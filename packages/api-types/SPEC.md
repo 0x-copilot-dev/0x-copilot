@@ -13,6 +13,7 @@ This package may define:
 - Public MCP registry request and response shapes.
 - Public skill registry request and response shapes.
 - Agent conversation, message, run, approval, and event shapes.
+- Local model status, catalog, runtime-control, and pull-stream shapes.
 - Frontend-visible enum unions and metadata maps.
 
 This package must not define:
@@ -43,6 +44,7 @@ run status enum constants between the Python server and this package.
 | Conversation and run types | `services/ai-backend` | `services/backend-facade` |
 | Runtime event types        | `services/ai-backend` | `services/backend-facade` |
 | Approval types             | `services/ai-backend` | `services/backend-facade` |
+| Local model types          | `services/ai-backend` | `services/backend-facade` |
 | SIWE wallet sign-in types  | `services/backend`    | `services/backend-facade` |
 
 ## Compatibility Policy
@@ -70,6 +72,22 @@ MCP servers that require a pre-registered OAuth client instead of dynamic client
 registration. Public `McpServer` responses expose only
 `oauth_client_configured`; raw or encrypted client secrets are backend-owned and
 must never appear in app-facing payloads.
+
+## Local Models
+
+`/v1/local-models/*` is a desktop / self-host surface. `GET .../status` always
+answers; every other route — including `POST .../runtime/start` — 404s unless
+the deployment enabled the feature, and `runtime/start` 404s again unless that
+server is also allowed to manage the runtime process. Both gates are
+server-authoritative and reported back as `LocalModelsStatus.enabled` and
+`runtime_managed`; clients render affordances from those fields rather than
+inferring host capability.
+
+`runtime_state` on `LocalModelsStatus` and `error_kind` on
+`LocalModelPullEvent` were added to shapes that already shipped, so both are
+optional. A client that sees no `runtime_state` falls back to `ollama_running`,
+and an error frame with no `error_kind` is treated as `terminal` — degrade
+rather than assume a retry is safe.
 
 ## Future Generation
 

@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>design-parity · first-run · Ollama states · DESIGN baseline</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <!-- Shared design tokens/base (design-kit) + this surface's fr-* stylesheet.
+         Served from the tools/design-parity root so ../../../design-kit resolves. -->
+    <link rel="stylesheet" href="../../../design-kit/copilot.css" />
+    <link rel="stylesheet" href="copilot-firstrun.css" />
+    <style>
+      /* Pin the mock's CATALOG geometry so this page is viewport-independent.
+         Every width in the mock is percentage-derived (`.mw` is max-width:100%,
+         `.ol-main` is width:min(940px,94%)), and the extraction context's
+         viewport is not ours to control - a headless context reports
+         `innerWidth: 0`, which collapses `.mw` to ~2px and leaves the card
+         overflowing at a width that matches nothing. These three rules restore
+         the exact geometry the five-up catalog gives a card (940px stage, three
+         14px-gapped columns => a 304px card) and apply in single-card mode too,
+         so `?state=` changes WHICH card renders, never how wide it is. They beat
+         the harness block's inline `width`/`gridTemplateColumns` (inline styles
+         are not !important). The live side pins its own layout the same way -
+         see lib/render-live-ollama.test.tsx. */
+      .mw {
+        width: 1160px !important;
+        max-width: none !important;
+      }
+      .ol-main {
+        width: 940px !important;
+      }
+      .ol-grid {
+        grid-template-columns: 1fr 1fr 1fr !important;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- PRD-P8 design baseline. Drive ONE card with ?state=:
+           ?state=not-installed · ?state=installed · ?state=downloading · ?state=stopped
+         No ?state= renders the full five-card catalog as the mock ships it.
+         (?state=fail exists but is the DROPPED "Download failed" state — not
+         one of the four; see PRD-P8 D1.) -->
+    <div id="app-root"></div>
+
+    <script
+      src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+      crossorigin="anonymous"
+    ></script>
+    <script
+      src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+      crossorigin="anonymous"
+    ></script>
+
+    <!-- Shared kit stubs first (Icon/Mark/useTweaks globals), then the vendored
+         design component, which self-mounts into #app-root. -->
+    <script type="text/babel" src="../../../design-kit/stubs.js"></script>
+    <script type="text/babel" src="copilot-firstrun-ollama.jsx"></script>
+  </body>
+</html>

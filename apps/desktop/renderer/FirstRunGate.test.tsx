@@ -13,10 +13,45 @@ import {
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+/** Every render's `useFirstRunLaunch` input + resulting phase, in order. */
+const launchTrace = vi.hoisted(
+  () =>
+    [] as Array<{
+      readonly modelReady: boolean;
+      readonly modelBlocked: boolean | undefined;
+      readonly phase: string;
+    }>,
+);
+
+// Keep every real chat-surface export — the surface, the card and the hooks are
+// exactly what these tests drive — but tap `useFirstRunLaunch` so the binder's
+// inputs (and the phase they produce) are observable: the DOM shows the ack the
+// phase produced, not the phase itself, so only the trace can prove the queued
+// hold actually EXITED rather than being re-rendered. Mirrors the web host.
+vi.mock("@0x-copilot/chat-surface", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@0x-copilot/chat-surface")>();
+  return {
+    ...actual,
+    useFirstRunLaunch: (
+      options: Parameters<typeof actual.useFirstRunLaunch>[0],
+    ): ReturnType<typeof actual.useFirstRunLaunch> => {
+      const result = actual.useFirstRunLaunch(options);
+      launchTrace.push({
+        modelReady: options.modelReady,
+        modelBlocked: options.modelBlocked,
+        phase: result.phase,
+      });
+      return result;
+    },
+  };
+});
+
 import { CHANNELS } from "@0x-copilot/chat-transport";
 
 import type { WindowBridge } from "../preload/window-bridge-types";
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
+import { OLLAMA_DOWNLOAD_URL } from "../main/services/ollama-download";
 import { FirstRunGate, FirstRunSurfaceMount } from "./FirstRunGate";
 
 interface Call {
@@ -212,5 +247,355 @@ describe("FirstRunSurfaceMount", () => {
       expect(screen.queryByTestId("first-run-ack")).not.toBeNull(),
     );
     expect(screen.queryByTestId("first-run-ack-placeholder")).toBeNull();
+  });
+});
+
+// --- PRD-P8 §8: the two card seams this host must supply --------------------
+//
+// `FirstRunLocalCard` renders a control ONLY when its callback prop is present
+// ("omitted means no button" — the card never ships a control that cannot
+// work). So an unwired seam here is not a degraded state, it is a DEAD END:
+// state ① with no "Get Ollama ↗" and state ③ with no way off the gate. These
+// tests assert both controls actually exist in the desktop host, and that the
+// external open is the argument-free channel rather than a URL the renderer
+// hands over.
+
+type StatusPatch = Record<string, unknown>;
+
+function localModelsBridge(statuses: readonly StatusPatch[]) {
+  let call = 0;
+  return makeBridge({
+    [CHANNELS.transportRequest]: async (payload) => {
+      const { path } = payload as { path?: string };
+      if (path === "/v1/local-models/status") {
+        // Successive probes walk the list, then hold on the last entry.
+        const status = statuses[Math.min(call, statuses.length - 1)];
+        call += 1;
+        return status;
+      }
+      if (path === "/v1/local-models") return { models: [] };
+      return {};
+    },
+    // The pull opens an SSE subscription that never yields a frame — enough to
+    // park the hook in `phase: "downloading"`, which is state ③.
+    [CHANNELS.transportSubscribe]: async () => ({ ok: true }),
+    [CHANNELS.transportUnsubscribe]: async () => ({ removed: true }),
+  });
+}
+
+const NOT_INSTALLED: StatusPatch = {
+  enabled: true,
+  ollama_running: false,
+  ollama_version: null,
+  runtime_state: "not_installed",
+  runtime_managed: true,
+};
+
+const RUNNING: StatusPatch = {
+  enabled: true,
+  ollama_running: true,
+  ollama_version: "0.5.0",
+  runtime_state: "running",
+  runtime_managed: true,
+};
+
+describe("FirstRunSurfaceMount — P8 local-card seams", () => {
+  it("renders state ①'s Get Ollama button and opens it over the argument-free channel", async () => {
+    const bridge = localModelsBridge([NOT_INSTALLED]);
+    stubWindowBridge(bridge);
+    render(
+      <FirstRunSurfaceMount workspaceId="org_acme" onComplete={vi.fn()} />,
+    );
+
+    // ① — runtime absent: the watch line plus the host-brokered action.
+    await waitFor(() =>
+      expect(screen.queryByTestId("first-run-local-get-ollama")).not.toBeNull(),
+    );
+
+    act(() => {
+      screen.getByTestId("first-run-local-get-ollama").click();
+    });
+
+    const opens = bridge.calls.filter(
+      (c) => c.channel === FIRST_RUN_CHANNELS.openOllamaDownload,
+    );
+    expect(opens).toHaveLength(1);
+    // The whole security property: the renderer names an INTENT, never a URL.
+    // Main owns `OLLAMA_DOWNLOAD_URL`; nothing addressable crosses the bridge.
+    expect(opens[0]?.payload).toEqual({});
+    expect(JSON.stringify(opens[0]?.payload)).not.toContain(
+      OLLAMA_DOWNLOAD_URL,
+    );
+    expect(JSON.stringify(bridge.calls)).not.toContain("http");
+  });
+
+  it("renders state ③'s Continue → and advances to the composer without unmounting the gate first", async () => {
+    // ① then ② on the poll: the hook arms auto-start on the not-installed
+    // probe and fires it on the runtime edge (D4), so the pull begins with NO
+    // click — which is exactly the case where the gate stays mounted and the
+    // user needs `Continue →` to move on.
+    vi.useFakeTimers();
+    try {
+      stubWindowBridge(localModelsBridge([NOT_INSTALLED, RUNNING]));
+      render(
+        <FirstRunSurfaceMount workspaceId="org_acme" onComplete={vi.fn()} />,
+      );
+
+      // Flush the mount probe (a promise chain, not a timer).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByTestId("first-run-local-watch")).not.toBeNull();
+
+      // The 3s fast poll re-probes, sees the runtime, and auto-starts the pull.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(3_500);
+      });
+
+      expect(screen.queryByTestId("first-run-local-progress")).not.toBeNull();
+      const cont = screen.getByTestId("first-run-local-continue");
+
+      act(() => {
+        cont.click();
+      });
+
+      // D4a-1: advancing to the composer, with the download still in flight.
+      expect(screen.queryByTestId("first-run-composer")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// --- PRD-P8 §7: killing the permanent "Queued" hang on this host ------------
+//
+// The desktop binder must thread the hook's "the model is NOT landing" fact
+// (`blocked !== null || runtime === "stopped"`) into BOTH `useFirstRunLaunch`
+// (so the queued hold can exit) and `FirstRunSurface`'s `localModelBlocked`
+// (so the composer/ack ctx stops claiming a download is in flight). Web derives
+// it identically (`FirstRunSurfaceMount.tsx`). Without it the gap is SILENT:
+// `modelBlocked` is optional on the hook, so desktop compiles and the ack keeps
+// echoing "· downloading 40%" for a download that died.
+
+const STOPPED: StatusPatch = {
+  enabled: true,
+  ollama_running: false,
+  ollama_version: null,
+  runtime_state: "stopped",
+  runtime_managed: true,
+};
+
+/**
+ * Like `localModelsBridge`, but the SSE subscription is drivable: it captures
+ * the `subscriptionId` the IpcTransport registers and the `stream-event`
+ * listener it attaches, so a test can push real pull frames through the real
+ * transport + port + hook rather than stubbing any of them. Also answers the
+ * two run-create POSTs so a send can reach the acknowledgment.
+ */
+function streamingLocalModelsBridge(statuses: readonly StatusPatch[]): {
+  readonly bridge: WindowBridge & { calls: Call[] };
+  emit(frame: Record<string, unknown>): Promise<void>;
+} {
+  let probe = 0;
+  let subscriptionId: string | null = null;
+  const listeners = new Map<string, Array<(payload: unknown) => void>>();
+  const calls: Call[] = [];
+
+  const bridge: WindowBridge & { calls: Call[] } = {
+    calls,
+    ipc: {
+      invoke<T = unknown>(channel: string, payload: unknown): Promise<T> {
+        calls.push({ channel, payload });
+        if (channel === CHANNELS.transportRequest) {
+          const { path } = payload as { path?: string };
+          if (path === "/v1/local-models/status") {
+            const status = statuses[Math.min(probe, statuses.length - 1)];
+            probe += 1;
+            return Promise.resolve(status as T);
+          }
+          if (path === "/v1/local-models") {
+            return Promise.resolve({ models: [] } as T);
+          }
+          if (path === "/v1/agent/conversations") {
+            return Promise.resolve({ conversation_id: "conv_1" } as T);
+          }
+          if (path === "/v1/agent/runs") {
+            return Promise.resolve({ run_id: "run_1" } as T);
+          }
+          return Promise.resolve({} as T);
+        }
+        if (channel === CHANNELS.transportSubscribe) {
+          subscriptionId =
+            (payload as { subscriptionId?: string }).subscriptionId ?? null;
+        }
+        return Promise.resolve({} as T);
+      },
+      on(channel: string, handler: (payload: unknown) => void): () => void {
+        const bucket = listeners.get(channel) ?? [];
+        bucket.push(handler);
+        listeners.set(channel, bucket);
+        return () => {
+          listeners.set(
+            channel,
+            (listeners.get(channel) ?? []).filter((h) => h !== handler),
+          );
+        };
+      },
+    },
+  };
+
+  return {
+    bridge,
+    async emit(frame: Record<string, unknown>): Promise<void> {
+      if (subscriptionId === null) {
+        throw new Error("no pull subscription is open");
+      }
+      const event = {
+        subscriptionId,
+        kind: "message",
+        message: JSON.stringify(frame),
+      };
+      await act(async () => {
+        for (const handler of listeners.get(CHANNELS.streamEvent) ?? []) {
+          handler(event);
+        }
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    },
+  };
+}
+
+function pullFrame(
+  over: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    sequence_no: 1,
+    status: "pulling",
+    bytes_total: 1000,
+    bytes_completed: 400,
+    speed_bps: null,
+    eta_seconds: null,
+    done: false,
+    error: null,
+    error_kind: null,
+    ...over,
+  };
+}
+
+describe("FirstRunSurfaceMount — P8 §7 modelBlocked threading", () => {
+  it("stops the acknowledgment claiming a download once the runtime dies mid-pull", async () => {
+    vi.useFakeTimers();
+    launchTrace.length = 0;
+    try {
+      // ② on the first probe (runtime up, model absent), then a dead daemon on
+      // every probe after the failure.
+      const { bridge, emit } = streamingLocalModelsBridge([RUNNING, STOPPED]);
+      stubWindowBridge(bridge);
+      render(
+        <FirstRunSurfaceMount workspaceId="org_acme" onComplete={vi.fn()} />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // Explicit "Start download" → advances to the composer AND pulls.
+      await act(async () => {
+        screen.getByTestId("first-run-start-download").click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await emit(pullFrame());
+
+      // Nothing is wrong yet: the download is live and the model can still land.
+      expect(launchTrace.at(-1)).toMatchObject({
+        modelReady: false,
+        modelBlocked: false,
+      });
+
+      // Send the first prompt while the model is still downloading → queued.
+      fireEvent.change(screen.getByTestId("composer-textarea"), {
+        target: { value: "Watch my wallet" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Send message"));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(launchTrace.at(-1)?.phase).toBe("queued");
+      expect(screen.getByTestId("first-run-ack")).toHaveTextContent(
+        "Qwen 3 4B · downloading 40%",
+      );
+
+      // The daemon dies. Pre-P8 this was the permanent hang: the pct freezes,
+      // `modelReady` never flips, and the queued phase had no exit.
+      await emit(
+        pullFrame({
+          sequence_no: 2,
+          status: "error",
+          error: "connection refused",
+          error_kind: "runtime_unreachable",
+        }),
+      );
+
+      // The queued hold EXITED (this is the hang fix itself) …
+      expect(launchTrace.at(-1)?.modelBlocked).toBe(true);
+      expect(launchTrace.at(-1)?.phase).toBe("blocked");
+      // … and the acknowledgment stops echoing a download that is not happening.
+      const ack = screen.getByTestId("first-run-ack");
+      expect(ack).toHaveTextContent("Qwen 3 4B · download paused at 40%");
+      // The TITLE has to stop lying too, or the ack argues with itself:
+      // "Queued — starts when the model lands" directly above "· paused".
+      expect(ack.getAttribute("data-variant")).toBe("stalled");
+      expect(screen.getByTestId("first-run-ack-title").textContent).toBe(
+        "Held — the model isn't downloading",
+      );
+      // …and it is not a dead end: the action returns the composer, which the
+      // narrowed double-launch guard then accepts a re-submit from.
+      await act(async () => {
+        screen.getByTestId("first-run-ack-back").click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      expect(screen.queryByTestId("first-run-ack")).toBeNull();
+      expect(screen.queryByTestId("composer-textarea")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // `firstRunAckLines` interpolates the pct VERBATIM, and `pullPercent` is
+  // got/total*100 — a real byte pct is fractional. The binder must round it
+  // (web does the same, by floor) or the ack prints the full float.
+  it("prints a whole-number download pct, never the raw float", async () => {
+    vi.useFakeTimers();
+    launchTrace.length = 0;
+    try {
+      const { bridge, emit } = streamingLocalModelsBridge([RUNNING]);
+      stubWindowBridge(bridge);
+      render(
+        <FirstRunSurfaceMount workspaceId="org_acme" onComplete={vi.fn()} />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await act(async () => {
+        screen.getByTestId("first-run-start-download").click();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      // 40.7% — fractional, and floored (not rounded) so the ack can never
+      // over-claim progress the launch lane has not accepted as ready.
+      await emit(pullFrame({ bytes_completed: 407 }));
+
+      fireEvent.change(screen.getByTestId("composer-textarea"), {
+        target: { value: "Watch my wallet" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Send message"));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      const ack = screen.getByTestId("first-run-ack");
+      expect(ack).toHaveTextContent("Qwen 3 4B · downloading 40%");
+      expect(ack.textContent).not.toContain("40.7");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

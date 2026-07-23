@@ -14,12 +14,14 @@ from typing import Any
 
 from runtime_api.local_models.hf_metadata import HfGgufResolver
 from runtime_api.local_models.ollama_client import OllamaClient
+from runtime_api.local_models.ollama_runtime import OllamaRuntimeController
 from runtime_api.schemas.local_models import (
     LocalModelPullEvent,
     LocalModelSize,
     LocalModelSummary,
     LocalModelsList,
     LocalModelsStatus,
+    LocalRuntimeState,
     RunPlacement,
 )
 
@@ -29,26 +31,52 @@ _SUCCESS_STATUS = "success"
 class LocalModelService:
     """High-level local-model operations consumed by the HTTP routes."""
 
+    _DEFAULT_START_TIMEOUT_SECONDS = 20.0
+
     def __init__(
         self,
         *,
         ollama: OllamaClient,
         hf: HfGgufResolver,
+        runtime: OllamaRuntimeController | None = None,
         clock: Callable[[], float] = time.monotonic,
+        start_timeout_seconds: float = _DEFAULT_START_TIMEOUT_SECONDS,
     ) -> None:
         self._ollama = ollama
         self._hf = hf
+        # Default to the unmanaged controller so a caller that forgets to wire
+        # one cannot accidentally claim host knowledge or spawn a process.
+        self._runtime = (
+            runtime if runtime is not None else OllamaRuntimeController(manage=False)
+        )
         self._clock = clock
+        self._start_timeout_seconds = start_timeout_seconds
 
     async def status(self, *, enabled: bool) -> LocalModelsStatus:
         # Only probe Ollama when the feature is on — a disabled deployment
         # should never reach out.
-        version = await self._ollama.running_version() if enabled else None
-        return LocalModelsStatus(
-            enabled=enabled,
-            ollama_running=version is not None,
-            ollama_version=version,
+        if not enabled:
+            return self._status(enabled=False, version=None)
+        return self._status(enabled=True, version=await self._ollama.running_version())
+
+    async def start_runtime(self) -> LocalModelsStatus:
+        """Start the local runtime and return the resulting status (PRD §4.3).
+
+        Idempotent: an already-answering daemon short-circuits before any
+        spawn. A daemon that does not come up inside the bounded window is
+        reported as its derived state (``stopped`` / ``not_installed``), not
+        raised — a slow start is not an error. Spawn failures *are* raised, as
+        typed :class:`~runtime_api.local_models.ollama_client.LocalModelError`.
+        """
+
+        version = await self._ollama.running_version()
+        if version is not None:
+            return self._status(enabled=True, version=version)
+        await self._runtime.start()
+        version = await self._runtime.wait_until_running(
+            self._ollama.running_version, timeout=self._start_timeout_seconds
         )
+        return self._status(enabled=True, version=version)
 
     async def list_models(self) -> LocalModelsList:
         tags = await self._ollama.list_tags()
@@ -110,6 +138,44 @@ class LocalModelService:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
+
+    def _status(self, *, enabled: bool, version: str | None) -> LocalModelsStatus:
+        """PRD-P8 §4.2 — the single source of truth for runtime derivation.
+
+        ```
+        not enabled                  -> UNKNOWN,       running=False
+        version is not None          -> RUNNING
+        not manage_runtime           -> UNKNOWN        # cannot see host FS
+        binary found on this machine -> STOPPED
+        otherwise                    -> NOT_INSTALLED
+        ```
+
+        ``runtime_managed`` is false whenever the feature is off: the start
+        route is gated on both flags, so advertising control we would refuse
+        to exercise would be a lie the client renders as a dead button.
+        """
+
+        managed = enabled and self._runtime.manage
+        return LocalModelsStatus(
+            enabled=enabled,
+            ollama_running=version is not None,
+            ollama_version=version,
+            runtime_state=self._runtime_state(enabled=enabled, version=version),
+            runtime_managed=managed,
+        )
+
+    def _runtime_state(
+        self, *, enabled: bool, version: str | None
+    ) -> LocalRuntimeState:
+        if not enabled:
+            return LocalRuntimeState.UNKNOWN
+        if version is not None:
+            return LocalRuntimeState.RUNNING
+        if not self._runtime.manage:
+            return LocalRuntimeState.UNKNOWN
+        if self._runtime.installed():
+            return LocalRuntimeState.STOPPED
+        return LocalRuntimeState.NOT_INSTALLED
 
     def _rate(
         self,

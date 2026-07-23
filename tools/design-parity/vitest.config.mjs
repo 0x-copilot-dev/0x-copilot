@@ -24,6 +24,7 @@ export default defineConfig({
     environment: "jsdom",
     include: [
       "lib/render-live.test.tsx",
+      "lib/render-live-ollama.test.tsx",
       "lib/render-live-login.test.tsx",
       "lib/render-live-run-empty.test.tsx",
       "lib/render-live-composer.test.tsx",

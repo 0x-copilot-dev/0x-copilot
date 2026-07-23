@@ -1,0 +1,198 @@
+{
+  "state": "stopped",
+  "counts": {
+    "low": 18,
+    "info": 6
+  },
+  "findings": [
+    {
+      "label": "stopped.card.meta",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.25px → normal"
+    },
+    {
+      "label": "stopped.card.meta",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "stopped.card.meta",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "14.25px → 13px"
+    },
+    {
+      "label": "stopped.card.meta",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "stopped.dep",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "stopped.dep",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "stopped.dep",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "77.0938px → 84.0938px"
+    },
+    {
+      "label": "stopped.dling",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "stopped.dling",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "stopped.acts",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "19.5px → normal"
+    },
+    {
+      "label": "stopped.acts",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "270px → 281px"
+    },
+    {
+      "label": "stopped.acts",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "42px → 29px"
+    },
+    {
+      "label": "stopped.action",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "111.875px → 112.156px"
+    },
+    {
+      "label": "stopped.action",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "42px → 29px"
+    },
+    {
+      "label": "stopped.watch",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "lineHeight",
+      "detail": "14.7px → normal"
+    },
+    {
+      "label": "stopped.watch",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "width",
+      "detail": "148.125px → 281px"
+    },
+    {
+      "label": "stopped.watch",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "style",
+      "prop": "height",
+      "detail": "29.375px → 12px"
+    },
+    {
+      "label": "stopped.watch",
+      "group": "④ runtime stopped",
+      "severity": "low",
+      "kind": "tag",
+      "detail": "<span> → <p> (semantic/default-style change)"
+    },
+    {
+      "label": "stopped.card.meta",
+      "group": "④ runtime stopped",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "expected: PRD-P8 D5 — see not-installed.card.meta. — “Qwen 3 4B · 5.6 GB · free forever” → “Qwen 3 4B · 4.3 GB · free forever”"
+    },
+    {
+      "label": "stopped.dep",
+      "group": "④ runtime stopped",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "stopped.acts",
+      "group": "④ runtime stopped",
+      "severity": "info",
+      "kind": "copy",
+      "prop": "text",
+      "detail": "“Restart Ollamadownload resumes on its own” → “Restart Ollama”"
+    },
+    {
+      "label": "stopped.acts",
+      "group": "④ runtime stopped",
+      "severity": "info",
+      "kind": "style",
+      "prop": "fontSize",
+      "detail": "expected: HARNESS ARTIFACT, no visual effect: the mock's base font-size is 13px and the live fixture inherits 13.6px (0.85rem). Every text node in this card sets its own size (title 13, meta 9.5, body 11.5, note 9, dling/ok 11.5, watch 10.5), so this is the inherited base only and renders nothing. — 13px → 13.6px (+0.6px)"
+    },
+    {
+      "label": "stopped.acts",
+      "group": "④ runtime stopped",
+      "severity": "info",
+      "kind": "style",
+      "prop": "flexWrap",
+      "detail": "expected: live-only, deliberate: the shipped card is narrower than the mock's catalog column, so the action row wraps instead of overflowing. — nowrap → wrap"
+    },
+    {
+      "label": "stopped.action",
+      "group": "④ runtime stopped",
+      "severity": "info",
+      "kind": "style",
+      "prop": "color",
+      "detail": "expected: PRE-EXISTING, verified at 5c890515 (before this branch): `.gbtn--pri` uses --color-accent-contrast, commented in onboarding.css as \"design literal #0b0a0e\". The mock hard-codes the literal; the FTUE tokenized it repo-wide for every primary gate button, not just these states. rgb(11,10,14) vs rgb(8,19,29) — both near-black on the accent fill. Not PRD-P8 drift; changing it would be a separate, surface-wide decision. — rgb(11, 10, 14) (#0b0a0e (literal near-black)) → rgb(8, 19, 29) (--accent-ink)"
+    }
+  ]
+}

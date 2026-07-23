@@ -107,10 +107,95 @@ export const FIRST_RUN_COPY = {
   },
   local: {
     title: "Download the local model",
+    // D5 (PRD-P8 §3) — FROZEN. The mock says 5.6 GB; 4.3 GB is the verified
+    // Qwen3-4B Q8_0 size (4,280,404,704 B). Honesty beats parity; do not edit.
     meta: "Qwen 3 4B · 4.3 GB · free forever",
     body: "Runs on this machine. Nothing you send ever leaves it.",
     btn: "Start download",
     note: "type your first prompt while it downloads",
+    // --- PRD-P8 §5 — the four runtime-state feet -------------------------
+    // Design wording verbatim EXCEPT the two D4a deviations (`continueBtn`
+    // and `downloadingNote`) and the three strings the design has no state
+    // for (`unavailable`, `reconnecting`, `stoppedWatchUnmanaged`), each
+    // flagged below so the design-parity report reads them as intent.
+    /** Feature gated off (web/cloud) — unchanged from P2. */
+    unavailable:
+      "Local models run in the desktop app. Add a key to use a frontier model here.",
+    /** ① not_installed / unknown — the host-brokered external open. */
+    getOllama: "Get Ollama ↗",
+    /** ① watch line: the card polls, so the user never has to re-check. */
+    watchDetect: "download starts once it's detected",
+    /** ① → detected: the runtime edge auto-starts the pull (PRD-P8 §6). */
+    detected: "Ollama detected — starting your download",
+    /** ② model already installed / pull finished — no redundant pull. */
+    ready: "on-device · ready",
+    /** ③ the `.dling` headline while the pull is in flight. */
+    downloading: "Ollama detected — downloading now",
+    /**
+     * ③ note tail. DEVIATION D4a-2: the design reads "type your first prompt
+     * while it lands", which would be a lie on the gate (there is no composer
+     * there). The design's line is used verbatim once the user has advanced.
+     */
+    downloadingNote: "downloading in the background",
+    /** ③ note tail while the stream is retrying (`transient`, PRD-P8 §6). */
+    reconnecting: "reconnecting — nothing already downloaded is lost",
+    /**
+     * ③ action. DEVIATION D4a-1: the design's ③ foot has no button because
+     * the mock has already moved the user to the composer. D4 keeps the card
+     * mounted, so the user needs a way forward.
+     */
+    continueBtn: "Continue →",
+    /** Accessible name for the ③ progress track (prefixes the model name). */
+    progressLabel: "Downloading",
+    /** ④ runtime stopped. */
+    stopped: "Ollama stopped responding",
+    /** ④ action — renders ONLY when `runtimeManaged` (PRD-P8 §5). */
+    restart: "Restart Ollama",
+    /** ④ watch line when this server can restart the runtime. */
+    stoppedWatch: "download resumes on its own",
+    /**
+     * ④ watch line when it cannot (web / containerised). The design has no
+     * unmanaged state; without it the degraded foot would tell the user the
+     * download resumes without saying what has to happen first.
+     */
+    stoppedWatchUnmanaged:
+      "start Ollama again — the download resumes on its own",
+    /** ④ terminal-error action (`terminal` kind, no auto-retry). */
+    resume: "Resume download",
+    /**
+     * A break the server did not classify, or one with no message at all (a
+     * torn stream, a transport throw). Client-authored, so it lives here with
+     * the rest of the card copy rather than as a literal in the hook.
+     */
+    interrupted: "Download interrupted.",
+    /**
+     * The `transient` retry budget is spent (PRD-P8 §6's cap). The auto-retry
+     * lane has stopped, so this must NOT promise a reconnect — it says what is
+     * true (the bytes are safe) and leaves the way out to `Resume download`.
+     */
+    retriesExhausted:
+      "The download keeps dropping — nothing already downloaded is lost",
+  },
+  /**
+   * PRD-P8 §7 — the acknowledgment's THIRD state.
+   *
+   * Only the new strings live here: `starting` / `queued` remain in
+   * `FIRST_RUN_ACK_TITLES` (`Acknowledgment.tsx`), so no ack string ever has
+   * two homes. `firstRunAckLines.ts` composes the two sources.
+   */
+  ack: {
+    stalled: {
+      /**
+       * Replaces "Queued — starts when the model lands" when the model
+       * demonstrably is NOT landing. It names the state (held), names the
+       * reason (the download stopped), and promises nothing.
+       */
+      title: "Held — the model isn't downloading",
+      /** Both real ways out, plus the reassurance that nothing was lost. */
+      note: "Restart Ollama or add a key — your prompt is saved.",
+      /** The action that makes the state actionable (`FirstRunAckCtx.onBack`). */
+      action: "Back to the composer",
+    },
   },
   key: {
     title: "Bring your own key",

@@ -8,6 +8,7 @@ what the settings UI + model picker render.
 
 from __future__ import annotations
 
+from enum import StrEnum
 from typing import Literal
 
 from pydantic import Field
@@ -19,12 +20,49 @@ from agent_runtime.execution.contracts import RuntimeContract
 RunPlacement = Literal["gpu", "cpu", "partial"]
 
 
+class LocalRuntimeState(StrEnum):
+    """PRD-P8 §4.1 — what this server can honestly say about the local runtime.
+
+    Derived server-side only (§4.2). ``UNKNOWN`` is the honest answer whenever
+    the daemon is silent *and* this deployment is not allowed to inspect the
+    host filesystem (containerised self-host, web).
+    """
+
+    UNKNOWN = "unknown"  # cannot determine (remote/containerised)
+    NOT_INSTALLED = "not_installed"  # binary absent on this machine
+    STOPPED = "stopped"  # binary present, daemon not answering
+    RUNNING = "running"
+
+
+class LocalModelErrorKind(StrEnum):
+    """PRD-P8 §4.1 — how a local-model failure should be recovered from.
+
+    Drives the client's retry policy (D1: no red terminal state). Classified
+    server-side from transport/protocol signals; the daemon's own response
+    text is untrusted and never travels with it.
+    """
+
+    RUNTIME_UNREACHABLE = "runtime_unreachable"  # daemon died / refused
+    TRANSIENT = "transient"  # network blip, stream break
+    TERMINAL = "terminal"  # 4xx, disk full, bad repo
+
+
 class LocalModelsStatus(RuntimeContract):
-    """Capability probe: is the feature enabled + is Ollama reachable."""
+    """Capability probe: is the feature enabled + is Ollama reachable.
+
+    ``ollama_running`` / ``ollama_version`` are the Round-2 fields and stay
+    populated exactly as before — five client call sites still read them.
+    ``runtime_state`` / ``runtime_managed`` are PRD-P8 additive fields
+    (D3: every new field optional, every consumer tolerates its absence).
+    """
 
     enabled: bool
     ollama_running: bool
     ollama_version: str | None = None
+    runtime_state: LocalRuntimeState = LocalRuntimeState.UNKNOWN
+    # True only when this server may start/restart the runtime itself
+    # (``RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME`` + the feature flag).
+    runtime_managed: bool = False
 
 
 class LocalModelSummary(RuntimeContract):
@@ -69,14 +107,19 @@ class LocalModelPullEvent(RuntimeContract):
     eta_seconds: float | None = Field(default=None, ge=0)
     done: bool = False
     error: str | None = None
+    # Present only on a terminal error frame. Tells the client whether to
+    # auto-resume (transient / runtime_unreachable) or stop and ask (terminal).
+    error_kind: LocalModelErrorKind | None = None
 
 
 __all__ = [
+    "LocalModelErrorKind",
     "LocalModelPullEvent",
     "LocalModelSize",
     "LocalModelSummary",
     "LocalModelsList",
     "LocalModelsStatus",
+    "LocalRuntimeState",
     "PullLocalModelRequest",
     "RunPlacement",
 ]

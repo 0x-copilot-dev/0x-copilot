@@ -4510,12 +4510,14 @@ export type {
 // Desktop / self-host only; the management routes 404 unless the deployment
 // enabled the feature. Single declaration site: ./localModels.ts.
 export type {
+  LocalModelErrorKind,
   LocalModelPullEvent,
   LocalModelRunPlacement,
   LocalModelSize,
   LocalModelSummary,
   LocalModelsListResponse,
   LocalModelsStatus,
+  LocalRuntimeState,
   PullLocalModelRequest,
 } from "./localModels";
 // === end Local models ===

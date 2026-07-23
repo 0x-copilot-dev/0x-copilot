@@ -1,9 +1,10 @@
 // Acknowledgment — variant copy + the three jade-check lines (PRD-P3 §6.3).
 
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { Acknowledgment, FIRST_RUN_ACK_TITLES } from "./Acknowledgment";
+import { FIRST_RUN_ACK_STALLED } from "./firstRunAckLines";
 
 describe("<Acknowledgment>", () => {
   it("variant 'starting' renders 'Starting your first run' + the 3 lines", () => {
@@ -44,9 +45,67 @@ describe("<Acknowledgment>", () => {
     expect(screen.getByTestId("first-run-ack-title").textContent).toBe(
       "Queued — starts when the model lands",
     );
-    expect(screen.getByTestId("first-run-ack").getAttribute("data-variant")).toBe(
-      "queued",
+    expect(
+      screen.getByTestId("first-run-ack").getAttribute("data-variant"),
+    ).toBe("queued");
+  });
+
+  // PRD-P8 §7 — the third variant. `queued` promises "starts when the model
+  // lands"; once it demonstrably is not landing, that title contradicts the
+  // model line right beneath it ("· download paused at 40%").
+  it("variant 'stalled' renders the honest held title + note + escape action", () => {
+    const onAction = vi.fn();
+    render(
+      <Acknowledgment
+        variant="stalled"
+        modelLine="model — Qwen 3 4B · download paused at 40%"
+        toolsLine="tools — none"
+        privacyLine="nothing leaves this machine"
+        note={FIRST_RUN_ACK_STALLED.note}
+        actionLabel={FIRST_RUN_ACK_STALLED.action}
+        onAction={onAction}
+      />,
     );
+    expect(screen.getByTestId("first-run-ack-title").textContent).toBe(
+      "Held — the model isn't downloading",
+    );
+    // One home for the string: the map entry IS the copy constant.
+    expect(FIRST_RUN_ACK_TITLES.stalled).toBe(FIRST_RUN_ACK_STALLED.title);
+    expect(
+      screen.getByTestId("first-run-ack").getAttribute("data-variant"),
+    ).toBe("stalled");
+    expect(screen.getByTestId("first-run-ack-note").textContent).toBe(
+      "Restart Ollama or add a key — your prompt is saved.",
+    );
+    fireEvent.click(screen.getByTestId("first-run-ack-back"));
+    expect(onAction).toHaveBeenCalledTimes(1);
+  });
+
+  // Mirrors `FirstRunLocalCardProps`' omitted-means-no-button rule: a host that
+  // wired no escape must not get a control that silently does nothing.
+  it("renders no action when the label or the handler is missing", () => {
+    const { rerender } = render(
+      <Acknowledgment
+        variant="stalled"
+        modelLine="model — Qwen 3 4B"
+        toolsLine="tools — none"
+        privacyLine="nothing leaves this machine"
+        actionLabel={FIRST_RUN_ACK_STALLED.action}
+      />,
+    );
+    expect(screen.queryByTestId("first-run-ack-back")).toBeNull();
+    expect(screen.queryByTestId("first-run-ack-note")).toBeNull();
+
+    rerender(
+      <Acknowledgment
+        variant="stalled"
+        modelLine="model — Qwen 3 4B"
+        toolsLine="tools — none"
+        privacyLine="nothing leaves this machine"
+        onAction={() => undefined}
+      />,
+    );
+    expect(screen.queryByTestId("first-run-ack-back")).toBeNull();
   });
 
   it("renders an optional error line when supplied", () => {

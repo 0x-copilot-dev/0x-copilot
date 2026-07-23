@@ -68,11 +68,22 @@ export type {
   AcknowledgmentProps,
   AcknowledgmentVariant,
 } from "./Acknowledgment";
-export { firstRunAckLines } from "./firstRunAckLines";
+export {
+  firstRunAckLines,
+  // P8 §7 — the ack's third state. Hosts render `Acknowledgment` directly (only
+  // the P1 placeholder is in-package), so without these four the honest stalled
+  // title and its escape action are unreachable from any shipping surface.
+  firstRunAckStateForPhase,
+  firstRunAckTitle,
+  firstRunAckNote,
+  firstRunAckAction,
+  FIRST_RUN_ACK_STALLED,
+} from "./firstRunAckLines";
 export type {
   FirstRunAckEngine,
   FirstRunToolsState,
   FirstRunAckLines,
+  FirstRunAckState,
 } from "./firstRunAckLines";
 export { useFirstRunLaunch } from "./useFirstRunLaunch";
 export type {

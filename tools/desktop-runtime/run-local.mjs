@@ -711,6 +711,14 @@ conn.close()
       // Ollama (the section shows setup steps until then). Default Ollama
       // endpoint is http://localhost:11434/v1.
       RUNTIME_ENABLE_LOCAL_MODELS: "true",
+      // PRD-P8 D2 — same machine, so also authorise DETECTING the Ollama
+      // binary and STARTING it (POST /v1/local-models/runtime/start). This is
+      // what separates "Ollama not installed" from "Ollama stopped responding"
+      // in the first-run card, and it is what "Restart Ollama" calls. Desktop
+      // only: containerised self-host leaves it false because its
+      // OLLAMA_BASE_URL points at host.docker.internal — it can neither see nor
+      // spawn a host binary. Mirrors apps/desktop/main/services/service-env.ts.
+      RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME: "true",
       DATABASE_URL: aiDbUrl,
       AUDIT_HMAC_KEY: secrets.auditHmacKey,
       MCP_BACKEND_REGISTRY_URL: `http://127.0.0.1:${backendPort}`,

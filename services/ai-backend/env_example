@@ -51,6 +51,31 @@ RUNTIME_EVENT_BUS_BACKEND=in_memory
 # wire-equivalent for the FE — both event types are handled by the
 # citation reducers.
 RUNTIME_BATCH_SOURCE_INGESTION=false
+# --- Local models (Ollama) — off by default, one uncomment away -------------
+# Uncomment to expose /v1/local-models/* in `make dev`: Settings -> Local
+# models plus the first-run "Download the local model" card become live (pull
+# an HF GGUF and run it through a user-installed Ollama). Left off, /status
+# reports enabled:false and every other local-models route 404s, so none of
+# the first-run local-model states can be exercised outside a staged desktop
+# boot. Requires Ollama on this machine: https://ollama.com/download
+# RUNTIME_ENABLE_LOCAL_MODELS=true
+# Additionally authorises this server to detect the Ollama binary on THIS
+# machine and start it (POST /v1/local-models/runtime/start). Uncomment only
+# when ai-backend runs natively on your own machine (`make dev`) — that is
+# what makes the card's "Ollama not installed" vs "Ollama stopped responding"
+# states and the Restart Ollama action reachable in dev. Leave it off for any
+# containerised run (`make docker-dev`, self-host): a container cannot see the
+# host's binary, so the honest answer there is runtime_state "unknown".
+# RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME=true
+# OpenAI-compatible Ollama endpoint. Default http://localhost:11434/v1, which
+# is what you want for a native `make dev`; override only to point at a
+# non-default host/port. NOTE — unlike every other key in this file, this one
+# is NOT read through RuntimeSettings: OpenAICompatibleEndpoint.resolve_base_url
+# reads os.environ directly, so a value here (or in .env) is silently ignored.
+# Export it into the process environment instead:
+#   OLLAMA_BASE_URL=http://127.0.0.1:11500/v1 make dev
+# Container stacks already set it explicitly (docker-compose.dev.yml,
+# deploy/self-host/docker-compose.prod.yml).
 MCP_BACKEND_REGISTRY_URL=
 MCP_AUTH_REDIRECT_URI=http://127.0.0.1:5173/mcp/oauth/callback
 SKILLS_BACKEND_REGISTRY_URL=
