@@ -83,14 +83,21 @@ Backend-only, self-contained, tested.
 - [ ] Note for native `make dev`: with M4b, a half-configured `services/ai-backend/.env`
       now fails loud at startup — document "set both or neither".
 
-### Phase 2 — one typed catalog ⏳
+### Phase 2 — one typed catalog ⏳ (foundation done)
 
-- [ ] `api-types`: add `kind` (chat/embedding/…) + per-provider `recommended` to `ModelCatalogModel`.
-- [ ] ai-backend: emit `kind`; mark one recommended chat model per provider.
-- [ ] chat-surface: one catalog port/hook every composer consumes.
+- [x] `api-types`: add `kind` (`chat`/`embedding`/`image`/`audio`) to `ModelCatalogModel`
+      (optional, defaults `chat`). `ModelKind` type. typecheck green.
+- [x] ai-backend: `ModelCatalogItem.kind` (Literal, default `"chat"`) — the curated
+      catalog is chat-only, so the default flows through `ModelCatalog.build` unchanged;
+      test asserts every item is `kind == "chat"`. 763 passed.
+- [ ] chat-surface: one catalog port/hook every composer consumes (pickers filter `kind == "chat"`).
 - [ ] web: delete `demoModels` (`ChatScreen`) + `webModelCatalog`; read the port.
 - [ ] desktop: delete `CURATED_CLOUD_MODELS` (`desktopModelCatalog`); read the port.
-- [ ] add-key modal: stop rendering the raw provider probe as a picker.
+
+`recommended` (per-provider default marker) is deferred to Phase 3, where the
+auto-pick rule pins its exact semantics — added with its consumer, not before.
+The `ada-2` leak lives in the add-key modal's raw-probe dropdown; it is killed in
+Phase 3 (credential-only add-key removes the model step entirely), not here.
 
 ### Phase 3 — split credentials/selection + nav + auto-pick ⏳
 

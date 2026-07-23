@@ -208,6 +208,15 @@ class TestModelCatalogBuild:
         items = ModelCatalog.build(_settings())
         assert any(item.id == "gemini-3-flash" for item in items)
 
+    def test_every_item_is_chat_kind(self) -> None:
+        # The curated catalog is chat-only; the ``kind`` default flows through so
+        # a chat picker filtering ``kind == "chat"`` never drops a real model, and
+        # a non-chat model could never masquerade as a selectable chat model.
+        ModelCatalog.configure_source(LitellmModelSource(model_cost={}))
+        items = ModelCatalog.build(_settings())
+        assert items, "catalog must be non-empty"
+        assert all(item.kind == "chat" for item in items)
+
     def test_default_present_even_with_empty_source(self) -> None:
         ModelCatalog.configure_source(_FakeSource(()))
         settings = _settings()
