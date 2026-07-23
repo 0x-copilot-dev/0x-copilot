@@ -158,13 +158,49 @@ export type LedgerStagedWriteStatus =
   | "rejected"
   | "approved"
   | "applied"
+  // PRD-D3 — a row-set apply was decided (frozen), the terminal not yet folded.
+  | "apply_pending"
+  // PRD-D3 — some approved rows failed mid-apply (terminal in D3).
+  | "partially_applied"
   // PRD-D2 defensive: a `write.applied` folded onto a non-approved / rev-mismatched
   // stage (unreachable absent a bug — the server's approval gate + D1 freeze
   // prevent it). The TS twin of the Python fold's CORRUPT so parity holds.
   | "corrupt";
 
-/** The outcome of the last `write.applied` folded onto a stage (PRD-D2). */
-export type LedgerApplyResult = "applied" | "failed";
+/** The outcome of the last `write.applied` folded onto a stage (PRD-D2/D3). */
+export type LedgerApplyResult = "applied" | "partial" | "failed";
+
+/** A row's decision stance in the fold (PRD-D3). */
+export type LedgerRowStance = "will_apply" | "held";
+
+/** One folded row of a bulk row-set: content (title/diffs) + state. Rendered by
+ *  `TcStagedTableSurface`. `agentHoldReason` is STICKY — it survives a user
+ *  override (FR-C7). */
+export interface LedgerStagedRow {
+  readonly rowKey: string;
+  readonly title: string;
+  readonly changes: readonly LedgerRowChange[];
+  readonly stance: LedgerRowStance;
+  readonly agentHoldReason: string | null;
+  readonly decidedBy: "agent" | "user" | "policy" | null;
+  readonly applyOutcome: "applied" | "failed" | null;
+}
+
+/** One field diff on a staged row (display only, PRD-D3). */
+export interface LedgerRowChange {
+  readonly field: string;
+  readonly old: unknown;
+  readonly new: unknown;
+}
+
+/** Projection summary over a row-set's rows (PRD-D3). */
+export interface LedgerRowCounts {
+  readonly total: number;
+  readonly willApply: number;
+  readonly held: number;
+  readonly applied: number;
+  readonly failed: number;
+}
 
 /** A half-open `[start, end)` char range of a revision's NEW text and its
  *  author — the "edited by you" highlight ranges (PRD-D1). */
@@ -218,6 +254,10 @@ export interface LedgerStagedWrite {
    *  (held), with `applyFailureCode` naming the refusal. */
   readonly applyResult: LedgerApplyResult | null;
   readonly applyFailureCode: string | null;
+  /** PRD-D3 — the folded rows of a bulk row-set, or `null` for a single-artifact
+   *  (D1) stage. `TcStagedTableSurface` renders from this. */
+  readonly rows: readonly LedgerStagedRow[] | null;
+  readonly rowCounts: LedgerRowCounts | null;
 }
 
 export interface LedgerProjection {
@@ -350,6 +390,14 @@ interface StageAccumulator {
   ledgerId: string;
   applyResult: LedgerApplyResult | null;
   applyFailureCode: string | null;
+  // PRD-D3 row-set fold state (mirrors the Python `_StageAccumulator`).
+  isRowset: boolean;
+  rowOrder: string[];
+  stagedRows: Map<string, { title: string; changes: LedgerRowChange[] }>;
+  agentHoldReasons: Map<string, string>;
+  rowStances: Map<string, LedgerRowStance>;
+  rowDecidedBy: Map<string, "agent" | "user" | "policy">;
+  rowApplyOutcomes: Map<string, "applied" | "failed">;
 }
 
 function strOr(value: unknown, fallback: string): string {
@@ -625,7 +673,7 @@ function applyWriteStaged(
     payload.target !== null && typeof payload.target === "object"
       ? (payload.target as Record<string, unknown>)
       : {};
-  stages.set(stageId, {
+  const acc: StageAccumulator = {
     stageId,
     surfaceId: strOr(payload.surface_id, ""),
     draftId: draftIdFromProposalRef(payload.proposal_ref),
@@ -643,7 +691,33 @@ function applyWriteStaged(
     ledgerId: safeLedgerId(runId, seq),
     applyResult: null,
     applyFailureCode: null,
-  });
+    isRowset: false,
+    rowOrder: [],
+    stagedRows: new Map(),
+    agentHoldReasons: new Map(),
+    rowStances: new Map(),
+    rowDecidedBy: new Map(),
+    rowApplyOutcomes: new Map(),
+  };
+  // PRD-D3 — a `rows` count marks a row-set; `agent_holds` seed the sticky per-
+  // row pre-hold reasons (decided_by `agent`). Full content arrives with rev 1.
+  if (typeof payload.rows === "number" && Number.isFinite(payload.rows)) {
+    acc.isRowset = true;
+  }
+  const holds = payload.agent_holds;
+  if (Array.isArray(holds)) {
+    for (const raw of holds) {
+      if (raw === null || typeof raw !== "object") continue;
+      const rk = (raw as Record<string, unknown>).row_key;
+      const reason = (raw as Record<string, unknown>).reason;
+      if (typeof rk !== "string" || rk.length === 0) continue;
+      acc.isRowset = true;
+      acc.agentHoldReasons.set(rk, typeof reason === "string" ? reason : "");
+      acc.rowStances.set(rk, "held");
+      acc.rowDecidedBy.set(rk, "agent");
+    }
+  }
+  stages.set(stageId, acc);
 }
 
 function applyRevisionAdded(
@@ -670,6 +744,44 @@ function applyRevisionAdded(
   });
   if (rev > acc.latestRev) acc.latestRev = rev;
   if (seq > acc.lastSeq) acc.lastSeq = seq;
+  // PRD-D3 — hydrate the inline row-set; agent-held rows stay held, the rest
+  // default to will_apply.
+  const rowset = payload.rowset;
+  if (rowset !== null && typeof rowset === "object") {
+    hydrateRowset(acc, (rowset as Record<string, unknown>).rows);
+  }
+}
+
+function hydrateRowset(acc: StageAccumulator, rawRows: unknown): void {
+  if (!Array.isArray(rawRows)) return;
+  acc.isRowset = true;
+  for (const raw of rawRows) {
+    if (raw === null || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const rowKey = r.row_key;
+    const title = r.title;
+    if (typeof rowKey !== "string" || rowKey.length === 0) continue;
+    if (typeof title !== "string") continue;
+    if (acc.stagedRows.has(rowKey)) continue;
+    acc.stagedRows.set(rowKey, {
+      title,
+      changes: readRowChanges(r.changes),
+    });
+    acc.rowOrder.push(rowKey);
+    if (!acc.rowStances.has(rowKey)) acc.rowStances.set(rowKey, "will_apply");
+  }
+}
+
+function readRowChanges(value: unknown): LedgerRowChange[] {
+  if (!Array.isArray(value)) return [];
+  const out: LedgerRowChange[] = [];
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object") continue;
+    const c = raw as Record<string, unknown>;
+    if (typeof c.field !== "string" || c.field.length === 0) continue;
+    out.push({ field: c.field, old: c.old ?? null, new: c.new ?? null });
+  }
+  return out;
 }
 
 function applyDecisionRecorded(
@@ -702,13 +814,42 @@ function applyDecisionRecorded(
     scopeRevRaw >= 1
       ? scopeRevRaw
       : null;
+  const scopeRowKeys = Array.isArray(scope.row_keys)
+    ? (scope.row_keys.filter((k) => typeof k === "string" && k) as string[])
+    : [];
+  const apply = (payload as Record<string, unknown>).apply === true;
+  const actor = strOr(payload.actor, "");
   acc.decisions.push({
     decision,
     scopeRev,
-    actor: strOr(payload.actor, ""),
+    actor,
     seq,
     ledgerId: safeLedgerId(runId, seq),
   });
+  if (seq > acc.lastSeq) acc.lastSeq = seq;
+
+  // PRD-D3 — a row-scoped decision. `apply=true` freezes to apply_pending;
+  // otherwise it is a stance toggle (agent pre-hold reason stays STICKY).
+  if (scopeRowKeys.length > 0 && acc.isRowset) {
+    if (apply) {
+      acc.status = "apply_pending";
+      acc.approvedRev = acc.latestRev;
+    } else {
+      for (const rk of scopeRowKeys) {
+        if (!acc.stagedRows.has(rk)) continue;
+        if (decision === "approve") {
+          acc.rowStances.set(rk, "will_apply");
+          acc.rowDecidedBy.set(rk, decidedByOf(actor));
+        } else if (decision === "hold") {
+          acc.rowStances.set(rk, "held");
+          acc.rowDecidedBy.set(rk, decidedByOf(actor));
+        }
+      }
+    }
+    return;
+  }
+
+  // Single-artifact (D1) rev-scoped path — unchanged.
   if (decision === "approve") {
     acc.status = "approved";
     acc.approvedRev = scopeRev;
@@ -719,9 +860,10 @@ function applyDecisionRecorded(
     acc.status = "staged";
     acc.approvedRev = null;
   }
-  // `hold` never reaches the ledger in D1 (server 422s it), but if a future
-  // wave emits it the fold ignores its status effect here (D3 owns holds).
-  if (seq > acc.lastSeq) acc.lastSeq = seq;
+}
+
+function decidedByOf(actor: string): "agent" | "user" | "policy" {
+  return actor === "policy" ? "policy" : "user";
 }
 
 /** Fold `write.applied` (PRD-D2) — the TS twin of the Python fold's state machine.
@@ -740,6 +882,13 @@ function applyWriteApplied(
   if (acc === undefined) return; // applied for an unseen stage is ignored
   if (seq > acc.lastSeq) acc.lastSeq = seq;
   const result = payload.result;
+
+  // PRD-D3 — a row-set terminal (matched by the frozen apply_pending state).
+  if (acc.isRowset) {
+    applyRowsetTerminal(acc, result, payload);
+    return;
+  }
+
   const revRaw = payload.rev;
   const rev =
     typeof revRaw === "number" && Number.isInteger(revRaw) ? revRaw : null;
@@ -770,6 +919,54 @@ function applyWriteApplied(
   }
 }
 
+/** Fold a row-set `write.applied` (PRD-D3) — only legitimate from apply_pending.
+ *  `applied` ⇒ applied; `partial` ⇒ partially_applied (both terminal, per-row
+ *  outcomes from `row_results`); `failed` ⇒ back to `staged` (apply consumed,
+ *  stances intact); any other current state ⇒ `corrupt` (fail-closed). */
+function applyRowsetTerminal(
+  acc: StageAccumulator,
+  result: unknown,
+  payload: Record<string, unknown>,
+): void {
+  if (acc.status !== "apply_pending") {
+    acc.status = "corrupt";
+    acc.applyResult =
+      typeof result === "string" ? (result as LedgerApplyResult) : null;
+    return;
+  }
+  if (result === "applied") {
+    acc.status = "applied";
+    acc.applyResult = "applied";
+    foldRowResults(acc, payload.row_results);
+  } else if (result === "partial") {
+    acc.status = "partially_applied";
+    acc.applyResult = "partial";
+    foldRowResults(acc, payload.row_results);
+  } else if (result === "failed") {
+    acc.status = "staged";
+    acc.approvedRev = null;
+    acc.applyResult = "failed";
+  } else {
+    acc.status = "corrupt";
+    acc.applyResult =
+      typeof result === "string" ? (result as LedgerApplyResult) : null;
+  }
+}
+
+function foldRowResults(acc: StageAccumulator, value: unknown): void {
+  if (!Array.isArray(value)) return;
+  for (const raw of value) {
+    if (raw === null || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const rk = r.row_key;
+    const outcome = r.outcome;
+    if (typeof rk !== "string" || !acc.stagedRows.has(rk)) continue;
+    if (outcome === "applied" || outcome === "failed") {
+      acc.rowApplyOutcomes.set(rk, outcome);
+    }
+  }
+}
+
 /** Pull `failure.code` (a string) from a `write.applied{failed}` payload. */
 function failureCodeOf(value: unknown): string | null {
   if (value === null || typeof value !== "object") return null;
@@ -777,11 +974,39 @@ function failureCodeOf(value: unknown): string | null {
   return typeof code === "string" && code.length > 0 ? code : null;
 }
 
+/** Compose a stage's folded rows + counts (row-set only), or `[null, null]`. */
+function composeRows(
+  acc: StageAccumulator,
+): [readonly LedgerStagedRow[] | null, LedgerRowCounts | null] {
+  if (!acc.isRowset) return [null, null];
+  const rows: LedgerStagedRow[] = acc.rowOrder.map((rk) => {
+    const content = acc.stagedRows.get(rk);
+    return {
+      rowKey: rk,
+      title: content?.title ?? rk,
+      changes: content?.changes ?? [],
+      stance: acc.rowStances.get(rk) ?? "will_apply",
+      agentHoldReason: acc.agentHoldReasons.get(rk) ?? null,
+      decidedBy: acc.rowDecidedBy.get(rk) ?? null,
+      applyOutcome: acc.rowApplyOutcomes.get(rk) ?? null,
+    };
+  });
+  const counts: LedgerRowCounts = {
+    total: rows.length,
+    willApply: rows.filter((r) => r.stance === "will_apply").length,
+    held: rows.filter((r) => r.stance === "held").length,
+    applied: rows.filter((r) => r.applyOutcome === "applied").length,
+    failed: rows.filter((r) => r.applyOutcome === "failed").length,
+  };
+  return [rows, counts];
+}
+
 function freezeStage(acc: StageAccumulator): LedgerStagedWrite {
   const latestRevision =
     acc.revisions.length === 0
       ? null
       : acc.revisions.reduce((best, r) => (r.rev > best.rev ? r : best));
+  const [rows, rowCounts] = composeRows(acc);
   return {
     stageId: acc.stageId,
     surfaceId: acc.surfaceId,
@@ -798,6 +1023,8 @@ function freezeStage(acc: StageAccumulator): LedgerStagedWrite {
     latestRevision,
     applyResult: acc.applyResult,
     applyFailureCode: acc.applyFailureCode,
+    rows,
+    rowCounts,
   };
 }
 

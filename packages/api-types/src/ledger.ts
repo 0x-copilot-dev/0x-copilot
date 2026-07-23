@@ -99,6 +99,54 @@ export interface AgentHold {
   reason: string;
 }
 
+/** A row's decision stance in the fold (PRD-D3). */
+export type RowStance = "will_apply" | "held";
+
+/** Per-row outcome of a `write.applied` (PRD-D3). */
+export type RowOutcome = "applied" | "failed";
+
+/** One field's old→new diff on a staged row (display only, PRD-D3). */
+export interface RowFieldChange {
+  field: string;
+  old?: unknown;
+  new?: unknown;
+}
+
+/** One proposed row change — the WYSIWYG unit a user approves/holds (PRD-D3).
+ *  `target_args` is server-only and never rides the wire view. */
+export interface StagedRow {
+  row_key: string;
+  title: string;
+  target_args?: Record<string, unknown>;
+  changes: readonly RowFieldChange[];
+}
+
+/** Folded per-row state (PRD-D3). `agent_hold_reason` is sticky — it survives a
+ *  user override (FR-C7). */
+export interface RowState {
+  row_key: string;
+  stance: RowStance;
+  agent_hold_reason?: string | null;
+  decided_by?: "agent" | "user" | "policy" | null;
+  apply_outcome?: RowOutcome | null;
+}
+
+/** Projection summary over a stage's rows (PRD-D3). */
+export interface RowCounts {
+  total: number;
+  will_apply: number;
+  held: number;
+  applied: number;
+  failed: number;
+}
+
+/** One `write.applied.row_results` entry — a per-row apply outcome (PRD-D3). */
+export interface WriteAppliedRowResult {
+  row_key: string;
+  outcome: RowOutcome;
+  detail?: string;
+}
+
 /** Generation provenance for a shaped view (`view.derived.gen`). */
 export interface ViewGen {
   model: string;
@@ -207,11 +255,13 @@ export interface RevisionAddedPayload {
   rev: number;
   author: RevisionAuthor;
   diff_ref: string;
-  /** Additive (SDR §5 note, PRD-D1): the `draft://…` snapshot of THIS rev. */
+  /** Additive (SDR §5 note, PRD-D1): the `draft://…` / `stage://…` snapshot ref. */
   proposal_ref?: string;
   /** Additive (PRD-D1): the server-computed "edited by you" spans; `[]`/absent
    *  for the agent's rev 1. */
   authorship_spans?: readonly AuthorshipSpan[];
+  /** Additive (PRD-D3): the full inline row-set for a bulk (table) stage. */
+  rowset?: { rows: readonly StagedRow[] };
 }
 
 export interface DecisionRecordedPayload {
@@ -220,6 +270,9 @@ export interface DecisionRecordedPayload {
   decision: DecisionKind;
   scope: DecisionScope;
   actor: DecisionActor;
+  /** Additive (PRD-D3): present + `true` only on the apply-scoped approve (the
+   *  frozen decision that authorizes exactly `scope.row_keys` to execute). */
+  apply?: boolean;
 }
 
 /** Why an apply refused / failed (PRD-D2, additive to SDR §5). */
@@ -251,6 +304,8 @@ export interface WriteAppliedPayload {
   failure?: WriteAppliedFailure;
   /** Additive (PRD-D2): the approving decision, for the receipt fold (E1). */
   decided_by?: WriteAppliedDecidedBy;
+  /** Additive (PRD-D3): per-row apply outcomes (present on a row-set apply). */
+  row_results?: readonly WriteAppliedRowResult[];
 }
 
 export interface UsageRecordedPayload {
@@ -384,6 +439,43 @@ export interface StageRevisionRequest {
 export interface StageDecisionRequest {
   decision: DecisionKind;
   rev?: number;
+  /** PRD-D3 — row-set stance toggle scope (approve/hold). Exactly one of `rev`
+   *  or `row_keys` (never both). */
+  row_keys?: readonly string[];
+}
+
+/** Body for `POST /v1/agent/stages/{stage_id}/apply` (PRD-D3). The applied set
+ *  must equal the current will-apply set exactly (409 on a mismatch). */
+export interface StageApplyRequest {
+  rev: number;
+  row_keys: readonly string[];
+}
+
+/** One field diff on a staged row in the wire view (PRD-D3). */
+export interface StageRowChangeView {
+  field: string;
+  old?: unknown;
+  new?: unknown;
+}
+
+/** One staged row in the wire view: content + folded state (PRD-D3). */
+export interface StageRowView {
+  row_key: string;
+  title: string;
+  changes: readonly StageRowChangeView[];
+  stance: RowStance;
+  agent_hold_reason?: string | null;
+  decided_by?: "agent" | "user" | "policy" | null;
+  apply_outcome?: RowOutcome | null;
+}
+
+/** Row-count summary in the wire view (PRD-D3). */
+export interface StageRowCountsView {
+  total: number;
+  will_apply: number;
+  held: number;
+  applied: number;
+  failed: number;
 }
 
 /** One revision on the stage wire view. */
@@ -417,6 +509,9 @@ export interface StagedWriteView {
   status: string;
   revisions: readonly StageRevisionView[];
   decisions: readonly StageDecisionView[];
+  /** PRD-D3 — populated for a bulk row-set stage; `null` for single-artifact. */
+  rows?: readonly StageRowView[] | null;
+  row_counts?: StageRowCountsView | null;
 }
 
 /** FR-E2 wording, wire-safe (NEW, A1-defined). Not a ledger event type — a

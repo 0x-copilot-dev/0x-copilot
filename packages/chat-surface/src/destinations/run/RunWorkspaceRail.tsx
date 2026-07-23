@@ -52,6 +52,7 @@ import type { SourceEntry, SubagentEntry } from "@0x-copilot/api-types";
 import {
   AgentsTab,
   ApprovalsTab,
+  LedgerSourcesTab,
   SourcesTab,
   WorkspaceTabs,
   type ApprovalsQueueProjection,
@@ -63,6 +64,7 @@ import {
   type WorkspaceTabsItem,
 } from "../../workspace";
 import { isRunningStatus } from "../../workspace/workspaceHelpers";
+import type { LedgerSourcesProjection } from "./projectLedgerSources";
 import type { RunMode } from "./useRunMode";
 
 /** The four rail tabs, in v3 order — Chat · Agents · Approvals · Sources
@@ -97,6 +99,13 @@ export interface RunWorkspaceRailProps {
   readonly scrubbed?: boolean;
 
   // ── Sources tab (WorkspacePane body inputs) ────────────────────────────
+  /**
+   * Generative Surfaces v2 (PRD-E1 / FR-E3). When non-null, the Sources panel
+   * mounts the ledger-fold `LedgerSourcesTab` (everything read this run, grouped
+   * by connector) INSTEAD of the legacy citation `SourcesTab`. Absent / null ⇒
+   * existing behavior is byte-identical (all pre-existing assertions untouched).
+   */
+  readonly ledgerSources?: LedgerSourcesProjection | null;
   readonly sources?: SourceEntryMap;
   readonly sourcesLoading?: boolean;
   readonly sourcesError?: string | null;
@@ -133,6 +142,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     mode,
     chatSlot,
     defaultTab = "chat",
+    ledgerSources = null,
     sources = EMPTY_SOURCES,
     sourcesLoading,
     sourcesError = null,
@@ -236,15 +246,19 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
           aria-label="Sources"
           style={panelStyle(true)}
         >
-          <SourcesTab
-            sources={sources}
-            loading={sourcesLoading}
-            error={sourcesError}
-            searching={sourcesSearching}
-            onSelect={onSelectSource}
-            onJumpToChat={onJumpToChatSource}
-            SourceRowComponent={SourceRowComponent}
-          />
+          {ledgerSources !== null ? (
+            <LedgerSourcesTab ledgerSources={ledgerSources} />
+          ) : (
+            <SourcesTab
+              sources={sources}
+              loading={sourcesLoading}
+              error={sourcesError}
+              searching={sourcesSearching}
+              onSelect={onSelectSource}
+              onJumpToChat={onJumpToChatSource}
+              SourceRowComponent={SourceRowComponent}
+            />
+          )}
         </div>
       ) : null}
 

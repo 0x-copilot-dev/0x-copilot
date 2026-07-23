@@ -58,6 +58,24 @@ class Keys:
         SCOPE = "scope"
         START = "start"
         END = "end"
+        # PRD-D3 bulk row-set payload keys (write.staged rows/agent_holds;
+        # revision.added additive ``rowset``; decision.recorded ``scope.row_keys``
+        # + ``apply``; write.applied ``row_keys`` + additive ``row_results``).
+        # SDR §5 (verbatim + the additive keys noted under §5).
+        ROWS = "rows"
+        AGENT_HOLDS = "agent_holds"
+        ROW_KEY = "row_key"
+        ROW_KEYS = "row_keys"
+        REASON = "reason"
+        ROWSET = "rowset"
+        TARGET_ARGS = "target_args"
+        CHANGES = "changes"
+        FIELD = "field"
+        OLD = "old"
+        NEW = "new"
+        APPLY = "apply"
+        ROW_RESULTS = "row_results"
+        # ``row_results[].outcome`` reuses the existing ``OUTCOME`` key above.
         # PRD-D2 write.applied payload keys (SDR §5, verbatim + additive
         # ``failure`` / ``decided_by`` noted under §5).
         RESULT = "result"
@@ -67,6 +85,10 @@ class Keys:
         DETAIL = "detail"
         DECIDED_BY = "decided_by"
         DECISION_SEQ = "decision_seq"
+        # PRD-E1 receipt.emitted payload key (SDR §5, verbatim). ``surface_id`` /
+        # ``v`` reuse the existing keys above; ``fold_ref`` is the receipt's
+        # re-derivation pointer.
+        FOLD_REF = "fold_ref"
 
 
 class Values:
@@ -117,6 +139,14 @@ class Values:
     # additive failure-code enum defined in PRD-D2; ``partial`` is D3).
     RESULT_APPLIED = "applied"
     RESULT_FAILED = "failed"
+    # PRD-D3 partial-apply outcome (ApplyResult.PARTIAL member) + the per-row
+    # ``row_results[].outcome`` value set + the ``actor: policy`` allow-always
+    # auto-apply + the ``kind: table`` a row-set surface is created with.
+    RESULT_PARTIAL = "partial"
+    ROW_OUTCOME_APPLIED = "applied"
+    ROW_OUTCOME_FAILED = "failed"
+    ACTOR_POLICY = "policy"
+    KIND_TABLE = "table"
     FAILURE_PRECONDITION_DRIFT = "precondition_drift"
     FAILURE_CONNECTOR_ERROR = "connector_error"
     FAILURE_ATTEMPT_INDETERMINATE = "attempt_indeterminate"
@@ -125,6 +155,19 @@ class Values:
     # ``connector_receipt_ref`` scheme (PRD-D2, NEW): resolves to the persisted
     # raw ``ConnectorCommitResult`` for this commit attempt.
     COMMIT_REF_PREFIX = "commit://"
+
+    # PRD-E1 receipt constant values (SDR §5, NEW — E1 owns them). One receipt
+    # surface per run at the stable ``receipt://<run_id>`` id; the receipt has no
+    # SaaS connector, so its ``source`` is the constant ``runtime`` / ``receipt``
+    # pair. ``fold_ref = ledger://<run_id>@<through_seq>`` re-derives the receipt
+    # by folding events with ``sequence_no <= through_seq`` (NFR-5/6).
+    RECEIPT_SURFACE_PREFIX = "receipt://"
+    RECEIPT_CONNECTOR = "runtime"
+    RECEIPT_OP = "receipt"
+    RECEIPT_KIND = "receipt"
+    RECEIPT_TITLE = "Run receipt"
+    FOLD_REF_PREFIX = "ledger://"
+    FOLD_REF_SEPARATOR = "@"
 
 
 class Messages:
@@ -140,6 +183,19 @@ class Messages:
     WRITE_STAGED = "Staged a write"
     REVISION_ADDED = "Revised the draft"
     DECISION_RECORDED = "Recorded a decision"
+
+    # PRD-D3 bulk row-set emit-time summaries.
+    ROWSET_STAGED = "Staged a bulk change"
+    ROW_DECISION_RECORDED = "Recorded a row decision"
+    ROWSET_APPLIED = "Applied the approved rows"
+
+    # PRD-E1 receipt emit-time summaries (the two events the ReceiptEmitter
+    # appends at run termination) + the best-effort log tag.
+    RECEIPT_SURFACE_CREATED = "Prepared the run receipt"
+    RECEIPT_EMITTED = "Sealed the run receipt"
+    # Log tag when the ReceiptEmitter swallows its own exception (E1 §6). A fold
+    # or append failure must never block termination.
+    RECEIPT_EMIT_RAISED = "[surfaces_v2] receipt.emit_raised"
 
     # PRD-D2 write.applied emit-time summaries + FR-C3 display microcopy.
     WRITE_APPLIED = "Applied the write"

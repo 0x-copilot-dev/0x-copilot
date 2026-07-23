@@ -1,0 +1,35 @@
+{
+  "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+  "surface_id": "receipt://a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+  "fold_ref": "ledger://a7f3c9d2e5b14f60a7f3c9d2e5b14f60@20",
+  "generated_at": "2026-07-23T10:00:20Z",
+  "tiles": {
+    "reads_auto_ran": 1,
+    "writes_proposed": 3,
+    "writes_approved": 3,
+    "holds_untouched": 0
+  },
+  "rows": [
+    {
+      "ledger_id": "ra7f·004",
+      "event_type": "read.executed",
+      "title": "linear · get_issue",
+      "attribution": "auto_ran",
+      "at": "2026-07-23T10:00:04Z"
+    },
+    {
+      "ledger_id": "ra7f·015",
+      "event_type": "write.applied",
+      "title": "ENG-142 Fix streaming reconnect",
+      "attribution": "approved",
+      "at": "2026-07-23T10:00:15Z"
+    },
+    {
+      "ledger_id": "ra7f·016",
+      "event_type": "write.applied",
+      "title": "ENG-142 Fix streaming reconnect",
+      "attribution": "approved",
+      "at": "2026-07-23T10:00:16Z"
+    }
+  ]
+}

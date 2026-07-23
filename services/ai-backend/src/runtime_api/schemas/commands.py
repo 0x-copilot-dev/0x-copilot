@@ -68,6 +68,10 @@ class RuntimeStageCommitCommand(RuntimeContract):
     # ``sequence_no`` of the ``decision.recorded{approve}`` event — the handler's
     # approval gate refuses unless the folded approving decision matches this.
     decision_seq: int
+    # PRD-D3 — the approved row set for a bulk row-set apply, or ``None`` for a
+    # single-artifact (D1) commit. The worker gate re-checks that this equals the
+    # apply decision's scope exactly; held rows are never present here.
+    row_keys: tuple[str, ...] | None = None
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

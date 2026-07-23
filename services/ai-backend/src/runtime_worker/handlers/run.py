@@ -37,6 +37,7 @@ from agent_runtime.capabilities.surfaces import (
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
+from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -189,9 +190,15 @@ class RuntimeRunHandler:
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         token_counter: TokenCounterPort | None = None,
+        queue: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
+        # PRD-D3 — the durable command queue, threaded from the worker loop so the
+        # per-run ``stage_rowset_write`` tool can enqueue an allow-always auto-apply
+        # (FR-C8). ``None`` (unwired / minimal test handler) ⇒ the stager's
+        # ``commit_queue`` is ``None`` and nothing auto-applies.
+        self._queue = queue
         self.settings = settings or RuntimeSettings.load()
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
@@ -396,6 +403,7 @@ class RuntimeRunHandler:
                 command,
                 tool_observation_index,
                 workspace_backend=workspace_backend,
+                run=run,
             )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry
@@ -523,7 +531,7 @@ class RuntimeRunHandler:
                     run_id=command.run_id, status=AgentRunStatus.TIMED_OUT
                 )
             )
-            await self.run_termination.terminate(
+            await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.TIMED_OUT,
                 reason=TerminationReason.RUN_TIMEOUT,
@@ -560,7 +568,7 @@ class RuntimeRunHandler:
             # Map typed fatal errors to semantic termination reasons so the FE and
             # audit log can distinguish budget / auth failures from generic errors.
             termination_reason = _termination_reason_for(exc)
-            await self.run_termination.terminate(
+            await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.FAILED,
                 reason=termination_reason,
@@ -616,7 +624,7 @@ class RuntimeRunHandler:
         self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
         completed_at = completed.completed_at or datetime.now(timezone.utc)
         metrics_payload = metrics.to_payload(completed_at=completed_at)
-        await self.run_termination.terminate(
+        await self._emit_receipt_then_terminate(
             run=completed,
             terminal_status=AgentRunStatus.COMPLETED,
             reason=TerminationReason.NORMAL_COMPLETION,
@@ -635,6 +643,29 @@ class RuntimeRunHandler:
             status=AgentRunStatus.COMPLETED.value,
             budget_reservations=budget_reservations,
         )
+
+    async def _emit_receipt_then_terminate(
+        self, *, run: RunRecord, **terminate_kwargs: object
+    ) -> None:
+        """Append the run receipt (Generative Surfaces v2, PRD-E1) then terminate.
+
+        The single chokepoint every terminal path in this handler
+        (completed / failed / timed-out) routes through: it folds the run's
+        ledger into ``surface.created {kind: receipt}`` + ``receipt.emitted`` and
+        appends both BEFORE the terminal lifecycle event (the SSE stream stops on
+        terminal run status, so late-appended events would never reach live
+        clients). Gated on the same ``SURFACES_V2`` value the WorkLedgerEmitter
+        binds on, so flag-off is byte-identical. Best-effort: emission never
+        blocks termination.
+        """
+
+        await emit_receipt_if_enabled(
+            enabled=self.settings.execution.surfaces_v2,
+            event_producer=self.event_producer,
+            event_store=self.event_store,
+            run=run,
+        )
+        await self.run_termination.terminate(run=run, **terminate_kwargs)
 
     async def _preflight_budgets(
         self,
@@ -1046,6 +1077,7 @@ class RuntimeRunHandler:
         tool_observation_index: ToolObservationIndex,
         *,
         workspace_backend: object | None = None,
+        run: object | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts, workspace)."""
         dependencies = self.dependencies_factory(command.runtime_context)
@@ -1103,7 +1135,69 @@ class RuntimeRunHandler:
         sandbox_execute_tool = capability_tools.sandbox_execute_tool()
         if sandbox_execute_tool is not None:
             update["sandbox_execute_tool"] = sandbox_execute_tool
+        # PRD-D3 — the gated bulk row-set staging tool. Built only when SURFACES_V2
+        # is on (mirroring the A3 emitter gate); `None` otherwise, so the model's
+        # tool surface is byte-identical with the flag off.
+        stage_rowset_tool = self._stage_rowset_write_tool(command, run)
+        if stage_rowset_tool is not None:
+            update["stage_rowset_write_tool"] = stage_rowset_tool
         return dependencies.model_copy(update=update)
+
+    def _stage_rowset_write_tool(
+        self, command: RuntimeRunCommand, run: object | None
+    ) -> object | None:
+        """Build the per-run ``stage_rowset_write`` tool, or ``None`` (flag off).
+
+        Wired to the same event producer every emission uses (via
+        ``RuntimeStageLedger``), the durable queue (for an allow-always
+        auto-apply), and the C1 policy resolver. The stager never touches an MCP
+        client — only the CommitEngine path dispatches.
+        """
+
+        if not self.settings.execution.surfaces_v2 or run is None:
+            return None
+        from agent_runtime.api.stage_commit_queue import (  # noqa: PLC0415
+            RuntimeStageCommitQueue,
+        )
+        from agent_runtime.api.stage_ledger import RuntimeStageLedger  # noqa: PLC0415
+        from agent_runtime.capabilities.actions.policy import (  # noqa: PLC0415
+            ConnectorWritePolicyOverrides,
+            EffectiveActionPolicyResolver,
+        )
+        from agent_runtime.capabilities.tools.tool_use_enforcement import (  # noqa: PLC0415
+            ToolUsePolicyResolver,
+        )
+        from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (  # noqa: PLC0415
+            StageRowsetWriteTool,
+        )
+        from agent_runtime.surfaces_v2.rowset_policy import (  # noqa: PLC0415
+            RowsetPolicyResolver,
+        )
+        from agent_runtime.surfaces_v2.staging import WriteStager  # noqa: PLC0415
+
+        rc = command.runtime_context
+        resolver = EffectiveActionPolicyResolver(
+            snapshot=ToolUsePolicyResolver.resolve(rc),
+            overrides=ConnectorWritePolicyOverrides.from_user_policies(
+                rc.user_policies_json
+            ),
+        )
+        stager = WriteStager(
+            draft_store=self.draft_store,  # type: ignore[arg-type] — rowsets never touch drafts
+            ledger=RuntimeStageLedger(event_producer=self.event_producer),
+            commit_queue=(
+                RuntimeStageCommitQueue(queue=self._queue)  # type: ignore[arg-type]
+                if self._queue is not None
+                else None
+            ),
+            policy_resolver=RowsetPolicyResolver(resolver=resolver),
+        )
+        return StageRowsetWriteTool(
+            stager=stager,
+            run=run,
+            org_id=command.org_id,
+            run_id=command.run_id,
+        )
 
     def _draft_event_emitter(
         self, command: RuntimeRunCommand
