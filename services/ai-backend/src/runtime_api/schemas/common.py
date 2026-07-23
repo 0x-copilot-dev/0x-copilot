@@ -246,6 +246,18 @@ class RuntimeApiEventType(StrEnum):
     # the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
     GATE_OPENED = LedgerEventType.GATE_OPENED.value
     GATE_RESOLVED = LedgerEventType.GATE_RESOLVED.value
+    # Generative Surfaces v2 (PRD-D1, SDR §5). The single-artifact staged-write
+    # ledger triad, emitted behind ``SURFACES_V2`` by the ``WriteStager``:
+    # ``write.staged`` (a draft-send proposal becomes a staged surface),
+    # ``revision.added`` (rev 1 agent, then user free-form edits), and
+    # ``decision.recorded`` (approve/reject/restore). ``write.applied`` is
+    # INTENTIONALLY ABSENT here — PRD-D2's CommitEngine is its sole producer.
+    # All three project to ``RuntimeActivityKind.EVENT`` (StagedWrite fold +
+    # client ledger fold inputs, not timeline cards). Wire values come from the
+    # A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
+    WRITE_STAGED = LedgerEventType.WRITE_STAGED.value
+    REVISION_ADDED = LedgerEventType.REVISION_ADDED.value
+    DECISION_RECORDED = LedgerEventType.DECISION_RECORDED.value
 
     @classmethod
     def from_stream_event_type(

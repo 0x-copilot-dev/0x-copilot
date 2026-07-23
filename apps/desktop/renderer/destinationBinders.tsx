@@ -29,6 +29,7 @@ import {
 import {
   ActivityDestination,
   ChatsArchive,
+  ConnectModal,
   ConnectorsDestination,
   ProjectsDestination,
   RunDestination,
@@ -39,10 +40,11 @@ import {
   projectActivityRows,
   toChatArchiveRow,
   useChatsArchive,
+  useConnectFlow,
   useNotify,
   useTransport,
   type ConnectorAccessPort,
-  type ConnectorsFilterSlug,
+  type CustomServerInput,
   type ProjectDataPort,
   type ProjectSummary,
   type RunEmptyComposerCtx,
@@ -323,7 +325,23 @@ export function ConnectorsBinder({
   const notify = useNotify();
   const load = useCallback(() => loadConnectors(transport), [transport]);
   const { result, retry } = useSectionLoad(load);
-  const [filter, setFilter] = useState<ConnectorsFilterSlug>("connected");
+
+  // Custom-server add lives on the injected FirstRunConnectorsPort (SSOT — the
+  // same `/v1/mcp/servers` create the FTUE popover uses). This retires the
+  // "desktop custom-MCP add" follow-up: desktop gains custom add over the same
+  // port it already ships.
+  const port = useMemo(
+    () => createComposerConnectorsPort(transport),
+    [transport],
+  );
+
+  // Mirror the loaded connectors into a ref so the terminal Connect can resolve
+  // a freshly-connected connector by slug across the modal's await boundary.
+  const connectorsRef = useRef<ReadonlyArray<Connector>>([]);
+  useEffect(() => {
+    connectorsRef.current =
+      result?.status === "ok" ? (result.data?.connectors ?? []) : [];
+  }, [result]);
 
   // PRD-06 D4 — the access-mode writer, over the shell Transport (IPC → facade
   // PATCH). The destination owns the optimistic apply / revert / error banner;
@@ -345,43 +363,117 @@ export function ConnectorsBinder({
     [transport],
   );
 
-  // The connect flow is owned by Electron MAIN: the renderer hands main a
-  // stable slug and main binds the loopback + opens the system browser. On
-  // success we refetch so the newly-connected row appears. No token ever
-  // crosses the bridge — the invoke resolves with safe connection metadata.
-  const connect = useCallback(
-    (slug: ConnectorSlug): void => {
+  // PRD-11 D4 — the connect flow is host-neutral; only "open the authorization
+  // surface" is desktop-specific. The renderer is DENIED window.open, so a
+  // catalog pick routes through the main-brokered, slug-scoped connect IPC
+  // (loopback bind + system browser). A url-only request (a custom server's
+  // OAuth) is rejected — desktop cannot open it from the renderer.
+  const markConnectedRef = useRef<(slug?: ConnectorSlug) => void>(() => {});
+  const authorize = useCallback(
+    async (request: { slug?: ConnectorSlug; url?: string }): Promise<void> => {
+      if (request.slug === undefined) {
+        throw new Error(
+          "This server needs a browser sign-in that isn’t available on desktop yet.",
+        );
+      }
       const win = window as unknown as { bridge?: Window["bridge"] };
-      if (win.bridge === undefined) return;
-      win.bridge.ipc
-        .invoke(CONNECTOR_CHANNELS.connect, { slug })
-        .then(() => {
-          setFilter("connected");
-          retry();
-        })
-        .catch((error: unknown) => {
-          // Surface the failure instead of silently leaving the row in Available.
-          const raw = error instanceof Error ? error.message : String(error);
-          const body = raw.includes("connector_oauth_setup_required")
+      if (win.bridge === undefined) {
+        throw new Error("Connect is unavailable in this environment.");
+      }
+      const slug = request.slug;
+      try {
+        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.connect, { slug });
+      } catch (error: unknown) {
+        const raw = error instanceof Error ? error.message : String(error);
+        throw new Error(
+          raw.includes("connector_oauth_setup_required")
             ? "This connector isn’t set up for sign-in yet."
-            : messageFromError(error);
-          notify({ tone: "error", title: `Couldn’t connect ${slug}`, body });
-        });
+            : messageFromError(error),
+        );
+      }
+      // The main-brokered connect resolves on completion → refetch so the row
+      // lands, and signal the flow so the modal advances to the permission step.
+      retry();
+      markConnectedRef.current(slug);
     },
-    [notify, retry],
+    [retry],
+  );
+
+  // Custom-server add: create the MCP server over the port. Desktop cannot
+  // complete a browser OAuth from the renderer, so the flow completes on create
+  // (a non-auth server is fully registered; an OAuth server is registered and
+  // its sign-in is a documented desktop follow-up).
+  const addCustomServer = useCallback(
+    async (input: CustomServerInput): Promise<{ authorizeUrl?: string }> => {
+      await port.addCustomServer(input.url, input.oauthClient);
+      retry();
+      return {};
+    },
+    [port, retry],
+  );
+
+  const persistConnect = useCallback(
+    async (
+      slug: ConnectorSlug,
+      permission: ConnectorAccessMode,
+    ): Promise<void> => {
+      const connector = connectorsRef.current.find((c) => c.slug === slug);
+      if (connector === undefined) return;
+      await accessPort.setAccessMode(connector.id, permission);
+    },
+    [accessPort],
+  );
+
+  const flow = useConnectFlow({
+    authorize,
+    addCustomServer,
+    onConnect: persistConnect,
+  });
+  markConnectedRef.current = flow.markConnected;
+
+  // Reconnect a broken connector by re-authorizing its slug through the same
+  // main-brokered path.
+  const handleReconnect = useCallback(
+    (id: ConnectorId): void => {
+      const connector = connectorsRef.current.find((c) => c.id === id);
+      if (connector === undefined) return;
+      void authorize({ slug: connector.slug }).catch((error: unknown) => {
+        notify({
+          tone: "error",
+          title: `Couldn’t reconnect ${connector.display_name}`,
+          body: messageFromError(error),
+        });
+      });
+    },
+    [authorize, notify],
+  );
+
+  const catalog = useMemo<ReadonlyArray<ConnectorCatalogEntry>>(
+    () => (result?.status === "ok" ? (result.data?.available ?? []) : []),
+    [result],
   );
 
   return (
-    <ConnectorsDestination
-      items={result}
-      filter={filter}
-      onFilterChange={setFilter}
-      onConnect={() => setFilter("available")}
-      onOpenCatalogEntry={connect}
-      accessPort={accessPort}
-      onOpenApprovalSettings={onOpenApprovalSettings}
-      onRetry={retry}
-    />
+    <>
+      <ConnectorsDestination
+        items={result}
+        onConnect={flow.openConnect}
+        onReconnect={handleReconnect}
+        accessPort={accessPort}
+        onOpenApprovalSettings={onOpenApprovalSettings}
+        onRetry={retry}
+      />
+      <ConnectModal
+        open={flow.open}
+        onClose={flow.closeConnect}
+        catalog={catalog}
+        onSelectEntry={flow.onSelectEntry}
+        onConnect={flow.onConnect}
+        onAddCustomServer={flow.onAddCustomServer}
+        pending={flow.pending}
+        error={flow.error}
+      />
+    </>
   );
 }
 

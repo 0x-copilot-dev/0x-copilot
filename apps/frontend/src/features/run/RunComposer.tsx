@@ -171,6 +171,9 @@ export function RunComposer({
         models={models}
         selectedModel={selectedModel}
         onModelChange={onModelChange}
+        // "Add a provider key" navigates to Settings → Provider keys (the one
+        // surface); takes precedence over the inline port below.
+        onAddProviderKey={onOpenModelSettings}
         providerKeysPort={providerKeysPort}
         // The model picker is a model list (Cursor/Claude shape), not a depth grid.
         depthVisible={false}

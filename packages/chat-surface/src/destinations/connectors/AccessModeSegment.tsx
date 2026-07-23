@@ -145,6 +145,11 @@ export function AccessModeSegment({
 
 // === Styles ================================================================
 
+// PRD-11 D5 — the design's `.seg` group (copilot.css:708-715) sits on --panel
+// (== --color-surface), one rung LIGHTER than the page, not the old page-ground
+// token which was darker than the card it lived in. Radius stays --radius-md against
+// the design's 7px (a 1px delta declared as an expectDivergence, not a new rung
+// — PRD-01 §B refuses to extend the ladder).
 const groupStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
@@ -152,9 +157,13 @@ const groupStyle: CSSProperties = {
   padding: 2,
   borderRadius: "var(--radius-md, 12px)",
   border: "1px solid var(--color-border, #232325)",
-  background: "var(--color-bg, #131316)",
+  background: "var(--color-surface)",
 };
 
+// PRD-11 D5 — selection is NEUTRAL: background + colour only (design
+// copilot.css:730-733). No accent ring, and weight is a constant
+// --font-weight-medium for both states so the control never reflows type as
+// selection moves. Selected fills to --panel3 (== --color-surface-elevated).
 function itemStyle(selected: boolean, disabled: boolean): CSSProperties {
   return {
     appearance: "none",
@@ -163,13 +172,12 @@ function itemStyle(selected: boolean, disabled: boolean): CSSProperties {
     padding: "4px 10px",
     font: "inherit",
     fontSize: "var(--font-size-xs, 12px)",
-    fontWeight: selected ? 600 : 500,
+    fontWeight: "var(--font-weight-medium)",
     cursor: disabled ? "not-allowed" : "pointer",
-    background: selected ? "var(--color-bg-elevated, #18181b)" : "transparent",
+    background: selected ? "var(--color-surface-elevated)" : "transparent",
     color: selected
       ? "var(--color-text, #ededee)"
       : "var(--color-text-muted, #b4b4b8)",
-    boxShadow: selected ? "0 0 0 1px var(--color-accent, #d97757)" : "none",
     opacity: disabled ? 0.5 : 1,
     transition:
       "background-color var(--duration-fast, 120ms) var(--ease-standard, ease)",

@@ -1,5 +1,5 @@
-// ConnectorsDestination — "Tools" relabel, access-mode segment wiring,
-// approval-policy note, and reconnect (FR-4.20/4.22/4.24/4.25).
+// ConnectorsDestination (Tools) — row-list migration, identity tile,
+// access-mode segment wiring, approval-policy note, reconnect (PRD-11).
 
 import {
   act,
@@ -13,7 +13,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import type {
   Connector,
-  ConnectorCatalogEntry,
   ConnectorId,
   ConnectorSlug,
   SectionResult,
@@ -24,13 +23,12 @@ import type {
 import {
   ConnectorsDestination,
   TOOLS_POLICY_NOTE_COPY,
-  TOOLS_SUBTITLE,
 } from "./ConnectorsDestination";
 import type { ConnectorAccessPort } from "./ports/ConnectorAccessPort";
 
 type Items = SectionResult<{
   readonly connectors: ReadonlyArray<Connector>;
-  readonly available: ReadonlyArray<ConnectorCatalogEntry>;
+  readonly available: ReadonlyArray<unknown>;
 }>;
 
 function makeConnector(
@@ -84,22 +82,53 @@ function makeItems(): Items {
   };
 }
 
-describe("ConnectorsDestination — Tools relabel", () => {
-  it("renders the 'Tools' title, subtitle, and region label", () => {
+describe("ConnectorsDestination — Tools row list", () => {
+  it("renders the section header eyebrow, region label, and NO page title", () => {
     const { container } = render(<ConnectorsDestination items={makeItems()} />);
-    expect(screen.getByTestId("page-header-title")).toHaveTextContent("Tools");
-    expect(screen.getByTestId("page-header-subtitle")).toHaveTextContent(
-      TOOLS_SUBTITLE,
+    // Mono eyebrow `Connected · N`, not a 22px page <h1>.
+    expect(screen.getByTestId("section-header-label")).toHaveTextContent(
+      "Connected · 3",
     );
+    expect(screen.queryByTestId("page-header-title")).toBeNull();
+    expect(screen.queryByTestId("filter-tabs")).toBeNull();
     expect(
       container.querySelector('[data-component="connectors-destination"]'),
     ).toHaveAttribute("aria-label", "Tools");
   });
 
+  it("lays connectors out as a single hairline RowList (not a card grid)", () => {
+    render(<ConnectorsDestination items={makeItems()} />);
+    expect(screen.getByTestId("row-list")).toBeInTheDocument();
+    expect(screen.queryByTestId("card-grid")).toBeNull();
+    expect(screen.getAllByTestId("connector-row")).toHaveLength(3);
+  });
+
+  // ── PRD-11 DoD 3 — the missing-tile regression guard ─────────────────────
+  it("renders the default identity tile WITHOUT a renderIcon prop (DoD 3)", () => {
+    const items: Items = {
+      status: "ok",
+      data: {
+        connectors: [
+          makeConnector({
+            id: "conn_gmail" as ConnectorId,
+            slug: "gmail" as ConnectorSlug,
+            display_name: "Gmail",
+          }),
+        ],
+        available: [],
+      },
+    };
+    // No `renderIcon` — this was the exact defect: renderIcon was bound by
+    // neither host, so no tile ever rendered. The destination now defaults to
+    // an <AppIcon size="tile">.
+    const { container } = render(<ConnectorsDestination items={items} />);
+    expect(container.querySelector(".ui-app-icon--tile")).not.toBeNull();
+  });
+
   it("'Connect a tool' CTA fires onConnect", () => {
     const onConnect = vi.fn();
     render(<ConnectorsDestination items={makeItems()} onConnect={onConnect} />);
-    const cta = screen.getByTestId("page-header-primary-action");
+    const cta = screen.getByTestId("connectors-connect-cta");
     expect(cta).toHaveTextContent("Connect a tool");
     fireEvent.click(cta);
     expect(onConnect).toHaveBeenCalledTimes(1);
@@ -124,14 +153,20 @@ describe("ConnectorsDestination — Tools relabel", () => {
     expect(onOpenApprovalSettings).toHaveBeenCalledTimes(1);
   });
 
-  it("does not hardcode Safe/Dune as catalog defaults (FR-4.24)", () => {
-    render(<ConnectorsDestination items={makeItems()} />);
-    expect(screen.queryByText(/Safe/i)).toBeNull();
-    expect(screen.queryByText(/Dune/i)).toBeNull();
+  it("moves the Webhooks pivot into the header action slot", () => {
+    const onOpenWebhooks = vi.fn();
+    render(
+      <ConnectorsDestination
+        items={makeItems()}
+        onOpenWebhooks={onOpenWebhooks}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("connectors-webhooks"));
+    expect(onOpenWebhooks).toHaveBeenCalledTimes(1);
   });
 });
 
-describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22, PRD-06)", () => {
+describe("ConnectorsDestination — access-mode segment (PRD-06)", () => {
   it("each connected row renders an AccessModeSegment reflecting its mode", () => {
     render(<ConnectorsDestination items={makeItems()} />);
     const gmail = screen.getByRole("radiogroup", {
@@ -141,11 +176,9 @@ describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22, PRD-06)",
       "aria-checked",
       "true",
     );
-    // A read_act connector renders its segment with data-value="read_act".
     const notion = screen.getByRole("radiogroup", {
       name: "Access mode for Notion",
     });
-    expect(notion).toHaveAttribute("data-testid", "access-mode-segment");
     expect(notion).toHaveAttribute("data-value", "read_act");
   });
 
@@ -164,14 +197,11 @@ describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22, PRD-06)",
     const notion = screen.getByRole("radiogroup", {
       name: "Access mode for Notion",
     });
-    // Starts at read_act.
     expect(notion).toHaveAttribute("data-value", "read_act");
     fireEvent.click(within(notion).getByTestId("access-mode-option-off"));
     expect(setAccessMode).toHaveBeenCalledTimes(1);
     expect(setAccessMode).toHaveBeenCalledWith("conn_notion", "off");
-    // Optimistically flips to off before the promise settles.
     expect(notion).toHaveAttribute("data-value", "off");
-    // Settle to avoid an unhandled promise.
     act(() => {
       resolve(
         makeConnector({ id: "conn_notion" as ConnectorId, access_mode: "off" }),
@@ -189,9 +219,7 @@ describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22, PRD-06)",
       name: "Access mode for Notion",
     });
     fireEvent.click(within(notion).getByTestId("access-mode-option-off"));
-    // Optimistic flip happens first.
     expect(notion).toHaveAttribute("data-value", "off");
-    // After rejection it reverts to the server value and the banner renders.
     await waitFor(() => {
       expect(
         screen.getByRole("radiogroup", { name: "Access mode for Notion" }),
@@ -203,15 +231,57 @@ describe("ConnectorsDestination — access-mode segment (FR-4.21/4.22, PRD-06)",
   });
 });
 
-describe("ConnectorsDestination — reconnect (FR-4.25)", () => {
+describe("ConnectorsDestination — chip + reconnect", () => {
+  it("renders a status chip ONLY on non-connected rows", () => {
+    render(<ConnectorsDestination items={makeItems()} />);
+    // 3 rows; only the expired Notion row carries a chip.
+    const chips = screen.getAllByTestId("status-pill");
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toHaveTextContent(/re-auth/i);
+  });
+
   it("renders a Reconnect action for error/expired connectors wired to onReconnect", () => {
     const onReconnect = vi.fn();
     render(
       <ConnectorsDestination items={makeItems()} onReconnect={onReconnect} />,
     );
-    const action = screen.getByTestId("connector-card-action");
+    const action = screen.getByTestId("connector-reconnect");
     expect(action).toHaveTextContent("Reconnect");
     fireEvent.click(action);
     expect(onReconnect).toHaveBeenCalledWith("conn_notion");
+  });
+});
+
+describe("ConnectorsDestination — states", () => {
+  it("renders a loading skeleton when items is null", () => {
+    render(<ConnectorsDestination items={null} />);
+    expect(screen.getByTestId("connectors-skeleton")).toBeInTheDocument();
+  });
+
+  it("renders an error EmptyState with a retry action", () => {
+    const onRetry = vi.fn();
+    render(
+      <ConnectorsDestination
+        items={{ status: "error", error: "boom" }}
+        onRetry={onRetry}
+      />,
+    );
+    const retry = screen.getByRole("button", { name: /retry/i });
+    fireEvent.click(retry);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders the empty-connected EmptyState with a Connect CTA", () => {
+    const onConnect = vi.fn();
+    render(
+      <ConnectorsDestination
+        items={{ status: "ok", data: { connectors: [], available: [] } }}
+        onConnect={onConnect}
+      />,
+    );
+    // Both the header CTA and the EmptyState action read "Connect a tool";
+    // target the EmptyState action specifically.
+    fireEvent.click(screen.getByTestId("empty-state-action"));
+    expect(onConnect).toHaveBeenCalledTimes(1);
   });
 });

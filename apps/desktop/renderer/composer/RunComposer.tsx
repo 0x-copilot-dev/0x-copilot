@@ -268,8 +268,10 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onRemoveSkill={handleRemoveSkill}
         onClearSkills={handleClearSkills}
         connectorsTrigger={connectorsTrigger}
-        // Inline "Add a provider key" form inside the model popover (host-owned
-        // provider-keys surface); unset ⇒ the pill keeps its deep-link.
+        // "Add a provider key" navigates to Settings → Provider keys (the one
+        // surface); takes precedence over the inline port below.
+        onAddProviderKey={onOpenModelSettings}
+        // Inline form fallback if navigation isn't wired (host-owned surface).
         providerKeysPort={providerKeysPort}
         // Model popover footer → Settings → Local models. Same deep-link idiom
         // as the provider-keys CTA, just the other half of the picker.

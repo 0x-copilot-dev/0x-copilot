@@ -649,9 +649,8 @@ export {
   type ToolsSortSlug,
 } from "./destinations/tools";
 export {
-  ConnectorCard,
   ConnectorsDestination,
-  ConnectorsPanel,
+  useConnectFlow,
   RevealOnce,
   ConnectorDetailView,
   ScopeReviewTab,
@@ -665,11 +664,11 @@ export {
 } from "./destinations/connectors";
 export type {
   ConnectorsDestinationProps,
-  ConnectorsFilterCounts,
-  ConnectorsFilterSlug,
-  ConnectorCardProps,
   ConnectorAccessPort,
-  ConnectorsPanelProps,
+  ConnectFlow,
+  ConnectAuthorizeRequest,
+  CustomServerResult,
+  UseConnectFlowOptions,
   RevealOnceProps,
   ConnectorDetailViewProps,
   ConnectorDetailTabId,
@@ -1158,6 +1157,22 @@ export {
 } from "./thread-canvas";
 export { PostureChip, type PostureChipProps } from "./destinations/run";
 // === end PRD-C2 ===
+
+// === Surfaces v2 — PRD-D1 staged-write engine (client) ===
+export {
+  TcApproveBar,
+  approveBarMicrocopy,
+  type TcApproveBarProps,
+  TcStagedDraftSurface,
+  renderAuthorshipSpans,
+  type TcStagedDraftSurfaceProps,
+  type LedgerStagedWrite,
+  type LedgerStagedWriteStatus,
+  type LedgerStageRevision,
+  type LedgerStageDecision,
+  type LedgerAuthorshipSpan,
+} from "./thread-canvas";
+// === end PRD-D1 ===
 
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Provenance footer, skeleton/assembling state, lossless raw fallback, and the

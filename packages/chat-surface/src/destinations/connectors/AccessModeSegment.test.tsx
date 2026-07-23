@@ -166,6 +166,45 @@ describe("AccessModeSegment", () => {
     );
   });
 
+  // ── PRD-11 D5 — neutral selection (no ring, no weight reflow) ─────────────
+  it("selection is neutral: the selected and unselected options carry the SAME font-weight (DoD 6)", () => {
+    render(
+      <AccessModeSegment value="read_act" onChange={vi.fn()} ariaLabel="x" />,
+    );
+    // Design (copilot.css:716-733): weight is a constant 500 for both states;
+    // only background + colour change on selection. The live control must not
+    // reflow type weight as selection moves.
+    expect(
+      getComputedStyle(screen.getByTestId("access-mode-option-read_act"))
+        .fontWeight,
+    ).toBe(
+      getComputedStyle(screen.getByTestId("access-mode-option-off")).fontWeight,
+    );
+  });
+
+  it("no option carries an accent boxShadow ring", () => {
+    render(
+      <AccessModeSegment value="read_act" onChange={vi.fn()} ariaLabel="x" />,
+    );
+    for (const mode of ["read", "read_act", "off"]) {
+      expect(
+        screen.getByTestId(`access-mode-option-${mode}`).style.boxShadow,
+      ).toBe("");
+    }
+  });
+
+  it("the selected item fills to --color-surface-elevated on a --color-surface group", () => {
+    render(
+      <AccessModeSegment value="read_act" onChange={vi.fn()} ariaLabel="x" />,
+    );
+    expect(
+      screen.getByTestId("access-mode-option-read_act").style.background,
+    ).toBe("var(--color-surface-elevated)");
+    expect(screen.getByTestId("access-mode-segment").style.background).toBe(
+      "var(--color-surface)",
+    );
+  });
+
   it("disabled renders every option disabled and fires nothing", () => {
     const onChange = vi.fn();
     render(

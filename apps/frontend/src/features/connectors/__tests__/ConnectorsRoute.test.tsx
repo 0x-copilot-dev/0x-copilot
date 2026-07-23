@@ -750,7 +750,7 @@ describe("ConnectorsRoute reconnect", () => {
       );
     });
 
-    fireEvent.click(screen.getByTestId("connector-card-action"));
+    fireEvent.click(screen.getByTestId("connector-reconnect"));
 
     await waitFor(() => {
       expect(connectorsApiMocks.startConnectorOAuth).toHaveBeenCalledWith(

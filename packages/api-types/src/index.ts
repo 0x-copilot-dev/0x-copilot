@@ -39,10 +39,16 @@ export type {
   ReceiptEmittedPayload,
   LedgerEventPayloadMap,
   SurfaceEventV2,
+  AuthorshipSpan,
   Revision,
   Decision,
   Surface,
   StagedWrite,
+  StageRevisionRequest,
+  StageDecisionRequest,
+  StageRevisionView,
+  StageDecisionView,
+  StagedWriteView,
   ReceiptAttribution,
   UsageRecord,
   RunReceiptRow,
@@ -84,6 +90,9 @@ import type {
   ViewPreferencePayload,
   GateOpenedPayload,
   GateResolvedPayload,
+  WriteStagedPayload,
+  RevisionAddedPayload,
+  DecisionRecordedPayload,
 } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
@@ -395,6 +404,9 @@ export type RuntimeApiEventType =
   | "view.preference"
   | "gate.opened"
   | "gate.resolved"
+  | "write.staged"
+  | "revision.added"
+  | "decision.recorded"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -461,6 +473,9 @@ export const RUNTIME_API_EVENT_TYPES = [
   "view.preference",
   "gate.opened",
   "gate.resolved",
+  "write.staged",
+  "revision.added",
+  "decision.recorded",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2311,6 +2326,17 @@ export interface RuntimeEventPayloadByType {
    * posture chip from these (never the legacy `mcp_auth_required` event). */
   "gate.opened": GateOpenedPayload;
   "gate.resolved": GateResolvedPayload;
+  /** Generative Surfaces v2 (PRD-D1, SDR §5). The single-artifact staged-write
+   * ledger triad, emitted behind `SURFACES_V2`: `write.staged` (a draft-send
+   * proposal becomes a staged surface), `revision.added` (rev 1 agent, then
+   * user free-form edits with server-diffed authorship spans), and
+   * `decision.recorded` (approve/reject/restore). `write.applied` is
+   * INTENTIONALLY ABSENT — PRD-D2's CommitEngine is its sole producer. The
+   * client ledger fold renders the staged-draft surface + rev-pinned approve
+   * bar from these. */
+  "write.staged": WriteStagedPayload;
+  "revision.added": RevisionAddedPayload;
+  "decision.recorded": DecisionRecordedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

@@ -36,7 +36,7 @@ import type {
   ConnectorSlug,
   McpOAuthClientConfigRequest,
 } from "@0x-copilot/api-types";
-import { Button, Field, TextInput } from "@0x-copilot/design-system";
+import { AppIcon, Button, Field, TextInput } from "@0x-copilot/design-system";
 
 import { Modal, StepDots } from "../../settings/Modal";
 
@@ -291,12 +291,22 @@ export function ConnectModal({
 
   if (!open) return null;
 
+  // Design subtitle states the TRUST MODEL, not a task (copilot-flows.jsx:455).
   const subtitle =
     phase === "custom"
       ? "Add a custom server"
       : selected !== null
         ? selected.display_name
-        : "Bring a SaaS source in";
+        : "the agent acts through your accounts";
+
+  // Header identity tile. A picked connector shows its per-slug neutral tile;
+  // the unselected catalog step shows a neutral plug glyph (PRD-11 D7).
+  const logo =
+    selected !== null ? (
+      <AppIcon name={selected.slug} size="tile" tone="neutral" />
+    ) : (
+      <span aria-hidden="true">🔌</span>
+    );
 
   return (
     <Modal
@@ -304,7 +314,7 @@ export function ConnectModal({
       onClose={onClose}
       title="Connect a tool"
       subtitle={subtitle}
-      logo={<span aria-hidden="true">◆</span>}
+      logo={logo}
       footer={footer}
     >
       {phase === "catalog" ? (
@@ -347,19 +357,22 @@ function CatalogStep({
   const customRow =
     onAddCustom !== undefined ? (
       <li>
+        {/* PRD-11 D7 — the escape hatch is PINNED, not dashed (the design's
+            .mrow--dash is dead CSS after the cascade; only the sticky
+            treatment survives). Full-bleed against Modal's 15px body pad. */}
         <button
           type="button"
-          style={pickRowStyle}
+          style={customPickRowStyle}
           onClick={onAddCustom}
           data-testid="connect-catalog-custom"
         >
-          <span aria-hidden="true" style={glyphStyle}>
-            ＋
+          <span aria-hidden="true" style={customGlyphStyle}>
+            {"{ }"}
           </span>
           <span style={{ flex: 1, minWidth: 0 }}>
-            <span style={pickNameStyle}>Add a custom server</span>
+            <span style={pickNameStyle}>Custom MCP server</span>
             <span style={pickSubStyle}>
-              Any MCP server by URL — with optional OAuth client details.
+              paste a JSON config — stdio or remote
             </span>
           </span>
           <span aria-hidden="true" style={chevronStyle}>
@@ -394,9 +407,7 @@ function CatalogStep({
             data-testid="connect-catalog-option"
             data-slug={entry.slug}
           >
-            <span aria-hidden="true" style={glyphStyle}>
-              ◆
-            </span>
+            <AppIcon name={entry.slug} tone="neutral" style={mrowLogoStyle} />
             <span style={{ flex: 1, minWidth: 0 }}>
               <span style={pickNameStyle}>{entry.display_name}</span>
               <span style={pickSubStyle}>{entry.description}</span>
@@ -737,15 +748,18 @@ const listStyle: CSSProperties = {
   listStyle: "none",
 };
 
+// PRD-11 D7 — the design `.mrow` (copilot.css:2350-2364): padding 10px, 1px
+// --line2 (== --color-border-strong) border, radius 8px, bg --ink2
+// (== --color-bg-elevated), gap 10px.
 const pickRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: "var(--space-md)",
+  gap: 10,
   width: "100%",
-  padding: "var(--space-sm) var(--space-md)",
+  padding: 10,
   borderRadius: "var(--radius-md)",
-  border: "1px solid var(--color-border)",
-  backgroundColor: "var(--color-surface-muted)",
+  border: "1px solid var(--color-border-strong)",
+  backgroundColor: "var(--color-bg-elevated)",
   color: "var(--color-text)",
   font: "inherit",
   textAlign: "left",
@@ -753,16 +767,38 @@ const pickRowStyle: CSSProperties = {
   transition: "background-color var(--duration-fast) var(--ease-standard)",
 };
 
-const glyphStyle: CSSProperties = {
-  flex: "0 0 auto",
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
+// The escape hatch: an ordinary .mrow that is `position: sticky; bottom: -15px;
+// margin: 10px -15px 7px; width: calc(100% + 30px)` — full-bleed against the
+// Modal body's 15px pad (settings/Modal.tsx bodyStyle). Not dashed.
+const customPickRowStyle: CSSProperties = {
+  ...pickRowStyle,
+  position: "sticky",
+  bottom: -15,
+  margin: "10px -15px 7px",
+  width: "calc(100% + 30px)",
+};
+
+// 28×28 neutral tile (design `.mrow__logo`, radius 7 ≈ --radius-md). Passed to
+// AppIcon so the base 20px circle is overridden and the neutral class owns the
+// --panel3 / --tx2 chrome; the custom row's mono `{ }` glyph reuses the size.
+const mrowLogoStyle: CSSProperties = {
   width: 28,
   height: 28,
-  borderRadius: "var(--radius-sm)",
-  backgroundColor: "var(--color-surface)",
-  color: "var(--color-text-muted)",
+  borderRadius: "var(--radius-md)",
+  fontSize: "var(--font-size-2xs)",
+};
+
+const customGlyphStyle: CSSProperties = {
+  flex: "0 0 auto",
+  display: "grid",
+  placeItems: "center",
+  width: 28,
+  height: 28,
+  borderRadius: "var(--radius-md)",
+  backgroundColor: "var(--color-surface-elevated)",
+  color: "var(--color-text-strong)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs)",
 };
 
 const pickNameStyle: CSSProperties = {

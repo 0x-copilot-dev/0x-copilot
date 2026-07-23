@@ -154,6 +154,30 @@ describe("ModelPill (v3)", () => {
     expect(onAddProviderKey).toHaveBeenCalled();
   });
 
+  it("navigation deep-link wins over the inline port when both are set", () => {
+    // Locked decision: the pill's "Add a provider key" navigates to the one
+    // Settings surface rather than opening an inline form in the popover.
+    const onAddProviderKey = vi.fn();
+    const port: ProviderKeysPort = {
+      list: vi.fn().mockResolvedValue([]),
+      save: vi.fn(),
+      remove: vi.fn(),
+    };
+    render(
+      <ModelPill
+        models={models}
+        value="openai/gpt-5.4"
+        onChange={() => undefined}
+        onAddProviderKey={onAddProviderKey}
+        providerKeysPort={port}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Add a provider key/ }));
+    expect(onAddProviderKey).toHaveBeenCalled();
+    expect(screen.queryByTestId("first-run-keyform")).not.toBeInTheDocument();
+  });
+
   it("omits the footer when no deep-link callbacks are provided", () => {
     render(
       <ModelPill
@@ -194,7 +218,6 @@ describe("ModelPill (v3)", () => {
       remove: vi.fn().mockResolvedValue(undefined),
     };
     const onProviderKeyAdded = vi.fn();
-    const onAddProviderKey = vi.fn();
 
     render(
       <ModelPill
@@ -203,7 +226,6 @@ describe("ModelPill (v3)", () => {
         onChange={() => undefined}
         providerKeysPort={port}
         onProviderKeyAdded={onProviderKeyAdded}
-        onAddProviderKey={onAddProviderKey}
       />,
     );
 
@@ -211,10 +233,8 @@ describe("ModelPill (v3)", () => {
     fireEvent.click(screen.getByRole("button", { name: /Model: GPT-5\.4/ }));
     fireEvent.click(screen.getByRole("button", { name: /Add a provider key/ }));
 
-    // providerKeysPort wins over the deep-link: the inline KeyForm renders and
-    // onAddProviderKey never fires.
+    // With no navigation deep-link wired, the inline KeyForm is the fallback.
     expect(screen.getByTestId("first-run-keyform")).toBeInTheDocument();
-    expect(onAddProviderKey).not.toHaveBeenCalled();
 
     // Type a well-formed Anthropic key (the default first provider) and connect.
     fireEvent.change(screen.getByTestId("first-run-key-input"), {

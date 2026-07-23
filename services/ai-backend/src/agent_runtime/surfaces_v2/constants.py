@@ -44,6 +44,20 @@ class Keys:
         AUTH_STATE = "auth_state"
         OUTCOME = "outcome"
         WRITE_POLICY = "write_policy"
+        # PRD-D1 staged-write payload keys (write.staged / revision.added /
+        # decision.recorded — SDR §5, verbatim; ``proposal_ref`` /
+        # ``authorship_spans`` are the additive keys noted under §5).
+        STAGE_ID = "stage_id"
+        TARGET = "target"
+        PROPOSAL_REF = "proposal_ref"
+        REV = "rev"
+        AUTHOR = "author"
+        DIFF_REF = "diff_ref"
+        AUTHORSHIP_SPANS = "authorship_spans"
+        DECISION = "decision"
+        SCOPE = "scope"
+        START = "start"
+        END = "end"
 
 
 class Values:
@@ -81,6 +95,15 @@ class Values:
     # Longest a folded/derived surface title may be (D1).
     TITLE_MAX_LEN = 120
 
+    # PRD-D1 staged-write constant values (SDR §5 enum members, verbatim).
+    KIND_MESSAGE = "message"
+    AUTHOR_AGENT = "agent"
+    AUTHOR_USER = "user"
+    DECISION_APPROVE = "approve"
+    DECISION_REJECT = "reject"
+    DECISION_HOLD = "hold"
+    DECISION_RESTORE = "restore"
+
 
 class Messages:
     """Emit-time summaries for the ledger events (D3). ``action.classified``
@@ -90,6 +113,11 @@ class Messages:
     SURFACE_CREATED = "Prepared a surface"
     VIEW_DERIVED = "Derived a view"
     VIEW_PREFERENCE = "Set a view preference"
+
+    # PRD-D1 staged-write emit-time summaries.
+    WRITE_STAGED = "Staged a write"
+    REVISION_ADDED = "Revised the draft"
+    DECISION_RECORDED = "Recorded a decision"
 
     # Log tag when an emitter method swallows its own exception (D3/D8).
     EMIT_RAISED = "[surfaces_v2] ledger.emit_raised"

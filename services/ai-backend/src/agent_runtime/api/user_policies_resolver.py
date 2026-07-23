@@ -299,32 +299,35 @@ class ProviderKeysHydrator:
 
 
 class TrustedBackendLaneError(RuntimeError):
-    """The trusted-backend lane is half-configured.
+    """The trusted-backend policies lane is broken.
 
-    Raised at wiring time (app / worker startup) when exactly one of
-    ``BACKEND_BASE_URL`` / ``ENTERPRISE_SERVICE_TOKEN`` is set. A half-configured
-    lane silently degrades the per-user policy snapshot — and with it every
-    user's decrypted BYOK provider keys — to empty, so every BYOK run fails at
-    create with a misleading "add a key" error. Failing fast turns a silent,
-    per-run black hole into a loud, one-time startup error that names the fix.
+    Raised at wiring time (app / worker startup) when ``BACKEND_BASE_URL`` is set
+    but ``ENTERPRISE_SERVICE_TOKEN`` is missing — the runtime-policies fetch would
+    then fail to authenticate, silently degrading every user's BYOK keys to empty.
+    Failing fast turns that silent, per-run black hole into a loud, one-time
+    startup error that names the fix. (The reverse — token set, URL unset — is
+    NOT an error: the token also authenticates MCP/skills internal calls, so a
+    URL-less deployment simply runs with the BYOK lane off, logged loudly.)
     """
 
 
 class UserPoliciesResolverFactory:
     """Select the appropriate resolver from environment configuration.
 
-    The trusted-backend lane requires **both** ``BACKEND_BASE_URL`` and
-    ``ENTERPRISE_SERVICE_TOKEN``:
+    ``BACKEND_BASE_URL`` is the policies-lane switch; ``ENTERPRISE_SERVICE_TOKEN``
+    additionally authenticates other internal calls (MCP cards, skills, over their
+    own ``*_REGISTRY_URL``s), so the two are deliberately NOT strictly coupled:
 
     * **both set** → :class:`HttpUserPoliciesResolver` (BYOK keys reach runs).
-    * **neither set** → :class:`NullUserPoliciesResolver` (an env-key-only /
-      standalone deployment; BYOK is simply unavailable, never silently broken).
-    * **exactly one set** → :class:`TrustedBackendLaneError` (a deployment
-      misconfiguration — fail loud rather than silently drop every user's keys).
+    * **URL set, token missing** → :class:`TrustedBackendLaneError` (the fetch
+      can't authenticate — an unambiguously broken lane).
+    * **token set, URL missing** → :class:`NullUserPoliciesResolver`, logged
+      loudly. Legitimate "internal auth on, BYOK lane off" (e.g. the fake-model
+      harness); a deployment that MEANT to enable BYOK sees the warning.
+    * **neither set** → :class:`NullUserPoliciesResolver` (standalone default).
 
-    The old behaviour degraded partial configuration to Null with only a log
-    warning, which is exactly how self-host prod (token set, URL unset) shipped a
-    silent BYOK black hole. This factory refuses to paper over that.
+    Self-host prod (which wants BYOK) is fixed by wiring ``BACKEND_BASE_URL`` in
+    its compose, not by crashing every token-only deployment.
     """
 
     @classmethod
@@ -353,13 +356,25 @@ class UserPoliciesResolverFactory:
                 backend_url=backend_url,
                 service_token=service_token,
             )
-        if url_set or token_set:
+        if url_set and not token_set:
+            # URL without a service token is an unambiguously broken lane: the
+            # policies fetch would 401. Fail loud.
             raise TrustedBackendLaneError(
-                "Trusted-backend lane is half-configured "
-                f"(BACKEND_BASE_URL set={url_set}, ENTERPRISE_SERVICE_TOKEN set={token_set}). "
-                "BYOK provider keys would be silently dropped from every run. Set BOTH "
-                "to enable BYOK (see desktop service-env / self-host compose), or NEITHER "
-                "for an env-key-only deployment."
+                "BACKEND_BASE_URL is set but ENTERPRISE_SERVICE_TOKEN is missing: the "
+                "runtime-policies fetch cannot authenticate, so the trusted-backend "
+                "lane is broken. Set the service token, or unset BACKEND_BASE_URL."
+            )
+        if token_set:
+            # Token set, URL not. The token also authenticates non-policies internal
+            # calls (MCP cards, skills, via their own *_REGISTRY_URLs), so this is a
+            # legitimate "internal auth on, BYOK lane off" deployment (e.g. the
+            # fake-model harness). Disable the lane, but say so loudly so a
+            # deployment that MEANT to enable BYOK notices — never silently.
+            _LOGGER.warning(
+                "user-policies lane disabled: ENTERPRISE_SERVICE_TOKEN is set but "
+                "BACKEND_BASE_URL is not, so BYOK provider keys will NOT reach runs. "
+                "Set BACKEND_BASE_URL to enable the lane (desktop service-env / "
+                "self-host compose); ignore this if BYOK is intentionally off."
             )
         return NullUserPoliciesResolver()
 
