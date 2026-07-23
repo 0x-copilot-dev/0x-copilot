@@ -56,11 +56,13 @@ from runtime_api.schemas import (
     ApprovalDecision,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
+    ConversationBucket,
     ConversationStatus,
     ConversationRecord,
     CreateConversationRequest,
     CreateRunRequest,
     HistoryDeletionResponse,
+    matches_conversation_bucket,
     MessageRecord,
     MessageRole,
     MessageStatus,
@@ -244,12 +246,20 @@ class InMemoryRuntimeApiStore:
         include_archived: bool = False,
         include_deleted: bool = False,
         project_id: str | None = None,
+        bucket: ConversationBucket | None = None,
+        before_updated_at: datetime | None = None,
+        before_conversation_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
-        """Return scoped conversations ordered by latest update.
+        """Return scoped conversations ordered ``(updated_at DESC, id DESC)``.
 
         Soft-deleted rows (``deleted_at IS NOT NULL``) are excluded by default;
         pass ``include_deleted=True`` to include them. When ``project_id`` is
         set, only conversations filed under that project are returned (PRD-07).
+
+        ``bucket`` (PRD-09 D3) scopes to one Chats section server-side; when set,
+        ``include_archived`` is ignored and soft-deleted rows always excluded. The
+        ``(before_updated_at, before_conversation_id)`` keyset returns only rows
+        strictly older than it under the sort order.
         """
 
         records = [
@@ -263,23 +273,42 @@ class InMemoryRuntimeApiStore:
                 for conversation in records
                 if conversation.project_id == project_id
             ]
-        if not include_archived:
-            records = [
-                conversation
-                for conversation in records
-                if conversation.status != ConversationStatus.ARCHIVED
-            ]
-        if not include_deleted:
+        if bucket is not None:
             records = [
                 conversation
                 for conversation in records
                 if conversation.deleted_at is None
+                and matches_conversation_bucket(conversation, bucket)
             ]
-        return tuple(
-            sorted(
-                records, key=lambda conversation: conversation.updated_at, reverse=True
-            )[:limit]
+        else:
+            if not include_archived:
+                records = [
+                    conversation
+                    for conversation in records
+                    if conversation.status != ConversationStatus.ARCHIVED
+                ]
+            if not include_deleted:
+                records = [
+                    conversation
+                    for conversation in records
+                    if conversation.deleted_at is None
+                ]
+        ordered = sorted(
+            records,
+            key=lambda conversation: (
+                conversation.updated_at,
+                conversation.conversation_id,
+            ),
+            reverse=True,
         )
+        if before_updated_at is not None and before_conversation_id is not None:
+            boundary = (before_updated_at, before_conversation_id)
+            ordered = [
+                conversation
+                for conversation in ordered
+                if (conversation.updated_at, conversation.conversation_id) < boundary
+            ]
+        return tuple(ordered[:limit])
 
     async def count_conversations_by_project(
         self,
@@ -542,8 +571,13 @@ class InMemoryRuntimeApiStore:
         *,
         org_id: str,
         conversation_id: str,
+        prefer_roles: tuple[str, ...] = ("assistant",),
     ) -> MessageRecord | None:
-        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4).
+
+        Prefers the newest message whose role is in ``prefer_roles`` (PRD-09 D6),
+        falling back to the newest of any role when none matches.
+        """
 
         candidates = [
             message
@@ -554,7 +588,11 @@ class InMemoryRuntimeApiStore:
         ]
         if not candidates:
             return None
-        return max(candidates, key=lambda message: message.created_at)
+        preferred = [
+            message for message in candidates if str(message.role) in prefer_roles
+        ]
+        pool = preferred if preferred else candidates
+        return max(pool, key=lambda message: message.created_at)
 
     async def get_latest_run_for_conversation(
         self,
@@ -816,7 +854,13 @@ class InMemoryRuntimeApiStore:
     async def update_run_status(
         self, *, run_id: str, status: AgentRunStatus
     ) -> RunRecord:
-        """Update run status and relevant timestamps."""
+        """Update run status and relevant timestamps.
+
+        PRD-09 D4 — also bump the parent conversation's ``updated_at`` so a
+        status-only transition (cancel/fail/timeout/waiting_for_approval) moves
+        the row the Chats live tail watches; without it the tail would miss the
+        very chip flip the user is watching.
+        """
 
         run = self.runs[run_id]
         timestamps = StatusTransition.timestamp_updates(
@@ -824,6 +868,11 @@ class InMemoryRuntimeApiStore:
         )
         updated = run.model_copy(update={"status": status, **timestamps})
         self.runs[run_id] = updated
+        conversation = self.conversations.get(run.conversation_id)
+        if conversation is not None:
+            self.conversations[run.conversation_id] = conversation.model_copy(
+                update={"updated_at": datetime.now(timezone.utc)}
+            )
         return updated
 
     async def set_run_latest_sequence(

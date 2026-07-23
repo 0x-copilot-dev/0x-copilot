@@ -54,6 +54,17 @@ export interface RowProps extends Omit<
    */
   readonly trailing?: ReactNode;
   /**
+   * Optional overflow-menu content (PRD-09 D2), rendered in a persistently
+   * mounted slot after `meta`. Chats uses it for the ⋯ → Pin / Archive control.
+   * It is ALWAYS rendered (not hover-revealed — a reveal needs a `styles.css`
+   * `:hover`/`:focus-within` rule this PRD does not own), keyboard reachable,
+   * and click/keyboard events inside it `stopPropagation` so activating a menu
+   * item never triggers the row's own `onActivate`. The design ships no ⋯, so
+   * this is a deliberate live-only addition (recorded as `expectDivergence` on
+   * the chats anchors).
+   */
+  readonly overflow?: ReactNode;
+  /**
    * Tone of the 28x28 icon TILE (applied to the slot's `color`, so it reaches
    * the tile and the glyph inside it). `"success"` tints a live row jade;
    * default is muted. Distinct from wrapping the glyph in a coloured span — the
@@ -159,6 +170,12 @@ const trailingSlotStyle: CSSProperties = {
   justifyContent: "flex-end",
 };
 
+const overflowSlotStyle: CSSProperties = {
+  flex: "0 0 auto",
+  display: "inline-flex",
+  alignItems: "center",
+};
+
 export function Row({
   icon,
   title,
@@ -166,6 +183,7 @@ export function Row({
   sub,
   meta,
   trailing,
+  overflow,
   iconTone = "default",
   onActivate,
   ariaLabel,
@@ -248,6 +266,19 @@ export function Row({
       {meta !== undefined ? (
         <span style={metaStyle} data-testid="row-meta">
           {meta}
+        </span>
+      ) : null}
+      {overflow !== undefined && overflow !== null ? (
+        // Isolate the overflow control from row activation: a click or
+        // Enter/Space inside it must not bubble to the row's `onClick`/`onKeyDown`
+        // (PRD-09 D2). Rendered persistently, never hover-gated.
+        <span
+          style={overflowSlotStyle}
+          data-testid="row-overflow"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          {overflow}
         </span>
       ) : null}
       <span style={trailingSlotStyle} data-testid="row-trailing">

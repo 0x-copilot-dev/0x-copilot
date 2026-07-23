@@ -69,6 +69,15 @@ interface DestinationMeta {
    * without renaming it: `connectors` → "Tools", `tools` → "Skills".
    */
   readonly profileLabel?: string;
+  /**
+   * Per-destination topbar subtitle (PRD-09 D5). The design's topbar shows the
+   * title over a muted sub-line (`copilot-app.jsx:597-604`); this is the ONLY
+   * place that string lives, so `Topbar` resolves the subtitle from the
+   * registry rather than hard-coding it (a run/conversation `leaf` still wins).
+   * Closes Activity's AUDIT HIGH-4 (the per-destination subtitle was
+   * structurally unreachable) for all six rail slugs, Activity included.
+   */
+  readonly sublabel?: string;
 }
 
 // Canonical slug → metadata. The ONLY place a slug's label lives.
@@ -76,19 +85,27 @@ const DESTINATION_REGISTRY: Readonly<
   Record<ShellDestinationSlug, DestinationMeta>
 > = {
   home: { label: "Home" },
-  chats: { label: "Chats" },
+  chats: { label: "Chats", sublabel: "every conversation with the agent" },
   agents: { label: "Agents" },
   library: { label: "Library" },
   inbox: { label: "Inbox" },
-  tools: { label: "Tools", profileLabel: "Skills" },
-  projects: { label: "Projects" },
+  tools: {
+    label: "Tools",
+    profileLabel: "Skills",
+    sublabel: "saved multi-step workflows",
+  },
+  projects: { label: "Projects", sublabel: "group chats, files & context" },
   todos: { label: "Todos" },
-  connectors: { label: "Connectors", profileLabel: "Tools" },
+  connectors: {
+    label: "Connectors",
+    profileLabel: "Tools",
+    sublabel: "apps the agent can act through",
+  },
   team: { label: "Team" },
   memory: { label: "Memory" },
   routines: { label: "Routines" },
-  run: { label: "Run" },
-  activity: { label: "Activity" },
+  run: { label: "Run", sublabel: "the agent, working — scrub every step" },
+  activity: { label: "Activity", sublabel: "every action the agent has taken" },
   members: { label: "Members" },
   billing: { label: "Billing" },
 };
@@ -148,6 +165,21 @@ export const SHELL_DESTINATIONS: readonly ShellDestination[] = LEGACY_ORDER.map(
 );
 
 export const DEFAULT_SHELL_DESTINATION: ShellDestinationSlug = "home";
+
+/**
+ * Slug → topbar subtitle (PRD-09 D5). The single source of truth for the
+ * per-destination sub-line, derived from the registry so it can never disagree
+ * with the label. A slug with no `sublabel` maps to `undefined` (the topbar then
+ * shows the title alone). A run/conversation `leaf` still wins over this.
+ */
+export const SUBLABEL_BY_SLUG: Readonly<
+  Record<ShellDestinationSlug, string | undefined>
+> = Object.fromEntries(
+  (Object.keys(DESTINATION_REGISTRY) as ShellDestinationSlug[]).map((slug) => [
+    slug,
+    DESTINATION_REGISTRY[slug].sublabel,
+  ]),
+) as Record<ShellDestinationSlug, string | undefined>;
 
 /**
  * The rail destinations for a deployment profile, in display order.

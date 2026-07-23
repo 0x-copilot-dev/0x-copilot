@@ -147,6 +147,11 @@ class Keys:
         # since ``conversation_id`` is an unconstrained str (same hazard as
         # ``/runs`` vs ``/runs/{run_id}``).
         CONVERSATION_COUNTS = "conversation_counts"
+        # PRD-09 D4 — Chats live-refresh store-tail SSE. The literal
+        # ``/conversations/stream`` collection GET, registered BEFORE
+        # ``/conversations/{conversation_id}`` (unconstrained str) so the
+        # literal path wins.
+        STREAM_CONVERSATIONS = "stream_conversations"
         LIST_MODELS = "list_models"
         STREAM_RUN = "stream_run"
         # Recipient inbox endpoint + per-user SSE channel.

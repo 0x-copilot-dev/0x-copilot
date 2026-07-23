@@ -12,3 +12,9 @@ export {
   CHATS_LEAD_COPY,
   type ChatsSectionKey,
 } from "./ChatsArchive";
+
+// PRD-09 D1 — the transport-backed controller both hosts bind to.
+export {
+  useChatsArchive,
+  type ChatsArchiveController,
+} from "./useChatsArchive";

@@ -45,6 +45,7 @@ from runtime_api.schemas import (
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
     ApprovalStatus,
+    ConversationBucket,
     CreateConversationRequest,
     CreateRunRequest,
     RuntimeApiEventType,
@@ -192,6 +193,58 @@ class TestAsyncAdapterParity:
             run_id=run_id, latest_sequence_no=42
         )
         assert updated.latest_sequence_no == 42
+
+    async def test_cancel_raises_conversation_updated_at_and_is_reachable(
+        self, store: PostgresRuntimeApiStore
+    ) -> None:
+        """PRD-09 D4 / DoD #5 — a status-only run transition (CANCELLED, no
+        message appended) must bump the parent conversation's ``updated_at`` in
+        the same transaction so the Chats live tail sees the chip flip, and the
+        conversation must resurface at the head of the RECENT bucket while
+        dropping out of the pre-cancel (older-than) keyset page.
+
+        The conformance suite (``test_store_conformance.py``) asserts this for
+        ``in_memory`` + ``file``; this is the third adapter, exercised against a
+        real Postgres so all three backends are test-asserted, not just two.
+        """
+
+        org_id, user_id, run_id, conv_id = await _seed_run(store)
+        pre = await store.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conv_id
+        )
+        assert pre is not None
+
+        cancelled = await store.update_run_status(
+            run_id=run_id, status=AgentRunStatus.CANCELLED
+        )
+        assert cancelled.status == AgentRunStatus.CANCELLED
+
+        post = await store.get_conversation(
+            org_id=org_id, user_id=user_id, conversation_id=conv_id
+        )
+        assert post is not None
+        # updated_at strictly raised past the pre-cancel watermark...
+        assert post.updated_at > pre.updated_at
+
+        # ...so a tail watching (updated_at, id) after the pre-cancel watermark
+        # surfaces the row: it is the newest RECENT row, and the pre-cancel
+        # (older-than) keyset page no longer contains it.
+        newest = await store.list_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            limit=1,
+            bucket=ConversationBucket.RECENT,
+        )
+        assert newest and newest[0].conversation_id == conv_id
+        older_than_pre = await store.list_conversations(
+            org_id=org_id,
+            user_id=user_id,
+            limit=50,
+            bucket=ConversationBucket.RECENT,
+            before_updated_at=pre.updated_at,
+            before_conversation_id=pre.conversation_id,
+        )
+        assert conv_id not in {c.conversation_id for c in older_than_pre}
 
     async def test_append_event_assigns_monotonic_sequence(
         self, store: PostgresRuntimeApiStore

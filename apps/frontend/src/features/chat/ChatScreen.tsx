@@ -35,6 +35,7 @@ import {
   getConversation,
   listConversations,
   listMessages,
+  pinConversation,
   replayRunEvents,
   streamRunEvents,
   updateConversation,
@@ -152,7 +153,6 @@ import { deriveRunUiState, isRunUiEvent } from "./chatRunState";
 import { useChatProjectContext } from "./useChatProjectContext";
 import { hasPendingAction } from "./chatModel/status";
 import { useAuth } from "../auth/AuthContext";
-import { usePinnedConversations } from "./sidebar/usePinnedConversations";
 import { isTerminalAssistantStatus } from "./utils/activityDataBuilders";
 import { useBackgroundChatStreams } from "./runtime/useBackgroundChatStreams";
 import { errorMessage } from "../../utils/errors";
@@ -232,9 +232,6 @@ export function ChatScreen({
   // it to the auth context, which currently hard-navs to ?workspace=<id>
   // and lets <AuthGate> re-discover the session (PR 2.2 §3.7 fallback).
   const auth = useAuth();
-  // PR F3 — sidebar pin / unpin (localStorage; backend gains a typed
-  // metadata.pinned column in a future PR).
-  const pinned = usePinnedConversations(auth.identity?.user_id ?? null);
   // Phase 6.5 §4 (P6.5-C1) — context-aware chat creation. The hook
   // combines the route-supplied `routeProjectId` with the composer's
   // `[Filed under: ▾]` chip override into a single resolved value that
@@ -472,9 +469,32 @@ export function ChatScreen({
       if (conversationId === id) {
         setConversationId(null);
       }
-      pinned.togglePinned(id, false);
     },
-    [conversationId, identity, pinned],
+    [conversationId, identity],
+  );
+
+  // PRD-09 D2 — pin / unpin now writes the FIRST-CLASS `pinned` column via the
+  // real endpoint (the legacy localStorage pin concept is retired), so
+  // ChatScreen and the Chats surface share ONE pin mutation.
+  // Optimistic flip of the local row, rolled back on failure.
+  const onTogglePin = useCallback(
+    async (id: string, nextPinned: boolean): Promise<void> => {
+      setConversations((current) =>
+        current.map((c) =>
+          c.conversation_id === id ? { ...c, pinned: nextPinned } : c,
+        ),
+      );
+      try {
+        await pinConversation(id, nextPinned, identity);
+      } catch {
+        setConversations((current) =>
+          current.map((c) =>
+            c.conversation_id === id ? { ...c, pinned: !nextPinned } : c,
+          ),
+        );
+      }
+    },
+    [identity],
   );
 
   const loadHistoryItems = useCallback(
@@ -1991,9 +2011,8 @@ export function ChatScreen({
               }
               void auth.switchWorkspace(orgId);
             }}
-            onTogglePin={pinned.togglePinned}
+            onTogglePin={(id, next) => void onTogglePin(id, next)}
             onArchive={(id) => void onArchiveConversation(id)}
-            pinnedIds={pinned.pinnedIds}
           />
           <SourcePreviewProvider>
             <AssistantThread

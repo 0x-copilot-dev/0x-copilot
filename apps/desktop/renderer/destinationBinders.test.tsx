@@ -119,11 +119,24 @@ function chatsTransport(
   recorder: Recorder,
   conversations: readonly Conversation[],
 ): Transport {
+  // PRD-09 — `useChatsArchive` fetches each bucket server-side, so the fake
+  // classifies conversations into the bucket the request asks for (archived
+  // wins, then pinned, else recent), matching the real query scoping.
+  const bucketOf = (c: Conversation): string => {
+    if (c.status === "archived" || c.archived_at != null) return "archived";
+    if (c.pinned === true) return "pinned";
+    return "recent";
+  };
   return {
     request: <TRes,>(req: TypedRequest): Promise<TRes> => {
       recorder.calls.push(req);
+      const bucket = req.query?.bucket as string | undefined;
+      const scoped =
+        bucket === undefined
+          ? [...conversations]
+          : conversations.filter((c) => bucketOf(c) === bucket);
       const body: ConversationListResponse = {
-        conversations: [...conversations],
+        conversations: scoped,
         next_cursor: null,
         has_more: false,
       };
@@ -452,7 +465,7 @@ describe("ChatsBinder — reads first-class preview/model/pinned (PRD-03 Move 1)
     // The contradictory metadata values never surface.
     expect(container.textContent ?? "").not.toContain("WRONG");
     // `pinned: true` (first-class) buckets the row into the Pinned section —
-    // on `main` desktop read `metadata.pinned`, so Pinned was always empty.
+    // on `main` desktop read the stale metadata blob, so Pinned was always empty.
     const pinnedList = container.querySelector(
       "[data-testid='chats-section-pinned-list']",
     );

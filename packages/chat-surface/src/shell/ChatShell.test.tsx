@@ -226,8 +226,35 @@ describe("ChatShell", () => {
     expect(screen.getByTestId("topbar-subtitle")).toHaveTextContent("c-123");
   });
 
-  it("suppresses the shell Topbar on full-bleed chats", () => {
-    mount({ activeDestination: "chats", topbarLeaf: "c-123" });
+  // PRD-09 D5 — the topbar and the side columns are now INDEPENDENT decisions.
+  // Chats gains a topbar (it did NOT before) while staying full-bleed (no side
+  // columns), matching the design's `showTopbar` predicate.
+  it("renders the shell Topbar on chats (title 'Chats' + registry subtitle), no ContextPanel, no RightRail (DoD #10)", () => {
+    mount({ activeDestination: "chats" });
+    const shell = shellRoot();
+    // Topbar present with the Chats title + the registry-sourced subtitle.
+    expect(screen.getByTestId("topbar-title")).toHaveTextContent("Chats");
+    expect(screen.getByTestId("topbar-subtitle")).toHaveTextContent(
+      "every conversation with the agent",
+    );
+    // Still full-bleed for the SIDE columns: no ContextPanel, no RightRail.
+    expect(shell).toHaveStyle({ gridTemplateColumns: "48px 1fr 0" });
+    expect(screen.queryByRole("complementary", { name: /panel/i })).toBeNull();
+    expect(screen.queryByTestId("right-rail-toggle")).toBeNull();
+  });
+
+  it("does NOT render the Topbar on run or when settingsActive (DoD #10)", () => {
+    const run = mount({
+      activeDestination: "run",
+      profile: "single_user_desktop",
+    });
+    expect(screen.queryByTestId("topbar-title")).toBeNull();
+    run.unmount();
+    mount({
+      activeDestination: "projects",
+      settingsActive: true,
+      profile: "single_user_desktop",
+    });
     expect(screen.queryByTestId("topbar-title")).toBeNull();
   });
 
@@ -328,11 +355,12 @@ describe("ChatShell", () => {
     expect(screen.queryByTestId("topbar-wallet-chip")).toBeNull();
   });
 
-  it("does not render walletChip on full-bleed chats (topbar suppressed)", () => {
-    // The shell Topbar — and thus its wallet slot — is suppressed on
-    // full-bleed destinations, so the chip never leaks onto ChatScreen.
+  it("does not render walletChip on run (topbar suppressed there)", () => {
+    // PRD-09 D5 — the topbar (and thus its wallet slot) is suppressed on `run`
+    // and Settings, not on chats. `run` is the case the chip must never leak to.
     mount({
-      activeDestination: "chats",
+      activeDestination: "run",
+      profile: "single_user_desktop",
       walletChip: <span data-testid="wc">0x7f3C…a92C</span>,
     });
     expect(screen.queryByTestId("topbar-wallet-chip")).toBeNull();

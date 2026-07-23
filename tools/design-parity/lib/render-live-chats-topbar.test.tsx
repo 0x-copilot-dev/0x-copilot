@@ -1,63 +1,56 @@
-/* design-parity · live CHATS destination render (vitest + jsdom)
+/* design-parity · live CHATS destination render — TOPBAR + archive (vitest + jsdom)
  * =========================================================================
- * Renders the REAL @0x-copilot/chat-surface `ChatsArchive` — the exact
- * component BOTH hosts mount for the `chats` slug — to static HTML wrapped
- * with the REAL design-system token sheet, so the browser extractor reads the
- * shipping computed styles. This is the "live" side of the chats parity diff;
- * the "design" side is the vendored Claude Design ChatsSurface
+ * Renders the REAL @0x-copilot/chat-surface `Topbar` (resolved for the `chats`
+ * slug) STACKED ABOVE the REAL `ChatsArchive` — i.e. the exact page both hosts
+ * mount for `chats` AFTER PRD-09 — to static HTML wrapped with the REAL
+ * design-system token sheet, so the browser extractor reads the shipping
+ * computed styles. This is the "live" side of the chats parity diff; the
+ * "design" side is the vendored Claude Design ChatsSurface under its topbar
  * (design-kit/app-v3/index.html?dest=chats&state=default).
  *
  * Run:
  *   node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs \
- *     lib/render-live-chats.test.tsx
+ *     lib/render-live-chats-topbar.test.tsx
  * Output: surfaces/chats/live/default.html  (+ copied ds.css + fonts/)
  *
- * WHY `ChatsArchive` AND NOT `ChatsDestination`
- * ---------------------------------------------
- * `ChatsDestination` (destinations/chats/ChatsDestination.tsx:28-48) is a
- * 48-line pass-through wrapper around `ChatsArchive` — and it is mounted by
- * NEITHER host. Verified:
- *   * web     — apps/frontend/src/app/App.tsx:1042-1054 renders
- *               `<ChatsArchiveRoute>`, which mounts `<ChatsArchive>` directly
- *               (apps/frontend/src/features/chats/ChatsArchiveRoute.tsx:36,142);
- *   * desktop — apps/desktop/renderer/DestinationOutlet.tsx:188-193 renders
- *               `<ChatsBinder>`, which also mounts `<ChatsArchive>` directly
- *               (apps/desktop/renderer/destinationBinders.tsx:215-231).
- * Rendering the wrapper would add nothing to the DOM (it forwards every prop
- * unchanged) — but rendering `ChatsArchive` is the honest choice because it is
- * what actually ships on both substrates.
+ * WHY THE TOPBAR NOW BELONGS IN THIS RENDER
+ * -----------------------------------------
+ * The design's chats page sits UNDER the shell topbar ("Chats" + the subtitle
+ * "every conversation with the agent"), and the design URL `?dest=chats`
+ * extracts that topbar as the `topbar.title` anchor. Until PRD-09, `chats` was
+ * a full-bleed destination and the shell suppressed the Topbar, so the old
+ * body-only harness (`render-live-chats.test.tsx`, now superseded by this file)
+ * left `topbar.title` with NO live counterpart — a structural HIGH. PRD-09
+ * narrows `SUPPRESS_TOPBAR` to `{"run"}` (packages/chat-surface/src/shell/
+ * ChatShell.tsx:47), so `chats` now renders the shell Topbar on BOTH hosts.
+ * The live render therefore must include it, matched anchor-for-anchor against
+ * the design, instead of fabricating an absence.
  *
- * WHY NO TOPBAR IN THIS FILE
- * --------------------------
- * The design's chats page sits under the shell topbar ("Chats" + subtitle), and
- * the design-side anchor map has a `topbar.title` anchor. The live shell does
- * NOT render one here: `chats` is in `FULL_BLEED_DESTINATIONS`
- * (packages/chat-surface/src/shell/ChatShell.tsx:43-47) and the shell suppresses
- * the Topbar for full-bleed destinations (ChatShell.tsx:236-237 + 304-311 →
- * `{fullBleed ? null : <Topbar …>}`). Neither host adds a replacement bar
- * (apps/frontend/src/app/App.tsx:1047-1053 wraps the route in a bare
- * `<section data-testid="destination-outlet">`; the desktop outlet likewise has
- * no Topbar — `grep -n "Topbar" apps/desktop/renderer/*.tsx` → no match). So a
- * topbar is deliberately absent from the live HTML instead of being fabricated;
- * `topbar.title` has NO live counterpart and must be reported as a structural
- * divergence, not measured. (`rail.badge` is likewise out of scope here — the
- * rail is a separate surface with its own harness.)
+ * WHY `Topbar` + `ChatsArchive` DIRECTLY, NOT `ChatShell`
+ * ------------------------------------------------------
+ * `ChatShell` mounts the active destination's body from its registry, which
+ * pulls the archive over the transport port; with a static fake that yields no
+ * rows, so the 8-row fixture the design measures would be lost. Composing the
+ * two REAL leaf components (`Topbar` + `ChatsArchive`) is the honest way to get
+ * BOTH the shell topbar AND the populated body into one measurable document —
+ * `Topbar` is the same component `ChatShell` renders for `chats`
+ * (ChatShell.tsx:35 import; SUPPRESS_TOPBAR excludes `chats`), and
+ * `ChatsArchive` is the same body both hosts mount (web
+ * ChatsArchiveRoute.tsx:36; desktop destinationBinders.tsx). No prop of either
+ * is faked for looks.
  *
  * STYLESHEETS
  * -----------
- * The Chats surface ships ZERO CSS-file rules of its own: `.pg-lead`, `.sect-h`
- * and `.rowlist` are class HOOKS only — every visual property comes from inline
- * `CSSProperties` in `ChatsArchive.tsx` and its
- * `destinations/_shared/{Row,RowList,SectionHeader,PageLead}.tsx` primitives
- * plus `shell/StatusPill.tsx` (verified: `find packages/chat-surface/src -name
- * '*.css'` → only composer/workspace/onboarding, none of which define these
- * selectors). The one real stylesheet in play is the design-system sheet, which
- * supplies BOTH the tokens those inline styles read (`var(--color-*)`,
- * `var(--font-size-*)`, …) AND the `.ui-button--primary.ui-button--sm` rules
- * behind the "New chat" `<Button>` (packages/design-system/src/index.tsx:144-163
- * → styles.css:409-472). So `styles.css` is the only sheet linked here.
+ * The Chats surface + the Topbar ship ZERO CSS-file rules of their own beyond a
+ * few class HOOKS — every visual property comes from inline `CSSProperties` in
+ * `Topbar.tsx` / `ChatsArchive.tsx` and the `destinations/_shared/*` primitives
+ * plus `shell/StatusPill.tsx`. The one real stylesheet in play is the
+ * design-system sheet, which supplies BOTH the tokens those inline styles read
+ * AND the `.ui-button--primary.ui-button--sm` rules behind the "New chat"
+ * `<Button>`. So `styles.css` is the only sheet linked here.
  * ========================================================================= */
 import { createElement as h } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { cleanup, render, screen } from "@testing-library/react";
@@ -69,7 +62,7 @@ import type {
   ConversationId,
   SectionResult,
 } from "@0x-copilot/api-types";
-import { ChatsArchive } from "@0x-copilot/chat-surface";
+import { ChatsArchive, Topbar } from "@0x-copilot/chat-surface";
 
 const HERE = (p: string) => fileURLToPath(new URL(p, import.meta.url));
 const REPO = (p: string) => HERE("../../../" + p); // tools/design-parity/lib -> repo root
@@ -78,16 +71,11 @@ const LIVE = (p: string) => HERE("../surfaces/chats/live/" + p);
 // ---------------------------------------------------------------------------
 // Fixture — mirrors the design's CHATS fixture 1:1
 // (design-kit/app-v3/copilot-data.jsx:192-201): EIGHT rows bucketed 1 pinned /
-// 5 recent / 2 archived, same titles, same previews, same model strings, same
-// status mix (running | done, done, paused, done, done | archived, archived).
-//
-// The design fixture carries pre-formatted `when` strings ("now", "2h", "3h",
-// "1d", "Mon"); the live wire type carries an ISO `updated_at` and the component
-// derives the relative time itself (util/time.ts formatRelativeTime), so the
-// timestamps below are the design's coarse ages rebuilt as real instants against
-// a pinned NOW. (The rendered vocabulary therefore differs — live says "2 hr.
-// ago" where the design says "2h" — which is a copy divergence for the report,
-// not something the fixture should paper over.)
+// 5 recent / 2 archived, same titles, previews, model strings, status mix.
+// The design fixture carries pre-formatted `when` strings; the live wire type
+// carries an ISO `updated_at` and the component derives the relative time
+// itself, so the timestamps below are the design's coarse ages rebuilt as real
+// instants against a pinned NOW.
 // ---------------------------------------------------------------------------
 
 const NOW = Date.parse("2026-07-17T12:00:00Z"); // Fri 17 Jul 2026, 12:00 UTC
@@ -112,9 +100,8 @@ const PINNED: ReadonlyArray<ChatArchiveRow> = [
   },
 ];
 
-// Recent — the 5 unpinned, non-archived rows (design rows recon / investor / lp
-// / triage / ama), in fixture order so `paused` lands 3rd exactly as the design
-// anchor `.rowlist:nth-child(5) > .lrow:nth-child(3) .chip--warn` expects.
+// Recent — the 5 unpinned, non-archived rows, in fixture order so `paused`
+// lands 3rd exactly as the design anchor expects.
 const RECENT: ReadonlyArray<ChatArchiveRow> = [
   {
     id: id("conv_recon"),
@@ -191,13 +178,12 @@ const ARCHIVE: SectionResult<ChatsArchiveData> = {
 };
 
 /** Wrap the captured markup with the REAL design-system sheet and a fixed dark
- *  frame approximating the full-bleed destination viewport the shell hands
- *  Chats. The inner flex wrapper reproduces the WEB host's own sizing chrome
- *  (apps/frontend/src/features/chats/ChatsArchiveRoute.tsx:53-75 rootStyle +
- *  surfaceStyle, inside App.tsx's `height:100%; overflow:auto` outlet section),
- *  so the surface is measured at the height it really gets. Typography, colour,
- *  border and padding are frame-independent; width/height are comparator noise. */
-function shell(inner: string): string {
+ *  frame approximating the destination viewport the shell hands Chats: a
+ *  46px-tall Topbar (flex:none) above the archive body (flex:1, its own
+ *  scroll), mirroring the design mock's `.topbar` + `.pg` column. Typography,
+ *  colour, border and padding are frame-independent; width/height are
+ *  comparator noise. */
+function shell(topbar: string, body: string): string {
   return `<!doctype html>
 <html lang="en" data-theme="dark">
   <head>
@@ -211,18 +197,18 @@ function shell(inner: string): string {
         background: var(--color-bg); color: var(--color-text);
         font-family: var(--font-sans); overflow: hidden;
       }
-      /* host chrome: ChatsArchiveRoute rootStyle → surfaceStyle */
-      #host { height: 100%; width: 100%; min-height: 0; display: flex; flex-direction: column; }
+      /* host chrome: ChatsArchiveRoute rootStyle → surfaceStyle, under the topbar */
+      #host { flex: 1 1 auto; min-height: 0; width: 100%; display: flex; flex-direction: column; }
       #host-surface { flex: 1 1 auto; min-height: 0; }
     </style>
   </head>
   <body>
-    <div id="frame"><div id="host"><div id="host-surface">${inner}</div></div></div>
+    <div id="frame">${topbar}<div id="host"><div id="host-surface">${body}</div></div></div>
   </body>
 </html>`;
 }
 
-describe("live chats — ChatsArchive → static HTML", () => {
+describe("live chats — Topbar + ChatsArchive → static HTML", () => {
   beforeAll(() => {
     mkdirSync(LIVE(""), { recursive: true });
     copyFileSync(REPO("packages/design-system/src/styles.css"), LIVE("ds.css"));
@@ -245,7 +231,17 @@ describe("live chats — ChatsArchive → static HTML", () => {
     cleanup();
   });
 
-  it("default — pinned / recent / archived archive over the 8-row fixture", () => {
+  it("default — chats topbar over the 8-row pinned / recent / archived archive", () => {
+    // The topbar is a leaf view (no ports); render it to static markup. Its
+    // title resolves to "Chats" and its subtitle to "every conversation with
+    // the agent" straight from destinations.ts — the same source ChatShell uses.
+    const topbar = renderToStaticMarkup(
+      h(Topbar, {
+        activeDestination: "chats",
+        onOpenCommandPalette: () => undefined,
+      }),
+    );
+
     render(
       h(ChatsArchive, {
         archive: ARCHIVE,
@@ -265,15 +261,18 @@ describe("live chats — ChatsArchive → static HTML", () => {
     expect(screen.getByTestId("chats-section-recent")).not.toBeNull();
     expect(screen.getByTestId("chats-section-archived")).not.toBeNull();
     expect(screen.getAllByTestId("chat-archive-row")).toHaveLength(8);
-    // Exactly one live row → exactly one BrandMark icon slot (the design's
-    // single `.dotk` / jade affordance).
+    // Exactly one live row → exactly one BrandMark icon slot.
     expect(
       root.querySelectorAll(
         '[data-testid="chat-archive-row-icon"][data-live="true"]',
       ),
     ).toHaveLength(1);
     expect(screen.getByTestId("chats-new-chat")).not.toBeNull();
+    // The topbar carries the destination title + subtitle the design measures.
+    expect(topbar).toContain('data-testid="topbar-title"');
+    expect(topbar).toContain("Chats");
+    expect(topbar).toContain("every conversation with the agent");
 
-    writeFileSync(LIVE("default.html"), shell(root.outerHTML));
+    writeFileSync(LIVE("default.html"), shell(topbar, root.outerHTML));
   });
 });

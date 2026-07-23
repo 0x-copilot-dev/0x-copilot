@@ -38,6 +38,7 @@ import {
   messageFromError,
   projectActivityRows,
   toChatArchiveRow,
+  useChatsArchive,
   useNotify,
   useTransport,
   type ConnectorAccessPort,
@@ -50,8 +51,6 @@ import {
 import type { Transport } from "@0x-copilot/chat-transport";
 import type {
   ActivityRunRow,
-  ChatArchiveRow,
-  ChatsArchive as ChatsArchiveData,
   Connector,
   ConnectorAccessMode,
   ConnectorCatalogEntry,
@@ -59,7 +58,6 @@ import type {
   ConnectorListResponse,
   ConnectorSlug,
   SetConnectorAccessModeResponse,
-  Conversation,
   ConversationId,
   ConversationListResponse,
   DesktopConnectorCatalogResponse,
@@ -164,55 +162,24 @@ export interface DestinationBinderCallbacks {
 }
 
 // ===========================================================================
-// Chats — GET /v1/agent/conversations (incl. archived) → bucketed archive.
-// Mirrors apps/frontend chatsApi.bucketConversations (FR-4.5/4.9).
+// Chats — the shared `useChatsArchive` controller (PRD-09 D1) owns the whole
+// read/write model: three bucket-scoped cursored fetches, the SSE live tail,
+// setPinned / setArchived, and loadMore(bucket). The binder collapses to
+// navigation callbacks — the old local bucketConversations / loadChats /
+// useSectionLoad wiring (which drifted from web and could never live-refresh,
+// paginate, pin, or archive) is deleted. Per-row projection stays the shared
+// `toChatArchiveRow` (PRD-03), now consumed inside the hook.
 // ===========================================================================
-
-// Per-row projection is the shared `toChatArchiveRow` (PRD-03 Move 1) — it
-// reads the FIRST-CLASS `pinned` / `preview` / `model` fields. The local copy
-// this file used to carry read `metadata.*` keys that nothing writes, so
-// desktop's Pinned was always empty and preview/model never rendered.
-// Bucketing stays host-side per-row here (PRD-09 D1 moves it into the query).
-export function bucketConversations(
-  conversations: ReadonlyArray<Conversation>,
-): ChatsArchiveData {
-  const pinned: ChatArchiveRow[] = [];
-  const recent: ChatArchiveRow[] = [];
-  const archived: ChatArchiveRow[] = [];
-  for (const conversation of conversations) {
-    if (conversation.deleted_at != null) continue; // tombstone — never shown
-    const row = toChatArchiveRow(conversation);
-    if (row.status === "archived") archived.push(row);
-    else if (row.pinned) pinned.push(row);
-    else recent.push(row);
-  }
-  return { pinned, recent, archived };
-}
-
-async function loadChats(
-  transport: Transport,
-): Promise<SectionResult<ChatsArchiveData>> {
-  const response = await transport.request<ConversationListResponse>({
-    method: "GET",
-    path: "/v1/agent/conversations",
-    query: { limit: 100, include_archived: true },
-  });
-  return {
-    status: "ok",
-    data: bucketConversations(response?.conversations ?? []),
-  };
-}
 
 export function ChatsBinder({
   onNewChat,
   onOpenConversation,
 }: DestinationBinderCallbacks): ReactElement {
-  const transport = useTransport();
-  const load = useCallback(() => loadChats(transport), [transport]);
-  const { result, retry } = useSectionLoad(load);
+  const { archive, hasMore, onLoadMore, onTogglePin, onToggleArchive, retry } =
+    useChatsArchive();
   return (
     <ChatsArchive
-      archive={result}
+      archive={archive}
       // Reopen threads the row's REAL conversation id into the cockpit (the
       // Chats surface hands it to `onReopen`), so the cockpit resolves that
       // conversation's transcript + latest run instead of dropping to the
@@ -220,6 +187,10 @@ export function ChatsBinder({
       onReopen={(id) => onOpenConversation?.(id)}
       onNewChat={() => onNewChat?.()}
       onRetry={retry}
+      onTogglePin={onTogglePin}
+      onToggleArchive={onToggleArchive}
+      onLoadMore={onLoadMore}
+      hasMore={hasMore}
     />
   );
 }

@@ -151,6 +151,50 @@ describe("<Row>", () => {
     );
   });
 
+  // ── PRD-09 D2 — overflow slot (persistent, click-isolated) ───────────────
+  it("renders the overflow trigger without any pointer interaction (persistent, not hover-revealed)", () => {
+    render(
+      <Row
+        title="Chat"
+        overflow={
+          <button type="button" data-testid="ov-trigger">
+            ⋯
+          </button>
+        }
+      />,
+    );
+    // In the document at initial render — no hover/focus needed (D2).
+    expect(screen.getByTestId("ov-trigger")).toBeInTheDocument();
+    expect(screen.getByTestId("row-overflow")).toBeInTheDocument();
+  });
+
+  it("clicking the overflow button or a role=menuitem inside it does NOT invoke onActivate", () => {
+    const onActivate = vi.fn();
+    render(
+      <Row
+        title="Chat"
+        onActivate={onActivate}
+        ariaLabel="Open"
+        overflow={
+          <div>
+            <button type="button" data-testid="ov-trigger">
+              ⋯
+            </button>
+            <button type="button" role="menuitem" data-testid="ov-item">
+              Pin
+            </button>
+          </div>
+        }
+      />,
+    );
+    fireEvent.click(screen.getByTestId("ov-trigger"));
+    fireEvent.click(screen.getByTestId("ov-item"));
+    expect(onActivate).not.toHaveBeenCalled();
+    // The row itself still activates on a direct click.
+    fireEvent.click(screen.getByTestId("row"));
+    expect(onActivate).toHaveBeenCalledTimes(1);
+  });
+
   // ── PRD-08 D9 — title weight + row padding ───────────────────────────────
   it("uses the medium (500) title weight and 11px/14px row padding (DoD 23)", () => {
     render(<Row title="T" />);

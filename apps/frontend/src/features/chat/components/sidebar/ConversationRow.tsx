@@ -7,10 +7,10 @@ import { isPinned } from "../../utils/groupConversations";
  *
  * Single-line layout: status dot + ellipsized title + time. Hover/focus
  * swaps the time for a small ⋯ overflow that exposes pin/unpin and archive.
- * Pin lives on `conversation.metadata.pinned` (no server schema change
- * needed). Archive flips `archived_at` via the existing
- * `updateConversation` route. Both actions are wired up by the parent
- * (`Sidebar`).
+ * Pin lives on the first-class `conversation.pinned` column (PRD-09 D2),
+ * toggled via `POST /v1/agent/conversations/{id}/pin`. Archive flips
+ * `archived_at` via the existing `updateConversation` route. Both actions are
+ * wired up by the parent (`Sidebar`).
  *
  * PR 2.2.1 dropped the `disabled` prop: the runtime now keeps non-
  * visible conversations' streams running in the background, so there

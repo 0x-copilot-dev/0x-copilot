@@ -14,7 +14,7 @@ from copilot_service_contracts.scopes import (
     RUNTIME_USE,
 )
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from agent_runtime.api.approval_coordinator import ApprovalCoordinator
 from agent_runtime.api.constants import Keys
@@ -33,6 +33,7 @@ from runtime_api.schemas import (
     AssignedApprovalsResponse,
     CancelRunRequest,
     CancelRunResponse,
+    ConversationBucket,
     ConversationConnectorScopesResponse,
     ConversationContextResponse,
     ConversationCountsResponse,
@@ -92,6 +93,7 @@ from agent_runtime.persistence.records import (
 from runtime_api.http.workspace import register_workspace_feed_routes
 from runtime_api.sse.adapter import RuntimeSseAdapter
 from runtime_api.sse.event_bus import RuntimeEventBus
+from runtime_api.sse.conversation_adapter import ConversationSseAdapter
 from runtime_api.sse.inbox_adapter import InboxSseAdapter
 from runtime_api.sse.inbox_bus import InboxEventBus
 from runtime_api.system_skills import (
@@ -129,17 +131,32 @@ class RuntimeApiRoutes:
         # PRD-07 — narrow to a project's chat list. A filter axis on the
         # caller's already-scoped rows; never an authorization input.
         project_id: str | None = Query(None, min_length=1),
-    ) -> ConversationListResponse:
+        # PRD-09 D3 — bucket-scoped keyset pagination. Both absent → the legacy
+        # unfiltered path, byte-compatible (and the response omits ``next_cursor``
+        # entirely). A malformed/empty ``cursor`` is tolerated as "no cursor".
+        bucket: ConversationBucket | None = Query(None),
+        cursor: str | None = Query(None),
+    ) -> JSONResponse:
         """Return paginated conversations owned by the caller."""
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
-        return await cls.cqs(request).list_conversations(
+        result = await cls.cqs(request).list_conversations(
             org_id=org_id,
             user_id=user_id,
             limit=limit,
             include_archived=include_archived,
             include_deleted=include_deleted,
             project_id=project_id,
+            bucket=bucket,
+            cursor=cursor,
         )
+        # DoD #3 — the legacy caller (no bucket/cursor) sees a payload whose
+        # top-level keys are exactly {conversations, has_more}: drop the
+        # ``next_cursor`` key whenever it is null. When a bucket/cursor page has
+        # more rows the key is present and non-null (DoD #2).
+        payload = result.model_dump(mode="json")
+        if payload.get("next_cursor") is None:
+            payload.pop("next_cursor", None)
+        return JSONResponse(payload)
 
     @classmethod
     async def conversation_counts(
@@ -584,6 +601,36 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    async def stream_conversations(
+        cls,
+        request: Request,
+        after: str | None = Query(None),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> StreamingResponse:
+        """Chats live-refresh SSE channel (PRD-09 D4).
+
+        A STORE TAIL, not a bus: emits a ``conversation_changed`` envelope —
+        carrying the SAME projected ``ConversationResponse`` the list route
+        returns — for every conversation whose ``updated_at`` moved past the
+        caller's watermark. ``?after=<cursor>`` is the D3 keyset the client
+        reconnects from. Scoped to ``(org_id, user_id)`` derived from the
+        verified bearer, so ``after`` can never widen scope (DoD #4).
+        """
+
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return StreamingResponse(
+            ConversationSseAdapter.stream(
+                query_service=cls.cqs(request),
+                org_id=org_id,
+                user_id=user_id,
+                after=after,
+                follow=True,
+            ),
+            media_type=ConversationSseAdapter.MEDIA_TYPE,
+        )
+
+    @classmethod
     async def approval_decision(
         cls,
         request: Request,
@@ -733,6 +780,15 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=ConversationCountsResponse,
             name=Keys.RouteName.CONVERSATION_COUNTS,
+        )
+        # PRD-09 D4 — Chats live-refresh store tail. Literal path, registered
+        # BEFORE ``/conversations/{conversation_id}`` so it is not shadowed by
+        # the unconstrained ``conversation_id`` path param.
+        router.add_api_route(
+            "/conversations/stream",
+            RuntimeApiRoutes.stream_conversations,
+            methods=["GET"],
+            name=Keys.RouteName.STREAM_CONVERSATIONS,
         )
         router.add_api_route(
             "/conversations/{conversation_id}",

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import StrEnum
 from uuid import uuid4
 
 from pydantic import Field, NonNegativeInt, PositiveInt, ValidationInfo, field_validator
@@ -16,6 +17,48 @@ from runtime_api.schemas.common import (
     MessageRole,
     MessageStatus,
 )
+
+
+class ConversationBucket(StrEnum):
+    """The Chats surface's server-scoped section (PRD-09 D3).
+
+    When passed to ``GET /v1/agent/conversations?bucket=…`` the server scopes the
+    page to one section, so a pinned/archived row older than page 1 stays
+    reachable (the client-side bucket-over-one-page predicate was silently
+    incomplete). Absent → the legacy unfiltered path, byte-compatible.
+
+    Semantics (all ``deleted_at IS NULL``):
+      * ``PINNED``   → ``pinned AND NOT archived``
+      * ``ARCHIVED`` → ``archived`` (``status='archived'`` OR ``archived_at`` set)
+      * ``RECENT``   → the complement (``NOT pinned AND NOT archived``)
+    """
+
+    PINNED = "pinned"
+    RECENT = "recent"
+    ARCHIVED = "archived"
+
+
+def matches_conversation_bucket(
+    record: ConversationRecord, bucket: ConversationBucket
+) -> bool:
+    """Return whether a conversation row belongs to ``bucket`` (PRD-09 D3).
+
+    The single Python predicate the in-memory and file adapters share so their
+    bucket scoping cannot drift from each other or from the Postgres SQL. A row
+    is "archived" when its status is ``archived`` OR ``archived_at`` is set; a
+    pinned row that is also archived falls to ``ARCHIVED`` (pin excludes it).
+    Callers exclude ``deleted_at`` rows before consulting this predicate.
+    """
+
+    is_archived = (
+        record.status == ConversationStatus.ARCHIVED or record.archived_at is not None
+    )
+    if bucket == ConversationBucket.ARCHIVED:
+        return is_archived
+    if bucket == ConversationBucket.PINNED:
+        return record.pinned and not is_archived
+    # RECENT — the complement: neither pinned nor archived.
+    return not record.pinned and not is_archived
 
 
 # PR 1.2: per-chat connector scope override. Map of connector_id ->
@@ -357,6 +400,21 @@ class ConversationListResponse(RuntimeContract):
     conversations: tuple[ConversationResponse, ...]
     next_cursor: str | None = None
     has_more: bool = False
+
+
+class ConversationStreamEnvelope(RuntimeContract):
+    """One frame of the Chats live-refresh stream (PRD-09 D4).
+
+    Carries the SAME projected :class:`ConversationResponse` the list route
+    returns, so the client merges live rows through one projector. ``cursor`` is
+    the keyset watermark of this row ``(updated_at, conversation_id)`` — the SSE
+    ``id:`` a reconnecting client resumes from, identical to the D3 pagination
+    codec (one codec serves paging, reconnect-resume, and the tail).
+    """
+
+    event_type: str = "conversation_changed"
+    conversation: ConversationResponse
+    cursor: str
 
 
 class ConversationCountsResponse(RuntimeContract):

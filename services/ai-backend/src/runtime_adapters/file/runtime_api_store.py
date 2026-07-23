@@ -123,11 +123,13 @@ from runtime_api.schemas import (
     ApprovalDecision,
     ApprovalDecisionRecord,
     ApprovalRequestRecord,
+    ConversationBucket,
     ConversationRecord,
     ConversationStatus,
     CreateConversationRequest,
     CreateRunRequest,
     HistoryDeletionResponse,
+    matches_conversation_bucket,
     MessageRecord,
     MessageRole,
     RuntimeApprovalResolvedCommand,
@@ -1078,6 +1080,14 @@ class FileRuntimeApiStore:
             return None
         return conversation
 
+    # PRD-09 D3 — the desktop catalog is single-user and bounded; the bucket +
+    # keyset path fetches a generous slice from the index and scopes/pages in
+    # Python (via the shared ``matches_conversation_bucket`` predicate) rather
+    # than migrating the SQLite catalog to add ``pinned`` / ``archived_at``
+    # columns and a composite keyset index. The record is the source of truth for
+    # both — the catalog is a rebuildable projection.
+    _BUCKET_SCAN_CEILING = 10_000
+
     async def list_conversations(
         self,
         *,
@@ -1087,16 +1097,53 @@ class FileRuntimeApiStore:
         include_archived: bool = False,
         include_deleted: bool = False,
         project_id: str | None = None,
+        bucket: ConversationBucket | None = None,
+        before_updated_at: datetime | None = None,
+        before_conversation_id: str | None = None,
     ) -> Sequence[ConversationRecord]:
+        keyset_mode = bucket is not None or (
+            before_updated_at is not None and before_conversation_id is not None
+        )
+        if not keyset_mode:
+            docs = self._index.list_conversations(
+                org_id=org_id,
+                user_id=user_id,
+                limit=limit,
+                include_archived=include_archived,
+                include_deleted=include_deleted,
+                project_id=project_id,
+            )
+            return tuple(ConversationRecord.model_validate_json(doc) for doc in docs)
+
         docs = self._index.list_conversations(
             org_id=org_id,
             user_id=user_id,
-            limit=limit,
-            include_archived=include_archived,
-            include_deleted=include_deleted,
+            limit=self._BUCKET_SCAN_CEILING,
+            include_archived=True,
+            include_deleted=include_deleted if bucket is None else False,
             project_id=project_id,
         )
-        return tuple(ConversationRecord.model_validate_json(doc) for doc in docs)
+        records = [ConversationRecord.model_validate_json(doc) for doc in docs]
+        if bucket is not None:
+            records = [
+                record
+                for record in records
+                if record.deleted_at is None
+                and matches_conversation_bucket(record, bucket)
+            ]
+        ordered = sorted(
+            records,
+            key=lambda record: (record.updated_at, record.conversation_id),
+            reverse=True,
+        )
+        if before_updated_at is not None and before_conversation_id is not None:
+            boundary = (before_updated_at, before_conversation_id)
+            ordered = [
+                record
+                for record in ordered
+                if (record.updated_at, record.conversation_id) < boundary
+            ]
+        return tuple(ordered[:limit])
 
     async def count_conversations_by_project(
         self,
@@ -1363,8 +1410,13 @@ class FileRuntimeApiStore:
         *,
         org_id: str,
         conversation_id: str,
+        prefer_roles: tuple[str, ...] = ("assistant",),
     ) -> MessageRecord | None:
-        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4)."""
+        """Return the newest non-deleted message for the Chats-list preview (PRD-H.4).
+
+        Prefers the newest message whose role is in ``prefer_roles`` (PRD-09 D6),
+        falling back to the newest of any role when none matches.
+        """
 
         candidates = [
             message
@@ -1375,7 +1427,11 @@ class FileRuntimeApiStore:
         ]
         if not candidates:
             return None
-        return max(candidates, key=lambda message: message.created_at)
+        preferred = [
+            message for message in candidates if str(message.role) in prefer_roles
+        ]
+        pool = preferred if preferred else candidates
+        return max(pool, key=lambda message: message.created_at)
 
     async def get_latest_run_for_conversation(
         self,
@@ -1639,6 +1695,16 @@ class FileRuntimeApiStore:
         async with self._conversation_lock(updated.conversation_id):
             self.runs[run_id] = updated
             self._persist_run(updated)
+            # PRD-09 D4 — bump the parent conversation's ``updated_at`` in the
+            # same locked section so a status-only transition moves the row the
+            # Chats live tail watches.
+            conversation = self.conversations.get(updated.conversation_id)
+            if conversation is not None:
+                bumped = conversation.model_copy(
+                    update={"updated_at": datetime.now(timezone.utc)}
+                )
+                self.conversations[updated.conversation_id] = bumped
+                self._persist_conversation(bumped)
         return updated
 
     async def set_run_latest_sequence(
