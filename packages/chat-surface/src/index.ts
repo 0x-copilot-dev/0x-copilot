@@ -1097,6 +1097,28 @@ export {
 } from "./workspace";
 // === end Phase 1 (PR-1.7) ===
 
+// === PRD-B1 (Generative Surfaces v2) client ledger fold + hydration ===
+// Pure PEER of `projectSurfaceTabs` over the SAME `session.events` array (the
+// one-projector invariant), + the Transport-fed content hydration hook.
+export {
+  projectLedger,
+  tabUriForSurface,
+  surfaceIdForTabUri,
+  ledgerTabsAsSurfaceTabs,
+  toParitySnapshot,
+  type LedgerProjection,
+  type LedgerSurface,
+  type LedgerSurfaceKind,
+  type LedgerSurfaceSource,
+  type LedgerSurfaceView,
+  type LedgerViewTier,
+} from "./thread-canvas";
+export {
+  useSurfacesV2,
+  type UseSurfacesV2Result,
+} from "./destinations/run/useSurfacesV2";
+// === end PRD-B1 ===
+
 // === Phase 3 (PR-3.3) run-session host hook ===
 // The Run cockpit's live-run host hook. Resolves the active/selected run for a
 // conversation and subscribes to its SSE tail through the Transport port,

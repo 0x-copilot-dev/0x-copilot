@@ -33,7 +33,7 @@ import time
 from collections.abc import Awaitable, Callable, Coroutine, Mapping, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from agent_runtime.capabilities.surfaces.shape_hash import output_shape_hash
 from agent_runtime.capabilities.surfaces.spec_models import (
@@ -50,6 +50,12 @@ from agent_runtime.observability.surface_specgen_metrics import (
     RenderFallbackTier,
     SurfaceSpecgenMetrics,
 )
+
+if TYPE_CHECKING:
+    # PRD-A2 — the run-scoped usage meter, bound + injected by the worker
+    # (run.py:_build_surface_generation_scheduler). Type-only import so the
+    # generation subsystem stays decoupled from the recording seam.
+    from agent_runtime.observability.usage_meter import MeteredModelInvocation
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -626,10 +632,15 @@ class SurfaceSpecGenerator:
         completion: SpecCompletionPort,
         skill: SpecAuthoringSkill | None = None,
         metrics: SurfaceSpecgenMetrics | None = None,
+        usage_meter: "MeteredModelInvocation | None" = None,
     ) -> None:
         self._completion = completion
         self._skill = skill or SpecAuthoringSkill.load()
         self._metrics = metrics or SurfaceSpecgenMetrics()
+        # PRD-A2 D5b — when injected, each attempt records a per-call usage row
+        # (+ usage.recorded when SURFACES_V2 is on) with purpose=view_shaping.
+        # None keeps generation working unmetered (tests, disabled deployments).
+        self._usage_meter = usage_meter
 
     @property
     def skill_version(self) -> int:
@@ -677,6 +688,21 @@ class SurfaceSpecGenerator:
                 result=outcome.result,
                 duration_ms=duration_ms,
             )
+            # PRD-A2 D5b — durable per-attempt usage recording (async; distinct
+            # from the sync ``_meter`` OTel/log line above). Runs on EVERY
+            # attempt (incl. the successful one) because it precedes the early
+            # ``return`` — that is what makes retried shaping count per attempt
+            # (DoD). A model-error attempt has ``result is None`` (no model to
+            # attribute) and is skipped; a result with ``None`` tokens records
+            # zeros. ``surface_id`` is None: generation shapes a tool-output
+            # shape, not a concrete surface (Open Q — deferred plumb).
+            if self._usage_meter is not None and outcome.result is not None:
+                await self._usage_meter.record_attempt(
+                    model_id=outcome.result.model,
+                    input_tokens=outcome.result.input_tokens,
+                    output_tokens=outcome.result.output_tokens,
+                    duration_ms=duration_ms,
+                )
             if outcome.spec is not None:
                 return outcome.spec
             last_reason = outcome.reason
@@ -1141,6 +1167,7 @@ def build_surface_generation_scheduler(
     environ: Mapping[str, str],
     completion: SpecCompletionPort | None = None,
     schedule: ScheduleFn | None = None,
+    usage_meter: "MeteredModelInvocation | None" = None,
 ) -> SurfaceGenerationScheduler | None:
     """Build a run-scoped scheduler from env, or ``None`` when generation is off.
 
@@ -1162,7 +1189,9 @@ def build_surface_generation_scheduler(
         model = build_chat_model_from_id(model_id)
         completion = LangChainSpecCompletion(model=model, model_id=model_id)
     metrics = SurfaceSpecgenMetrics()
-    generator = SurfaceSpecGenerator(completion=completion, metrics=metrics)
+    generator = SurfaceSpecGenerator(
+        completion=completion, metrics=metrics, usage_meter=usage_meter
+    )
     return SurfaceGenerationScheduler(
         generator=generator,
         store=store,

@@ -59,6 +59,7 @@ import type {
 } from "@0x-copilot/api-types";
 import type { Transport } from "@0x-copilot/chat-transport";
 
+import type { SurfacePayload } from "./eventProjector";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
 import { TcChat } from "./TcChat";
 import { TcMiniTimeline } from "./TcMiniTimeline";
@@ -122,6 +123,15 @@ export interface ThreadCanvasProps {
    */
   readonly editSlot?: ReactNode;
   /**
+   * SURFACES_V2 (PRD-B1): when provided, the surface column resolves the active
+   * surface's state through this instead of `projection.surface.payloadFor(uri)`
+   * — the v2 canvas hydrates content from the SurfaceStore endpoint
+   * (`useSurfacesV2`), not from v1 `payload.surface` envelopes. Only consulted
+   * while live (`scrubbedSeq === null`); scrub behavior is unchanged (v2
+   * time-travel is out of scope). Omitted → the v1 projection path (default).
+   */
+  readonly resolveSurfaceState?: (uri: string) => SurfacePayload | undefined;
+  /**
    * Scrub cursor — null = live; number = a `sequence_no` to time-travel
    * the surface to. The host (ChatScreen) reconciles this with the
    * swimlane and mini-timeline UIs.
@@ -183,6 +193,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     onReject,
     onSuggestChanges,
     editSlot,
+    resolveSurfaceState,
     scrubbedSeq = null,
     onScrub,
     onSnapToNow,
@@ -271,6 +282,13 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   // with the swimlane/mini-timeline scrub cursor without a remount.
   const surfaceState = useMemo(() => {
     if (scrubbedSeq === null) {
+      // SURFACES_V2 (PRD-B1): when the host wired the v2 resolver, the active
+      // surface's content comes from the SurfaceStore hydration (`useSurfacesV2`)
+      // — never mixed with the v1 `payload.surface` projection. `undefined`
+      // (not yet hydrated) falls to TcSurfaceMount's tier-3 floor.
+      if (resolveSurfaceState !== undefined) {
+        return resolveSurfaceState(activeUri);
+      }
       return projection.surface.payloadFor(activeUri);
     }
     // Project up to the scrub cursor — surface freezes; chat stays live.
@@ -281,7 +299,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     return undefined; // ChatScreen feeds `pendingDiff`+state through props
     // when scrubbed (see PRD §3.7); the surface column shows the diff
     // overlay rather than the live surface during scrub.
-  }, [scrubbedSeq, projection.surface, activeUri]);
+  }, [scrubbedSeq, projection.surface, activeUri, resolveSurfaceState]);
 
   // Forward scrub cursor to TcChat (it shows the "Viewing <time>"
   // ghost banner when off-live).

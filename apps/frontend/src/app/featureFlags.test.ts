@@ -5,7 +5,9 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   RUN_COCKPIT_WEB_FLAG_KEY,
+  SURFACES_V2_FLAG_KEY,
   isRunCockpitWebEnabled,
+  isSurfacesV2CanvasEnabled,
 } from "./featureFlags";
 
 // jsdom's `localStorage` here is a no-op stub whose methods are not spy-able, so
@@ -54,5 +56,29 @@ describe("isRunCockpitWebEnabled (WC-P7)", () => {
       throw new Error("storage disabled");
     });
     expect(isRunCockpitWebEnabled()).toBe(true);
+  });
+});
+
+describe("isSurfacesV2CanvasEnabled (PRD-B1)", () => {
+  it("defaults OFF with no opt-in signal", () => {
+    stubLocalStorage(() => null);
+    expect(isSurfacesV2CanvasEnabled()).toBe(false);
+  });
+
+  it("enables when localStorage opts in with the exact string 'true'", () => {
+    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "true" : null));
+    expect(isSurfacesV2CanvasEnabled()).toBe(true);
+  });
+
+  it("stays OFF for any non-'true' value (fail-safe)", () => {
+    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "1" : null));
+    expect(isSurfacesV2CanvasEnabled()).toBe(false);
+  });
+
+  it("stays OFF when localStorage throws (private mode / storage disabled)", () => {
+    stubLocalStorage(() => {
+      throw new Error("storage disabled");
+    });
+    expect(isSurfacesV2CanvasEnabled()).toBe(false);
   });
 });

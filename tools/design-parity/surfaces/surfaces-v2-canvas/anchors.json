@@ -1,0 +1,39 @@
+{
+  "surface": "surfaces-v2-canvas",
+  "note": "design↔live element correspondence for the Generative Surfaces v2 canvas tab strip. Design side = the vendored `Generative Surfaces v2.dc.html` mock's surface-canvas tab strip (`.sheet-tabs` / `.sheet-tab`, copilot.css) — the named-surfaces-per-run strip B1 introduces. Live side = the REAL chat-surface `TcTabs` the Run cockpit mounts (`ThreadCanvas` → `TcTabs`, rendered with `role=tablist` / `role=tab` and a lime pinned dot). `TcTabs` uses inline styles (no class hooks), so the live anchors target the ARIA roles + testids. The active-tab treatment (design `.sheet-tab[data-on=true]` background/border vs live active border-bottom accent) is a known stylistic divergence flagged expectDivergence — TcTabs is the shipped kit component, not a reimplementation of the mock's pill-tab. VENDOR PROVENANCE: the mock is a design-compiler template (`index.dc.html`, `{{ }}` placeholders + `<sc-if>`); rendering the DESIGN side to comparable HTML needs the design compiler / DesignSync (Claude Design project ceb081f6 per SDR §9), so the 0-HIGH computed-style compare is an INTEGRATION-time step — see out/README.md. This file + the render-live-surfaces-v2 test stage the live side and the mapping so that run is a mechanical follow-up, not a re-derivation.",
+  "states": ["canvas"],
+  "elements": [
+    {
+      "label": "tab.strip",
+      "group": "SurfaceTabs",
+      "design": ".sheet-tabs",
+      "live": "[data-testid=\"tc-tabs\"]"
+    },
+    {
+      "label": "tab",
+      "group": "SurfaceTabs",
+      "design": ".sheet-tab",
+      "live": "[data-testid=\"tc-tabs\"] [role=\"tab\"]"
+    },
+    {
+      "label": "tab.active",
+      "group": "SurfaceTabs",
+      "design": ".sheet-tab[data-on=\"true\"]",
+      "live": "[data-testid=\"tc-tabs\"] [role=\"tab\"][data-active=\"true\"]",
+      "expectDivergence": "live TcTabs marks the active tab with a bottom accent border (design-system --color-accent), the mock uses a filled pill (panel2 bg + line border) — the shipped kit treatment, intended"
+    },
+    {
+      "label": "tab.dot",
+      "group": "SurfaceTabs",
+      "design": ".sheet-tab .d",
+      "live": "[data-testid=\"tc-tabs\"] [role=\"tab\"][data-pinned=\"true\"] span[aria-hidden=\"true\"]",
+      "expectDivergence": "the mock's neutral status dot vs TcTabs' lime pinned-dot — both are the small round surface-state indicator, colored per each system's tokens"
+    },
+    {
+      "label": "surface.mount",
+      "group": "SurfaceCanvas",
+      "design": ".sheet-scroll",
+      "live": "[data-testid=\"tc-surface-mount\"]"
+    }
+  ]
+}

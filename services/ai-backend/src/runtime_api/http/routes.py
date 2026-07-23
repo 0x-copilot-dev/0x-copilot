@@ -50,6 +50,7 @@ from runtime_api.schemas import (
     RunStatusResponse,
     UpdateConversationConnectorsRequest,
 )
+from runtime_api.schemas.surfaces_v2 import RunSurfacesResponse
 from runtime_api.schemas.budgets import (
     BudgetCreateRequest,
     BudgetListResponse,
@@ -367,6 +368,22 @@ class RuntimeApiRoutes:
             user_id=user_id,
             run_id=run_id,
             after_sequence=after_sequence,
+        )
+
+    @classmethod
+    async def get_run_surfaces(
+        cls,
+        request: Request,
+        run_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> RunSurfacesResponse:
+        """Return the SurfaceStore projection (folded ledger) for a run."""
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.cqs(request).list_run_surfaces(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
         )
 
     @classmethod
@@ -690,6 +707,13 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=RuntimeEventReplayResponse,
             name=Keys.RouteName.GET_EVENTS,
+        )
+        router.add_api_route(
+            "/runs/{run_id}/surfaces",
+            RuntimeApiRoutes.get_run_surfaces,
+            methods=["GET"],
+            response_model=RunSurfacesResponse,
+            name=Keys.RouteName.GET_RUN_SURFACES,
         )
         router.add_api_route(
             "/runs/{run_id}/stream",

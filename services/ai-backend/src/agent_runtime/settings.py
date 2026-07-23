@@ -41,6 +41,9 @@ class _EnvFields:
     WORKER_LOCK_SECONDS = "RUNTIME_WORKER_LOCK_SECONDS"
     START_IN_PROCESS_WORKER = "RUNTIME_START_IN_PROCESS_WORKER"
     ALLOW_EMPTY_CAPABILITIES = "RUNTIME_ALLOW_EMPTY_CAPABILITIES"
+    # Generative Surfaces v2 master flag (PRD-A1). Registered now but read by
+    # nothing until emission lands in PRD-A3 — flag-off byte-identical.
+    SURFACES_V2 = "SURFACES_V2"
     # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
     # executor accumulates chunks for the window and flushes via
     # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
@@ -144,6 +147,9 @@ class RuntimeExecutionSettings(RuntimeContract):
     # runtime. Off by default; ``POST /v1/local-models/runtime/start`` 404s
     # and ``runtime_state`` stays ``unknown`` while it is false.
     local_models_manage_runtime: bool = False
+    # Generative Surfaces v2 master flag (PRD-A1). Defaults false and is read by
+    # nothing in this PR; PRD-A3 gates emission + projector allow-lists on it.
+    surfaces_v2: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -383,6 +389,7 @@ class RuntimeSettings(BaseSettings):
                     v, E.LOCAL_MODELS_MANAGE_RUNTIME, "false"
                 ).lower()
                 in _truthy,
+                surfaces_v2=_s(v, E.SURFACES_V2, "false").lower() in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

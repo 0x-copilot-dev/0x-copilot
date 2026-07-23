@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="copilot-v3.css">
+  <style>
+    body{overflow:auto}
+    @keyframes gsrise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes gsheen{from{background-position:200% 0}to{background-position:-200% 0}}
+    @keyframes gssweep{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
+    @keyframes gspulse{0%,100%{box-shadow:0 0 0 0 rgba(95,178,236,.45)}55%{box-shadow:0 0 0 8px rgba(95,178,236,0)}}
+    @keyframes gsblink{0%,55%{opacity:1}56%,100%{opacity:0}}
+  </style>
+</helmet>
+<div class="stage" style="min-width:fit-content;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:11px;padding:18px">
+
+  <div class="mw" data-theme="{{ theme }}" data-accent="{{ accent }}" style="width:1180px;height:744px;min-width:1180px;max-width:none;flex:none" data-screen-label="0xCopilot app — run cockpit">
+    <div class="mw-bar">
+      <div class="mw-dots"><span class="mw-dot r"></span><span class="mw-dot y"></span><span class="mw-dot g"></span></div>
+      <div class="mw-title"><svg viewBox="0 0 400 400" width="14" height="14" aria-hidden="true"><defs><linearGradient id="gmk1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9bd4ff"></stop><stop offset="1" stop-color="#4593d8"></stop></linearGradient></defs><g fill="url(#gmk1)"><path d="M200 96q46 10 54 60-28-8-54-24Z"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(60 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(120 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(180 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(240 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(300 200 200)"></path></g><circle cx="200" cy="200" r="20" fill="#0b0a0e" stroke="url(#gmk1)" stroke-width="10"></circle></svg> <b><span class="zx">0x</span>Copilot</b> — local agent workspace · v3</div>
+      <sc-if value="{{ toolsLive }}" hint-placeholder-val="{{ false }}"><span class="mw-chip">{{ toolsLiveLabel }}</span></sc-if>
+    </div>
+    <div class="mw-body">
+      <nav class="rail" data-screen-label="App rail">
+        <button class="rail-brand" title="0xCopilot"><svg viewBox="0 0 400 400" width="22" height="22" aria-hidden="true"><defs><linearGradient id="gmk2" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9bd4ff"></stop><stop offset="1" stop-color="#4593d8"></stop></linearGradient></defs><g fill="url(#gmk2)"><path d="M200 96q46 10 54 60-28-8-54-24Z"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(60 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(120 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(180 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(240 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(300 200 200)"></path></g><circle cx="200" cy="200" r="20" fill="#0b0a0e" stroke="url(#gmk2)" stroke-width="10"></circle></svg></button>
+        <button class="rail-item" data-active="true" title="Run"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="4"></rect><path d="M10 9l5 3-5 3z"></path></svg></button>
+        <button class="rail-item" title="Chats" onClick="{{ onRail }}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v10H9l-4 4z"></path></svg></button>
+        <button class="rail-item" title="Projects" onClick="{{ onRail }}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg></button>
+        <button class="rail-item" title="Activity" onClick="{{ onRail }}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5 7 5-14L17 12h4"></path></svg></button>
+        <button class="rail-item" title="Tools" onClick="{{ onRail }}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0z M12 18v3"></path></svg></button>
+        <button class="rail-item" title="Skills" onClick="{{ onRail }}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.1 5.3L20 10l-5.9 1.7L12 17l-2.1-5.3L4 10l5.9-1.7z"></path></svg></button>
+        <div class="rail-foot">
+          <button class="rail-item" title="Settings" onClick="{{ onRail }}"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 2v3M12 19v3M2 12h3M19 12h3M4.9 4.9l2.1 2.1M17 17l2.1 2.1M19.1 4.9L17 7M7 17l-2.1 2.1"></path></svg></button>
+          <button class="rail-me" title="Alex">A</button>
+        </div>
+      </nav>
+
+      <div class="main">
+        <div class="ws3" data-mode="studio" data-side="{{ chatSide }}" data-screen-label="Run · studio">
+          <div class="ws-head">
+            <div class="side-ava" style="width:30px;height:30px"><svg viewBox="0 0 400 400" width="20" height="20" aria-hidden="true"><defs><linearGradient id="gmk3" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9bd4ff"></stop><stop offset="1" stop-color="#4593d8"></stop></linearGradient></defs><g fill="url(#gmk3)"><path d="M200 96q46 10 54 60-28-8-54-24Z"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(60 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(120 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(180 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(240 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(300 200 200)"></path></g><circle cx="200" cy="200" r="20" fill="#0b0a0e" stroke="url(#gmk3)" stroke-width="10"></circle></svg></div>
+            <div class="ws-goal">
+              <div class="k">{{ headKicker }}</div>
+              <h2>{{ headTitle }}</h2>
+            </div>
+            <sc-if value="{{ showPolicyChip }}" hint-placeholder-val="{{ false }}"><span class="chip {{ policyChipClass }}" style="margin-left:auto"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>{{ policyChipText }}</span></sc-if>
+            <sc-if value="{{ pendOn }}" hint-placeholder-val="{{ false }}"><button class="chip chip--warn" style="cursor:pointer;margin-left:{{ pendMl }}" onClick="{{ gotoApprovals }}"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>{{ pendLabel }}</button></sc-if>
+            <div class="seg ws-modes" style="{{ segStyle }}">
+              <button onClick="{{ onFocusMode }}">Focus</button>
+              <button data-on="true">Studio</button>
+            </div>
+          </div>
+
+          <div class="ws3-main">
+            <aside class="sd" data-screen-label="Chat rail">
+              <div class="sd-tabs">
+                <sc-for list="{{ sdTabs }}" as="st" hint-placeholder-count="0">
+                  <button class="sd-tab" data-on="{{ st.on }}" onClick="{{ st.click }}">{{ st.label }}<sc-if value="{{ st.badge }}" hint-placeholder-val="{{ false }}"><span class="b {{ st.hot }}">{{ st.badge }}</span></sc-if></button>
+                </sc-for>
+              </div>
+
+              <sc-if value="{{ sdChat }}" hint-placeholder-val="{{ true }}">
+                <div class="side-body scroll" ref="{{ chatRef }}">
+                  <sc-if value="{{ chatEmpty }}" hint-placeholder-val="{{ false }}">
+                    <div style="margin:auto 0;text-align:center;color:var(--mut2);padding:20px 8px">
+                      <div class="mono" style="font-size:9px;letter-spacing:.14em;margin-bottom:6px">NEW RUN</div>
+                      <div style="font-size:12px;color:var(--mut);line-height:1.6">Tell 0xCopilot what to get done.<br>It'll connect tools as it needs them and show its work on the canvas.</div>
+                    </div>
+                  </sc-if>
+                  <sc-for list="{{ msgs }}" as="m" hint-placeholder-count="0">
+                    <sc-if value="{{ m.you }}" hint-placeholder-val="{{ false }}"><div class="msg you" style="animation:gsrise .3s ease both">{{ m.t }}</div></sc-if>
+                    <sc-if value="{{ m.bot }}" hint-placeholder-val="{{ false }}"><div class="msg bot" style="animation:gsrise .3s ease both"><div class="who">0xCopilot</div>{{ m.t }}</div></sc-if>
+                    <sc-if value="{{ m.ev }}" hint-placeholder-val="{{ false }}">
+                      <div style="display:flex;gap:9px;align-items:flex-start;padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--panel);animation:gsrise .3s ease both">
+                        <span class="dotk" style="background:{{ m.c }};margin-top:5px"></span>
+                        <div style="min-width:0">
+                          <div style="font-size:11.5px;color:var(--tx2);font-weight:500">{{ m.t }}</div>
+                          <div class="mono" style="font-size:9px;color:var(--mut2);margin-top:2px">{{ m.sub }}</div>
+                        </div>
+                      </div>
+                    </sc-if>
+                  </sc-for>
+                  <sc-if value="{{ showPlan }}" hint-placeholder-val="{{ false }}">
+                    <div class="plan">
+                      <sc-for list="{{ plan }}" as="p" hint-placeholder-count="0">
+                        <div class="plan-step {{ p.s }}">
+                          <span class="ic">
+                            <sc-if value="{{ p.done }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></sc-if>
+                            <sc-if value="{{ p.pend }}" hint-placeholder-val="{{ false }}"><span class="spin"></span></sc-if>
+                            <sc-if value="{{ p.fut }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg></sc-if>
+                          </span>
+                          <span class="pt">{{ p.t }}</span>
+                        </div>
+                      </sc-for>
+                    </div>
+                  </sc-if>
+                </div>
+                <div class="sd-cmp">
+                  <div class="cmp" style="{{ cmpGlow }}">
+                    <textarea rows="1" placeholder="{{ cmpPlaceholder }}" value="{{ cmp }}" onChange="{{ onCmp }}" onKeyDown="{{ onCmpKey }}"></textarea>
+                    <div class="cmp-row">
+                      <button class="cmp-ic" title="Attach files" onClick="{{ onPill }}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5l-8.5 8.5a5.4 5.4 0 0 1-7.6-7.6L13.5 3.8a3.6 3.6 0 0 1 5.1 5.1l-8.6 8.6a1.8 1.8 0 0 1-2.5-2.5l7.9-7.9"></path></svg></button>
+                      <button class="cmp-pill" title="Choose model" onClick="{{ onPill }}"><span class="pd" style="background:#d97757"></span><span class="lb">Claude Sonnet 4.5</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></button>
+                      <button class="cmp-pill" title="Tools &amp; connections" onClick="{{ onPill }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0z M12 18v3"></path></svg><span class="lb">Tools</span><span class="n">{{ toolsCount }}</span></button>
+                      <span class="cmp-hint">⏎ send</span>
+                      <button class="cmp-send" disabled="{{ cmpEmpty }}" onClick="{{ onCmpSend }}" title="Send" style="{{ sendGlow }}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 16-3.5-6.5z"></path></svg></button>
+                    </div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ sdAgents }}" hint-placeholder-val="{{ false }}">
+                <div class="side-body scroll" style="gap:12px">
+                  <p class="sd-note">Every agent running in the background — this run and beyond. Anything held for sign-off lands in Approvals.</p>
+                  <div class="sect-h">Running · 1</div>
+                  <div class="ag">
+                    <div class="hd"><span class="dotk" style="background:var(--jade)"></span><span class="nm">Monday ops</span><span class="chip chip--sky" style="padding:1px 7px">this run</span></div>
+                    <div class="sub">Claude Sonnet 4.5 · {{ agTools }} tools · step {{ agStep }} of 4 · {{ agClock }}</div>
+                    <div class="bar"><div class="bar__f" style="width:{{ agPct }}"></div></div>
+                    <div class="cur"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"></path></svg>{{ agCur }}</div>
+                  </div>
+                  <div class="sect-h">Scheduled · 1</div>
+                  <div class="ag">
+                    <div class="hd"><span class="nm">Pipeline hygiene sweep</span><span class="chip">Fri 09:00</span></div>
+                    <div class="sub">Salesforce — flags stale opportunities weekly</div>
+                    <div class="ft"><button class="cbtn cbtn--sm cbtn--ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M7 5l12 7-12 7z"></path></svg> Run now</button></div>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ sdApprovals }}" hint-placeholder-val="{{ false }}">
+                <div class="side-body scroll" style="gap:12px">
+                  <p class="sd-note">Holding for your sign-off. Reads auto-run; connections &amp; writes are decided <b style="color:var(--tx2)">on the surface</b> — this panel just takes you there.</p>
+                  <sc-if value="{{ apEmpty }}" hint-placeholder-val="{{ false }}"><div class="ap-clear"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg> Nothing waiting on you — the run is moving.</div></sc-if>
+                  <sc-if value="{{ apConnect }}" hint-placeholder-val="{{ false }}">
+                    <div class="conf-card">
+                      <div class="conf-h"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0z M12 18v3"></path></svg> Connect {{ gName }} <span class="conf-sum">MCP · this run</span></div>
+                      <div class="ap-prev">{{ gReason }}<span class="ap-meta">the run is parked at the connect card on the canvas</span></div>
+                      <div class="ap-actions"><button class="cbtn cbtn--sm cbtn--pri" onClick="{{ gotoCanvas }}">Go to connect card →</button></div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ apDraft }}" hint-placeholder-val="{{ false }}">
+                    <div class="conf-card">
+                      <div class="conf-h"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4"></path></svg> Send reply to Priya <span class="conf-sum">Gmail · {{ revLabel }}</span></div>
+                      <div class="ap-prev">"…on track to ship <b>Thursday, Feb 12</b>, ahead of your Friday webinar."<span class="ap-meta">to priya@harborline.io · sends exactly what you approve</span></div>
+                      <div class="ap-actions"><button class="cbtn cbtn--sm cbtn--pri" onClick="{{ goDraft }}">Review on the surface →</button></div>
+                    </div>
+                  </sc-if>
+                  <sc-if value="{{ apBulk }}" hint-placeholder-val="{{ false }}">
+                    <div class="conf-card">
+                      <div class="conf-h"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5 7 5-14L17 12h4"></path></svg> Close 8 stale opportunities <span class="conf-sum">Salesforce · staged</span></div>
+                      <div class="ap-prev">{{ apBulkPrev }}<span class="ap-meta">old → new shown per row · approve or hold each</span></div>
+                      <div class="ap-actions"><button class="cbtn cbtn--sm cbtn--pri" onClick="{{ goBulk }}">Review on the surface →</button></div>
+                    </div>
+                  </sc-if>
+                  <div class="sect-h">Auto-approved · reads</div>
+                  <div class="ap-log">
+                    <sc-for list="{{ apLog }}" as="l" hint-placeholder-count="0">
+                      <div class="r"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg><span class="x">{{ l.t }}</span><span class="t">{{ l.at }}</span></div>
+                    </sc-for>
+                    <sc-if value="{{ apLogEmpty }}" hint-placeholder-val="{{ false }}"><div class="r" style="color:var(--mut2)"><span class="x">Nothing read yet.</span></div></sc-if>
+                  </div>
+                </div>
+              </sc-if>
+
+              <sc-if value="{{ sdSources }}" hint-placeholder-val="{{ false }}">
+                <div class="side-body scroll" style="gap:12px">
+                  <p class="sd-note">Everything the agent read or fetched this run — the receipts behind each surface.</p>
+                  <sc-if value="{{ srcEmpty }}" hint-placeholder-val="{{ false }}"><div class="ap-clear" style="color:var(--mut2)">No sources yet — the run hasn't read anything.</div></sc-if>
+                  <sc-for list="{{ srcGroups }}" as="sg" hint-placeholder-count="0">
+                    <div style="display:flex;flex-direction:column;gap:10px">
+                      <div class="sect-h">{{ sg.grp }} · {{ sg.n }}</div>
+                      <div class="rowlist">
+                        <sc-for list="{{ sg.items }}" as="it" hint-placeholder-count="0">
+                          <button class="lrow"><span class="lrow__logo">{{ sg.ini }}</span><span class="lrow__main"><span class="lrow__name src-nm">{{ it.n }}</span><span class="lrow__sub">{{ it.m }}</span></span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></button>
+                        </sc-for>
+                      </div>
+                    </div>
+                  </sc-for>
+                </div>
+              </sc-if>
+            </aside>
+
+            <section class="cv" style="position:relative" data-screen-label="Canvas">
+              <!-- COMPOSE / IDLE -->
+              <sc-if value="{{ showCompose }}" hint-placeholder-val="{{ true }}">
+                <div style="flex:1;min-height:0;display:grid;place-items:center;padding:24px" data-screen-label="Canvas — waiting for goal">
+                  <div style="text-align:center;max-width:430px;animation:gsrise .4s ease both">
+                    <span style="display:inline-flex;color:var(--mut2);opacity:.6;margin-bottom:16px"><svg viewBox="0 0 400 400" width="46" height="46" aria-hidden="true"><g fill="currentColor"><path d="M200 96q46 10 54 60-28-8-54-24Z"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(60 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(120 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(180 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(240 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(300 200 200)"></path></g><circle cx="200" cy="200" r="20" fill="none" stroke="currentColor" stroke-width="14"></circle></svg></span>
+                    <div class="mono" style="font-size:9px;letter-spacing:.16em;color:var(--mut2)">WAITING FOR A GOAL</div>
+                    <h2 style="font-size:17px;margin-top:9px">The agent's work shows up here</h2>
+                    <p style="font-size:12.5px;color:var(--mut);margin-top:8px;line-height:1.65">Records, drafts and proposed changes render as live surfaces on this canvas — you review and approve each one right here, never buried in chat.</p>
+                    <div class="mono" style="font-size:9px;color:var(--mut2);margin-top:16px;display:inline-flex;align-items:center;gap:7px"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>Nothing connects, reads or writes until you allow it.</div>
+                  </div>
+                </div>
+                <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)"><span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">IDLE</span><span class="mono" style="font-size:9.5px;color:var(--mut2)">no tools connected · send a message to begin · gv-00</span></div>
+              </sc-if>
+
+              <!-- RUN STARTED: tabs + (connect card OR surfaces) -->
+              <sc-if value="{{ runStarted }}" hint-placeholder-val="{{ false }}">
+                <div class="sheet-tabs">
+                  <sc-for list="{{ tabs }}" as="tb" hint-placeholder-count="1">
+                    <button class="sheet-tab" data-on="{{ tb.on }}" onClick="{{ tb.click }}"><sc-if value="{{ tb.pending }}" hint-placeholder-val="{{ false }}"><span class="spin" style="width:9px;height:9px;border-width:1.5px"></span></sc-if><sc-if value="{{ tb.dot }}" hint-placeholder-val="{{ true }}"><span class="d"></span></sc-if>{{ tb.label }}</button>
+                  </sc-for>
+                </div>
+
+                <!-- CONNECT CARD (compact, one tool) -->
+                <sc-if value="{{ showConnect }}" hint-placeholder-val="{{ false }}">
+                  <div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Connect card">
+                    <div class="scroll" style="flex:1;min-height:0;overflow:auto;display:grid;place-items:center;padding:24px">
+                      <div style="width:444px;max-width:100%;animation:gsrise .3s ease both">
+                        <div style="background:var(--panel);border:1px solid var(--line2);border-radius:13px;overflow:hidden">
+                          <div style="display:flex;align-items:center;gap:11px;padding:14px 16px;border-bottom:1px solid var(--line)">
+                            <span class="mrow__logo" style="width:34px;height:34px;color:{{ gLc }} !important">{{ gLg }}</span>
+                            <div style="flex:1;min-width:0">
+                              <h3 style="font-size:13.5px">Connect {{ gName }}</h3>
+                              <div class="mono" style="font-size:9px;color:var(--mut2);margin-top:2px">via {{ gHost }} · OAuth</div>
+                            </div>
+                            <span class="chip">step {{ gStep }}</span>
+                          </div>
+                          <div style="padding:13px 16px">
+                            <p style="font-size:12px;color:var(--tx2);line-height:1.6">0xCopilot needs {{ gName }} {{ gReason }}</p>
+                            <div style="display:flex;gap:8px;align-items:center;margin-top:11px;padding:8px 11px;border:1px solid var(--line);border-radius:8px;background:var(--ink2)">
+                              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--mut)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>
+                              <span class="mono" style="font-size:10px;color:var(--mut)">scopes: {{ gScopes }}</span>
+                            </div>
+                            <sc-if value="{{ gWrite }}" hint-placeholder-val="{{ false }}">
+                              <div style="margin-top:13px">
+                                <div class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">WHEN {{ gNameUpper }} WOULD WRITE</div>
+                                <div style="display:flex;gap:7px;margin-top:7px">
+                                  <button onClick="{{ setGAsk }}" style="flex:1;text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid {{ askBorder }};background:{{ askBg }}">
+                                    <div style="font-size:11.5px;font-weight:600;color:{{ askText }}">Ask me first</div>
+                                    <div class="mono" style="font-size:9px;color:var(--mut2);margin-top:2px">every write waits on the surface</div>
+                                  </button>
+                                  <button onClick="{{ setGAlways }}" style="flex:1;text-align:left;padding:9px 11px;border-radius:8px;cursor:pointer;border:1px solid {{ alwBorder }};background:{{ alwBg }}">
+                                    <div style="font-size:11.5px;font-weight:600;color:{{ alwText }}">Allow always</div>
+                                    <div class="mono" style="font-size:9px;color:var(--mut2);margin-top:2px">bypass — writes auto-apply</div>
+                                  </button>
+                                </div>
+                                <sc-if value="{{ gAlwaysOn }}" hint-placeholder-val="{{ false }}">
+                                  <div style="display:flex;gap:7px;align-items:flex-start;margin-top:9px;padding:7px 10px;border:1px solid rgba(232,180,94,.28);border-radius:7px;background:rgba(232,180,94,.05);font-size:10.5px;color:var(--tx2);line-height:1.5">
+                                    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="var(--amber)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none;margin-top:1px"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><path d="M12 9v4"></path><path d="M12 17h.01"></path></svg>
+                                    {{ gName }} writes will apply without asking. Surfaces still show every change. Revoke in Tools → Permissions.
+                                  </div>
+                                </sc-if>
+                              </div>
+                            </sc-if>
+                            <sc-if value="{{ gRead }}" hint-placeholder-val="{{ false }}">
+                              <div style="display:flex;gap:8px;align-items:center;margin-top:11px;font-size:11px;color:var(--jade)">
+                                <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                Read-only — 0xCopilot reads from {{ gName }}, never changes it.
+                              </div>
+                            </sc-if>
+                          </div>
+                          <div style="display:flex;align-items:center;gap:10px;padding:11px 16px;border-top:1px solid var(--line);background:var(--ink2)">
+                            <span class="mono" style="font-size:9px;color:var(--mut2)">{{ gPermLabel }}</span>
+                            <sc-if value="{{ gConnecting }}" hint-placeholder-val="{{ false }}"><span class="mono" style="margin-left:auto;font-size:10px;color:var(--mut);display:inline-flex;align-items:center;gap:8px"><span class="spin"></span>waiting for {{ gHost }}…</span></sc-if>
+                            <sc-if value="{{ gIdle }}" hint-placeholder-val="{{ false }}"><button class="cbtn cbtn--pri" style="margin-left:auto" onClick="{{ onConnect }}">Connect {{ gName }} →</button></sc-if>
+                          </div>
+                        </div>
+                        <div class="mono" style="font-size:9px;color:var(--mut2);text-align:center;margin-top:11px">the run is parked here until you connect — nothing runs without it</div>
+                      </div>
+                    </div>
+                    <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)"><span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">CONNECT</span><span class="mono" style="font-size:9.5px;color:var(--mut2)">{{ gProvenance }}</span></div>
+                  </div>
+                </sc-if>
+
+                <!-- SURFACES -->
+                <sc-if value="{{ showSurfaces }}" hint-placeholder-val="{{ false }}">
+                  <!-- RECORD · Linear -->
+                  <sc-if value="{{ actIssue }}" hint-placeholder-val="{{ false }}">
+                    <div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Surface — Linear record">
+                      <div class="sheet-scroll scroll" style="padding:22px">
+                        <div style="max-width:700px;margin:0 auto">
+                          <sc-if value="{{ issueSkel }}" hint-placeholder-val="{{ false }}">
+                            <div style="display:flex;flex-direction:column;gap:14px">
+                              <div style="height:11px;width:190px;border-radius:5px;background:linear-gradient(90deg,var(--panel2) 25%,var(--panel3) 40%,var(--panel2) 60%);background-size:200% 100%;animation:gsheen 1.3s linear infinite"></div>
+                              <div style="height:26px;width:480px;max-width:100%;border-radius:6px;background:linear-gradient(90deg,var(--panel2) 25%,var(--panel3) 40%,var(--panel2) 60%);background-size:200% 100%;animation:gsheen 1.3s linear infinite"></div>
+                              <div style="height:24px;width:380px;border-radius:6px;background:linear-gradient(90deg,var(--panel2) 25%,var(--panel3) 40%,var(--panel2) 60%);background-size:200% 100%;animation:gsheen 1.3s linear infinite"></div>
+                              <div style="height:84px;border-radius:8px;background:linear-gradient(90deg,var(--panel2) 25%,var(--panel3) 40%,var(--panel2) 60%);background-size:200% 100%;animation:gsheen 1.3s linear infinite"></div>
+                              <div style="height:52px;border-radius:8px;background:linear-gradient(90deg,var(--panel2) 25%,var(--panel3) 40%,var(--panel2) 60%);background-size:200% 100%;animation:gsheen 1.3s linear infinite"></div>
+                              <div class="mono" style="font-size:9.5px;color:var(--mut2);display:flex;align-items:center;gap:8px"><span class="spin"></span>Assembling a record view from linear.issues.get…</div>
+                            </div>
+                          </sc-if>
+                          <sc-if value="{{ issueReady }}" hint-placeholder-val="{{ false }}">
+                            <div>
+                              <div class="mono" style="font-size:9.5px;color:var(--mut2);letter-spacing:.06em;animation:gsrise .35s ease both">NORTHBEAM / ENG / CYCLE 14</div>
+                              <div style="display:flex;align-items:baseline;gap:11px;margin-top:8px;animation:gsrise .35s ease both;animation-delay:.05s">
+                                <h1 style="font-size:19px;letter-spacing:-.015em">Session token refresh drops checkout retries</h1>
+                                <span class="chip mono" style="flex:none">ENG-142</span>
+                              </div>
+                              <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:13px;animation:gsrise .35s ease both;animation-delay:.1s">
+                                <span class="chip chip--warn"><span class="dotk"></span>In Review</span>
+                                <span class="chip"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7z"></path></svg>High priority</span>
+                                <span class="chip"><span style="width:14px;height:14px;border-radius:4px;background:var(--panel3);color:var(--tx2);display:inline-grid;place-items:center;font-size:7.5px;font-weight:600;font-family:var(--body)">DO</span>Dana Okafor</span>
+                                <span class="chip"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>Due Thu, Feb 12</span>
+                              </div>
+                              <div style="display:grid;grid-template-columns:1fr 1fr;gap:9px 22px;margin-top:18px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);animation:gsrise .35s ease both;animation-delay:.15s">
+                                <div style="display:flex;gap:10px;font-size:12px"><span class="mono" style="font-size:9.5px;color:var(--mut2);width:74px;flex:none;padding-top:2px">LABELS</span><span style="display:flex;gap:5px"><span class="chip">payments</span><span class="chip">regression</span></span></div>
+                                <div style="display:flex;gap:10px;font-size:12px"><span class="mono" style="font-size:9.5px;color:var(--mut2);width:74px;flex:none;padding-top:2px">ESTIMATE</span><span style="color:var(--tx2)">3 points</span></div>
+                                <div style="display:flex;gap:10px;font-size:12px"><span class="mono" style="font-size:9.5px;color:var(--mut2);width:74px;flex:none;padding-top:2px">PROJECT</span><span style="color:var(--tx2)">Checkout hardening</span></div>
+                                <div style="display:flex;gap:10px;font-size:12px"><span class="mono" style="font-size:9.5px;color:var(--mut2);width:74px;flex:none;padding-top:2px">CYCLE</span><span style="color:var(--tx2)">14 · ends Friday</span></div>
+                              </div>
+                              <div style="margin-top:14px;font-size:12.5px;line-height:1.7;color:var(--tx2);animation:gsrise .35s ease both;animation-delay:.2s">
+                                <p>When the session token refreshes mid-checkout, queued payment retries inherit the stale token and get dropped by the gateway. Affects ~2% of retried checkouts since the Jan 28 deploy.</p>
+                                <p style="margin-top:8px;color:var(--mut)">Fix: carry an idempotency key through refresh; re-sign queued retries with the new token before dispatch.</p>
+                              </div>
+                              <div style="display:flex;align-items:center;gap:11px;margin-top:14px;padding:11px 14px;border:1px solid var(--line);border-radius:10px;background:var(--panel);animation:gsrise .35s ease both;animation-delay:.25s">
+                                <span style="color:var(--jade);display:inline-flex"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></span>
+                                <span class="mono" style="font-size:10.5px;color:var(--tx2)">PR #482 — session-refresh: retry idempotency</span>
+                                <span class="chip chip--ok" style="margin-left:auto">CI green · review requested</span>
+                              </div>
+                              <div style="display:flex;gap:14px;margin-top:13px;font-size:11px;color:var(--mut);animation:gsrise .35s ease both;animation-delay:.3s">
+                                <span><b style="color:var(--tx2);font-weight:500">Dana</b> moved to In Review · 2h ago</span><span>·</span><span><b style="color:var(--tx2);font-weight:500">Priya</b> asked for a date · 1d ago</span>
+                              </div>
+                            </div>
+                          </sc-if>
+                        </div>
+                      </div>
+                      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)">
+                        <span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">RECORD</span>
+                        <span class="mono" style="font-size:9.5px;color:var(--mut2)">linear.issues.get · 0.3s · read-only · gv-01</span>
+                        <a class="mono" style="margin-left:auto;font-size:9.5px;cursor:pointer" onClick="{{ onRegen }}">Looks wrong? Regenerate</a>
+                        <a class="mono" style="font-size:9.5px;display:inline-flex;align-items:center;gap:5px;cursor:pointer">Open in Linear<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- MESSAGE · Gmail draft -->
+                  <sc-if value="{{ actDraft }}" hint-placeholder-val="{{ false }}">
+                    <div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Surface — Gmail draft">
+                      <div class="sheet-scroll scroll" style="padding:22px">
+                        <div style="max-width:640px;margin:0 auto;opacity:{{ draftOpacity }}">
+                          <div style="border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden">
+                            <div style="padding:13px 16px;border-bottom:1px solid var(--line);display:flex;flex-direction:column;gap:5px">
+                              <div style="display:flex;gap:9px;font-size:11.5px"><span class="mono" style="font-size:9px;color:var(--mut2);width:52px;flex:none;padding-top:2px">FROM</span><span style="color:var(--tx2)">alex@northbeam.co <span class="mono" style="font-size:9px;color:var(--mut2)">· via 0xCopilot</span></span></div>
+                              <div style="display:flex;gap:9px;font-size:11.5px"><span class="mono" style="font-size:9px;color:var(--mut2);width:52px;flex:none;padding-top:2px">TO</span><span style="color:var(--tx2)">Priya Shah &lt;priya@harborline.io&gt;</span></div>
+                              <div style="display:flex;gap:9px;font-size:11.5px"><span class="mono" style="font-size:9px;color:var(--mut2);width:52px;flex:none;padding-top:2px">SUBJECT</span><span style="color:var(--tx);font-weight:500">Re: Checkout fix — timeline?</span></div>
+                            </div>
+                            <div style="margin:14px 16px 0;padding:10px 13px;border-left:2px solid var(--line3);background:var(--ink2);border-radius:0 8px 8px 0">
+                              <div class="mono" style="font-size:9px;color:var(--mut2);margin-bottom:5px">YESTERDAY 4:12 PM — PRIYA WROTE</div>
+                              <div style="font-size:12px;color:var(--mut);line-height:1.65">Hi Alex — any update on the checkout regression? We're running a customer webinar Friday and I'd love to say the fix is live. — P</div>
+                            </div>
+                            <div style="padding:14px 16px 16px">
+                              <div style="display:flex;align-items:center;gap:12px;margin-bottom:11px">
+                                <span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">DRAFT · {{ revLabel }}</span>
+                                <span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--mut)"><span style="width:8px;height:8px;border-radius:2.5px;background:rgba(95,178,236,.35);border:1px solid var(--accent-line)"></span>0xCopilot wrote</span>
+                                <sc-if value="{{ edited }}" hint-placeholder-val="{{ false }}"><span style="display:inline-flex;align-items:center;gap:5px;font-size:10px;color:var(--mut)"><span style="width:8px;height:8px;border-radius:2.5px;background:rgba(169,139,224,.4);border:1px solid rgba(169,139,224,.5)"></span>your edit</span></sc-if>
+                              </div>
+                              <sc-if value="{{ dSeg1 }}" hint-placeholder-val="{{ false }}">
+                                <p style="margin:0 0 12px;font-size:12.5px;line-height:1.8;color:var(--tx2);animation:gsrise .3s ease both"><span style="background:rgba(95,178,236,.09);border-radius:3px;padding:1.5px 3px;box-decoration-break:clone;-webkit-box-decoration-break:clone">Hi Priya — good news: the checkout fix (ENG-142) is in review and on track to ship <b style="color:var(--tx);font-weight:600">Thursday, Feb 12</b>, ahead of your Friday webinar.</span></p>
+                              </sc-if>
+                              <sc-if value="{{ dSeg2 }}" hint-placeholder-val="{{ false }}">
+                                <sc-if value="{{ dEditing }}" hint-placeholder-val="{{ false }}">
+                                  <div style="margin:0 0 12px;animation:gsrise .2s ease both">
+                                    <textarea class="cta" style="min-height:64px;font-size:12px;border-color:rgba(169,139,224,.5)" value="{{ seg2Draft }}" onChange="{{ onSeg2 }}"></textarea>
+                                    <div style="display:flex;gap:7px;margin-top:8px;justify-content:flex-end">
+                                      <button class="cbtn cbtn--sm cbtn--ghost" onClick="{{ onEditCancel }}">Cancel</button>
+                                      <button class="cbtn cbtn--sm" onClick="{{ onEditDone }}">Done editing</button>
+                                    </div>
+                                  </div>
+                                </sc-if>
+                                <sc-if value="{{ dNotEditing }}" hint-placeholder-val="{{ false }}">
+                                  <p style="margin:0 0 12px;font-size:12.5px;line-height:1.8;color:var(--tx2);animation:gsrise .3s ease both"><span style="background:{{ seg2Bg }};border-radius:3px;padding:1.5px 3px;box-decoration-break:clone;-webkit-box-decoration-break:clone">{{ seg2 }}</span><sc-if value="{{ edited }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:8.5px;color:rgba(169,139,224,.9);margin-left:7px;border:1px solid rgba(169,139,224,.4);border-radius:4px;padding:1px 5px;vertical-align:1px">edited by you</span></sc-if></p>
+                                </sc-if>
+                              </sc-if>
+                              <sc-if value="{{ dSeg3 }}" hint-placeholder-val="{{ false }}">
+                                <p style="margin:0;font-size:12.5px;line-height:1.8;color:var(--tx2);animation:gsrise .3s ease both"><span style="background:rgba(95,178,236,.09);border-radius:3px;padding:1.5px 3px;box-decoration-break:clone;-webkit-box-decoration-break:clone">I'll send release notes once it's live. — Alex</span></p>
+                              </sc-if>
+                              <sc-if value="{{ dStreaming }}" hint-placeholder-val="{{ false }}"><div class="mono" style="font-size:9.5px;color:var(--mut2);display:flex;align-items:center;gap:8px;margin-top:10px"><span class="spin"></span>Drafting…</div></sc-if>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <sc-if value="{{ dAwait }}" hint-placeholder-val="{{ false }}">
+                        <div style="flex:none;display:flex;align-items:center;gap:11px;padding:10px 16px;border-top:1px solid rgba(232,180,94,.28);background:rgba(232,180,94,.05)" data-screen-label="Approval bar">
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="var(--amber)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>
+                          <span style="font-size:12px;color:var(--tx2)">Exactly this draft — <b style="font-weight:600;color:var(--tx)">{{ revLabel }}</b> — is what sends.</span>
+                          <div style="margin-left:auto;display:flex;gap:8px">
+                            <button class="cbtn cbtn--sm cbtn--danger" onClick="{{ onReject }}">Reject</button>
+                            <button class="cbtn cbtn--sm" onClick="{{ onEdit }}" disabled="{{ dEditing }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"></path></svg>Edit draft</button>
+                            <button class="cbtn cbtn--sm cbtn--pri" onClick="{{ onApprove }}" disabled="{{ dEditing }}">Approve &amp; send →</button>
+                          </div>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ dSending }}" hint-placeholder-val="{{ false }}">
+                        <div style="flex:none;display:flex;align-items:center;gap:10px;padding:12px 16px;border-top:1px solid var(--line);background:var(--ink2)"><span class="spin"></span><span class="mono" style="font-size:10.5px;color:var(--mut)">{{ dSendingLabel }}</span></div>
+                      </sc-if>
+                      <sc-if value="{{ dSent }}" hint-placeholder-val="{{ false }}">
+                        <div style="flex:none;display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid rgba(87,199,133,.25);background:rgba(87,199,133,.05)">
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--jade)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M5 12l5 5L20 7"></path></svg>
+                          <span style="font-size:12px;color:var(--tx2)">Sent 11:42 AM · <b style="font-weight:600;color:var(--tx)">{{ revLabel }}</b> · {{ dSentNote }}</span>
+                          <a class="mono" style="margin-left:auto;font-size:9.5px;display:inline-flex;align-items:center;gap:5px;cursor:pointer">Open in Gmail<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ dRejected }}" hint-placeholder-val="{{ false }}">
+                        <div style="flex:none;display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid rgba(240,118,79,.25);background:rgba(240,118,79,.05)">
+                          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--ember)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M6 6l12 12M18 6L6 18"></path></svg>
+                          <span style="font-size:12px;color:var(--tx2)">Draft rejected — nothing was sent.</span>
+                          <button class="cbtn cbtn--sm" style="margin-left:auto" onClick="{{ onRestore }}">Restore draft</button>
+                        </div>
+                      </sc-if>
+                      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)">
+                        <span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">MESSAGE</span>
+                        <span class="mono" style="font-size:9.5px;color:var(--mut2)">gmail.drafts.create → messages.send · {{ draftProv }} · gv-02</span>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- TABLE · Salesforce bulk -->
+                  <sc-if value="{{ actBulk }}" hint-placeholder-val="{{ false }}">
+                    <div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Surface — Salesforce bulk review">
+                      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line)">
+                        <span style="font-size:12.5px;font-weight:600;font-family:var(--disp)">8 opportunities → Closed-Lost</span>
+                        <span class="chip chip--warn">staged, not applied</span>
+                        <span class="mono" style="margin-left:auto;font-size:10px;color:var(--mut)">{{ bulkCounts }}</span>
+                      </div>
+                      <div class="sheet-scroll scroll">
+                        <div style="display:grid;grid-template-columns:70px 1.5fr .55fr .72fr 1.62fr 100px;gap:10px;padding:8px 16px;border-bottom:1px solid var(--line);position:sticky;top:0;background:var(--ink);z-index:2">
+                          <span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">DECIDE</span>
+                          <span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">OPPORTUNITY</span>
+                          <span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">AMOUNT</span>
+                          <span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">ACTIVITY</span>
+                          <span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">STAGE CHANGE</span>
+                          <span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2);text-align:right">STATUS</span>
+                        </div>
+                        <sc-for list="{{ rows }}" as="r" hint-placeholder-count="0">
+                          <div style="display:grid;grid-template-columns:70px 1.5fr .55fr .72fr 1.62fr 100px;gap:10px;padding:10px 16px;align-items:center;border-bottom:1px solid var(--line);animation:gsrise .35s ease both;animation-delay:{{ r.delay }};box-shadow:{{ r.inset }}">
+                            <div style="display:flex;gap:5px">
+                              <button title="Approve this change" onClick="{{ r.tglYes }}" disabled="{{ r.lock }}" style="width:26px;height:24px;border-radius:6px;display:grid;place-items:center;cursor:pointer;border:1px solid {{ r.yesBorder }};background:{{ r.yesBg }};color:{{ r.yesColor }}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></button>
+                              <button title="Hold — keep as is" onClick="{{ r.tglNo }}" disabled="{{ r.lock }}" style="width:26px;height:24px;border-radius:6px;display:grid;place-items:center;cursor:pointer;border:1px solid {{ r.noBorder }};background:{{ r.noBg }};color:{{ r.noColor }}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"></path></svg></button>
+                            </div>
+                            <div style="min-width:0">
+                              <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tx)"><span style="width:18px;height:18px;border-radius:5px;background:var(--panel3);color:var(--mut);display:inline-grid;place-items:center;font-size:8px;font-weight:600;flex:none">{{ r.ini }}</span><span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.nm }}</span></div>
+                              <sc-if value="{{ r.flag }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:5px;margin-top:3px;font-size:10px;color:var(--amber)"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M12 3l10 17H2z"></path><path d="M12 9v5M12 17.5v.5"></path></svg>{{ r.flag }} — agent pre-held</div></sc-if>
+                            </div>
+                            <span class="mono" style="font-size:10.5px;color:var(--tx2)">{{ r.amt }}</span>
+                            <span class="mono" style="font-size:9.5px;color:{{ r.actColor }}">{{ r.act }}</span>
+                            <div style="display:flex;align-items:center;gap:7px;min-width:0">
+                              <span style="font-size:11px;color:var(--mut2);text-decoration:line-through;white-space:nowrap">{{ r.old }}</span>
+                              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="var(--mut2)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+                              <span style="font-size:10.5px;color:var(--tx);background:rgba(232,180,94,.09);border:1px solid rgba(232,180,94,.28);border-radius:5px;padding:1px 7px;white-space:nowrap">Closed-Lost</span>
+                            </div>
+                            <div style="text-align:right">
+                              <sc-if value="{{ r.pend }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:9px;color:{{ r.decColor }}">{{ r.decLabel }}</span></sc-if>
+                              <sc-if value="{{ r.work }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:9px;color:var(--mut);display:inline-flex;align-items:center;gap:6px"><span class="spin"></span>writing…</span></sc-if>
+                              <sc-if value="{{ r.done }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:9px;color:var(--jade);display:inline-flex;align-items:center;gap:5px"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg>updated</span></sc-if>
+                              <sc-if value="{{ r.held }}" hint-placeholder-val="{{ false }}"><span class="mono" style="font-size:9px;color:var(--mut2)">held</span></sc-if>
+                            </div>
+                          </div>
+                        </sc-for>
+                      </div>
+                      <sc-if value="{{ bulkReview }}" hint-placeholder-val="{{ false }}">
+                        <div style="flex:none;display:flex;align-items:center;gap:11px;padding:10px 16px;border-top:1px solid rgba(232,180,94,.28);background:rgba(232,180,94,.05)">
+                          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="var(--amber)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>
+                          <span style="font-size:12px;color:var(--tx2)">Writes apply <b style="font-weight:600;color:var(--tx)">only</b> to rows you approve. Held rows stay untouched.</span>
+                          <button class="cbtn cbtn--sm cbtn--pri" style="margin-left:auto" onClick="{{ onApply }}" disabled="{{ applyDisabled }}">{{ applyLabel }}</button>
+                        </div>
+                      </sc-if>
+                      <sc-if value="{{ bulkApplying }}" hint-placeholder-val="{{ false }}">
+                        <div style="flex:none;display:flex;align-items:center;gap:10px;padding:12px 16px;border-top:1px solid var(--line);background:var(--ink2)"><span class="spin"></span><span class="mono" style="font-size:10.5px;color:var(--mut)">Applying approved changes to Salesforce…</span></div>
+                      </sc-if>
+                      <sc-if value="{{ bulkDone }}" hint-placeholder-val="{{ false }}">
+                        <div style="flex:none;display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid rgba(87,199,133,.25);background:rgba(87,199,133,.05)">
+                          <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="var(--jade)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M5 12l5 5L20 7"></path></svg>
+                          <span style="font-size:12px;color:var(--tx2)">{{ bulkDoneLabel }}</span>
+                          <a class="mono" style="margin-left:auto;font-size:9.5px;display:inline-flex;align-items:center;gap:5px;cursor:pointer">Open in Salesforce<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a>
+                        </div>
+                      </sc-if>
+                      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)">
+                        <span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">TABLE</span>
+                        <span class="mono" style="font-size:9.5px;color:var(--mut2)">salesforce.opportunities.update · 8 staged writes · {{ bulkProv }} · gv-03</span>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- UNKNOWN TOOL · Fathom -->
+                  <sc-if value="{{ actCall }}" hint-placeholder-val="{{ false }}">
+                    <div style="flex:1;min-height:0;display:flex;flex-direction:column;position:relative" data-screen-label="Surface — unknown tool (Fathom)">
+                      <div class="sheet-scroll scroll" style="padding:22px">
+                        <div style="max-width:640px;margin:0 auto;position:relative">
+                          <sc-if value="{{ fGenericOn }}" hint-placeholder-val="{{ false }}">
+                            <div style="animation:gsrise .3s ease both">
+                              <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">
+                                <span class="chip"><span class="dotk" style="background:var(--mut2)"></span>First render of this tool — generic view</span>
+                                <sc-if value="{{ fSimple }}" hint-placeholder-val="{{ false }}"><a class="mono" style="font-size:9.5px;cursor:pointer" onClick="{{ onUseNice }}">Use upgraded view</a></sc-if>
+                              </div>
+                              <div style="border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden">
+                                <div style="padding:13px 16px;border-bottom:1px solid var(--line);font-size:13px;font-weight:600;font-family:var(--disp)">Osprey Financial ⟷ Northbeam — renewal check-in</div>
+                                <sc-for list="{{ fFields }}" as="f" hint-placeholder-count="0">
+                                  <div style="display:flex;gap:14px;padding:9px 16px;border-bottom:1px solid var(--line);font-size:12px">
+                                    <span class="mono" style="font-size:10px;color:var(--mut2);width:120px;flex:none;padding-top:1px">{{ f.k }}</span>
+                                    <span style="color:var(--tx2);line-height:1.6;min-width:0">{{ f.v }}</span>
+                                  </div>
+                                </sc-for>
+                                <div style="display:flex;gap:14px;padding:9px 16px;font-size:12px">
+                                  <span class="mono" style="font-size:10px;color:var(--mut2);width:120px;flex:none;padding-top:1px">summary</span>
+                                  <span style="color:var(--tx2);line-height:1.65">Rachel confirmed budget survived the reorg; timeline slipped a quarter, not dead. Wants revised Enterprise API pricing before Thursday's steering call. Tone warm — renewal likely if pricing lands.</span>
+                                </div>
+                              </div>
+                            </div>
+                          </sc-if>
+                          <sc-if value="{{ fNiceOn }}" hint-placeholder-val="{{ false }}">
+                            <div style="animation:gsrise .4s ease both">
+                              <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">
+                                <span class="chip chip--sky"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.1 5.3L20 10l-5.9 1.7L12 17l-2.1-5.3L4 10l5.9-1.7z"></path></svg>Upgraded to a call layout</span>
+                                <a class="mono" style="font-size:9.5px;cursor:pointer" onClick="{{ onKeepSimple }}">Back to generic view</a>
+                              </div>
+                              <div style="border:1px solid var(--line);border-radius:12px;background:var(--panel);overflow:hidden">
+                                <div style="padding:15px 17px 13px;border-bottom:1px solid var(--line)">
+                                  <h3 style="font-size:14.5px;letter-spacing:-.01em">Osprey Financial ⟷ Northbeam — renewal check-in</h3>
+                                  <div style="display:flex;gap:7px;flex-wrap:wrap;margin-top:10px">
+                                    <span class="chip"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg>Yesterday · 2:30 PM · 32 min</span>
+                                    <span class="chip chip--ok"><span class="dotk"></span>Positive · 0.78</span>
+                                    <span class="chip"><span style="width:14px;height:14px;border-radius:4px;background:var(--panel3);color:var(--tx2);display:inline-grid;place-items:center;font-size:7.5px;font-weight:600;font-family:var(--body)">RK</span>Rachel Kim · Osprey</span>
+                                    <span class="chip"><span style="width:14px;height:14px;border-radius:4px;background:var(--panel3);color:var(--tx2);display:inline-grid;place-items:center;font-size:7.5px;font-weight:600;font-family:var(--body)">MT</span>Marcus Tran · Northbeam</span>
+                                  </div>
+                                </div>
+                                <div style="padding:13px 17px;border-bottom:1px solid var(--line)">
+                                  <div class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut2);margin-bottom:7px">SUMMARY</div>
+                                  <p style="font-size:12.5px;line-height:1.7;color:var(--tx2)">Rachel confirmed budget survived the reorg — the renewal slipped a quarter, it isn't dead. She wants revised Enterprise API pricing before Thursday's steering call. Tone warm; renewal likely if pricing lands.</p>
+                                </div>
+                                <div style="padding:13px 17px">
+                                  <div class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut2);margin-bottom:9px">ACTION ITEMS</div>
+                                  <div style="display:flex;flex-direction:column;gap:8px">
+                                    <div style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--tx2)"><span style="width:14px;height:14px;border:1.5px solid var(--line3);border-radius:4px;flex:none;margin-top:2px"></span>Send updated Enterprise API pricing before Thursday <span class="mono" style="font-size:9px;color:var(--mut2)">· Marcus</span></div>
+                                    <div style="display:flex;gap:9px;align-items:flex-start;font-size:12.5px;color:var(--tx2)"><span style="width:14px;height:14px;border:1.5px solid var(--line3);border-radius:4px;flex:none;margin-top:2px"></span>Loop in security for the SOC 2 packet <span class="mono" style="font-size:9px;color:var(--mut2)">· Alex</span></div>
+                                  </div>
+                                </div>
+                                <div style="display:flex;align-items:center;padding:10px 17px;border-top:1px solid var(--line);background:var(--ink2)">
+                                  <a class="mono" style="font-size:9.5px;display:inline-flex;align-items:center;gap:5px;cursor:pointer">Open recording — fathom.video/c/88412<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a>
+                                </div>
+                              </div>
+                            </div>
+                          </sc-if>
+                          <sc-if value="{{ fSweep }}" hint-placeholder-val="{{ false }}">
+                            <div style="position:absolute;inset:-6px;border-radius:14px;overflow:hidden;pointer-events:none">
+                              <div style="position:absolute;inset:0;background:linear-gradient(100deg,transparent 30%,var(--accent-soft) 50%,transparent 70%);animation:gssweep .7s ease-in-out infinite"></div>
+                            </div>
+                          </sc-if>
+                        </div>
+                      </div>
+                      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)">
+                        <span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">{{ fPatternLabel }}</span>
+                        <span class="mono" style="font-size:9.5px;color:var(--mut2)">{{ fProvenance }}</span>
+                        <a class="mono" style="margin-left:auto;font-size:9.5px;display:inline-flex;align-items:center;gap:5px;cursor:pointer">Open in Fathom<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg></a>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- FALLBACK · raw envelope -->
+                  <sc-if value="{{ actRaw }}" hint-placeholder-val="{{ false }}">
+                    <div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Surface — raw fallback">
+                      <div class="sheet-scroll scroll" style="display:grid;place-items:center;padding:22px">
+                        <div style="width:600px;max-width:100%;animation:gsrise .35s ease both">
+                          <div style="display:flex;flex-direction:column;align-items:center;text-align:center;margin-bottom:18px">
+                            <span style="width:40px;height:40px;border-radius:50%;border:1px dashed var(--line3);display:grid;place-items:center;color:var(--mut);margin-bottom:12px"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H7a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2 2 2 0 0 1 2 2v5c0 1.1.9 2 2 2h1"></path><path d="M16 3h1a2 2 0 0 1 2 2v5c0 1.1.9 2 2 2a2 2 0 0 0-2 2v5a2 2 0 0 1-2 2h-1"></path></svg></span>
+                            <h3 style="font-size:14px">This result doesn't fit a view</h3>
+                            <p style="font-size:12px;color:var(--mut);margin-top:6px;max-width:440px;line-height:1.65">The forecast export is a packed, versioned blob — not a record, table, message, document or board. Rather than guess at a chart, here's the raw result. Nothing is hidden.</p>
+                          </div>
+                          <div style="border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden">
+                            <div style="display:flex;align-items:center;gap:8px;padding:8px 13px;border-bottom:1px solid var(--line)">
+                              <span class="mono" style="font-size:9.5px;color:var(--mut2)">salesforce.analytics.export · FY26-Q1 · 41 KB</span>
+                              <button class="cbtn cbtn--sm cbtn--ghost" style="margin-left:auto" onClick="{{ onCopyRaw }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>Copy</button>
+                              <button class="cbtn cbtn--sm cbtn--ghost"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11M7 10l5 5 5-5M4 20h16"></path></svg>Download</button>
+                            </div>
+                            <pre class="mono" style="margin:0;padding:13px 16px;font-size:10.5px;line-height:1.75;color:var(--tx2);overflow:auto">{
+  "export_version": "3.1",
+  "job": "forecast_recalc_88f2",
+  "status": "complete",
+  "encoding": "sfdc-packed/columnar",
+  "checksum": "9d41c6aa",
+  "columns": ["opp_id","stage","fx_amount","close_q","owner_id"],
+  "frames": 4,
+  "payload": "H4sIAAAAAAAA/8vMS1WyUsrJz0/PzM…" <span style="color:var(--mut2)">// 41,208 bytes</span>
+}</pre>
+                          </div>
+                          <div style="display:flex;justify-content:center;margin-top:14px"><a class="mono" style="font-size:9.5px;cursor:pointer" onClick="{{ onSuggestShape }}">Suggest a shape for this tool →</a></div>
+                        </div>
+                      </div>
+                      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)">
+                        <span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">RAW</span>
+                        <span class="mono" style="font-size:9.5px;color:var(--mut2)">fallback envelope · shown when no pattern fits confidently · gv-05</span>
+                      </div>
+                    </div>
+                  </sc-if>
+
+                  <!-- RUN RECEIPT -->
+                  <sc-if value="{{ actReceipt }}" hint-placeholder-val="{{ false }}">
+                    <div style="flex:1;min-height:0;display:flex;flex-direction:column" data-screen-label="Surface — run receipt">
+                      <div class="sheet-scroll scroll" style="padding:22px">
+                        <div style="max-width:680px;margin:0 auto;animation:gsrise .35s ease both">
+                          <div style="display:flex;align-items:center;gap:11px">
+                            <h1 style="font-size:17px;letter-spacing:-.015em">Run receipt</h1>
+                            <span class="chip chip--ok"><span class="dotk"></span>Complete</span>
+                            <span class="mono" style="margin-left:auto;font-size:10px;color:var(--mut2)">11:38 → 11:45 · 4 tools</span>
+                          </div>
+                          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-top:14px">
+                            <div style="border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:11px 13px"><div class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut2)">READS</div><div style="font-size:15px;font-weight:600;margin-top:4px;font-family:var(--disp)">4 <span style="font-size:10.5px;font-weight:400;color:var(--mut)">auto-ran</span></div></div>
+                            <div style="border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:11px 13px"><div class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut2)">WRITES</div><div style="font-size:15px;font-weight:600;margin-top:4px;font-family:var(--disp)">9 <span style="font-size:10.5px;font-weight:400;color:var(--mut)">proposed · {{ recApproved }} approved</span></div></div>
+                            <div style="border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:11px 13px"><div class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut2)">HELD</div><div style="font-size:15px;font-weight:600;margin-top:4px;font-family:var(--disp)">{{ recHeld }} <span style="font-size:10.5px;font-weight:400;color:var(--mut)">untouched</span></div></div>
+                          </div>
+                          <div style="display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;margin-top:14px">
+                            <sc-for list="{{ receipts }}" as="rc" hint-placeholder-count="0">
+                              <div style="display:flex;align-items:center;gap:11px;padding:10px 14px;border-bottom:1px solid var(--line)">
+                                <span style="width:24px;height:24px;border-radius:6px;background:var(--panel3);display:inline-grid;place-items:center;font-size:9px;font-weight:600;color:{{ rc.lc }};flex:none">{{ rc.lg }}</span>
+                                <div style="flex:1;min-width:0">
+                                  <div style="font-size:12px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ rc.t }}</div>
+                                  <div class="mono" style="font-size:9px;color:var(--mut2);margin-top:1px">{{ rc.sub }}</div>
+                                </div>
+                                <span class="mono" style="font-size:9px;color:{{ rc.sc }};flex:none">{{ rc.st }}</span>
+                                <span class="mono" style="font-size:9px;color:var(--mut2);flex:none">{{ rc.at }}</span>
+                                <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="var(--mut2)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"></path></svg>
+                              </div>
+                            </sc-for>
+                            <div style="display:flex;align-items:center;gap:8px;padding:9px 14px;background:var(--ink2)">
+                              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="var(--jade)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg>
+                              <span class="mono" style="font-size:9.5px;color:var(--mut)">Every write was decided on its surface — nothing was approved from chat.</span>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                      <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)">
+                        <span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">RECEIPT</span>
+                        <span class="mono" style="font-size:9.5px;color:var(--mut2)">assembled from the run ledger · immutable · gv-06</span>
+                      </div>
+                    </div>
+                  </sc-if>
+                </sc-if>
+
+                <!-- toast -->
+                <sc-if value="{{ toastOn }}" hint-placeholder-val="{{ false }}">
+                  <div style="position:absolute;left:50%;bottom:46px;transform:translateX(-50%);z-index:9;display:flex;align-items:center;gap:11px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:8px 8px 8px 13px;box-shadow:0 14px 36px -12px rgba(0,0,0,.7);animation:gsrise .25s ease both">
+                    <span style="font-size:11.5px;color:var(--tx2)">{{ toastT }}</span>
+                    <sc-if value="{{ toastHasAct }}" hint-placeholder-val="{{ false }}"><button class="cbtn cbtn--sm cbtn--ghost" onClick="{{ onToastAct }}">{{ toastLabel }}</button></sc-if>
+                  </div>
+                </sc-if>
+              </sc-if>
+
+              <sc-if value="{{ composeToastOn }}" hint-placeholder-val="{{ false }}">
+                <div style="position:absolute;left:50%;bottom:46px;transform:translateX(-50%);z-index:9;display:flex;align-items:center;gap:11px;background:var(--panel2);border:1px solid var(--line2);border-radius:9px;padding:8px 13px;box-shadow:0 14px 36px -12px rgba(0,0,0,.7);animation:gsrise .25s ease both">
+                  <span style="font-size:11.5px;color:var(--tx2)">{{ toastT }}</span>
+                </div>
+              </sc-if>
+            </section>
+          </div>
+
+          <!-- timeline -->
+          <div class="tl" data-min="{{ tlMin }}" data-screen-label="Run timeline">
+            <div class="tl-head">
+              <div class="tl-clock">
+                <span class="tl-lbl live">LIVE</span>
+                <span class="t mono">{{ tlClock }}</span>
+                <span class="sub">{{ tlSub }}</span>
+              </div>
+              <div class="tl-ctrls">
+                <button title="Previous step" onClick="{{ onPrev }}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6L9 12l9 6zM6 5v14"></path></svg></button>
+                <button title="Next step" onClick="{{ onNext }}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l9 6-9 6zM18 5v14"></path></svg></button>
+                <button class="snap" onClick="{{ onLive }}">Live</button>
+                <button class="tl-min" title="Minimize timeline" onClick="{{ onTlMin }}"><span style="display:inline-flex;transform:{{ tlChev }}"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"></path></svg></span></button>
+              </div>
+            </div>
+            <div class="tl-track" style="cursor:default">
+              <div class="tl-laneline" style="top:12.5%"></div>
+              <div class="tl-laneline" style="top:37.5%"></div>
+              <div class="tl-laneline" style="top:62.5%"></div>
+              <div class="tl-laneline" style="top:87.5%"></div>
+              <sc-for list="{{ beads }}" as="bd" hint-placeholder-count="0">
+                <span class="{{ bd.cls }}" style="left:{{ bd.x }}%;top:{{ bd.top }}%" title="{{ bd.title }}" onClick="{{ bd.click }}"></span>
+              </sc-for>
+              <div class="tl-head-line" style="left:{{ headX }}%"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- demo walkthrough strip -->
+  <div style="width:1180px;flex:none;display:flex;align-items:center;gap:9px;flex-wrap:wrap" data-screen-label="Walkthrough strip">
+    <span class="mono" style="font-size:9px;letter-spacing:.14em;color:var(--mut2)">WALKTHROUGH</span>
+    <sc-for list="{{ chapters }}" as="c" hint-placeholder-count="0">
+      <button onClick="{{ c.click }}" style="display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:999px;cursor:pointer;font-family:var(--body);font-size:11px;background:transparent;border:1px solid {{ c.bc }};color:{{ c.tc }}" style-hover="border-color:var(--line3);color:var(--tx)"><span class="mono" style="font-size:9px;color:{{ c.nc }}">{{ c.n }}</span>{{ c.label }}</button>
+    </sc-for>
+    <span class="mono" style="margin-left:auto;font-size:9px;color:var(--mut2)">← → to move · the run pauses at each connect &amp; each change</span>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1260, &quot;height&quot;: 872}, &quot;theme&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Appearance&quot;}, &quot;accent&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;sky&quot;, &quot;jade&quot;, &quot;ember&quot;, &quot;violet&quot;], &quot;default&quot;: &quot;sky&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Appearance&quot;}, &quot;chatSide&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;right&quot;, &quot;left&quot;], &quot;default&quot;: &quot;right&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Workspace&quot;}, &quot;autoAdvance&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Walkthrough&quot;}}">
+const GOAL = "Catch me up on ENG-142, reply to Priya with the ship date, and close out last quarter's stale opportunities.";
+const SEG2_DEFAULT = "Dana's PR covers the session-refresh path, and we'll confirm here the moment it's deployed.";
+const PH = ["compose", "read", "draft", "bulk", "unknown", "fallback", "done"];
+const CHAPTERS = ["Ask", "Read", "Draft", "Bulk", "New tool", "Fallback", "Receipt"];
+const TOOL_OF = { compose: null, read: "li", draft: "gm", bulk: "sf", unknown: "fa", fallback: null, done: null };
+const SURFACE_OF = { li: "issue", gm: "draft", sf: "bulk", fa: "call" };
+const TOOLS = {
+  li: { nm: "Linear", lg: "Li", lc: "var(--violet)", host: "linear.app", write: false, step: "1 of 4", reason: "to read ENG-142.", scopes: "read issues & cycles" },
+  gm: { nm: "Gmail", lg: "Gm", lc: "var(--accent)", host: "accounts.google.com", write: true, step: "2 of 4", reason: "to read Priya's thread and send your reply.", scopes: "read thread · create & send mail" },
+  sf: { nm: "Salesforce", lg: "Sf", lc: "var(--amber)", host: "login.salesforce.com", write: true, step: "3 of 4", reason: "to review and update stale opportunities.", scopes: "read opportunities · update fields" },
+  fa: { nm: "Fathom", lg: "Fa", lc: "var(--jade)", host: "fathom.video", write: false, step: "4 of 4", reason: "to read the Osprey call summary — a tool it hasn't used before.", scopes: "read call recordings & summaries" },
+};
+const ROWS = [
+  { nm: "Meridian Health — renewal", ini: "MH", amt: "$48,000", act: "96d ago", old: "Negotiation", flag: null },
+  { nm: "Anchor Logistics — seat expansion", ini: "AL", amt: "$22,000", act: "121d ago", old: "Proposal", flag: null },
+  { nm: "Bluepine — platform pilot", ini: "BP", amt: "$64,000", act: "88d ago", old: "Negotiation", flag: null },
+  { nm: "Corsair Labs — annual", ini: "CL", amt: "$31,000", act: "140d ago", old: "Discovery", flag: null },
+  { nm: "Halcyon Media — upsell", ini: "HM", amt: "$18,000", act: "12d ago", old: "Proposal", flag: "Contact replied 12d ago" },
+  { nm: "Northwind Retail — POS rollout", ini: "NR", amt: "$57,000", act: "104d ago", old: "Negotiation", flag: null },
+  { nm: "Osprey Financial — API tier", ini: "OF", amt: "$73,000", act: "1d ago", old: "Proposal", flag: "Renewal call yesterday" },
+  { nm: "Tessellate — starter plan", ini: "TS", amt: "$9,000", act: "133d ago", old: "Discovery", flag: null },
+];
+const F_FIELDS = [
+  { k: "recorded_at", v: "Yesterday · 2:30 PM" }, { k: "duration_min", v: "32" },
+  { k: "participants", v: "rachel@ospreyfin.com · marcus@northbeam.co" }, { k: "sentiment", v: "positive (0.78)" },
+  { k: "action_items", v: "2 items" }, { k: "recording_url", v: "fathom.video/c/88412" },
+];
+const y = (t) => ({ k: "you", t });
+const b = (t) => ({ k: "bot", t });
+const ev = (t, sub, c) => ({ k: "ev", t, sub, c });
+const RUNSTART = b("On it — starting with ENG-142. I'll connect each tool as I reach it, and hold anything that writes for your OK.");
+const ASK = {
+  li: b("First, ENG-142. I need Linear — it's read-only, so just connect and I'll pull the issue."),
+  gm: b("Now Priya's reply. I need Gmail to read her thread and send. Connect it — I'll hold the draft for you."),
+  sf: b("Next, the stale pipeline. I need Salesforce to review and update opportunities — every change waits for you."),
+  fa: b("You asked why I held Osprey. There's a call in Fathom, a tool I haven't used before — connect it and I'll read the summary."),
+};
+const connectedEv = (id, note) => ev("Connected " + TOOLS[id].nm, "mcp.oauth · " + note, "var(--jade)");
+const POST = {
+  li: [ev("Reading ENG-142", "linear.issues.get · auto-ran (read)", "var(--accent)")],
+  gm: [ev("Read Priya's thread", "gmail.threads.get · auto-ran (read)", "var(--accent)")],
+  sf: [ev("Staged 8 opportunity updates", "salesforce.opportunities · writes held", "var(--amber)"), b("All 8 look closeable. Two had recent touches, so I pre-held them — decide per row on the canvas.")],
+  fa: [ev("Reading call summary", "fathom.calls.get · auto-ran · first render", "var(--accent)"), b("Fathom's new to me, so you get the generic view instantly while I shape a better one.")],
+};
+const readDone = b("ENG-142 is in review with Dana and lands Thursday. Drafting Priya's reply with that date — it won't send without you.");
+const draftDone = (rev, note) => [ev("Reply sent to Priya", "gmail.messages.send · " + rev + " · " + note + " · 11:42", "var(--jade)"), b("Sent — " + (note === "you approved" ? "exactly the revision you approved" : "auto-sent under allow-always") + ". Next: 8 opportunities with no real activity since October.")];
+const bulkDone = (n, h) => [ev("Updated " + n + " opportunities", "salesforce.update · 11:44", "var(--jade)"), b(n + " closed, " + h + " held open. About Osprey — there was a call yesterday. Pulling the summary from Fathom.")];
+const unknownDone = b("Upgraded the view. Rachel confirmed budget's intact — slipped a quarter, not dead. Good call holding it.");
+const FALLBACK_ENTRY = [ev("Forecast recalc returned", "salesforce.analytics.export · packed blob · no view fits", "var(--mut2)"), b("Closing those kicked off a forecast recalc — it comes back as a packed export with no honest way to chart it, so it's on the canvas raw. Nothing hidden.")];
+const DONE_ENTRY = [b("That's the run: 4 reads auto-ran, and you decided every write — approvals happened on the surfaces, never in here. Receipt's on the canvas."), ev("Run complete", "6 surfaces · 11:38 → 11:45", "var(--jade)")];
+const noteFor = (id, perm) => TOOLS[id].write ? (perm === "always" ? "writes: allow always (bypass)" : "writes: ask first") : (id === "fa" ? "read-only · first render" : "read-only");
+
+class Component extends DCLogic {
+  state = this.snap(0);
+  timers = [];
+  t(ms, fn) { const g = this.gen || 0; this.timers.push(setTimeout(() => { if ((this.gen || 0) === g) fn(); }, ms)); }
+  clearTimers() { this.gen = (this.gen || 0) + 1; this.timers.forEach(clearTimeout); this.timers = []; }
+  auto() { return this.props.autoAdvance ?? true; }
+  freshRows() { return ROWS.map((r) => ({ ...r, dec: r.flag ? "no" : "yes", run: "idle" })); }
+  tool(status, perm) { return { status, perm: perm || "ask", gsel: "ask" }; }
+
+  snap(i) {
+    const s = {
+      phase: PH[i], msgs: [], tools: { li: this.tool("idle"), gm: this.tool("idle"), sf: this.tool("idle"), fa: this.tool("idle") },
+      sdTab: "chat", tlMin: false, issue: "skel", dPhase: "stream", dSegs: 0,
+      seg2: SEG2_DEFAULT, seg2Draft: SEG2_DEFAULT, edited: false, rows: this.freshRows(),
+      bulk: "review", fView: "generic", fSimple: false, toast: null, cmp: "", userTyped: false, tab: null,
+    };
+    const push = (arr) => (Array.isArray(arr) ? s.msgs.push(...arr) : s.msgs.push(arr));
+    if (i >= 1) { push(y(GOAL)); push(RUNSTART); push(ASK.li); }
+    if (i > 1) { s.tools.li = this.tool("ok", "ask"); push(connectedEv("li", noteFor("li"))); push(POST.li); push(readDone); s.issue = "ready"; s.tab = "issue"; }
+    if (i >= 2) push(ASK.gm);
+    if (i > 2) { s.tools.gm = this.tool("ok", "ask"); push(connectedEv("gm", noteFor("gm", "ask"))); push(POST.gm); s.dPhase = "sent"; s.dSegs = 3; push(draftDone("rev 1", "you approved")); s.tab = "draft"; }
+    if (i >= 3) push(ASK.sf);
+    if (i > 3) { s.tools.sf = this.tool("ok", "ask"); push(connectedEv("sf", noteFor("sf", "ask"))); push(POST.sf); s.bulk = "done"; s.rows = s.rows.map((r) => ({ ...r, run: r.dec === "yes" ? "done" : "idle" })); push(bulkDone(6, 2)); s.tab = "bulk"; }
+    if (i >= 4) push(ASK.fa);
+    if (i > 4) { s.tools.fa = this.tool("ok", "ask"); push(connectedEv("fa", noteFor("fa"))); push(POST.fa); s.fView = "nice"; push(unknownDone); s.tab = "call"; }
+    if (i >= 5) { push(FALLBACK_ENTRY); s.tab = "raw"; }
+    if (i >= 6) { push(DONE_ENTRY); s.tab = "receipt"; }
+    return s;
+  }
+
+  connected(id) { return this.state.tools[id].status === "ok"; }
+
+  jump = (i) => { this.clearTimers(); this.setState(this.snap(i), () => { this.enterPhase(PH[i]); this.scrollChat(); }); };
+
+  go(phase) {
+    this.clearTimers();
+    this.setState((s) => {
+      const m = [...s.msgs];
+      if (phase === "read") { m.push(ASK.li); }
+      if (phase === "draft") { m.push(ASK.gm); }
+      if (phase === "bulk") { m.push(ASK.sf); }
+      if (phase === "unknown") { m.push(ASK.fa); }
+      if (phase === "fallback") m.push(...FALLBACK_ENTRY);
+      if (phase === "done") m.push(...DONE_ENTRY);
+      const ns = { phase, msgs: m };
+      if (phase === "read") ns.issue = "skel";
+      if (phase === "fallback") ns.tab = "raw";
+      if (phase === "done") ns.tab = "receipt";
+      return ns;
+    }, () => { this.enterPhase(phase); this.scrollChat(); });
+  }
+
+  enterPhase(phase) {
+    if (phase === "compose") { this.startTyping(); return; }
+    if (phase === "fallback") { if (this.auto()) this.t(4600, () => this.go("done")); return; }
+    // read/draft/bulk/unknown: wait on connect card. done: end.
+  }
+
+  startTyping() {
+    if (this.state.userTyped) return;
+    let n = 0;
+    this.t(500, () => this._type(n));
+  }
+  _type(n) {
+    if (this.state.userTyped) return;
+    n += 2;
+    if (n >= GOAL.length) { this.setState({ cmp: GOAL }); return; }
+    this.setState({ cmp: GOAL.slice(0, n) });
+    this.t(26, () => this._type(n));
+  }
+
+  onConnected(id) {
+    const perm = this.state.tools[id].perm;
+    this.pushMsgs([connectedEv(id, noteFor(id, perm))]);
+    this.setState({ tab: SURFACE_OF[id] });
+    const phase = { li: "read", gm: "draft", sf: "bulk", fa: "unknown" }[id];
+    this.surfaceEnter(phase, perm);
+  }
+
+  surfaceEnter(phase, perm) {
+    if (phase === "read") {
+      this.pushMsgs(POST.li);
+      this.setState({ issue: "skel" });
+      this.t(900, () => this.setState((s) => (s.issue === "skel" ? { issue: "ready" } : null)));
+      this.t(1600, () => this.pushMsgs([readDone]));
+      if (this.auto()) this.t(4200, () => this.go("draft"));
+    }
+    if (phase === "draft") {
+      this.pushMsgs(POST.gm);
+      this.setState({ dPhase: "stream", dSegs: 0 });
+      const strm = (fn) => (s) => (s.dPhase === "stream" ? fn(s) : null);
+      this.t(400, () => this.setState(strm(() => ({ dSegs: 1 }))));
+      this.t(950, () => this.setState(strm(() => ({ dSegs: 2 }))));
+      this.t(1500, () => {
+        this.setState(strm(() => ({ dSegs: 3, dPhase: "ready" })));
+        if (perm === "always") this.t(300, () => this.autoSend());
+      });
+    }
+    if (phase === "bulk") {
+      this.pushMsgs(POST.sf);
+      this.setState({ bulk: "review" });
+      if (perm === "always") this.t(800, () => this.apply(true));
+    }
+    if (phase === "unknown") {
+      this.pushMsgs(POST.fa);
+      this.setState({ fView: "generic" });
+      this.t(2300, () => this.setState((s) => (s.fView === "generic" ? { fView: "sweep" } : null)));
+      this.t(3000, () => {
+        this.setState((s) => (s.fView !== "nice" ? { fView: "nice" } : null));
+        this.pushMsgs([unknownDone]);
+        this.showToast("View upgraded — a call layout fit this tool", "Keep generic", () => this.setState({ fSimple: true, toast: null }));
+      });
+      if (this.auto()) this.t(6400, () => this.go("fallback"));
+    }
+  }
+
+  pushMsgs(arr) { this.setState((s) => ({ msgs: [...s.msgs, ...arr] })); this.scrollChat(); }
+  scrollChat() { requestAnimationFrame(() => requestAnimationFrame(() => { if (this._chat) this._chat.scrollTop = this._chat.scrollHeight + 500; })); }
+  showToast(t, label, fn) { const tok = {}; this._toastTok = tok; this.setState({ toast: { t, label, fn } }); this.t(4600, () => { if (this._toastTok === tok) this.setState({ toast: null }); }); }
+
+  componentDidMount() {
+    this.enterPhase("compose");
+    this._key = (e) => {
+      const tag = (e.target.tagName || "").toLowerCase();
+      if (tag === "textarea" || tag === "input") return;
+      const cur = PH.indexOf(this.state.phase);
+      if (e.key === "ArrowRight") this.jump(Math.min(cur + 1, 6));
+      if (e.key === "ArrowLeft") this.jump(Math.max(cur - 1, 0));
+    };
+    window.addEventListener("keydown", this._key);
+  }
+  componentWillUnmount() { this.clearTimers(); window.removeEventListener("keydown", this._key); }
+
+  startRun() {
+    const t = (this.state.cmp || "").trim() || GOAL;
+    this.clearTimers();
+    this.setState({ cmp: "", userTyped: true, phase: "read", msgs: [y(t), RUNSTART, ASK.li], issue: "skel" }, () => { this.enterPhase("read"); this.scrollChat(); });
+  }
+  connect(id) {
+    const perm = this.state.tools[id].gsel || "ask";
+    this.setState((s) => ({ tools: { ...s.tools, [id]: { status: "conn", perm, gsel: perm } } }));
+    const d = { li: 850, gm: 1050, sf: 950, fa: 900 }[id];
+    this.t(d, () => { this.setState((s) => ({ tools: { ...s.tools, [id]: { ...s.tools[id], status: "ok" } } })); this.onConnected(id); });
+  }
+  autoSend() {
+    this.setState({ dPhase: "sending" });
+    this.t(1000, () => { this.setState({ dPhase: "sent" }); this.pushMsgs(draftDone("rev 1", "auto-sent")); if (this.auto()) this.t(2400, () => this.go("bulk")); });
+  }
+  approve = () => {
+    this.setState({ dPhase: "sending" });
+    this.t(1100, () => { this.setState({ dPhase: "sent" }); this.pushMsgs(draftDone(this.state.edited ? "rev 2" : "rev 1", "you approved")); });
+    if (this.auto()) this.t(3600, () => this.go("bulk"));
+  };
+  apply = (autoAll) => {
+    const idxs = this.state.rows.map((r, i) => (r.dec === "yes" ? i : -1)).filter((i) => i >= 0);
+    if (!idxs.length) return;
+    this.setState({ bulk: "applying" });
+    idxs.forEach((ri, k) => {
+      this.t(240 + k * 180, () => this.setState((s) => ({ rows: s.rows.map((r, j) => (j === ri ? { ...r, run: "work" } : r)) })));
+      this.t(240 + k * 180 + 340, () => this.setState((s) => ({ rows: s.rows.map((r, j) => (j === ri ? { ...r, run: "done" } : r)) })));
+    });
+    const total = 240 + idxs.length * 180 + 560;
+    this.t(total, () => { this.setState({ bulk: "done" }); this.pushMsgs(bulkDone(idxs.length, 8 - idxs.length)); });
+    if (this.auto()) this.t(total + 2400, () => this.go("unknown"));
+  };
+  sendCmp() {
+    const t = this.state.cmp.trim();
+    if (!t) return;
+    this.setState({ cmp: "", userTyped: true });
+    this.pushMsgs([y(t)]);
+    this.t(700, () => this.pushMsgs([b("Noted — folding that in. Anything that writes will still wait for you on its surface.")]));
+  }
+
+  renderVals() {
+    const s = this.state;
+    const idx = PH.indexOf(s.phase);
+    const need = TOOL_OF[s.phase];
+    const connected = need ? s.tools[need].status === "ok" : true;
+    const showConnect = !!need && !connected;
+    const runStarted = idx >= 1;
+    const showCompose = s.phase === "compose";
+    const liOk = s.tools.li.status === "ok", gmOk = s.tools.gm.status === "ok", sfOk = s.tools.sf.status === "ok", faOk = s.tools.fa.status === "ok";
+    const connCount = [liOk, gmOk, sfOk, faOk].filter(Boolean).length;
+    const anyAlways = (gmOk && s.tools.gm.perm === "always") || (sfOk && s.tools.sf.perm === "always");
+    // available surfaces
+    const avail = [];
+    if (liOk) avail.push("issue");
+    if (gmOk) avail.push("draft");
+    if (sfOk) avail.push("bulk");
+    if (faOk) avail.push("call");
+    if (idx >= 5) avail.push("raw");
+    if (idx >= 6) avail.push("receipt");
+    let tab = avail.includes(s.tab) ? s.tab : avail[avail.length - 1] || null;
+    if (showConnect) tab = null;
+    const TL = { issue: "ENG-142", draft: "Re: Checkout fix", bulk: "Opportunities · 8", call: "Osprey call", raw: "Forecast export", receipt: "Run receipt" };
+    const tabs = avail.map((id) => ({ label: TL[id], on: !showConnect && tab === id, dot: true, pending: false, click: () => this.setState({ tab: id }) }));
+    if (showConnect) tabs.push({ label: TOOLS[need].nm + " · connecting", on: true, dot: false, pending: true, click: () => {} });
+    // approvals pend
+    const dAwait = s.dPhase === "ready" || s.dPhase === "edit";
+    const connPend = showConnect ? 1 : 0;
+    const draftPend = s.phase === "draft" && dAwait ? 1 : 0;
+    const bulkPend = s.phase === "bulk" && s.bulk === "review" ? 1 : 0;
+    const pendTotal = connPend + draftPend + bulkPend;
+    // gate vals
+    const T = need ? TOOLS[need] : TOOLS.li;
+    const gsel = need ? (s.tools[need].gsel || "ask") : "ask";
+    const gStatus = need ? s.tools[need].status : "idle";
+    const rev = s.edited ? "rev 2" : "rev 1";
+    const review = s.bulk === "review";
+    const yesN = s.rows.filter((r) => r.dec === "yes").length;
+    const rows = s.rows.map((r, i) => {
+      const yes = r.dec === "yes", held = !review && r.dec === "no";
+      return {
+        ...r, delay: i * 0.05 + "s", lock: !review,
+        inset: r.flag && review ? "inset 2px 0 0 var(--amber)" : "none",
+        actColor: r.flag ? "var(--amber)" : "var(--mut2)",
+        yesBorder: yes ? "transparent" : "var(--line2)", yesBg: yes ? "var(--accent)" : "transparent", yesColor: yes ? "var(--accent-ink)" : "var(--mut2)",
+        noBorder: !yes ? "var(--line3)" : "var(--line2)", noBg: !yes ? "var(--panel3)" : "transparent", noColor: !yes ? "var(--tx)" : "var(--mut2)",
+        decColor: yes ? "var(--accent)" : "var(--mut)", decLabel: yes ? "will apply" : "held by you",
+        pend: review, work: r.run === "work", done: r.run === "done", held,
+        tglYes: () => review && this.setState((st) => ({ rows: st.rows.map((x, j) => (j === i ? { ...x, dec: "yes" } : x)) })),
+        tglNo: () => review && this.setState((st) => ({ rows: st.rows.map((x, j) => (j === i ? { ...x, dec: "no" } : x)) })),
+      };
+    });
+    const fNice = s.fView === "nice" && !s.fSimple;
+    const receipts = [
+      { lg: "Li", lc: "var(--violet)", t: "Read ENG-142 — Session token refresh drops checkout retries", sub: "linear.issues.get · gv-01", st: "auto-ran", sc: "var(--mut)", at: "11:39" },
+      { lg: "Gm", lc: "var(--accent)", t: "Read thread “Checkout fix — timeline?”", sub: "gmail.threads.get · quoted in gv-02", st: "auto-ran", sc: "var(--mut)", at: "11:40" },
+      { lg: "Gm", lc: "var(--accent)", t: "Sent reply to Priya Shah — " + rev, sub: "gmail.messages.send · gv-02", st: "you approved", sc: "var(--jade)", at: "11:42" },
+      { lg: "Sf", lc: "var(--amber)", t: "Closed " + yesN + " opportunities as Closed-Lost", sub: "salesforce.opportunities.update · gv-03", st: "you approved", sc: "var(--jade)", at: "11:44" },
+      { lg: "Sf", lc: "var(--amber)", t: "Held " + (8 - yesN) + " opportunities — no change", sub: "flagged: recent activity", st: "you held", sc: "var(--amber)", at: "11:44" },
+      { lg: "Fa", lc: "var(--jade)", t: "Read call summary — Osprey ⟷ Northbeam", sub: "fathom.calls.get · first render · gv-04", st: "auto-ran", sc: "var(--mut)", at: "11:45" },
+      { lg: "Sf", lc: "var(--amber)", t: "Forecast export — shown raw", sub: "salesforce.analytics.export · gv-05", st: "no view fit", sc: "var(--mut2)", at: "11:45" },
+    ];
+    // timeline beads
+    const EV = [
+      { x: 5, lane: 3, at: "11:38", ttl: "Run started — goal received", tab: null, done: idx >= 1 },
+      { x: 12, lane: 0, at: "11:38", ttl: "Linear connected", tab: "issue", done: liOk },
+      { x: 18, lane: 0, at: "11:39", ttl: "ENG-142 read", tab: "issue", done: liOk && (idx > 1 || s.issue === "ready") },
+      { x: 27, lane: 1, at: "11:40", ttl: "Gmail connected", tab: "draft", done: gmOk },
+      { x: 34, lane: 1, at: "11:41", ttl: "Reply drafted — held", tab: "draft", done: gmOk && (idx > 2 || s.dPhase !== "stream") },
+      { x: 42, lane: 1, at: "11:42", ttl: "Reply sent", tab: "draft", done: s.dPhase === "sent" || idx > 2 },
+      { x: 51, lane: 2, at: "11:43", ttl: "Salesforce connected", tab: "bulk", done: sfOk },
+      { x: 59, lane: 2, at: "11:43", ttl: "8 updates staged", tab: "bulk", done: sfOk },
+      { x: 67, lane: 2, at: "11:44", ttl: "Applied per your review", tab: "bulk", done: s.bulk === "done" || idx > 3 },
+      { x: 77, lane: 3, at: "11:45", ttl: "Fathom connected (new tool)", tab: "call", done: faOk },
+      { x: 85, lane: 3, at: "11:45", ttl: "Call summary read", tab: "call", done: faOk && (idx > 4 || fNice) },
+      { x: 91, lane: 2, at: "11:45", ttl: "Export shown raw", tab: "raw", done: idx >= 5 },
+      { x: 96, lane: 3, at: "11:45", ttl: "Run receipt", tab: "receipt", done: idx >= 6 },
+    ];
+    let lastDone = 0;
+    EV.forEach((e, i) => { if (e.done) lastDone = i; });
+    const beads = EV.map((e, i) => ({
+      x: e.x, top: ((e.lane + 0.5) / 4) * 100, title: e.at + " · " + e.ttl,
+      cls: "tl-bead " + (e.done ? (i === lastDone ? "now" : "done") : "future"),
+      click: () => { if (e.done && e.tab && avail.includes(e.tab)) this.setState({ tab: e.tab }); },
+    }));
+    const statusSub =
+      s.phase === "compose" ? "idle · waiting for a goal" :
+      showConnect ? TOOLS[need].nm + " · waiting for you to connect" :
+      s.phase === "read" ? (s.issue === "skel" ? "Linear · assembling record view…" : "Linear · ENG-142 on canvas") :
+      s.phase === "draft" ? (s.dPhase === "stream" ? "Gmail · drafting reply…" : s.dPhase === "sending" ? "Gmail · sending…" : s.dPhase === "sent" ? "Gmail · sent" : "Gmail · draft held — waiting on you") :
+      s.phase === "bulk" ? (review ? "Salesforce · 8 writes staged — waiting on you" : s.bulk === "applying" ? "Salesforce · applying…" : "Salesforce · applied") :
+      s.phase === "unknown" ? (fNice ? "Fathom · upgraded call view" : "Fathom · first render — generic view") :
+      s.phase === "fallback" ? "Salesforce · export shown raw — no view fits" : "Run complete · receipt on canvas";
+    const plan = [
+      { t: "Read ENG-142 from Linear", i: 1 }, { t: "Draft & send Priya's reply", i: 2 },
+      { t: "Review 8 stale opportunities", i: 3 }, { t: "Explain holds & wrap up", i: 4 },
+    ].map((p) => {
+      const done = p.i === 4 ? idx >= 6 : idx > p.i;
+      const pend = !done && idx >= p.i;
+      return { t: p.t, done, pend, fut: !done && !pend, s: done ? "done" : pend ? "pending" : "future" };
+    });
+    const sdTabs = [
+      { id: "chat", label: "Chat" }, { id: "agents", label: "Agents", badge: idx >= 1 ? 2 : null },
+      { id: "approvals", label: "Approvals", badge: pendTotal || null, hot: pendTotal > 0 ? "hot" : "" }, { id: "sources", label: "Sources" },
+    ].map((t) => ({ ...t, on: s.sdTab === t.id, click: () => this.setState({ sdTab: t.id }) }));
+    const srcGroups = [
+      liOk && { grp: "Linear", ini: "Li", items: [{ n: "ENG-142 · issue + PR link", m: "read 11:39 · gv-01" }] },
+      gmOk && { grp: "Gmail", ini: "Gm", items: [{ n: "Thread “Checkout fix — timeline?”", m: "read 11:40 · gv-02" }] },
+      sfOk && { grp: "Salesforce", ini: "Sf", items: [{ n: "Opportunities · stale >85d (8)", m: "read 11:43 · gv-03" }].concat(idx >= 5 ? [{ n: "Analytics export FY26-Q1", m: "read 11:45 · raw · gv-05" }] : []) },
+      faOk && { grp: "Fathom", ini: "Fa", items: [{ n: "Call · Osprey ⟷ Northbeam", m: "read 11:45 · first render · gv-04" }] },
+    ].filter(Boolean).map((g) => ({ ...g, n: g.items.length }));
+    const apLog = [
+      liOk && { t: "Read ENG-142 from Linear", at: "11:39" },
+      gmOk && { t: "Read Priya's thread from Gmail", at: "11:40" },
+      sfOk && { t: "Listed stale opportunities", at: "11:43" },
+      faOk && { t: "Read Fathom call summary", at: "11:45" },
+    ].filter(Boolean);
+    const on = (v) => v ? "var(--accent)" : "var(--line2)";
+    return {
+      theme: this.props.theme ?? "dark", accent: this.props.accent ?? "sky", chatSide: this.props.chatSide ?? "right",
+      toolsLive: idx >= 1, toolsLiveLabel: connCount + " tool" + (connCount === 1 ? "" : "s") + " live",
+      headKicker: idx >= 1 ? "Active run" : "New run", headTitle: idx >= 1 ? "Monday ops — ENG-142, Priya & pipeline" : "Start a run",
+      showPolicyChip: idx >= 1, policyChipClass: anyAlways ? "chip--warn" : "chip--sky",
+      policyChipText: anyAlways ? "Bypass on · writes auto" : "Writes wait for you",
+      pendOn: pendTotal > 0, pendLabel: pendTotal + " waiting", pendMl: idx >= 1 ? "0" : "auto",
+      segStyle: idx >= 1 || pendTotal > 0 ? "margin-left:0" : "margin-left:auto",
+      gotoApprovals: () => this.setState({ sdTab: "approvals" }),
+      gotoCanvas: () => this.setState({ sdTab: "chat" }),
+      onFocusMode: () => this.showToast("This walkthrough stays in Studio — Focus is the chat-centered mode.", null, null),
+      onRail: () => this.showToast("Only the Run is wired in this walkthrough.", null, null),
+      sdTabs, sdChat: s.sdTab === "chat", sdAgents: s.sdTab === "agents", sdApprovals: s.sdTab === "approvals", sdSources: s.sdTab === "sources",
+      chatEmpty: s.msgs.length === 0,
+      msgs: s.msgs.map((m) => ({ you: m.k === "you", bot: m.k === "bot", ev: m.k === "ev", t: m.t, sub: m.sub, c: m.c })),
+      showPlan: idx >= 1, plan,
+      chatRef: (el) => { this._chat = el; },
+      cmp: s.cmp, cmpEmpty: !s.cmp.trim(), cmpPlaceholder: showCompose ? "Ask 0xCopilot to get something done…" : "Steer the run — drop files, @ tools, / skills",
+      cmpGlow: showCompose ? "border-color:var(--accent-line)" : "", sendGlow: showCompose && s.cmp.trim() ? "animation:gspulse 1.6s ease infinite" : "",
+      toolsCount: connCount + "/" + (connCount + 1),
+      onCmp: (e) => this.setState({ cmp: e.target.value, userTyped: true }),
+      onCmpKey: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.onCmpSend(); } },
+      onCmpSend: () => (showCompose ? this.startRun() : this.sendCmp()),
+      onPill: () => this.showToast("Model & tool pickers aren't wired in this walkthrough.", null, null),
+      agTools: connCount, agStep: Math.min(idx + 1, 4), agClock: idx >= 6 ? "done · 7m" : (2 + idx) + "m",
+      agPct: Math.round(Math.min((idx + 1) / 7, 1) * 100) + "%", agCur: statusSub,
+      apEmpty: pendTotal === 0, apConnect: connPend > 0, apDraft: draftPend > 0, apBulk: bulkPend > 0,
+      apBulkPrev: yesN + " approved · " + (8 - yesN) + " held by the agent's flags — decide per row.",
+      goDraft: () => this.setState({ tab: "draft", sdTab: "chat" }), goBulk: () => this.setState({ tab: "bulk", sdTab: "chat" }),
+      apLog, apLogEmpty: apLog.length === 0, srcGroups, srcEmpty: srcGroups.length === 0,
+      showCompose, runStarted, showConnect, showSurfaces: runStarted && !showConnect,
+      tabs,
+      // connect card
+      gName: T.nm, gNameUpper: T.nm.toUpperCase(), gLg: T.lg, gLc: T.lc, gHost: T.host, gReason: T.reason, gScopes: T.scopes, gStep: T.step,
+      gWrite: T.write, gRead: !T.write, gConnecting: gStatus === "conn", gIdle: gStatus === "idle",
+      gAlwaysOn: gsel === "always",
+      askBorder: on(gsel === "ask"), askBg: gsel === "ask" ? "var(--accent-soft)" : "transparent", askText: gsel === "ask" ? "var(--tx)" : "var(--mut)",
+      alwBorder: gsel === "always" ? "rgba(232,180,94,.5)" : "var(--line2)", alwBg: gsel === "always" ? "rgba(232,180,94,.08)" : "transparent", alwText: gsel === "always" ? "var(--tx)" : "var(--mut)",
+      setGAsk: () => need && this.setState((st) => ({ tools: { ...st.tools, [need]: { ...st.tools[need], gsel: "ask" } } })),
+      setGAlways: () => need && this.setState((st) => ({ tools: { ...st.tools, [need]: { ...st.tools[need], gsel: "always" } } })),
+      gPermLabel: T.write ? (gsel === "always" ? "will auto-approve " + T.nm + " writes" : "will ask before " + T.nm + " writes") : "read-only access",
+      gProvenance: "mcp.oauth · " + T.host + " · runs before any " + T.nm + " call · gv-00" + T.step[0],
+      onConnect: () => this.connect(need),
+      actIssue: tab === "issue", actDraft: tab === "draft", actBulk: tab === "bulk", actCall: tab === "call", actRaw: tab === "raw", actReceipt: tab === "receipt",
+      issueSkel: s.issue === "skel", issueReady: s.issue === "ready",
+      onRegen: () => this.showToast("Regeneration isn't wired here — in product it re-derives the view from the same response.", null, null),
+      dSeg1: s.dSegs >= 1, dSeg2: s.dSegs >= 2, dSeg3: s.dSegs >= 3,
+      dStreaming: s.dPhase === "stream", dAwait, dEditing: s.dPhase === "edit", dNotEditing: s.dPhase !== "edit",
+      dSending: s.dPhase === "sending", dSent: s.dPhase === "sent", dRejected: s.dPhase === "rejected",
+      dSendingLabel: "Handing " + rev + " to Gmail…", dSentNote: gmOk && s.tools.gm.perm === "always" ? "auto-sent (allow-always)" : "exactly as you approved",
+      draftProv: gmOk && s.tools.gm.perm === "always" ? "write · allow-always" : "write · held for approval",
+      draftOpacity: s.dPhase === "rejected" ? 0.45 : 1,
+      seg2: s.seg2, seg2Draft: s.seg2Draft, edited: s.edited, revLabel: rev,
+      seg2Bg: s.edited ? "rgba(169,139,224,.13)" : "rgba(95,178,236,.09)",
+      onSeg2: (e) => this.setState({ seg2Draft: e.target.value }),
+      onEdit: () => this.setState({ dPhase: "edit", seg2Draft: s.seg2 }),
+      onEditCancel: () => this.setState({ dPhase: "ready" }),
+      onEditDone: () => this.setState((st) => ({ dPhase: "ready", seg2: st.seg2Draft, edited: st.seg2Draft.trim() !== SEG2_DEFAULT })),
+      onApprove: this.approve, onReject: () => this.setState({ dPhase: "rejected" }), onRestore: () => this.setState({ dPhase: "ready" }),
+      rows, bulkCounts: yesN + " approved · " + (8 - yesN) + " held",
+      bulkReview: review, bulkApplying: s.bulk === "applying", bulkDone: s.bulk === "done",
+      bulkDoneLabel: yesN + " updated in Salesforce 11:44 · " + (8 - yesN) + " held, untouched",
+      bulkProv: sfOk && s.tools.sf.perm === "always" ? "allow-always · agent still held flagged" : "per-row approval",
+      applyLabel: "Apply " + yesN + " change" + (yesN === 1 ? "" : "s") + " →", applyDisabled: yesN === 0, onApply: () => this.apply(false),
+      fFields: F_FIELDS, fGenericOn: !fNice, fNiceOn: fNice, fSweep: s.fView === "sweep", fSimple: s.fSimple,
+      onKeepSimple: () => this.setState({ fSimple: true }), onUseNice: () => this.setState({ fSimple: false }),
+      fPatternLabel: fNice ? "RECORD · UPGRADED" : "RECORD · AUTO",
+      fProvenance: fNice ? "fathom.calls.get · purpose-shaped 1.4s after first render · gv-04b" : "fathom.calls.get · derived from response schema · gv-04a",
+      onCopyRaw: () => this.showToast("Raw payload copied.", null, null),
+      onSuggestShape: () => this.showToast("Thanks — logged. Suggested shapes train the view generator.", null, null),
+      receipts, recApproved: 1 + yesN, recHeld: 8 - yesN,
+      toastOn: !!s.toast && runStarted, composeToastOn: !!s.toast && !runStarted,
+      toastT: s.toast ? s.toast.t : "", toastHasAct: !!(s.toast && s.toast.label), toastLabel: s.toast ? s.toast.label : "",
+      onToastAct: () => { if (s.toast && s.toast.fn) s.toast.fn(); },
+      tlMin: s.tlMin ? "1" : "0", tlChev: s.tlMin ? "rotate(180deg)" : "none", onTlMin: () => this.setState({ tlMin: !s.tlMin }),
+      tlClock: EV[lastDone].done ? EV[lastDone].at + ":00" : "11:38:00", tlSub: statusSub,
+      headX: EV[lastDone].done ? EV[lastDone].x : 3,
+      onPrev: () => this.jump(Math.max(idx - 1, 0)), onNext: () => this.jump(Math.min(idx + 1, 6)),
+      onLive: () => { if (tab) this.setState({ tab }); else this.setState({ sdTab: "chat" }); },
+      beads,
+      chapters: CHAPTERS.map((label, i) => ({
+        n: "0" + (i + 1), label, click: () => this.jump(i),
+        bc: i === idx ? "var(--accent-line)" : "var(--line)",
+        tc: i === idx ? "var(--accent)" : i < idx ? "var(--tx2)" : "var(--mut2)",
+        nc: i === idx ? "var(--accent)" : "var(--mut2)",
+      })),
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -108,6 +108,24 @@ class Purpose(StrEnum):
     Purpose.derive precedence (extractor jobs construct their context
     explicitly with this value)."""
 
+    VIEW_SHAPING = "view_shaping"
+    """Generative Surfaces v2 (PRD-A2, ../02-sdr.md §5/§8) — the async
+    surface-spec generation call that shapes an unknown tool output into
+    an archetype view (S5 honesty ladder). Non-streamed; metered per
+    attempt through :class:`MeteredModelInvocation` so a retried shaping
+    records real spend. Maps to the closed ledger vocabulary
+    ``usage.recorded.purpose == "view_shaping"``. Out of band of the main
+    loop's Purpose.derive precedence (spec-generation callers construct
+    context explicitly with this value)."""
+
+    SHAPE_REQUEST = "shape_request"
+    """Generative Surfaces v2 (PRD-A2, ../02-sdr.md §5/§8) — a
+    user-invited "Suggest a shape" higher-effort shaping call (FR-D4, S5
+    else-branch). Wired by B4, which passes a concrete per-call
+    ``surface_id``; the enum member + ledger mapping land here so B4 is a
+    one-line call. Maps to ``usage.recorded.purpose == "shape_request"``.
+    Out of band of the main loop's Purpose.derive precedence."""
+
     @classmethod
     def derive(
         cls,

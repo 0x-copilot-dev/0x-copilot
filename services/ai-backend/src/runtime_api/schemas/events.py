@@ -31,6 +31,7 @@ from agent_runtime.api.constants import Keys, Messages, Values
 # ``_display_title_for`` resolves the helper at call time when both modules are
 # fully initialised.
 from agent_runtime.observability.redactor import JsonObjectCoercer
+from agent_runtime.surfaces_v2.constants import Keys as _LedgerKeys
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -72,6 +73,13 @@ class _Fields:
     GENERATOR_MODEL = "generator_model"
     SKILL_VERSION = "skill_version"
     SURFACE_PREPARED_TITLE = "Prepared a view"
+    # Generative Surfaces v2 (PRD-A2, SDR §5) — usage.recorded payload keys.
+    USAGE_V = "v"
+    USAGE_PURPOSE = "purpose"
+    USAGE_MODEL = "model"
+    USAGE_TOKENS_IN = "tokens_in"
+    USAGE_TOKENS_OUT = "tokens_out"
+    USAGE_SURFACE_ID = "surface_id"
 
 
 class RuntimeEventPresentationProjector:
@@ -152,6 +160,16 @@ class RuntimeEventPresentationProjector:
             return cls._citation_made_payload(payload)
         if event_type is RuntimeApiEventType.SURFACE_SPEC_GENERATED:
             return cls._surface_spec_generated_payload(payload)
+        if event_type is RuntimeApiEventType.USAGE_RECORDED:
+            return cls._usage_recorded_payload(payload)
+        if event_type is RuntimeApiEventType.ACTION_CLASSIFIED:
+            return cls._action_classified_payload(payload)
+        if event_type is RuntimeApiEventType.READ_EXECUTED:
+            return cls._read_executed_payload(payload)
+        if event_type is RuntimeApiEventType.SURFACE_CREATED:
+            return cls._surface_created_payload(payload)
+        if event_type is RuntimeApiEventType.VIEW_DERIVED:
+            return cls._view_derived_payload(payload)
         return payload
 
     @classmethod
@@ -252,6 +270,23 @@ class RuntimeEventPresentationProjector:
             # Generative-UI (PRD-01) — an out-of-band "prepared a view" note.
             # Explicit so a TOOL-sourced emit can't reroute it into the tool
             # bucket; the FE consumes it as a surface-state merge, not a card.
+            return RuntimeActivityKind.EVENT
+        if event_type is RuntimeApiEventType.USAGE_RECORDED:
+            # Generative Surfaces v2 (PRD-A2) — a metering ledger event, not a
+            # timeline card. Explicit (matches the default) so a MODEL-sourced
+            # emit can't be rerouted; A3's UsageTotals fold consumes it.
+            return RuntimeActivityKind.EVENT
+        if event_type in {
+            RuntimeApiEventType.ACTION_CLASSIFIED,
+            RuntimeApiEventType.READ_EXECUTED,
+            RuntimeApiEventType.SURFACE_CREATED,
+            RuntimeApiEventType.VIEW_DERIVED,
+        }:
+            # Generative Surfaces v2 (PRD-A3) — ledger events the SurfaceStore
+            # fold consumes as surface-state merges, never timeline cards.
+            # Explicit so a TOOL/SYSTEM-sourced emit can't reroute into the tool
+            # bucket (the read events are emitted while a tool result is in
+            # flight).
             return RuntimeActivityKind.EVENT
         if event_type is RuntimeApiEventType.COMPRESSION_NOTE:
             # PR A1 — context-compression note. Renders as an inline
@@ -695,6 +730,159 @@ class RuntimeEventPresentationProjector:
         if isinstance(spec, dict):
             safe_payload[_Fields.SPEC] = spec
         return safe_payload
+
+    @classmethod
+    def _usage_recorded_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``usage.recorded`` payloads through a strict allow-list.
+
+        Keeps exactly the SDR §5 fields — ``v`` / ``purpose`` / ``model`` /
+        ``tokens_in`` / ``tokens_out`` / ``surface_id`` — so an emitter can
+        never over-share (tenant ids stay off the envelope; ``surface_id`` is
+        optional). The :class:`UsageMeter` is the intended emitter (PRD-A2);
+        this projection re-filters on append regardless.
+        """
+
+        safe_payload: JsonObject = {}
+        version = payload.get(_Fields.USAGE_V)
+        if isinstance(version, int) and not isinstance(version, bool):
+            safe_payload[_Fields.USAGE_V] = version
+        for text_key in (
+            _Fields.USAGE_PURPOSE,
+            _Fields.USAGE_MODEL,
+            _Fields.USAGE_SURFACE_ID,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        for token_key in (_Fields.USAGE_TOKENS_IN, _Fields.USAGE_TOKENS_OUT):
+            tokens = payload.get(token_key)
+            if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
+                safe_payload[token_key] = tokens
+        return safe_payload
+
+    @classmethod
+    def _action_classified_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``action.classified`` through a strict allow-list (PRD-A3 D5).
+
+        Keeps exactly the SDR §5 fields — ``v`` / ``call_id`` / ``connector`` /
+        ``op`` / ``class`` / ``basis`` — so an emitter can never over-share. In
+        Wave A ``class`` is always ``"unknown"`` and ``basis`` ``"default"`` (no
+        classifier yet); this projection re-filters regardless of the emitter.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.CALL_ID,
+            _LedgerKeys.Field.CONNECTOR,
+            _LedgerKeys.Field.OP,
+            _LedgerKeys.Field.CLASS,
+            _LedgerKeys.Field.BASIS,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        return safe_payload
+
+    @classmethod
+    def _read_executed_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``read.executed`` through a strict allow-list (PRD-A3 D5).
+
+        Keeps ``v`` / ``call_id`` / ``connector`` / ``op`` / ``payload_ref`` and
+        the optional non-negative ``latency_ms``. ``payload_ref`` trips the
+        ``"ref"``-key OFFLOADED marker in ``_redaction_state_for`` — correct, it
+        *is* a reference.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.CALL_ID,
+            _LedgerKeys.Field.CONNECTOR,
+            _LedgerKeys.Field.OP,
+            _LedgerKeys.Field.PAYLOAD_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        latency = payload.get(_LedgerKeys.Field.LATENCY_MS)
+        if isinstance(latency, int) and not isinstance(latency, bool) and latency >= 0:
+            safe_payload[_LedgerKeys.Field.LATENCY_MS] = latency
+        return safe_payload
+
+    @classmethod
+    def _surface_created_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``surface.created`` through a strict allow-list (PRD-A3 D5).
+
+        Keeps ``v`` / ``surface_id`` / ``kind`` / ``source{connector,op}`` /
+        ``title`` / ``payload_ref``. ``source`` is re-built from its own nested
+        allow-list so untrusted extra keys cannot ride through.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.KIND,
+            _LedgerKeys.Field.TITLE,
+            _LedgerKeys.Field.PAYLOAD_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        source = cls._op_ref(payload.get(_LedgerKeys.Field.SOURCE))
+        if source is not None:
+            safe_payload[_LedgerKeys.Field.SOURCE] = source
+        return safe_payload
+
+    @classmethod
+    def _view_derived_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``view.derived`` through a strict allow-list (PRD-A3 D5).
+
+        Keeps ``v`` / ``surface_id`` / ``tier`` / ``basis`` / optional
+        ``spec_ref`` / optional ``gen{model}``. ``gen`` is re-built from a nested
+        allow-list (``ms`` is not measured in A3, so only ``model`` survives).
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.TIER,
+            _LedgerKeys.Field.BASIS,
+            _LedgerKeys.Field.SPEC_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        gen = payload.get(_LedgerKeys.Field.GEN)
+        if isinstance(gen, dict):
+            model = cls._text(gen.get(_LedgerKeys.Field.MODEL))
+            if model is not None:
+                safe_payload[_LedgerKeys.Field.GEN] = {_LedgerKeys.Field.MODEL: model}
+        return safe_payload
+
+    @classmethod
+    def _copy_payload_version(
+        cls, payload: JsonObject, safe_payload: JsonObject
+    ) -> None:
+        """Copy the ``v`` payload-version integer through when it is a real int."""
+
+        version = payload.get(_LedgerKeys.Field.V)
+        if isinstance(version, int) and not isinstance(version, bool):
+            safe_payload[_LedgerKeys.Field.V] = version
+
+    @classmethod
+    def _op_ref(cls, value: object) -> JsonObject | None:
+        """Rebuild a ``{connector, op}`` ref from its own allow-list, or None."""
+
+        if not isinstance(value, dict):
+            return None
+        connector = cls._text(value.get(_LedgerKeys.Field.CONNECTOR))
+        op = cls._text(value.get(_LedgerKeys.Field.OP))
+        if connector is None or op is None:
+            return None
+        return {_LedgerKeys.Field.CONNECTOR: connector, _LedgerKeys.Field.OP: op}
 
     @classmethod
     def _approval_requested_payload(cls, payload: JsonObject) -> JsonObject:

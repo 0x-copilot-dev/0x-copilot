@@ -36,6 +36,7 @@ from agent_runtime.capabilities.surfaces import (
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
+from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -81,6 +82,11 @@ from agent_runtime.execution.providers.citation_pipeline import CitationStreamPi
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.records import BudgetReservationRecord
+from agent_runtime.observability.attribution import Purpose
+from agent_runtime.observability.usage_meter import (
+    MeteredModelInvocation,
+    UsageMeter,
+)
 from agent_runtime.observability.usage_recorder import (
     PostgresUsageRecorder,
     UsageRecorder,
@@ -332,6 +338,16 @@ class RuntimeRunHandler:
             if surface_scheduler is not None
             else None
         )
+        # Generative Surfaces v2 (PRD-A3 D4): a run-scoped Work Ledger emitter,
+        # bound only when ``SURFACES_V2`` is on. The tool middleware reaches it
+        # via the ContextVar to record ``action.classified`` / ``read.executed``
+        # / ``surface.created`` / ``view.derived`` for each executed read.
+        work_ledger_emitter = self._build_work_ledger_emitter(run)
+        work_ledger_emitter_token = (
+            WorkLedgerEmitter.bind_for_run(work_ledger_emitter)
+            if work_ledger_emitter is not None
+            else None
+        )
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -556,6 +572,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if work_ledger_emitter_token is not None:
+                WorkLedgerEmitter.unbind(work_ledger_emitter_token)
             if surface_scheduler_token is not None:
                 SurfaceGenerationScheduler.unbind(surface_scheduler_token)
             if resolver_token is not None:
@@ -1437,6 +1455,9 @@ class RuntimeRunHandler:
                 # 0 (disabled).
                 delta_coalesce_window_ms=self.settings.execution.delta_coalesce_window_ms,
                 delta_coalesce_max_chunks=self.settings.execution.delta_coalesce_max_chunks,
+                # PRD-A2 D5a — gate mid-run ``usage.recorded`` emission on the
+                # v2 flag; off ⇒ byte-identical stream.
+                surfaces_v2_enabled=self.settings.execution.surfaces_v2,
             )
         return StreamingExecutor.compose_final(result)
 
@@ -1599,12 +1620,70 @@ class RuntimeRunHandler:
                 summary="Prepared a view",
                 payload=dict(payload),
             )
+            # Generative Surfaces v2 (PRD-A3 D4, Hook 2): the async spec upgrade
+            # is a second, generated-basis ``view.derived`` on the ledger. v1
+            # first, v2 second (additive). No-op unless SURFACES_V2 bound an
+            # emitter; the generation task captured the ContextVar at schedule
+            # time (during the tool call, while the emitter is bound).
+            emitter = WorkLedgerEmitter.active()
+            if emitter is not None:
+                await emitter.on_spec_generated(payload=payload)
+
+        # PRD-A2 D5b — the spec-generation path is otherwise unmetered. Bind a
+        # per-run VIEW_SHAPING meter: it writes a usage row per attempt (real
+        # per-attempt spend) and, when SURFACES_V2 is on, emits usage.recorded.
+        async def _emit_usage(payload: Mapping[str, object]) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.MODEL,
+                event_type=RuntimeApiEventType.USAGE_RECORDED,
+                payload=dict(payload),
+            )
+
+        meter = UsageMeter(
+            recorder=self.usage_recorder,
+            emit_event=_emit_usage,
+            surfaces_v2=self.settings.execution.surfaces_v2,
+        )
+        invocation = MeteredModelInvocation(
+            meter=meter, run=run, purpose=Purpose.VIEW_SHAPING
+        )
 
         return build_surface_generation_scheduler(
             store=_surface_store(),
             emit=_emit,
             environ=os.environ,
+            usage_meter=invocation,
         )
+
+    def _build_work_ledger_emitter(self, run: RunRecord) -> WorkLedgerEmitter | None:
+        """Build a run-scoped Work Ledger emitter, or ``None`` (PRD-A3 D4).
+
+        Returns ``None`` unless ``SURFACES_V2`` is on — gated on the same
+        settings value A2 threads, so binding is byte-identical to flag-off when
+        off. Its :data:`EmitFn` closure maps a ledger event-type *value* (an A1
+        ``LedgerEventType`` string) to the wire enum by value — both enums carry
+        identical values (e.g. ``"action.classified"``) — and appends through the
+        same event producer every other emission uses.
+        """
+
+        if not self.settings.execution.surfaces_v2:
+            return None
+
+        async def _emit(
+            event_type_value: str,
+            payload: Mapping[str, object],
+            summary: str | None,
+        ) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SYSTEM,
+                event_type=RuntimeApiEventType(str(event_type_value)),
+                summary=summary,
+                payload=dict(payload),
+            )
+
+        return WorkLedgerEmitter(emit=_emit)
 
     async def _bind_conversation_ordinal_allocator(
         self,
