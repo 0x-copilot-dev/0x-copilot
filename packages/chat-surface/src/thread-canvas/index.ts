@@ -59,6 +59,22 @@ export {
 } from "./ledgerProjection";
 // === end PRD-B1 ===
 
+// === Surfaces v2 — PRD-B3 view lifecycle ===
+export {
+  type LedgerSurfaceViewState,
+  type LedgerViewKeep,
+} from "./ledgerProjection";
+export {
+  ViewUpgradeToast,
+  type ViewUpgradeToastProps,
+} from "./ViewUpgradeToast";
+export {
+  ViewTierToggle,
+  MAX_REGEN_PER_SURFACE,
+  type ViewTierToggleProps,
+} from "./ViewTierToggle";
+// === end PRD-B3 ===
+
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Pure PEERS of `projectLedger` over the SAME `session.events` array, plus the
 // footer / skeleton / raw-fallback / status-strip chrome they feed. All mount

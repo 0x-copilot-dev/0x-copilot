@@ -20,6 +20,7 @@ optional (``None`` when a surface has no content event yet — an honest
 from __future__ import annotations
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.surfaces_v2.ledger_models import ViewBasis, ViewKeep, ViewTier
 from agent_runtime.surfaces_v2.projection import (
     SurfaceSnapshot,
     SurfaceViewState,
@@ -47,9 +48,45 @@ class RunSurfacesResponse(RuntimeContract):
     latest_sequence_no: int
 
 
+# ---------------------------------------------------------------------------
+# PRD-B3 — per-surface view-lifecycle mutating endpoints
+# ---------------------------------------------------------------------------
+
+
+class SurfaceViewPreferenceRequest(RuntimeContract):
+    """Body for ``POST /v1/agent/surfaces/{surface_id}/view-preference``.
+
+    ``keep`` is the durable tier the user is pinning (``generic`` | ``shaped``).
+    ``actor`` is server-stamped to ``user`` on the appended ledger event — never
+    caller-supplied — so the request carries only the choice.
+    """
+
+    keep: ViewKeep
+
+
+class SurfaceViewActionResponse(RuntimeContract):
+    """200 body for ``POST .../regenerate`` — the re-derived view + its ledger id."""
+
+    surface_id: str
+    tier: ViewTier
+    basis: ViewBasis
+    ledger_id: str
+
+
+class SurfaceViewPreferenceResponse(RuntimeContract):
+    """200 body for ``POST .../view-preference`` — the pinned tier + its ledger id."""
+
+    surface_id: str
+    keep: ViewKeep
+    ledger_id: str
+
+
 __all__ = [
     "HydratedSurfaceSnapshot",
     "RunSurfacesResponse",
     "SurfaceSnapshot",
+    "SurfaceViewActionResponse",
+    "SurfaceViewPreferenceRequest",
+    "SurfaceViewPreferenceResponse",
     "SurfaceViewState",
 ]

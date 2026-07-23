@@ -170,6 +170,8 @@ class RuntimeEventPresentationProjector:
             return cls._surface_created_payload(payload)
         if event_type is RuntimeApiEventType.VIEW_DERIVED:
             return cls._view_derived_payload(payload)
+        if event_type is RuntimeApiEventType.VIEW_PREFERENCE:
+            return cls._view_preference_payload(payload)
         return payload
 
     @classmethod
@@ -281,8 +283,9 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.READ_EXECUTED,
             RuntimeApiEventType.SURFACE_CREATED,
             RuntimeApiEventType.VIEW_DERIVED,
+            RuntimeApiEventType.VIEW_PREFERENCE,
         }:
-            # Generative Surfaces v2 (PRD-A3) — ledger events the SurfaceStore
+            # Generative Surfaces v2 (PRD-A3/B3) — ledger events the SurfaceStore
             # fold consumes as surface-state merges, never timeline cards.
             # Explicit so a TOOL/SYSTEM-sourced emit can't reroute into the tool
             # bucket (the read events are emitted while a tool result is in
@@ -859,7 +862,37 @@ class RuntimeEventPresentationProjector:
         if isinstance(gen, dict):
             model = cls._text(gen.get(_LedgerKeys.Field.MODEL))
             if model is not None:
-                safe_payload[_LedgerKeys.Field.GEN] = {_LedgerKeys.Field.MODEL: model}
+                safe_gen: JsonObject = {_LedgerKeys.Field.MODEL: model}
+                # PRD-B3 widens A3's ``gen`` allow-list to admit the generation
+                # duration ``ms`` (int) the ViewDeriver now populates. Without it
+                # the projector would silently drop ``gen.ms`` and the B3 payload
+                # spec (``gen: {model, ms}``) would not survive the wire.
+                ms = gen.get(_LedgerKeys.Field.MS)
+                if isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0:
+                    safe_gen[_LedgerKeys.Field.MS] = ms
+                safe_payload[_LedgerKeys.Field.GEN] = safe_gen
+        return safe_payload
+
+    @classmethod
+    def _view_preference_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``view.preference`` through a strict allow-list (PRD-B3).
+
+        Keeps exactly the SDR §5 fields — ``v`` / ``surface_id`` / ``keep`` /
+        ``actor`` — so a user-initiated preference append can never over-share.
+        ``keep`` and ``actor`` are constrained value strings; anything else is
+        dropped (the ledger append re-filters regardless of the caller).
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.KEEP,
+            _LedgerKeys.Field.ACTOR,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
         return safe_payload
 
     @classmethod

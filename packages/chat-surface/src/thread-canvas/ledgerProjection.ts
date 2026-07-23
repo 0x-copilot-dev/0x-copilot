@@ -18,6 +18,7 @@ import {
   formatLedgerId,
   type SurfaceCreatedPayload,
   type ViewDerivedPayload,
+  type ViewPreferencePayload,
 } from "@0x-copilot/api-types";
 
 import type { SurfaceTab } from "./eventProjector";
@@ -37,6 +38,31 @@ export type LedgerSurfaceKind =
 
 export type LedgerViewTier = "raw" | "generic" | "shaped";
 
+/** Durable tier pin (`view.preference.keep`) — the "Keep generic" / "Shaped"
+ *  toggle state, folded from the ledger so it survives reload (PRD-B3). */
+export type LedgerViewKeep = "generic" | "shaped";
+
+/** Per-surface view-lifecycle state (PRD-B3). Folds `view.derived` +
+ *  `view.preference` into the explicit tier ladder the canvas renders:
+ *  `effectiveTier` = `keep ?? tier-of-latest-view.derived`, where a
+ *  `keep: "shaped"` folds only once `shapedAvailable`, and `keep: "generic"`
+ *  always folds. `regenCount` bounds the Regenerate affordance (server cap
+ *  authoritative). */
+export interface LedgerSurfaceViewState {
+  /** Tier of the latest `view.derived` (before any preference is applied). */
+  readonly tier: LedgerViewTier;
+  readonly basis: string;
+  readonly specRef: string | null;
+  /** Durable pin, or null until the user toggles. */
+  readonly keep: LedgerViewKeep | null;
+  /** Whether a shaped derivation has ever landed (enables the Shaped toggle). */
+  readonly shapedAvailable: boolean;
+  /** Prior user regenerations folded from the ledger (non-first, non-registry). */
+  readonly regenCount: number;
+  /** The rendered tier after applying `keep` against `shapedAvailable`. */
+  readonly effectiveTier: LedgerViewTier;
+}
+
 /** The connector server + operation a surface was sourced from. Always present
  *  (empty strings when the create carried no `source`) so the parity snapshot
  *  matches the Python fold's `connector`/`op` string columns. */
@@ -53,6 +79,8 @@ export interface LedgerSurfaceView {
   readonly basis: string;
   readonly specRef: string | null;
   readonly generatorModel: string | null;
+  /** Durable tier pin folded from `view.preference` (PRD-B3), or null. */
+  readonly preference: LedgerViewKeep | null;
 }
 
 /** One surface's folded metadata (no hydrated payload content — that comes from
@@ -68,6 +96,9 @@ export interface LedgerSurface {
   readonly view: LedgerSurfaceView | null;
   /** Convenience mirror of `view?.tier ?? null` (PRD-B1 §2). */
   readonly viewTier: LedgerViewTier | null;
+  /** PRD-B3 view-lifecycle state (tier ladder + preference + regen), or null
+   *  until the first `view.derived` lands. Drives the toast + toggle + regen. */
+  readonly viewState: LedgerSurfaceViewState | null;
   readonly createdSeq: number; // first `sequence_no` — anchors `ledgerId`
   readonly lastSeq: number; // highest seq touching this surface — tab order key
   readonly ledgerId: string; // "r<short>·<seq>" via the A1 formatter, from createdSeq
@@ -153,6 +184,10 @@ interface SurfaceAccumulator {
   createdSeq: number;
   lastSeq: number;
   ledgerId: string;
+  // PRD-B3 view-lifecycle fold state (composed into `viewState` at freeze).
+  keep: LedgerViewKeep | null;
+  shapedAvailable: boolean;
+  regenCount: number;
 }
 
 function strOr(value: unknown, fallback: string): string {
@@ -204,7 +239,11 @@ export function projectLedger(
     if (eventSeq > latestSequenceNo) latestSequenceNo = eventSeq;
     if (runId === "" && typeof event.run_id === "string") runId = event.run_id;
     const eventType = event.event_type;
-    if (eventType !== "surface.created" && eventType !== "view.derived") {
+    if (
+      eventType !== "surface.created" &&
+      eventType !== "view.derived" &&
+      eventType !== "view.preference"
+    ) {
       continue; // tolerate + ignore every other (present + future) event type
     }
     const eventId = event.event_id;
@@ -218,8 +257,10 @@ export function projectLedger(
 
     if (eventType === "surface.created") {
       applySurfaceCreated(surfaces, event.run_id, seq, payload);
-    } else {
+    } else if (eventType === "view.derived") {
       applyViewDerived(surfaces, seq, payload);
+    } else {
+      applyViewPreference(surfaces, seq, payload);
     }
     if (seq > lastLedgerSeq) lastLedgerSeq = seq;
   }
@@ -267,6 +308,9 @@ function applySurfaceCreated(
     createdSeq: seq,
     lastSeq: seq,
     ledgerId: safeLedgerId(runId, seq),
+    keep: null,
+    shapedAvailable: false,
+    regenCount: 0,
   });
 }
 
@@ -289,16 +333,73 @@ function applyViewDerived(
       typeof model === "string" && model.length > 0 ? model : null;
   }
   const specRef = payload.spec_ref;
+  const tierValue = (typeof tier === "string" ? tier : "") as LedgerViewTier;
+  const basisValue = strOr(payload.basis, "");
+  // Upgrades merge in place (same surface_id / tab identity — no remount): the
+  // latest derivation wins for tier/basis, and a shaped derivation unlocks the
+  // toggle without erasing an earlier "Keep generic" pin.
   acc.view = {
-    tier: (typeof tier === "string" ? tier : "") as LedgerViewTier,
-    basis: strOr(payload.basis, ""),
+    tier: tierValue,
+    basis: basisValue,
     specRef: typeof specRef === "string" && specRef.length > 0 ? specRef : null,
     generatorModel,
+    preference: acc.keep,
   };
+  if (tierValue === "shaped") acc.shapedAvailable = true;
+  // regenCount: prior non-first, non-registry derivations (PRD-B3 / SDR). The
+  // first derivation seeds the surface; each later non-registry one is a repair.
+  if (basisValue !== "registry") acc.regenCount += 1;
   if (seq > acc.lastSeq) acc.lastSeq = seq;
 }
 
+/** Fold `view.preference` — the durable tier pin (PRD-B3). Sets `keep` so a
+ *  later shaped `view.derived` never clobbers a "Keep generic", and advances
+ *  `lastSeq` (mirrors the Python fold). A preference for an unseen surface or a
+ *  malformed `keep` is ignored. */
+function applyViewPreference(
+  surfaces: Map<string, SurfaceAccumulator>,
+  seq: number,
+  payload: Record<string, unknown>,
+): void {
+  const p = payload as unknown as Partial<ViewPreferencePayload>;
+  const surfaceId = p.surface_id;
+  if (typeof surfaceId !== "string") return;
+  const acc = surfaces.get(surfaceId);
+  if (acc === undefined) return;
+  const keep = payload.keep;
+  if (keep !== "generic" && keep !== "shaped") return;
+  acc.keep = keep;
+  if (acc.view !== null) {
+    acc.view = { ...acc.view, preference: keep };
+  }
+  if (seq > acc.lastSeq) acc.lastSeq = seq;
+}
+
+/** Effective rendered tier: `keep ?? tier-of-latest-view.derived`, where a
+ *  `keep: "shaped"` only folds once a shaped derivation exists (SDR §5). */
+function effectiveTierOf(acc: SurfaceAccumulator): LedgerViewTier {
+  const derived: LedgerViewTier = acc.view?.tier ?? "raw";
+  if (acc.keep === "generic") return "generic";
+  if (acc.keep === "shaped" && acc.shapedAvailable) return "shaped";
+  return derived;
+}
+
 function freeze(acc: SurfaceAccumulator): LedgerSurface {
+  // regenCount excludes the first (seeding) derivation — the server cap is the
+  // authoritative one; this mirror only disables the Regenerate affordance.
+  const regenCount = acc.regenCount > 0 ? acc.regenCount - 1 : 0;
+  const viewState: LedgerSurfaceViewState | null =
+    acc.view === null
+      ? null
+      : {
+          tier: acc.view.tier,
+          basis: acc.view.basis,
+          specRef: acc.view.specRef,
+          keep: acc.keep,
+          shapedAvailable: acc.shapedAvailable,
+          regenCount,
+          effectiveTier: effectiveTierOf(acc),
+        };
   return {
     surfaceId: acc.surfaceId,
     kind: acc.kind,
@@ -307,6 +408,7 @@ function freeze(acc: SurfaceAccumulator): LedgerSurface {
     payloadRef: acc.payloadRef,
     view: acc.view,
     viewTier: acc.view?.tier ?? null,
+    viewState,
     createdSeq: acc.createdSeq,
     lastSeq: acc.lastSeq,
     ledgerId: acc.ledgerId,
@@ -371,6 +473,9 @@ export function toParitySnapshot(p: LedgerProjection): unknown {
               basis: s.view.basis,
               spec_ref: s.view.specRef,
               generator_model: s.view.generatorModel,
+              // PRD-B3: the durable pin, mirrored so this snapshot byte-equals
+              // the Python fold's `SurfaceViewState.model_dump` (`null` unpinned).
+              preference: s.view.preference,
             },
       first_sequence_no: s.createdSeq,
       last_sequence_no: s.lastSeq,

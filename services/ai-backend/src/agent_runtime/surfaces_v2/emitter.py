@@ -144,9 +144,19 @@ class WorkLedgerEmitter:
                 Keys.Field.TIER: Values.TIER_SHAPED,
                 Keys.Field.BASIS: Values.BASIS_GENERATED,
             }
+            # PRD-B3: the generated-basis upgrade carries the ``spec_ref`` for the
+            # authored spec (same ``spec:<server>/<tool>`` convention regenerate
+            # uses) and the ``gen`` block ``{model, ms}`` (A3 emitted model only).
+            spec_ref = self._spec_ref_from_spec(payload.get(_EnvelopeKey.SPEC))
+            if spec_ref is not None:
+                derived[Keys.Field.SPEC_REF] = spec_ref
             model = payload.get(_SchedulerPayload.GENERATOR_MODEL)
             if isinstance(model, str) and model:
-                derived[Keys.Field.GEN] = {Keys.Field.MODEL: model}
+                gen: dict[str, object] = {Keys.Field.MODEL: model}
+                ms = payload.get(_SchedulerPayload.GENERATOR_MS)
+                if isinstance(ms, int) and not isinstance(ms, bool) and ms >= 0:
+                    gen[Keys.Field.MS] = ms
+                derived[Keys.Field.GEN] = gen
             await self.emit(
                 LedgerEventType.VIEW_DERIVED.value, derived, Messages.VIEW_DERIVED
             )
@@ -154,6 +164,30 @@ class WorkLedgerEmitter:
             _LOGGER.warning(Messages.EMIT_RAISED, exc_info=True)
 
     # -- payload builders ---------------------------------------------------
+
+    @staticmethod
+    def _spec_ref_from_spec(spec: object) -> str | None:
+        """Build the ``spec:<server>/<tool>`` ref from a generated spec's source.
+
+        The scheduler's ``surface_spec_generated`` payload carries the authored
+        spec; its ``source.server`` / ``source.tool`` key the same normalised ref
+        the regenerate path and the registry ladder use. Returns ``None`` when the
+        spec (or its source) is absent/malformed — the upgrade still emits without
+        a ref rather than fabricating one.
+        """
+
+        if not isinstance(spec, Mapping):
+            return None
+        source = spec.get(_EnvelopeKey.SOURCE)
+        if not isinstance(source, Mapping):
+            return None
+        server = source.get(_EnvelopeKey.SERVER)
+        tool = source.get(_EnvelopeKey.TOOL)
+        if not isinstance(server, str) or not server:
+            return None
+        if not isinstance(tool, str) or not tool:
+            return None
+        return f"{Values.SPEC_REF_PREFIX}{server_slug(server)}/{tool_slug(tool)}"
 
     @staticmethod
     def _classify(*, server_name: str, tool_name: str) -> tuple[str, str]:
@@ -327,6 +361,11 @@ class _EnvelopeKey:
     SPEC = "spec"
     DATA = "data"
     TITLE_PATH = "title_path"
+    # ``spec.source.{server,tool}`` — the connector/tool a generated spec binds
+    # to, used to build the B3 ``spec_ref``.
+    SOURCE = "source"
+    SERVER = "server"
+    TOOL = "tool"
 
 
 class _SchedulerPayload:
@@ -334,6 +373,7 @@ class _SchedulerPayload:
 
     SURFACE_URI = "surface_uri"
     GENERATOR_MODEL = "generator_model"
+    GENERATOR_MS = "generator_ms"
 
 
 _EMITTER_CTX: ContextVar[WorkLedgerEmitter | None] = ContextVar(

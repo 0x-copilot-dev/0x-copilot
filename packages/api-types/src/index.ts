@@ -81,6 +81,7 @@ import type {
   ReadExecutedPayload,
   SurfaceCreatedPayload,
   ViewDerivedPayload,
+  ViewPreferencePayload,
 } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
@@ -389,6 +390,7 @@ export type RuntimeApiEventType =
   | "read.executed"
   | "surface.created"
   | "view.derived"
+  | "view.preference"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -452,6 +454,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "read.executed",
   "surface.created",
   "view.derived",
+  "view.preference",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2205,6 +2208,9 @@ export interface RuntimeEventPayloadByType {
   "read.executed": ReadExecutedPayload;
   "surface.created": SurfaceCreatedPayload;
   "view.derived": ViewDerivedPayload;
+  /** Generative Surfaces v2 (PRD-B3, SDR §5). The durable tier preference — a
+   * user "Keep generic"/"Shaped" pin that survives reload by replay. */
+  "view.preference": ViewPreferencePayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

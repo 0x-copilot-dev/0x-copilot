@@ -50,7 +50,12 @@ from runtime_api.schemas import (
     RunStatusResponse,
     UpdateConversationConnectorsRequest,
 )
-from runtime_api.schemas.surfaces_v2 import RunSurfacesResponse
+from runtime_api.schemas.surfaces_v2 import (
+    RunSurfacesResponse,
+    SurfaceViewActionResponse,
+    SurfaceViewPreferenceRequest,
+    SurfaceViewPreferenceResponse,
+)
 from runtime_api.schemas.budgets import (
     BudgetCreateRequest,
     BudgetListResponse,
@@ -387,6 +392,52 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    async def regenerate_surface_view(
+        cls,
+        request: Request,
+        surface_id: str,
+        run_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> SurfaceViewActionResponse:
+        """Re-derive a surface's view from its stored payload (PRD-B3, FR-A6).
+
+        Keyed on ``surface_id`` + the owning ``run_id`` (SDR §4). Zero new
+        connector traffic — a pure re-derivation of the stored tool response.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.surface_view_coordinator(request).regenerate_view(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            surface_id=surface_id,
+        )
+
+    @classmethod
+    async def set_surface_view_preference(
+        cls,
+        request: Request,
+        surface_id: str,
+        payload: SurfaceViewPreferenceRequest,
+        run_id: str = Query(..., min_length=1),
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> SurfaceViewPreferenceResponse:
+        """Pin a surface's tier preference (``generic``/``shaped``) — PRD-B3.
+
+        Appends a durable ``view.preference`` ledger event so the pin survives
+        reload by replay ("Keep generic survives reload").
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.surface_view_coordinator(request).set_view_preference(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            surface_id=surface_id,
+            keep=payload.keep,
+        )
+
+    @classmethod
     def stream_run(
         cls,
         request: Request,
@@ -579,6 +630,12 @@ class RuntimeApiRoutes:
         return request.app.state.conversation_query_service
 
     @classmethod
+    def surface_view_coordinator(cls, request: Request):
+        """Retrieve the PRD-B3 surface-view coordinator from app state."""
+
+        return request.app.state.surface_view_coordinator
+
+    @classmethod
     def workspace_coordinator(cls, request: Request) -> WorkspaceCoordinator:
         """Retrieve the workspace coordinator from app state."""
 
@@ -714,6 +771,22 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=RunSurfacesResponse,
             name=Keys.RouteName.GET_RUN_SURFACES,
+        )
+        # ``surface_id`` (a v1 surface_uri) carries slashes → the ``:path``
+        # converter captures the whole tail before the literal action suffix.
+        router.add_api_route(
+            "/surfaces/{surface_id:path}/regenerate",
+            RuntimeApiRoutes.regenerate_surface_view,
+            methods=["POST"],
+            response_model=SurfaceViewActionResponse,
+            name=Keys.RouteName.REGENERATE_SURFACE_VIEW,
+        )
+        router.add_api_route(
+            "/surfaces/{surface_id:path}/view-preference",
+            RuntimeApiRoutes.set_surface_view_preference,
+            methods=["POST"],
+            response_model=SurfaceViewPreferenceResponse,
+            name=Keys.RouteName.SET_SURFACE_VIEW_PREFERENCE,
         )
         router.add_api_route(
             "/runs/{run_id}/stream",

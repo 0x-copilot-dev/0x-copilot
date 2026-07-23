@@ -427,6 +427,19 @@ class RuntimeApiAppFactory:
             event_store=_ports.event_store,
             on_event_appended=_on_event_appended,
         )
+        # Generative Surfaces v2 (PRD-B3) — the per-surface view-lifecycle
+        # coordinator. Appends ``view.preference`` / re-derived ``view.derived``
+        # to the run ledger through the same producer, so its effects survive
+        # reload by replay. Shaping (regenerate) is metered as ``view_shaping``.
+        from agent_runtime.api.surface_view_coordinator import (  # noqa: PLC0415
+            SurfaceViewCoordinator,
+        )
+
+        app.state.surface_view_coordinator = SurfaceViewCoordinator(
+            persistence=_ports.persistence,
+            event_store=_ports.event_store,
+            event_producer=_event_producer,
+        )
         _model_resolver = ModelConfigResolver(_settings)
 
         # Construct the five coordinators.

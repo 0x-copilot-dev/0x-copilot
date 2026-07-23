@@ -1119,6 +1119,21 @@ export {
 } from "./destinations/run/useSurfacesV2";
 // === end PRD-B1 ===
 
+// === Surfaces v2 — PRD-B3 view lifecycle (generic/shaped, upgrade, regenerate) ===
+// Per-surface view-state fold extensions + the non-modal upgrade toast and the
+// persistent tier toggle / Regenerate cluster. All pure projections of the same
+// ledger; callbacks ride the Transport port (no second SSE subscription).
+export {
+  ViewUpgradeToast,
+  ViewTierToggle,
+  MAX_REGEN_PER_SURFACE,
+  type ViewUpgradeToastProps,
+  type ViewTierToggleProps,
+  type LedgerSurfaceViewState,
+  type LedgerViewKeep,
+} from "./thread-canvas";
+// === end PRD-B3 ===
+
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Provenance footer, skeleton/assembling state, lossless raw fallback, and the
 // status strip — all pure projections of the Work Ledger, mounted strictly

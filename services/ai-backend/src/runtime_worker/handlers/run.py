@@ -1669,6 +1669,9 @@ class RuntimeRunHandler:
             emit=_emit,
             environ=os.environ,
             usage_meter=invocation,
+            # PRD-B3 shaping-on default: the run's provider drives the cheapest
+            # shaping model when SURFACE_SPEC_MODEL is unset and SURFACES_V2 is on.
+            run_provider=run.model_provider,
         )
 
     def _build_work_ledger_emitter(self, run: RunRecord) -> WorkLedgerEmitter | None:
