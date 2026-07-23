@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 
+import type { ShellHostBinding } from "../contract/shellBinding";
 import type { PresenceSignal } from "../presence/presence-signal";
 import {
   useOptionalDeploymentProfile,
@@ -82,19 +83,18 @@ export interface ChatShellProps<TRoute> {
   readonly onOpenCommandPalette?: () => void;
 
   /**
-   * When `true` the shell renders full-bleed (topbar + context column +
-   * right rail suppressed) regardless of `activeDestination` — for the
-   * Settings surface, which is full-height (DESIGN-SPEC §1) but is not a rail
-   * destination (it opens from the rail foot via `onOpenSettings`). The rail
-   * still highlights `activeDestination`, mirroring the web host's behaviour
-   * of keeping the last destination active while Settings is open.
+   * TOTAL host binding for the shell's host-owned capabilities (PRD-03 Move 2):
+   * `railIdentity` (rail-foot avatar name), `walletChip` (FTUE topbar chip),
+   * `topbarLeaf` (topbar sub-crumb) and `settingsActive` (the Settings surface
+   * is full-height full-bleed while active). Every field is REQUIRED and never
+   * `undefined` — a host that omits one fails to compile, and an opt-out is a
+   * literal `null` in the diff. This replaces the four discrete optional props
+   * that let capabilities ship dark when a host silently declined them.
+   *
+   * `railBadges` is deliberately NOT in the binding — PRD-12 owns that prop and
+   * its data source (C1).
    */
-  readonly settingsActive?: boolean;
-
-  /**
-   * Optional sub-crumb for the topbar (e.g. conversation id, server id).
-   */
-  readonly topbarLeaf?: string | null;
+  readonly binding: ShellHostBinding;
 
   /**
    * Optional explicit rail destinations. When supplied, this list is rendered
@@ -115,27 +115,12 @@ export interface ChatShellProps<TRoute> {
   readonly contextPanel?: ReactNode | ContextPanelProps;
 
   /**
-   * Optional account identity for the rail foot avatar (user initial). The
-   * host derives it (web `AuthContext`, desktop bootstrap identity); the shell
-   * only forwards it to `AppRail`. Absent = neutral glyph (PRD-C).
-   */
-  readonly railIdentity?: { readonly initial: string };
-
-  /**
    * Optional per-destination badge counts (e.g. active runs on `run`). The host
    * derives them from data it already holds (PRD-H); the shell forwards them to
    * `AppRail`, which shows a badge only when the count > 0 and the destination
-   * isn't active. Absent = no badges.
+   * isn't active. Absent = no badges. PRD-12 owns this prop (C1).
    */
   readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
-
-  /**
-   * Optional host-injected top-bar chip (FTUE P4 wallet chip), forwarded to the
-   * `Topbar`'s additive `walletChip` slot. Shown only on non-full-bleed
-   * destinations (where the shell Topbar renders). Absent = byte-identical to
-   * before.
-   */
-  readonly walletChip?: ReactNode;
 
   /** Main column content. */
   readonly children?: ReactNode;
@@ -150,13 +135,10 @@ export function ChatShell<TRoute>({
   onNavigate,
   onOpenSettings,
   onOpenCommandPalette,
-  settingsActive,
-  topbarLeaf,
+  binding,
   destinations,
   contextPanel,
-  railIdentity,
   railBadges,
-  walletChip,
   children,
 }: ChatShellProps<TRoute>): ReactElement {
   const profile = useOptionalDeploymentProfile();
@@ -180,12 +162,12 @@ export function ChatShell<TRoute>({
               onNavigate={onNavigate}
               onOpenSettings={onOpenSettings}
               onOpenCommandPalette={onOpenCommandPalette}
-              settingsActive={settingsActive ?? false}
-              topbarLeaf={topbarLeaf}
+              settingsActive={binding.settingsActive}
+              topbarLeaf={binding.topbarLeaf}
               contextPanel={contextPanel}
-              railIdentity={railIdentity}
+              railIdentity={binding.railIdentity}
               railBadges={railBadges}
-              walletChip={walletChip}
+              walletChip={binding.walletChip}
             >
               {children}
             </ShellGrid>
@@ -205,9 +187,11 @@ interface ShellGridProps {
   readonly settingsActive: boolean;
   readonly topbarLeaf?: string | null;
   readonly contextPanel?: ReactNode | ContextPanelProps;
-  readonly railIdentity?: { readonly initial: string };
+  // PRD-03: the shell carries the raw display name and shims it to AppRail's
+  // `{ initial }` shape at the call site below. `null` = neutral glyph.
+  readonly railIdentity: { readonly displayName: string } | null;
   readonly railBadges?: Partial<Record<ShellDestinationSlug, number>>;
-  readonly walletChip?: ReactNode;
+  readonly walletChip: ReactNode | null;
   readonly children?: ReactNode;
 }
 
@@ -290,7 +274,11 @@ function ShellGrid({
         destinations={destinations}
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
-        identity={railIdentity}
+        // PRD-12 deletes this shim when AppRail takes `{ displayName }` and
+        // derives the glyph (charAt(0), title, aria-label) itself (its D5).
+        identity={
+          railIdentity ? { initial: railIdentity.displayName } : undefined
+        }
         badges={railBadges}
       />
       {fullBleed ? null : (

@@ -49,7 +49,6 @@ import {
 import {
   ProjectDetailView,
   ProjectsDestination,
-  cacheProjectNames,
   hasItemRefResolver,
   registerItemRefResolver,
   type ProjectDetail,
@@ -292,16 +291,11 @@ export function ProjectsRoute({
   const [detail, setDetail] = useState<DetailState | null>(null);
   const [detailReloadToken, setDetailReloadToken] = useState(0);
 
-  // Prime the chat-surface project-name cache so cross-destination
-  // `<ItemLink kind="project">` links (chat / inbox / activity surfaces)
-  // resolve to the real project name instead of the generic "Project"
-  // label (FR-G.6). Runs on the loaded list + every SSE merge; the cache
-  // is a module-singleton, so the resolver reads whatever we've seen.
-  useEffect(() => {
-    if (state.kind === "ready") {
-      cacheProjectNames(state.items);
-    }
-  }, [state]);
+  // PRD-03 Move 1: priming the cross-destination project-name cache is no
+  // longer a host duty — `ProjectsDestination` primes it from `items` in an
+  // effect, so both hosts get real `<ItemLink kind="project">` names without
+  // each remembering a cache-priming call (desktop never did, so every desktop
+  // project link read the literal "Project").
 
   // ---- Initial fetch ------------------------------------------------
   useEffect(() => {
@@ -819,13 +813,17 @@ export function ProjectsRoute({
         </div>
       )}
       {focusedProjectId !== null ? (
-        // Detail pane — mounted through the destination's own
-        // `renderDetail` / `focusedProjectId` slot (FR-4.11).
+        // Detail pane — mounted through the destination's own detail slot
+        // (FR-4.11). PRD-03: the slot is now one total `detail` binding; web
+        // declares `mode: "enabled"` and carries the focused id + slot together.
         <ProjectsDestination
           items={detailSection}
-          focusedProjectId={focusedProjectId}
-          onCloseDetail={() => setFocusedProjectId(null)}
-          renderDetail={({ onClose }) => renderProjectDetail(onClose)}
+          detail={{
+            mode: "enabled",
+            focusedProjectId,
+            onCloseDetail: () => setFocusedProjectId(null),
+            renderDetail: ({ onClose }) => renderProjectDetail(onClose),
+          }}
         />
       ) : state.kind === "loading" ? (
         <div data-testid="projects-route-loading" style={{ fontSize: 13 }}>

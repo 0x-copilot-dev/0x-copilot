@@ -3,6 +3,7 @@ import { type ReactElement } from "react";
 import {
   DestinationPlaceholder,
   type ConversationId,
+  type RunId,
   type ShellDestinationSlug,
 } from "@0x-copilot/chat-surface";
 
@@ -77,11 +78,16 @@ export interface DestinationOutletProps {
    */
   readonly conversationId?: ConversationId | null;
   /**
-   * Navigate the shell to the Run cockpit (no conversation id). Wired by
-   * bootstrap to a new-run intent. The Phase-4 surfaces call it for open-run /
-   * run-skill / new chat — the cockpit front door for STARTING a run.
+   * Open a SPECIFIC run — carries the run id (PRD-03 Move 3). Activity rows use
+   * it; where it navigates is PRD-04's concern. Split from `onNewChat` so the
+   * run id can no longer be silently discarded by a 0-arity callback.
    */
-  readonly onOpenRun?: () => void;
+  readonly onOpenRun?: (runId: RunId) => void;
+  /**
+   * Start a NEW chat on the Run cockpit front door (no id). Chats' "New chat"
+   * and Skills' "Run" use it.
+   */
+  readonly onNewChat?: () => void;
   /**
    * Reopen a specific conversation (Chats → Run) with its REAL id. Bootstrap
    * navigates the Router to the conversation route; the outlet re-keys the
@@ -123,6 +129,7 @@ export function DestinationOutlet({
   destination,
   conversationId = null,
   onOpenRun,
+  onNewChat,
   onOpenConversation,
   onConversationCreated,
   onOpenRetentionSettings,
@@ -145,6 +152,7 @@ export function DestinationOutlet({
       {renderSurface(resolved, {
         conversationId,
         onOpenRun,
+        onNewChat,
         onOpenConversation,
         onConversationCreated,
         onOpenRetentionSettings,
@@ -160,7 +168,8 @@ export function DestinationOutlet({
 
 interface SurfaceContext {
   readonly conversationId: ConversationId | null;
-  readonly onOpenRun?: () => void;
+  readonly onOpenRun?: (runId: RunId) => void;
+  readonly onNewChat?: () => void;
   readonly onOpenConversation?: (id: ConversationId) => void;
   readonly onConversationCreated?: (id: ConversationId) => void;
   readonly onOpenRetentionSettings?: () => void;
@@ -198,7 +207,7 @@ function renderSurface(
     case "chats":
       return (
         <ChatsBinder
-          onOpenRun={ctx.onOpenRun}
+          onNewChat={ctx.onNewChat}
           onOpenConversation={ctx.onOpenConversation}
         />
       );
@@ -216,7 +225,7 @@ function renderSurface(
         <ConnectorsBinder onOpenApprovalSettings={ctx.onOpenApprovalSettings} />
       );
     case "tools":
-      return <SkillsBinder onOpenRun={ctx.onOpenRun} />;
+      return <SkillsBinder onNewChat={ctx.onNewChat} />;
     default:
       return <DestinationPlaceholder {...fallbackCopy(resolved)} />;
   }

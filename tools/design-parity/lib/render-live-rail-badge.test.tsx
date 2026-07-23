@@ -127,8 +127,16 @@ function renderState(activeDestination: ShellDestinationSlug): string {
         // without it.
         onOpenSettings: () => undefined,
         onOpenCommandPalette: () => undefined,
-        // Design mock's avatar letter is prefs.name.slice(0,1) = "S" (Sasha).
-        railIdentity: { initial: "S" },
+        // PRD-03: the four discrete props are one total binding. The rail-foot
+        // avatar takes the raw display name; ChatShell shims it to AppRail's
+        // `{ initial }` (slice(0,1).toUpperCase() = "S"), so the pixels are
+        // identical to the design mock's prefs.name.slice(0,1) = "S" (Sasha).
+        binding: {
+          railIdentity: { displayName: "S" },
+          walletChip: null,
+          topbarLeaf: null,
+          settingsActive: false,
+        },
         // Design mock's DEST[0].badge is the literal "1".
         railBadges: { run: 1 },
       },

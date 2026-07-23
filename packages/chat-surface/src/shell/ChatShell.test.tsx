@@ -89,9 +89,13 @@ function mount({
       activeDestination={activeDestination}
       onNavigate={onNavigate}
       onOpenSettings={onOpenSettings}
-      settingsActive={settingsActive}
-      topbarLeaf={topbarLeaf ?? null}
-      walletChip={walletChip}
+      // PRD-03: the four discrete props are now one total binding.
+      binding={{
+        railIdentity: null,
+        walletChip: walletChip ?? null,
+        topbarLeaf: topbarLeaf ?? null,
+        settingsActive: settingsActive ?? false,
+      }}
     >
       {children}
     </ChatShell>

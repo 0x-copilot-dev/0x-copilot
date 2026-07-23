@@ -341,6 +341,63 @@ describe("ChatsBinder — reopen threads the real conversation id", () => {
   });
 });
 
+describe("ChatsBinder — reads first-class preview/model/pinned (PRD-03 Move 1)", () => {
+  it("renders the first-class fields (not metadata) and buckets a pinned row", async () => {
+    const recorder: Recorder = { calls: [] };
+    // First-class fields carry the real values; a stale `metadata` blob carries
+    // contradictory ones. Nothing writes `metadata.*`, so the first-class
+    // fields must win — the exact drift the old local `toArchiveRow` shipped.
+    const conversation: Conversation = {
+      conversation_id: "conv-pin",
+      org_id: "org-1",
+      user_id: "user-1",
+      assistant_id: "asst-1",
+      title: "Pinned digest",
+      status: "active",
+      created_at: "2026-07-22T00:00:00Z",
+      updated_at: "2026-07-22T00:00:00Z",
+      archived_at: null,
+      metadata: { preview: "WRONG", model: "WRONG", pinned: false },
+      schema_version: 1,
+      pinned: true,
+      preview: "hello",
+      model: "claude-sonnet-4.5",
+    };
+
+    const ui: ReactElement = (
+      <TransportProvider transport={chatsTransport(recorder, [conversation])}>
+        <RouterProvider router={fakeRouter()}>
+          <ChatsBinder />
+        </RouterProvider>
+      </TransportProvider>
+    );
+    const { container } = render(ui);
+
+    const preview = await waitFor(() => {
+      const el = container.querySelector(
+        "[data-testid='chat-archive-row-preview']",
+      );
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    expect(preview.textContent).toBe("hello");
+    expect(
+      container.querySelector("[data-testid='chat-archive-row-model']")
+        ?.textContent,
+    ).toBe("claude-sonnet-4.5");
+    // The contradictory metadata values never surface.
+    expect(container.textContent ?? "").not.toContain("WRONG");
+    // `pinned: true` (first-class) buckets the row into the Pinned section —
+    // on `main` desktop read `metadata.pinned`, so Pinned was always empty.
+    const pinnedList = container.querySelector(
+      "[data-testid='chats-section-pinned-list']",
+    );
+    expect(
+      pinnedList?.querySelector("[data-testid='chat-archive-row']"),
+    ).not.toBeNull();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // PRD-06 DoD 15 — regression guard for the "Off everywhere" bug on desktop.
 // The binder must (a) render each connector's REAL access mode (not a blanket

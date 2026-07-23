@@ -84,4 +84,24 @@ export default [
       ],
     },
   },
+
+  // Test-harness exception to the substrate-primitive ban.
+  //
+  // The `no-restricted-globals` boundary above exists to keep code that is
+  // *mounted in a substrate* (web / desktop webview) from reaching a browser
+  // primitive directly. Test files are never mounted in a substrate — they
+  // run only under vitest + jsdom. The portable production functions they
+  // exercise take the substrate target as an argument (e.g.
+  // `attachShellShortcuts(document, …)`), and the test supplies jsdom's
+  // concrete `document`. Banning `document`/`window` inside the tests would
+  // make those portable functions untestable while proving nothing about
+  // portability. So the globals ban is lifted for test files only —
+  // production files (including src/contract/ and src/projections/) stay
+  // fully guarded, and the host-app import ban still applies to tests.
+  {
+    files: ["src/**/*.test.{ts,tsx}"],
+    rules: {
+      "no-restricted-globals": "off",
+    },
+  },
 ];

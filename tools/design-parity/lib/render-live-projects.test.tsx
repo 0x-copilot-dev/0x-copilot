@@ -93,10 +93,7 @@ vi.mock("../../../apps/frontend/src/api/projectsApi", async () => {
 
 // Imports below this line resolve through the mock above.
 import { ProjectsRoute } from "../../../apps/frontend/src/features/projects/ProjectsRoute";
-import {
-  ProjectsDestination,
-  cacheProjectNames,
-} from "@0x-copilot/chat-surface";
+import { ProjectsDestination } from "@0x-copilot/chat-surface";
 import { RouterProvider } from "../../../packages/chat-surface/src/providers/RouterProvider";
 // PRJ-09 probe: the real shell chrome, mounted the way each host mounts it.
 import { ChatShell } from "../../../packages/chat-surface/src/shell/ChatShell";
@@ -386,10 +383,9 @@ it("renders the live Project detail (ProjectDetailView, solo profile) → detail
 // same design anchors can be diffed against the other host.
 // ===========================================================================
 it("renders the live ProjectsDestination card grid (desktop host) → default-chatsurface.html", async () => {
-  // Prime the name cache the way the web binder does so the card-name
-  // `<ItemLink kind="project">` resolves to the real name rather than the
-  // generic "Project" label (projectNameCache.ts:22-40).
-  cacheProjectNames(SEEDS.map((s) => ({ id: s.id, name: s.name })));
+  // PRD-03 Move 1: `ProjectsDestination` primes the name cache from `items`
+  // itself, so the card-name `<ItemLink kind="project">` resolves to the real
+  // name with no host-side priming call.
 
   const rows = SEEDS.map(summaryOf);
   const items: SectionResult<ReadonlyArray<ProjectSummary>> = {
@@ -408,6 +404,9 @@ it("renders the live ProjectsDestination card grid (desktop host) → default-ch
       { router } as never,
       h(ProjectsDestination, {
         items,
+        // PRD-03: the desktop host has no project-detail flow — the disabled
+        // binding is the explicit statement of that (was a silent omission).
+        detail: { mode: "disabled" },
         counts: { all: 3, active: 3, archived: 0, starred: 0 },
         onCreateProject: () => undefined,
         onStarProject: () => undefined,
@@ -484,7 +483,13 @@ it("PRJ-09 · web host: topbar shows the title but NO subtitle", () => {
           ...shellStubs,
           activeDestination: "projects",
           onNavigate: () => undefined,
-          // Mirrors App.tsx:1200-1226 exactly: NO `topbarLeaf` prop.
+          // Mirrors App.tsx exactly: the total binding, `topbarLeaf: null`.
+          binding: {
+            railIdentity: null,
+            walletChip: null,
+            topbarLeaf: null,
+            settingsActive: false,
+          },
         } as never,
         null,
       ),
@@ -503,8 +508,13 @@ it("PRJ-09 · desktop host: topbar shows the title but NO subtitle", () => {
         activeDestination: "projects",
         destinations: destinationsForProfile("single_user_desktop"),
         onNavigate: () => undefined,
-        settingsActive: false,
-        // Mirrors bootstrap.tsx:318-330 exactly: NO `topbarLeaf` prop.
+        // Mirrors bootstrap.tsx exactly: the total binding, `topbarLeaf: null`.
+        binding: {
+          railIdentity: null,
+          walletChip: null,
+          topbarLeaf: null,
+          settingsActive: false,
+        },
       } as never,
       null,
     ),
