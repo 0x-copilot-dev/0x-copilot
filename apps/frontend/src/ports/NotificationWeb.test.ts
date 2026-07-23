@@ -1,7 +1,6 @@
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
-  type ArtifactRoute,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "@0x-copilot/chat-surface";
 import type { ConversationId } from "@0x-copilot/api-types";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -40,7 +39,7 @@ function uninstallNotification(): void {
 
 beforeEach(() => {
   instances.length = 0;
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 afterEach(() => {
@@ -91,16 +90,13 @@ describe("WebNotificationPort", () => {
     expect(instances[0].options?.tag).toBe("inbox");
   });
 
-  it("click navigates via the resolved ItemRef route", async () => {
+  it("click navigates via the resolved ItemRoute (synchronous, PRD-04)", () => {
     installNotification("granted");
-    const route: ArtifactRoute = {
-      kind: "chat",
-      conversationId: "conv_001",
-    };
-    registerItemRefResolver("chat", async () => ({
-      label: "Convo",
-      icon: null,
-      route,
+    const route = { screen: "chat", destination: "run", subPath: "conv_001" };
+    registerItemRoute("chat", (id) => ({
+      screen: "chat",
+      destination: "run",
+      subPath: id,
     }));
     const navigate = vi.fn();
     const port = new WebNotificationPort({ navigate });
@@ -116,10 +112,25 @@ describe("WebNotificationPort", () => {
       notification as unknown as Notification,
       new Event("click"),
     );
-    // resolveItemRef is async; wait a microtask + a macrotask so the
-    // .then(navigate) chain settles.
-    await new Promise((r) => setTimeout(r, 0));
+    // resolveItemRoute is synchronous now — no microtask wait needed.
     expect(navigate).toHaveBeenCalledWith(route);
+  });
+
+  it("click is a no-op when no route is registered for the ref's kind", () => {
+    installNotification("granted");
+    const navigate = vi.fn();
+    const port = new WebNotificationPort({ navigate });
+    port.notify({
+      title: "Reply",
+      body: "Body",
+      destination: "chats",
+      ref: { kind: "chat", id: "conv_001" as ConversationId },
+    });
+    instances[0].onclick?.call(
+      instances[0] as unknown as Notification,
+      new Event("click"),
+    );
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it("click is a no-op when no ref is supplied", () => {

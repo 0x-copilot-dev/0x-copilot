@@ -11,32 +11,32 @@
 //    "granted" — matches §1.2 "no-op when permission not granted".
 //  - `requestPermission()` is web-only and prompts the user; desktop
 //    implementations omit it (permission is granted at install time).
-//  - Click navigation goes through `resolveItemRef(ref)` → the resolved
-//    `ArtifactRoute`, which the host hands to the Router. We do this
-//    inside the port (rather than passing a Router in) because the
-//    Router's TRoute type parameter is host-specific; the registry
-//    resolver returns the substrate-portable `ArtifactRoute` instead.
+//  - Click navigation goes through the ItemRoute registry: `hasItemRoute` +
+//    `resolveItemRoute(ref)` synchronously yield the HOST route (an `AppRoute`
+//    on web, PRD-04 Seam B), which the caller hands to the Router. The route is
+//    typed `unknown` here because it belongs to the host's own union; the
+//    caller casts it back.
 
 import {
-  resolveItemRef,
+  hasItemRoute,
+  resolveItemRoute,
   type NotificationPort,
   type NotifyPayload,
 } from "@0x-copilot/chat-surface";
-import type { ArtifactRoute } from "@0x-copilot/chat-surface";
 
 /**
- * Caller hands in a `navigate` closure so the port stays decoupled from
- * the host's wider Router<AppRoute> instantiation — the port speaks the
- * substrate-portable `ArtifactRoute` shape, the host knows how to widen
- * that into its app route union. Same pattern the chat-surface's
- * `<ItemLink>` follows.
+ * Caller hands in a `navigate` closure so the port stays decoupled from the
+ * host's Router union. The registry resolves an `ItemRef` to a HOST route
+ * (`unknown` here); the caller's closure casts it back to its own route union
+ * (`AppRoute` on web) and navigates. Same pattern chat-surface's `<ItemLink>`
+ * follows.
  */
 export interface WebNotificationPortConfig {
-  readonly navigate: (route: ArtifactRoute) => void;
+  readonly navigate: (route: unknown) => void;
 }
 
 export class WebNotificationPort implements NotificationPort {
-  readonly #navigate: (route: ArtifactRoute) => void;
+  readonly #navigate: (route: unknown) => void;
 
   constructor(config: WebNotificationPortConfig) {
     this.#navigate = config.navigate;
@@ -62,18 +62,18 @@ export class WebNotificationPort implements NotificationPort {
     const ref = payload.ref;
     if (ref !== undefined) {
       native.onclick = (): void => {
-        // Defer the navigate so the focus / blur dance the OS does when
-        // the user clicks a notification settles before the route swap.
-        void resolveItemRef(ref)
-          .then((resolved) => {
-            if (resolved === null) return;
-            const route = resolved.route;
-            if (route === null) return;
-            this.#navigate(route);
-          })
-          .catch(() => {
-            // Resolver failures are non-fatal — the click is best-effort.
-          });
+        // No registered route for this kind → nothing to navigate to (the
+        // notification is still shown; the click is just inert).
+        if (!hasItemRoute(ref.kind)) return;
+        let route: unknown;
+        try {
+          route = resolveItemRoute(ref);
+        } catch {
+          // Resolver failures are non-fatal — the click is best-effort.
+          return;
+        }
+        if (route === null || route === undefined) return;
+        this.#navigate(route);
       };
     }
   }

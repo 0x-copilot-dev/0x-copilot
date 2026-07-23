@@ -1,109 +1,117 @@
-import type { ConversationId, ItemRef } from "@0x-copilot/api-types";
+import type { ConversationId, ItemKind, ItemRef } from "@0x-copilot/api-types";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
-  ItemRefResolverAlreadyRegistered,
-  ItemRefResolverNotRegistered,
-  __resetItemRefRegistryForTests,
-  hasItemRefResolver,
-  registerItemRefResolver,
-  resolveItemRef,
-  unregisterItemRefResolver,
-  type ItemRefResolved,
+  ItemRouteAlreadyRegistered,
+  ItemRouteNotRegistered,
+  __resetItemRouteRegistryForTests,
+  hasItemRoute,
+  registerItemRoute,
+  resolveItemRoute,
+  unregisterItemRoute,
 } from "./registry";
 
-const A_LABEL: ItemRefResolved = {
-  label: "Acme renewal",
-  icon: "📝",
-  route: { kind: "chat", conversationId: "conv_001" },
-  breadcrumb: "Chats",
-};
+// Every member of `ItemKind` — the barrel-emptiness proof (DoD 16) enumerates
+// this. Drift from `refs.ts`'s union is caught by the exhaustiveness check the
+// consuming resolvers already carry.
+const ALL_KINDS: ReadonlyArray<ItemKind> = [
+  "chat",
+  "run",
+  "subagent",
+  "tool_result",
+  "todo",
+  "inbox_item",
+  "project",
+  "library_file",
+  "library_page",
+  "library_dataset",
+  "agent",
+  "tool",
+  "skill",
+  "connector",
+  "person",
+  "memory",
+  "routine",
+  "approval",
+  "meeting_external",
+];
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
-describe("ItemRef registry", () => {
-  it("returns false from hasItemRefResolver when nothing is registered", () => {
-    expect(hasItemRefResolver("chat")).toBe(false);
+describe("ItemRoute registry (route-only, synchronous)", () => {
+  it("returns false from hasItemRoute when nothing is registered", () => {
+    expect(hasItemRoute("chat")).toBe(false);
   });
 
-  it("registers and resolves a ref by kind", async () => {
-    registerItemRefResolver("chat", async (id) => {
-      // Type-level: id is ConversationId here, not plain string.
-      const _typed: ConversationId = id;
-      void _typed;
-      return A_LABEL;
+  it("registers and resolves a HOST route by kind, synchronously", () => {
+    registerItemRoute("chat", (id) => ({ screen: "chat", conversationId: id }));
+    expect(hasItemRoute("chat")).toBe(true);
+    const ref: ItemRef = { kind: "chat", id: "conv_001" as ConversationId };
+    // Synchronous — no promise, no effect.
+    expect(resolveItemRoute(ref)).toEqual({
+      screen: "chat",
+      conversationId: "conv_001",
     });
-    expect(hasItemRefResolver("chat")).toBe(true);
-    const ref: ItemRef = {
-      kind: "chat",
-      id: "conv_001" as ConversationId,
-    };
-    const resolved = await resolveItemRef(ref);
-    expect(resolved).toEqual(A_LABEL);
   });
 
   it("rejects duplicate registration without replace: true", () => {
-    registerItemRefResolver("chat", async () => A_LABEL);
-    expect(() => registerItemRefResolver("chat", async () => A_LABEL)).toThrow(
-      ItemRefResolverAlreadyRegistered,
+    registerItemRoute("chat", () => null);
+    expect(() => registerItemRoute("chat", () => null)).toThrow(
+      ItemRouteAlreadyRegistered,
     );
     try {
-      registerItemRefResolver("chat", async () => A_LABEL);
+      registerItemRoute("chat", () => null);
     } catch (e) {
-      expect((e as ItemRefResolverAlreadyRegistered).kind).toBe("chat");
+      expect((e as ItemRouteAlreadyRegistered).kind).toBe("chat");
     }
   });
 
-  it("accepts duplicate registration with replace: true", async () => {
-    registerItemRefResolver("chat", async () => A_LABEL);
-    const replacement: ItemRefResolved = {
-      label: "Replaced",
-      icon: null,
-      route: null,
-    };
-    registerItemRefResolver("chat", async () => replacement, { replace: true });
-    const resolved = await resolveItemRef({
-      kind: "chat",
-      id: "conv_001" as ConversationId,
-    });
-    expect(resolved).toEqual(replacement);
+  it("accepts duplicate registration with replace: true", () => {
+    registerItemRoute("chat", () => ({ screen: "old" }));
+    registerItemRoute("chat", () => ({ screen: "new" }), { replace: true });
+    expect(
+      resolveItemRoute({ kind: "chat", id: "conv_001" as ConversationId }),
+    ).toEqual({ screen: "new" });
   });
 
-  it("resolveItemRef rejects with ItemRefResolverNotRegistered when no resolver is wired", async () => {
-    await expect(
-      resolveItemRef({ kind: "chat", id: "conv_001" as ConversationId }),
-    ).rejects.toBeInstanceOf(ItemRefResolverNotRegistered);
+  it("resolveItemRoute throws ItemRouteNotRegistered when no resolver is wired", () => {
+    expect(() =>
+      resolveItemRoute({ kind: "chat", id: "conv_001" as ConversationId }),
+    ).toThrow(ItemRouteNotRegistered);
+  });
+
+  it("a resolver may return null (no route for this id)", () => {
+    registerItemRoute("chat", () => null);
+    expect(
+      resolveItemRoute({ kind: "chat", id: "conv_x" as ConversationId }),
+    ).toBeNull();
   });
 
   it("unregister removes the resolver and returns whether one existed", () => {
-    expect(unregisterItemRefResolver("chat")).toBe(false);
-    registerItemRefResolver("chat", async () => A_LABEL);
-    expect(unregisterItemRefResolver("chat")).toBe(true);
-    expect(hasItemRefResolver("chat")).toBe(false);
+    expect(unregisterItemRoute("chat")).toBe(false);
+    registerItemRoute("chat", () => null);
+    expect(unregisterItemRoute("chat")).toBe(true);
+    expect(hasItemRoute("chat")).toBe(false);
   });
+});
 
-  it("isolates resolvers per kind", async () => {
-    registerItemRefResolver("chat", async () => A_LABEL);
-    expect(hasItemRefResolver("chat")).toBe(true);
-    expect(hasItemRefResolver("todo")).toBe(false);
-    await expect(
-      resolveItemRef({
-        kind: "todo",
-        id: "todo_x" as ItemRef extends { kind: "todo"; id: infer I }
-          ? I
-          : never,
-      }),
-    ).rejects.toBeInstanceOf(ItemRefResolverNotRegistered);
-  });
+// ===========================================================================
+// DoD 16 — the package registers NO routes on import. Registration is now
+// host-only (apps/frontend/src/app/itemRoutes.ts, apps/desktop/renderer/
+// itemRoutes.ts); importing the barrel must leave the registry empty.
+// ===========================================================================
 
-  it("propagates resolver-returned null as a deleted signal", async () => {
-    registerItemRefResolver("chat", async () => null);
-    const resolved = await resolveItemRef({
-      kind: "chat",
-      id: "conv_x" as ConversationId,
-    });
-    expect(resolved).toBeNull();
-  });
+describe("barrel import registers no routes (PRD-04 Seam B)", () => {
+  it("hasItemRoute is false for every ItemKind after importing the package barrel", async () => {
+    // Import ONLY the barrel — nothing else. If any destination still
+    // registered a route at import time, one of these would be true.
+    // (Generous timeout: transforming the whole barrel can be slow under
+    // full-suite CPU contention; the assertion itself is instant.)
+    await import("@0x-copilot/chat-surface");
+    for (const kind of ALL_KINDS) {
+      expect(hasItemRoute(kind)).toBe(false);
+    }
+  }, 30_000);
 });

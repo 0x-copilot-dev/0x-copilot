@@ -124,7 +124,7 @@ export function InFlightStrip({
                   {project.icon_emoji}
                 </span>
                 <div style={nameStyle}>
-                  <ItemLink ref={project.ref} deletedLabel="deleted project" />
+                  <ItemLink ref={project.ref} label={project.name} />
                 </div>
               </div>
               <div style={metaStyle}>

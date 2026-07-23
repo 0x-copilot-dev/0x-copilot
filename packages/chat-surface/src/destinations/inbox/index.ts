@@ -10,13 +10,6 @@
 // orchestrator rewires the stub to `@0x-copilot/api-types` at
 // merge time.
 
-import type { InboxItemId } from "@0x-copilot/api-types";
-
-import {
-  hasItemRefResolver,
-  registerItemRefResolver,
-} from "../../refs/registry";
-
 import {
   InboxDestination,
   bucketInbox,
@@ -62,19 +55,6 @@ export type {
   InboxSenderKind,
   InboxSystemOrigin,
 } from "./InboxDestination";
-// ===========================================================================
-// ItemRef resolver registration (cross-audit §3.3)
-// ===========================================================================
-
-if (!hasItemRefResolver("inbox_item")) {
-  registerItemRefResolver("inbox_item", async (id: InboxItemId) => ({
-    label: "Inbox item",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Inbox",
-  }));
-}
-
 // ===========================================================================
 // Detail / reply / snooze re-exports (P4-B2)
 // ===========================================================================

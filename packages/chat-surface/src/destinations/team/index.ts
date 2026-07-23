@@ -6,13 +6,6 @@
 // `<ItemLink kind="person" id=…>` resolves without forcing a circular
 // dependency.
 
-import type { UserId } from "@0x-copilot/api-types";
-
-import {
-  hasItemRefResolver,
-  registerItemRefResolver,
-} from "../../refs/registry";
-
 import {
   OffboardingWizard,
   type OffboardingWizardProps,
@@ -83,21 +76,3 @@ export {
   type OffboardingWizardProps,
   type OffboardingAsset,
 };
-
-// ===========================================================================
-// ItemRef resolver registration (cross-audit §3.3)
-// ===========================================================================
-//
-// A dedicated `{ kind: "person-detail", userId }` route variant will land
-// alongside the data-binder phase. Until then, the workspace route is the
-// stable fallback so `<ItemLink kind="person">` renders a real link
-// rather than the deleted-chip — same pattern Tools / Projects use.
-
-if (!hasItemRefResolver("person")) {
-  registerItemRefResolver("person", async (id: UserId) => ({
-    label: "Person",
-    icon: null,
-    route: { kind: "workspace", workspaceId: id as unknown as string },
-    breadcrumb: "Team",
-  }));
-}

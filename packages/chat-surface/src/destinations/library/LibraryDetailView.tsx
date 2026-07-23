@@ -33,6 +33,7 @@ import type { CSSProperties, ReactElement } from "react";
 import type { ItemRef } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 
 import {
@@ -640,7 +641,10 @@ export function LibraryDetailView({
                 <span>{item.source.label}</span>
                 {item.source.originatingRef !== undefined && (
                   <div style={{ paddingTop: 2 }}>
-                    <ItemLink ref={item.source.originatingRef} />
+                    <ItemLink
+                      ref={item.source.originatingRef}
+                      label={itemKindNoun(item.source.originatingRef.kind)}
+                    />
                   </div>
                 )}
               </div>
@@ -696,7 +700,7 @@ export function LibraryDetailView({
                 >
                   {item.crossRefs.refs.map((ref, idx) => (
                     <div key={`${ref.kind}:${ref.id}:${idx}`}>
-                      <ItemLink ref={ref} />
+                      <ItemLink ref={ref} label={itemKindNoun(ref.kind)} />
                     </div>
                   ))}
                 </div>
@@ -729,6 +733,7 @@ export function LibraryDetailView({
                           <ItemLink
                             key={`${ref.kind}:${ref.id}:${refIdx}`}
                             ref={ref}
+                            label={itemKindNoun(ref.kind)}
                           />
                         ))}
                       </div>

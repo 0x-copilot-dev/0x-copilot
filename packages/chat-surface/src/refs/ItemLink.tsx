@@ -1,152 +1,95 @@
-// <ItemLink ref={ref} /> — the ONLY way a destination renders a
+// <ItemLink label={…} ref={ref} /> — the ONLY way a destination renders a
 // cross-destination link.
 //
-// Source: cross-audit.md §1.1 + §3.3 (binding 2026-05-17). Direct
-// `router.navigate(…)` calls from destination cards are forbidden;
-// they bypass the registry's resolve-and-display logic and lose the
-// deleted-ref signal.
+// Source: cross-audit.md §1.1 + §3.3; reshaped by PRD-04 (Seams A/B + G11).
+// Direct `router.navigate(…)` calls from destination cards are still forbidden.
 //
-// Behavior:
-// 1. On mount, look up the resolver for `ref.kind`, invoke it with the
-//    branded id.
-// 2. While the resolver promise is in flight, render a non-disruptive
-//    skeleton chip.
-// 3. On success with `route != null`, render an `<a>` whose click
-//    handler calls `router.navigate(route)`.
-// 4. On success with `route === null`, render a `<span>` "deleted
-//    ${kind}" chip (cross-audit §5.3 cascade-on-delete default).
-// 5. On resolver failure or null, render the same deleted chip with
-//    the kind. We don't surface the error string here — destinations
-//    that want detailed error UX should call `resolveItemRef` directly.
+// Two facts, two owners (PRD-04):
+//   * DISPLAY TEXT is the caller's — `label` is a REQUIRED `ReactNode`. The
+//     caller renders the entity's real name where it has it (it almost always
+//     does), or `itemKindNoun(ref.kind)` where it holds only an id. There is no
+//     `deletedLabel`: a caller that knows an entity is gone passes that phrasing
+//     in `label`.
+//   * THE ROUTE is the host's — looked up SYNCHRONOUSLY from the route registry
+//     (`resolveItemRoute`), which the host populates from its own route union.
+//
+// Rendering:
+//   * kind has a registered route AND it resolves non-null → an `<a>` whose
+//     click calls `router.navigate(route)` (modified clicks fall through to the
+//     browser so users can open in a new tab);
+//   * otherwise → a plain, non-interactive `<span>` carrying `label`. "not
+//     navigable yet" and "deleted" are the same inert-text presentation now;
+//     the old code conflated both into a "deleted …" chip.
+//
+// ACCENT-LINK POLICY (README G11, owned here): an `ItemRef` link declares NO
+// colour and NO font-size. It inherits `color` / `font-size` / `font-weight`
+// from whatever slot it sits in — a `Row` title, a card name, a table cell.
+// Accent is reserved for the affordances the design spends it on (status chips,
+// live/streaming indicators, active nav) and is never applied to an entity
+// name. No `.ui-link` recipe is minted — inheritance is the recipe.
 
 import {
-  useEffect,
-  useState,
   type CSSProperties,
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
+  type ReactNode,
 } from "react";
 
-import type { ItemKind, ItemRef } from "@0x-copilot/api-types";
+import type { ItemRef } from "@0x-copilot/api-types";
 
 import { useRouter } from "../providers/RouterProvider";
 import type { ArtifactRoute } from "../routing/router";
 
-import { resolveItemRef, type ItemRefResolved } from "./registry";
+import { hasItemRoute, resolveItemRoute } from "./registry";
 
 export interface ItemLinkProps {
   readonly ref: ItemRef;
+  /**
+   * What the link renders — the entity's real display name where the caller
+   * has it, or `itemKindNoun(ref.kind)` where it holds only an id. Required on
+   * purpose (PRD-04 Seam A): an optional prop leaves the old constant-label
+   * defect one careless call site away; required makes the compiler enumerate
+   * every call site so each states, in a reviewable diff, what it renders.
+   */
+  readonly label: ReactNode;
   /** Optional className for host-level styling overrides. */
   readonly className?: string;
-  /**
-   * Optional override for the deleted-state label. When omitted the
-   * chip reads `deleted ${kind}`.
-   */
-  readonly deletedLabel?: string;
 }
 
-type ResolveState =
-  | { readonly kind: "loading" }
-  | { readonly kind: "ready"; readonly resolved: ItemRefResolved }
-  | { readonly kind: "deleted" }
-  | { readonly kind: "error" };
-
-const skeletonStyle: CSSProperties = {
-  display: "inline-flex",
-  alignItems: "center",
-  gap: 6,
-  height: 18,
-  minWidth: 80,
-  padding: "0 8px",
-  borderRadius: "var(--radius-sm, 6px)",
-  backgroundColor: "var(--color-surface-muted, #222224)",
-  color: "var(--color-text-subtle, #7e7e84)",
-  fontSize: "var(--font-size-xs, 12px)",
-  opacity: 0.6,
-};
-
+// No `color`, no `fontSize` (README G11) — the link inherits its slot's
+// typography. Only layout + affordance chrome.
 const linkStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  color: "var(--color-accent, #d97757)",
   textDecoration: "none",
   cursor: "pointer",
-  fontSize: "var(--font-size-sm, 13px)",
 };
 
-const deletedStyle: CSSProperties = {
+// Inert text — a kind with no registered route (or a route that resolved to
+// null). Same "no colour / no font-size, inherit the slot" discipline.
+const staticStyle: CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   gap: 6,
-  color: "var(--color-text-subtle, #7e7e84)",
-  fontStyle: "italic",
-  fontSize: "var(--font-size-sm, 13px)",
 };
-
-function humanKind(kind: ItemKind): string {
-  return kind.replace(/_/g, " ");
-}
 
 export function ItemLink({
   ref,
+  label,
   className,
-  deletedLabel,
 }: ItemLinkProps): ReactElement {
   const router = useRouter<ArtifactRoute>();
-  const [state, setState] = useState<ResolveState>({ kind: "loading" });
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ kind: "loading" });
-    resolveItemRef(ref)
-      .then((resolved) => {
-        if (cancelled) return;
-        if (resolved === null) {
-          setState({ kind: "deleted" });
-          return;
-        }
-        if (resolved.route === null) {
-          setState({ kind: "deleted" });
-          return;
-        }
-        setState({ kind: "ready", resolved });
-      })
-      .catch(() => {
-        if (cancelled) return;
-        // Resolver promise rejected (unregistered kind, network).
-        // Treat as deleted/unavailable — the host-level "something
-        // is wrong" banner is the destination's job, not this chip's.
-        setState({ kind: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [ref]);
+  // Pure function of (kind, id) — no effect, no loading state, no promise.
+  const route = hasItemRoute(ref.kind) ? resolveItemRoute(ref) : null;
 
-  if (state.kind === "loading") {
+  if (route === null || route === undefined) {
     return (
       <span
         className={className}
-        style={skeletonStyle}
-        aria-busy="true"
-        aria-live="polite"
-        role="status"
-        data-testid="item-link-skeleton"
-        data-item-kind={ref.kind}
-      >
-        loading…
-      </span>
-    );
-  }
-
-  if (state.kind === "deleted" || state.kind === "error") {
-    const label = deletedLabel ?? `deleted ${humanKind(ref.kind)}`;
-    return (
-      <span
-        className={className}
-        style={deletedStyle}
-        data-testid="item-link-deleted"
+        style={staticStyle}
+        data-testid="item-link-static"
         data-item-kind={ref.kind}
       >
         {label}
@@ -154,12 +97,10 @@ export function ItemLink({
     );
   }
 
-  const { resolved } = state;
-  const route = resolved.route as ArtifactRoute; // non-null narrowed above
   const handleClick = (event: ReactMouseEvent<HTMLAnchorElement>): void => {
     // Plain clicks navigate via the router (substrate-agnostic). Modified
-    // clicks (cmd/ctrl/shift/middle) fall through to the browser's default
-    // so users can open in new tab/window.
+    // clicks (cmd/ctrl/shift/middle) fall through to the browser's default so
+    // users can open in a new tab/window.
     if (
       event.defaultPrevented ||
       event.metaKey ||
@@ -171,7 +112,7 @@ export function ItemLink({
       return;
     }
     event.preventDefault();
-    router.navigate(route);
+    router.navigate(route as ArtifactRoute);
   };
 
   return (
@@ -180,13 +121,11 @@ export function ItemLink({
       className={className}
       style={linkStyle}
       onClick={handleClick}
-      title={resolved.breadcrumb}
       data-testid="item-link"
       data-item-kind={ref.kind}
       data-item-id={ref.id}
     >
-      {resolved.icon}
-      <span>{resolved.label}</span>
+      {label}
     </a>
   );
 }

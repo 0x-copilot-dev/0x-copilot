@@ -18,6 +18,7 @@ import { useState, type CSSProperties, type ReactElement } from "react";
 import type { PersonDetailResponse, TeamRole } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { ActivityList, type ActivityRow } from "../../shell/ActivityList";
 import { EmptyState } from "../../shell/EmptyState";
 import { PageHeader } from "../../shell/PageHeader";
@@ -280,7 +281,7 @@ function RefListTab({
           data-testid={`${testIdPrefix}-row`}
           data-item-kind={ref.kind}
         >
-          <ItemLink ref={ref} />
+          <ItemLink ref={ref} label={itemKindNoun(ref.kind)} />
         </li>
       ))}
     </ul>

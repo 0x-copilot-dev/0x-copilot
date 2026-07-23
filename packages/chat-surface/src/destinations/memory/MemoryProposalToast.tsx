@@ -32,6 +32,7 @@ import { type CSSProperties, type ReactElement } from "react";
 import type { MemoryProposal } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { StatusPill } from "../../shell/StatusPill";
 
 // ===========================================================================
@@ -102,7 +103,10 @@ export function MemoryProposalToast({
           Snooze
         </button>
         <span style={sourceStyle} data-testid="memory-proposal-toast-source">
-          <ItemLink ref={proposal.source} />
+          <ItemLink
+            ref={proposal.source}
+            label={itemKindNoun(proposal.source.kind)}
+          />
         </span>
       </div>
     </div>

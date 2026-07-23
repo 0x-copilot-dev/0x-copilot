@@ -7,20 +7,20 @@ import type {
   TenantId,
   UserId,
 } from "@0x-copilot/api-types";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../../refs/registry";
 import type { ArtifactRoute, Router } from "../../routing/router";
 
 import { PersonDetailView } from "./PersonDetailView";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 const NOW = Date.parse("2026-05-18T12:00:00.000Z");
@@ -108,24 +108,22 @@ describe("PersonDetailView", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders agents/projects via ItemLink when resolvers are registered", async () => {
-    registerItemRefResolver("agent", async () => ({
-      label: "Acme bot",
-      icon: null,
-      route: { kind: "workspace", workspaceId: "w-a" } as ArtifactRoute,
-    }));
-    registerItemRefResolver("project", async () => ({
-      label: "Acme renewal",
-      icon: null,
-      route: { kind: "workspace", workspaceId: "w-p" } as ArtifactRoute,
-    }));
+  it("renders agents/projects via ItemLink anchors when routes are registered", () => {
+    registerItemRoute(
+      "agent",
+      () => ({ kind: "workspace", workspaceId: "w-a" }) as ArtifactRoute,
+    );
+    registerItemRoute(
+      "project",
+      () => ({ kind: "workspace", workspaceId: "w-p" }) as ArtifactRoute,
+    );
     renderInProvider(
       <PersonDetailView detail={makeDetail()} isAdmin={false} now={NOW} />,
     );
     fireEvent.click(screen.getByTestId("person-detail-tab-agents"));
-    await waitFor(() =>
-      expect(screen.getByText("Acme bot")).toBeInTheDocument(),
-    );
+    // Routes registered → the refs render as interactive anchors. The label is
+    // the caller-supplied kind noun (id-only refs, PRD-04 Non-goals).
+    expect(screen.getAllByTestId("item-link").length).toBeGreaterThan(0);
   });
 
   it("Activity tab — empty state when recent_activity is empty", () => {
@@ -139,11 +137,10 @@ describe("PersonDetailView", () => {
   });
 
   it("Activity tab — renders rows when entries exist (admin)", async () => {
-    registerItemRefResolver("project", async () => ({
-      label: "Acme renewal",
-      icon: null,
-      route: { kind: "workspace", workspaceId: "w-p" } as ArtifactRoute,
-    }));
+    registerItemRoute(
+      "project",
+      () => ({ kind: "workspace", workspaceId: "w-p" }) as ArtifactRoute,
+    );
     const detail = makeDetail({
       recent_activity: [
         {

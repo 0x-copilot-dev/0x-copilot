@@ -10,8 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../providers/RouterProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../refs/registry";
 import type { ArtifactRoute, Router } from "../routing/router";
 // TODO(merge): rewire to "@0x-copilot/api-types" AssignedApproval
@@ -21,7 +21,7 @@ import type { ActivityEntry } from "../thread-canvas/eventProjector";
 import { RightRail } from "./RightRail";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 const NOW = Date.parse("2026-05-17T12:00:00.000Z");
@@ -165,11 +165,10 @@ describe("RightRail (tabs view)", () => {
   });
 
   it("switches to Approvals when its tab is clicked (uncontrolled)", () => {
-    registerItemRefResolver("approval", async (id) => ({
-      label: `Approval ${id}`,
-      icon: null,
-      route: { kind: "chat", conversationId: "x" } as ArtifactRoute,
-    }));
+    registerItemRoute(
+      "approval",
+      () => ({ kind: "chat", conversationId: "x" }) as ArtifactRoute,
+    );
     render(
       <RouterProvider router={noopRouter}>
         <RightRail

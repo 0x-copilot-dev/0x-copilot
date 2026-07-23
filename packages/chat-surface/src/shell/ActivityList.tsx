@@ -14,6 +14,7 @@ import type { CSSProperties, ReactElement, ReactNode } from "react";
 import type { ItemRef } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../refs/ItemLink";
+import { itemKindNoun } from "../refs/itemKindNoun";
 import { formatRelativeTime } from "../util/time";
 
 export interface ActivityRow {
@@ -109,7 +110,7 @@ export function ActivityList({
             </span>
           ) : null}
           <div style={linkBlockStyle}>
-            <ItemLink ref={row.ref} />
+            <ItemLink ref={row.ref} label={itemKindNoun(row.ref.kind)} />
             {row.context !== undefined && row.context.length > 0 ? (
               <div style={contextStyle} data-testid="activity-row-context">
                 {row.context}

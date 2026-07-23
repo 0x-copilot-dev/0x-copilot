@@ -15,15 +15,15 @@ import type {
 
 import { RouterProvider } from "../../providers/RouterProvider";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../../refs/registry";
 import type { ArtifactRoute, Router } from "../../routing/router";
 
 import { ConnectorDetailView } from "./ConnectorDetailView";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 const NOW = Date.parse("2026-05-17T12:00:00.000Z");
@@ -130,11 +130,10 @@ describe("ConnectorDetailView", () => {
   });
 
   it("admin gate: admin Audit panel renders rows when entries exist", () => {
-    registerItemRefResolver("agent", async () => ({
-      label: "Agent",
-      icon: null,
-      route: { kind: "chat", conversationId: "x" } as ArtifactRoute,
-    }));
+    registerItemRoute(
+      "agent",
+      () => ({ kind: "chat", conversationId: "x" }) as ArtifactRoute,
+    );
     renderInProvider(
       <ConnectorDetailView
         detail={makeDetail()}

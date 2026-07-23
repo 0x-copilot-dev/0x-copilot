@@ -41,6 +41,7 @@ import type { ItemRef, RoutineId, RunId, UserId } from "@0x-copilot/api-types";
 
 import type { ClipboardPort } from "../../ports/ClipboardPort";
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 import { StatusPill, type StatusTone } from "../../shell/StatusPill";
 
 // ===========================================================================
@@ -636,7 +637,7 @@ function RunHistoryTab({ state, onRetry }: RunHistoryTabProps): ReactElement {
                 data-testid="routine-run-history-row"
                 data-run-id={row.id}
               >
-                <ItemLink ref={row.ref} />
+                <ItemLink ref={row.ref} label={itemKindNoun(row.ref.kind)} />
                 <StatusPill
                   status={runStatusTone(row.status)}
                   label={row.status}

@@ -3,16 +3,13 @@ import { render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { RouterProvider } from "../providers/RouterProvider";
-import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
-} from "../refs/registry";
+import { __resetItemRouteRegistryForTests } from "../refs/registry";
 import type { ArtifactRoute, Router } from "../routing/router";
 
 import { DocList } from "./DocList";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
 });
 
 const noopRouter: Router<ArtifactRoute> = {
@@ -23,7 +20,7 @@ const noopRouter: Router<ArtifactRoute> = {
 
 describe("<DocList>", () => {
   it("renders one row per snapshot (refs mode)", async () => {
-    registerItemRefResolver("chat", async () => null); // deleted-style render
+    // No route registered → ItemLink renders the caller's label as inert text.
     const snapshots: ReadonlyArray<ItemRefSnapshot> = [
       {
         ref: { kind: "chat", id: "conv_001" as ConversationId },

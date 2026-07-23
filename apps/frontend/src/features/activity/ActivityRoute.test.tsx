@@ -22,8 +22,6 @@ import type {
 } from "@0x-copilot/api-types";
 import {
   RouterProvider,
-  registerItemRefResolver,
-  __resetItemRefRegistryForTests,
   type ArtifactRoute,
   type Router,
 } from "@0x-copilot/chat-surface";
@@ -142,10 +140,10 @@ function auditList(rows: readonly AuditEvent[]): ListAuditEventsResponse {
   };
 }
 
-// --- Router + ItemLink resolver scaffolding -------------------------------
-// Non-running rows navigate through the `"run"` ItemLink resolver; the
-// host (Run destination) owns it, so tests register a stand-in and wrap
-// the route in a RouterProvider the way the App shell does.
+// --- Router scaffolding ---------------------------------------------------
+// PRD-04 Seam C: Activity rows no longer use `<ItemLink>` — every row calls
+// `onOpenRun({ conversationId, runId })` directly. The RouterProvider is still
+// wrapped the way the App shell does it.
 const navigate = vi.fn();
 const testRouter: Router<ArtifactRoute> = {
   current: () => ({ kind: "chat", conversationId: "x" }) as ArtifactRoute,
@@ -179,21 +177,9 @@ beforeEach(() => {
   apiMocks.listAuditEvents.mockReset();
   navigate.mockClear();
   vi.spyOn(Date, "now").mockReturnValue(NOW);
-  // The Run destination registers the "run" resolver at import time; override
-  // it with the test stand-in deliberately (registry throws otherwise).
-  registerItemRefResolver(
-    "run",
-    async (id) => ({
-      label: `Run ${id}`,
-      icon: null,
-      route: { kind: "run", runId: id },
-    }),
-    { replace: true },
-  );
 });
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
   vi.restoreAllMocks();
 });
 
@@ -372,13 +358,13 @@ describe("<ActivityRoute>", () => {
       within(todayGroup).getByTestId("activity-row-meta"),
     ).toHaveTextContent("gmail");
 
-    // Non-running rows resolve their title through the "run" ItemLink
-    // resolver — await it so the resolver's state update settles inside
-    // act rather than after teardown.
-    await screen.findAllByTestId("item-link");
+    // PRD-04 Seam C — every row renders its real title as plain text (no
+    // ItemLink). "Today run" is the second-day's row title.
+    expect(screen.getByText("Today run")).toBeInTheDocument();
+    expect(screen.queryAllByTestId("item-link")).toHaveLength(0);
   });
 
-  it("a running run row invokes the host onOpenRun with the run id (FR-4.16)", async () => {
+  it("a row invokes the host onOpenRun with { conversationId, runId } (FR-4.16, Seam C)", async () => {
     apiMocks.listConversations.mockResolvedValue(
       convList([
         conv({
@@ -402,12 +388,13 @@ describe("<ActivityRoute>", () => {
     );
 
     const rowEl = screen.getByTestId("activity-row");
-    // The shared chat-surface <Row> renders an activatable `role="button"`
-    // div (not a native <button>) so nested links compose — mirror its own
-    // suite's assertion rather than pinning the tag name.
+    // The shared chat-surface <Row> renders an activatable `role="button"` div.
     expect(rowEl).toHaveAttribute("role", "button");
     await userEvent.click(rowEl);
-    expect(onOpenRun).toHaveBeenCalledWith("run_live" as RunId);
+    expect(onOpenRun).toHaveBeenCalledWith({
+      conversationId: "conv_live",
+      runId: "run_live" as RunId,
+    });
   });
 
   it("the retention link invokes the host onOpenRetentionSettings (FR-4.17)", async () => {

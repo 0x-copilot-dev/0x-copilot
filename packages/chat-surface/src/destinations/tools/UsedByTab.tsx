@@ -18,6 +18,7 @@ import type { CSSProperties, ReactElement } from "react";
 import type { ItemRef } from "@0x-copilot/api-types";
 
 import { ItemLink } from "../../refs/ItemLink";
+import { itemKindNoun } from "../../refs/itemKindNoun";
 
 // ===========================================================================
 // Public props.
@@ -133,7 +134,7 @@ function ConsumerSection(props: ConsumerSectionProps): ReactElement {
               data-testid={`${testIdRoot}-row`}
               data-item-kind={ref.kind}
             >
-              <ItemLink ref={ref} />
+              <ItemLink ref={ref} label={itemKindNoun(ref.kind)} />
             </li>
           ))}
         </ul>

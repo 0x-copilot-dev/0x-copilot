@@ -3,17 +3,14 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 
 import { RouterProvider } from "../../providers/RouterProvider";
 import type { ArtifactRoute, Router } from "../../routing/router";
-import {
-  registerItemRefResolver,
-  unregisterItemRefResolver,
-} from "../../refs/registry";
+import { registerItemRoute, unregisterItemRoute } from "../../refs/registry";
 
 import {
   ProjectDetailView,
   type ProjectDetail,
   type ProjectFileRow,
 } from "./ProjectDetailView";
-import type { LibraryFileId, ProjectId } from "@0x-copilot/api-types";
+import type { ProjectId } from "@0x-copilot/api-types";
 
 const PROJECT: ProjectDetail = {
   id: "proj-1" as ProjectId,
@@ -307,19 +304,14 @@ describe("ProjectDetailView — files tab", () => {
   // stand-in here so the row's <ItemLink> resolves to a real (artifact)
   // route without importing another destination's index at test time.
   beforeAll(() => {
-    registerItemRefResolver(
+    registerItemRoute(
       "library_file",
-      async (id: LibraryFileId) => ({
-        label: "File",
-        icon: null,
-        route: { kind: "workspace", workspaceId: id as unknown as string },
-        breadcrumb: "Library",
-      }),
+      (id) => ({ kind: "workspace", workspaceId: id }),
       { replace: true },
     );
   });
   afterAll(() => {
-    unregisterItemRefResolver("library_file");
+    unregisterItemRoute("library_file");
   });
 
   it("degrades to a coming-soon empty state when no files source is provided", () => {
@@ -370,12 +362,21 @@ describe("ProjectDetailView — files tab", () => {
     expect(rows[0]).toHaveAttribute("data-ref-kind", "library_file");
     expect(rows[0]).toHaveAttribute("data-ref-id", "file-abc");
     expect(rows[1]).toHaveAttribute("data-ref-id", "file-def");
-    // The file name is shown as the row's primary text (display hint).
-    expect(screen.getByText("Renewal deck.pdf")).toBeInTheDocument();
-    expect(screen.getByText("Pricing model.xlsx")).toBeInTheDocument();
-    // <ItemLink> resolves asynchronously — flush so the open-link renders
-    // inside act().
-    expect(await screen.findAllByTestId("item-link")).toHaveLength(2);
+    // The file name is shown as the row's primary text AND as the ItemLink's
+    // label now (PRD-04 Seam A: the caller passes the real name, not "File"),
+    // so it appears twice per row — assert via the dedicated name-cell testid.
+    const names = screen.getAllByTestId("project-file-row-name");
+    expect(names.map((n) => n.textContent)).toEqual([
+      "Renewal deck.pdf",
+      "Pricing model.xlsx",
+    ]);
+    // <ItemLink> renders synchronously now; its label is the file name.
+    const links = screen.getAllByTestId("item-link");
+    expect(links).toHaveLength(2);
+    expect(links.map((l) => l.textContent)).toEqual([
+      "Renewal deck.pdf",
+      "Pricing model.xlsx",
+    ]);
   });
 
   it("opens the file's artifact route via the ItemLink on click", async () => {

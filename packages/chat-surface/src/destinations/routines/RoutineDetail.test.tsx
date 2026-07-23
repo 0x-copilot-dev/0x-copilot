@@ -18,8 +18,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ClipboardPort } from "../../ports/ClipboardPort";
 import {
-  __resetItemRefRegistryForTests,
-  registerItemRefResolver,
+  __resetItemRouteRegistryForTests,
+  registerItemRoute,
 } from "../../refs/registry";
 import { RouterProvider } from "../../providers/RouterProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
@@ -35,7 +35,7 @@ import {
 } from "./RoutineDetail";
 
 afterEach(() => {
-  __resetItemRefRegistryForTests();
+  __resetItemRouteRegistryForTests();
   vi.useRealTimers();
 });
 
@@ -315,12 +315,10 @@ describe("<RoutineDetail>", () => {
   });
 
   it("Run history rows render through <ItemLink> (cross-audit §3.3)", async () => {
-    registerItemRefResolver("run", async (id) => ({
-      label: `Run ${id}`,
-      icon: null,
-      route: { kind: "run", runId: id } as ArtifactRoute,
-      breadcrumb: "Runs",
-    }));
+    registerItemRoute(
+      "run",
+      (id) => ({ kind: "run", runId: id }) as ArtifactRoute,
+    );
     const runs: RoutineDetailRunHistoryState = {
       kind: "ready",
       runs: [

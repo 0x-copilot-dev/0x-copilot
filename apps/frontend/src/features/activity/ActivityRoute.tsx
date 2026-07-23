@@ -30,6 +30,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import { ActivityDestination } from "@0x-copilot/chat-surface";
 import type {
   ActivityRunRow,
+  ConversationId,
   RunId,
   SectionResult,
 } from "@0x-copilot/api-types";
@@ -40,12 +41,16 @@ import { fetchActivity } from "./api/activityApi";
 export interface ActivityRouteProps {
   readonly identity: RequestIdentity;
   /**
-   * Open the live Run cockpit for a running run (FR-4.16). The host wires
-   * this to `router.navigate` toward the Run destination — a callback,
-   * not an in-component navigation, so the route stays decoupled from the
-   * host's `AppRoute` union.
+   * Open the Run cockpit for a row (FR-4.16; PRD-04 Seam C). Fired for every
+   * row, carrying the conversation id (the cockpit's bind target) and the run
+   * id. The host wires this to `router.navigate` toward the Run destination —
+   * a callback, not an in-component navigation, so the route stays decoupled
+   * from the host's `AppRoute` union.
    */
-  readonly onOpenRun: (runId: RunId) => void;
+  readonly onOpenRun: (target: {
+    readonly conversationId: ConversationId;
+    readonly runId: RunId;
+  }) => void;
   /**
    * Open Settings → Privacy & data, where retention / export / delete
    * live (FR-4.17). Settings is a web-only host screen (PRD §5), reached

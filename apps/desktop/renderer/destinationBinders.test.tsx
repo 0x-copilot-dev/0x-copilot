@@ -36,7 +36,12 @@ import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ChatsBinder, ConnectorsBinder, RunBinder } from "./destinationBinders";
+import {
+  ActivityBinder,
+  ChatsBinder,
+  ConnectorsBinder,
+  RunBinder,
+} from "./destinationBinders";
 
 // globals: false in the desktop vitest config → register cleanup explicitly.
 afterEach(() => {
@@ -508,5 +513,92 @@ describe("ConnectorsBinder — access mode reflects real authority + persists", 
       expect(patch?.body).toEqual({ access_mode: "read_act" });
     });
     expect(container).toBeTruthy();
+  });
+});
+
+// ===========================================================================
+// ActivityBinder — PRD-04 Seam C: activating a row forwards the row's
+// { conversationId, runId } to `onOpenRun` (no longer discards the argument).
+// ===========================================================================
+
+function activityTransport(conversations: readonly Conversation[]): Transport {
+  return {
+    request: <TRes,>(req: TypedRequest): Promise<TRes> => {
+      if (req.path.includes("/v1/agent/conversations")) {
+        const body: ConversationListResponse = {
+          conversations: [...conversations],
+          next_cursor: null,
+          has_more: false,
+        };
+        return Promise.resolve(body as unknown as TRes);
+      }
+      // /v1/audit — enrichment only; empty is fine.
+      return Promise.resolve({
+        rows: [],
+        next_cursor: null,
+        has_more: false,
+        degraded_streams: [],
+      } as unknown as TRes);
+    },
+    subscribeServerSentEvents: (
+      _opts: SseSubscribeOptions,
+    ): SseSubscription => ({ close: () => undefined }),
+    getSession: (): Session => ({ bearer: null }),
+    capabilities: (): TransportCapabilities => ({
+      substrate: "desktop-webview",
+      nativeSecretStorage: true,
+      fileSystemAccess: false,
+      clipboardWrite: false,
+      openExternal: false,
+    }),
+  };
+}
+
+function activityConv(over: Partial<Conversation> = {}): Conversation {
+  return {
+    conversation_id: "conv_row",
+    org_id: "org_1",
+    user_id: "user_1",
+    assistant_id: "asst_1",
+    title: "Weekly treasury reconciliation",
+    status: "active",
+    created_at: "2026-07-18T08:00:00Z",
+    updated_at: "2026-07-18T09:00:00Z",
+    archived_at: null,
+    metadata: {},
+    schema_version: 1,
+    latest_run_id: "run_row",
+    latest_run_status: "running",
+    ...over,
+  };
+}
+
+describe("ActivityBinder — row activation forwards { conversationId, runId }", () => {
+  it("calls onOpenRun with the row's conversation_id (not discarded — guards destinationBinders onOpenRun)", async () => {
+    const onOpenRun = vi.fn();
+    const { container } = render(
+      <TransportProvider transport={activityTransport([activityConv()])}>
+        <RouterProvider router={fakeRouter()}>
+          <ActivityBinder onOpenRun={onOpenRun} />
+        </RouterProvider>
+      </TransportProvider>,
+    );
+
+    // Wait for the projected row to render.
+    let row: HTMLElement | null = null;
+    await waitFor(() => {
+      row = container.querySelector<HTMLElement>(
+        "[data-testid='activity-row']",
+      );
+      expect(row).not.toBeNull();
+    });
+
+    fireEvent.click(row as unknown as HTMLElement);
+
+    expect(onOpenRun).toHaveBeenCalledTimes(1);
+    expect(onOpenRun).toHaveBeenCalledWith({
+      conversationId: "conv_row",
+      runId: "run_row",
+    });
   });
 });
