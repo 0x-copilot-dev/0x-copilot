@@ -135,6 +135,7 @@ from runtime_api.schemas import (
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
     RuntimeRunCommand,
+    RunHistoryEntry,
     RunRecord,
     WorkspaceDefaultsRecord,
 )
@@ -1376,6 +1377,52 @@ class FileRuntimeApiStore:
         ]
         candidates.sort(key=lambda run: run.created_at, reverse=True)
         return tuple(candidates[: max(0, limit)])
+
+    async def list_runs_for_org(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        limit: int,
+        before_created_at: datetime | None = None,
+        before_run_id: str | None = None,
+    ) -> tuple[RunHistoryEntry, ...]:
+        """Return the caller's runs newest-first across conversations (PRD-05).
+
+        Same in-memory-scan shape the other run queries use — both this store and
+        the in-memory one hydrate every run into a process dict, so the scan is
+        asymptotically identical. Joins ``self.conversations`` for the title and
+        excludes runs whose conversation is soft-deleted or absent (the file
+        store's ``delete_user_history`` physically purges, so purged runs never
+        reach this scan; ``soft_delete_conversation`` keeps the row with a
+        ``deleted_at`` stamp, which the join predicate below hides).
+        """
+
+        entries: list[RunHistoryEntry] = []
+        for run in self.runs.values():
+            if run.org_id != org_id or run.user_id != user_id:
+                continue
+            conversation = self.conversations.get(run.conversation_id)
+            if conversation is None or conversation.deleted_at is not None:
+                continue
+            entries.append(
+                RunHistoryEntry(
+                    run_id=run.run_id,
+                    conversation_id=run.conversation_id,
+                    conversation_title=conversation.title,
+                    status=run.status,
+                    model_name=run.model_name,
+                    created_at=run.created_at,
+                    started_at=run.started_at,
+                    completed_at=run.completed_at,
+                    cancelled_at=run.cancelled_at,
+                )
+            )
+        entries.sort(key=lambda e: (e.created_at, e.run_id), reverse=True)
+        if before_created_at is not None and before_run_id is not None:
+            keyset = (before_created_at, before_run_id)
+            entries = [e for e in entries if (e.created_at, e.run_id) < keyset]
+        return tuple(entries[: max(0, limit)])
 
     # ==================================================================
     # PersistencePort — runs

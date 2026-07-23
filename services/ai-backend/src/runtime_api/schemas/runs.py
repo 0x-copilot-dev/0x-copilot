@@ -452,6 +452,47 @@ class RunListResponse(RuntimeContract):
     has_more: bool = False
 
 
+class RunHistoryEntry(RuntimeContract):
+    """One row of the org-scoped run history (PRD-05), keyed on a RUN.
+
+    Distinct from :class:`RunSummaryResponse` (per-conversation selector): this
+    entry is one-per-run across the whole (org, user) scope and joins the run's
+    conversation for ``conversation_title``. ``status`` carries the RAW
+    eight-value runtime enum — the UI's product vocabulary ("done" / "stopped" /
+    "needs_input") is a client-side fold and must not be encoded on the wire.
+
+    ``conversation_title`` is ``None`` when the conversation has no title.
+    Clients render row time as ``started_at ?? created_at``; ``created_at`` is
+    NOT NULL and is the keyset key, whereas ``started_at`` is nullable (a queued
+    run has none) and can never be a keyset key.
+    """
+
+    run_id: str
+    conversation_id: str
+    conversation_title: str | None = None
+    status: AgentRunStatus
+    model_name: str
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    cancelled_at: datetime | None = None
+
+
+class RunHistoryResponse(RuntimeContract):
+    """Paginated, newest-first org-scoped run history (PRD-05).
+
+    Ordered by ``(created_at DESC, run_id DESC)`` and keyset-paginated:
+    ``next_cursor`` is the opaque token to page to strictly-older rows, and is
+    ``None`` exactly when ``has_more`` is ``False``. ``has_more`` is computed by
+    fetching ``limit + 1`` rows and truncating — never by ``len == limit``,
+    which reports a spurious extra page on an exact-multiple boundary.
+    """
+
+    runs: tuple[RunHistoryEntry, ...]
+    next_cursor: str | None = None
+    has_more: bool = False
+
+
 class CancelRunRequest(RuntimeContract):
     """Request to cancel long-running work."""
 

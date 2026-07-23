@@ -91,6 +91,41 @@ def test_distinct_bearer_tokens_yield_distinct_ai_backend_identity(monkeypatch) 
     assert captured[1].user_id == "user_bob"
 
 
+def test_run_history_overrides_client_supplied_tenant(monkeypatch) -> None:
+    """PRD-05 — GET /v1/agent/runs forwards the SESSION's org/user, never the
+    client-supplied ``?org_id=&user_id=`` query params (which the route does not
+    even read). Guards against a caller reading another tenant's run history."""
+    monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", "test-auth-secret")
+    monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "test-service-token")
+
+    calls: list[dict[str, object]] = []
+
+    async def capture(app, method, path, *, target, identity, **kwargs):
+        calls.append(
+            {"path": path, "params": kwargs.get("params"), "identity": identity}
+        )
+        return {"runs": [], "next_cursor": None, "has_more": False}
+
+    monkeypatch.setattr(facade_app, "forward_json", capture)
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = client.get(
+        "/v1/agent/runs",
+        params={"org_id": "other_org", "user_id": "other_user", "limit": 10},
+        headers={"authorization": _bearer("org_acme", "user_alice")},
+    )
+
+    assert response.status_code == 200
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["path"] == "/v1/agent/runs"
+    # The forwarded params carry the verified session's tenant, not the client's.
+    assert call["params"]["org_id"] == "org_acme"
+    assert call["params"]["user_id"] == "user_alice"
+    assert call["params"]["limit"] == 10
+    assert call["identity"].org_id == "org_acme"
+
+
 def test_pin_route_forwards_post_to_ai_backend(monkeypatch) -> None:
     """PRD-H.4 — POST /conversations/{id}/pin proxies to ai-backend as POST."""
     monkeypatch.setenv("ENTERPRISE_AUTH_SECRET", "test-auth-secret")

@@ -63,6 +63,10 @@ vi.mock("../../api/auditApi", async () => {
 });
 
 // Imports below resolve through the mocks above.
+import {
+  ACTIVITY_RUN_STATUSES,
+  AGENT_RUN_STATUSES,
+} from "@0x-copilot/api-types";
 import { ActivityRoute } from "./ActivityRoute";
 import { mapRunStatus, projectActivityRows } from "./api/activityApi";
 
@@ -91,7 +95,10 @@ function conv(over: Partial<Conversation> = {}): Conversation {
     metadata: {},
     schema_version: 1,
     latest_run_id: "run_default",
-    latest_run_status: "completed",
+    // Only non-terminal statuses are emittable in `latest_run_status` (the
+    // server projects it from the active-run query). Finished runs come from
+    // GET /v1/agent/runs (PRD-05), not this field.
+    latest_run_status: "running",
     ...over,
   };
 }
@@ -211,6 +218,17 @@ describe("mapRunStatus", () => {
     expect(mapRunStatus("failed")).toBe("stopped");
     expect(mapRunStatus("timed_out")).toBe("stopped");
   });
+
+  it("is total over AGENT_RUN_STATUSES (PRD-05 DoD 16)", () => {
+    // Every one of the eight runtime statuses folds to a valid Activity status
+    // — the fold must be total so a run of ANY status coming off the new
+    // GET /v1/agent/runs spine has a defined chip.
+    for (const status of AGENT_RUN_STATUSES) {
+      const mapped = mapRunStatus(status);
+      expect(mapped).not.toBeUndefined();
+      expect(ACTIVITY_RUN_STATUSES.includes(mapped)).toBe(true);
+    }
+  });
 });
 
 describe("projectActivityRows", () => {
@@ -220,7 +238,7 @@ describe("projectActivityRows", () => {
         conv({
           conversation_id: "conv_a",
           latest_run_id: "run_a",
-          latest_run_status: "completed",
+          latest_run_status: "waiting_for_approval",
           title: "Weekly digest",
           updated_at: TODAY_ISO,
         }),
@@ -245,7 +263,8 @@ describe("projectActivityRows", () => {
     expect(rows[0]).toMatchObject({
       run_id: "run_a",
       title: "Weekly digest",
-      status: "done",
+      // waiting_for_approval folds to needs_input (the Inbox fold, FR-4.18).
+      status: "needs_input",
       meta: "calendar · gmail", // deduped + sorted
       started_at: TODAY_ISO,
     });
@@ -304,14 +323,16 @@ describe("<ActivityRoute>", () => {
         conv({
           conversation_id: "conv_today",
           latest_run_id: "run_today",
-          latest_run_status: "completed",
+          // Non-running (needs_input) rows navigate via the "run" ItemLink
+          // resolver — the path this test exercises below.
+          latest_run_status: "waiting_for_approval",
           title: "Today run",
           updated_at: TODAY_ISO,
         }),
         conv({
           conversation_id: "conv_yday",
           latest_run_id: "run_yday",
-          latest_run_status: "completed",
+          latest_run_status: "waiting_for_approval",
           title: "Yesterday run",
           updated_at: YESTERDAY_ISO,
         }),
@@ -465,7 +486,7 @@ describe("<ActivityRoute>", () => {
         conv({
           conversation_id: "conv_a",
           latest_run_id: "run_a",
-          latest_run_status: "completed",
+          latest_run_status: "running",
           updated_at: TODAY_ISO,
         }),
       ]),

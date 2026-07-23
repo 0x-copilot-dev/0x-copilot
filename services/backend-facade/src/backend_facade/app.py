@@ -942,6 +942,30 @@ def create_app(
             identity=identity,
         )
 
+    # PRD-05 — org-scoped run history. Registered ABOVE the `/v1/agent/runs/{run_id}`
+    # GET (below): Starlette matches in registration order and `run_id` is an
+    # unconstrained str, so a later position would let the detail route shadow this
+    # literal. Client-supplied `org_id`/`user_id` are never read here — `scoped_params`
+    # injects the verified session's identity, the same idiom `list_conversations` uses.
+    @app.get("/v1/agent/runs")
+    async def list_run_history(
+        request: Request,
+        # No upper bound here either: ai-backend's service is the single clamp
+        # authority (PRD-05 DoD 8), so an over-cap ``limit`` is forwarded and
+        # clamped to 200 rather than 422'd — the facade stays a thin proxy.
+        limit: int = Query(50, ge=1),
+        cursor: str | None = None,
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/agent/runs",
+            target="ai_backend",
+            params=identity.scoped_params({"limit": limit, "cursor": cursor}),
+            identity=identity,
+        )
+
     @app.post("/v1/skills")
     async def create_skill(
         request: Request, payload: dict[str, object]

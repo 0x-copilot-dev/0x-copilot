@@ -916,3 +916,153 @@ class TestFastApiRuntimeApi(FastApiRuntimeApiTestMixin):
         assert missing.json()["safe_message"] == "Run was not found for this scope."
         assert invalid.status_code == 400
         assert invalid.json()["code"] == "validation_error"
+
+
+class TestRunHistoryRoute(FastApiRuntimeApiTestMixin):
+    """PRD-05 — GET /v1/agent/runs: the org-scoped run-history collection read."""
+
+    def _scope(self) -> dict[str, Any]:
+        return {"org_id": self.Values.ORG_ID, "user_id": self.Values.USER_ID}
+
+    async def _seed(
+        self, client, store, specs: list[tuple[datetime, AgentRunStatus]]
+    ) -> tuple[str, list[str]]:
+        """Create one run per spec, then patch its created_at + status directly.
+
+        Runs are created through the real POST /runs path (so idempotency +
+        persistence match production), then their created_at/status are rewritten
+        on the in-memory record to place them on specific calendar days / states —
+        the wire has no way to backdate a run, but the store is the test's to shape.
+        """
+        conversation = await self.create_conversation(client)
+        conversation_id = conversation["conversation_id"]
+        run_ids: list[str] = []
+        for index, (created_at, status) in enumerate(specs):
+            resp = client.post(
+                "/v1/agent/runs",
+                json={
+                    **self.run_payload(conversation_id),
+                    "idempotency_key": f"rh-{index}",
+                },
+            )
+            assert resp.status_code == 200
+            run_id = resp.json()["run_id"]
+            run_ids.append(run_id)
+            record = store.runs[run_id]
+            store.runs[run_id] = record.model_copy(
+                update={"created_at": created_at, "status": status}
+            )
+        return conversation_id, run_ids
+
+    async def test_run_history_returns_paginated_shape(self) -> None:
+        client, store = self.create_client()
+        base = datetime(2026, 7, 18, 9, 0, tzinfo=timezone.utc)
+        await self._seed(
+            client,
+            store,
+            [
+                (base, AgentRunStatus.COMPLETED),
+                (base + timedelta(minutes=5), AgentRunStatus.RUNNING),
+            ],
+        )
+        resp = client.get("/v1/agent/runs", params=self._scope())
+        assert resp.status_code == 200
+        body = resp.json()
+        assert set(body) == {"runs", "next_cursor", "has_more"}
+        assert len(body["runs"]) == 2
+        assert body["has_more"] is False
+        assert body["next_cursor"] is None
+        # Newest-first; the terminal (completed) run is reachable — the bug fix.
+        assert {r["status"] for r in body["runs"]} == {"completed", "running"}
+
+    async def test_run_history_limit_over_cap_is_clamped_not_rejected(self) -> None:
+        client, store = self.create_client()
+        base = datetime(2026, 7, 18, 9, 0, tzinfo=timezone.utc)
+        await self._seed(
+            client,
+            store,
+            [(base + timedelta(minutes=i), AgentRunStatus.COMPLETED) for i in range(3)],
+        )
+        # limit=500 is clamped to 200 by the service, not 422'd by the route.
+        resp = client.get("/v1/agent/runs", params={**self._scope(), "limit": 500})
+        assert resp.status_code == 200
+        assert len(resp.json()["runs"]) == 3
+
+    async def test_run_history_malformed_cursor_returns_newest_window(self) -> None:
+        client, store = self.create_client()
+        base = datetime(2026, 7, 18, 9, 0, tzinfo=timezone.utc)
+        await self._seed(
+            client,
+            store,
+            [(base + timedelta(minutes=i), AgentRunStatus.COMPLETED) for i in range(3)],
+        )
+        clean = client.get("/v1/agent/runs", params=self._scope()).json()
+        garbled = client.get(
+            "/v1/agent/runs",
+            params={**self._scope(), "cursor": "!!not-a-valid-cursor!!"},
+        )
+        assert garbled.status_code == 200
+        assert [r["run_id"] for r in garbled.json()["runs"]] == [
+            r["run_id"] for r in clean["runs"]
+        ]
+
+    async def test_run_history_requires_scope(self) -> None:
+        client, _store = self.create_client()
+        # Neither service-token headers nor org_id+user_id supplied.
+        resp = client.get("/v1/agent/runs")
+        assert resp.status_code == 400
+
+    async def test_run_history_cursor_round_trips_to_strictly_older_page(self) -> None:
+        client, store = self.create_client()
+        base = datetime(2026, 7, 18, 9, 0, tzinfo=timezone.utc)
+        await self._seed(
+            client,
+            store,
+            [(base + timedelta(minutes=i), AgentRunStatus.COMPLETED) for i in range(5)],
+        )
+        page1 = client.get(
+            "/v1/agent/runs", params={**self._scope(), "limit": 2}
+        ).json()
+        assert page1["has_more"] is True
+        assert page1["next_cursor"] is not None
+        page2 = client.get(
+            "/v1/agent/runs",
+            params={**self._scope(), "limit": 2, "cursor": page1["next_cursor"]},
+        ).json()
+        ids1 = {r["run_id"] for r in page1["runs"]}
+        ids2 = {r["run_id"] for r in page2["runs"]}
+        assert ids1.isdisjoint(ids2)
+
+    async def test_run_history_matches_design_census(self) -> None:
+        """Design value pinned numerically (PRD-05 DoD 17): the design fixture
+        (tools/design-parity/design-kit/app-v3/copilot-data.jsx:600-645) is 8 runs
+        across 3 calendar days, 1 non-terminal + 7 terminal. The endpoint returns
+        all 8, spanning 3 distinct dates, newest-first."""
+        client, store = self.create_client()
+        today = datetime(2026, 7, 16, 11, 44, tzinfo=timezone.utc)
+        yesterday = datetime(2026, 7, 15, 9, 2, tzinfo=timezone.utc)
+        mon_jul_14 = datetime(2026, 7, 14, 18, 30, tzinfo=timezone.utc)
+        # 8 runs across 3 days: 1 non-terminal (running) + 7 terminal.
+        specs = [
+            (today + timedelta(minutes=0), AgentRunStatus.RUNNING),
+            (today + timedelta(minutes=1), AgentRunStatus.COMPLETED),
+            (today + timedelta(minutes=2), AgentRunStatus.COMPLETED),
+            (yesterday + timedelta(minutes=0), AgentRunStatus.COMPLETED),
+            (yesterday + timedelta(minutes=1), AgentRunStatus.CANCELLED),
+            (yesterday + timedelta(minutes=2), AgentRunStatus.COMPLETED),
+            (mon_jul_14 + timedelta(minutes=0), AgentRunStatus.COMPLETED),
+            (mon_jul_14 + timedelta(minutes=1), AgentRunStatus.FAILED),
+        ]
+        await self._seed(client, store, specs)
+        body = client.get(
+            "/v1/agent/runs", params={**self._scope(), "limit": 50}
+        ).json()
+        runs = body["runs"]
+        assert len(runs) == 8
+        dates = {r["created_at"][:10] for r in runs}
+        assert len(dates) == 3
+        created = [r["created_at"] for r in runs]
+        assert created == sorted(created, reverse=True)
+        terminal = {"cancelled", "completed", "failed", "timed_out"}
+        assert sum(1 for r in runs if r["status"] in terminal) == 7
+        assert sum(1 for r in runs if r["status"] == "running") == 1

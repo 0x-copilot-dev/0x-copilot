@@ -302,14 +302,23 @@ describe("ChatsBinder — reopen threads the real conversation id", () => {
   it("invokes onOpenConversation with the row's conversation id on reopen", async () => {
     const recorder: Recorder = { calls: [] };
     const onOpenConversation = vi.fn();
-    const conversation = {
+    // A fully-typed Conversation (no `as unknown as` escape hatch — that double
+    // assertion silently defeated the PRD-05 `latest_run_status` narrowing).
+    // `latest_run_status` carries an emittable non-terminal status.
+    const conversation: Conversation = {
       conversation_id: "conv-42",
+      org_id: "org-1",
+      user_id: "user-1",
+      assistant_id: "asst-1",
       title: "Watchlist digest",
       status: "active",
+      created_at: "2026-07-22T00:00:00Z",
       updated_at: "2026-07-22T00:00:00Z",
+      archived_at: null,
       metadata: {},
-      latest_run_status: "completed",
-    } as unknown as Conversation;
+      schema_version: 1,
+      latest_run_status: "running",
+    };
 
     const ui: ReactElement = (
       <TransportProvider transport={chatsTransport(recorder, [conversation])}>
