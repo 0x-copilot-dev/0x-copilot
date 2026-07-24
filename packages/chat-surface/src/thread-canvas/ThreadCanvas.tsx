@@ -695,13 +695,15 @@ function gridStyleFor(mode: ThreadMode, railWidthPx: number): CSSProperties {
         '"switcher switcher switcher" "tabs tabs tabs" "surface handle chat" "swimlanes swimlanes swimlanes" "mini mini mini"',
     };
   }
-  // focus: chat-only column, surface column collapses.
+  // focus: the surface column collapses; the `chat` area spans the full width
+  // so the injected rail (RunWorkspaceRail) can lay out the design's two-column
+  // split internally — Chat (730px centered) | Run-details panel (324/46px). The
+  // mini-timeline stays full-width below (WS-F).
   return {
     ...baseGridStyle,
-    gridTemplateColumns: "minmax(0, 760px)",
+    gridTemplateColumns: "minmax(0, 1fr)",
     gridTemplateRows: "auto auto 1fr auto",
     gridTemplateAreas: '"switcher" "tabs" "chat" "mini"',
-    justifyContent: "center",
   };
 }
 

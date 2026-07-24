@@ -159,7 +159,7 @@ import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
-import { useRunMode } from "./useRunMode";
+import { useRunMode, useRunPanelCollapsed } from "./useRunMode";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -521,6 +521,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     enabled,
   });
   const { mode, setMode } = useRunMode({ conversationId, enabled });
+  // WS-F: the Focus Run-details panel's collapse state, persisted per
+  // conversation (mirrors `useRunMode`) so it restores on reopen.
+  const {
+    collapsed: focusPanelCollapsed,
+    setCollapsed: setFocusPanelCollapsed,
+  } = useRunPanelCollapsed({ conversationId });
   // Persisted, draggable width of the Studio workspace rail (global preference).
   const { width: railWidth, setWidth: setRailWidth } = useRailWidth();
 
@@ -1648,6 +1654,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       ledgerSources={ledgerSourcesProjection}
       pendingV2={railPendingV2}
       focusApprovalsSignal={surfacesV2 ? approvalsFocusSignal : undefined}
+      // WS-F: Focus Run-details panel collapse — persisted per conversation.
+      panelCollapsed={focusPanelCollapsed}
+      onPanelCollapsedChange={setFocusPanelCollapsed}
     />
   );
 

@@ -380,11 +380,11 @@ describe("RunWorkspaceRail — badges + empty copy (FR-3.12)", () => {
 });
 
 // ============================================================
-// FR-3.13 — Focus mode collapses to Chat-only
+// WS-F — Focus mode: Chat | Run-details two-column layout
 // ============================================================
 
-describe("RunWorkspaceRail — Focus mode (FR-3.13)", () => {
-  it("suppresses the tab chrome and shows only the Chat surface", () => {
+describe("RunWorkspaceRail — Focus Run-details panel (WS-F)", () => {
+  it("drops the Studio tabset and shows the Chat column + the Run-details panel", () => {
     render(
       <RunWorkspaceRail
         mode="focus"
@@ -393,19 +393,147 @@ describe("RunWorkspaceRail — Focus mode (FR-3.13)", () => {
         approvalsQueue={approvalsQueue([approval()])}
       />,
     );
-    // No tablist / tabs in Focus.
-    expect(screen.queryByRole("tablist")).toBeNull();
-    expect(screen.queryAllByRole("tab")).toHaveLength(0);
-    // The Chat surface is still mounted…
+    // The Studio 4-tab tablist (incl. a Chat tab) is gone…
+    expect(
+      screen.queryByRole("tablist", { name: "Run workspace tabs" }),
+    ).toBeNull();
+    expect(screen.queryByRole("tab", { name: "Chat" })).toBeNull();
+    // …the Chat surface is the LEFT column (still mounted)…
     expect(screen.getByTestId("rail-chat-content")).toBeInTheDocument();
-    // …and the non-chat panels are gone even though their data is non-empty.
-    expect(screen.queryByTestId("run-rail-panel-sources")).toBeNull();
-    expect(screen.queryByTestId("run-rail-panel-agents")).toBeNull();
-    expect(screen.queryByTestId("run-rail-panel-approvals")).toBeNull();
+    // …and the Run-details panel is the RIGHT column, defaulting to Agents.
+    const panel = screen.getByTestId("tc-focus-panel");
+    expect(panel).toBeInTheDocument();
+    expect(within(panel).getByRole("tablist")).toBeInTheDocument();
+    // Agents / Approvals / Sources are the SideTabs (no Chat tab).
+    expect(tabLabels()).toEqual(["Agents", "Approvals", "Sources"]);
     expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
-      "data-mode",
-      "focus",
+      "data-focus-panel-tab",
+      "agents",
     );
+  });
+
+  it("reuses the hoisted Agents/Approvals/Sources bodies in the Run-details panel", () => {
+    render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        subagents={subagentMap([subagent({ display_title: "Doc reader" })])}
+        approvalsQueue={approvalsQueue([approval({ title: "Send email" })])}
+        sources={sourceMap([source({ title: "Renewal terms" })])}
+      />,
+    );
+    // Default → Agents body reachable.
+    expect(screen.getByTestId("workspace-agents-tab")).toBeInTheDocument();
+    // Switch to Approvals → the hoisted ApprovalsTab body.
+    fireEvent.click(screen.getByRole("tab", { name: /Approvals/ }));
+    expect(screen.getByTestId("workspace-approvals-tab")).toBeInTheDocument();
+    expect(screen.getByText("Send email")).toBeInTheDocument();
+    // Switch to Sources → the hoisted SourcesTab body.
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByTestId("workspace-sources-tab")).toBeInTheDocument();
+    expect(screen.getByText("Renewal terms")).toBeInTheDocument();
+    // Chat is NOT hidden away — it stays the left column throughout.
+    expect(screen.getByTestId("rail-chat-content")).toBeInTheDocument();
+  });
+
+  it("keeps the Approvals pending badge in the Run-details panel", () => {
+    render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([
+          approval({ approvalId: "ap-1", messageId: "m1" }),
+          approval({ approvalId: "ap-2", messageId: "m2" }),
+        ])}
+      />,
+    );
+    const badge = screen.getByTestId("run-rail-approvals-badge");
+    expect(badge).toHaveTextContent("2");
+    expect(badge).toHaveAttribute("data-tone", "accent");
+  });
+
+  it("collapses to the 46px icon rail and expands back", () => {
+    render(<RunWorkspaceRail mode="focus" chatSlot={chatSlot()} />);
+    // Expanded by default.
+    expect(screen.getByTestId("tc-focus-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("tc-focus-strip")).toBeNull();
+
+    // Collapse → the icon rail replaces the panel.
+    fireEvent.click(screen.getByTestId("tc-focus-panel-collapse"));
+    expect(screen.queryByTestId("tc-focus-panel")).toBeNull();
+    const strip = screen.getByTestId("tc-focus-strip");
+    expect(strip).toBeInTheDocument();
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-focus-panel-collapsed",
+      "true",
+    );
+    // The Chat column survives the collapse.
+    expect(screen.getByTestId("rail-chat-content")).toBeInTheDocument();
+
+    // Expand → back to the full panel.
+    fireEvent.click(screen.getByTestId("tc-focus-strip-expand"));
+    expect(screen.getByTestId("tc-focus-panel")).toBeInTheDocument();
+    expect(screen.queryByTestId("tc-focus-strip")).toBeNull();
+  });
+
+  it("a collapsed icon click expands the panel onto that tab", () => {
+    render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        sources={sourceMap([source({ title: "Renewal terms" })])}
+      />,
+    );
+    fireEvent.click(screen.getByTestId("tc-focus-panel-collapse"));
+    // Click the Sources icon in the rail → expand + select Sources.
+    fireEvent.click(screen.getByTestId("tc-focus-strip-sources"));
+    expect(screen.getByTestId("tc-focus-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("run-workspace-rail")).toHaveAttribute(
+      "data-focus-panel-tab",
+      "sources",
+    );
+    expect(screen.getByText("Renewal terms")).toBeInTheDocument();
+  });
+
+  it("shows an accent badge on the collapsed Approvals icon when pending", () => {
+    render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+        panelCollapsed
+      />,
+    );
+    const badge = screen.getByTestId("tc-focus-strip-approvals-badge");
+    expect(badge).toHaveTextContent("1");
+    expect(badge).toHaveAttribute("data-tone", "accent");
+  });
+
+  it("honors a controlled panelCollapsed prop and reports the toggle", () => {
+    const onPanelCollapsedChange = vi.fn();
+    const { rerender } = render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        panelCollapsed={false}
+        onPanelCollapsedChange={onPanelCollapsedChange}
+      />,
+    );
+    expect(screen.getByTestId("tc-focus-panel")).toBeInTheDocument();
+    // Controlled: clicking reports up but does not self-collapse.
+    fireEvent.click(screen.getByTestId("tc-focus-panel-collapse"));
+    expect(onPanelCollapsedChange).toHaveBeenCalledWith(true);
+    expect(screen.getByTestId("tc-focus-panel")).toBeInTheDocument();
+    // Host flips the prop → the rail collapses.
+    rerender(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        panelCollapsed
+        onPanelCollapsedChange={onPanelCollapsedChange}
+      />,
+    );
+    expect(screen.getByTestId("tc-focus-strip")).toBeInTheDocument();
   });
 
   it("keeps the same Chat surface node across Studio→Focus (no remount)", () => {
@@ -416,6 +544,19 @@ describe("RunWorkspaceRail — Focus mode (FR-3.13)", () => {
     rerender(<RunWorkspaceRail mode="focus" chatSlot={chatSlot()} />);
     const after = screen.getByTestId("rail-chat-content");
     expect(after).toBe(before);
+  });
+
+  it("drops the Approvals SideTab while scrubbed off-now", () => {
+    render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        approvalsQueue={approvalsQueue([approval()])}
+        scrubbed
+      />,
+    );
+    expect(tabLabels()).toEqual(["Agents", "Sources"]);
+    expect(screen.queryByRole("tab", { name: /Approvals/ })).toBeNull();
   });
 });
 
