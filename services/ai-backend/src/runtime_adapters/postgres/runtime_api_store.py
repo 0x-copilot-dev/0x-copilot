@@ -85,6 +85,7 @@ from runtime_adapters.base import (
     StatusTransition,
     _Fields,
 )
+from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ACTIVE_RUN_STATUSES,
@@ -379,6 +380,22 @@ async def _read_runtime_audit_chain_head_async(
 class PostgresRuntimeApiStore:
     """Async Postgres implementation of persistence, event store, and queue ports."""
 
+    def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
+        """Attach artifact jobs to existing deletion and retention entrypoints."""
+
+        self._artifact_lifecycle_jobs = jobs
+
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        jobs = self._artifact_lifecycle_jobs
+        if jobs is None:
+            return None
+        return await jobs.on_org_deleted(org_id=org_id, deleted_at=deleted_at)
+
     def __init__(
         self,
         database_url: str | None = None,
@@ -396,6 +413,7 @@ class PostgresRuntimeApiStore:
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
+        self._artifact_lifecycle_jobs: ArtifactLifecycleJobs | None = None
         self.database_url = database_url
         self._role = role
         # When True, every successful ``append_event`` / ``append_events_batch``
@@ -1126,7 +1144,15 @@ class PostgresRuntimeApiStore:
                 (now, now, conversation_id, org_id, user_id),
             )
             row = await cur.fetchone()
-        return self._conversation_record(row) if row is not None else None
+        record = self._conversation_record(row) if row is not None else None
+        if record is not None and self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                deleted_at=record.deleted_at or now,
+            )
+        return record
 
     async def restore_conversation(
         self,
@@ -2822,7 +2848,7 @@ class PostgresRuntimeApiStore:
                         now,
                     ),
                 )
-        return HistoryDeletionResponse(
+        result = HistoryDeletionResponse(
             org_id=org_id,
             user_id=user_id,
             conversations_archived=conversations_archived,
@@ -2831,6 +2857,13 @@ class PostgresRuntimeApiStore:
             events_retained=events_retained,
             audit_event_id=audit_event_id,
         )
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_user_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                deleted_at=now,
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Usage + pricing
@@ -4152,7 +4185,10 @@ class PostgresRuntimeApiStore:
                     """
                 )
                 rows = await cur.fetchall()
-        return tuple(str(row["org_id"]) for row in rows)
+        org_ids = {str(row["org_id"]) for row in rows}
+        if self._artifact_lifecycle_jobs is not None:
+            org_ids.update(await self._artifact_lifecycle_jobs.list_org_ids())
+        return tuple(sorted(org_ids))
 
     async def list_retention_policies(
         self, *, org_id: str
@@ -4226,6 +4262,20 @@ class PostgresRuntimeApiStore:
         chunk_size: int = 0,
     ) -> RetentionSweepOutcome:
         """Expire or tombstone rows matching the retention kind; ``chunk_size>0`` uses keyset chunking."""
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            jobs = self._artifact_lifecycle_jobs
+            if jobs is None or dry_run:
+                return RetentionSweepOutcome(org_id=org_id, kind=kind)
+            result = await jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=datetime.now(timezone.utc),
+                limit=chunk_size or None,
+            )
+            return RetentionSweepOutcome(
+                org_id=org_id,
+                kind=kind,
+                deleted=len(result.purge.purged_artifact_ids),
+            )
         # chunk_size > 0 → retention_until-based chunked CTE (avoids full-table scan on large orgs).
         # chunk_size == 0 → legacy created_at+ttl unbounded SQL (flag=false).
         if chunk_size > 0:

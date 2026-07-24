@@ -29,6 +29,12 @@ _MIGRATION_TABLES = {
     "agent_runs",
     "runtime_events",
     "runtime_outbox_events",
+    "runtime_artifacts",
+    "runtime_artifact_revisions",
+    "runtime_artifact_idempotency",
+    "runtime_artifact_reference_edges",
+    "runtime_artifact_gc_candidates",
+    "runtime_artifact_gc_quarantine",
     "runtime_async_tasks",
     "runtime_subagent_results",
     "runtime_tool_invocations",
@@ -84,10 +90,11 @@ class _FakeConnection:
 
     def __init__(self) -> None:
         self.statements: list[str] = []
+        self.executions: list[tuple[str, object]] = []
 
     async def execute(self, sql: str, params=None):
-        del params
         self.statements.append(sql)
+        self.executions.append((sql, params))
         return _FakeCursor()
 
     @asynccontextmanager
@@ -164,3 +171,56 @@ class TestPostgresAccountMergeSql:
         # via ON DELETE CASCADE and carry no org column; consumer cursors and
         # model_pricing carry no tenancy at all.
         assert _MIGRATION_TABLES - targets == set()
+
+    async def test_artifact_tables_use_only_the_dedicated_merge_routine(
+        self,
+    ) -> None:
+        artifact_tables = {
+            "runtime_artifacts",
+            "runtime_artifact_revisions",
+            "runtime_artifact_idempotency",
+            "runtime_artifact_reference_edges",
+            "runtime_artifact_gc_candidates",
+            "runtime_artifact_gc_quarantine",
+        }
+
+        assert artifact_tables.isdisjoint(
+            {table for table, _columns in PostgresAccountMergeRekeyer._SIMPLE_TABLES}
+        )
+        statements = await self._run(FieldCodec(NullFieldEncryption()))
+        joined = "\n".join(statements)
+        assert "pg_advisory_xact_lock" in joined
+        assert "artifact_event_publish_requested" in joined
+        assert "FOR UPDATE" in joined
+        assert "payload_json = jsonb_set" in joined
+        assert "response_json = CASE" in joined
+        assert "request_type = 'artifact_lifecycle'" in joined
+        assert "reason::jsonb" in joined
+        assert "provenance_org_id" in joined
+        assert "SET id =" not in joined
+
+    async def test_artifact_mutations_are_absorbed_scope_only(self) -> None:
+        store = _FakeStore(FieldCodec(NullFieldEncryption()))
+        rekeyer = PostgresAccountMergeRekeyer(store)  # type: ignore[arg-type]
+
+        await rekeyer.rekey(
+            absorbed_org_id="org_absorbed",
+            absorbed_user_id="user_absorbed",
+            survivor_org_id="org_survivor",
+            survivor_user_id="user_survivor",
+        )
+
+        artifact_executions = [
+            (sql, params)
+            for sql, params in store.connection.executions
+            if "runtime_artifact" in sql
+            or "artifact_event_publish_requested" in sql
+            or "request_type = 'artifact_lifecycle'" in sql
+        ]
+        assert artifact_executions
+        assert all(
+            "org_third" not in repr(params) for _sql, params in artifact_executions
+        )
+        assert any(
+            "org_absorbed" in repr(params) for _sql, params in artifact_executions
+        )

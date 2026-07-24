@@ -101,6 +101,7 @@ class RetentionSweeperLoop:
         grace_days_messages: int | None = None,
         grace_days_events: int | None = None,
         grace_days_memory_items: int | None = None,
+        artifact_effects_v2: bool = False,
     ) -> None:
         self._persistence = persistence
         self._interval = (
@@ -157,6 +158,11 @@ class RetentionSweeperLoop:
             ),
         }
         self._metrics = metrics if metrics is not None else RetentionMetrics()
+        self._sweep_kinds = (
+            (*self._SWEEP_KINDS, RetentionKind.ARTIFACTS_TOMBSTONED)
+            if artifact_effects_v2
+            else self._SWEEP_KINDS
+        )
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -202,7 +208,7 @@ class RetentionSweeperLoop:
                 policies=policies,
                 deployment_defaults=DEPLOYMENT_DEFAULT_TTL_SECONDS,
             )
-            for kind in self._SWEEP_KINDS:
+            for kind in self._sweep_kinds:
                 if self._use_retention_until:
                     outcome = await self._sweep_kind_chunked(
                         org_id=org_id, kind=kind, resolver=resolver
@@ -276,7 +282,11 @@ class RetentionSweeperLoop:
             )
             # Dry-run stops after one chunk: force-rollback means rows never disappear,
             # so looping would never converge.
-            if self._dry_run or chunk.tombstoned + chunk.deleted == 0:
+            if (
+                self._dry_run
+                or kind is RetentionKind.ARTIFACTS_TOMBSTONED
+                or chunk.tombstoned + chunk.deleted == 0
+            ):
                 break
 
         elapsed = time.monotonic() - t0
@@ -306,15 +316,22 @@ class RetentionSweeperLoop:
     ) -> RetentionSweepOutcome | None:
         """Single-pass ``created_at+ttl`` sweep used when ``use_retention_until`` is disabled."""
 
-        resolved = resolver.resolve(kind=kind)
-        if resolved.ttl_seconds is None and kind is not RetentionKind.CONTEXT_PAYLOADS:
-            return None
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            ttl_seconds = 0
+        else:
+            resolved = resolver.resolve(kind=kind)
+            if (
+                resolved.ttl_seconds is None
+                and kind is not RetentionKind.CONTEXT_PAYLOADS
+            ):
+                return None
+            ttl_seconds = resolved.ttl_seconds or 0
         t0 = time.monotonic()
         try:
             outcome = await self._persistence.sweep_retention_kind(
                 org_id=org_id,
                 kind=kind,
-                ttl_seconds=resolved.ttl_seconds or 0,
+                ttl_seconds=ttl_seconds,
                 dry_run=self._dry_run,
                 chunk_size=0,
             )

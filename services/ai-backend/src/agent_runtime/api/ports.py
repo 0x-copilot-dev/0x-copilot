@@ -463,6 +463,14 @@ class PersistencePort(Protocol):
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while retaining audit-safe evidence."""
 
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        """Trusted org-erasure hook; a no-op when artifact effects are disabled."""
+
     # ----- Workspace defaults + conversation lifecycle ----- #
 
     async def get_workspace_defaults(

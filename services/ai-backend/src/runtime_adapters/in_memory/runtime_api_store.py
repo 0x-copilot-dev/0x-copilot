@@ -32,6 +32,7 @@ from agent_runtime.persistence.records import (
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
+    RetentionKind,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -51,6 +52,7 @@ from runtime_adapters.base import (
     StatusTransition,
     _Fields,
 )
+from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ACTIVE_RUN_STATUSES,
@@ -69,6 +71,7 @@ from runtime_api.schemas import (
     MessageRole,
     MessageStatus,
     RuntimeApprovalResolvedCommand,
+    RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
@@ -84,6 +87,22 @@ from runtime_api.schemas import (
 class InMemoryRuntimeApiStore:
     """In-memory implementation of persistence, event store, and queue ports."""
 
+    def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
+        """Attach the gated artifact hooks without changing legacy construction."""
+
+        self._artifact_lifecycle_jobs = jobs
+
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        jobs = self._artifact_lifecycle_jobs
+        if jobs is None:
+            return None
+        return await jobs.on_org_deleted(org_id=org_id, deleted_at=deleted_at)
+
     async def open(self) -> None:
         """Lifecycle parity with the Postgres adapter — no pool to open."""
 
@@ -94,6 +113,7 @@ class InMemoryRuntimeApiStore:
         """Lifecycle parity with the Postgres adapter — no schema to migrate."""
 
     def __init__(self) -> None:
+        self._artifact_lifecycle_jobs: ArtifactLifecycleJobs | None = None
         self.conversations: dict[str, ConversationRecord] = {}
         self.messages: dict[str, MessageRecord] = {}
         self.runs: dict[str, RunRecord] = {}
@@ -536,9 +556,23 @@ class InMemoryRuntimeApiStore:
         if conversation is None:
             return None
         if conversation.deleted_at is not None:
+            if self._artifact_lifecycle_jobs is not None:
+                await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    deleted_at=conversation.deleted_at,
+                )
             return conversation
         updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
         self.conversations[conversation_id] = updated
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                deleted_at=now,
+            )
         return updated
 
     async def restore_conversation(
@@ -1342,6 +1376,8 @@ class InMemoryRuntimeApiStore:
         seen.update(c.org_id for c in self.conversations.values())
         seen.update(m.org_id for m in self.messages.values())
         seen.update(r.org_id for r in self.runs.values())
+        if self._artifact_lifecycle_jobs is not None:
+            seen.update(await self._artifact_lifecycle_jobs.list_org_ids())
         return tuple(sorted(seen))
 
     async def sweep_retention_kind(
@@ -1363,6 +1399,19 @@ class InMemoryRuntimeApiStore:
 
         from agent_runtime.persistence.records import RetentionSweepOutcome
 
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            if self._artifact_lifecycle_jobs is None or dry_run:
+                return RetentionSweepOutcome(org_id=org_id, kind=kind)
+            result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=datetime.now(timezone.utc),
+                limit=chunk_size or None,
+            )
+            return RetentionSweepOutcome(
+                org_id=org_id,
+                kind=kind,
+                deleted=len(result.purge.purged_artifact_ids),
+            )
         return RetentionSweepOutcome(
             org_id=org_id,
             kind=kind,
@@ -1538,7 +1587,7 @@ class InMemoryRuntimeApiStore:
                 _Fields.DELETED_AT: now.isoformat(),
             },
         )
-        return HistoryDeletionResponse(
+        result = HistoryDeletionResponse(
             org_id=org_id,
             user_id=user_id,
             conversations_archived=conversations_archived,
@@ -1547,6 +1596,13 @@ class InMemoryRuntimeApiStore:
             events_retained=events_retained,
             audit_event_id=audit_event_id,
         )
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_user_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                deleted_at=now,
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Usage + pricing
@@ -2521,6 +2577,46 @@ class InMemoryRuntimeApiStore:
             approval_id=None,
             payload=command.model_dump(mode="json"),
         )
+
+    async def enqueue_artifact_event(
+        self,
+        command: RuntimeArtifactEventCommand,
+    ) -> None:
+        """Idempotently mirror one canonical artifact event into this queue."""
+
+        payload = command.model_dump(mode="json")
+        expected = {
+            **payload,
+            _Fields.COMMAND_ID: command.command_id,
+            _Fields.COMMAND_TYPE: (
+                PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED
+            ),
+            _Fields.ORG_ID: command.org_id,
+            _Fields.RUN_ID: command.run_id,
+            _Fields.APPROVAL_ID: None,
+        }
+        existing = self._queue_payloads.get(command.command_id)
+        if existing is not None:
+            if existing != expected:
+                raise ValueError("artifact queue command id conflicts")
+            return
+        self._register_command(
+            command_id=command.command_id,
+            command_type=(PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED),
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=payload,
+        )
+
+    async def artifact_event_status(
+        self,
+        *,
+        event_id: str,
+    ) -> OutboxStatus | None:
+        """Return public queue state for canonical acknowledgement recovery."""
+
+        return self._queue_statuses.get(event_id)
 
     async def claim_next(
         self,

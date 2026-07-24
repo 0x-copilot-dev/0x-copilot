@@ -36,6 +36,12 @@ ALTER TABLE runtime_model_call_usage     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_user     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_org      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE runtime_citations            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifacts            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_revisions   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_idempotency ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_reference_edges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_gc_candidates ENABLE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_gc_quarantine ENABLE ROW LEVEL SECURITY;
 
 -- ``FORCE`` makes RLS apply to the table owner as well, closing the
 -- escape hatch where a misconfigured deploy connects as the table owner
@@ -63,3 +69,9 @@ ALTER TABLE runtime_model_call_usage     FORCE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_user     FORCE ROW LEVEL SECURITY;
 ALTER TABLE runtime_usage_daily_org      FORCE ROW LEVEL SECURITY;
 ALTER TABLE runtime_citations            FORCE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifacts            FORCE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_revisions   FORCE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_idempotency FORCE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_reference_edges FORCE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_gc_candidates FORCE ROW LEVEL SECURITY;
+ALTER TABLE runtime_artifact_gc_quarantine FORCE ROW LEVEL SECURITY;

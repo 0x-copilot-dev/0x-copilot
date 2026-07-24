@@ -89,6 +89,7 @@ from agent_runtime.persistence.records import (
     UsageDailyUserRow,
 )
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
+from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
 from runtime_adapters.file._audit_manifest import (
     AuditManifest,
     AuditManifestVerifier,
@@ -135,6 +136,7 @@ from runtime_api.schemas import (
     MessageRecord,
     MessageRole,
     RuntimeApprovalResolvedCommand,
+    RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
@@ -216,6 +218,22 @@ class _PurgeOutcome:
 class FileRuntimeApiStore:
     """On-disk implementation of persistence, event store, and queue ports."""
 
+    def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
+        """Attach the gated repository lifecycle to existing store operations."""
+
+        self._artifact_lifecycle_jobs = jobs
+
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        jobs = self._artifact_lifecycle_jobs
+        if jobs is None:
+            return None
+        return await jobs.on_org_deleted(org_id=org_id, deleted_at=deleted_at)
+
     def __init__(
         self,
         root: str | Path,
@@ -224,6 +242,7 @@ class FileRuntimeApiStore:
         retention_days: int = 0,
         compaction_enabled: bool = True,
     ) -> None:
+        self._artifact_lifecycle_jobs: ArtifactLifecycleJobs | None = None
         self._layout = FileStoreLayout(Path(root))
         # Boot-time bounded-growth compaction of the append-with-fold state
         # ledgers (default ON; a kill switch for the persistence path).
@@ -1376,11 +1395,25 @@ class FileRuntimeApiStore:
         if conversation is None:
             return None
         if conversation.deleted_at is not None:
+            if self._artifact_lifecycle_jobs is not None:
+                await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    deleted_at=conversation.deleted_at,
+                )
             return conversation
         updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
         async with self._conversation_lock(conversation_id):
             self.conversations[conversation_id] = updated
             self._persist_conversation(updated)
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                deleted_at=now,
+            )
         return updated
 
     async def restore_conversation(
@@ -2362,7 +2395,7 @@ class FileRuntimeApiStore:
             now=now,
             user_id=user_id,
         )
-        return HistoryDeletionResponse(
+        result = HistoryDeletionResponse(
             org_id=org_id,
             user_id=user_id,
             conversations_archived=outcome.conversations,
@@ -2371,6 +2404,13 @@ class FileRuntimeApiStore:
             events_retained=outcome.retained_events,
             audit_event_id=outcome.audit_event_id,
         )
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_user_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                deleted_at=now,
+            )
+        return result
 
     # ==================================================================
     # Export / import (portable single-conversation archive) — file store only
@@ -3286,6 +3326,8 @@ class FileRuntimeApiStore:
         seen.update(c.org_id for c in self.conversations.values())
         seen.update(m.org_id for m in self.messages.values())
         seen.update(r.org_id for r in self.runs.values())
+        if self._artifact_lifecycle_jobs is not None:
+            seen.update(await self._artifact_lifecycle_jobs.list_org_ids())
         return tuple(sorted(seen))
 
     async def sweep_retention_kind(
@@ -3310,6 +3352,19 @@ class FileRuntimeApiStore:
         removed without deleting.
         """
 
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            if self._artifact_lifecycle_jobs is None or dry_run:
+                return RetentionSweepOutcome(org_id=org_id, kind=kind)
+            result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=datetime.now(timezone.utc),
+                limit=chunk_size or None,
+            )
+            return RetentionSweepOutcome(
+                org_id=org_id,
+                kind=kind,
+                deleted=len(result.purge.purged_artifact_ids),
+            )
         if kind is not RetentionKind.MESSAGES:
             return RetentionSweepOutcome(org_id=org_id, kind=kind)
 
@@ -3445,6 +3500,43 @@ class FileRuntimeApiStore:
             payload=command.model_dump(mode="json"),
         )
 
+    async def enqueue_artifact_event(
+        self,
+        command: RuntimeArtifactEventCommand,
+    ) -> None:
+        """Idempotently mirror one canonical artifact event into durable queue state."""
+
+        payload = command.model_dump(mode="json")
+        command_type = PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED
+        async with self._state_lock:
+            full_payload = self._command_payload(
+                command_id=command.command_id,
+                command_type=command_type,
+                org_id=command.org_id,
+                run_id=command.run_id,
+                approval_id=None,
+                payload=payload,
+            )
+            existing = self._queue_payloads.get(command.command_id)
+            if existing is not None:
+                if existing != full_payload:
+                    raise ValueError("artifact queue command id conflicts")
+                return
+            self._register_command_locked(
+                command_id=command.command_id,
+                full_payload=full_payload,
+            )
+
+    async def artifact_event_status(
+        self,
+        *,
+        event_id: str,
+    ) -> OutboxStatus | None:
+        """Return public durable queue state for canonical ack recovery."""
+
+        async with self._state_lock:
+            return self._queue_statuses.get(event_id)
+
     async def claim_next(
         self, *, worker_id: str, lock_expires_at: datetime
     ) -> RuntimeWorkerClaim | None:
@@ -3509,28 +3601,57 @@ class FileRuntimeApiStore:
         payload: dict[str, object],
     ) -> None:
         async with self._state_lock:
-            available_at = datetime.now(timezone.utc)
-            self._queue_order.append(command_id)
-            full_payload = {
-                **payload,
-                _Fields.COMMAND_ID: command_id,
-                _Fields.COMMAND_TYPE: command_type,
-                _Fields.ORG_ID: org_id,
-                _Fields.RUN_ID: run_id,
-                _Fields.APPROVAL_ID: approval_id,
-            }
-            self._queue_payloads[command_id] = full_payload
-            self._queue_statuses[command_id] = OutboxStatus.PENDING
-            self._queue_attempts[command_id] = 0
-            self._queue_available_at[command_id] = available_at
-            self._append_queue_op(
-                {
-                    "op": "enqueue",
-                    "command_id": command_id,
-                    "payload": full_payload,
-                    "available_at": available_at.isoformat(),
-                }
+            self._register_command_locked(
+                command_id=command_id,
+                full_payload=self._command_payload(
+                    command_id=command_id,
+                    command_type=command_type,
+                    org_id=org_id,
+                    run_id=run_id,
+                    approval_id=approval_id,
+                    payload=payload,
+                ),
             )
+
+    @staticmethod
+    def _command_payload(
+        *,
+        command_id: str,
+        command_type: str,
+        org_id: str,
+        run_id: str,
+        approval_id: str | None,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            **payload,
+            _Fields.COMMAND_ID: command_id,
+            _Fields.COMMAND_TYPE: command_type,
+            _Fields.ORG_ID: org_id,
+            _Fields.RUN_ID: run_id,
+            _Fields.APPROVAL_ID: approval_id,
+        }
+
+    def _register_command_locked(
+        self,
+        *,
+        command_id: str,
+        full_payload: dict[str, object],
+    ) -> None:
+        available_at = datetime.now(timezone.utc)
+        self._queue_order.append(command_id)
+        self._queue_payloads[command_id] = full_payload
+        self._queue_statuses[command_id] = OutboxStatus.PENDING
+        self._queue_attempts[command_id] = 0
+        self._queue_available_at[command_id] = available_at
+        self._append_queue_op(
+            {
+                "op": "enqueue",
+                "command_id": command_id,
+                "payload": full_payload,
+                "available_at": available_at.isoformat(),
+            }
+        )
 
     def _claim_command(
         self, *, command_id: str, worker_id: str, lock_expires_at: datetime
