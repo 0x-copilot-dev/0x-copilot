@@ -68,6 +68,17 @@ from agent_runtime.capabilities.operations.context import (
     OperationEventEmitterAdapter,
     VerifiedOperationIdentity,
 )
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationGatewayContext,
+    McpOperationGatewayServices,
+)
+from agent_runtime.capabilities.operations.classifier import OperationClassifier
+from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
+from agent_runtime.effects.executor import EffectExecutionScope
+from agent_runtime.effects.staging import EffectStager
+from agent_runtime.api.effect_commit_queue import RuntimeEffectCommitOutbox
+from agent_runtime.api.effect_ledger import RuntimeEffectLedger
+from agent_runtime.surfaces_v2.ledger_models import EffectActor
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
@@ -130,6 +141,10 @@ from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
+from runtime_worker.mcp_operation_storage import (
+    RuntimeMcpOperationArgumentStore,
+    RuntimeMcpOperationResultStore,
+)
 from agent_runtime.context.memory.subagent_trace import SubagentArtifactsBackend
 from runtime_worker.tool_observations import (
     PriorToolResultLoader,
@@ -208,6 +223,8 @@ class RuntimeRunHandler:
         token_counter: TokenCounterPort | None = None,
         queue: object | None = None,
         artifact_service: object | None = None,
+        artifact_blob_store: object | None = None,
+        artifact_reference_store: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -219,6 +236,8 @@ class RuntimeRunHandler:
         # B1 publication uses the A2-composed service directly through the
         # OperationContext. ``None`` on the dark path keeps the tool absent.
         self.artifact_service = artifact_service
+        self._artifact_blob_store = artifact_blob_store
+        self._artifact_reference_store = artifact_reference_store
         self.settings = settings or RuntimeSettings.load()
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
@@ -380,6 +399,7 @@ class RuntimeRunHandler:
             else None
         )
         operation_context_token: object | None = None
+        mcp_operation_gateway_token: object | None = None
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -418,6 +438,7 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         try:
+            mcp_gateway_services = self._build_mcp_operation_gateway_services(run)
             if self._operation_context_required():
                 operation_context_token = OperationContext.bind_for_run(
                     identity=VerifiedOperationIdentity(
@@ -435,8 +456,12 @@ class RuntimeRunHandler:
                         if self._artifact_publication_enabled()
                         else None
                     ),
-                    mode=self.settings.execution.operation_gateway_mode,
-                    canonical_arguments_durable=False,
+                    mode=self._effective_operation_gateway_mode(mcp_gateway_services),
+                    canonical_arguments_durable=mcp_gateway_services is not None,
+                )
+            if mcp_gateway_services is not None:
+                mcp_operation_gateway_token = McpOperationGatewayContext.bind_for_run(
+                    mcp_gateway_services
                 )
             tool_observation_index = await self._tool_observation_index(command, run)
             workspace_backend = await self._workspace_backend_for_run(command)
@@ -635,6 +660,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if mcp_operation_gateway_token is not None:
+                McpOperationGatewayContext.unbind(mcp_operation_gateway_token)  # type: ignore[arg-type]
             if operation_context_token is not None:
                 OperationContext.unbind(operation_context_token)  # type: ignore[arg-type]
             if work_ledger_emitter_token is not None:
@@ -1243,6 +1270,86 @@ class RuntimeRunHandler:
             self._artifact_publication_enabled()
             or self.settings.execution.operation_gateway_mode
             is not OperationGatewayMode.OFF
+        )
+
+    def _effective_operation_gateway_mode(
+        self, services: McpOperationGatewayServices | None
+    ) -> OperationGatewayMode:
+        """Keep an incomplete rollout on the established path, never half-enforced."""
+
+        configured = self.settings.execution.operation_gateway_mode
+        if configured is OperationGatewayMode.ENFORCE and services is None:
+            logging.getLogger(__name__).warning(
+                "mcp_operation_gateway_unavailable_falling_back",
+                extra={"reason": "durable D1 dependencies are incomplete"},
+            )
+            return OperationGatewayMode.OFF
+        return configured
+
+    def _build_mcp_operation_gateway_services(
+        self, run: RunRecord
+    ) -> McpOperationGatewayServices | None:
+        """Compose D1's only model-facing MCP authority for an enforced run.
+
+        All dependencies are deliberately required together.  In particular a
+        missing blob/reference store never degrades to an in-memory argument
+        cache: the legacy path remains selected until the cohort is complete.
+        """
+
+        if (
+            not self.settings.execution.surfaces_v2
+            or self.settings.execution.operation_gateway_mode
+            is not OperationGatewayMode.ENFORCE
+            or self._queue is None
+            or self._artifact_blob_store is None
+            or self._artifact_reference_store is None
+        ):
+            return None
+        enqueue = getattr(self._queue, "enqueue_effect_commit", None)
+        put_stream = getattr(self._artifact_blob_store, "put_stream", None)
+        acquire = getattr(self._artifact_reference_store, "acquire", None)
+        list_edges = getattr(self._artifact_reference_store, "list_edges", None)
+        if not all(
+            callable(value) for value in (enqueue, put_stream, acquire, list_edges)
+        ):
+            return None
+        owner_ref = f"principal://users/{run.user_id}"
+        scope = EffectExecutionScope(
+            org_id=run.org_id,
+            user_id=run.user_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            owner_ref=owner_ref,
+        )
+        descriptors = DEFAULT_OPERATION_DESCRIPTORS
+        classifier = OperationClassifier(descriptors=descriptors)
+        return McpOperationGatewayServices(
+            gateway=OperationGateway(descriptors=descriptors, classifier=classifier),
+            descriptors=descriptors,
+            classifier=classifier,
+            stager=EffectStager(
+                ledger=RuntimeEffectLedger(
+                    event_producer=self.event_producer,
+                    run=run,
+                    owner_ref=owner_ref,
+                ),
+                outbox=RuntimeEffectCommitOutbox(queue=self._queue, scope=scope),  # type: ignore[arg-type]
+            ),
+            stage_scope=EffectStageScope(run_id=run.run_id, owner_ref=owner_ref),
+            stage_author=EffectActorIdentity(
+                actor=EffectActor.SYSTEM,
+                principal_ref="principal://system/mcp-operation-gateway",
+            ),
+            result_store=RuntimeMcpOperationResultStore(
+                event_producer=self.event_producer,
+                run=run,
+            ),
+            argument_store=RuntimeMcpOperationArgumentStore(
+                blobs=self._artifact_blob_store,  # type: ignore[arg-type]
+                references=self._artifact_reference_store,  # type: ignore[arg-type]
+                org_id=run.org_id,
+                user_id=run.user_id,
+            ),
         )
 
     def _publish_artifact_tool(self) -> PublishArtifactTool | None:

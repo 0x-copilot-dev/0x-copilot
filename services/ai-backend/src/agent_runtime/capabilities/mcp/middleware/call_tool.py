@@ -33,8 +33,17 @@ from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
     CitationProjectingMcpMiddleware,
 )
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationAdapter,
+    McpOperationGatewayContext,
+    McpOperationGatewayServices,
+)
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationRequestFactory,
+)
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.surfaces.generator import (
     GenToolDescriptor,
@@ -45,7 +54,7 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from agent_runtime.surfaces_v2.gate import ToolAccessGate
-from agent_runtime.surfaces_v2.ledger_models import GateAuthState
+from agent_runtime.surfaces_v2.ledger_models import GateAuthState, OperationOutcome
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -77,6 +86,19 @@ class CallMcpTool:
         )
         if isinstance(parsed_input, McpToolCallResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
+
+        # D1 authoritative MCP convergence.  The binding is intentionally
+        # stricter than the feature flag: an enforce-mode OperationContext with
+        # durable canonical arguments AND trusted staging/result dependencies is
+        # required.  Until the worker composition root supplies all three, the
+        # established v2 path below is byte-identical.  On this path the generic
+        # tool is classified before any connector client can be created; writes,
+        # destructive calls, and unknown operations become effects, never MCP
+        # dispatches.  In particular, do not call ``_emit_ledger`` here: the
+        # OperationGateway is the sole authoritative event producer.
+        services = McpOperationGatewayContext.enforced()
+        if services is not None:
+            return await self._ainvoke_operation_gateway(parsed_input, services)
 
         resolution = await self.registry.resolve_server(parsed_input.server_name)
         if isinstance(resolution, McpLoadError):
@@ -312,6 +334,135 @@ class CallMcpTool:
             latency_ms=dispatch_latency_ms,
         )
         return result
+
+    async def _ainvoke_operation_gateway(
+        self,
+        parsed_input: McpToolCallRequest,
+        services: McpOperationGatewayServices,
+    ) -> dict[str, Any]:
+        """Run one classified MCP operation without touching the legacy path."""
+
+        resolution = await self.registry.resolve_server(parsed_input.server_name)
+        if isinstance(resolution, McpLoadError):
+            return McpToolCallResult.fail(
+                resolution.code,
+                resolution.safe_message,
+                retryable=resolution.retryable,
+                server_name=resolution.server_name or parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        if not McpPermissionPolicy.is_server_card_authorized(
+            self.runtime_context, resolution.card
+        ):
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.PERMISSION_DENIED,
+                Messages.Loader.UNAUTHORIZED_SERVER,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+
+        request = OperationRequestFactory.create(
+            capability=parsed_input.server_name,
+            op=parsed_input.tool_name,
+            arguments=parsed_input.arguments,
+        )
+        operation_context = OperationContext.require()
+        stored_arguments = operation_context.arguments.get(request.canonical_args_ref)
+        if stored_arguments is None:
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        digest, canonical_bytes = stored_arguments
+        try:
+            await services.argument_store.persist(
+                ref=request.canonical_args_ref,
+                digest=digest,
+                canonical_bytes=canonical_bytes,
+            )
+        except Exception:  # noqa: BLE001 - never dispatch without durable material.
+            _LOGGER.warning(
+                "mcp_operation_arguments_unavailable",
+                extra={"operation_id": request.operation_id},
+                exc_info=True,
+            )
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        adapter = McpOperationAdapter(
+            registry=self.registry,
+            runtime_context=self.runtime_context,
+            timeout_seconds=self.loader.timeout_seconds,
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            arguments=parsed_input.arguments,
+            gate=self.gate,
+            services=services,
+            tool_call_id=parsed_input.tool_call_id,
+        )
+        disposition = await services.gateway.invoke(request, adapter)
+        output: dict[str, Any] = {
+            "status": disposition.outcome.value,
+            "operation_id": disposition.operation_id,
+            "summary": disposition.agent_summary,
+        }
+        if disposition.outcome is OperationOutcome.SUCCEEDED:
+            stored = adapter.stored_result
+            if stored is None:
+                # A successful disposition without a durable result is an
+                # adapter invariant violation.  Do not pretend the read
+                # completed to the model.
+                return McpToolCallResult.fail(
+                    McpLoadErrorCode.CONNECTION_FAILED,
+                    Messages.Loader.LOAD_FAILED,
+                    retryable=True,
+                    server_name=parsed_input.server_name,
+                    tool_name=parsed_input.tool_name,
+                    correlation_id=self.runtime_context.trace_id,
+                ).model_dump(mode="json", exclude_none=True)
+            output.update(
+                {
+                    "status": "completed",
+                    "summary": (
+                        f"Fetched {parsed_input.tool_name} from "
+                        f"{parsed_input.server_name}."
+                    ),
+                    "result_ref": stored.result_ref,
+                    "result": stored.model_output,
+                }
+            )
+        elif disposition.outcome is OperationOutcome.STAGED:
+            output.update(
+                {
+                    "status": "staged",
+                    "stage_id": disposition.stage_ids[0],
+                    "summary": (
+                        f"Proposed {parsed_input.tool_name} on "
+                        f"{parsed_input.server_name}; no external change has "
+                        "been made."
+                    ),
+                }
+            )
+        elif disposition.outcome is OperationOutcome.BLOCKED:
+            output["status"] = "blocked"
+        else:
+            output["status"] = "failed"
+        return McpToolCallResult.ok(
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            output=output,
+        ).model_dump(mode="json", exclude_none=True)
 
     @staticmethod
     async def _emit_ledger(

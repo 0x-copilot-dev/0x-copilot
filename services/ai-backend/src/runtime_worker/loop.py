@@ -20,6 +20,7 @@ from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.persistence.constants import Values as PersistenceValues
@@ -38,6 +39,10 @@ from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.artifact_event import RuntimeArtifactEventHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
+from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
+from runtime_worker.handlers.effect_reconcile import RuntimeEffectReconcileHandler
+from runtime_worker.mcp_operation_storage import RuntimeMcpEffectCoordinatorFactory
+from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -97,13 +102,33 @@ class RuntimeWorker:
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: object | None = None,
         artifact_service: object | None = None,
+        artifact_blob_store: object | None = None,
+        artifact_reference_store: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.queue: RuntimeQueuePort = queue
         self.settings = settings or RuntimeSettings.load()
+        d1_ready = bool(
+            self.settings.execution.surfaces_v2
+            and callable(getattr(queue, "enqueue_effect_commit", None))
+            and callable(getattr(artifact_blob_store, "put_stream", None))
+            and callable(getattr(artifact_reference_store, "acquire", None))
+            and callable(getattr(artifact_reference_store, "list_edges", None))
+        )
         OperationGatewayStartupGuard.validate(
-            mode=self.settings.execution.operation_gateway_mode,
+            mode=(
+                self.settings.execution.operation_gateway_mode
+                if self.settings.execution.surfaces_v2
+                else OperationGatewayMode.OFF
+            ),
+            stage_dependency_ready=d1_ready,
+            # D1 queues only body-free commands. The sole executor remains the
+            # worker-owned McpEffectExecutor wired by the effect-commit lane;
+            # this readiness check prevents model execution from starting until
+            # its material dependencies are present too.
+            executor_dependency_ready=d1_ready,
+            durable_arguments_ready=d1_ready,
         )
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds
@@ -144,6 +169,8 @@ class RuntimeWorker:
             # auto-apply through the same durable queue the API uses.
             queue=self.queue,
             artifact_service=artifact_service,
+            artifact_blob_store=artifact_blob_store,
+            artifact_reference_store=artifact_reference_store,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -181,8 +208,54 @@ class RuntimeWorker:
         )
         self.effect_commit_handler = effect_commit_handler
         self.effect_reconcile_handler = effect_reconcile_handler
+        if d1_ready and self.effect_commit_handler is None:
+            claims = self._effect_claim_store()
+            factory = RuntimeMcpEffectCoordinatorFactory(
+                event_producer=self.run_handler.event_producer,
+                claims=claims,
+                blobs=artifact_blob_store,  # type: ignore[arg-type]
+                references=artifact_reference_store,  # type: ignore[arg-type]
+                dependencies_factory=DefaultRuntimeDependenciesFactory(
+                    self.settings,
+                    mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+                ),
+                timeout_seconds=self.settings.default_timeout_seconds,
+            )
+            self.effect_commit_handler = RuntimeEffectCommitHandler(
+                persistence=self.persistence,
+                coordinator_factory=factory,
+            )
+            self.effect_reconcile_handler = RuntimeEffectReconcileHandler(
+                persistence=self.persistence,
+                claims=claims,
+                coordinator_factory=factory,
+            )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
+
+    def _effect_claim_store(self) -> object:
+        """Select the A5 durable claim store for D1's exact MCP executor."""
+
+        if (
+            self.settings.store.backend == "file"
+            and self.settings.store.file_store_root
+        ):
+            from runtime_adapters.file.effect_claim_store import FileEffectClaimStore
+
+            return FileEffectClaimStore(root=self.settings.store.file_store_root)
+        if self.settings.store.backend == "postgres" and hasattr(
+            self.persistence, "_role_connection"
+        ):
+            from runtime_adapters.postgres.effect_claim_store import (
+                PostgresEffectClaimStore,
+            )
+
+            return PostgresEffectClaimStore(store=self.persistence)
+        from runtime_adapters.in_memory.effect_claim_store import (
+            InMemoryEffectClaimStore,
+        )
+
+        return InMemoryEffectClaimStore()
 
     async def run_once(self) -> bool:
         """Claim and process one command, returning whether work was found."""

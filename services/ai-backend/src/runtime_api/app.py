@@ -88,9 +88,6 @@ from runtime_api.sse.event_bus import (
 )
 from runtime_api.sse.postgres_event_bus import PostgresEventBus
 from runtime_worker import RuntimeWorker
-from agent_runtime.capabilities.operations.context import (
-    OperationGatewayStartupGuard,
-)
 
 
 # Structured logger for run-executor topology decisions. A "no run executor"
@@ -137,9 +134,10 @@ class RuntimeApiAppFactory:
         without module-level singletons or circular imports.
         """
         settings = settings or RuntimeSettings.load()
-        OperationGatewayStartupGuard.validate(
-            mode=settings.execution.operation_gateway_mode,
-        )
+        # The API process does not own MCP execution dependencies.  The worker
+        # validates D1's complete stage/executor/material cohort after the
+        # runtime ports exist; validating here would reject a correctly wired
+        # in-process worker before those ports are available.
         if configure_logging_on_create:
             LoggingConfigurator.configure()
         if configure_telemetry_on_create:
@@ -1194,6 +1192,10 @@ class RuntimeApiAppFactory:
                 app.state, "runtime_user_policies_resolver", None
             ),
             artifact_service=getattr(app.state, "artifact_service", None),
+            artifact_blob_store=getattr(ports, "artifact_blob_store", None),
+            artifact_reference_store=getattr(
+                ports, "artifact_reference_provider", None
+            ),
         )
         app.state.runtime_in_process_worker = worker
         app.state.runtime_in_process_worker_task = asyncio.create_task(

@@ -237,9 +237,18 @@ async def _assemble_harness(
         # result for block, or left untouched for auto. Fails open to the
         # deployment default snapshot (write=ask → the existing MCP approval)
         # when no policy is configured, so an unconfigured run is unchanged.
+        from agent_runtime.capabilities.mcp.operation_adapter import (
+            is_enforced_mcp_gateway_active,
+        )
+
         enforced_tools = ToolUsePolicyEnforcer.enforce(
             model_tools=model_tools,
             snapshot=ToolUsePolicyResolver.resolve(runtime_context),
+            delegated_tool_names=(
+                frozenset({McpValues.ToolName.CALL_MCP_TOOL})
+                if is_enforced_mcp_gateway_active()
+                else frozenset()
+            ),
         )
         model_tools = enforced_tools.tools
         model_instructions = _instructions_with_capability_tools(
