@@ -14,6 +14,7 @@ from runtime_worker.legacy_mcp_effect_executor import (
     LegacyMcpEffectMaterial,
     LegacyMcpEffectMaterialError,
 )
+from runtime_worker.mcp_effect_executor import McpEffectExecutor
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.surfaces_v2.commit_engine import (
     StageCommitConnectorError,
@@ -103,13 +104,19 @@ def _executor(
     resolver: _Resolver,
     connector: _Connector,
     enabled: bool = True,
-) -> LegacyMcpEffectExecutor:
-    return LegacyMcpEffectExecutor(
+) -> McpEffectExecutor:
+    return McpEffectExecutor(
         scope=_scope(),
         connector=connector,  # type: ignore[arg-type] -- focused connector seam fake
         material_resolver=resolver,
         enabled=enabled,
     )
+
+
+def test_canonical_executor_import_is_the_legacy_compatible_implementation() -> None:
+    """D1 promotes one exact-argument executor without a second transport path."""
+
+    assert McpEffectExecutor is LegacyMcpEffectExecutor
 
 
 @pytest.mark.asyncio

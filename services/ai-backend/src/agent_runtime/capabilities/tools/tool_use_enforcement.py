@@ -172,6 +172,7 @@ class ToolUsePolicyEnforcer:
         *,
         model_tools: Sequence[object],
         snapshot: ToolUsePolicySnapshot,
+        delegated_tool_names: frozenset[str] = frozenset(),
     ) -> EnforcedToolSurface:
         """Return the enforced tool tuple + Deep Agents ``interrupt_on`` config.
 
@@ -186,6 +187,12 @@ class ToolUsePolicyEnforcer:
         interrupt_on: dict[str, object] = {}
         for index, tool in enumerate(tools):
             tool_name = str(getattr(tool, "name", "")).strip()
+            # D1 delegates the MCP umbrella tool to the operation gateway only
+            # when a fully-wired enforce context is bound.  The gateway then
+            # applies policy after exact operation classification; applying this
+            # generic external-call gate first would incorrectly hold reads.
+            if tool_name in delegated_tool_names:
+                continue
             side_effects = cls._GATED_TOOL_SIDE_EFFECTS.get(tool_name)
             if side_effects is None:
                 continue

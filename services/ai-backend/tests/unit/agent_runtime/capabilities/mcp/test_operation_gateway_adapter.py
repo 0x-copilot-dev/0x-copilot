@@ -1,0 +1,429 @@
+"""D1 MCP convergence tests: classify before client creation, then read or stage.
+
+These tests deliberately bind the operation context/services directly.  The
+worker composition root is reserved for a separate stream; that does not
+weaken this contract because an unbound service context uses the legacy path.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+
+from agent_runtime.capabilities.actions.policy import ConnectorWritePolicyOverrides
+from agent_runtime.capabilities.mcp import CallMcpTool, DynamicMcpRegistry, McpLoader
+from agent_runtime.capabilities.mcp.annotations import (
+    McpToolAnnotations,
+    McpToolAnnotationsRegistry,
+)
+from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
+from agent_runtime.capabilities.mcp.cards import McpAuthState
+from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationArgumentMaterialResolver,
+    McpOperationGatewayContext,
+    McpOperationGatewayServices,
+    McpOperationStoredResult,
+)
+from agent_runtime.capabilities.operations.classifier import OperationClassifier
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationRequestFactory,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.operations.descriptors import (
+    OperationDescriptorRegistry,
+)
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
+from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
+from agent_runtime.effects.staging import EffectStager
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
+from agent_runtime.surfaces_v2.ledger_models import EffectActor, LedgerEventType
+from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
+from agent_runtime.surfaces_v2.gate import ToolAccessGate
+from tests.unit.agent_runtime.effects.fakes import (
+    FakeClock,
+    FakeLedger,
+    FakeOutbox,
+    FakeStageIds,
+)
+from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
+
+_SERVER = "linear"
+
+
+def _runtime_context() -> AgentRuntimeContext:
+    return AgentRuntimeContext(
+        user_id="user_d1",
+        org_id="org_d1",
+        roles={"employee"},
+        permission_scopes={"docs:read", "docs:write"},
+        model_profile=ModelConfig(
+            provider="openai",
+            model_name="gpt-4o-mini",
+            max_input_tokens=4096,
+            timeout_seconds=30,
+            temperature=0.0,
+        ),
+        run_id="run_d1",
+        trace_id="trace_d1",
+    )
+
+
+@dataclass
+class _RecordedOperationEvents:
+    rows: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+
+    async def emit(
+        self,
+        event_type: LedgerEventType,
+        payload: Mapping[str, object],
+        summary: str | None = None,
+    ) -> None:
+        del summary
+        self.rows.append((event_type.value, dict(payload)))
+
+
+@dataclass
+class _ResultStore:
+    calls: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+
+    async def store_read_result(self, *, request, output: Mapping[str, object]):  # type: ignore[no-untyped-def]
+        body = {str(key): value for key, value in output.items()}
+        self.calls.append((request.operation_id, body))
+        return McpOperationStoredResult(
+            result_ref=f"operation://{request.operation_id}/result",
+            model_output={"items": body.get("items", [])},
+        )
+
+
+class _AuthSessions:
+    async def create_auth_session(self, *, server_id: str, runtime_context):  # type: ignore[no-untyped-def]
+        del runtime_context
+        return McpAuthSession(
+            server_id=server_id,
+            server_name=_SERVER,
+            display_name="Linear",
+            auth_url="https://vendor.example/oauth",
+            expires_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
+
+@dataclass
+class _RejectedInterrupt:
+    calls: int = 0
+
+    def __call__(self, payload: dict[str, object]) -> object:
+        del payload
+        self.calls += 1
+        return {"decision": "rejected"}
+
+
+class _Fixture(DynamicMcpLoadingMixin):
+    def make_call_tool(
+        self,
+        *,
+        output: Mapping[str, object] | None = None,
+        gate: ToolAccessGate | None = None,
+        auth_state: McpAuthState = McpAuthState.AUTHENTICATED,
+    ) -> tuple[CallMcpTool, object]:
+        client = self.FakeMcpClient(
+            tools=(
+                self.make_tool(name="list_issues"),
+                self.make_tool(name="update_issue"),
+                self.make_tool(name="delete_issue"),
+                self.make_tool(name="unlisted_operation"),
+            ),
+            resources=(),
+            tool_outputs={"list_issues": output or {"items": [{"id": "L-1"}]}},
+        )
+        card = self.make_card(name=_SERVER).model_copy(
+            update={"auth_state": auth_state, "server_id": "srv_linear"}
+        )
+        provider = self.FakeMcpProvider(
+            cards=(card,),
+            clients={_SERVER: client},
+        )
+        registry = DynamicMcpRegistry(providers=(provider,))
+        return (
+            CallMcpTool(
+                registry=registry,
+                loader=McpLoader(registry),
+                runtime_context=_runtime_context(),
+                gate=gate,
+            ),
+            provider,
+        )
+
+    def bind_enforced(self):  # type: ignore[no-untyped-def]
+        context = _runtime_context()
+        events = _RecordedOperationEvents()
+        operation_token = OperationContext.bind_for_run(
+            identity=VerifiedOperationIdentity(
+                org_id=context.org_id,
+                user_id=context.user_id,
+                conversation_id="conv_d1",
+                run_id=context.run_id,
+            ),
+            policy_snapshot=ToolUsePolicySnapshot.from_response(
+                workspace=None,
+                user=None,
+            ),
+            ledger_emitter=events,
+            artifact_service=None,
+            mode=OperationGatewayMode.ENFORCE,
+            canonical_arguments_durable=True,
+        )
+        descriptors = OperationDescriptorRegistry()
+        classifier = OperationClassifier(descriptors=descriptors)
+        ledger = FakeLedger()
+        result_store = _ResultStore()
+        service_token = McpOperationGatewayContext.bind_for_run(
+            McpOperationGatewayServices(
+                gateway=OperationGateway(
+                    descriptors=descriptors,
+                    classifier=classifier,
+                ),
+                descriptors=descriptors,
+                classifier=classifier,
+                stager=EffectStager(
+                    ledger=ledger,
+                    outbox=FakeOutbox(),
+                    clock=FakeClock(),
+                    stage_ids=FakeStageIds(),
+                ),
+                stage_scope=EffectStageScope(
+                    run_id=context.run_id,
+                    owner_ref="principal://users/user_d1",
+                ),
+                stage_author=EffectActorIdentity(
+                    actor=EffectActor.USER,
+                    principal_ref="principal://users/user_d1",
+                ),
+                result_store=result_store,
+                connector_overrides=ConnectorWritePolicyOverrides(),
+            )
+        )
+        return context, events, ledger, result_store, operation_token, service_token
+
+
+def _invoke(
+    tool: CallMcpTool, name: str, arguments: dict[str, object]
+) -> dict[str, object]:
+    return asyncio.run(
+        tool.ainvoke(
+            {
+                "server_name": _SERVER,
+                "tool_name": name,
+                "arguments": arguments,
+                "tool_call_id": "call_d1",
+            }
+        )
+    )
+
+
+def test_catalog_read_executes_once_persists_result_and_uses_no_legacy_ledger() -> None:
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    _context, events, ledger, result_store, operation_token, service_token = (
+        fixture.bind_enforced()
+    )
+    legacy_rows: list[str] = []
+
+    async def legacy_emit(
+        event_type: str, payload: Mapping[str, object], summary: str | None
+    ) -> None:
+        del payload, summary
+        legacy_rows.append(event_type)
+
+    legacy_token = WorkLedgerEmitter.bind_for_run(WorkLedgerEmitter(emit=legacy_emit))
+    try:
+        result = _invoke(tool, "list_issues", {"team": "ENG"})
+    finally:
+        WorkLedgerEmitter.unbind(legacy_token)
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert provider.created_clients == [_SERVER]
+    assert result["output"] == {
+        "status": "completed",
+        "operation_id": result["output"]["operation_id"],
+        "summary": "Fetched list_issues from linear.",
+        "result_ref": result["output"]["result_ref"],
+        "result": {"items": [{"id": "L-1"}]},
+    }
+    assert result_store.calls and result_store.calls[0][1] == {"items": [{"id": "L-1"}]}
+    assert ledger.events_by_stage == {}
+    assert [event_type for event_type, _payload in events.rows] == [
+        LedgerEventType.OPERATION_REQUESTED.value,
+        LedgerEventType.OPERATION_CLASSIFIED.value,
+        LedgerEventType.OPERATION_COMPLETED.value,
+    ]
+    assert LedgerEventType.READ_EXECUTED.value not in {
+        event_type for event_type, _payload in events.rows
+    }
+    # The legacy MCP-owned emitter would make a mapping result a surface.  D1
+    # must leave that compatibility projection untouched on the enforce path.
+    assert legacy_rows == []
+
+
+def test_catalog_write_stages_exact_arguments_without_creating_an_mcp_client() -> None:
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    _context, events, ledger, _result_store, operation_token, service_token = (
+        fixture.bind_enforced()
+    )
+    arguments = {"issue_id": "L-1", "title": "Approved title", "labels": ["p1"]}
+    annotation_token = McpToolAnnotationsRegistry.bind_for_run({})
+    McpToolAnnotationsRegistry.register(
+        _SERVER,
+        "update_issue",
+        McpToolAnnotations(read_only_hint=True),
+    )
+    try:
+        result = _invoke(tool, "update_issue", arguments)
+    finally:
+        McpToolAnnotationsRegistry.unbind(annotation_token)
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert provider.created_clients == []
+    assert result["output"]["status"] == "staged"
+    # A contradictory provider `readOnlyHint` may never loosen catalog write.
+    assert provider.created_clients == []
+    assert result["output"]["summary"] == (
+        "Proposed update_issue on linear; no external change has been made."
+    )
+    staged = next(iter(ledger.events_by_stage.values()))[0].payload
+    assert staged["capability"] == _SERVER
+    assert staged["op"] == "update_issue"
+    assert staged["proposal_content_ref"].startswith("operation://op_")
+    assert staged["proposal_digest"]
+    assert arguments["title"] not in str(staged)
+    assert [event_type for event_type, _payload in events.rows] == [
+        LedgerEventType.OPERATION_REQUESTED.value,
+        LedgerEventType.OPERATION_CLASSIFIED.value,
+        LedgerEventType.OPERATION_COMPLETED.value,
+    ]
+
+
+def test_unknown_and_destructive_mcp_operations_stage_fail_closed_without_dispatch() -> (
+    None
+):
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    _context, _events, ledger, _result_store, operation_token, service_token = (
+        fixture.bind_enforced()
+    )
+    try:
+        unknown = _invoke(tool, "unlisted_operation", {"id": "L-1"})
+        destructive = _invoke(tool, "delete_issue", {"id": "L-2"})
+    finally:
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert provider.created_clients == []
+    assert unknown["output"]["status"] == "staged"
+    assert destructive["output"]["status"] == "staged"
+    staged = [events[0].payload for events in ledger.events_by_stage.values()]
+    assert {row["effect_class"] for row in staged} == {
+        "unknown",
+        "external_destructive",
+    }
+
+
+def test_missing_auth_parks_the_classified_read_before_client_creation() -> None:
+    fixture = _Fixture()
+    interrupt = _RejectedInterrupt()
+    runtime_context = _runtime_context()
+    gate = ToolAccessGate(
+        auth_session_creator=_AuthSessions(),
+        runtime_context=runtime_context,
+        interrupt_handler=interrupt,
+        classifier=None,
+    )
+    tool, provider = fixture.make_call_tool(
+        gate=gate,
+        auth_state=McpAuthState.UNAUTHENTICATED,
+    )
+    _context, _events, _ledger, _result_store, operation_token, service_token = (
+        fixture.bind_enforced()
+    )
+    try:
+        result = _invoke(tool, "list_issues", {})
+    finally:
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert interrupt.calls == 1
+    assert provider.created_clients == []
+    assert result["output"]["status"] == "failed"
+
+
+def test_explicit_flag_off_keeps_the_legacy_mcp_result_even_if_services_are_bound(
+    monkeypatch,
+) -> None:
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    _context, events, ledger, result_store, operation_token, service_token = (
+        fixture.bind_enforced()
+    )
+    monkeypatch.setenv("SURFACES_V2", "false")
+    try:
+        result = _invoke(tool, "list_issues", {"team": "ENG"})
+    finally:
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert provider.created_clients == [_SERVER]
+    assert result == {
+        "server_name": _SERVER,
+        "tool_name": "list_issues",
+        "output": {"items": [{"id": "L-1"}]},
+    }
+    assert events.rows == []
+    assert ledger.events_by_stage == {}
+    assert result_store.calls == []
+
+
+def test_material_resolver_returns_only_the_exact_canonical_stage_arguments() -> None:
+    fixture = _Fixture()
+    _context, _events, _ledger, _result_store, operation_token, service_token = (
+        fixture.bind_enforced()
+    )
+    arguments = {"issue_id": "L-1", "metadata": {"priority": "high"}}
+    try:
+        request = OperationRequestFactory.create(
+            capability=_SERVER,
+            op="update_issue",
+            arguments=arguments,
+        )
+        material = asyncio.run(
+            McpOperationArgumentMaterialResolver(
+                arguments=OperationContext.require().arguments
+            ).resolve(
+                type(
+                    "Request",
+                    (),
+                    {
+                        "target_ref": "mcp-target://linear/update_issue",
+                        "target_digest": "a" * 64,
+                        "proposal_ref": "proposal://stg_00000000-0000-4000-8000-000000000001/revisions/1",
+                        "proposal_content_ref": request.canonical_args_ref,
+                        "proposal_digest": request.args_digest,
+                    },
+                )()
+            )
+        )
+    finally:
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert isinstance(material, McpEffectMaterial)
+    assert material.arguments == arguments
+    assert material.proposal_content_ref == request.canonical_args_ref
+    assert material.proposal_digest == request.args_digest
