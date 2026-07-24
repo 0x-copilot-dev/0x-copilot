@@ -86,6 +86,10 @@ from runtime_adapters.base import (
     _Fields,
 )
 from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
+from runtime_adapters.postgres.artifact_hold_fence import (
+    acquire_artifact_hold_fences,
+    has_active_hold_for_scope,
+)
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ACTIVE_RUN_STATUSES,
@@ -2726,36 +2730,27 @@ class PostgresRuntimeApiStore:
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while preserving audit/event evidence."""
 
-        # TODO(legal-hold-race): the legal-hold check below is TOCTOU; another
-        # writer can insert a hold between this SELECT and the UPDATEs that
-        # follow. Pre-existing hazard, tracked separately from the async
-        # migration.
         now = datetime.now(timezone.utc)
         ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
         audit_event_id = f"history_delete_{ts_ns}"
         async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.transaction():
-                cur = await conn.execute(
-                    """
-                    SELECT id FROM runtime_legal_holds
-                    WHERE org_id = %s
-                      AND released_at IS NULL
-                      AND (
-                        (scope = 'org' AND resource_id = %s)
-                        OR (scope = 'user' AND user_id = %s)
-                        OR (
-                            scope = 'conversation'
-                            AND resource_id IN (
-                                SELECT id FROM agent_conversations WHERE org_id = %s AND user_id = %s
-                            )
-                        )
-                      )
-                    LIMIT 1
-                    """,
-                    (org_id, org_id, user_id, org_id, user_id),
+                # Acquire the very same advisory fences as the direct
+                # runtime_legal_holds trigger, then recheck inside this
+                # transaction before *any* history update.  A hold now either
+                # commits first and blocks this erasure, or waits until this
+                # complete erasure transaction commits; it cannot interleave
+                # between the policy check and its destructive statements.
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=org_id,
+                    user_id=user_id,
                 )
-                hold = await cur.fetchone()
-                if hold is not None:
+                if await has_active_hold_for_scope(
+                    conn,
+                    org_id=org_id,
+                    user_id=user_id,
+                ):
                     raise RuntimeApiError(
                         RuntimeErrorCode.VALIDATION_ERROR,
                         "Deletion is blocked by an active legal hold.",

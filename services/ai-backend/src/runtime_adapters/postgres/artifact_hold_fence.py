@@ -19,12 +19,16 @@ def hold_fence_tokens(
 ) -> tuple[str, ...]:
     """Return the closed, deterministic lock set for a lifecycle scope."""
 
-    tokens = {f"artifact-hold:org:{org_id}"}
+    # This order is a database contract: the direct legal-hold trigger in
+    # migration 0008 takes the same org → user → conversation sequence.  Do
+    # not lexically sort these tokens; that would put ``conversation`` first
+    # and can deadlock a lifecycle transaction against a direct hold writer.
+    tokens = [f"artifact-hold:org:{org_id}"]
     if user_id is not None:
-        tokens.add(f"artifact-hold:user:{org_id}:{user_id}")
+        tokens.append(f"artifact-hold:user:{org_id}:{user_id}")
     if conversation_id is not None:
-        tokens.add(f"artifact-hold:conversation:{org_id}:{conversation_id}")
-    return tuple(sorted(tokens))
+        tokens.append(f"artifact-hold:conversation:{org_id}:{conversation_id}")
+    return tuple(tokens)
 
 
 async def acquire_artifact_hold_fences(
@@ -158,7 +162,15 @@ def hold_fence_tokens_for_rows(
                 conversation_id=conversation_id,
             )
         )
-    return tuple(sorted(tokens))
+
+    def sort_key(token: str) -> tuple[int, str]:
+        if token.startswith("artifact-hold:org:"):
+            return (0, token)
+        if token.startswith("artifact-hold:user:"):
+            return (1, token)
+        return (2, token)
+
+    return tuple(sorted(tokens, key=sort_key))
 
 
 __all__ = (

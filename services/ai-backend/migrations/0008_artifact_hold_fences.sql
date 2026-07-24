@@ -10,30 +10,43 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 DECLARE
+    v_org_id text;
     v_user_id text;
+    v_resource_id text;
+    v_scope text;
 BEGIN
-    v_user_id := NEW.user_id;
-    IF NEW.scope = 'conversation' AND v_user_id IS NULL THEN
+    IF TG_OP = 'DELETE' THEN
+        v_org_id := OLD.org_id;
+        v_user_id := OLD.user_id;
+        v_resource_id := OLD.resource_id;
+        v_scope := OLD.scope;
+    ELSE
+        v_org_id := NEW.org_id;
+        v_user_id := NEW.user_id;
+        v_resource_id := NEW.resource_id;
+        v_scope := NEW.scope;
+    END IF;
+    IF v_scope = 'conversation' AND v_user_id IS NULL THEN
         SELECT user_id INTO v_user_id
           FROM agent_conversations
-         WHERE org_id = NEW.org_id AND id = NEW.resource_id;
+         WHERE org_id = v_org_id AND id = v_resource_id;
     END IF;
 
     PERFORM pg_advisory_xact_lock(
-        hashtextextended('artifact-hold:org:' || NEW.org_id, 0)
+        hashtextextended('artifact-hold:org:' || v_org_id, 0)
     );
     IF v_user_id IS NOT NULL THEN
         PERFORM pg_advisory_xact_lock(
             hashtextextended(
-                'artifact-hold:user:' || NEW.org_id || ':' || v_user_id,
+                'artifact-hold:user:' || v_org_id || ':' || v_user_id,
                 0
             )
         );
     END IF;
-    IF NEW.scope = 'conversation' THEN
+    IF v_scope = 'conversation' THEN
         PERFORM pg_advisory_xact_lock(
             hashtextextended(
-                'artifact-hold:conversation:' || NEW.org_id || ':' || NEW.resource_id,
+                'artifact-hold:conversation:' || v_org_id || ':' || v_resource_id,
                 0
             )
         );
@@ -47,15 +60,21 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF TG_OP = 'UPDATE'
-       AND OLD.released_at IS NULL
-       AND NEW.released_at IS NOT NULL THEN
+    IF TG_OP = 'DELETE'
+       OR (
+            TG_OP = 'UPDATE'
+            AND OLD.released_at IS NULL
+            AND NEW.released_at IS NOT NULL
+       ) THEN
         UPDATE runtime_artifact_reference_edges
-           SET released_at = NEW.released_at
-         WHERE org_id = NEW.org_id
+           SET released_at = COALESCE(NEW.released_at, now())
+         WHERE org_id = OLD.org_id
            AND reference_kind = 'legal_hold'
-           AND reference_id = NEW.id
+           AND reference_id = OLD.id
            AND released_at IS NULL;
+        IF TG_OP = 'DELETE' THEN
+            RETURN OLD;
+        END IF;
         RETURN NEW;
     END IF;
 
@@ -113,11 +132,16 @@ END;
 $$;
 
 CREATE TRIGGER runtime_legal_holds_artifact_fence_before
-BEFORE INSERT OR UPDATE OF released_at ON runtime_legal_holds
+BEFORE INSERT OR UPDATE OF released_at OR DELETE ON runtime_legal_holds
 FOR EACH ROW
 EXECUTE FUNCTION runtime_artifact_hold_acquire_fences();
 
 CREATE TRIGGER runtime_legal_holds_artifact_pin_after
-AFTER INSERT OR UPDATE OF released_at ON runtime_legal_holds
+AFTER INSERT OR UPDATE OF released_at OR DELETE ON runtime_legal_holds
 FOR EACH ROW
 EXECUTE FUNCTION runtime_artifact_hold_pin_or_release();
+
+-- Legal-hold release is an auditable transition (released_at), not a hard
+-- delete.  The trigger above is defensive for privileged maintenance roles;
+-- product writers cannot orphan pins through a direct DELETE.
+REVOKE DELETE ON runtime_legal_holds FROM enterprise_app;
