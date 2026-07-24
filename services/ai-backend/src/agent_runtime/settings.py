@@ -44,6 +44,9 @@ class _EnvFields:
     # Generative Surfaces v2 master flag (PRD-A1). Registered now but read by
     # nothing until emission lands in PRD-A3 — flag-off byte-identical.
     SURFACES_V2 = "SURFACES_V2"
+    # SDR-19 single rollout gate for artifact/effect persistence. It stays
+    # dark until E2 cutover; storage composition and API routes read it.
+    ARTIFACT_EFFECTS_V2 = "ARTIFACT_EFFECTS_V2"
     # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
     # executor accumulates chunks for the window and flushes via
     # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
@@ -71,6 +74,9 @@ class _EnvFields:
     # (unlimited / keep forever); only the single_user_desktop profile sets them.
     FILE_STORE_MAX_BYTES = "RUNTIME_FILE_STORE_MAX_BYTES"
     FILE_STORE_RETENTION_DAYS = "RUNTIME_FILE_STORE_RETENTION_DAYS"
+    # Explicit durable shared-volume root for artifact blobs when metadata uses
+    # Postgres. There is deliberately no Postgres bytea fallback.
+    ARTIFACT_BLOB_ROOT = "RUNTIME_ARTIFACT_BLOB_ROOT"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
     MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
     SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
@@ -153,6 +159,9 @@ class RuntimeExecutionSettings(RuntimeContract):
     # switch (chat-only degradation). Resolves identically to
     # ``SurfacesV2Flag.enabled()`` (same env var, same truthy set, same default).
     surfaces_v2: bool = True
+    # SDR-19 is dark by default. When false product routes remain absent and
+    # no artifact repository is composed.
+    artifact_effects_v2: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -172,6 +181,9 @@ class RuntimeStoreSettings(RuntimeContract):
     # keeps history forever. Conversations whose last activity predates the
     # window are physically reaped by the cleanup sweeper (startup + on demand).
     file_store_retention_days: int = Field(default=0, ge=0)
+    # Required for the Postgres backend. API and worker processes must mount
+    # this same durable root; factory construction fails closed when absent.
+    artifact_blob_root: str | None = None
 
 
 class RuntimeMcpSettings(RuntimeContract):
@@ -393,6 +405,8 @@ class RuntimeSettings(BaseSettings):
                 ).lower()
                 in _truthy,
                 surfaces_v2=_s(v, E.SURFACES_V2, "true").lower() in _truthy,
+                artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
+                in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
@@ -400,6 +414,7 @@ class RuntimeSettings(BaseSettings):
                 file_store_root=_o(v, E.FILE_STORE_ROOT),
                 file_store_max_bytes=int(_s(v, E.FILE_STORE_MAX_BYTES, "0")),
                 file_store_retention_days=int(_s(v, E.FILE_STORE_RETENTION_DAYS, "0")),
+                artifact_blob_root=_o(v, E.ARTIFACT_BLOB_ROOT),
             ),
             mcp=RuntimeMcpSettings(
                 backend_registry_url=_o(v, E.MCP_BACKEND_REGISTRY_URL),

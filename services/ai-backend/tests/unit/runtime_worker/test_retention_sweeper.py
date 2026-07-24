@@ -126,6 +126,48 @@ class TestRetentionSweeperLoop:
         assert len(outcomes) >= 8  # 2 orgs × 4 column-driven kinds
 
     @pytest.mark.asyncio
+    async def test_artifact_pass_is_absent_when_rollout_is_off(self) -> None:
+        persistence = _FakePersistence(orgs=("org_a", "org_b"))
+
+        outcomes = await RetentionSweeperLoop(
+            persistence=persistence,
+            artifact_effects_v2=False,
+        ).sweep_once()
+
+        assert all(
+            call["kind"] is not RetentionKind.ARTIFACTS_TOMBSTONED
+            for call in persistence.sweep_calls
+        )
+        assert all(
+            outcome.kind is not RetentionKind.ARTIFACTS_TOMBSTONED
+            for outcome in outcomes
+        )
+
+    @pytest.mark.asyncio
+    async def test_enabled_artifact_pass_runs_exactly_once_per_org(self) -> None:
+        persistence = _FakePersistence(orgs=("org_a", "org_b"))
+
+        outcomes = await RetentionSweeperLoop(
+            persistence=persistence,
+            artifact_effects_v2=True,
+        ).sweep_once()
+
+        artifact_calls = [
+            call
+            for call in persistence.sweep_calls
+            if call["kind"] is RetentionKind.ARTIFACTS_TOMBSTONED
+        ]
+        assert [(call["org_id"], call["ttl_seconds"]) for call in artifact_calls] == [
+            ("org_a", 0),
+            ("org_b", 0),
+        ]
+        assert [
+            outcome.org_id
+            for outcome in outcomes
+            if outcome.kind is RetentionKind.ARTIFACTS_TOMBSTONED
+        ] == ["org_a", "org_b"]
+
+    @pytest.mark.asyncio
     async def test_per_org_policy_overrides_default(self) -> None:
         # org_a policy sets MESSAGES TTL to 1h; resolver passes it to sweep_kind.
         org_a_policy = RetentionPolicyRecord(

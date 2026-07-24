@@ -116,7 +116,8 @@ class RuntimeWorkerEntrypoint:
                 RetentionSweeperLoopEnv.ENABLED, default=False
             ):
                 retention_loop = RetentionSweeperLoop(
-                    persistence=async_ports.persistence
+                    persistence=async_ports.persistence,
+                    artifact_effects_v2=async_ports.artifact_effects_v2,
                 )
                 await retention_loop.start()
                 logger.info(

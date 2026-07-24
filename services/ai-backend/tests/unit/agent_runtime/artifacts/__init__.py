@@ -1,0 +1,1 @@
+"""Artifact repository domain tests."""

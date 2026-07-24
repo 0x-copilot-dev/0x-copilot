@@ -1,10 +1,28 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
 
+export type {
+  ArtifactCreateMultipartFields,
+  ArtifactDetailResponse,
+  ArtifactListResponse,
+  ArtifactMutationResponse,
+  ArtifactPromotionRequest,
+  ArtifactRevisionMultipartFields,
+  ArtifactRevisionResponse,
+} from "./artifacts";
+export {
+  isArtifactDetailResponse,
+  isArtifactListResponse,
+  isArtifactMutationResponse,
+  isArtifactRevisionResponse,
+} from "./artifacts";
+
 // Work Ledger vocabulary (Generative Surfaces v2, SDR §5 / PRD-A1). `ledger.ts`
 // is the single canonical home for all v2 ledger/domain type additions across
 // every wave; this barrel only ever gains re-export lines, never a type body.
 export type {
   LedgerEventType,
+  ArtifactRuntimeEventType,
+  ArtifactRuntimeEventPayloadMap,
   GateAuthState,
   GateOutcome,
   WritePolicy,
@@ -141,6 +159,7 @@ export type {
 } from "./ledger";
 export {
   LEDGER_EVENT_TYPES,
+  ARTIFACT_RUNTIME_EVENT_TYPES,
   isLedgerEventType,
   isSurfaceEventV2,
   isLedgerPayloadForWrite,
@@ -182,6 +201,8 @@ import type {
 // Local binding for the shared ledger payloads used in RuntimeEventPayloadByType
 // below (the block above re-exports them but does not bind them into local scope).
 import type {
+  ArtifactRuntimeEventPayloadMap,
+  ArtifactRuntimeEventType,
   UsageRecordedPayload,
   ActionClassifiedPayload,
   ReadExecutedPayload,
@@ -198,6 +219,7 @@ import type {
   WriteAppliedPayload,
   ReceiptEmittedPayload,
 } from "./ledger";
+import { ARTIFACT_RUNTIME_EVENT_TYPES } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
@@ -515,6 +537,7 @@ export type RuntimeApiEventType =
   | "decision.recorded"
   | "write.applied"
   | "receipt.emitted"
+  | ArtifactRuntimeEventType
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -588,6 +611,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "decision.recorded",
   "write.applied",
   "receipt.emitted",
+  ...ARTIFACT_RUNTIME_EVENT_TYPES,
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2354,7 +2378,7 @@ export interface ApprovalUndoRequestedPayload {
   [key: string]: unknown;
 }
 
-export interface RuntimeEventPayloadByType {
+export interface RuntimeEventPayloadByType extends ArtifactRuntimeEventPayloadMap {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;
   run_cancelling: RuntimeLifecyclePayload;

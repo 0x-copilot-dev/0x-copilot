@@ -23,11 +23,13 @@ from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerR
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
+    RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
+from runtime_worker.handlers.artifact_event import RuntimeArtifactEventHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
 from agent_runtime.persistence.ports import (
@@ -58,6 +60,7 @@ class RuntimeWorker:
         run_handler: RuntimeRunHandler | None = None,
         cancel_handler: RuntimeCancelHandler | None = None,
         approval_handler: RuntimeApprovalHandler | None = None,
+        artifact_event_handler: RuntimeArtifactEventHandler | None = None,
         stage_commit_handler: RuntimeStageCommitHandler | None = None,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: "DraftStorePort | None" = None,
@@ -123,6 +126,13 @@ class RuntimeWorker:
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
+        )
+        self.artifact_event_handler = (
+            artifact_event_handler
+            or RuntimeArtifactEventHandler(
+                persistence=self.persistence,
+                event_store=self.event_store,
+            )
         )
         # PRD-D2 — the SOLE producer of ``write.applied``. Default construction
         # mirrors ``approval_handler``: it builds its own durable claim ledger
@@ -232,6 +242,9 @@ class RuntimeWorker:
         PersistenceValues.EventType.RUN_CANCEL_REQUESTED: "runtime_worker.cancel",
         PersistenceValues.EventType.APPROVAL_RESOLVED: "runtime_worker.approval_resolved",
         PersistenceValues.EventType.STAGE_COMMIT_REQUESTED: "runtime_worker.stage_commit",
+        PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED: (
+            "runtime_worker.artifact_event"
+        ),
     }
 
     async def _dispatch(self, claim: RuntimeWorkerClaim) -> None:
@@ -259,6 +272,13 @@ class RuntimeWorker:
             if command_type == PersistenceValues.EventType.STAGE_COMMIT_REQUESTED:
                 command = self._runtime_stage_commit_command(claim)
                 await self.stage_commit_handler.handle(command)
+                return
+            if (
+                command_type
+                == PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED
+            ):
+                command = self._runtime_artifact_event_command(claim)
+                await self.artifact_event_handler.handle(command)
                 return
             raise AgentRuntimeError(
                 RuntimeErrorCode.VALIDATION_ERROR,
@@ -331,6 +351,21 @@ class RuntimeWorker:
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Stage-commit command payload is unavailable.",
+            retryable=False,
+        )
+
+    def _runtime_artifact_event_command(
+        self,
+        claim: RuntimeWorkerClaim,
+    ) -> RuntimeArtifactEventCommand:
+        """Deserialise one canonical artifact-ledger publication command."""
+
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeArtifactEventCommand.model_validate(payload)
+        raise AgentRuntimeError(
+            RuntimeErrorCode.VALIDATION_ERROR,
+            "Artifact event command payload is unavailable.",
             retryable=False,
         )
 

@@ -39,10 +39,13 @@ class TestApiTypeContracts:
     def test_typescript_runtime_event_constants_match_backend_enums(self) -> None:
         repo_root = Path(__file__).resolve().parents[5]
         api_types = (repo_root / "packages/api-types/src/index.ts").read_text()
+        ledger_types = (repo_root / "packages/api-types/src/ledger.ts").read_text()
 
-        assert self._string_array(api_types, "RUNTIME_API_EVENT_TYPES") == {
-            event_type.value for event_type in RuntimeApiEventType
-        }
+        runtime_types = self._string_array(api_types, "RUNTIME_API_EVENT_TYPES")
+        runtime_types.update(
+            self._string_array(ledger_types, "ARTIFACT_RUNTIME_EVENT_TYPES")
+        )
+        assert runtime_types == {event_type.value for event_type in RuntimeApiEventType}
         assert self._string_array(api_types, "RUNTIME_EVENT_SOURCES") == {
             source.value for source in StreamEventSource
         }

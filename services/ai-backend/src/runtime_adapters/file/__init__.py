@@ -27,6 +27,9 @@ from runtime_adapters.file._health import (
     FileStoreRepairReason,
     StoreHealthReport,
 )
+from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
+from runtime_adapters.file.artifact_gc import FileArtifactGarbageCollector
+from runtime_adapters.file.artifact_metadata_store import FileArtifactMetadataStore
 from runtime_adapters.file.citation_store import FileCitationStore
 from runtime_adapters.file.conversation_tool_ordinal_store import (
     FileConversationToolOrdinalStore,
@@ -60,6 +63,9 @@ from runtime_adapters.file.share_store import FileShareStore
 from runtime_adapters.file.subagent_trace_backend import FileSubagentTraceBackend
 
 __all__ = [
+    "FileArtifactBlobStore",
+    "FileArtifactGarbageCollector",
+    "FileArtifactMetadataStore",
     "FileRuntimeApiStore",
     "FileObjectStore",
     "FileStoreCleanupReport",

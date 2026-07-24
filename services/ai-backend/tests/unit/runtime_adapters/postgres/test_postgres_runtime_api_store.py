@@ -296,6 +296,38 @@ class TestAsyncAdapterParity:
         )
         assert [r.sequence_no for r in rows] == [3, 4, 5]
 
+    async def test_get_event_by_id_is_primary_key_lookup_and_scope_bounded(
+        self, store: PostgresRuntimeApiStore
+    ) -> None:
+        org_id, _user_id, run_id, conv_id = await _seed_run(store)
+        event_id = "op_123e4567-e89b-42d3-a456-426614174000"
+        appended = await store.append_event(
+            RuntimeEventDraft(
+                event_id=event_id,
+                run_id=run_id,
+                conversation_id=conv_id,
+                org_id=org_id,
+                trace_id="trace",
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.TOOL_RESULT,
+                payload={"output": "immutable result"},
+            )
+        )
+
+        found = await store.get_event_by_id(
+            org_id=org_id, run_id=run_id, event_id=event_id
+        )
+        foreign_org = await store.get_event_by_id(
+            org_id="org_foreign", run_id=run_id, event_id=event_id
+        )
+        foreign_run = await store.get_event_by_id(
+            org_id=org_id, run_id="run_foreign", event_id=event_id
+        )
+
+        assert found == appended
+        assert foreign_org is None
+        assert foreign_run is None
+
     async def test_append_with_notify_after_append_does_not_raise(self) -> None:
         """Regression: ``notify_after_append=True`` must not raise on either
         the single-append or the batch-append path.

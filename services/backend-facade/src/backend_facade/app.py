@@ -16,6 +16,7 @@ from backend_facade.adapter_registry_routes import (
     register_adapter_registry_routes,
 )
 from backend_facade.adapter_review_routes import register_adapter_review_routes
+from backend_facade.artifact_routes import register_artifact_proxy_routes
 from backend_facade.agents_routes import register_agents_routes
 from backend_facade.audit_routes import register_audit_routes
 from backend_facade.auth_routes import register_auth_routes
@@ -154,6 +155,8 @@ def create_app(
 
     register_adapter_registry_routes(app)
     register_adapter_review_routes(app)
+    if app.state.settings.artifact_effects_v2:
+        register_artifact_proxy_routes(app)
     register_agents_routes(app)
     register_audit_routes(app)
     register_auth_routes(app)

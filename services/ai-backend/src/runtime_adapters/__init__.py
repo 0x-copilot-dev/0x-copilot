@@ -1,1 +1,1 @@
-"""Runtime adapter package — in-memory and Postgres store implementations."""
+"""Runtime adapter package — in-memory, file, and Postgres implementations."""

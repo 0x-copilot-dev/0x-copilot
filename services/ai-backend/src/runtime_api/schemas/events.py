@@ -33,6 +33,7 @@ from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.surfaces_v2.constants import Keys as _LedgerKeys
 from agent_runtime.surfaces_v2.constants import Values as _LedgerValues
+from agent_runtime.surfaces_v2.ledger_models import WorkLedgerVocabulary
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -204,6 +205,15 @@ class RuntimeEventPresentationProjector:
             return cls._write_applied_payload(payload)
         if event_type is RuntimeApiEventType.RECEIPT_EMITTED:
             return cls._receipt_emitted_payload(payload)
+        if event_type in {
+            RuntimeApiEventType.ARTIFACT_CREATED,
+            RuntimeApiEventType.ARTIFACT_REVISED,
+            RuntimeApiEventType.ARTIFACT_PROMOTED,
+        }:
+            return cls._artifact_ledger_payload(
+                event_type=event_type,
+                payload=payload,
+            )
         return payload
 
     @classmethod
@@ -325,6 +335,9 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.DECISION_RECORDED,
             RuntimeApiEventType.WRITE_APPLIED,
             RuntimeApiEventType.RECEIPT_EMITTED,
+            RuntimeApiEventType.ARTIFACT_CREATED,
+            RuntimeApiEventType.ARTIFACT_REVISED,
+            RuntimeApiEventType.ARTIFACT_PROMOTED,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -1378,6 +1391,28 @@ class RuntimeEventPresentationProjector:
         return safe_payload
 
     @classmethod
+    def _artifact_ledger_payload(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> JsonObject:
+        """Validate and canonicalize a reference-only artifact ledger payload."""
+
+        try:
+            validated = WorkLedgerVocabulary.validate_payload(
+                event_type.value,
+                payload,
+            )
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning(
+                "Rejected malformed artifact ledger payload event_type=%s",
+                event_type.value,
+            )
+            return {}
+        return validated.model_dump(mode="json", by_alias=True)
+
+    @classmethod
     def _copy_payload_version(
         cls, payload: JsonObject, safe_payload: JsonObject
     ) -> None:
@@ -1874,11 +1909,63 @@ class RuntimeEventDraft(_RuntimeEventBase):
     """
 
     org_id: str
+    # Optional producer-assigned identity for durable outbox publication.
+    # Ordinary model/tool stream events leave this unset and retain the
+    # adapter-generated UUID behavior.  A retry with the same stable id and
+    # identical body returns the original envelope instead of appending twice.
+    event_id: str | None = None
+    # When an outbox command represents an earlier domain mutation, preserve
+    # that mutation time on the ledger.  Unset keeps the historical append-time
+    # behavior for every existing producer.
+    created_at: datetime | None = None
 
     @field_validator(Keys.Field.ORG_ID, mode="before")
     @classmethod
     def _normalize_org_id(cls, value: object, info: ValidationInfo) -> str:
         return ValueNormalizer.normalize_id(value, info.field_name)
+
+    @field_validator(Keys.Field.EVENT_ID, mode="before")
+    @classmethod
+    def _normalize_optional_event_id(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
+        return ValueNormalizer.normalize_optional_id(value, info.field_name)
+
+    def matches_envelope(self, envelope: RuntimeEventEnvelope) -> bool:
+        """Return whether ``envelope`` is the idempotent result of this draft."""
+
+        expected_activity = (
+            self.activity_kind
+            or RuntimeEventPresentationProjector.activity_kind_for(
+                event_type=self.event_type,
+                source=self.source,
+            )
+        )
+        return (
+            self.event_id is not None
+            and envelope.event_id == self.event_id
+            and envelope.run_id == self.run_id
+            and envelope.conversation_id == self.conversation_id
+            and envelope.source == self.source
+            and envelope.event_type == self.event_type
+            and envelope.trace_id == self.trace_id
+            and envelope.parent_event_id == self.parent_event_id
+            and envelope.span_id == self.span_id
+            and envelope.parent_span_id == self.parent_span_id
+            and envelope.parent_task_id == self.parent_task_id
+            and envelope.task_id == self.task_id
+            and envelope.subagent_id == self.subagent_id
+            and envelope.display_title == self.display_title
+            and envelope.summary == self.summary
+            and envelope.status == self.status
+            and envelope.activity_kind == expected_activity
+            and envelope.visibility == self.visibility
+            and envelope.redaction_state == self.redaction_state
+            and envelope.presentation == self.presentation
+            and envelope.payload == self.payload
+            and envelope.metadata == self.metadata
+            and (self.created_at is None or envelope.created_at == self.created_at)
+        )
 
     @classmethod
     def from_stream_event(

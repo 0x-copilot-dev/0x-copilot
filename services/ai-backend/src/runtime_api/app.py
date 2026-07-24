@@ -47,11 +47,14 @@ from agent_runtime.api.user_policies_resolver import (
     UserPoliciesResolver,
 )
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
+from agent_runtime.artifacts import ArtifactService
 from agent_runtime.deployment import (
     DeploymentProfile,
     log_profile,
     resolve_or_exit,
 )
+from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
 from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.observability.http_logging import (
@@ -119,6 +122,7 @@ class RuntimeApiAppFactory:
         user_policies_resolver: UserPoliciesResolver | None = None,
         suggestible_connectors_resolver: SuggestibleConnectorsResolver | None = None,
         project_resolver: ProjectResolverPort | None = None,
+        artifact_service: ArtifactService | None = None,
         configure_logging_on_create: bool = True,
         configure_telemetry_on_create: bool = True,
         deployment: DeploymentProfile | None = None,
@@ -214,6 +218,35 @@ class RuntimeApiAppFactory:
         app.state.conversation_query_service = _cqs
         app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
+        # A2 — explicit composition seam for the canonical Artifact Repository.
+        # A true flag must have the complete storage-owned bundle *before* the
+        # route table is mounted. Serving enabled artifact routes with a None
+        # service would turn a deployment mistake into a deferred 503.
+        if _settings.execution.artifact_effects_v2:
+            if _ports.require_artifact_service_storage() is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "ARTIFACT_EFFECTS_V2 requires a complete artifact repository "
+                    + "during API composition.",
+                    retryable=False,
+                )
+            resolved_artifact_service = (
+                artifact_service
+                if artifact_service is not None
+                else cls.default_artifact_service(app)
+            )
+            if resolved_artifact_service is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "ARTIFACT_EFFECTS_V2 could not compose ArtifactService.",
+                    retryable=False,
+                )
+            app.state.artifact_service = resolved_artifact_service
+        else:
+            # The router is absent while dark. Retaining an injected fake is
+            # useful for isolated non-route test composition and has no public
+            # effect because no artifact path is registered.
+            app.state.artifact_service = artifact_service
         app.state.draft_service = cls.default_draft_service(app)
         # PRD-D1 — the single-artifact staged-write service (v2). Registered on
         # app state always (harmless when the flag is off — the stage routes are
@@ -256,7 +289,11 @@ class RuntimeApiAppFactory:
                 "run_executor": cls.classify_run_executor(app),
             }
 
-        app.include_router(RuntimeApiRouter.create_router())
+        app.include_router(
+            RuntimeApiRouter.create_router(
+                artifact_effects_v2=_settings.execution.artifact_effects_v2,
+            )
+        )
         app.include_router(UsageApiRouter.create_router())
         # P8-A4 — per-agent usage aggregation (read-only over the canonical
         # ``runtime_model_call_usage`` tracker; cross-audit §5.5 invariant).
@@ -563,6 +600,17 @@ class RuntimeApiAppFactory:
             backend_base_url=backend_base_url,
             service_token=service_token,
         )
+
+    @classmethod
+    def default_artifact_service(cls, app: FastAPI) -> ArtifactService | None:
+        """Compose ArtifactService from a validated storage-owned port bundle."""
+
+        from agent_runtime.api.artifact_repository import ArtifactServiceComposition
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return ArtifactServiceComposition.build(ports)
 
     @classmethod
     def _httpx_membership_fetcher(cls):

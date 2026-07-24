@@ -18,6 +18,8 @@ class FacadeSettings(BaseModel):
     # else, where nginx/Vite serves the wallet page. When set, the facade serves
     # the SIWE wallet page same-origin with the /v1/auth/siwe/* API.
     web_dist_dir: str = ""
+    # SDR §19 migration flag, shared verbatim with ai-backend. Default OFF.
+    artifact_effects_v2: bool = False
 
     @classmethod
     def load(cls) -> "FacadeSettings":
@@ -32,4 +34,8 @@ class FacadeSettings(BaseModel):
                 "/"
             ),
             web_dist_dir=os.environ.get("FACADE_WEB_DIST_DIR", "").strip(),
+            artifact_effects_v2=os.environ.get("ARTIFACT_EFFECTS_V2", "false")
+            .strip()
+            .lower()
+            in {"1", "true", "yes", "on"},
         )
