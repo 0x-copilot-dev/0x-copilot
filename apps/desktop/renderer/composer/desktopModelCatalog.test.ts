@@ -98,3 +98,131 @@ describe("defaultSelectedModelId — provider-aware auto-select", () => {
     expect(models.find((m) => m.id === picked)?.configured).toBe(true);
   });
 });
+
+// The standby (no-active-run) composer calls `defaultSelectedModelId` with NO
+// `preferProvider`, so the provider-priority walk is the only thing standing
+// between the user and the backend's default OpenAI item — which the catalog
+// puts FIRST. The live bug: a user with only an Anthropic key saw "GPT-5.4
+// Mini" preselected because the fallback returned `models[0]` (the keyless
+// default) instead of the one model they could actually run.
+describe("defaultSelectedModelId — provider priority among configured", () => {
+  const openaiDefault = (configured: boolean): CatalogModel => ({
+    id: "gpt-5.4-mini",
+    provider: "openai",
+    model_name: "gpt-5.4-mini",
+    name: "GPT-5.4 Mini",
+    configured,
+    supports_streaming: true,
+    disabled: !configured,
+  });
+  const claude = (configured: boolean): CatalogModel => ({
+    id: "claude-sonnet-4-5",
+    provider: "anthropic",
+    model_name: "claude-sonnet-4-5",
+    name: "Claude Sonnet 4.5",
+    configured,
+    supports_streaming: true,
+    disabled: !configured,
+  });
+  const openrouter = (configured: boolean): CatalogModel => ({
+    id: "openrouter/auto",
+    provider: "openrouter",
+    model_name: "openrouter/auto",
+    name: "OpenRouter Auto",
+    configured,
+    supports_streaming: true,
+    disabled: !configured,
+  });
+  const gemini = (configured: boolean): CatalogModel => ({
+    id: "gemini-2.5-pro",
+    provider: "google",
+    model_name: "gemini-2.5-pro",
+    name: "Gemini 2.5 Pro",
+    configured,
+    supports_streaming: true,
+    disabled: !configured,
+  });
+
+  it("never preselects the keyless OpenAI default; picks Claude when only Anthropic is configured", () => {
+    // Backend default (gpt-5.4-mini) is FIRST but keyless; only Anthropic has a
+    // key. The old `firstUsable ?? models[0]` could surface the OpenAI default.
+    const models = [openaiDefault(false), claude(true), openrouter(false)];
+    expect(defaultSelectedModelId(models)).toBe("claude-sonnet-4-5");
+  });
+
+  it("respects OpenAI > Anthropic > OpenRouter > Gemini when several are configured", () => {
+    const all = [
+      openaiDefault(true),
+      claude(true),
+      openrouter(true),
+      gemini(true),
+    ];
+    expect(defaultSelectedModelId(all)).toBe("gpt-5.4-mini");
+    // Drop OpenAI's key → Anthropic wins.
+    expect(
+      defaultSelectedModelId([
+        openaiDefault(false),
+        claude(true),
+        openrouter(true),
+        gemini(true),
+      ]),
+    ).toBe("claude-sonnet-4-5");
+    // Only OpenRouter + Gemini configured → OpenRouter wins.
+    expect(
+      defaultSelectedModelId([
+        openaiDefault(false),
+        claude(false),
+        openrouter(true),
+        gemini(true),
+      ]),
+    ).toBe("openrouter/auto");
+    // Only Gemini configured → Gemini.
+    expect(
+      defaultSelectedModelId([
+        openaiDefault(false),
+        claude(false),
+        openrouter(false),
+        gemini(true),
+      ]),
+    ).toBe("gemini-2.5-pro");
+  });
+
+  it("preferProvider still wins over the priority order", () => {
+    const models = [openaiDefault(true), claude(true)];
+    expect(
+      defaultSelectedModelId(models, { preferProvider: "anthropic" }),
+    ).toBe("claude-sonnet-4-5");
+  });
+
+  it("falls back to a usable non-priority provider (local) when no priority provider is configured", () => {
+    const models = mergeCatalog({
+      cloudModels: [openaiDefault(false), claude(false)],
+      localModelNames: ["qwen3:4b"],
+    });
+    expect(defaultSelectedModelId(models)).toBe("qwen3:4b");
+  });
+
+  it('returns "" — never an unusable entry — when nothing is configured', () => {
+    const models = [openaiDefault(false), claude(false), openrouter(false)];
+    expect(defaultSelectedModelId(models)).toBe("");
+  });
+
+  it("prefers defaultModelId within the winning priority provider", () => {
+    const models: CatalogModel[] = [
+      openaiDefault(true),
+      {
+        id: "gpt-5",
+        provider: "openai",
+        model_name: "gpt-5",
+        name: "GPT-5",
+        configured: true,
+        supports_streaming: true,
+      },
+      claude(true),
+    ];
+    // OpenAI wins the priority; the default_model_id selects WITHIN it.
+    expect(defaultSelectedModelId(models, { defaultModelId: "gpt-5" })).toBe(
+      "gpt-5",
+    );
+  });
+});

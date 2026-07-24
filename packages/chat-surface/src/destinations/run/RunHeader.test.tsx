@@ -4,6 +4,13 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { RunHeader } from "./RunHeader";
+import { STUDIO_ENABLED } from "./useRunMode";
+
+// The Studio/Focus segmented control is hidden while Studio is disabled. Its
+// tests are gated behind the flag so they run again on re-enable; a Focus-only
+// test asserts the switcher is absent in the shipping (Focus-only) state.
+const studioIt = STUDIO_ENABLED ? it : it.skip;
+const focusIt = STUDIO_ENABLED ? it.skip : it;
 
 describe("RunHeader", () => {
   it("renders the ACTIVE RUN kicker and the goal", () => {
@@ -39,27 +46,40 @@ describe("RunHeader", () => {
     );
   });
 
-  it("renders a two-tab Studio/Focus segmented control reflecting the mode", () => {
-    render(<RunHeader goal="G" mode="focus" onModeChange={() => {}} />);
-    const tablist = screen.getByTestId("run-mode-switcher");
-    expect(tablist.getAttribute("role")).toBe("tablist");
-    const studio = screen.getByTestId("run-mode-studio");
-    const focus = screen.getByTestId("run-mode-focus");
-    expect(studio.getAttribute("aria-selected")).toBe("false");
-    expect(focus.getAttribute("aria-selected")).toBe("true");
-    // Roving tabindex: only the selected tab is in the tab order.
-    expect(studio.getAttribute("tabindex")).toBe("-1");
-    expect(focus.getAttribute("tabindex")).toBe("0");
-  });
+  studioIt(
+    "renders a two-tab Studio/Focus segmented control reflecting the mode",
+    () => {
+      render(<RunHeader goal="G" mode="focus" onModeChange={() => {}} />);
+      const tablist = screen.getByTestId("run-mode-switcher");
+      expect(tablist.getAttribute("role")).toBe("tablist");
+      const studio = screen.getByTestId("run-mode-studio");
+      const focus = screen.getByTestId("run-mode-focus");
+      expect(studio.getAttribute("aria-selected")).toBe("false");
+      expect(focus.getAttribute("aria-selected")).toBe("true");
+      // Roving tabindex: only the selected tab is in the tab order.
+      expect(studio.getAttribute("tabindex")).toBe("-1");
+      expect(focus.getAttribute("tabindex")).toBe("0");
+    },
+  );
 
-  it("fires onModeChange when a segment is clicked", () => {
+  focusIt(
+    "hides the Studio/Focus segmented control while Studio is disabled",
+    () => {
+      render(<RunHeader goal="G" mode="focus" onModeChange={() => {}} />);
+      expect(screen.queryByTestId("run-mode-switcher")).toBeNull();
+      expect(screen.queryByTestId("run-mode-studio")).toBeNull();
+      expect(screen.queryByTestId("run-mode-focus")).toBeNull();
+    },
+  );
+
+  studioIt("fires onModeChange when a segment is clicked", () => {
     const onModeChange = vi.fn();
     render(<RunHeader goal="G" mode="studio" onModeChange={onModeChange} />);
     fireEvent.click(screen.getByTestId("run-mode-focus"));
     expect(onModeChange).toHaveBeenCalledWith("focus");
   });
 
-  it("cycles modes with ArrowLeft/ArrowRight over the two values", () => {
+  studioIt("cycles modes with ArrowLeft/ArrowRight over the two values", () => {
     const onModeChange = vi.fn();
     render(<RunHeader goal="G" mode="studio" onModeChange={onModeChange} />);
     const tablist = screen.getByTestId("run-mode-switcher");

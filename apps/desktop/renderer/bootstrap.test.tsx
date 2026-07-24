@@ -467,6 +467,71 @@ describe("renderer bootstrap", () => {
     ).toBe("run");
   });
 
+  it("Chats 'New chat' clears the bound conversation, rebinding to the 'new' sentinel (Bug A)", async () => {
+    // The cockpit head-resolves whatever conversation it is bound to via
+    // GET /v1/agent/conversations/{id}. Recording those paths lets us prove
+    // whether "New chat" cleared the binding (→ "new") or left it stale.
+    const paths: string[] = [];
+    const root = await mountSignedInShell((path) => {
+      paths.push(path);
+      return undefined; // fall through to the fake bridge's null
+    });
+
+    // Bind a conversation the way a deep-link / reopen does — navigate the
+    // shell router's hash. Its subscription binds the conversation and lands on
+    // Run, and the cockpit head-resolves conv_bound.
+    await act(async () => {
+      window.location.hash = "#/convo/conv_bound";
+      window.dispatchEvent(new Event("hashchange"));
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(paths).toContain("/v1/agent/conversations/conv_bound");
+
+    // Go to the Chats destination and wait for its "New chat" CTA (the archive
+    // does a 3-bucket `Promise.all` fetch, so flush a few microtask turns). The
+    // fake bridge returns no conversations → the empty state, whose New-chat
+    // primary is `empty-state-action` (the ready-state header uses
+    // `chats-new-chat`); both invoke the same `onNewChat`.
+    await act(async () => {
+      (
+        root.querySelector(
+          "[data-component='app-rail'] [data-destination='chats']",
+        ) as HTMLButtonElement
+      )?.click();
+    });
+    let newChat: HTMLButtonElement | null = null;
+    for (let i = 0; i < 20 && newChat === null; i += 1) {
+      await act(async () => {
+        await Promise.resolve();
+      });
+      newChat = root.querySelector(
+        "[data-testid='empty-state-action'], [data-testid='chats-new-chat']",
+      ) as HTMLButtonElement | null;
+    }
+    expect(newChat).not.toBeNull();
+
+    // Only observe requests issued AFTER the New-chat click.
+    paths.length = 0;
+    await act(async () => {
+      newChat?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Fixed: New chat routes through `openNewRun` (same as ⌘N), which clears the
+    // bound conversation → the cockpit remounts on the "new" sentinel and head-
+    // resolves it. The old wiring (`handleNavigate("run")`) kept conv_bound
+    // bound and would have refetched it instead.
+    expect(
+      root
+        .querySelector("[data-testid='destination-outlet']")
+        ?.getAttribute("data-destination"),
+    ).toBe("run");
+    expect(paths).toContain("/v1/agent/conversations/new");
+    expect(paths).not.toContain("/v1/agent/conversations/conv_bound");
+  });
+
   it("shows the fatal boot screen when the supervisor reports a fatal status", async () => {
     const controls = installFakeBridge();
     container = document.createElement("div");
