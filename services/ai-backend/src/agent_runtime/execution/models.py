@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from agent_runtime.execution.contracts import (
     ModelConfig,
     ModelReasoningConfig,
+    ModelReasoningSummary,
     RuntimeErrorCode,
 )
 from agent_runtime.execution.depth import DepthBudgetTable, ReasoningDepth
@@ -143,10 +144,11 @@ class ModelConfigResolver:
                 if selected.supports_streaming is not None
                 else default_model.supports_streaming
             ),
-            reasoning=(
-                selected.reasoning
-                if selected.reasoning is not None
-                else default_model.reasoning
+            reasoning=self._resolve_reasoning(
+                provider=provider,
+                model_name=selected.model_name or default_model.model_name,
+                selected=selected.reasoning,
+                default=default_model.reasoning,
             ),
             # Inherit the deployment-wide tool-call budget from settings;
             # depth scales it below. Keeps a single source of truth so an
@@ -154,6 +156,59 @@ class ModelConfigResolver:
             tool_call_budget=self.settings.execution.tool_call_budget,
         )
         return DepthBudgetTable.apply(base, selected.reasoning_depth)
+
+    @classmethod
+    def _resolve_reasoning(
+        cls,
+        *,
+        provider: str,
+        model_name: str,
+        selected: ModelReasoningConfig | None,
+        default: ModelReasoningConfig | None,
+    ) -> ModelReasoningConfig | None:
+        """Resolve the reasoning config, defaulting a summary for native OpenAI.
+
+        Precedence is unchanged: an explicit request config wins, then the
+        deployment default. Only when BOTH are absent do we synthesize one — and
+        only for a native OpenAI reasoning-capable model. Without this, a reasoning
+        model (e.g. ``gpt-5.4-mini``) runs with ``reasoning=None``, so the builder
+        never asks OpenAI for ``reasoning.summary`` and the Responses API emits no
+        ``reasoning_summary_text_delta`` — the Focus/Studio transcript then shows
+        no thinking block.
+
+        The default requests only a ``summary`` (``auto``); effort is left unset so
+        OpenAI applies its own default. It is scoped to ``provider == "openai"`` so
+        the OpenAI-wire-compatible gateways (OpenRouter) and custom endpoints —
+        which route through Chat Completions and 400 on a ``reasoning`` kwarg —
+        never inherit it. Anthropic/Gemini thinking is a separate control and is
+        untouched here.
+        """
+
+        if selected is not None:
+            return selected
+        if default is not None:
+            return default
+        if provider == "openai" and cls._openai_supports_reasoning(model_name):
+            return ModelReasoningConfig(summary=ModelReasoningSummary.AUTO)
+        return None
+
+    @staticmethod
+    def _openai_supports_reasoning(model_name: str) -> bool:
+        """Whether ``model_name`` is a native OpenAI reasoning model.
+
+        A capability family predicate, not a per-model list: the ``gpt-5`` line and
+        the ``o1``/``o3``/``o4`` reasoning series always reason, so requesting a
+        summary is safe. Non-reasoning OpenAI models (``gpt-4o``, ``gpt-4.1``, and
+        the ``gpt-5-chat`` conversational variants) are excluded — the Responses
+        API 400s on a ``reasoning`` param they do not support.
+        """
+
+        normalized = model_name.strip().lower().replace("_", "-")
+        if "chat" in normalized:
+            return False
+        if normalized.startswith(("o1", "o3", "o4")):
+            return True
+        return normalized.startswith("gpt-5")
 
     @classmethod
     def _normalize_provider(cls, provider: str) -> str:

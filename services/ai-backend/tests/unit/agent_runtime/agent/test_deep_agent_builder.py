@@ -112,6 +112,45 @@ def test_deep_agent_builder_configures_openai_responses_reasoning(
     assert fake_deepagents.calls[0]["model"] == call
 
 
+def test_deep_agent_builder_requests_summary_only_reasoning(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The resolver synthesizes a summary-only config for a native OpenAI
+    # reasoning model that had no explicit reasoning selection. The builder must
+    # turn that into ``reasoning={"summary": "auto"}`` on the Responses API so
+    # OpenAI emits ``reasoning_summary_text_delta`` (the thinking block); effort
+    # is left to OpenAI's default and temperature must be dropped.
+    fake_deepagents = FakeDeepAgentsModule()
+    chat_models = CapturingChatModelFactory()
+    monkeypatch.setattr(
+        builder_module, "create_deep_agent", fake_deepagents.create_deep_agent
+    )
+    monkeypatch.setattr(builder_module, "init_chat_model", chat_models)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=("doc_search",),
+            model_config=ModelConfig(
+                provider="openai",
+                model_name="gpt-5.4-mini",
+                max_input_tokens=128_000,
+                timeout_seconds=45,
+                temperature=0,
+                supports_streaming=True,
+                reasoning=ModelReasoningConfig(summary=ModelReasoningSummary.AUTO),
+            ),
+            system_prompt="Follow policy.",
+        )
+    )
+
+    call = chat_models.calls[0]
+    assert call.kwargs["use_responses_api"] is True
+    assert call.kwargs["reasoning"] == {"summary": "auto"}
+    assert call.kwargs["output_version"] == "responses/v1"
+    assert "temperature" not in call.kwargs
+    assert "include" not in call.kwargs
+
+
 def test_deep_agent_builder_routes_openrouter_to_chat_completions(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
