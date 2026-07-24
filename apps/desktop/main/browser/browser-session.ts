@@ -21,6 +21,7 @@
 
 import {
   BrowserActionClass,
+  BrowserEffectOutcome,
   BrowserActionStatus,
   BrowserErrorCode,
   BrowserToolName,
@@ -39,8 +40,11 @@ import {
   actionRequiresApproval,
   classifyTool,
   type BrowserActionRequest,
+  type BrowserActionPlan,
   type BrowserActionResult,
+  type BrowserEffectReceipt,
   type BrowserOriginPolicy,
+  type BrowserPrepareResult,
   type BrowserSnapshotNode,
 } from "./protocol";
 import type {
@@ -91,8 +95,13 @@ export class BrowserSession {
   #pageId = "";
   #generation = 0;
   #currentOrigin: string | undefined;
-  /** ref -> redacted {role,name} for the CURRENT generation only. */
-  readonly #refIndex = new Map<string, { role: string; name: string }>();
+  /** ref -> redacted target identity for the CURRENT generation only. */
+  readonly #refIndex = new Map<
+    string,
+    { role: string; name: string; fingerprint: string }
+  >();
+  /** Private one-use handles created only after an exact prepare check. */
+  readonly #preparedActions = new Map<string, BrowserActionPlan>();
 
   constructor(cfg: BrowserSessionConfig) {
     this.#cfg = cfg;
@@ -108,6 +117,16 @@ export class BrowserSession {
 
   get generation(): number {
     return this.#generation;
+  }
+
+  /** Opaque main/worker-only session reference; never a cookie or host path. */
+  get sessionRef(): string {
+    return `browser-session://${this.#sessionId}`;
+  }
+
+  /** Opaque current-page reference. It changes only when the session closes. */
+  get pageRef(): string {
+    return `browser-page://${this.#pageId}`;
   }
 
   /** Open the isolated context + first page. Idempotent. */
@@ -393,6 +412,94 @@ export class BrowserSession {
     });
   }
 
+  // --- private A5 effect bridge -------------------------------------------
+
+  /**
+   * Revalidate an exact staged action without a page mutation. This method is
+   * available only to Electron-main's private bridge, never to the MCP broker.
+   */
+  async prepareAction(plan: BrowserActionPlan): Promise<BrowserPrepareResult> {
+    if (this.#page === null) await this.open();
+    if (!this.#matchesPlan(plan)) return this.#drift(plan);
+    const preparedRef = `browser-prepared://${this.#sessionId}/${this.#randomId()}`;
+    this.#preparedActions.set(preparedRef, plan);
+    return {
+      preparedRef,
+      observedPreconditionDigest: plan.preconditionDigest,
+      preconditionDrift: false,
+    };
+  }
+
+  /**
+   * Apply exactly one prepared action. It consumes the handle before touching
+   * Playwright so redelivery cannot send the action twice.
+   */
+  async applyPrepared(preparedRef: string): Promise<BrowserEffectReceipt> {
+    const plan = this.#preparedActions.get(preparedRef);
+    this.#preparedActions.delete(preparedRef);
+    if (plan === undefined) {
+      return {
+        outcome: BrowserEffectOutcome.Indeterminate,
+        safeMessage: "The prepared browser action is no longer available.",
+      };
+    }
+    if (!this.#matchesPlan(plan)) {
+      return {
+        outcome: BrowserEffectOutcome.PreconditionDrift,
+        safeMessage: "The browser page changed before the action was applied.",
+      };
+    }
+    const target = this.#resolveRef(plan.elementRef!);
+    if (target === null) {
+      return {
+        outcome: BrowserEffectOutcome.PreconditionDrift,
+        safeMessage: "The reviewed browser element is no longer available.",
+      };
+    }
+    try {
+      switch (plan.actionKind) {
+        case "click":
+          await this.#requirePage().clickRef(target);
+          this.#bumpGeneration();
+          break;
+        case "submit":
+          await this.#requirePage().submitRef(target);
+          this.#bumpGeneration();
+          break;
+        // Typed values and artifact upload bytes remain behind the later
+        // protected-fields/upload bridge. Never substitute model text or a host
+        // path into a reviewed plan.
+        case "input":
+        case "select":
+        case "upload_submit":
+          return {
+            outcome: BrowserEffectOutcome.Failed,
+            safeMessage:
+              "This reviewed browser action is not enabled on this device.",
+          };
+      }
+    } catch {
+      // A POST/click may have reached the origin before Playwright reports an
+      // error. It is therefore indeterminate and never retried blindly.
+      return {
+        outcome: BrowserEffectOutcome.Indeterminate,
+        safeMessage: "The browser action outcome could not be confirmed.",
+      };
+    }
+    return {
+      outcome: BrowserEffectOutcome.Applied,
+      safeMessage: "The reviewed browser action was applied.",
+    };
+  }
+
+  /** Observe a prior attempt only. It must never execute a page action. */
+  async reconcileAction(_preparedRef: string): Promise<BrowserEffectReceipt> {
+    return {
+      outcome: BrowserEffectOutcome.Indeterminate,
+      safeMessage: "The browser action outcome could not be confirmed.",
+    };
+  }
+
   /**
    * The approval gate. Reads pass through (returns null). A side-effecting
    * action MUST clear the injected `BrowserApprovalPort`; when no port is wired
@@ -444,6 +551,32 @@ export class BrowserSession {
   #bumpGeneration(): void {
     this.#generation += 1;
     this.#refIndex.clear();
+    this.#preparedActions.clear();
+  }
+
+  #matchesPlan(plan: BrowserActionPlan): boolean {
+    if (
+      plan.sessionRef !== this.sessionRef ||
+      plan.pageRef !== this.pageRef ||
+      plan.origin !== this.#currentOrigin ||
+      plan.precondition.origin !== this.#currentOrigin ||
+      plan.precondition.pageGeneration !== this.#generation ||
+      plan.elementRef === undefined ||
+      plan.elementFingerprint === undefined
+    )
+      return false;
+    const entry = this.#refIndex.get(plan.elementRef);
+    return entry?.fingerprint === plan.elementFingerprint;
+  }
+
+  #drift(plan: BrowserActionPlan): BrowserPrepareResult {
+    return {
+      observedPreconditionDigest:
+        plan.preconditionDigest === "0".repeat(64)
+          ? "f".repeat(64)
+          : "0".repeat(64),
+      preconditionDrift: true,
+    };
   }
 
   #label(target: ElementTarget): string {
@@ -493,15 +626,29 @@ export class BrowserSession {
     const convert = (node: RawAxNode, depth: number): BrowserSnapshotNode => {
       const ref = `e${gen}_${count}`;
       const name = node.name ?? "";
+      const fingerprint = sha256Hex(
+        new TextEncoder().encode(
+          JSON.stringify([
+            this.#sessionId,
+            this.#pageId,
+            this.#generation,
+            ref,
+            node.role,
+            name,
+            this.#currentOrigin ?? "",
+          ]),
+        ),
+      );
       const out: BrowserSnapshotNode = {
         ref,
         role: node.role,
         // The accessible NAME (label), never `node.value` (input contents).
         name,
+        fingerprint,
       };
       // Record the ref so the action layer can resolve it to a role/name
       // locator for the CURRENT generation (redacted label only, no value).
-      this.#refIndex.set(ref, { role: node.role, name });
+      this.#refIndex.set(ref, { role: node.role, name, fingerprint });
       count += 1;
       if (
         depth < maxDepth &&

@@ -14,9 +14,17 @@ from agent_runtime.capabilities.browser.desktop_browser_provider import (
     DesktopBrowserMcpProvider,
     build_browser_mcp,
 )
+from agent_runtime.capabilities.browser.effect_adapter import (
+    BrowserEffectExecutor,
+    BrowserEffectStageAdapter,
+)
+from agent_runtime.capabilities.browser.operation_adapter import BrowserOperationAdapter
 
 __all__ = [
     "BrowserMcpConfig",
+    "BrowserEffectExecutor",
+    "BrowserEffectStageAdapter",
+    "BrowserOperationAdapter",
     "DesktopBrowserMcpClient",
     "DesktopBrowserMcpProvider",
     "build_browser_mcp",

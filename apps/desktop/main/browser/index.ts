@@ -65,6 +65,10 @@ export {
   type BrowserWorkerPort,
 } from "./browser-broker";
 export {
+  BrowserPrivateEffectBridge,
+  type BrowserPrivateEffectWorkerPort,
+} from "./private-effect-bridge";
+export {
   SessionWorkerPort,
   type SessionWorkerPortConfig,
 } from "./session-worker-port";

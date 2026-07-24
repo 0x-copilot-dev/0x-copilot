@@ -12,12 +12,18 @@
 // factory + fake engine and never launch a browser.
 
 import {
+  BrowserActionStatus,
+  BrowserErrorCode,
   BrowserToolName,
+  type BrowserActionPlan,
   type BrowserActionRequest,
+  type BrowserEffectReceipt,
+  type BrowserPrepareResult,
   type BrowserActionResult,
 } from "./protocol";
 import type { BrowserSession } from "./browser-session";
 import type { BrowserWorkerPort } from "./browser-broker";
+import type { BrowserPrivateEffectWorkerPort } from "./private-effect-bridge";
 import { browserToolSchemas, type BrowserToolSchema } from "./tool-schemas";
 
 export interface SessionWorkerPortConfig {
@@ -33,21 +39,41 @@ export interface SessionWorkerPortConfig {
   readonly includeActionTools?: boolean;
 }
 
-export class SessionWorkerPort implements BrowserWorkerPort {
+export class SessionWorkerPort
+  implements BrowserWorkerPort, BrowserPrivateEffectWorkerPort
+{
   readonly #cfg: SessionWorkerPortConfig;
   readonly #sessions = new Map<string, BrowserSession>();
+  readonly #preparedOwners = new Map<string, BrowserSession>();
 
   constructor(cfg: SessionWorkerPortConfig) {
     this.#cfg = cfg;
   }
 
   listTools(): Promise<readonly BrowserToolSchema[]> {
-    return Promise.resolve(
-      browserToolSchemas({ includeActions: this.#cfg.includeActionTools }),
-    );
+    // Generic side-effect schemas remain unadvertised. Passing a legacy
+    // includeActionTools flag cannot reopen browser_click outside the staged
+    // BrowserPrivateEffectBridge protocol.
+    return Promise.resolve(browserToolSchemas({ includeActions: false }));
   }
 
   async dispatch(request: BrowserActionRequest): Promise<BrowserActionResult> {
+    // The broker performs this check too, but the worker is an authority
+    // boundary in its own right. An internal caller cannot sidestep the staged
+    // protocol by calling `dispatch(browser_click)` directly.
+    const advertised = await this.listTools();
+    if (!advertised.some((tool) => tool.name === request.toolName)) {
+      return {
+        version: 1,
+        requestId: request.requestId,
+        sessionId: "",
+        actionId: "",
+        status: BrowserActionStatus.Denied,
+        safeSummary: "browser side-effecting actions require staged review",
+        artifactRefs: [],
+        errorCode: BrowserErrorCode.ToolNotImplemented,
+      };
+    }
     const runId = request.binding.runId;
     let session = this.#sessions.get(runId);
     if (session === undefined) {
@@ -61,10 +87,44 @@ export class SessionWorkerPort implements BrowserWorkerPort {
     return result;
   }
 
+  /** Electron-main private bridge only; absent from the public broker port. */
+  async prepareAction(plan: BrowserActionPlan): Promise<BrowserPrepareResult> {
+    const session = this.#sessionForOpaqueRef(plan.sessionRef);
+    const prepared = await session.prepareAction(plan);
+    if (prepared.preparedRef !== undefined) {
+      this.#preparedOwners.set(prepared.preparedRef, session);
+    }
+    return prepared;
+  }
+
+  async applyPrepared(preparedRef: string): Promise<BrowserEffectReceipt> {
+    const owner = this.#preparedOwners.get(preparedRef);
+    this.#preparedOwners.delete(preparedRef);
+    return owner === undefined
+      ? {
+          outcome: "indeterminate",
+          safeMessage: "The prepared browser action is no longer available.",
+        }
+      : owner.applyPrepared(preparedRef);
+  }
+
+  async reconcileAction(preparedRef: string): Promise<BrowserEffectReceipt> {
+    // This calls no page action. The opaque prepared ref is the only lookup
+    // key and its owner remains local to this worker port.
+    const owner = this.#preparedOwners.get(preparedRef);
+    return owner === undefined
+      ? {
+          outcome: "indeterminate",
+          safeMessage: "The browser action outcome could not be confirmed.",
+        }
+      : owner.reconcileAction(preparedRef);
+  }
+
   /** Tear down every live session (teardown / cancel / app shutdown). */
   async closeAll(): Promise<void> {
     const sessions = [...this.#sessions.values()];
     this.#sessions.clear();
+    this.#preparedOwners.clear();
     for (const session of sessions) {
       try {
         await session.close();
@@ -72,5 +132,12 @@ export class SessionWorkerPort implements BrowserWorkerPort {
         // Best-effort teardown.
       }
     }
+  }
+
+  #sessionForOpaqueRef(sessionRef: string): BrowserSession {
+    for (const session of this.#sessions.values()) {
+      if (session.sessionRef === sessionRef) return session;
+    }
+    throw new Error("browser session reference is unavailable");
   }
 }

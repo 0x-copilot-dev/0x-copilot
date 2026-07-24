@@ -449,7 +449,10 @@ class OperationGateway:
                 org_id=context.identity.org_id,
                 user_id=context.identity.user_id,
                 request=create_request,
-                provenance=ArtifactProvenance(author=author),
+                provenance=ArtifactProvenance(
+                    author=author,
+                    source_ref=publication.source_ref,
+                ),
                 content=publication.content,
             )
         assert publication.content_ref is not None
@@ -459,7 +462,7 @@ class OperationGateway:
             request=create_request,
             provenance=ArtifactProvenance(
                 author=author,
-                source_ref=publication.content_ref,
+                source_ref=publication.source_ref or publication.content_ref,
             ),
             source_ref=publication.content_ref,
         )
