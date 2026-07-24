@@ -14,7 +14,10 @@ SERVICE_CONTRACTS_PATH := ../../packages/service-contracts/src
 AUDIT_CHAIN_PATH := ../../packages/audit-chain/src
 SHARED_PYTHONPATH := src:$(SERVICE_CONTRACTS_PATH):$(AUDIT_CHAIN_PATH)
 
-.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall desktop-supervised test test-merge-live
+CLI_DIR := tools/cli
+BUMP ?= patch
+
+.PHONY: help setup setup-node setup-python setup-hooks check-local-env check-provider-key dev prod prod-build check-prod-env docker-dev docker-dev-down desktop-install desktop-uninstall desktop-supervised cli-version cli-publish test test-merge-live
 
 help:
 	@echo "0xCopilot make targets"
@@ -27,6 +30,8 @@ help:
 	@echo "  make desktop-supervised One command: stage runtime + build + launch the REAL supervised desktop app"
 	@echo "  make desktop-install    Build the copilot CLI from this checkout, install it globally, launch"
 	@echo "  make desktop-uninstall  Remove the copilot CLI, staged runtime, and local app data"
+	@echo "  make cli-version BUMP=patch  Bump @0x-copilot/cli version (patch|minor|major|x.y.z)"
+	@echo "  make cli-publish        Publish @0x-copilot/cli to npm (needs npm login)"
 	@echo "  make prod             Build production artifacts after prod env checks"
 	@echo "  make test             Run focused auth/runtime tests"
 
@@ -171,6 +176,32 @@ desktop-uninstall:
 	rm -f tools/cli/0x-copilot-cli-*.tgz
 	rm -rf tools/cli/payload
 	@echo "Done. If 'copilot' still resolves in this shell, run: hash -r"
+
+# --- Publish the @0x-copilot/cli npm package (manual, from a maintainer machine) ---
+# No CI publishes this package: ci-cli.yml only runs checks, and the `v*` tag
+# drives release-desktop.yml (the Electron GitHub release), NOT this npm package.
+# Release flow:
+#   make cli-version BUMP=patch     # patch|minor|major, or an exact version like 0.2.0
+#   git commit -am "chore(cli): bump @0x-copilot/cli to <v>"
+#   make cli-publish
+# `npm publish` runs prepack (assemble-payload -> full desktop + frontend build),
+# so root node_modules must exist; `npm login` (with publish rights on the
+# @0x-copilot scope) is required first.
+cli-version:
+	cd $(CLI_DIR) && npm version $(BUMP) --no-git-tag-version
+	@v=$$(node -p "require('./$(CLI_DIR)/package.json').version"); \
+		echo; \
+		echo "Bumped @0x-copilot/cli to $$v (package.json only, no git tag)."; \
+		echo "Next: git commit -am \"chore(cli): bump @0x-copilot/cli to $$v\" && make cli-publish"
+
+cli-publish:
+	@test -d node_modules || (echo "Missing node_modules. Run: make setup" && exit 1)
+	@npm whoami >/dev/null 2>&1 || (echo "Not logged in to npm. Run: npm login (need publish rights on the @0x-copilot scope)." && exit 1)
+	cd $(CLI_DIR) && npm run check && npm run smoke && node scripts/pack-manifest-check.mjs
+	@v=$$(node -p "require('./$(CLI_DIR)/package.json').version"); \
+		echo "Publishing @0x-copilot/cli@$$v to npm as '$$(npm whoami)' (public, tag latest)..."
+	cd $(CLI_DIR) && npm publish
+	@echo "Published. Verify with: npm view @0x-copilot/cli version"
 
 check-prod-env:
 	@test -n "$$ENTERPRISE_AUTH_SECRET" || (echo "ENTERPRISE_AUTH_SECRET is required for make prod" && exit 1)
