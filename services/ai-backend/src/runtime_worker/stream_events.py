@@ -102,6 +102,15 @@ class StreamCustomProcessor:
         payload = StreamMessageParser.safe_activity_payload(data)
         if not payload:
             return
+        if namespace.is_subagent and parent_task_id is not None:
+            payload.setdefault(Keys.Field.PARENT_TASK_ID, parent_task_id)
+        if namespace.is_subagent:
+            StreamUpdateProcessor.add_subagent_presentation_fields(
+                run=run,
+                event_type=RuntimeApiEventType.SUBAGENT_PROGRESS,
+                payload=payload,
+                parent_task_id=parent_task_id,
+            )
         await event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT

@@ -1,0 +1,1075 @@
+/*
+ * Shared subagent, fleet, and Agents-pane presentation.
+ *
+ * Hosts must load the design-system tokens before this stylesheet. Both the
+ * web and desktop entrypoints import it so chat-surface components do not rely
+ * on a host-private stylesheet.
+ */
+
+/* Timeline subset used by shared subagent activity components. */
+.aui-tool-card__timeline {
+  border-left: 1px solid var(--color-border);
+  display: grid;
+  gap: var(--space-sm);
+  margin-left: var(--space-xs);
+  padding-left: var(--space-md);
+}
+
+.aui-tool-card__timeline-item {
+  align-items: start;
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: 1fr auto;
+  position: relative;
+}
+
+.aui-tool-card__timeline-item::before {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+  content: "";
+  height: 0.45rem;
+  left: calc(-1 * var(--space-md) - 0.25rem);
+  position: absolute;
+  top: 0.4rem;
+  width: 0.45rem;
+}
+
+.aui-tool-card__timeline-item p {
+  color: var(--color-text-muted);
+  margin: var(--space-2xs) 0 0;
+}
+
+.aui-tool-card__timeline-title {
+  color: var(--color-text);
+  font-weight: 650;
+}
+
+.aui-tool-card__timeline-item > span {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-2xs);
+  text-transform: uppercase;
+}
+
+/* Agents workspace tab. */
+.atlas-workspace-agent-group {
+  list-style: none;
+  margin: 0 0 var(--space-sm);
+  padding: 0;
+}
+
+.atlas-workspace-agent-group__header {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: flex;
+  font: 600 0.72rem/1.2 var(--font-sans);
+  justify-content: space-between;
+  margin-bottom: var(--space-xs);
+  padding: 0.25rem 0.125rem;
+  text-align: left;
+  width: 100%;
+}
+
+.atlas-workspace-agent-group__header:hover,
+.atlas-workspace-agent-group__header:focus-visible {
+  background: var(--color-surface);
+  color: var(--color-text);
+  outline: none;
+}
+
+.atlas-workspace-agent-group__header time {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.atlas-workspace-agent-group__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.atlas-workspace-agent {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.atlas-workspace-agent__header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.atlas-workspace-agent__name {
+  color: var(--color-text);
+  flex: 1 1 auto;
+  font-weight: var(--font-weight-semibold);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.atlas-workspace-agent__objective,
+.atlas-workspace-agent__result,
+.atlas-workspace-agent__meta {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  margin: 0;
+}
+
+.atlas-workspace-agent__working {
+  color: var(--color-accent-strong);
+  font-weight: var(--font-weight-medium);
+}
+
+.atlas-workspace-agent__details {
+  margin-top: 2px;
+}
+
+.atlas-workspace-agent__details-summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  justify-content: space-between;
+  list-style: none;
+  padding: 2px 0;
+  user-select: none;
+}
+
+.atlas-workspace-agent__details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.atlas-workspace-agent__details-summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+.atlas-workspace-agent__disclosure-hint {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-2xs);
+  transition: transform 120ms ease;
+}
+
+.atlas-workspace-agent__details[open]
+  > .atlas-workspace-agent__details-summary
+  .atlas-workspace-agent__disclosure-hint {
+  transform: rotate(180deg);
+}
+
+.atlas-workspace-agent__timeline {
+  font-size: var(--font-size-xs);
+  margin-top: 6px;
+  padding-left: 16px;
+}
+
+.atlas-workspace-agent__timeline.aui-tool-card__timeline
+  > .aui-tool-card__timeline-item {
+  padding: 6px 0;
+}
+
+/* Focus Agents scan rows. This is intentionally a distinct primitive from
+ * `.subagent-card`: the thread card remains a richer, vertical detail view. */
+.atlas-workspace-tab__item--child {
+  margin-left: 0;
+}
+
+.agent-activity-row {
+  align-items: flex-start;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  display: flex;
+  flex-wrap: nowrap;
+  gap: 9px;
+  padding: 9px 11px;
+  position: relative;
+}
+
+.agent-activity-row[data-lead="true"] {
+  background: var(--color-surface);
+}
+
+.agent-activity-row:has(.agent-activity-row__details[open]) {
+  flex-wrap: wrap;
+}
+
+.agent-activity-row[data-depth] {
+  margin-left: 18px;
+}
+
+.agent-activity-row__lifecycle {
+  align-items: center;
+  color: var(--color-text);
+  display: inline-flex;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  font-weight: 400;
+  height: 14px;
+  justify-content: center;
+  line-height: 1;
+  margin-top: 1px;
+  width: 14px;
+}
+
+.agent-activity-row__lifecycle[data-status="completed"] {
+  color: var(--color-success, var(--color-text-muted));
+}
+
+.agent-activity-row__lifecycle[data-status="failed"],
+.agent-activity-row__lifecycle[data-status="timed_out"] {
+  color: var(--color-danger);
+}
+
+.agent-activity-row__lifecycle[data-status="cancelled"],
+.agent-activity-row__lifecycle[data-status="paused"] {
+  color: var(--color-warning, var(--color-text-muted));
+}
+
+.agent-activity-row__spinner {
+  animation: agent-activity-row-spin 0.85s linear infinite;
+  border: 2px solid var(--color-border-strong);
+  border-radius: 999px;
+  border-top-color: var(--color-accent);
+  display: block;
+  height: 14px;
+  width: 14px;
+}
+
+.agent-activity-row__content {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+.agent-activity-row__identity {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.agent-activity-row__name {
+  color: var(--color-text);
+  font: 500 11.5px/17.25px var(--font-sans);
+  letter-spacing: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.agent-activity-row__model {
+  align-items: center;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 5px;
+  color: var(--color-accent);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: 400 8.5px/12px var(--font-mono);
+  gap: 4px;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  white-space: nowrap;
+}
+
+.agent-activity-row__activity {
+  color: var(--color-text-subtle);
+  font: 400 9px/13.5px var(--font-mono);
+  margin: 3px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-activity-row__actions {
+  align-items: center;
+  align-self: center;
+  display: inline-flex;
+  gap: 2px;
+}
+
+.agent-activity-row[data-has-detail="true"] .agent-activity-row__actions {
+  margin-right: 20px;
+}
+
+.agent-activity-row__jump,
+.agent-activity-row__detail-toggle {
+  align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: inline-flex;
+  font: 500 12px/1 var(--font-mono);
+  height: 18px;
+  justify-content: center;
+  padding: 0;
+  width: 18px;
+}
+
+.agent-activity-row__detail-toggle {
+  cursor: pointer;
+  list-style: none;
+  position: absolute;
+  right: 11px;
+  top: 9px;
+}
+
+.agent-activity-row__detail-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.agent-activity-row__detail-toggle > span {
+  transition: transform 120ms ease;
+}
+
+.agent-activity-row__details[open] > .agent-activity-row__detail-toggle > span {
+  transform: rotate(180deg);
+}
+
+.agent-activity-row__jump:hover,
+.agent-activity-row__detail-toggle:hover,
+.agent-activity-row__jump:focus-visible,
+.agent-activity-row__detail-toggle:focus-visible {
+  background: var(--color-surface-elevated);
+  color: var(--color-text);
+  outline: none;
+}
+
+.agent-activity-row__jump:focus-visible,
+.agent-activity-row__detail-toggle:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 1px;
+}
+
+.agent-activity-row__details {
+  flex: 0 0 calc(100% - 23px);
+  margin-top: 1px;
+  margin-left: 23px;
+  min-width: 0;
+}
+
+/* Keep a closed native disclosure out of grid flow: its summary is the
+ * top-right chevron, so a second zero-height grid row must not add a visible
+ * 9px gap to the scan row. Opening it returns the body to the row grid. */
+.agent-activity-row__details:not([open]) {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+}
+
+.agent-activity-row__details:not([open]) > .agent-activity-row__detail-toggle {
+  pointer-events: auto;
+}
+
+.agent-activity-row__details-body {
+  background: var(--color-surface-muted);
+  border-top: 1px solid var(--color-border-subtle);
+  padding: 8px 0 0;
+}
+
+.agent-activity-row__details-body .aui-tool-card__timeline {
+  font-size: var(--font-size-xs);
+  margin: 0 0 0 2px;
+  padding-left: 14px;
+}
+
+.agent-activity-row__full-result {
+  color: var(--color-text-muted);
+  font: 400 10px/1.45 var(--font-mono);
+  margin: 0;
+  max-height: 12rem;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.agent-activity-row__empty {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  margin: 0;
+}
+
+.agent-activity-row__approval-jump {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+  margin-top: 8px;
+  padding: 2px 0;
+}
+
+.agent-activity-row__approval-jump:hover,
+.agent-activity-row__approval-jump:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
+/* Parallel subagent fleet. */
+.aui-fleet-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-lg);
+  display: grid;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+}
+
+.aui-fleet-card__head {
+  align-items: center;
+  display: grid;
+  gap: var(--space-sm);
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.aui-fleet-card__icon {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-accent) 18%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 30%, transparent);
+  border-radius: var(--radius-md);
+  color: var(--color-accent-strong);
+  display: inline-flex;
+  font-size: var(--font-size-sm);
+  height: 2rem;
+  justify-content: center;
+  width: 2rem;
+}
+
+.aui-fleet-card__title {
+  color: var(--color-text);
+  font-size: var(--font-size-lg);
+  font-weight: 650;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aui-fleet-card__count,
+.aui-fleet-card__elapsed {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+}
+
+.aui-fleet-card__sub {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  margin: 0;
+}
+
+.aui-fleet-card__rows {
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.aui-fleet-card__foot {
+  align-items: center;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-size-xs);
+  gap: var(--space-sm);
+}
+
+.aui-fleet-card__foot > span:first-child {
+  flex: 1 1 auto;
+  min-width: min(16rem, 100%);
+}
+
+.aui-fleet-card__foot-text {
+  align-items: center;
+  display: inline-flex;
+  gap: 6px;
+}
+
+.aui-fleet-card__foot-text > svg {
+  color: var(--color-text-muted);
+  flex: none;
+}
+
+.aui-fleet-card__link {
+  background: transparent;
+  border: 0;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  padding: 0;
+}
+
+.aui-fleet-card__link:hover {
+  color: var(--color-accent);
+}
+
+.aui-fleet-card .subagent-card {
+  background: color-mix(in srgb, var(--color-bg) 35%, transparent);
+  border-color: var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 0.25rem var(--space-sm);
+  grid-template-columns: 1.25rem minmax(0, 1fr) minmax(5rem, 9rem) auto auto;
+  padding: var(--space-sm);
+}
+
+.aui-fleet-card .subagent-card__head,
+.aui-fleet-card .subagent-card__details,
+.aui-fleet-card .subagent-card__details-summary {
+  display: contents;
+}
+
+.aui-fleet-card .subagent-card__icon {
+  grid-column: 1;
+  grid-row: 1 / span 2;
+  place-self: center;
+}
+
+.aui-fleet-card .subagent-card__name {
+  font-size: var(--font-size-md);
+  grid-column: 2;
+  grid-row: 1;
+  letter-spacing: var(--tracking-normal);
+  text-transform: none;
+}
+
+.aui-fleet-card .subagent-card__status-badge {
+  justify-self: end;
+}
+
+.aui-fleet-card .subagent-card__jump {
+  grid-column: 5;
+  grid-row: 1 / span 2;
+}
+
+.aui-fleet-card .subagent-card__task,
+.aui-fleet-card .subagent-card__finding {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  grid-column: 2;
+  grid-row: 2;
+  line-clamp: 1;
+  -webkit-line-clamp: 1;
+}
+
+.aui-fleet-card .subagent-card__finding {
+  display: none;
+}
+
+.aui-fleet-card .subagent-card__details-summary::before {
+  align-self: center;
+  background: var(--color-success, #6ee7a8);
+  border-radius: 999px;
+  content: "";
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  height: 5px;
+  justify-self: stretch;
+}
+
+.aui-fleet-card .subagent-card__meta {
+  align-self: center;
+  color: var(--color-text-muted);
+  flex: initial;
+  font-size: var(--font-size-sm);
+  grid-column: 4;
+  grid-row: 1 / span 2;
+  justify-self: end;
+  max-width: 4rem;
+}
+
+.aui-fleet-card .subagent-card__meta::first-letter {
+  text-transform: uppercase;
+}
+
+.aui-fleet-card .subagent-card__disclosure-hint {
+  grid-column: 5;
+  grid-row: 1 / span 2;
+  place-self: center;
+}
+
+.aui-fleet-card .subagent-card__details-body {
+  grid-column: 2 / -1;
+  grid-row: 3;
+}
+
+/* Shared subagent card. */
+.subagent-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--space-sm);
+}
+
+.subagent-card__head {
+  align-items: center;
+  display: flex;
+  font-size: var(--font-size-2xs);
+  gap: 8px;
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.subagent-card__status-badge {
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  padding: 2px 6px;
+}
+
+.subagent-card[data-compact="true"] .subagent-card__status-badge {
+  font-size: var(--font-size-2xs);
+  padding: 1px 5px;
+}
+
+.subagent-card__icon {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+
+.subagent-card__name {
+  flex: 1 1 auto;
+  font-weight: var(--font-weight-semibold);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-card__jump {
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  line-height: 1;
+  padding: 2px 4px;
+}
+
+.subagent-card__jump:hover,
+.subagent-card__jump:focus-visible {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  outline: none;
+}
+
+.subagent-card__task {
+  color: var(--color-text);
+  display: -webkit-box;
+  font-size: var(--font-size-md);
+  line-clamp: 2;
+  line-height: 1.45;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.subagent-card__finding {
+  color: var(--color-text-muted);
+  display: -webkit-box;
+  font-size: var(--font-size-xs);
+  line-clamp: 3;
+  line-height: 1.5;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+.subagent-card__details {
+  margin-top: 2px;
+}
+
+.subagent-card__details-summary {
+  align-items: center;
+  color: var(--color-text-subtle);
+  cursor: pointer;
+  display: flex;
+  font-size: var(--font-size-2xs);
+  gap: 6px;
+  justify-content: space-between;
+  list-style: none;
+  margin: -2px -4px;
+  min-height: 1.75rem;
+  padding: 2px 4px;
+  user-select: none;
+}
+
+.subagent-card__details-summary::-webkit-details-marker {
+  display: none;
+}
+
+.subagent-card__details-summary:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
+}
+
+.subagent-card__meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-card__disclosure-hint {
+  align-items: center;
+  border-radius: 4px;
+  color: var(--color-text-subtle);
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: var(--font-size-lg);
+  height: 1.45rem;
+  justify-content: center;
+  line-height: 1;
+  transition: transform 120ms ease;
+  width: 1.45rem;
+}
+
+.subagent-card__details-summary:hover .subagent-card__disclosure-hint {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+}
+
+.subagent-card__details[open]
+  > .subagent-card__details-summary
+  .subagent-card__disclosure-hint {
+  transform: rotate(180deg);
+}
+
+.subagent-card__details-body {
+  margin-top: 4px;
+}
+
+.subagent-card__empty {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-xs);
+  font-style: italic;
+  margin: 0;
+}
+
+.subagent-card__full-result {
+  background: var(--color-surface-raised);
+  border-radius: var(--radius-sm);
+  color: var(--color-text);
+  font-family: ui-monospace, SFMono-Regular, monospace;
+  font-size: var(--font-size-xs);
+  margin: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: var(--space-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.subagent-card__jump-to-approval {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  margin: 4px 0 6px;
+  padding: 2px 0;
+}
+
+.subagent-card__jump-to-approval:hover,
+.subagent-card__jump-to-approval:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
+/* Compact row within a parallel fleet. */
+.subagent-fleet-row {
+  align-items: center;
+  background: var(--color-surface-raised, var(--color-surface));
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 16px minmax(0, 1fr) 96px auto 64px;
+  padding: 12px 14px;
+}
+
+.subagent-fleet-row--clickable {
+  cursor: pointer;
+  transition:
+    background-color 120ms ease,
+    border-color 120ms ease;
+}
+
+.subagent-fleet-row--clickable:hover,
+.subagent-fleet-row--clickable:focus-visible {
+  border-color: var(--color-border-strong, var(--color-text-muted));
+}
+
+.subagent-fleet-row--clickable:focus-visible {
+  outline: 2px solid var(--color-focus-ring, var(--color-accent-strong));
+  outline-offset: 2px;
+}
+
+.subagent-fleet-row__indicator {
+  align-items: center;
+  display: inline-flex;
+  font-size: var(--font-size-xs);
+  height: 16px;
+  justify-content: center;
+  line-height: 1;
+  width: 16px;
+}
+
+.subagent-fleet-row__indicator[data-status="completed"] {
+  color: var(--color-success);
+}
+
+.subagent-fleet-row__indicator[data-status="failed"],
+.subagent-fleet-row__indicator[data-status="timed_out"] {
+  color: var(--color-danger);
+}
+
+.subagent-fleet-row__indicator[data-status="cancelled"] {
+  color: var(--color-warning);
+}
+
+.subagent-fleet-row__indicator[data-status="running"],
+.subagent-fleet-row__indicator[data-status="queued"] {
+  animation: subagent-fleet-row-pulse 1.4s ease-in-out infinite;
+  color: var(--color-accent-strong);
+}
+
+.subagent-fleet-row__text {
+  min-width: 0;
+}
+
+.subagent-fleet-row__name {
+  color: var(--color-text);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-fleet-row__task {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subagent-fleet-row__progress {
+  background: var(--color-surface-raised);
+  border-radius: 999px;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.subagent-fleet-row__progress-fill {
+  background: var(--color-accent-strong);
+  display: block;
+  height: 100%;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 220ms ease;
+}
+
+.subagent-fleet-row[data-status="running"] .subagent-fleet-row__progress-fill,
+.subagent-fleet-row[data-status="queued"] .subagent-fleet-row__progress-fill {
+  animation: subagent-fleet-row-progress 2.4s ease-in-out infinite;
+}
+
+.subagent-fleet-row[data-status="completed"]
+  .subagent-fleet-row__progress-fill {
+  background: var(--color-success);
+  transform: scaleX(1);
+}
+
+.subagent-fleet-row[data-status="failed"] .subagent-fleet-row__progress-fill,
+.subagent-fleet-row[data-status="timed_out"]
+  .subagent-fleet-row__progress-fill {
+  background: var(--color-danger);
+  transform: scaleX(1);
+}
+
+.subagent-fleet-row[data-status="cancelled"]
+  .subagent-fleet-row__progress-fill {
+  background: var(--color-warning);
+  transform: scaleX(1);
+}
+
+.subagent-fleet-row[data-status="paused"] .subagent-fleet-row__indicator {
+  animation: subagent-fleet-row-paused-pulse 1.6s ease-in-out infinite;
+  color: var(--color-warning);
+}
+
+.subagent-fleet-row[data-paused="true"] .subagent-fleet-row__progress-fill {
+  animation: subagent-fleet-row-paused-progress 2s ease-in-out infinite;
+  background: var(--color-warning);
+}
+
+.subagent-fleet-row[data-status="paused"]
+  .subagent-fleet-row__progress-fill:not([style]) {
+  transform: scaleX(0.18);
+}
+
+.subagent-fleet-row__paused-chip {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.subagent-fleet-row__elapsed {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-2xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.subagent-fleet-row__inline-timeline {
+  background: var(--color-surface-raised);
+  border-radius: 6px;
+  border-top: 1px solid var(--color-border-subtle);
+  margin: 4px -8px 8px;
+  padding: 8px 12px 10px calc(12px + 16px);
+}
+
+.subagent-fleet-row__activity-list {
+  margin: 0;
+}
+
+.subagent-fleet-row__empty {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  margin: 0;
+}
+
+.subagent-fleet-row__jump-link {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--color-accent-strong);
+  cursor: pointer;
+  display: inline-block;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  margin-top: 8px;
+  padding: 2px 0;
+}
+
+.subagent-fleet-row__jump-link:hover,
+.subagent-fleet-row__jump-link:focus-visible {
+  outline: none;
+  text-decoration: underline;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .agent-activity-row__detail-toggle > span {
+    transition: none;
+  }
+
+  .agent-activity-row__spinner {
+    animation: none;
+  }
+
+  .atlas-workspace-agent__disclosure-hint,
+  .subagent-card__disclosure-hint {
+    transition: none;
+  }
+
+  .subagent-fleet-row[data-status="paused"] .subagent-fleet-row__indicator,
+  .subagent-fleet-row[data-paused="true"] .subagent-fleet-row__progress-fill,
+  .subagent-fleet-row__indicator[data-status="running"],
+  .subagent-fleet-row__indicator[data-status="queued"],
+  .subagent-fleet-row[data-status="running"] .subagent-fleet-row__progress-fill,
+  .subagent-fleet-row[data-status="queued"] .subagent-fleet-row__progress-fill {
+    animation: none;
+  }
+
+  .subagent-fleet-row[data-status="running"] .subagent-fleet-row__progress-fill,
+  .subagent-fleet-row[data-status="queued"] .subagent-fleet-row__progress-fill {
+    transform: scaleX(0.45);
+  }
+}
+
+@keyframes agent-activity-row-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes subagent-fleet-row-paused-pulse {
+  0%,
+  100% {
+    opacity: 0.6;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+@keyframes subagent-fleet-row-paused-progress {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@keyframes subagent-fleet-row-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+@keyframes subagent-fleet-row-progress {
+  0% {
+    transform: scaleX(0.05);
+  }
+  50% {
+    transform: scaleX(0.55);
+  }
+  100% {
+    transform: scaleX(0.85);
+  }
+}
+
+@media (max-width: 600px) {
+  .subagent-fleet-row {
+    gap: 8px;
+    grid-template-columns: 16px minmax(0, 1fr) 56px 48px;
+  }
+}

@@ -33,11 +33,15 @@ import {
   normaliseLifecycleStatus,
   stringValue,
 } from "./subagentHelpers";
+import {
+  agentPresentationFields,
+  type ProjectedSubagentEntry,
+} from "./agentActivityRowViewModel";
 
 /** Conversation-scoped subagent snapshot keyed by `task_id`. Structurally
  *  identical to `workspace`'s `SubagentSnapshotMap` so it flows straight into
  *  `RunWorkspaceRail.subagents` without a cross-family import. */
-export type SubagentSnapshotMap = ReadonlyMap<string, SubagentEntry>;
+export type SubagentSnapshotMap = ReadonlyMap<string, ProjectedSubagentEntry>;
 
 /** One dispatched parallel batch, projected for the inline `SubagentFleetCard`. */
 export interface FleetProjection {
@@ -111,7 +115,7 @@ export function projectSubagents(
   }
 
   const seen = new Set<string>();
-  const subagents = new Map<string, SubagentEntry>();
+  const subagents = new Map<string, ProjectedSubagentEntry>();
   const parentFleetByTask = new Map<string, string>();
   const fleetHeads = new Map<string, MutableFleet>();
   const fleetOrder: string[] = [];
@@ -201,7 +205,7 @@ function reduceFleetFinished(
 
 function buildFleet(
   head: MutableFleet,
-  subagents: ReadonlyMap<string, SubagentEntry>,
+  subagents: ReadonlyMap<string, ProjectedSubagentEntry>,
   parentFleetByTask: ReadonlyMap<string, string>,
 ): FleetProjection {
   const children: SubagentEntry[] = [];
@@ -260,7 +264,7 @@ function byStartOrder(left: SubagentEntry, right: SubagentEntry): number {
 
 function reduceChild(
   event: RuntimeEventEnvelope,
-  subagents: Map<string, SubagentEntry>,
+  subagents: Map<string, ProjectedSubagentEntry>,
   parentFleetByTask: Map<string, string>,
 ): void {
   const taskId = stringValue(event.task_id);
@@ -286,10 +290,10 @@ function reduceChild(
 }
 
 function projectChildEvent(
-  current: SubagentEntry | undefined,
+  current: ProjectedSubagentEntry | undefined,
   event: RuntimeEventEnvelope,
   taskId: string,
-): SubagentEntry | undefined {
+): ProjectedSubagentEntry | undefined {
   switch (event.event_type) {
     case SUBAGENT_STARTED:
       return onStarted(current, event, taskId);
@@ -307,66 +311,85 @@ function projectChildEvent(
 }
 
 function onStarted(
-  current: SubagentEntry | undefined,
+  current: ProjectedSubagentEntry | undefined,
   event: RuntimeEventEnvelope,
   taskId: string,
-): SubagentEntry {
+): ProjectedSubagentEntry {
   const base = current ?? seedFromEvent(event, taskId);
-  return {
-    ...base,
-    subagent_name: subagentName(event) ?? base.subagent_name,
-    status: "running",
-    started_at: base.started_at ?? event.created_at,
-    objective_summary: event.summary ?? base.objective_summary,
-    display_title: event.display_title ?? base.display_title,
-  };
+  return withPresentationFields(
+    {
+      ...base,
+      subagent_name: subagentName(event) ?? base.subagent_name,
+      status: "running",
+      started_at: base.started_at ?? event.created_at,
+      objective_summary: event.summary ?? base.objective_summary,
+      display_title: event.display_title ?? base.display_title,
+    },
+    event,
+  );
 }
 
 function onProgress(
-  current: SubagentEntry | undefined,
+  current: ProjectedSubagentEntry | undefined,
   event: RuntimeEventEnvelope,
   taskId: string,
-): SubagentEntry {
+): ProjectedSubagentEntry {
   if (current === undefined) {
-    return {
-      ...seedFromEvent(event, taskId),
-      display_title: event.display_title ?? null,
-    };
+    return withPresentationFields(
+      {
+        ...seedFromEvent(event, taskId),
+        display_title: event.display_title ?? null,
+      },
+      event,
+      event.summary,
+    );
   }
   const nextDisplay = event.display_title ?? current.display_title;
-  if (nextDisplay === current.display_title && current.status === "running") {
+  const next = withPresentationFields(
+    { ...current, display_title: nextDisplay, status: "running" },
+    event,
+    event.summary,
+  );
+  if (
+    nextDisplay === current.display_title &&
+    current.status === "running" &&
+    samePresentation(current, next)
+  ) {
     return current;
   }
-  return { ...current, display_title: nextDisplay, status: "running" };
+  return next;
 }
 
 function onCompleted(
-  current: SubagentEntry | undefined,
+  current: ProjectedSubagentEntry | undefined,
   event: RuntimeEventEnvelope,
   taskId: string,
-): SubagentEntry {
+): ProjectedSubagentEntry {
   const base = current ?? seedFromEvent(event, taskId);
   const completedAt = event.created_at;
   const duration =
     payloadDurationMs(event) ??
     durationFromStarted(base.started_at, completedAt);
-  return {
-    ...base,
-    status: normaliseTerminalStatus(event.status),
-    completed_at: completedAt,
-    duration_ms: duration,
-    result_summary: event.summary ?? base.result_summary,
-    // Terminal wins over paused — clear the pause hints.
-    pause_reason: null,
-    pause_source_event_id: null,
-  };
+  return withPresentationFields(
+    {
+      ...base,
+      status: normaliseTerminalStatus(event.status),
+      completed_at: completedAt,
+      duration_ms: duration,
+      result_summary: event.summary ?? base.result_summary,
+      // Terminal wins over paused — clear the pause hints.
+      pause_reason: null,
+      pause_source_event_id: null,
+    },
+    event,
+  );
 }
 
 function onPaused(
-  current: SubagentEntry | undefined,
+  current: ProjectedSubagentEntry | undefined,
   event: RuntimeEventEnvelope,
   taskId: string,
-): SubagentEntry {
+): ProjectedSubagentEntry {
   const base = current ?? seedFromEvent(event, taskId);
   const reason = pauseReasonFromPayload(event);
   const sourceEventId = pauseSourceEventIdFromPayload(event);
@@ -377,19 +400,22 @@ function onPaused(
   ) {
     return base;
   }
-  return {
-    ...base,
-    status: "paused",
-    pause_reason: reason,
-    pause_source_event_id: sourceEventId,
-  };
+  return withPresentationFields(
+    {
+      ...base,
+      status: "paused",
+      pause_reason: reason,
+      pause_source_event_id: sourceEventId,
+    },
+    event,
+  );
 }
 
 function onResumed(
-  current: SubagentEntry | undefined,
+  current: ProjectedSubagentEntry | undefined,
   event: RuntimeEventEnvelope,
   taskId: string,
-): SubagentEntry {
+): ProjectedSubagentEntry {
   const base = current ?? seedFromEvent(event, taskId);
   if (
     base.status === "running" &&
@@ -401,37 +427,87 @@ function onResumed(
   if (!isResumableStatus(base.status)) {
     return base;
   }
-  return {
-    ...base,
-    status: "running",
-    pause_reason: null,
-    pause_source_event_id: null,
-  };
+  return withPresentationFields(
+    {
+      ...base,
+      status: "running",
+      pause_reason: null,
+      pause_source_event_id: null,
+    },
+    event,
+  );
 }
 
 function seedFromEvent(
   event: RuntimeEventEnvelope,
   taskId: string,
-): SubagentEntry {
+): ProjectedSubagentEntry {
+  return withPresentationFields(
+    {
+      task_id: taskId,
+      parent_run_id: event.run_id,
+      subagent_name: subagentName(event) ?? "subagent",
+      status: "running",
+      display_title: event.display_title ?? null,
+      objective_summary: null,
+      started_at: null,
+      completed_at: null,
+      duration_ms: null,
+      result_summary: null,
+      safe_error_code: null,
+      safe_error_message: null,
+      // The live event projection has no per-call usage rows; usage stays null
+      // until the next conversation re-seed (parity with the host reducer).
+      token_usage: null,
+      pause_reason: null,
+      pause_source_event_id: null,
+    },
+    event,
+  );
+}
+
+/** Retain new safe presentation data across lifecycle frames. `summary` is
+ * the backwards-compatible current-activity source until every worker sends
+ * the explicit `current_activity` payload field. */
+function withPresentationFields(
+  entry: ProjectedSubagentEntry,
+  event: RuntimeEventEnvelope,
+  activityFallback?: string | null,
+): ProjectedSubagentEntry {
+  const next = agentPresentationFields(event.payload);
   return {
-    task_id: taskId,
-    parent_run_id: event.run_id,
-    subagent_name: subagentName(event) ?? "subagent",
-    status: "running",
-    display_title: event.display_title ?? null,
-    objective_summary: null,
-    started_at: null,
-    completed_at: null,
-    duration_ms: null,
-    result_summary: null,
-    safe_error_code: null,
-    safe_error_message: null,
-    // The live event projection has no per-call usage rows; usage stays null
-    // until the next conversation re-seed (parity with the host reducer).
-    token_usage: null,
-    pause_reason: null,
-    pause_source_event_id: null,
+    ...entry,
+    ...(next.parent_task_id !== undefined
+      ? { parent_task_id: next.parent_task_id }
+      : {}),
+    ...(next.parent_agent_role !== undefined
+      ? { parent_agent_role: next.parent_agent_role }
+      : {}),
+    ...(next.parent_agent_name !== undefined
+      ? { parent_agent_name: next.parent_agent_name }
+      : {}),
+    ...(next.model_display_label !== undefined
+      ? { model_display_label: next.model_display_label }
+      : {}),
+    ...(next.current_activity !== undefined
+      ? { current_activity: next.current_activity }
+      : activityFallback
+        ? { current_activity: activityFallback }
+        : {}),
   };
+}
+
+function samePresentation(
+  current: ProjectedSubagentEntry,
+  next: ProjectedSubagentEntry,
+): boolean {
+  return (
+    current.parent_task_id === next.parent_task_id &&
+    current.parent_agent_role === next.parent_agent_role &&
+    current.parent_agent_name === next.parent_agent_name &&
+    current.model_display_label === next.model_display_label &&
+    current.current_activity === next.current_activity
+  );
 }
 
 // --- status helpers (parity with host subagentStatus) ----------------------

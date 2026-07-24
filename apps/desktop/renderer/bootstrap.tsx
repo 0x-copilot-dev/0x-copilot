@@ -17,6 +17,9 @@ import "@0x-copilot/chat-surface/src/onboarding/onboarding.css";
 // it desktop renders raw <pre>/<code> with no card, no chip, and code bleeds
 // off-screen. Shared single source of truth with the web app (App.tsx).
 import "@0x-copilot/chat-surface/src/messages/markdown.css";
+// Subagent cards, fleet rows, and the Agents tab's nested timeline are shared
+// with the web host; load their presentation alongside the other surface CSS.
+import "@0x-copilot/chat-surface/src/subagents/subagents.css";
 import "./desktop.css";
 
 import {

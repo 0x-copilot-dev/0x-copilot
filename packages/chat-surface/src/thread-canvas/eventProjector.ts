@@ -163,10 +163,27 @@ export interface ToolCallEntry {
   readonly summary?: string;
   /** Safe error message on a failed/timed-out/cancelled result. */
   readonly errorMessage?: string;
+  /**
+   * Factually supplied tool origin. Today the runtime emits only MCP origin;
+   * absence means unknown and must not be inferred from the tool name.
+   */
+  readonly provenance?: ToolCallProvenance;
+  /** Safe authority mode supplied by the runtime, never inferred locally. */
+  readonly accessMode?: "read" | "read_act" | "off";
+  /** Measured duration from the completed runtime frame, in milliseconds. */
+  readonly durationMs?: number;
+  /** Task ids factually correlated to work delegated by this tool call. */
+  readonly subagentTaskIds?: readonly string[];
   /** Anchor: `sequence_no` of the first (started) frame. */
   readonly sequenceNo: number;
   /** Anchor timestamp (epoch ms) for interleave; null if unparseable. */
   readonly createdAtMs: number | null;
+}
+
+/** Safe, display-ready origin projected from `payload.provenance`. */
+export interface ToolCallProvenance {
+  readonly source: "mcp";
+  readonly serverName: string;
 }
 
 /**
@@ -860,6 +877,10 @@ interface MutableToolCall {
   result?: Record<string, unknown>;
   summary?: string;
   errorMessage?: string;
+  provenance?: ToolCallProvenance;
+  accessMode?: "read" | "read_act" | "off";
+  durationMs?: number;
+  subagentTaskIds?: readonly string[];
   sequenceNo: number;
   createdAtMs: number | null;
 }
@@ -886,6 +907,15 @@ function reduceToolStarted(
     summary:
       pickString(event.payload, "summary") ?? prior?.summary ?? undefined,
     errorMessage: prior?.errorMessage,
+    provenance:
+      readToolProvenance(event.payload?.["provenance"]) ?? prior?.provenance,
+    accessMode:
+      readToolAccessMode(event.payload?.["access_mode"]) ?? prior?.accessMode,
+    durationMs:
+      readToolDuration(event.payload?.["duration_ms"]) ?? prior?.durationMs,
+    subagentTaskIds:
+      readToolTaskIds(event.payload?.["subagent_task_ids"]) ??
+      prior?.subagentTaskIds,
     // The started frame is the earliest, so it wins the anchor when present.
     sequenceNo: prior?.sequenceNo ?? event.sequence_no,
     createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
@@ -916,6 +946,15 @@ function reduceToolResult(
       pickString(event.payload, "error_message") ??
       pickString(event.payload, "safe_message") ??
       prior?.errorMessage,
+    provenance:
+      readToolProvenance(event.payload?.["provenance"]) ?? prior?.provenance,
+    accessMode:
+      readToolAccessMode(event.payload?.["access_mode"]) ?? prior?.accessMode,
+    durationMs:
+      readToolDuration(event.payload?.["duration_ms"]) ?? prior?.durationMs,
+    subagentTaskIds:
+      readToolTaskIds(event.payload?.["subagent_task_ids"]) ??
+      prior?.subagentTaskIds,
     sequenceNo: prior?.sequenceNo ?? event.sequence_no,
     createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
   });
@@ -931,6 +970,12 @@ function buildToolCall(m: MutableToolCall): ToolCallEntry {
     ...(m.result !== undefined ? { result: m.result } : {}),
     ...(m.summary !== undefined ? { summary: m.summary } : {}),
     ...(m.errorMessage !== undefined ? { errorMessage: m.errorMessage } : {}),
+    ...(m.provenance !== undefined ? { provenance: m.provenance } : {}),
+    ...(m.accessMode !== undefined ? { accessMode: m.accessMode } : {}),
+    ...(m.durationMs !== undefined ? { durationMs: m.durationMs } : {}),
+    ...(m.subagentTaskIds !== undefined
+      ? { subagentTaskIds: m.subagentTaskIds }
+      : {}),
     sequenceNo: m.sequenceNo,
     createdAtMs: m.createdAtMs,
   };
@@ -965,6 +1010,39 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
     return value as Record<string, unknown>;
   }
   return undefined;
+}
+
+function readToolProvenance(value: unknown): ToolCallProvenance | undefined {
+  const record = readRecord(value);
+  if (record?.["source"] !== "mcp") return undefined;
+  const serverName = record["server_name"];
+  if (typeof serverName !== "string" || serverName.trim() === "") {
+    return undefined;
+  }
+  return { source: "mcp", serverName };
+}
+
+function readToolAccessMode(
+  value: unknown,
+): "read" | "read_act" | "off" | undefined {
+  return value === "read" || value === "read_act" || value === "off"
+    ? value
+    : undefined;
+}
+
+function readToolDuration(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0
+    ? value
+    : undefined;
+}
+
+function readToolTaskIds(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const ids = value.filter(
+    (taskId): taskId is string =>
+      typeof taskId === "string" && taskId.trim().length > 0,
+  );
+  return [...new Set(ids)];
 }
 
 function parseMs(iso: string): number | null {

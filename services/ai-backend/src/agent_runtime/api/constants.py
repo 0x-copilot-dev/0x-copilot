@@ -15,6 +15,7 @@ class Keys:
     class Field:
         """Payload and record field names used across persistence, events, and HTTP responses."""
 
+        ACCESS_MODE = "access_mode"
         AFTER_SEQUENCE = "after_sequence"
         API_EVENT_TYPE = "api_event_type"
         APPROVAL_ID = "approval_id"
@@ -42,9 +43,11 @@ class Keys:
         CONTENT = "content"
         CONVERSATION_ID = "conversation_id"
         CORRELATION_ID = "correlation_id"
+        CURRENT_ACTIVITY = "current_activity"
         CREATED_AT = "created_at"
         DECISION = "decision"
         DISPLAY_TITLE = "display_title"
+        DURATION_MS = "duration_ms"
         ERROR_COUNT = "error_count"
         EVENT_ID = "event_id"
         EVENT_TYPE = "event_type"
@@ -54,6 +57,7 @@ class Keys:
         IDEMPOTENCY_KEY = "idempotency_key"
         MESSAGE_ID = "message_id"
         METADATA = "metadata"
+        MODEL_DISPLAY_LABEL = "model_display_label"
         NAME = "name"
         ORG_ID = "org_id"
         OUTPUT = "output"
@@ -65,6 +69,8 @@ class Keys:
         OUTPUT_REF = "output_ref"
         # Bounded inline peek that replaces the full ``output`` after an offload.
         PREVIEW = "preview"
+        PARENT_AGENT_NAME = "parent_agent_name"
+        PARENT_AGENT_ROLE = "parent_agent_role"
         PARENT_EVENT_ID = "parent_event_id"
         PARENT_SPAN_ID = "parent_span_id"
         PARENT_TASK_ID = "parent_task_id"
@@ -79,11 +85,13 @@ class Keys:
         SERVER_NAME = "server_name"
         SHORT_SUMMARY = "short_summary"
         SOURCE = "source"
+        PROVENANCE = "provenance"
         SOURCE_TOOL_CALL_ID = "source_tool_call_id"
         SPAN_ID = "span_id"
         STATUS = "status"
         SUBAGENT_ID = "subagent_id"
         SUBAGENT_NAME = "subagent_name"
+        SUBAGENT_TASK_IDS = "subagent_task_ids"
         SUMMARY = "summary"
         # Generative-UI (PRD-02) — the surface envelope and its mirrored URI ride
         # at the event-payload top level; the frontend projector keys off both.
@@ -261,6 +269,16 @@ class Values:
         SKIPPED = "skipped"
         STARTED = "started"
         WAITING = "waiting"
+
+    class AgentRole:
+        """Runtime hierarchy roles disclosed on subagent lifecycle events."""
+
+        SUPERVISOR = "supervisor"
+
+    class Provenance:
+        """Structured, source-backed tool provenance discriminators."""
+
+        MCP = "mcp"
 
     class Tool:
         """Tool name strings as seen in event payloads and capability registrations."""

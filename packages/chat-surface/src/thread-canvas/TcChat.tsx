@@ -45,6 +45,7 @@ import type { ApprovalsQueueItem } from "../workspace";
 // truth; TcChat never re-derives tool state from raw events.
 import type { ToolCallEntry } from "./eventProjector";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
+import { ToolCallCard } from "./ToolCallCard";
 
 export type TcChatMode = "studio" | "focus";
 
@@ -663,8 +664,6 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
   const items = mergeStream(messages, fleets, toolCalls);
   return (
     <ul style={ulStyle}>
-      {/* Scoped spinner keyframes — one style node per mount is enough. */}
-      <style>{TOOL_SPINNER_CSS}</style>
       {items.map((item) => {
         if (item.kind === "fleet") {
           return renderFleetCard(item.fleet);
@@ -757,21 +756,10 @@ function renderFleetCard(fleet: FleetProjection): ReactNode {
   );
 }
 
-// Workstream D — the compact inline tool-call card. Renders in the transcript
-// flow at the point the tool ran: a mono tool name, a running spinner that
-// resolves to ✓ (done) or ! (failed), and the args/result behind a lightweight
-// `<details>` expand (blobs are truncated, never dumped whole). Pure
-// presentation over the injected `projectToolCalls` entry — the projection is
-// the single source of truth (FR-3.3). Rendered identically in Studio + Focus
-// (the transcript is shared).
+// Workstream D — the compact inline tool-call card. The reusable card owns the
+// visual disclosure target and its bounded payload/detail treatment; TcChat
+// only owns transcript ordering and the list-item anchor.
 function renderToolCard(toolCall: ToolCallEntry): ReactNode {
-  const running = toolCall.status === "running";
-  const error = toolCall.status === "error";
-  const hasDetails =
-    toolCall.args !== undefined ||
-    toolCall.result !== undefined ||
-    toolCall.errorMessage !== undefined;
-  const statusLabel = running ? "running…" : error ? "failed" : "done";
   return (
     <li
       key={`tool-${toolCall.id}`}
@@ -779,70 +767,9 @@ function renderToolCard(toolCall: ToolCallEntry): ReactNode {
       data-testid={`tc-chat-tool-${toolCall.id}`}
       data-tool-status={toolCall.status}
     >
-      <div
-        style={toolCardStyle}
-        role="group"
-        aria-label={`Tool: ${toolCall.title}`}
-      >
-        <div style={toolHeadStyle}>
-          <span style={toolMarkStyle(toolCall.status)} aria-hidden="true">
-            {running ? (
-              <span className="tc-tool-spinner" style={toolSpinnerStyle} />
-            ) : error ? (
-              "!"
-            ) : (
-              "✓"
-            )}
-          </span>
-          <span style={toolNameStyle}>{toolCall.toolName}</span>
-          <span style={toolStatusStyle}>{statusLabel}</span>
-        </div>
-        {toolCall.summary !== undefined ? (
-          <p style={toolSummaryStyle}>{toolCall.summary}</p>
-        ) : null}
-        {hasDetails ? (
-          <details style={toolDetailsStyle}>
-            <summary style={toolDetailsSummaryStyle}>Details</summary>
-            {toolCall.args !== undefined ? (
-              <pre
-                style={toolPreStyle}
-                data-testid={`tc-chat-tool-${toolCall.id}-args`}
-              >
-                {formatBlob(toolCall.args)}
-              </pre>
-            ) : null}
-            {toolCall.result !== undefined ? (
-              <pre
-                style={toolPreStyle}
-                data-testid={`tc-chat-tool-${toolCall.id}-result`}
-              >
-                {formatBlob(toolCall.result)}
-              </pre>
-            ) : null}
-            {toolCall.errorMessage !== undefined ? (
-              <p style={toolErrorStyle}>{toolCall.errorMessage}</p>
-            ) : null}
-          </details>
-        ) : null}
-      </div>
+      <ToolCallCard toolCall={toolCall} />
     </li>
   );
-}
-
-// Keep blobs compact — pretty-print then hard-cap so a huge tool payload never
-// blows out the transcript. Non-serialisable values degrade to a placeholder.
-const TOOL_BLOB_CAP = 600;
-function formatBlob(value: Record<string, unknown>): string {
-  let text: string;
-  try {
-    text = JSON.stringify(value, null, 2);
-  } catch {
-    return "[unserialisable]";
-  }
-  if (text.length <= TOOL_BLOB_CAP) {
-    return text;
-  }
-  return `${text.slice(0, TOOL_BLOB_CAP)}…`;
 }
 
 type StreamItem =
@@ -1051,125 +978,9 @@ const fleetItemStyle: CSSProperties = {
   padding: 0,
 };
 
-// Workstream D — the inline tool-call card. Quiet v3 aesthetic: small, muted,
-// a mono tool label; design-system tokens only (no hardcoded hex). Scoped
-// spinner keyframes are injected once per mount (design-system owns no spinner
-// primitive) and gated off under reduce-motion.
-const TOOL_SPINNER_CSS = `
-@keyframes tc-tool-spin { to { transform: rotate(360deg); } }
-.tc-tool-spinner { animation: tc-tool-spin 0.7s linear infinite; }
-[data-reduce-motion="1"] .tc-tool-spinner,
-[data-reduce-motion="always"] .tc-tool-spinner { animation: none; }
-@media (prefers-reduced-motion: reduce) { .tc-tool-spinner { animation: none; } }
-`;
-
 const toolItemStyle: CSSProperties = {
   listStyle: "none",
   padding: 0,
-};
-
-const toolCardStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 5,
-  padding: "7px 10px",
-  borderRadius: 8,
-  background: "var(--color-surface-muted)",
-  border: `1px solid ${PALETTE.cardBorder}`,
-  color: PALETTE.textHi,
-};
-
-const toolHeadStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: 8,
-  minWidth: 0,
-};
-
-const toolNameStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--font-size-2xs)",
-  letterSpacing: "var(--tracking-caption)",
-  color: PALETTE.textHi,
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
-};
-
-const toolStatusStyle: CSSProperties = {
-  marginLeft: "auto",
-  flexShrink: 0,
-  fontSize: "var(--font-size-2xs)",
-  color: PALETTE.textLo,
-};
-
-const toolMarkStyle = (status: ToolCallEntry["status"]): CSSProperties => ({
-  display: "inline-flex",
-  alignItems: "center",
-  justifyContent: "center",
-  width: 14,
-  height: 14,
-  flexShrink: 0,
-  fontSize: "var(--font-size-2xs)",
-  fontWeight: 700,
-  lineHeight: 1,
-  color:
-    status === "error"
-      ? "var(--color-danger)"
-      : status === "complete"
-        ? "var(--color-success)"
-        : PALETTE.textLo,
-});
-
-const toolSpinnerStyle: CSSProperties = {
-  width: 10,
-  height: 10,
-  borderRadius: "50%",
-  border: "1.5px solid var(--color-border-strong)",
-  borderTopColor: "var(--color-accent)",
-  boxSizing: "border-box",
-};
-
-const toolSummaryStyle: CSSProperties = {
-  margin: 0,
-  fontSize: "var(--font-size-2xs)",
-  lineHeight: 1.5,
-  color: PALETTE.textLo,
-};
-
-const toolDetailsStyle: CSSProperties = {
-  margin: 0,
-};
-
-const toolDetailsSummaryStyle: CSSProperties = {
-  cursor: "pointer",
-  fontSize: "var(--font-size-2xs)",
-  color: PALETTE.textLo,
-  userSelect: "none",
-};
-
-const toolPreStyle: CSSProperties = {
-  margin: "6px 0 0",
-  padding: "6px 8px",
-  borderRadius: 6,
-  background: "var(--color-surface)",
-  border: `1px solid ${PALETTE.cardBorder}`,
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--font-size-2xs)",
-  lineHeight: 1.45,
-  color: PALETTE.textLo,
-  overflowX: "auto",
-  maxHeight: 180,
-  overflowY: "auto",
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-};
-
-const toolErrorStyle: CSSProperties = {
-  margin: "6px 0 0",
-  fontSize: "var(--font-size-2xs)",
-  lineHeight: 1.45,
-  color: "var(--color-danger)",
 };
 
 // Focus mode: the SAME transcript + composer as Studio, in a centered reading

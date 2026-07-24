@@ -71,16 +71,33 @@ const TASK_MAX = 160;
 const FINDING_MAX = 280;
 const FULL_RESULT_MAX = 600;
 
-/** Strip markdown code fences and collapse whitespace so a one-line
- *  summary derived from a result containing code never shows `\`\`\`lang`
- *  markers. The disclosure body keeps the raw text. */
+/** Strip summary-only markdown and collapse whitespace so card metadata stays
+ *  readable plaintext. The disclosure body keeps the raw result. */
 function flattenForSummary(input: string): string {
-  return input
-    .replace(/```[\s\S]*?```/g, " ")
-    .replace(/`[^`]*`/g, " ")
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return (
+    input
+      .replace(/\r\n?/g, "\n")
+      .replace(/```[\s\S]*?```/g, " ")
+      .replace(/`[^`]*`/g, " ")
+      // Only remove heading syntax at the beginning of a line. Keeping this
+      // scoped avoids treating a hash used in ordinary prose as markdown.
+      .replace(
+        /^\s{0,3}#{1,6}(?:[ \t]+|$)(.*?)(?:[ \t]+#{1,6})?[ \t]*$/gm,
+        "$1",
+      )
+      // Likewise, a dash, asterisk, or number is a list marker only when it
+      // occurs at the start of a markdown line and is followed by whitespace.
+      .replace(/^\s{0,3}(?:[-+*]|\d+[.)])[ \t]+/gm, "")
+      // Remove paired strong-emphasis delimiters without stripping ordinary
+      // underscores or asterisks that are part of a word or value.
+      .replace(
+        /(^|[^\p{L}\p{N}_])(\*\*|__)(\S(?:[^\r\n]*?\S)?)\2(?=$|[^\p{L}\p{N}_])/gmu,
+        "$1$3",
+      )
+      .replace(/\n+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim()
+  );
 }
 
 function deriveTaskText(...candidates: Array<string | null>): string | null {

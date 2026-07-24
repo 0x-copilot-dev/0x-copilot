@@ -2209,7 +2209,29 @@ export interface ReasoningSummaryDeltaPayload {
   [key: string]: unknown;
 }
 
-export interface ToolCallPayload {
+/** Source-backed provenance for a tool invocation. Emitted only when the
+ * runtime can identify the MCP dispatcher server; native tools omit it. */
+export interface ToolProvenance {
+  source: "mcp";
+  server_name: string;
+}
+
+/** Frozen connector authority mode captured when a run starts. `read_act` is
+ * a configured authority mode, not a claim that the individual tool call wrote
+ * data. The field is omitted unless the runtime can safely resolve the server. */
+export type ToolAccessMode = "read" | "read_act" | "off";
+
+/** Optional runtime facts shared by tool start, delta, result, and completion
+ * payloads. `subagent_task_ids` ties a tool emitted inside a task subgraph to
+ * its supervisor task call; it is absent for main-agent tools. */
+export interface ToolExecutionPresentation {
+  provenance?: ToolProvenance;
+  access_mode?: ToolAccessMode;
+  duration_ms?: number;
+  subagent_task_ids?: string[];
+}
+
+export interface ToolCallPayload extends ToolExecutionPresentation {
   tool_name: string;
   call_id: string;
   args?: Record<string, unknown>;
@@ -2218,7 +2240,7 @@ export interface ToolCallPayload {
   [key: string]: unknown;
 }
 
-export interface ToolCallDeltaPayload {
+export interface ToolCallDeltaPayload extends ToolExecutionPresentation {
   tool_name?: string;
   call_id: string;
   delta?: string;
@@ -2235,7 +2257,7 @@ export type ToolResultStatus =
   | "abandoned"
   | "cancelled";
 
-export interface ToolResultPayload {
+export interface ToolResultPayload extends ToolExecutionPresentation {
   tool_name: string;
   call_id: string;
   status?: ToolResultStatus | (string & {});
@@ -2256,6 +2278,17 @@ export interface SubagentActivityPayload {
   task_id: string;
   subagent_name?: string;
   subagent_id?: string;
+  /** Supervisor task-call correlation when this lifecycle event is nested
+   * under another subagent. Root subagent events omit it. */
+  parent_task_id?: string;
+  /** `supervisor` is emitted by the Deep Agents task-runtime seam. */
+  parent_agent_role?: string;
+  /** Intentionally absent unless a real lead display identity exists at runtime. */
+  parent_agent_name?: string;
+  /** Human-readable label derived from the resolved shared model profile. */
+  model_display_label?: string;
+  /** Current task/progress text copied from the event when it exists. */
+  current_activity?: string;
   status?: string;
   display_title?: string;
   short_summary?: string;

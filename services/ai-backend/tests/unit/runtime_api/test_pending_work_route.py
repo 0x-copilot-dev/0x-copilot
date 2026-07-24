@@ -294,6 +294,35 @@ class TestPendingWorkRoute:
         assert body["items"] == []
         assert body["agents"] == []
 
+    def test_active_run_without_pending_absent_while_pending_rows_remain(
+        self, monkeypatch
+    ) -> None:
+        bundle = _build(monkeypatch, flag_on=True)
+        store = bundle.store
+        _seed_conversation(store, conversation_id="conv_quiet", title="Quiet run")
+        quiet_run = _seed_run(
+            store,
+            run_id="runquiet0000000000000000000000000",
+            conversation_id="conv_quiet",
+            status=AgentRunStatus.QUEUED,
+        )
+        _seed_conversation(store, conversation_id="conv_waiting", title="Needs input")
+        pending_run = _seed_run(
+            store,
+            run_id="runwaiting000000000000000000000000",
+            conversation_id="conv_waiting",
+            status=AgentRunStatus.WAITING_FOR_APPROVAL,
+        )
+        asyncio.run(_append_gate(store, pending_run))
+
+        body = bundle.client.get("/v1/agent/pending-work", headers=_headers()).json()
+
+        assert [item["run_id"] for item in body["items"]] == [pending_run.run_id]
+        assert [agent["run_id"] for agent in body["agents"]] == [pending_run.run_id]
+        assert quiet_run.run_id not in {
+            item["run_id"] for item in body["items"] + body["agents"]
+        }
+
     def test_foreign_user_runs_excluded(self, monkeypatch) -> None:
         bundle = _build(monkeypatch, flag_on=True)
         store = bundle.store
