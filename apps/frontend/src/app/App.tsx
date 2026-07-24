@@ -4,6 +4,9 @@ import type { ReactElement } from "react";
 import { Suspense, lazy, useEffect, useMemo, useState } from "react";
 import "@0x-copilot/design-system/styles.css";
 import "streamdown/styles.css";
+// Assistant/reasoning markdown prose (code-block card, inline-code chip,
+// blockquote bar, tables) — shared single source of truth with desktop.
+import "@0x-copilot/chat-surface/src/messages/markdown.css";
 import "../styles.css";
 import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";

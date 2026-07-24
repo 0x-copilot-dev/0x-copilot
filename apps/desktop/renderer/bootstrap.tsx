@@ -11,6 +11,12 @@ import "@0x-copilot/chat-surface/src/workspace/workspace.css";
 // cards, inline key form, footer). Same stranded-CSS fix as composer.css:
 // without it the onboarding gate renders unstyled.
 import "@0x-copilot/chat-surface/src/onboarding/onboarding.css";
+// Assistant/reasoning markdown prose — code-block card + language header + copy
+// actions + scroll/max-height, blockquote accent bar, inline-code chip, links,
+// headings, lists, hr, tables. Same stranded-CSS fix as composer.css: without
+// it desktop renders raw <pre>/<code> with no card, no chip, and code bleeds
+// off-screen. Shared single source of truth with the web app (App.tsx).
+import "@0x-copilot/chat-surface/src/messages/markdown.css";
 import "./desktop.css";
 
 import {
