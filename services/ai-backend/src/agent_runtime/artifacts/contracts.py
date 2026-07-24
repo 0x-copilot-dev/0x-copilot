@@ -9,15 +9,22 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Annotated, ClassVar
+from typing import Annotated
 
-from pydantic import Field, PositiveInt, field_validator, model_validator
+from pydantic import (
+    AfterValidator,
+    Field,
+    PositiveInt,
+    field_validator,
+    model_validator,
+)
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.surfaces_v2.entities import Artifact, ArtifactRevision
 from agent_runtime.surfaces_v2.ledger_ids import (
     ArtifactContentRefCodec,
     ArtifactIdCodec,
+    OperationIdCodec,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
@@ -28,9 +35,65 @@ from agent_runtime.surfaces_v2.ledger_models import (
 
 Sha256Hex = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 SafeTitle = Annotated[str, Field(min_length=1, max_length=240)]
-SafeMediaType = Annotated[str, Field(min_length=1, max_length=255)]
-SafeFilename = Annotated[str, Field(min_length=1, max_length=255)]
 SafeCursor = Annotated[str, Field(min_length=1, max_length=2048)]
+
+_MEDIA_TYPE = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/"
+    r"[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*"
+    r"(?:;[ \t]*[A-Za-z0-9!#$&^_.+-]+="
+    r"(?:[A-Za-z0-9!#$&^_.+-]+|\"[^\"\r\n]*\"))*$"
+)
+_WINDOWS_RESERVED_FILENAME = re.compile(
+    r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$",
+    re.IGNORECASE,
+)
+_MESSAGE_SOURCE = re.compile(r"^message://[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
+_OPERATION_SOURCE = re.compile(r"^operation://(op_[0-9a-f-]+)/result$")
+_PAYLOAD_SOURCE = re.compile(r"^payload://[A-Za-z0-9][A-Za-z0-9._:/-]{0,1023}$")
+
+
+def _validate_media_type(value: str) -> str:
+    if _MEDIA_TYPE.fullmatch(value) is None:
+        raise ValueError("media_type must be a valid MIME media type")
+    return value
+
+
+def _validate_filename(value: str) -> str:
+    if (
+        value in {".", ".."}
+        or value != value.strip()
+        or value.endswith(".")
+        or any(character in value for character in ("\r", "\n", "\x00", "/", "\\"))
+        or _WINDOWS_RESERVED_FILENAME.fullmatch(value) is not None
+    ):
+        raise ValueError("suggested_filename is not safe for download metadata")
+    return value
+
+
+def validate_artifact_source_ref(value: str) -> str:
+    """Validate a logical source before any resolver or filesystem boundary."""
+
+    if _MESSAGE_SOURCE.fullmatch(value) is not None:
+        return value
+    operation_match = _OPERATION_SOURCE.fullmatch(value)
+    if operation_match is not None:
+        OperationIdCodec.parse(operation_match.group(1))
+        return value
+    if _PAYLOAD_SOURCE.fullmatch(value) is not None:
+        return value
+    raise ValueError("source_ref must be a message, operation result, or payload")
+
+
+SafeMediaType = Annotated[
+    str,
+    Field(min_length=1, max_length=255),
+    AfterValidator(_validate_media_type),
+]
+SafeFilename = Annotated[
+    str,
+    Field(min_length=1, max_length=255),
+    AfterValidator(_validate_filename),
+]
 
 
 class ArtifactKindLimit(RuntimeContract):
@@ -87,8 +150,6 @@ class ArtifactCreateRequest(RuntimeContract):
     title: SafeTitle
     media_type: SafeMediaType
     suggested_filename: SafeFilename | None = None
-    author: ArtifactAuthor
-    source_ref: str | None = Field(default=None, min_length=1, max_length=2048)
     expected_digest: Sha256Hex | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
 
@@ -96,8 +157,6 @@ class ArtifactCreateRequest(RuntimeContract):
 class ArtifactRevisionRequest(RuntimeContract):
     artifact_id: str
     parent_revision: PositiveInt
-    author: ArtifactAuthor
-    source_ref: str | None = Field(default=None, min_length=1, max_length=2048)
     expected_digest: Sha256Hex | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
 
@@ -108,6 +167,18 @@ class ArtifactRevisionRequest(RuntimeContract):
         return value
 
 
+class ArtifactProvenance(RuntimeContract):
+    """Trusted server-derived authorship; never deserialize from an app body."""
+
+    author: ArtifactAuthor
+    source_ref: str | None = Field(default=None, min_length=1, max_length=2048)
+
+    @field_validator("source_ref")
+    @classmethod
+    def _logical_source_ref(cls, value: str | None) -> str | None:
+        return validate_artifact_source_ref(value) if value is not None else None
+
+
 class ArtifactPromotionRequest(RuntimeContract):
     run_id: str = Field(min_length=1, max_length=255)
     source_ref: str = Field(min_length=1, max_length=2048)
@@ -116,6 +187,11 @@ class ArtifactPromotionRequest(RuntimeContract):
     media_type: SafeMediaType | None = None
     suggested_filename: SafeFilename | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
+
+    @field_validator("source_ref")
+    @classmethod
+    def _logical_source_ref(cls, value: str) -> str:
+        return validate_artifact_source_ref(value)
 
 
 class ArtifactBlobWriteResult(RuntimeContract):
@@ -306,47 +382,15 @@ class ArtifactSourceDescriptor(RuntimeContract):
     title: SafeTitle | None = None
     suggested_filename: SafeFilename | None = None
 
-    _ALLOWED_SOURCE: ClassVar[re.Pattern[str]] = re.compile(
-        r"^(?:"
-        r"message://[A-Za-z0-9._:-]+"
-        r"|operation://op_[0-9a-f-]+/result"
-        r"|payload://[A-Za-z0-9._:/-]+"
-        r")$"
-    )
-
     @field_validator("source_ref")
     @classmethod
     def _allowed_source_ref(cls, value: str) -> str:
-        if cls._ALLOWED_SOURCE.fullmatch(value) is None:
-            raise ValueError(
-                "source_ref must be a message, operation result, or payload"
-            )
-        return value
+        return validate_artifact_source_ref(value)
 
 
 class ArtifactGcCandidate(RuntimeContract):
     blob_key: Sha256Hex
     unreferenced_since: datetime
-
-
-class ArtifactReferenceSnapshot(RuntimeContract):
-    """All references that prevent physical blob collection."""
-
-    artifact_blob_keys: frozenset[Sha256Hex] = Field(default_factory=frozenset)
-    effect_blob_keys: frozenset[Sha256Hex] = Field(default_factory=frozenset)
-    receipt_blob_keys: frozenset[Sha256Hex] = Field(default_factory=frozenset)
-    audit_blob_keys: frozenset[Sha256Hex] = Field(default_factory=frozenset)
-    legal_hold_blob_keys: frozenset[Sha256Hex] = Field(default_factory=frozenset)
-
-    @property
-    def live_blob_keys(self) -> frozenset[str]:
-        return frozenset().union(
-            self.artifact_blob_keys,
-            self.effect_blob_keys,
-            self.receipt_blob_keys,
-            self.audit_blob_keys,
-            self.legal_hold_blob_keys,
-        )
 
 
 class ArtifactContractValidator:
@@ -379,7 +423,7 @@ __all__ = (
     "ArtifactListQuery",
     "ArtifactMutationResult",
     "ArtifactPromotionRequest",
-    "ArtifactReferenceSnapshot",
+    "ArtifactProvenance",
     "ArtifactRevisionRequest",
     "ArtifactScope",
     "ArtifactSoftDeleteCommand",
@@ -391,4 +435,5 @@ __all__ = (
     "SafeMediaType",
     "SafeTitle",
     "Sha256Hex",
+    "validate_artifact_source_ref",
 )

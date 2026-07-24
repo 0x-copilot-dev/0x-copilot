@@ -17,6 +17,7 @@ from agent_runtime.artifacts.contracts import (
     ArtifactListPage,
     ArtifactListQuery,
     ArtifactMutationResult,
+    ArtifactProvenance,
     ArtifactPromotionRequest,
     ArtifactRevisionRequest,
     ArtifactScope,
@@ -24,6 +25,7 @@ from agent_runtime.artifacts.contracts import (
     ArtifactStoredRecord,
     ArtifactStoredRevision,
     ByteRange,
+    validate_artifact_source_ref,
 )
 from agent_runtime.artifacts.errors import (
     ArtifactBlobUnavailableError,
@@ -46,6 +48,7 @@ from agent_runtime.surfaces_v2.ledger_ids import (
 from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
     ArtifactCreatedPayload,
+    ArtifactKind,
     ArtifactPromotedPayload,
     ArtifactRevisedPayload,
     LedgerEventType,
@@ -93,6 +96,7 @@ class ArtifactService:
         org_id: str,
         user_id: str,
         request: ArtifactCreateRequest,
+        provenance: ArtifactProvenance,
         chunks: AsyncIterator[bytes],
     ) -> ArtifactMutationResult:
         """Create revision 1 after verifying run scope and the streamed body."""
@@ -105,6 +109,7 @@ class ArtifactService:
         return await self._create_in_scope(
             scope=scope,
             request=request,
+            provenance=provenance,
             chunks=chunks,
             route=self.Routes.CREATE,
             promoted_source_ref=None,
@@ -116,6 +121,7 @@ class ArtifactService:
         org_id: str,
         user_id: str,
         request: ArtifactCreateRequest,
+        provenance: ArtifactProvenance,
         content: bytes,
     ) -> ArtifactMutationResult:
         """Bounded convenience path for trusted internal callers."""
@@ -124,6 +130,7 @@ class ArtifactService:
             org_id=org_id,
             user_id=user_id,
             request=request,
+            provenance=provenance,
             chunks=self._single_chunk(content),
         )
 
@@ -133,6 +140,7 @@ class ArtifactService:
         org_id: str,
         user_id: str,
         request: ArtifactRevisionRequest,
+        provenance: ArtifactProvenance,
         chunks: AsyncIterator[bytes],
     ) -> ArtifactMutationResult:
         """Compare-and-append one immutable artifact revision."""
@@ -164,8 +172,8 @@ class ArtifactService:
             ),
             content_digest=written.content_digest,
             byte_size=written.byte_size,
-            author=request.author,
-            source_ref=request.source_ref,
+            author=provenance.author,
+            source_ref=provenance.source_ref,
             created_at=now.isoformat(),
         )
         stored_revision = ArtifactStoredRevision(
@@ -180,15 +188,15 @@ class ArtifactService:
             parent_revision=request.parent_revision,
             content_ref=revision.content_ref,
             content_digest=revision.content_digest,
-            author=request.author,
+            author=provenance.author,
         )
         request_digest = self._request_digest(
             route=self.Routes.REVISE,
             values={
                 "artifact_id": request.artifact_id,
                 "parent_revision": request.parent_revision,
-                "author": request.author.value,
-                "source_ref": request.source_ref,
+                "author": provenance.author.value,
+                "source_ref": provenance.source_ref,
                 "content_digest": written.content_digest,
             },
         )
@@ -287,12 +295,17 @@ class ArtifactService:
                 or byte_range.end >= stat.byte_size
             ):
                 raise ArtifactRangeError()
-        stream = await self._blobs.open_stream(
-            stored.blob_key,
-            start=byte_range.start if byte_range is not None else None,
-            end=byte_range.end if byte_range is not None else None,
-        )
-        return record, stored, stream
+        try:
+            stream = await self._blobs.open_stream(
+                stored.blob_key,
+                start=byte_range.start if byte_range is not None else None,
+                end=byte_range.end if byte_range is not None else None,
+            )
+        except ArtifactBlobUnavailableError:
+            raise
+        except Exception as exc:
+            raise ArtifactBlobUnavailableError() from exc
+        return record, stored, self._safe_blob_stream(stream)
 
     async def list_for_run(
         self,
@@ -300,7 +313,7 @@ class ArtifactService:
         org_id: str,
         user_id: str,
         run_id: str,
-        kind=None,
+        kind: ArtifactKind | None = None,
         limit: int = 50,
         cursor: str | None = None,
     ) -> ArtifactListPage:
@@ -327,7 +340,11 @@ class ArtifactService:
         """Copy one authorized logical source into independent artifact storage."""
 
         if self._sources is None:
-            raise ArtifactInvalidSourceError()
+            raise ArtifactNotFoundError()
+        try:
+            source_ref = validate_artifact_source_ref(request.source_ref)
+        except ValueError as exc:
+            raise ArtifactInvalidSourceError() from exc
         scope = await self._require_run_scope(
             org_id=org_id,
             user_id=user_id,
@@ -336,12 +353,12 @@ class ArtifactService:
         try:
             descriptor = await self._sources.resolve_source(
                 scope=scope,
-                source_ref=request.source_ref,
+                source_ref=source_ref,
             )
         except ValueError as exc:
             raise ArtifactInvalidSourceError() from exc
         if descriptor is None:
-            raise ArtifactInvalidSourceError()
+            raise ArtifactNotFoundError()
         chunks = await self._sources.open_source(scope=scope, source=descriptor)
         create_request = ArtifactCreateRequest(
             run_id=request.run_id,
@@ -353,14 +370,16 @@ class ArtifactService:
             suggested_filename=(
                 request.suggested_filename or descriptor.suggested_filename
             ),
-            author=ArtifactAuthor.IMPORT,
-            source_ref=descriptor.source_ref,
             expected_digest=descriptor.content_digest,
             idempotency_key=request.idempotency_key,
         )
         return await self._create_in_scope(
             scope=scope,
             request=create_request,
+            provenance=ArtifactProvenance(
+                author=ArtifactAuthor.IMPORT,
+                source_ref=descriptor.source_ref,
+            ),
             chunks=chunks,
             route=self.Routes.PROMOTE,
             promoted_source_ref=descriptor.source_ref,
@@ -411,6 +430,7 @@ class ArtifactService:
         *,
         scope: ArtifactScope,
         request: ArtifactCreateRequest,
+        provenance: ArtifactProvenance,
         chunks: AsyncIterator[bytes],
         route: str,
         promoted_source_ref: str | None,
@@ -431,8 +451,8 @@ class ArtifactService:
             content_ref=ArtifactContentRefCodec.format(artifact_id, 1),
             content_digest=written.content_digest,
             byte_size=written.byte_size,
-            author=request.author,
-            source_ref=request.source_ref,
+            author=provenance.author,
+            source_ref=provenance.source_ref,
             created_at=now.isoformat(),
         )
         artifact = Artifact(
@@ -445,7 +465,7 @@ class ArtifactService:
             title=request.title,
             media_type=request.media_type,
             current_revision=1,
-            created_by=request.author,
+            created_by=provenance.author,
             created_at=now.isoformat(),
             updated_at=now.isoformat(),
             deleted_at=None,
@@ -466,7 +486,7 @@ class ArtifactService:
             revision=1,
             content_ref=revision.content_ref,
             content_digest=revision.content_digest,
-            author=request.author,
+            author=provenance.author,
         )
         events = [
             self._event(
@@ -506,8 +526,8 @@ class ArtifactService:
                 "title": request.title,
                 "media_type": request.media_type,
                 "suggested_filename": request.suggested_filename,
-                "author": request.author.value,
-                "source_ref": request.source_ref,
+                "author": provenance.author.value,
+                "source_ref": provenance.source_ref,
                 "content_digest": written.content_digest,
             },
         )
@@ -613,6 +633,20 @@ class ArtifactService:
     async def _single_chunk(content: bytes) -> AsyncIterator[bytes]:
         if content:
             yield content
+
+    @staticmethod
+    async def _safe_blob_stream(
+        stream: AsyncIterator[bytes],
+    ) -> AsyncIterator[bytes]:
+        """Translate adapter failures that occur after response streaming starts."""
+
+        try:
+            async for chunk in stream:
+                yield chunk
+        except ArtifactBlobUnavailableError:
+            raise
+        except Exception as exc:
+            raise ArtifactBlobUnavailableError() from exc
 
     @staticmethod
     def digest_bytes(content: bytes) -> str:

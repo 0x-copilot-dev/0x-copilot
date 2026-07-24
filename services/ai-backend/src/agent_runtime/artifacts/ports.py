@@ -16,7 +16,6 @@ from agent_runtime.artifacts.contracts import (
     ArtifactListPage,
     ArtifactListQuery,
     ArtifactMutationResult,
-    ArtifactReferenceSnapshot,
     ArtifactScope,
     ArtifactSoftDeleteCommand,
     ArtifactSourceDescriptor,
@@ -66,7 +65,12 @@ class ArtifactMetadataStorePort(Protocol):
     async def soft_delete(
         self, command: ArtifactSoftDeleteCommand
     ) -> ArtifactStoredRecord | None:
-        """Tombstone metadata without synchronously deleting shared bytes."""
+        """Tombstone metadata without synchronously deleting shared bytes.
+
+        An identical idempotency retry returns the tombstoned record. A new
+        idempotency key targeting an existing tombstone returns ``None`` so the
+        application preserves its scoped 404 semantics.
+        """
 
     async def list_unreferenced_content(
         self,
@@ -76,9 +80,6 @@ class ArtifactMetadataStorePort(Protocol):
         limit: int,
     ) -> Sequence[ArtifactGcCandidate]:
         """Return grace-expired blob candidates; never delete them here."""
-
-    async def list_live_blob_keys(self, *, org_id: str) -> frozenset[str]:
-        """Return every blob referenced by artifact revisions, including tombstones."""
 
 
 @runtime_checkable
@@ -105,14 +106,6 @@ class ArtifactBlobStorePort(Protocol):
 
     async def stat(self, blob_key: str) -> ArtifactBlobStat:
         """Return size and range capability for one internal blob key."""
-
-    async def delete_if_unreferenced(
-        self,
-        blob_key: str,
-        *,
-        live_blob_keys: frozenset[str],
-    ) -> bool:
-        """Delete only when ``blob_key`` is absent from the supplied live snapshot."""
 
     async def list_candidates(
         self, *, older_than: datetime, limit: int
@@ -155,14 +148,37 @@ class ArtifactLedgerPublisherPort(Protocol):
 
 @runtime_checkable
 class ArtifactReferenceProviderPort(Protocol):
-    """One reference source used by retention-safe blob garbage collection."""
+    """One exact per-digest reference source used during final GC checks."""
 
-    async def snapshot(self, *, org_id: str) -> ArtifactReferenceSnapshot:
-        """Return the provider's exact live reference set for one tenant."""
+    async def has_reference(self, *, org_id: str, blob_key: str) -> bool:
+        """Return whether this source currently retains ``blob_key``."""
+
+
+@runtime_checkable
+class ArtifactGarbageCollectorPort(Protocol):
+    """Coordinated final-check + quarantine boundary for physical collection."""
+
+    async def collect_if_unreferenced(
+        self,
+        *,
+        org_id: str,
+        candidate: ArtifactGcCandidate,
+        grace_before: datetime,
+    ) -> bool:
+        """Quarantine one candidate only after an authoritative final recheck.
+
+        Implementations MUST coordinate this operation with artifact/effect/
+        receipt/audit publication for the same digest. A concurrent publication
+        must cancel or restore quarantine before its metadata transaction
+        commits. Immediate unlink based on a caller-supplied snapshot is
+        forbidden; tombstoned artifact revisions remain references until their
+        retention purge removes the metadata.
+        """
 
 
 __all__ = (
     "ArtifactBlobStorePort",
+    "ArtifactGarbageCollectorPort",
     "ArtifactLedgerPublisherPort",
     "ArtifactMetadataStorePort",
     "ArtifactReferenceProviderPort",
