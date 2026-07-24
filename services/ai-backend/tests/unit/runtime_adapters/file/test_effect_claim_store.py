@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -82,15 +83,25 @@ async def test_changed_digest_reusing_key_fails_closed(tmp_path) -> None:
 
 
 async def test_concurrent_adapter_instances_have_one_claim_winner(tmp_path) -> None:
-    barrier = threading.Barrier(16)
+    caller_count = 16
+    barrier = threading.Barrier(caller_count)
 
     def claim_from_a_separate_caller() -> EffectClaimAcquisition:
         barrier.wait()
         return asyncio.run(FileEffectClaimStore(root=tmp_path).claim(claim=_claim()))
 
-    claims = await asyncio.gather(
-        *(asyncio.to_thread(claim_from_a_separate_caller) for _ in range(16))
-    )
+    # asyncio's default thread pool is sized from the host CPU count. On a
+    # two/four-core CI runner it can have fewer than ``caller_count`` workers,
+    # leaving every worker waiting at the barrier forever. Own the executor so
+    # this remains a real 16-way contention test on every supported platform.
+    loop = asyncio.get_running_loop()
+    with ThreadPoolExecutor(max_workers=caller_count) as executor:
+        claims = await asyncio.gather(
+            *(
+                loop.run_in_executor(executor, claim_from_a_separate_caller)
+                for _ in range(caller_count)
+            )
+        )
 
     assert sum(acquired.created for acquired in claims) == 1
     assert {acquired.claim.claim_id for acquired in claims} == {
