@@ -14,6 +14,10 @@ from pydantic import ValidationError
 
 from agent_runtime.delegation.subagents.constants import Limits, Messages, _Fields
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.delegation.subagents.authority import (
+    SubagentAuthorityError,
+    SubagentCapabilityGrant,
+)
 from agent_runtime.delegation.subagents.contracts import (
     AsyncSubagentLaunch,
     AsyncTaskLifecycleResult,
@@ -26,6 +30,7 @@ from agent_runtime.delegation.subagents.contracts import (
     SubagentTask,
 )
 from agent_runtime.delegation.subagents.definitions import DynamicSubagentCatalog
+from agent_runtime.delegation.subagents.handoff import SubagentHandoffPolicy
 
 RawSubagentResult = SubagentResult | Mapping[str, object] | None
 RawSubagentLaunch = AsyncSubagentLaunch | Mapping[str, object]
@@ -96,6 +101,7 @@ class AsyncSubagentLifecycle:
         context: AgentRuntimeContext,
         subagent_name: str,
         task: SubagentTask,
+        parent_grant: SubagentCapabilityGrant | None = None,
     ) -> AsyncTaskLifecycleResult:
         """Start a subagent task or queue it when its concurrency limit is exhausted."""
 
@@ -104,9 +110,24 @@ class AsyncSubagentLifecycle:
             return AsyncTaskLifecycleResult(error=resolution)
 
         definition = resolution.definition
+        try:
+            task = SubagentHandoffPolicy.enforce_existing_task(
+                context=context,
+                definition=definition,
+                task=task,
+                parent_grant=parent_grant,
+            )
+        except SubagentAuthorityError:
+            return AsyncTaskLifecycleResult.fail(
+                SubagentErrorCode.PERMISSION_DENIED,
+                Messages.Lifecycle.PERMISSION_DENIED,
+                retryable=False,
+                correlation_id=context.trace_id,
+            )
         if self.store.count_active(definition.name) >= definition.concurrency_limit:
             state = AsyncTaskStateFactory.create(
                 definition=definition,
+                task=task,
                 status=AsyncTaskStatus.QUEUED,
                 now=self.clock(),
                 thread_id=uuid4().hex,
@@ -146,6 +167,7 @@ class AsyncSubagentLifecycle:
 
         state = AsyncTaskStateFactory.create(
             definition=definition,
+            task=task,
             status=launch.status,
             now=self.clock(),
             thread_id=launch.thread_id,
@@ -239,7 +261,20 @@ class AsyncSubagentLifecycle:
             return AsyncTaskLifecycleErrors.stale_task(task_id)
 
         try:
+            task = SubagentHandoffPolicy.enforce_task_update(
+                task=task,
+                runtime_context_ref=state.runtime_context_ref,
+                authority=state.authority,
+            )
             await self.runner.update(state, task)
+        except SubagentAuthorityError:
+            return AsyncTaskLifecycleResult.fail(
+                SubagentErrorCode.PERMISSION_DENIED,
+                Messages.Lifecycle.PERMISSION_DENIED,
+                retryable=False,
+                task_id=state.task_id,
+                correlation_id=state.runtime_context_ref.trace_id,
+            )
         except Exception:
             logging.getLogger(__name__).warning(
                 "Subagent update failed for task %s", state.task_id, exc_info=True
@@ -341,6 +376,8 @@ class AsyncSubagentLifecycle:
                 created_at=state.created_at,
                 updated_at=self.clock(),
                 deadline_at=state.deadline_at,
+                runtime_context_ref=state.runtime_context_ref,
+                authority=state.authority,
             )
             self.store.save(promoted)
             self._queued_tasks.pop(state.task_id, None)
@@ -355,6 +392,7 @@ class AsyncTaskStateFactory:
         cls,
         *,
         definition: SubagentDefinition,
+        task: SubagentTask,
         status: AsyncTaskStatus,
         now: datetime,
         thread_id: str,
@@ -369,6 +407,8 @@ class AsyncTaskStateFactory:
             created_at=now,
             updated_at=now,
             deadline_at=now + timedelta(seconds=definition.timeout_seconds),
+            runtime_context_ref=task.runtime_context_ref,
+            authority=task.authority,
         )
 
 
@@ -391,6 +431,8 @@ class AsyncTaskStateTransition:
             created_at=state.created_at,
             updated_at=now,
             deadline_at=state.deadline_at,
+            runtime_context_ref=state.runtime_context_ref,
+            authority=state.authority,
         )
 
 

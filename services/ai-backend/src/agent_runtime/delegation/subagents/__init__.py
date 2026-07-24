@@ -15,6 +15,20 @@ from agent_runtime.delegation.subagents.contracts import (
     SubagentTask,
     SubagentTransport,
 )
+from agent_runtime.delegation.subagents.authority import (
+    SubagentAuthorityError,
+    SubagentAuthorityPolicy,
+    SubagentCapabilityGrant,
+    SubagentPolicyGrant,
+)
+from agent_runtime.delegation.subagents.operation_identity import (
+    SUBAGENT_DELEGATION_OPERATION_ID_KEY,
+    SUBAGENT_PARENT_OPERATION_ID_KEY,
+    SUBAGENT_ROOT_OPERATION_ID_KEY,
+    SUPERVISOR_TASK_CALL_ID_KEY,
+    SubagentOperationIdentityFactory,
+    SubagentOperationLink,
+)
 from agent_runtime.delegation.subagents.definitions import (
     DynamicSubagentCatalog,
     RegisteredSubagent,
@@ -41,17 +55,27 @@ __all__ = [
     "InMemoryAsyncTaskStore",
     "RegisteredSubagent",
     "RuntimeContextReference",
+    "SUBAGENT_DELEGATION_OPERATION_ID_KEY",
+    "SUBAGENT_PARENT_OPERATION_ID_KEY",
+    "SUBAGENT_ROOT_OPERATION_ID_KEY",
+    "SUPERVISOR_TASK_CALL_ID_KEY",
     "SubagentArtifact",
+    "SubagentAuthorityError",
+    "SubagentAuthorityPolicy",
+    "SubagentCapabilityGrant",
     "SubagentDefinition",
     "SubagentDefinitionProvider",
     "SubagentError",
     "SubagentErrorCode",
     "SubagentHandoffBuilder",
     "SubagentHandoffPolicy",
+    "SubagentOperationIdentityFactory",
+    "SubagentOperationLink",
     "SubagentOutputContract",
     "SubagentPermissionPolicy",
     "SubagentResult",
     "SubagentRunner",
     "SubagentTask",
     "SubagentTransport",
+    "SubagentPolicyGrant",
 ]
