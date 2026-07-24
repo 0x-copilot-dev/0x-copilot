@@ -292,14 +292,24 @@ class TestArtifactJsonRoutes(ArtifactRouteMixin):
         assert listing.json()["next_cursor"] == "cursor_2"
         assert service.calls[-1][1]["kind"] == ArtifactKind.CODE
 
-    def test_promotion_literal_route_is_not_shadowed(self) -> None:
+    @pytest.mark.parametrize(
+        "source_ref",
+        (
+            "message://msg_1",
+            "operation://op_123e4567-e89b-42d3-a456-426614174000/result",
+            "payload://payload_result_01",
+        ),
+    )
+    def test_promotion_literal_route_accepts_only_logical_source_refs(
+        self, source_ref: str
+    ) -> None:
         service = FakeArtifactService()
         response = self.client(service).post(
             "/v1/agent/artifacts:promote",
             headers=self.headers(idempotency=True),
             json={
                 "run_id": self.RUN,
-                "source_ref": "message://msg_1",
+                "source_ref": source_ref,
                 "kind": "document",
                 "title": "Promoted notes",
             },
@@ -309,8 +319,27 @@ class TestArtifactJsonRoutes(ArtifactRouteMixin):
         assert response.json()["replayed"] is True
         assert service.calls[0][0] == "promote"
         request = service.calls[0][1][1]
-        assert request.source_ref == "message://msg_1"
+        assert request.source_ref == source_ref
         assert request.idempotency_key == "idem_artifact_1"
+
+    def test_promotion_malformed_source_ref_is_safe_not_found(self) -> None:
+        service = FakeArtifactService()
+
+        response = self.client(service).post(
+            "/v1/agent/artifacts:promote",
+            headers=self.headers(idempotency=True),
+            json={
+                "run_id": self.RUN,
+                "source_ref": "file:///private/secret.csv",
+                "kind": "file",
+            },
+        )
+
+        assert response.status_code == 404
+        assert response.json() == {
+            "detail": "Artifact source is not available for this scope."
+        }
+        assert service.calls == []
 
     def test_delete_forwards_only_verified_scope_and_idempotency(self) -> None:
         service = FakeArtifactService()

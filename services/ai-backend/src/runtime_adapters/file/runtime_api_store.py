@@ -284,6 +284,10 @@ class FileRuntimeApiStore:
         self.messages: dict[str, MessageRecord] = {}
         self.runs: dict[str, RunRecord] = {}
         self.events_by_run: dict[str, list[RuntimeEventEnvelope]] = {}
+        # Materialized exact-id index used by artifact source promotion.  It is
+        # rebuilt from immutable JSONL on open, never by scanning at request
+        # time for a guessed payload/call-id substring.
+        self._events_by_id: dict[str, RuntimeEventEnvelope] = {}
         self.approval_requests: dict[str, ApprovalRequestRecord] = {}
         self.approval_decisions: dict[str, ApprovalDecisionRecord] = {}
         self.approval_batches: dict[str, ApprovalBatchRecord] = {}
@@ -668,6 +672,7 @@ class FileRuntimeApiStore:
         for envelope in envelopes:
             bucket = self.events_by_run.setdefault(envelope.run_id, [])
             bucket.append(envelope)
+            self._events_by_id[envelope.event_id] = envelope
         for bucket in self.events_by_run.values():
             bucket.sort(key=lambda event: event.sequence_no)
 
@@ -1893,6 +1898,7 @@ class FileRuntimeApiStore:
                     )
             envelope = self._envelope_for(event, sequence_no=len(events) + 1)
             events.append(envelope)
+            self._events_by_id[envelope.event_id] = envelope
             self._persist_event(envelope, org_id=event.org_id)
             if event.run_id in self.runs:
                 await self.set_run_latest_sequence(
@@ -1942,6 +1948,8 @@ class FileRuntimeApiStore:
             # failed/interrupted write leaves no phantom events behind.
             self._persist_events_batch(envelopes, org_id=first.org_id)
             bucket.extend(envelopes)
+            for envelope in envelopes:
+                self._events_by_id[envelope.event_id] = envelope
             if first.run_id in self.runs:
                 await self.set_run_latest_sequence(
                     run_id=first.run_id,
@@ -1959,6 +1967,23 @@ class FileRuntimeApiStore:
             run_id=run_id, after_sequence=after_sequence
         )
         return tuple(RuntimeEventEnvelope.model_validate_json(doc) for doc in docs)
+
+    async def get_event_by_id(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        event_id: str,
+    ) -> RuntimeEventEnvelope | None:
+        """Return one materialized immutable event only in its owning scope."""
+
+        event = self._events_by_id.get(event_id)
+        if event is None or event.run_id != run_id:
+            return None
+        run = self.runs.get(run_id)
+        if run is None or run.org_id != org_id:
+            return None
+        return event
 
     async def get_latest_sequence(self, *, run_id: str) -> int:
         return self._index.latest_sequence(run_id=run_id)
@@ -2646,7 +2671,9 @@ class FileRuntimeApiStore:
             if run.conversation_id != conversation_id:
                 continue
             self.runs.pop(run.run_id, None)
-            self.events_by_run.pop(run.run_id, None)
+            removed_events = self.events_by_run.pop(run.run_id, ())
+            for event in removed_events:
+                self._events_by_id.pop(event.event_id, None)
             if run.idempotency_key is not None:
                 key = (run.org_id, run.user_id, run.idempotency_key)
                 self._run_idempotency.pop(key, None)

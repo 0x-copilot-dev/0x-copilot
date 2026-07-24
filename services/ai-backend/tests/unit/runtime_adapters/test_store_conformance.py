@@ -456,6 +456,52 @@ class TestMessageOrderingConformance(_CrudSeedMixin):
         assert foreign_org is None
 
 
+class TestExactEventSourceRecordConformance(_CrudSeedMixin):
+    """Artifact promotion reads one immutable result record by its id."""
+
+    async def test_event_id_lookup_is_exact_and_scope_bounded(self, store) -> None:
+        conversation, run = await self._new_run(store)
+        event_id = "op_123e4567-e89b-42d3-a456-426614174000"
+        event = await store.append_event(
+            RuntimeEventDraft(
+                org_id=self._ORG,
+                event_id=event_id,
+                run_id=run.run_id,
+                conversation_id=conversation.conversation_id,
+                trace_id=run.trace_id,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.TOOL_RESULT,
+                payload={"output": "immutable result"},
+            )
+        )
+
+        found = await store.get_event_by_id(
+            org_id=self._ORG,
+            run_id=run.run_id,
+            event_id=event_id,
+        )
+        foreign_run = await store.get_event_by_id(
+            org_id=self._ORG,
+            run_id="run_foreign",
+            event_id=event_id,
+        )
+        foreign_org = await store.get_event_by_id(
+            org_id="org_foreign",
+            run_id=run.run_id,
+            event_id=event_id,
+        )
+        missing = await store.get_event_by_id(
+            org_id=self._ORG,
+            run_id=run.run_id,
+            event_id="payload_missing",
+        )
+
+        assert found == event
+        assert foreign_run is None
+        assert foreign_org is None
+        assert missing is None
+
+
 class TestMessageKeysetWindowConformance(_CrudSeedMixin):
     """list_messages returns the most-recent window (ASC) with keyset paging.
 

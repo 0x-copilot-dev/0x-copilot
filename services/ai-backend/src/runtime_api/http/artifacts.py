@@ -47,6 +47,7 @@ from agent_runtime.artifacts import (
     ArtifactStorageError,
     ArtifactTooLargeError,
 )
+from agent_runtime.artifacts.contracts import validate_artifact_source_ref
 from agent_runtime.surfaces_v2.ledger_models import ArtifactAuthor, ArtifactKind
 from runtime_api.http.artifact_content import ArtifactContentPolicy
 from runtime_api.http.artifact_multipart import (
@@ -354,6 +355,14 @@ class ArtifactRoutes:
             ..., alias="Idempotency-Key", min_length=1, max_length=255
         ),
     ) -> ArtifactMutationResponse:
+        # A malformed source is intentionally indistinguishable from a missing
+        # or foreign one.  Validate it here (before Pydantic builds the domain
+        # request) so the transport preserves ArtifactService's safe 404
+        # source-disclosure contract instead of leaking a validation 422.
+        try:
+            validate_artifact_source_ref(payload.source_ref)
+        except ValueError as exc:
+            raise cls._http(ArtifactInvalidSourceError()) from exc
         try:
             result = await cls._service(request).promote_source(
                 org_id=identity.org_id,

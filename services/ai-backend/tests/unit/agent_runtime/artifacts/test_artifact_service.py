@@ -201,13 +201,14 @@ class ArtifactServiceFakes:
             return self.scope
 
     class Sources:
-        def __init__(self, body: bytes) -> None:
+        def __init__(self, body: bytes, *, source_ref: str = "message://msg_1") -> None:
             self.body = body
+            self.source_ref = source_ref
             self.resolve_calls = 0
 
         async def resolve_source(self, *, scope, source_ref):
             self.resolve_calls += 1
-            if source_ref != "message://msg_1":
+            if source_ref != self.source_ref:
                 return None
             return ArtifactSourceDescriptor(
                 source_ref=source_ref,
@@ -396,11 +397,21 @@ class TestArtifactService(ArtifactServiceFakes):
         )
 
     @pytest.mark.asyncio
-    async def test_promotion_resolves_and_copies_server_owned_source(self) -> None:
+    @pytest.mark.parametrize(
+        "source_ref",
+        (
+            "message://msg_1",
+            "operation://op_123e4567-e89b-42d3-a456-426614174000/result",
+            "payload://payload_result_01",
+        ),
+    )
+    async def test_promotion_resolves_and_copies_server_owned_source(
+        self, source_ref: str
+    ) -> None:
         metadata = self.Metadata()
         service = self.service(
             metadata=metadata,
-            sources=self.Sources(b"# Hello\n"),
+            sources=self.Sources(b"# Hello\n", source_ref=source_ref),
         )
 
         result = await service.promote_source(
@@ -408,7 +419,7 @@ class TestArtifactService(ArtifactServiceFakes):
             user_id=SCOPE.user_id,
             request=ArtifactPromotionRequest(
                 run_id=SCOPE.run_id,
-                source_ref="message://msg_1",
+                source_ref=source_ref,
                 kind=ArtifactKind.DOCUMENT,
                 idempotency_key="promote-1",
             ),
@@ -422,6 +433,9 @@ class TestArtifactService(ArtifactServiceFakes):
             LedgerEventType.ARTIFACT_CREATED,
             LedgerEventType.ARTIFACT_PROMOTED,
         )
+        promoted = metadata.create_command.ledger_events[-1]
+        assert promoted.payload["source_ref"] == source_ref
+        assert "# Hello" not in str(metadata.create_command.ledger_events)
 
     @pytest.mark.asyncio
     async def test_range_stream_returns_exact_bytes(self) -> None:

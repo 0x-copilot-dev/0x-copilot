@@ -128,6 +128,10 @@ class InMemoryRuntimeApiStore:
         self.approval_batch_items: dict[str, ApprovalBatchItemRecord] = {}
         self._approval_batch_locks: dict[str, asyncio.Lock] = {}
         self.events_by_run: dict[str, list[RuntimeEventEnvelope]] = {}
+        # Exact immutable-event lookup for server-side artifact promotion.  This
+        # is deliberately separate from the per-run replay list: promotion
+        # never searches event history by content/call-id text.
+        self._events_by_id: dict[str, RuntimeEventEnvelope] = {}
         self.run_commands: list[RuntimeRunCommand] = []
         self.cancel_commands: list[RuntimeCancelCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
@@ -2494,6 +2498,7 @@ class InMemoryRuntimeApiStore:
             **envelope_kwargs,
         )
         events.append(envelope)
+        self._events_by_id[envelope.event_id] = envelope
         if event.run_id in self.runs:
             await self.set_run_latest_sequence(
                 run_id=event.run_id,
@@ -2518,6 +2523,23 @@ class InMemoryRuntimeApiStore:
             for event in self.events_by_run.get(run_id, ())
             if event.sequence_no > after_sequence
         )
+
+    async def get_event_by_id(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        event_id: str,
+    ) -> RuntimeEventEnvelope | None:
+        """Return one event only when its immutable id and scope both match."""
+
+        event = self._events_by_id.get(event_id)
+        if event is None or event.run_id != run_id:
+            return None
+        run = self.runs.get(run_id)
+        if run is None or run.org_id != org_id:
+            return None
+        return event
 
     async def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""

@@ -9,6 +9,7 @@ combines those injected ports into ``ArtifactService``.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from typing import Protocol, cast, runtime_checkable
@@ -24,11 +25,11 @@ from agent_runtime.artifacts import (
 )
 from agent_runtime.artifacts.contracts import validate_artifact_source_ref
 
-INDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset({"message"})
-# Explicit A2 contract exemption: the owning operation-result/payload stores do
-# not yet expose immutable indexed lookup ports. These schemes validate but
-# return scoped not-found; replay/scanning and filesystem fallback are forbidden.
-UNINDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset({"operation", "payload"})
+INDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset({"message", "operation", "payload"})
+# Kept as an exported compatibility value for callers that rendered the former
+# rollout state.  All logical source schemes accepted by the A2 contract are
+# now resolved through exact, scoped source-record lookups.
+UNINDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset()
 
 
 class _ArtifactMessageByIdPort(Protocol):
@@ -41,6 +42,23 @@ class _ArtifactMessageByIdPort(Protocol):
         conversation_id: str,
         run_id: str,
         message_id: str,
+    ) -> object | None: ...
+
+
+class _ArtifactEventByIdPort(Protocol):
+    """Exact, tenant- and run-scoped immutable event-record lookup.
+
+    ``event_id`` is the source-record key, not a search term.  Adapters must
+    resolve it through their primary/materialized event-id index and must never
+    replay a run's event stream to find a candidate.
+    """
+
+    async def get_event_by_id(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        event_id: str,
     ) -> object | None: ...
 
 
@@ -85,12 +103,54 @@ class ArtifactSourceLookupPort(Protocol):
         message_id: str,
     ) -> ArtifactSourceSnapshot | None: ...
 
+    async def get_operation_result_snapshot(
+        self,
+        *,
+        scope: ArtifactScope,
+        operation_id: str,
+    ) -> ArtifactSourceSnapshot | None: ...
+
+    async def get_payload_snapshot(
+        self,
+        *,
+        scope: ArtifactScope,
+        payload_ref: str,
+    ) -> ArtifactSourceSnapshot | None: ...
+
 
 class RuntimeArtifactSourceLookup:
-    """Adapt a runtime store's exact message query to source snapshots."""
+    """Adapt exact runtime records to safe promotion source snapshots.
 
-    def __init__(self, messages: _ArtifactMessageByIdPort) -> None:
+    Operation and payload sources intentionally share the event-id index rather
+    than introducing an event-history scan:
+
+    * ``operation://op_…/result`` names the immutable result record with
+      ``event_id == operation_id``;
+    * ``payload://<event-id>`` names that result record directly.
+
+    Producers that want a result to be promotable must therefore write one
+    immutable ``tool_result`` source record with a stable event id.  Ordinary
+    tool events remain untouched and are not discoverable by guessed call ids,
+    result text, paths, or arguments.
+    """
+
+    _RESULT_EVENT_TYPE = "tool_result"
+    _OUTPUT_FIELD = "output"
+    _DEFAULT_TITLE = "Operation result"
+
+    def __init__(
+        self,
+        messages: _ArtifactMessageByIdPort,
+        *,
+        events: _ArtifactEventByIdPort | None = None,
+    ) -> None:
         self._messages = messages
+        # Runtime adapter factories pass one store that satisfies both narrow
+        # read ports.  The optional override keeps tests/future split stores
+        # explicit without a structural cast at the call site.
+        self._events = (
+            events if events is not None else cast(_ArtifactEventByIdPort, messages)
+        )
 
     async def get_message_snapshot(
         self,
@@ -122,6 +182,101 @@ class RuntimeArtifactSourceLookup:
             title="Conversation message",
         )
 
+    async def get_operation_result_snapshot(
+        self,
+        *,
+        scope: ArtifactScope,
+        operation_id: str,
+    ) -> ArtifactSourceSnapshot | None:
+        event = await self._get_result_event(scope=scope, event_id=operation_id)
+        if event is None:
+            return None
+        return self._snapshot_from_result_event(
+            event=event,
+            source_ref=f"operation://{operation_id}/result",
+            title=self._DEFAULT_TITLE,
+        )
+
+    async def get_payload_snapshot(
+        self,
+        *,
+        scope: ArtifactScope,
+        payload_ref: str,
+    ) -> ArtifactSourceSnapshot | None:
+        event_id = payload_ref.removeprefix("payload://")
+        if not event_id:
+            return None
+        event = await self._get_result_event(scope=scope, event_id=event_id)
+        if event is None:
+            return None
+        return self._snapshot_from_result_event(
+            event=event,
+            source_ref=payload_ref,
+            title="Result payload",
+        )
+
+    async def _get_result_event(
+        self,
+        *,
+        scope: ArtifactScope,
+        event_id: str,
+    ) -> object | None:
+        event = await self._events.get_event_by_id(
+            org_id=scope.org_id,
+            run_id=scope.run_id,
+            event_id=event_id,
+        )
+        if event is None:
+            return None
+        event_type = getattr(event, "event_type", None)
+        event_type_value = getattr(event_type, "value", event_type)
+        if event_type_value != self._RESULT_EVENT_TYPE:
+            return None
+        return event
+
+    @classmethod
+    def _snapshot_from_result_event(
+        cls,
+        *,
+        event: object,
+        source_ref: str,
+        title: str,
+    ) -> ArtifactSourceSnapshot | None:
+        """Copy only a stored result value into an artifact byte snapshot.
+
+        Result-source records must carry their content in the projected
+        ``tool_result.payload.output`` field.  We deliberately do not inspect
+        event metadata (which can include execution diagnostics), tool-call
+        arguments, previews, offload paths, or any other fields.
+        """
+
+        payload = getattr(event, "payload", None)
+        if not isinstance(payload, dict):
+            return None
+        output = payload.get(cls._OUTPUT_FIELD)
+        if isinstance(output, str):
+            content = output.encode("utf-8")
+            media_type = "text/plain; charset=utf-8"
+        elif isinstance(output, (dict, list)):
+            try:
+                content = json.dumps(
+                    output,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8")
+            except (TypeError, ValueError):
+                return None
+            media_type = "application/json"
+        else:
+            return None
+        return ArtifactSourceSnapshot.from_bytes(
+            source_ref=source_ref,
+            content=content,
+            media_type=media_type,
+            title=title,
+        )
+
 
 class RuntimeArtifactRunScopeResolver:
     """Resolve a run only when both tenant and owner match."""
@@ -151,10 +306,9 @@ class RuntimeArtifactRunScopeResolver:
 class RuntimeArtifactSourceResolver:
     """Resolve supported logical sources without scanning run history.
 
-    A2 supports ``message://`` through an exact indexed store lookup.
-    ``operation://`` and ``payload://`` validate but return scoped not-found
-    until their stores expose equivalent indexed immutable-snapshot queries.
-    They never fall back to replaying a run or reading a server-local path.
+    Every accepted logical scheme resolves only through an exact, scoped source
+    record lookup.  The resolver never replays a run, searches message/event
+    text, reads server-local paths, or accepts client-supplied bytes.
     """
 
     CHUNK_BYTES = 64 * 1024
@@ -205,8 +359,19 @@ class RuntimeArtifactSourceResolver:
                 scope=scope,
                 message_id=canonical.removeprefix("message://"),
             )
-        # No event replay: these schemes stay typed-not-found until an indexed,
-        # immutable source query is available through ArtifactSourceLookupPort.
+        if canonical.startswith("operation://"):
+            operation_id = canonical.removeprefix("operation://").removesuffix(
+                "/result"
+            )
+            return await self._lookup.get_operation_result_snapshot(
+                scope=scope,
+                operation_id=operation_id,
+            )
+        if canonical.startswith("payload://"):
+            return await self._lookup.get_payload_snapshot(
+                scope=scope,
+                payload_ref=canonical,
+            )
         return None
 
     @classmethod

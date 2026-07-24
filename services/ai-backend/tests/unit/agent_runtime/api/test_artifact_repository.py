@@ -43,6 +43,14 @@ class _Message:
     content_format: str = "markdown"
 
 
+@dataclass(frozen=True)
+class _ResultEvent:
+    event_id: str
+    run_id: str
+    event_type: str
+    payload: dict[str, object]
+
+
 class _Persistence:
     def __init__(self) -> None:
         self.run: _Run | None = _Run()
@@ -72,6 +80,19 @@ class _MessageStore:
         return message
 
 
+class _EventStore:
+    def __init__(self) -> None:
+        self.events: dict[str, _ResultEvent] = {}
+        self.calls: list[dict[str, str]] = []
+
+    async def get_event_by_id(self, **kwargs):
+        self.calls.append(kwargs)
+        event = self.events.get(kwargs["event_id"])
+        if event is None or event.run_id != kwargs["run_id"]:
+            return None
+        return event
+
+
 class _Lookup:
     def __init__(self, *snapshots: ArtifactSourceSnapshot | None) -> None:
         self._snapshots = list(snapshots)
@@ -82,6 +103,14 @@ class _Lookup:
         if not self._snapshots:
             return None
         return self._snapshots.pop(0)
+
+    async def get_operation_result_snapshot(self, **kwargs):
+        self.calls += 1
+        return None
+
+    async def get_payload_snapshot(self, **kwargs):
+        self.calls += 1
+        return None
 
 
 class ArtifactResolverMixin:
@@ -127,9 +156,11 @@ class TestRuntimeArtifactRunScopeResolver(ArtifactResolverMixin):
 
 
 class TestRuntimeArtifactSourceResolver(ArtifactResolverMixin):
-    def test_indexed_source_contract_exemption_is_explicit_and_closed(self) -> None:
-        assert INDEXED_ARTIFACT_SOURCE_SCHEMES == frozenset({"message"})
-        assert UNINDEXED_ARTIFACT_SOURCE_SCHEMES == frozenset({"operation", "payload"})
+    def test_all_valid_source_schemes_use_exact_lookup_contracts(self) -> None:
+        assert INDEXED_ARTIFACT_SOURCE_SCHEMES == frozenset(
+            {"message", "operation", "payload"}
+        )
+        assert UNINDEXED_ARTIFACT_SOURCE_SCHEMES == frozenset()
         assert INDEXED_ARTIFACT_SOURCE_SCHEMES.isdisjoint(
             UNINDEXED_ARTIFACT_SOURCE_SCHEMES
         )
@@ -182,24 +213,115 @@ class TestRuntimeArtifactSourceResolver(ArtifactResolverMixin):
         ]
 
     @pytest.mark.asyncio
+    async def test_operation_result_uses_its_exact_immutable_record_id(self) -> None:
+        events = _EventStore()
+        events.events[self.OPERATION_ID] = _ResultEvent(
+            event_id=self.OPERATION_ID,
+            run_id=self.SCOPE.run_id,
+            event_type="tool_result",
+            payload={"output": {"total": 42, "items": ["a", "b"]}},
+        )
+        resolver = RuntimeArtifactSourceResolver(
+            RuntimeArtifactSourceLookup(_MessageStore(), events=events)
+        )
+
+        descriptor = await resolver.resolve_source(
+            scope=self.SCOPE,
+            source_ref=f"operation://{self.OPERATION_ID}/result",
+        )
+        assert descriptor is not None
+        assert descriptor.source_ref == f"operation://{self.OPERATION_ID}/result"
+        assert descriptor.media_type == "application/json"
+        chunks = await resolver.open_source(scope=self.SCOPE, source=descriptor)
+        assert await self.read(chunks) == b'{"items":["a","b"],"total":42}'
+        assert events.calls == [
+            {
+                "org_id": self.SCOPE.org_id,
+                "run_id": self.SCOPE.run_id,
+                "event_id": self.OPERATION_ID,
+            },
+            {
+                "org_id": self.SCOPE.org_id,
+                "run_id": self.SCOPE.run_id,
+                "event_id": self.OPERATION_ID,
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_payload_uses_exact_event_id_and_never_inspects_metadata(
+        self,
+    ) -> None:
+        event_id = "payload_result_01"
+        events = _EventStore()
+        events.events[event_id] = _ResultEvent(
+            event_id=event_id,
+            run_id=self.SCOPE.run_id,
+            event_type="tool_result",
+            payload={"output": "trusted result body", "arguments": "never read"},
+        )
+        resolver = RuntimeArtifactSourceResolver(
+            RuntimeArtifactSourceLookup(_MessageStore(), events=events)
+        )
+
+        descriptor = await resolver.resolve_source(
+            scope=self.SCOPE,
+            source_ref=f"payload://{event_id}",
+        )
+        assert descriptor is not None
+        assert descriptor.source_ref == f"payload://{event_id}"
+        chunks = await resolver.open_source(scope=self.SCOPE, source=descriptor)
+        assert await self.read(chunks) == b"trusted result body"
+        assert all("arguments" not in repr(call) for call in events.calls)
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "source_ref",
         (
-            "payload://call/result",
+            "payload://missing_result",
             f"operation://{ArtifactResolverMixin.OPERATION_ID}/result",
         ),
     )
-    async def test_unindexed_schemes_are_honest_not_found_without_scan(
+    async def test_missing_or_foreign_result_is_honest_not_found_without_scan(
         self,
         source_ref: str,
     ) -> None:
-        lookup = _Lookup()
-        resolved = await RuntimeArtifactSourceResolver(lookup).resolve_source(
+        events = _EventStore()
+        events.events[self.OPERATION_ID] = _ResultEvent(
+            event_id=self.OPERATION_ID,
+            run_id="run_foreign",
+            event_type="tool_result",
+            payload={"output": "foreign"},
+        )
+        resolver = RuntimeArtifactSourceResolver(
+            RuntimeArtifactSourceLookup(_MessageStore(), events=events)
+        )
+        resolved = await resolver.resolve_source(
             scope=self.SCOPE,
             source_ref=source_ref,
         )
         assert resolved is None
-        assert lookup.calls == 0
+        assert len(events.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_non_result_event_is_not_a_payload_source(self) -> None:
+        event_id = "payload_not_result"
+        events = _EventStore()
+        events.events[event_id] = _ResultEvent(
+            event_id=event_id,
+            run_id=self.SCOPE.run_id,
+            event_type="tool_call",
+            payload={"output": "must not promote"},
+        )
+        resolver = RuntimeArtifactSourceResolver(
+            RuntimeArtifactSourceLookup(_MessageStore(), events=events)
+        )
+        assert (
+            await resolver.resolve_source(
+                scope=self.SCOPE,
+                source_ref=f"payload://{event_id}",
+            )
+            is None
+        )
 
     @pytest.mark.asyncio
     async def test_changed_source_fails_digest_before_metadata_creation(self) -> None:

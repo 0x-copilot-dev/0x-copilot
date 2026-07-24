@@ -5938,6 +5938,31 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._event_envelope(row) for row in rows)
 
+    async def get_event_by_id(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        event_id: str,
+    ) -> RuntimeEventEnvelope | None:
+        """Return an immutable event by its primary key in one tenant/run scope.
+
+        Artifact promotion uses this as an exact source-record lookup.  The
+        ``runtime_events.id`` primary key is the index; payload text, call ids,
+        and result references are never searched.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_events
+                WHERE id = %s AND org_id = %s AND run_id = %s
+                """,
+                (event_id, org_id, run_id),
+            )
+            row = await cur.fetchone()
+        return self._event_envelope(row) if row is not None else None
+
     async def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
 
