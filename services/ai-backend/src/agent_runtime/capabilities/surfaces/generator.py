@@ -533,6 +533,25 @@ class SpecAuthoringSkill:
     def examples(self) -> tuple[Mapping[str, object], ...]:
         return self._examples
 
+    def with_max_retries(self, max_retries: int) -> "SpecAuthoringSkill":
+        """Return a copy of this skill with an overridden retry budget (PRD-B4).
+
+        The user-invited "Suggest a shape" attempt is allowed more attempts than
+        the automatic pass (whose ``max_retries`` comes from ``skill.json``). This
+        raises only the retry count — the doctrine, examples, model hint, and
+        version are shared verbatim — so ``SurfaceSpecGenerator`` computes
+        ``attempts = 1 + max(max_retries, 0)`` with the bigger budget and zero
+        generator changes. ``max_retries`` is clamped at 0 (no negative budget).
+        """
+
+        return SpecAuthoringSkill(
+            skill_version=self.skill_version,
+            model_hint=self.model_hint,
+            max_retries=max(max_retries, 0),
+            doctrine=self._doctrine,
+            examples=self._examples,
+        )
+
     @classmethod
     def load(cls) -> "SpecAuthoringSkill":
         """Load the bundle once (cached); raises if the manifest is malformed."""

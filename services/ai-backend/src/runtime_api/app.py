@@ -466,6 +466,24 @@ class RuntimeApiAppFactory:
                 pricing_catalog=ModelPricingCatalog.from_litellm(),
             ),
         )
+        # Generative Surfaces v2 (PRD-B4) — the user-invited "Suggest a shape"
+        # coordinator. Runs a higher-effort shaping attempt in the runtime_api
+        # process (the run may already be complete), persists on success, and
+        # ledgers shape.requested/shape.resolved. Metered ``shape_request`` via the
+        # same production usage recorder.
+        from agent_runtime.api.shape_request_coordinator import (  # noqa: PLC0415
+            ShapeRequestCoordinator,
+        )
+
+        app.state.shape_request_coordinator = ShapeRequestCoordinator(
+            persistence=_ports.persistence,
+            event_store=_ports.event_store,
+            event_producer=_event_producer,
+            usage_recorder=PostgresUsageRecorder(
+                persistence=_ports.persistence,
+                pricing_catalog=ModelPricingCatalog.from_litellm(),
+            ),
+        )
         _model_resolver = ModelConfigResolver(_settings)
 
         # Construct the five coordinators.

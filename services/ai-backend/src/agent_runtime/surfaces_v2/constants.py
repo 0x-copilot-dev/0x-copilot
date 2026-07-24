@@ -179,6 +179,14 @@ class Messages:
     VIEW_DERIVED = "Derived a view"
     VIEW_PREFERENCE = "Set a view preference"
 
+    # PRD-B4 "Suggest a shape" emit-time summaries.
+    SHAPE_REQUESTED = "Requested a shape"
+    SHAPE_RESOLVED = "Resolved a shape request"
+    # FR-D3 honest, requirement-grade no-fit reason. A CONSTANT safe summary (not
+    # the generator's ``GenFailure.reason``, which can echo model-derived label /
+    # path text) so no untrusted model output ever rides the ledger row.
+    SHAPE_NO_FIT_REASON = "no confident view fit"
+
     # PRD-D1 staged-write emit-time summaries.
     WRITE_STAGED = "Staged a write"
     REVISION_ADDED = "Revised the draft"

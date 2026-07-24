@@ -19,6 +19,10 @@ optional (``None`` when a surface has no content event yet — an honest
 
 from __future__ import annotations
 
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.ledger_models import ViewBasis, ViewKeep, ViewTier
 from agent_runtime.surfaces_v2.projection import (
@@ -81,9 +85,45 @@ class SurfaceViewPreferenceResponse(RuntimeContract):
     ledger_id: str
 
 
+# ---------------------------------------------------------------------------
+# PRD-B4 — user-invited "Suggest a shape"
+# ---------------------------------------------------------------------------
+
+
+class ShapeRequestForwardBody(BaseModel):
+    """Body the facade forwards to ``POST .../shape-request`` (PRD-B4).
+
+    The facade stamps ``org_id`` / ``user_id`` into the body via
+    ``scoped_payload`` (and also as trusted headers, which ``scoped_identity``
+    treats as authoritative), so this model reads only ``run_id`` and **ignores**
+    the stamped identity keys (``extra="ignore"`` — a ``RuntimeContract``'s
+    ``extra="forbid"`` would reject them). ``run_id`` is required: the canvas is
+    per-run (FR-A2) and the client always knows it.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    run_id: str = Field(min_length=1)
+
+
+class ShapeRequestAccepted(RuntimeContract):
+    """``202 Accepted`` body for ``POST .../shape-request`` (PRD-B4).
+
+    The invited attempt is scheduled; the outcome arrives over the run SSE stream
+    as ``shape.requested`` → ``shape.resolved`` ledger events (no polling). The
+    api-types mirror is ``ShapeRequestAccepted`` in ``packages/api-types``.
+    """
+
+    surface_id: str
+    # Pinned to the constant ``"requested"`` — the accept beat, never the outcome.
+    status: Literal["requested"] = "requested"
+
+
 __all__ = [
     "HydratedSurfaceSnapshot",
     "RunSurfacesResponse",
+    "ShapeRequestAccepted",
+    "ShapeRequestForwardBody",
     "SurfaceSnapshot",
     "SurfaceViewActionResponse",
     "SurfaceViewPreferenceRequest",
