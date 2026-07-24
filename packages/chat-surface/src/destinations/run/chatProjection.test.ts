@@ -128,6 +128,53 @@ describe("projectChatMessages", () => {
     expect(messages[0].parts[0].text).toBe("main");
   });
 
+  // Regression guard: the REAL runtime wire shape. model_delta carries the
+  // chunk under `delta` (+ a duplicate `message`), NOT `text` — the original
+  // tests used `{text}`, which is why dropped streaming went unnoticed. A
+  // catalog run has ~300 of these; reading only `.text` folded every one to "".
+  it("streams model_delta from the real `{delta, message}` payload shape", () => {
+    const messages = projectChatMessages([
+      ev({
+        event_type: "model_delta",
+        sequence_no: 1,
+        payload: { delta: "Hel", message: "Hel" },
+      }),
+      ev({
+        event_type: "model_delta",
+        sequence_no: 2,
+        payload: { delta: "lo", message: "lo" },
+      }),
+    ]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].parts).toEqual([
+      { type: "text", text: "Hello", status: { type: "running" } },
+    ]);
+  });
+
+  it("streams reasoning from the real `{summary, delta}` payload shape", () => {
+    const messages = projectChatMessages([
+      ev({
+        event_type: "reasoning_summary_delta",
+        sequence_no: 1,
+        payload: { summary: "Plan: ", delta: "Plan: " },
+      }),
+      ev({
+        event_type: "reasoning_summary_delta",
+        sequence_no: 2,
+        payload: { summary: "Plan: step 1", delta: "step 1" },
+      }),
+      ev({
+        event_type: "model_delta",
+        sequence_no: 3,
+        payload: { delta: "Done", message: "Done" },
+      }),
+    ]);
+    expect(messages[0].parts).toEqual([
+      { type: "reasoning", text: "Plan: step 1", status: { type: "running" } },
+      { type: "text", text: "Done", status: { type: "running" } },
+    ]);
+  });
+
   it("dedupes by event_id (safe on replay)", () => {
     const dup = ev({
       event_type: "model_delta",

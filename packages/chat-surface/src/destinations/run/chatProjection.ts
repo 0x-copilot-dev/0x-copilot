@@ -27,13 +27,27 @@ import type {
   TcChatMessagePart,
 } from "../../thread-canvas/TcChat";
 
-/** Read a string `text` field off an event payload, else "". */
+/**
+ * Read the streamed text chunk off an event payload, else "".
+ *
+ * The runtime does NOT put the chunk under `text`: `model_delta` carries it as
+ * `payload.delta` (with a duplicate `message`), and `reasoning_summary_delta`
+ * carries it as `payload.delta` too (alongside a cumulative `summary`). Reading
+ * only `text` folded every delta to "" — so live token streaming AND the
+ * reasoning stream never rendered; text appeared only at `final_response`.
+ * Resolve `text` (legacy/other events) → `delta` (the streamed chunk). We do
+ * NOT read `message` here: on `final_response` that key is a structured message
+ * object, not a string (final_response text still resolves via `event.summary`).
+ */
 function payloadText(event: RuntimeEventEnvelope): string {
   const payload = event.payload;
   if (payload !== null && typeof payload === "object") {
-    const value = (payload as Record<string, unknown>).text;
-    if (typeof value === "string") {
-      return value;
+    const record = payload as Record<string, unknown>;
+    for (const key of ["text", "delta"] as const) {
+      const value = record[key];
+      if (typeof value === "string" && value !== "") {
+        return value;
+      }
     }
   }
   return "";
