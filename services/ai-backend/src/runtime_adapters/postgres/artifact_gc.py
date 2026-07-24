@@ -30,9 +30,7 @@ class PostgresArtifactGarbageCollector:
         """Whether the durable shared-volume manifest needs a worker sweep."""
 
         with self._blob_store.coordinator.locked():
-            return bool(
-                self._blob_store.coordinator.discover_active_candidates_locked()
-            )
+            return bool(self._blob_store.coordinator.pending_candidates_locked())
 
     async def discover_orphaned_publications(
         self,
@@ -47,14 +45,14 @@ class PostgresArtifactGarbageCollector:
         adapter.  Here, the worker takes the *same* digest advisory lock used
         by metadata commits and GC, then either proves a reference exists and
         retires the manifest, or records an ordinary durable candidate.  A
-        metadata commit racing this scan can therefore only commit first, or
-        restore a deterministic quarantine after the scan wins; it can never
-        lose active bytes to a blind orphan reaper.
+        metadata commit racing this recovery can therefore only commit first,
+        or restore a deterministic quarantine after the recovery wins; it can
+        never lose active bytes to a blind orphan reaper.
         """
 
         coordinator = self._blob_store.coordinator
         with coordinator.locked():
-            discovered = coordinator.discover_active_candidates_locked()
+            discovered = coordinator.pending_candidates_locked()
         candidates: list[ArtifactGcCandidate] = []
         for blob_key, state in discovered[: max(1, limit)]:
             if state.candidate_since > older_than:

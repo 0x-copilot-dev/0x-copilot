@@ -248,3 +248,31 @@ class TestFileArtifactCrashRestart:
             limit=10,
         )
         assert reap.reaped_blob_keys == (written.blob_key,)
+
+    async def test_pending_publication_manifest_does_not_rescan_healthy_bytes(
+        self, tmp_path
+    ) -> None:
+        """A resolved publication must not re-enter recovery just because it exists."""
+
+        layout = FileStoreLayout(tmp_path / "store")
+        coordinator = FileArtifactPublicationCoordinator(layout)
+        blobs = FileArtifactBlobStore(layout, coordinator)
+        body = b"healthy bytes are not recovery work"
+        written = await blobs.put_stream(
+            expected_digest=None,
+            chunks=_chunks(body),
+            byte_limit=len(body),
+        )
+
+        with coordinator.locked():
+            assert tuple(key for key, _ in coordinator.pending_candidates_locked()) == (
+                written.blob_key,
+            )
+            coordinator.cancel_candidate_locked(written.blob_key)
+
+        # The physical object intentionally remains active.  Recovery reads
+        # only its durable pending-publication manifest, never an all-blobs
+        # directory walk that would recreate a candidate for this healthy key.
+        assert layout.object_path(written.blob_key).is_file()
+        with coordinator.locked():
+            assert coordinator.pending_candidates_locked() == ()
