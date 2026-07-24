@@ -50,6 +50,7 @@ _WINDOWS_RESERVED_FILENAME = re.compile(
 _MESSAGE_SOURCE = re.compile(r"^message://[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _OPERATION_SOURCE = re.compile(r"^operation://(op_[0-9a-f-]+)/result$")
 _PAYLOAD_SOURCE = re.compile(r"^payload://[A-Za-z0-9][A-Za-z0-9._:/-]{0,1023}$")
+_DRAFT_SOURCE = re.compile(r"^draft://[0-9a-f]{32}$")
 
 
 def _validate_media_type(value: str) -> str:
@@ -82,6 +83,22 @@ def validate_artifact_source_ref(value: str) -> str:
     if _PAYLOAD_SOURCE.fullmatch(value) is not None:
         return value
     raise ValueError("source_ref must be a message, operation result, or payload")
+
+
+def validate_artifact_provenance_ref(value: str) -> str:
+    """Validate a source retained on a canonical revision.
+
+    ``draft://`` is deliberately *not* an app-facing promotion source.  It is
+    an internal binding marker written only by :class:`ArtifactDraftBackend`.
+    Keeping it separate from ``validate_artifact_source_ref`` prevents a
+    client from promoting an arbitrary virtual draft path while still letting
+    the repository enumerate canonical draft artifacts without a second
+    writable mapping/content store.
+    """
+
+    if _DRAFT_SOURCE.fullmatch(value) is not None:
+        return value
+    return validate_artifact_source_ref(value)
 
 
 SafeMediaType = Annotated[
@@ -176,7 +193,7 @@ class ArtifactProvenance(RuntimeContract):
     @field_validator("source_ref")
     @classmethod
     def _logical_source_ref(cls, value: str | None) -> str | None:
-        return validate_artifact_source_ref(value) if value is not None else None
+        return validate_artifact_provenance_ref(value) if value is not None else None
 
 
 class ArtifactPromotionRequest(RuntimeContract):
@@ -436,4 +453,5 @@ __all__ = (
     "SafeTitle",
     "Sha256Hex",
     "validate_artifact_source_ref",
+    "validate_artifact_provenance_ref",
 )

@@ -588,21 +588,9 @@ class RuntimeApprovalHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
-        if self._draft_store is not None:
-            # Tenant identity is bound at construction so the model cannot inject
-            # org_id via path strings when writing to /drafts/<uuid>.md.
-            from agent_runtime.capabilities.backends import (  # noqa: PLC0415 — break import cycle
-                DraftBackend,
-            )
-
-            update["drafts_backend"] = DraftBackend(
-                store=self._draft_store,
-                org_id=run.org_id,
-                conversation_id=run.conversation_id,
-                run_id=run.run_id,
-                user_id=run.runtime_context.user_id,
-                emit_event=self._draft_backend_event_emitter(run),
-            )
+        drafts_backend = self._drafts_backend(run)
+        if drafts_backend is not None:
+            update["drafts_backend"] = drafts_backend
         publish_artifact_tool = self._publish_artifact_tool()
         if publish_artifact_tool is not None:
             update["publish_artifact_tool"] = publish_artifact_tool
@@ -612,6 +600,37 @@ class RuntimeApprovalHandler:
         return bool(
             self.settings.execution.artifact_effects_v2
             and self.artifact_service is not None
+        )
+
+    def _drafts_backend(self, run: RunRecord) -> object | None:
+        """Resume against the same single draft authority as the run path."""
+
+        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
+            ArtifactDraftBackend,
+            DraftBackend,
+        )
+
+        if (
+            self._artifact_publication_enabled()
+            and self.settings.execution.artifact_drafts_v2
+        ):
+            return ArtifactDraftBackend(
+                artifacts=self.artifact_service,
+                org_id=run.org_id,
+                conversation_id=run.conversation_id,
+                run_id=run.run_id,
+                user_id=run.runtime_context.user_id,
+                legacy_store=self._draft_store,
+            )
+        if self._draft_store is None:
+            return None
+        return DraftBackend(
+            store=self._draft_store,
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            user_id=run.runtime_context.user_id,
+            emit_event=self._draft_backend_event_emitter(run),
         )
 
     def _operation_context_required(self) -> bool:

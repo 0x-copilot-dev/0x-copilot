@@ -213,6 +213,39 @@ class ArtifactService:
             promoted_source_ref=None,
         )
 
+    async def create_draft_from_bytes(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        request: ArtifactCreateRequest,
+        provenance: ArtifactProvenance,
+        content: bytes,
+        artifact_id: str,
+    ) -> ArtifactMutationResult:
+        """Create one canonical artifact for the internal ``/drafts`` adapter.
+
+        ``artifact_id`` is server-derived from the bound draft scope and virtual
+        path.  It is never an HTTP or model argument; using it here lets
+        concurrent first writes converge without a second writable mapping.
+        """
+
+        ArtifactIdCodec.parse(artifact_id)
+        scope = await self._require_run_scope(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=request.run_id,
+        )
+        return await self._create_in_scope(
+            scope=scope,
+            request=request,
+            provenance=provenance,
+            chunks=self._single_chunk(content),
+            route=self.Routes.PUBLISH,
+            promoted_source_ref=None,
+            artifact_id=artifact_id,
+        )
+
     async def append_revision_from_stream(
         self,
         *,
@@ -513,6 +546,7 @@ class ArtifactService:
         chunks: AsyncIterator[bytes],
         route: str,
         promoted_source_ref: str | None,
+        artifact_id: str | None = None,
     ) -> ArtifactMutationResult:
         self._validate_title(request.title)
         kind_limit = self._limits.for_kind(request.kind)
@@ -522,7 +556,7 @@ class ArtifactService:
             byte_limit=kind_limit.maximum_bytes,
         )
         now = self._utc_now()
-        artifact_id = ArtifactIdCodec.format(uuid4())
+        artifact_id = artifact_id or ArtifactIdCodec.format(uuid4())
         revision = ArtifactRevision(
             artifact_id=artifact_id,
             revision=1,

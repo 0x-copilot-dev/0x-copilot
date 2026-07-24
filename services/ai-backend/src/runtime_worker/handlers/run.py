@@ -1142,21 +1142,15 @@ class RuntimeRunHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
-        if self.draft_store is not None:
-            # Tenant identity is bound at construction so the model cannot inject
-            # org_id via path strings when writing to /drafts/<uuid>.md.
-            from agent_runtime.capabilities.backends import (  # noqa: PLC0415 — break import cycle
-                DraftBackend,
-            )
-
-            update["drafts_backend"] = DraftBackend(
-                store=self.draft_store,
-                org_id=command.org_id,
-                conversation_id=command.conversation_id,
-                run_id=command.run_id,
-                user_id=command.runtime_context.user_id,
-                emit_event=self._draft_event_emitter(command),
-            )
+        drafts_backend = self._drafts_backend(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+            user_id=command.runtime_context.user_id,
+            emit_event=self._draft_event_emitter(command),
+        )
+        if drafts_backend is not None:
+            update["drafts_backend"] = drafts_backend
         if tool_observation_index.has_observations:
             update["prior_tool_result_loader"] = PriorToolResultLoader(
                 tool_observation_index
@@ -1194,6 +1188,54 @@ class RuntimeRunHandler:
         return bool(
             self.settings.execution.artifact_effects_v2
             and self.artifact_service is not None
+        )
+
+    def _artifact_drafts_enabled(self) -> bool:
+        return bool(
+            self._artifact_publication_enabled()
+            and self.settings.execution.artifact_drafts_v2
+        )
+
+    def _drafts_backend(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str,
+        user_id: str,
+        emit_event: Callable[[object], Awaitable[None]],
+    ) -> object | None:
+        """Select one writable draft authority for this run.
+
+        The artifact path deliberately wins only behind the explicit B1 flag.
+        Its legacy store parameter is read-through migration only; it never
+        writes a ``runtime_drafts`` row.  The old backend remains byte-for-byte
+        available while the flag is off.
+        """
+
+        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
+            ArtifactDraftBackend,
+            DraftBackend,
+        )
+
+        if self._artifact_drafts_enabled():
+            return ArtifactDraftBackend(
+                artifacts=self.artifact_service,
+                org_id=org_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                user_id=user_id,
+                legacy_store=self.draft_store,
+            )
+        if self.draft_store is None:
+            return None
+        return DraftBackend(
+            store=self.draft_store,
+            org_id=org_id,
+            conversation_id=conversation_id,
+            run_id=run_id,
+            user_id=user_id,
+            emit_event=emit_event,
         )
 
     def _operation_context_required(self) -> bool:
