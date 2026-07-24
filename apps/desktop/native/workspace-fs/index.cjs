@@ -43,7 +43,7 @@ function loadNative() {
     try {
       const addon = require(candidate);
       if (addon && typeof addon.openBeneath === "function") {
-        return {
+        const wrapped = {
           platform: process.platform,
           openBeneath: (root, rel, opts) =>
             addon.openBeneath(
@@ -53,6 +53,28 @@ function loadNative() {
               Boolean(opts && opts.write),
             ),
         };
+        // C2 is intentionally all-or-nothing for writes. Preserve the richer
+        // native methods only when the compiled addon exports the complete v2
+        // handle-relative lifecycle; Electron main otherwise reports writable
+        // capability unavailable and never falls back to node:fs mutations.
+        const v2 = [
+          "workspaceRootIdentity",
+          "workspacePrepare",
+          "workspaceWrite",
+          "workspaceSeal",
+          "workspaceCommit",
+          "workspaceReconcile",
+          "workspaceReconcileClaim",
+          "workspaceAbort",
+          "workspaceProposeRecovery",
+          "workspaceProposeRecoveryClaim",
+        ];
+        if (v2.every((name) => typeof addon[name] === "function")) {
+          for (const name of v2) {
+            wrapped[name] = (...args) => addon[name](...args);
+          }
+        }
+        return wrapped;
       }
     } catch {
       // Not built for this candidate path / ABI — try the next one.

@@ -67,6 +67,26 @@ describe("GrantStore", () => {
     expect(all[0].grantId).toBe(grant.grantId);
   });
 
+  it("normalizes only safe root-relative authority prefixes", async () => {
+    const store = makeStore();
+    const grant = await store.create({
+      root: "/Users/x/projects/atlas",
+      mode: "read_write",
+      label: "atlas",
+      allowedPathPrefixes: ["/docs/", "docs", "src/generated"],
+    });
+    expect(grant.allowedPathPrefixes).toEqual(["docs", "src/generated"]);
+
+    await expect(
+      store.create({
+        root: "/Users/x/projects/other",
+        mode: "read_write",
+        label: "other",
+        allowedPathPrefixes: ["../outside"],
+      }),
+    ).rejects.toThrow("grant path prefix is invalid");
+  });
+
   it("rejects a non-absolute root without echoing the value", async () => {
     const store = makeStore();
     await expect(

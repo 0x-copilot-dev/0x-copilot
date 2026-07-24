@@ -31,6 +31,16 @@ export const GRANT_MODES: readonly GrantMode[] = [
 export type GrantStatus = "active" | "revoked";
 
 /**
+ * Stable identity of the selected grant root.  The canonical path is only a
+ * locator held in Electron main; writes additionally require this identity to
+ * match at use time so a directory substitution cannot inherit a grant.
+ */
+export interface GrantRootIdentity {
+  readonly volumeId: string;
+  readonly fileId: string;
+}
+
+/**
  * Internal grant record — includes the canonical, realpath-resolved host
  * `root`. NEVER serialize this straight to the renderer; project through
  * `toRendererGrant` first.
@@ -39,6 +49,19 @@ export interface Grant {
   readonly grantId: string;
   /** Canonical absolute directory (symlinks resolved via realpath). */
   readonly root: string;
+  /**
+   * Added by the v2 workspace authority.  Older grants without a captured
+   * identity remain readable but are never eligible for a write permit.
+   */
+  readonly rootIdentity?: GrantRootIdentity;
+  /** Local signed-in profile that selected the root. Required for writes. */
+  readonly profileId?: string;
+  /** Installation/device that owns this local grant. Required for writes. */
+  readonly deviceId?: string;
+  /** Root-relative capability subsets; empty means no subpath is writable. */
+  readonly allowedPathPrefixes?: readonly string[];
+  /** Epoch millis. Expired grants are treated as revoked for authority checks. */
+  readonly expiresAt?: number;
   readonly mode: GrantMode;
   /** Sanitized display label (folder basename or a renderer-supplied hint). */
   readonly label: string;
