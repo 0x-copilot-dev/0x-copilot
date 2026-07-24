@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import replace
-
 import pytest
 from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
@@ -18,6 +16,7 @@ from agent_runtime.artifacts import (
     ArtifactStoredRecord,
     ArtifactStoredRevision,
 )
+from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.surfaces_v2.entities import Artifact, ArtifactRevision
 from agent_runtime.surfaces_v2.ledger_models import ArtifactAuthor, ArtifactKind
 from agent_runtime.settings import RuntimeSettings
@@ -145,16 +144,18 @@ class ArtifactRouteMixin:
         service: object | None = None,
         *,
         artifact_effects_v2: str | None = "true",
-        complete_repository_ports: bool = False,
     ) -> TestClient:
         store = InMemoryRuntimeApiStore()
-        ports = RuntimeAdapterFactory.from_store(store)
-        if complete_repository_ports:
-            ports = replace(
-                ports,
-                artifact_metadata_store=object(),  # composition-only contract fake
-                artifact_blob_store=object(),  # composition-only contract fake
-            )
+        flag_enabled = (artifact_effects_v2 or "").lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        ports = RuntimeAdapterFactory.from_store(
+            store,
+            artifact_effects_v2=flag_enabled,
+        )
         environ = {
             "OPENAI_API_KEY": "sk-test",
             "RUNTIME_DEFAULT_PROVIDER": "openai",
@@ -687,12 +688,27 @@ class TestArtifactRouteWiring(ArtifactRouteMixin):
         assert client.app.state.artifact_service is service
 
     def test_real_factory_composes_default_service_from_complete_ports(self) -> None:
-        client = self.real_client(
-            complete_repository_ports=True,
-        )
+        client = self.real_client()
         assert isinstance(client.app.state.artifact_service, ArtifactService)
         paths = client.get("/openapi.json").json()["paths"]
         assert self._artifact_operation_count(paths) == 8
+
+    def test_enabled_routes_fail_at_composition_for_incomplete_ports(self) -> None:
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+                "ARTIFACT_EFFECTS_V2": "true",
+            }
+        )
+        with pytest.raises(AgentRuntimeError, match="complete artifact repository"):
+            RuntimeApiAppFactory.create_app(
+                ports=RuntimeAdapterFactory.from_store(InMemoryRuntimeApiStore()),
+                settings=settings,
+                configure_logging_on_create=False,
+                configure_telemetry_on_create=False,
+            )
 
     def test_real_app_foreign_and_missing_artifacts_share_safe_404(self) -> None:
         client = self.real_client(FakeArtifactService())

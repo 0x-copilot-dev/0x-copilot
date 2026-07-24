@@ -53,6 +53,8 @@ from agent_runtime.deployment import (
     log_profile,
     resolve_or_exit,
 )
+from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
 from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.observability.http_logging import (
@@ -217,15 +219,34 @@ class RuntimeApiAppFactory:
         app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
         # A2 — explicit composition seam for the canonical Artifact Repository.
-        # The API layer never constructs metadata/blob adapters. The storage
-        # integration lane injects one fully composed service here; until then,
-        # mounted routes fail safely with 503 rather than creating a shadow
-        # in-memory repository.
-        app.state.artifact_service = (
-            artifact_service
-            if artifact_service is not None
-            else cls.default_artifact_service(app)
-        )
+        # A true flag must have the complete storage-owned bundle *before* the
+        # route table is mounted. Serving enabled artifact routes with a None
+        # service would turn a deployment mistake into a deferred 503.
+        if _settings.execution.artifact_effects_v2:
+            if _ports.require_artifact_service_storage() is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "ARTIFACT_EFFECTS_V2 requires a complete artifact repository "
+                    + "during API composition.",
+                    retryable=False,
+                )
+            resolved_artifact_service = (
+                artifact_service
+                if artifact_service is not None
+                else cls.default_artifact_service(app)
+            )
+            if resolved_artifact_service is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "ARTIFACT_EFFECTS_V2 could not compose ArtifactService.",
+                    retryable=False,
+                )
+            app.state.artifact_service = resolved_artifact_service
+        else:
+            # The router is absent while dark. Retaining an injected fake is
+            # useful for isolated non-route test composition and has no public
+            # effect because no artifact path is registered.
+            app.state.artifact_service = artifact_service
         app.state.draft_service = cls.default_draft_service(app)
         # PRD-D1 — the single-artifact staged-write service (v2). Registered on
         # app state always (harmless when the flag is off — the stage routes are
@@ -582,13 +603,7 @@ class RuntimeApiAppFactory:
 
     @classmethod
     def default_artifact_service(cls, app: FastAPI) -> ArtifactService | None:
-        """Compose ArtifactService from storage-owned runtime ports.
-
-        Older/pre-storage port bundles intentionally return ``None`` so the
-        mounted routes fail with a safe 503. Once the storage lane contributes
-        ``artifact_metadata_store`` and ``artifact_blob_store``, this seam
-        composes the production service with scoped run/source resolvers.
-        """
+        """Compose ArtifactService from a validated storage-owned port bundle."""
 
         from agent_runtime.api.artifact_repository import ArtifactServiceComposition
 
