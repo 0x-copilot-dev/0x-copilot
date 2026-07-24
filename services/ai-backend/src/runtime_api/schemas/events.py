@@ -234,6 +234,19 @@ class RuntimeEventPresentationProjector:
                 event_type=event_type,
                 payload=payload,
             )
+        if event_type in {
+            RuntimeApiEventType.EFFECT_STAGED,
+            RuntimeApiEventType.EFFECT_REVISED,
+            RuntimeApiEventType.EFFECT_DECISION_RECORDED,
+            RuntimeApiEventType.EFFECT_CLAIMED,
+            RuntimeApiEventType.EFFECT_APPLIED,
+            RuntimeApiEventType.EFFECT_INDETERMINATE,
+            RuntimeApiEventType.EFFECT_RECONCILED,
+        }:
+            return cls._effect_ledger_payload(
+                event_type=event_type,
+                payload=payload,
+            )
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -370,6 +383,13 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.OPERATION_CLASSIFIED,
             RuntimeApiEventType.OPERATION_COMPLETED,
             RuntimeApiEventType.OPERATION_FAILED,
+            RuntimeApiEventType.EFFECT_STAGED,
+            RuntimeApiEventType.EFFECT_REVISED,
+            RuntimeApiEventType.EFFECT_DECISION_RECORDED,
+            RuntimeApiEventType.EFFECT_CLAIMED,
+            RuntimeApiEventType.EFFECT_APPLIED,
+            RuntimeApiEventType.EFFECT_INDETERMINATE,
+            RuntimeApiEventType.EFFECT_RECONCILED,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -1526,6 +1546,35 @@ class RuntimeEventPresentationProjector:
             )
             return {}
         return validated.model_dump(mode="json", by_alias=True)
+
+    @classmethod
+    def _effect_ledger_payload(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> JsonObject:
+        """Validate and canonicalize a reference-only universal-effect row.
+
+        ``WorkLedgerVocabulary`` is a strict Pydantic allow-list: unknown
+        fields, raw proposal bytes, physical paths, and malformed opaque refs
+        are rejected before the event can enter replay or SSE. ``exclude_none``
+        preserves additive v:1 compatibility rather than manufacturing fields
+        absent from a historical row.
+        """
+
+        try:
+            validated = WorkLedgerVocabulary.validate_payload(
+                event_type.value,
+                payload,
+            )
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning(
+                "Rejected malformed effect ledger payload event_type=%s",
+                event_type.value,
+            )
+            return {}
+        return validated.model_dump(mode="json", by_alias=True, exclude_none=True)
 
     @classmethod
     def _copy_payload_version(
