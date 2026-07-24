@@ -32,7 +32,11 @@ from agent_runtime.capabilities.operations.errors import (
 from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorRegistry,
 )
-from agent_runtime.capabilities.operations.observability import OperationGatewayMetrics
+from agent_runtime.capabilities.operations.observability import (
+    FailSoftOperationEventEmitter,
+    FailSoftOperationMetrics,
+    OperationGatewayMetrics,
+)
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.canonical_json import (
@@ -146,6 +150,10 @@ class BoundOperationContext:
         default_factory=OperationInvocationRegistry
     )
 
+    def __post_init__(self) -> None:
+        self.ledger_emitter = FailSoftOperationEventEmitter.wrap(self.ledger_emitter)
+        self.metrics = FailSoftOperationMetrics.wrap(self.metrics)
+
 
 _CONTEXT: ContextVar[BoundOperationContext | None] = ContextVar(
     "operation_gateway_context", default=None
@@ -178,11 +186,17 @@ class OperationContext:
             BoundOperationContext(
                 identity=identity,
                 policy_snapshot=policy_snapshot,
-                ledger_emitter=ledger_emitter or NullOperationEventEmitter(),
+                ledger_emitter=(
+                    ledger_emitter
+                    if ledger_emitter is not None
+                    else NullOperationEventEmitter()
+                ),
                 artifact_service=artifact_service,
                 mode=mode,
-                metrics=metrics or OperationGatewayMetrics(),
-                arguments=arguments or OperationArgumentStore(),
+                metrics=metrics if metrics is not None else OperationGatewayMetrics(),
+                arguments=(
+                    arguments if arguments is not None else OperationArgumentStore()
+                ),
                 canonical_arguments_durable=canonical_arguments_durable,
             )
         )

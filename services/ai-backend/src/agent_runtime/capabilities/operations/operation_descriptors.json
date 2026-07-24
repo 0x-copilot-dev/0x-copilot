@@ -390,8 +390,8 @@
   },
   {
     "descriptor": {
-      "capability": "browser",
-      "op": "navigate",
+      "capability": "desktop-browser",
+      "op": "browser_navigate",
       "executor": "browser",
       "effect_class": "internal_reversible",
       "result_kind": "activity",
@@ -406,8 +406,8 @@
   },
   {
     "descriptor": {
-      "capability": "browser",
-      "op": "snapshot",
+      "capability": "desktop-browser",
+      "op": "browser_snapshot",
       "executor": "browser",
       "effect_class": "none",
       "result_kind": "activity",
@@ -422,8 +422,8 @@
   },
   {
     "descriptor": {
-      "capability": "browser",
-      "op": "wait",
+      "capability": "desktop-browser",
+      "op": "browser_wait",
       "executor": "browser",
       "effect_class": "none",
       "result_kind": "activity",
@@ -438,8 +438,8 @@
   },
   {
     "descriptor": {
-      "capability": "browser",
-      "op": "screenshot",
+      "capability": "desktop-browser",
+      "op": "browser_screenshot",
       "executor": "browser",
       "effect_class": "none",
       "result_kind": "activity",
@@ -454,8 +454,8 @@
   },
   {
     "descriptor": {
-      "capability": "browser",
-      "op": "close",
+      "capability": "desktop-browser",
+      "op": "browser_close",
       "executor": "browser",
       "effect_class": "internal_reversible",
       "result_kind": "activity",

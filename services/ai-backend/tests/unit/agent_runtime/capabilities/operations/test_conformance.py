@@ -61,6 +61,29 @@ class TestOperationConformance:
     ) -> None:
         OperationConformanceGate.validate_current()
 
+    @pytest.mark.parametrize(
+        "op",
+        [
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_wait",
+            "browser_screenshot",
+            "browser_close",
+        ],
+    )
+    def test_desktop_browser_dispatch_keys_resolve_exact_descriptors(
+        self,
+        op: str,
+    ) -> None:
+        entry = DEFAULT_OPERATION_DESCRIPTORS.resolve_entry(
+            "desktop_browser",
+            op,
+        )
+
+        assert entry is not None
+        assert entry.descriptor.capability == "desktop-browser"
+        assert entry.descriptor.op == op
+
     def test_duplicate_registration_fails(self) -> None:
         registration = CapabilityRegistration(
             capability="builtin",

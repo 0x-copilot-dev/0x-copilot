@@ -213,11 +213,31 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
         ("model", "artifact_content_part", "runtime_worker.handlers.run"),
         ("artifact", "publish", "agent_runtime.artifacts.service"),
         ("draft", "publish", "capabilities.backends.draft_backend"),
-        ("browser", "navigate", "capabilities.browser.desktop_browser_provider"),
-        ("browser", "snapshot", "capabilities.browser.desktop_browser_provider"),
-        ("browser", "wait", "capabilities.browser.desktop_browser_provider"),
-        ("browser", "screenshot", "capabilities.browser.desktop_browser_provider"),
-        ("browser", "close", "capabilities.browser.desktop_browser_provider"),
+        (
+            "desktop_browser",
+            "browser_navigate",
+            "capabilities.browser.desktop_browser_provider",
+        ),
+        (
+            "desktop_browser",
+            "browser_snapshot",
+            "capabilities.browser.desktop_browser_provider",
+        ),
+        (
+            "desktop_browser",
+            "browser_wait",
+            "capabilities.browser.desktop_browser_provider",
+        ),
+        (
+            "desktop_browser",
+            "browser_screenshot",
+            "capabilities.browser.desktop_browser_provider",
+        ),
+        (
+            "desktop_browser",
+            "browser_close",
+            "capabilities.browser.desktop_browser_provider",
+        ),
     )
     catalog = tuple(
         (connector, op, "capabilities.actions.catalog_data")

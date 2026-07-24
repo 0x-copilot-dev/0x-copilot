@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from collections.abc import Mapping
 
 import pytest
 from langchain_core.tools import StructuredTool
@@ -29,6 +31,24 @@ class CancellingComparisonMetrics(RecordingMetrics):
 
     def disposition_mismatch(self, **_values: object) -> None:
         raise asyncio.CancelledError
+
+
+class BlockingFirstEmitter:
+    def __init__(self) -> None:
+        self.calls = 0
+        self.entered = asyncio.Event()
+
+    async def emit(
+        self,
+        event_type: LedgerEventType,
+        payload: Mapping[str, object],
+        summary: str | None = None,
+    ) -> None:
+        del event_type, payload, summary
+        self.calls += 1
+        if self.calls == 1:
+            self.entered.set()
+            await asyncio.Future()
 
 
 class TestLegacyShadowProbe(BoundContextMixin):
@@ -122,12 +142,15 @@ class TestLegacyShadowProbe(BoundContextMixin):
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
-        ("fail_on_call", "expected_emitter_calls"),
-        [(1, 2), (2, 3), (3, 3)],
+        "fail_on_call",
+        [1, 2, 3],
     )
     async def test_emitter_failure_at_every_shadow_event_is_fail_soft(
-        self, fail_on_call: int, expected_emitter_calls: int
+        self,
+        fail_on_call: int,
+        caplog: pytest.LogCaptureFixture,
     ) -> None:
+        caplog.set_level(logging.DEBUG)
         emitter = RecordingEmitter(fail_on_call=fail_on_call)
         token = self.bind(emitter=emitter)
         calls = 0
@@ -150,7 +173,8 @@ class TestLegacyShadowProbe(BoundContextMixin):
 
         assert observed is result
         assert calls == 1
-        assert emitter.calls == expected_emitter_calls
+        assert emitter.calls == 3
+        assert "telemetry-secret-must-not-escape" not in caplog.text
         assert all(
             event_type
             in {
@@ -160,6 +184,37 @@ class TestLegacyShadowProbe(BoundContextMixin):
             }
             for event_type, _, _ in emitter.events
         )
+
+    @pytest.mark.asyncio
+    async def test_real_task_cancellation_during_observation_prevents_legacy_call(
+        self,
+    ) -> None:
+        emitter = BlockingFirstEmitter()
+        token = self.bind(emitter=emitter)
+        calls = 0
+
+        async def legacy() -> str:
+            nonlocal calls
+            calls += 1
+            return "must-not-run"
+
+        task = asyncio.create_task(
+            OperationShadowProbe.invoke_legacy(
+                capability="builtin",
+                op="web_search",
+                arguments={},
+                legacy=legacy,
+            )
+        )
+        try:
+            await asyncio.wait_for(emitter.entered.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            OperationContext.unbind(token)
+
+        assert calls == 0
 
     @pytest.mark.asyncio
     async def test_metric_failure_is_fail_soft_and_uses_bounded_unknown_key(
@@ -376,7 +431,7 @@ class TestTypedModelArtifactObservation(BoundContextMixin):
         assert emitter.events == []
 
     @pytest.mark.asyncio
-    async def test_explicit_typed_part_records_supplied_ref_without_publishing(
+    async def test_explicit_typed_part_does_not_trust_or_publish_supplied_ref(
         self,
     ) -> None:
         emitter = RecordingEmitter()
@@ -411,8 +466,68 @@ class TestTypedModelArtifactObservation(BoundContextMixin):
             LedgerEventType.OPERATION_CLASSIFIED,
             LedgerEventType.OPERATION_COMPLETED,
         ]
-        assert emitter.events[-1][1]["result_ref"] == "payload://immutable-model-output"
+        assert "result_ref" not in emitter.events[-1][1]
         assert artifact_service.calls == []
+
+    @pytest.mark.asyncio
+    async def test_invalid_typed_part_does_not_leak_user_text_to_logs(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+        secret = "raw-user-text-must-not-escape"
+        token = self.bind()
+        try:
+            await OperationShadowProbe.observe_model_result(
+                {
+                    "content": [
+                        {
+                            "type": "artifact",
+                            "intent": {
+                                "kind": "document",
+                                "title": secret,
+                                "presentation_preference": "canvas",
+                            },
+                            "content_ref": "payload://untrusted",
+                            "raw_content": secret,
+                        }
+                    ]
+                }
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert secret not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_real_task_cancellation_during_model_observation_propagates(
+        self,
+    ) -> None:
+        emitter = BlockingFirstEmitter()
+        token = self.bind(emitter=emitter)
+        task = asyncio.create_task(
+            OperationShadowProbe.observe_model_result(
+                {
+                    "content": [
+                        {
+                            "type": "artifact",
+                            "intent": {
+                                "kind": "document",
+                                "presentation_preference": "canvas",
+                            },
+                            "content_ref": "payload://untrusted",
+                        }
+                    ]
+                }
+            )
+        )
+        try:
+            await asyncio.wait_for(emitter.entered.wait(), timeout=1)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+        finally:
+            OperationContext.unbind(token)
 
     @pytest.mark.asyncio
     async def test_typed_part_observation_is_fail_soft_after_first_event(

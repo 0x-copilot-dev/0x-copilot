@@ -12,8 +12,11 @@ from agent_runtime.capabilities.operations.context import (
 )
 from agent_runtime.capabilities.operations.contracts import (
     GateResolution,
+    OperationArgumentResolver,
     OperationClassification,
+    OperationEventEmitter,
     OperationGatewayMode,
+    OperationMetricsPort,
     OperationRawResult,
     OperationRequest,
     ProposedEffect,
@@ -148,11 +151,12 @@ class BoundContextMixin:
     @staticmethod
     def bind(
         *,
-        emitter: RecordingEmitter | None = None,
-        metrics: RecordingMetrics | None = None,
+        emitter: OperationEventEmitter | None = None,
+        metrics: OperationMetricsPort | None = None,
         artifact_service: object | None = None,
         mode: OperationGatewayMode = OperationGatewayMode.SHADOW,
         durable_arguments: bool = False,
+        arguments: OperationArgumentResolver | None = None,
     ):
         return OperationContext.bind_for_run(
             identity=VerifiedOperationIdentity(
@@ -165,7 +169,8 @@ class BoundContextMixin:
             ledger_emitter=emitter or RecordingEmitter(),
             artifact_service=artifact_service,  # type: ignore[arg-type]
             mode=mode,
-            metrics=metrics or RecordingMetrics(),  # type: ignore[arg-type]
+            metrics=metrics or RecordingMetrics(),
+            arguments=arguments,
             canonical_arguments_durable=durable_arguments,
         )
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 
 from agent_runtime.artifacts.contracts import ArtifactPromotionRequest
@@ -36,6 +37,11 @@ from agent_runtime.capabilities.operations.errors import (
     OperationGatewayErrorCode,
     OperationEnforcementNotReadyError,
     OperationIdentityMismatchError,
+)
+from agent_runtime.surfaces_v2.canonical_json import (
+    CanonicalJsonError,
+    canonical_json_bytes,
+    sha256_hex,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectClass,
@@ -295,8 +301,21 @@ class OperationGateway:
         stored = context.arguments.get(request.canonical_args_ref)
         if stored is None:
             raise OperationArgumentsMissingError
-        digest, _ = stored
-        if digest != request.args_digest:
+        digest, canonical_bytes = stored
+        if (
+            digest != request.args_digest
+            or sha256_hex(canonical_bytes) != request.args_digest
+        ):
+            raise OperationArgumentsDigestMismatchError
+        try:
+            decoded = json.loads(canonical_bytes)
+            is_canonical_object = (
+                isinstance(decoded, dict)
+                and canonical_json_bytes(decoded) == canonical_bytes
+            )
+        except (CanonicalJsonError, json.JSONDecodeError, UnicodeDecodeError):
+            is_canonical_object = False
+        if not is_canonical_object:
             raise OperationArgumentsDigestMismatchError
 
     @staticmethod

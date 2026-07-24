@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import logging
+from dataclasses import dataclass, field
 from uuid import uuid4
 
 import pytest
@@ -24,11 +25,13 @@ from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorRegistry,
 )
 from agent_runtime.capabilities.operations.errors import (
+    OperationArgumentsDigestMismatchError,
     OperationEnforcementNotReadyError,
     OperationIdempotencyConflictError,
     OperationIdentityMismatchError,
 )
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.surfaces_v2.canonical_json import sha256_hex
 from agent_runtime.surfaces_v2.ledger_ids import (
     ArtifactIdCodec,
     EffectStageIdCodec,
@@ -96,6 +99,27 @@ class ProposalOnlyAdapter:
     async def build_proposal(self, _request: object) -> ProposedEffect:
         self.calls += 1
         return self.proposal
+
+
+@dataclass
+class CorruptibleArgumentResolver:
+    entries: dict[str, tuple[str, bytes]] = field(default_factory=dict)
+
+    def put(self, *, ref: str, digest: str, canonical_bytes: bytes) -> None:
+        self.entries[ref] = (digest, canonical_bytes)
+
+    def get(self, ref: str) -> tuple[str, bytes] | None:
+        return self.entries.get(ref)
+
+    def corrupt_bytes(self, ref: str) -> None:
+        digest, _ = self.entries[ref]
+        self.entries[ref] = (digest, b'{"tampered":true}')
+
+    def replace_with_noncanonical_bytes(self, ref: str) -> str:
+        noncanonical = b'{ "value": 1 }'
+        digest = sha256_hex(noncanonical)
+        self.entries[ref] = (digest, noncanonical)
+        return digest
 
 
 class TestOperationGateway(BoundContextMixin):
@@ -298,6 +322,59 @@ class TestOperationGateway(BoundContextMixin):
         assert emitter.events[-1][0] is LedgerEventType.OPERATION_FAILED
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("fail_on_call", [1, 2, 3])
+    async def test_emitter_failure_at_every_gateway_event_is_fail_soft(
+        self,
+        fail_on_call: int,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+        emitter = RecordingEmitter(fail_on_call=fail_on_call)
+        token = self.bind(
+            emitter=emitter,
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+        )
+        adapter = RecordingAdapter()
+        try:
+            result = await OperationGateway(
+                descriptors=_registry(EffectClass.NONE),
+                gates=AllowingGate(),
+            ).invoke(self._request(EffectClass.NONE), adapter)
+        finally:
+            OperationContext.unbind(token)
+
+        assert result.outcome is OperationOutcome.SUCCEEDED
+        assert adapter.read_calls == 1
+        assert emitter.calls == 3
+        assert "telemetry-secret-must-not-escape" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_metric_failure_is_fail_soft_and_not_logged_verbatim(
+        self,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        caplog.set_level(logging.DEBUG)
+        metrics = RecordingMetrics(fail=True)
+        token = self.bind(
+            metrics=metrics,
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+        )
+        adapter = RecordingAdapter()
+        try:
+            result = await OperationGateway(
+                descriptors=_registry(EffectClass.NONE),
+                gates=AllowingGate(),
+            ).invoke(self._request(EffectClass.NONE), adapter)
+        finally:
+            OperationContext.unbind(token)
+
+        assert result.outcome is OperationOutcome.SUCCEEDED
+        assert adapter.read_calls == 1
+        assert "metric-secret-must-not-escape" not in caplog.text
+
+    @pytest.mark.asyncio
     async def test_cancellation_is_ledgered_then_rethrown(self) -> None:
         emitter = RecordingEmitter()
         token = self.bind(
@@ -317,6 +394,30 @@ class TestOperationGateway(BoundContextMixin):
 
         assert emitter.events[-1][0] is LedgerEventType.OPERATION_COMPLETED
         assert emitter.events[-1][1]["outcome"] == "cancelled"
+
+    @pytest.mark.asyncio
+    async def test_cancellation_is_not_replaced_by_telemetry_failure(self) -> None:
+        emitter = RecordingEmitter(fail_on_call=3)
+        token = self.bind(
+            emitter=emitter,
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+        )
+        adapter = RecordingAdapter(failure=asyncio.CancelledError())
+        try:
+            with pytest.raises(asyncio.CancelledError):
+                await OperationGateway(
+                    descriptors=_registry(EffectClass.NONE),
+                    gates=AllowingGate(),
+                ).invoke(self._request(EffectClass.NONE), adapter)
+        finally:
+            OperationContext.unbind(token)
+
+        assert emitter.calls == 3
+        assert [event[0] for event in emitter.events] == [
+            LedgerEventType.OPERATION_REQUESTED,
+            LedgerEventType.OPERATION_CLASSIFIED,
+        ]
 
     @pytest.mark.asyncio
     async def test_same_operation_is_executed_once_and_digest_conflict_fails(
@@ -367,6 +468,55 @@ class TestOperationGateway(BoundContextMixin):
                 )
         finally:
             OperationContext.unbind(token)
+
+    @pytest.mark.asyncio
+    async def test_stored_canonical_bytes_are_verified_against_digest(self) -> None:
+        arguments = CorruptibleArgumentResolver()
+        token = self.bind(
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+            arguments=arguments,
+        )
+        adapter = RecordingAdapter()
+        request = self._request(EffectClass.NONE)
+        arguments.corrupt_bytes(request.canonical_args_ref)
+        try:
+            with pytest.raises(OperationArgumentsDigestMismatchError):
+                await OperationGateway(
+                    descriptors=_registry(EffectClass.NONE),
+                    gates=AllowingGate(),
+                ).invoke(request, adapter)
+        finally:
+            OperationContext.unbind(token)
+
+        assert adapter.read_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_matching_digest_cannot_bless_noncanonical_argument_bytes(
+        self,
+    ) -> None:
+        arguments = CorruptibleArgumentResolver()
+        token = self.bind(
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+            arguments=arguments,
+        )
+        adapter = RecordingAdapter()
+        request = self._request(EffectClass.NONE)
+        digest = arguments.replace_with_noncanonical_bytes(request.canonical_args_ref)
+        try:
+            with pytest.raises(OperationArgumentsDigestMismatchError):
+                await OperationGateway(
+                    descriptors=_registry(EffectClass.NONE),
+                    gates=AllowingGate(),
+                ).invoke(
+                    request.model_copy(update={"args_digest": digest}),
+                    adapter,
+                )
+        finally:
+            OperationContext.unbind(token)
+
+        assert adapter.read_calls == 0
 
     @pytest.mark.asyncio
     async def test_enforce_rejects_run_local_arguments_before_adapter(

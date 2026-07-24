@@ -82,10 +82,7 @@ class OperationShadowProbe:
             try:
                 classification = cls._classification(request)
             except Exception:
-                _LOGGER.debug(
-                    "operation_gateway.shadow_classification_failed",
-                    exc_info=True,
-                )
+                _LOGGER.debug("operation_gateway.shadow_classification_failed")
         started = time.perf_counter()
         if request is not None and classification is not None:
             await cls._observe_safely(
@@ -164,14 +161,14 @@ class OperationShadowProbe:
                         request=request,
                         outcome=OperationOutcome.SUCCEEDED,
                         started=time.perf_counter(),
-                        result_ref=part.content_ref,
                     )
                 )
-        except BaseException as exc:
-            _LOGGER.debug(
-                "operation_gateway.shadow_model_observation_failed",
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
+        except asyncio.CancelledError:
+            if cls._task_is_cancelling():
+                raise
+            _LOGGER.debug("operation_gateway.shadow_model_observation_failed")
+        except Exception:
+            _LOGGER.debug("operation_gateway.shadow_model_observation_failed")
 
     @classmethod
     def _request(
@@ -192,7 +189,7 @@ class OperationShadowProbe:
                 artifact_intent=artifact_intent,
             )
         except Exception:
-            _LOGGER.debug("operation_gateway.shadow_request_failed", exc_info=True)
+            _LOGGER.debug("operation_gateway.shadow_request_failed")
             return None
 
     @staticmethod
@@ -272,14 +269,12 @@ class OperationShadowProbe:
         request: OperationRequest,
         outcome: OperationOutcome,
         started: float,
-        result_ref: str | None = None,
     ) -> None:
         latency_ms = max(0, int((time.perf_counter() - started) * 1000))
         payload = OperationCompletedPayload(
             v=1,
             operation_id=request.operation_id,
             outcome=outcome,
-            result_ref=result_ref,
             latency_ms=latency_ms,
         )
         context = OperationContext.require()
@@ -317,13 +312,20 @@ class OperationShadowProbe:
     async def _observe_safely(awaitable: Awaitable[None]) -> None:
         try:
             await awaitable
-        except BaseException as exc:
-            # Cancellation belongs to legacy execution, not observation.  A
-            # telemetry implementation raising CancelledError is still swallowed.
-            _LOGGER.debug(
-                "operation_gateway.shadow_observation_failed",
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
+        except asyncio.CancelledError:
+            if OperationShadowProbe._task_is_cancelling():
+                raise
+            _LOGGER.debug("operation_gateway.shadow_observation_failed")
+        except Exception:
+            _LOGGER.debug("operation_gateway.shadow_observation_failed")
+
+    @staticmethod
+    def _task_is_cancelling() -> bool:
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            return False
+        return task is not None and task.cancelling() > 0
 
     @staticmethod
     def _compare_classification_safely(
@@ -344,11 +346,8 @@ class OperationShadowProbe:
                 legacy_class=legacy_class,
                 gateway_class=classification.effect_class.value,
             )
-        except BaseException as exc:
-            _LOGGER.debug(
-                "operation_gateway.shadow_classification_metric_failed",
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
+        except Exception:
+            _LOGGER.debug("operation_gateway.shadow_classification_metric_failed")
 
     @staticmethod
     def _observe_disposition_safely(
@@ -386,11 +385,8 @@ class OperationShadowProbe:
                     legacy_disposition=legacy_disposition.value,
                     gateway_disposition=predicted.value,
                 )
-        except BaseException as exc:
-            _LOGGER.debug(
-                "operation_gateway.shadow_disposition_failed",
-                exc_info=(type(exc), exc, exc.__traceback__),
-            )
+        except Exception:
+            _LOGGER.debug("operation_gateway.shadow_disposition_failed")
 
     @staticmethod
     def _artifact_parts(result: object) -> tuple[ModelArtifactContentPart, ...]:
@@ -434,10 +430,7 @@ class OperationShadowProbe:
             except Exception:
                 # Invalid explicit intent is observable only as a debug signal;
                 # final narrative remains untouched per SDR failure behavior.
-                _LOGGER.debug(
-                    "operation_gateway.invalid_artifact_content_part",
-                    exc_info=True,
-                )
+                _LOGGER.debug("operation_gateway.invalid_artifact_content_part")
         return tuple(parts)
 
 
