@@ -29,7 +29,8 @@
     "decision_kind": ["approve", "reject", "hold", "restore"],
     "decision_actor": ["user", "policy"],
     "apply_result": ["applied", "partial", "failed"],
-    "usage_purpose": ["run", "subagent", "view_shaping", "shape_request"]
+    "usage_purpose": ["run", "subagent", "view_shaping", "shape_request"],
+    "shape_outcome": ["shaped", "no_fit"]
   },
   "events": {
     "gate.opened": {
@@ -62,6 +63,7 @@
     "view.derived": { "required": ["v", "surface_id", "tier", "basis"] },
     "view.preference": { "required": ["v", "surface_id", "keep", "actor"] },
     "shape.requested": { "required": ["v", "surface_id", "actor"] },
+    "shape.resolved": { "required": ["v", "surface_id", "outcome"] },
     "write.staged": {
       "required": ["v", "stage_id", "surface_id", "target", "proposal_ref"]
     },

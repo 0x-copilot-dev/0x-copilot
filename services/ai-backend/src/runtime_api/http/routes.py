@@ -56,6 +56,8 @@ from runtime_api.schemas import (
 )
 from runtime_api.schemas.surfaces_v2 import (
     RunSurfacesResponse,
+    ShapeRequestAccepted,
+    ShapeRequestForwardBody,
     SurfaceViewActionResponse,
     SurfaceViewPreferenceRequest,
     SurfaceViewPreferenceResponse,
@@ -570,6 +572,30 @@ class RuntimeApiRoutes:
         )
 
     @classmethod
+    async def shape_request(
+        cls,
+        request: Request,
+        surface_id: str,
+        payload: ShapeRequestForwardBody,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ShapeRequestAccepted:
+        """Run a user-invited "Suggest a shape" attempt (PRD-B4, FR-D4).
+
+        Keyed on ``surface_id`` + the owning ``run_id`` (body). A higher-effort
+        shaping attempt (bigger budget than the automatic pass) is scheduled; the
+        outcome streams as ``shape.requested`` → ``shape.resolved`` ledger events.
+        Flag-off ⇒ 404 (byte-identical). Returns ``202 Accepted``.
+        """
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        return await cls.shape_request_coordinator(request).request_shape(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=payload.run_id,
+            surface_id=surface_id,
+        )
+
+    @classmethod
     def stream_run(
         cls,
         request: Request,
@@ -798,6 +824,12 @@ class RuntimeApiRoutes:
         return request.app.state.surface_view_coordinator
 
     @classmethod
+    def shape_request_coordinator(cls, request: Request):
+        """Retrieve the PRD-B4 shape-request coordinator from app state."""
+
+        return request.app.state.shape_request_coordinator
+
+    @classmethod
     def workspace_coordinator(cls, request: Request) -> WorkspaceCoordinator:
         """Retrieve the workspace coordinator from app state."""
 
@@ -993,6 +1025,16 @@ class RuntimeApiRouter:
             methods=["POST"],
             response_model=SurfaceViewPreferenceResponse,
             name=Keys.RouteName.SET_SURFACE_VIEW_PREFERENCE,
+        )
+        # PRD-B4 — user-invited "Suggest a shape". ``202 Accepted``; the outcome
+        # streams as shape.requested/shape.resolved ledger events (no polling).
+        router.add_api_route(
+            "/surfaces/{surface_id:path}/shape-request",
+            RuntimeApiRoutes.shape_request,
+            methods=["POST"],
+            response_model=ShapeRequestAccepted,
+            status_code=status.HTTP_202_ACCEPTED,
+            name=Keys.RouteName.SHAPE_REQUEST,
         )
         router.add_api_route(
             "/runs/{run_id}/stream",

@@ -1258,6 +1258,27 @@ def create_app(
             identity=identity,
         )
 
+    @app.post("/v1/agent/surfaces/{surface_id:path}/shape-request", status_code=202)
+    async def request_surface_shape(
+        request: Request,
+        surface_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        # Generative Surfaces v2 (PRD-B4): user-invited "Suggest a shape". The
+        # body is an UNTYPED dict passthrough (``scoped_payload`` stamps org/user;
+        # a typed model would silently drop the client's ``run_id``). The outcome
+        # streams over the run SSE as shape.requested/shape.resolved ledger events;
+        # upstream 404/409/422 status passes through via ``_upstream_error_detail``.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/surfaces/{surface_id}/shape-request",
+            target="ai_backend",
+            json=identity.scoped_payload(payload),
+            identity=identity,
+        )
+
     # Generative Surfaces v2 (PRD-D1): single-artifact staged-write passthroughs.
     # Pure proxies (no logic) to the ai-backend stage engine, keyed on
     # ``stage_id`` + the owning ``run_id`` (stage state is a pure fold of that

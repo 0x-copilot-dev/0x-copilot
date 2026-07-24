@@ -38,6 +38,10 @@ export type {
   ViewDerivedPayload,
   ViewPreferencePayload,
   ShapeRequestedPayload,
+  ShapeResolvedPayload,
+  ShapeOutcome,
+  ShapeRequestBody,
+  ShapeRequestAccepted,
   WriteStagedPayload,
   RevisionAddedPayload,
   DecisionRecordedPayload,
@@ -109,6 +113,8 @@ import type {
   SurfaceCreatedPayload,
   ViewDerivedPayload,
   ViewPreferencePayload,
+  ShapeRequestedPayload,
+  ShapeResolvedPayload,
   GateOpenedPayload,
   GateResolvedPayload,
   WriteStagedPayload,
@@ -425,6 +431,8 @@ export type RuntimeApiEventType =
   | "surface.created"
   | "view.derived"
   | "view.preference"
+  | "shape.requested"
+  | "shape.resolved"
   | "gate.opened"
   | "gate.resolved"
   | "write.staged"
@@ -496,6 +504,8 @@ export const RUNTIME_API_EVENT_TYPES = [
   "surface.created",
   "view.derived",
   "view.preference",
+  "shape.requested",
+  "shape.resolved",
   "gate.opened",
   "gate.resolved",
   "write.staged",
@@ -2353,6 +2363,10 @@ export interface RuntimeEventPayloadByType {
   /** Generative Surfaces v2 (PRD-B3, SDR §5). The durable tier preference — a
    * user "Keep generic"/"Shaped" pin that survives reload by replay. */
   "view.preference": ViewPreferencePayload;
+  /** Generative Surfaces v2 (PRD-B4, SDR §5). The user-invited "Suggest a shape"
+   * request + its outcome (`shaped`/`no_fit`), emitted behind `SURFACES_V2`. */
+  "shape.requested": ShapeRequestedPayload;
+  "shape.resolved": ShapeResolvedPayload;
   /** Generative Surfaces v2 (PRD-C2, SDR §5). The ToolAccessGate park/resume
    * pair, emitted behind `SURFACES_V2`: `gate.opened` beside the mcp_auth
    * interrupt, `gate.resolved` when the decision endpoint records the

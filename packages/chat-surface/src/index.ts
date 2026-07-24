@@ -1150,6 +1150,17 @@ export {
   type LedgerViewKeep,
 } from "./thread-canvas";
 // === end PRD-B3 ===
+// === Surfaces v2 — PRD-B4 suggest-a-shape ===
+// The user-invited "Suggest a shape" button on the raw/generic fallback surface,
+// plus the folded per-surface `shapeRequest` state it renders from. Presentational
+// + a pure ledger fold; the callback rides the Transport port (no second SSE sub).
+export {
+  SuggestShapeButton,
+  SHAPE_NO_FIT_LINE,
+  type SuggestShapeButtonProps,
+  type LedgerShapeRequestState,
+} from "./thread-canvas";
+// === end PRD-B4 ===
 // === Surfaces v2 — PRD-C2 tool-access gate card + posture chip ===
 export {
   TcGateCard,

@@ -276,6 +276,29 @@
         "surface_id": "surface_receipt",
         "fold_ref": "payload/fold_01"
       }
+    },
+    {
+      "event_type": "shape.resolved",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 21,
+      "created_at": "2026-07-23T10:00:21Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_issue",
+        "outcome": "shaped"
+      }
+    },
+    {
+      "event_type": "shape.resolved",
+      "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
+      "sequence_no": 22,
+      "created_at": "2026-07-23T10:00:22Z",
+      "payload": {
+        "v": 1,
+        "surface_id": "surface_issue",
+        "outcome": "no_fit",
+        "reason": "no confident view fit"
+      }
     }
   ]
 }

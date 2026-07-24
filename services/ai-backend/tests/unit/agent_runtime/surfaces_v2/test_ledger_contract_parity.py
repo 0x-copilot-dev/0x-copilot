@@ -60,7 +60,7 @@ class TestLedgerContractParity(LedgerContractMixin):
         constant_values = set(LEDGER_EVENT_TYPES)
 
         assert contract_keys == enum_values == constant_values
-        assert len(contract_keys) == 14
+        assert len(contract_keys) == 15
 
     def test_event_type_order_is_stable(self) -> None:
         # Ordering is part of the contract: the JSON events insertion order, the
@@ -74,7 +74,7 @@ class TestLedgerContractParity(LedgerContractMixin):
         model_keys = set(WorkLedgerVocabulary.PAYLOAD_MODELS.keys())
 
         assert model_keys == set(LedgerEventType)
-        assert len(WorkLedgerVocabulary.PAYLOAD_MODELS) == 14
+        assert len(WorkLedgerVocabulary.PAYLOAD_MODELS) == 15
         for model in WorkLedgerVocabulary.PAYLOAD_MODELS.values():
             assert issubclass(model, LedgerPayload)
 

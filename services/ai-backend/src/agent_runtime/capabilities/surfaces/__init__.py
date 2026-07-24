@@ -48,6 +48,12 @@ from agent_runtime.capabilities.surfaces.projector import (
     SurfaceProjector,
 )
 from agent_runtime.capabilities.surfaces.shape_hash import output_shape_hash
+from agent_runtime.capabilities.surfaces.shape_request import (
+    InvitedShapeAttempt,
+    ShapeRequestError,
+    ShapeRequestOutcome,
+    ShapeRequestRunner,
+)
 from agent_runtime.capabilities.surfaces.store import (
     FileSurfaceSpecStore,
     InMemorySurfaceSpecStore,
@@ -74,8 +80,12 @@ __all__ = [
     "GenToolDescriptor",
     "InMemoryCommitLedger",
     "InMemorySurfaceSpecStore",
+    "InvitedShapeAttempt",
     "PersistenceCommitAuditSink",
     "RemoteState",
+    "ShapeRequestError",
+    "ShapeRequestOutcome",
+    "ShapeRequestRunner",
     "SpecAuthoringSkill",
     "SpecKey",
     "StoredSpec",

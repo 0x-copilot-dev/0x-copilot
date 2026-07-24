@@ -70,10 +70,12 @@ import { TcStatusStrip } from "./TcStatusStrip";
 import { TcSurfaceFrame } from "./TcSurfaceFrame";
 import { TcSurfaceMount, type PendingDiffHandle } from "./TcSurfaceMount";
 import type {
+  LedgerShapeRequestState,
   LedgerSurfaceViewState,
   LedgerViewKeep,
 } from "./ledgerProjection";
 import { ViewTierToggle } from "./ViewTierToggle";
+import { SuggestShapeButton } from "./SuggestShapeButton";
 import { TcSwimlanes } from "./TcSwimlanes";
 import { TcTabs, type TcTab } from "./TcTabs";
 import { useEventProjector } from "./useEventProjector";
@@ -178,6 +180,16 @@ export interface ThreadCanvasProps {
     keep: LedgerViewKeep,
   ) => void;
   /**
+   * SURFACES_V2 (PRD-B4): the active surface's folded "Suggest a shape" state +
+   * the invited-shaping callback. When both are provided AND the active surface's
+   * effective tier is `raw`/`generic`, the surface chrome renders the
+   * `SuggestShapeButton` beside the tier toggle. The callback rides the host
+   * Transport port (RunDestination POSTs to the shape-request endpoint); omitted
+   * → no button (flag-off byte-identical).
+   */
+  readonly activeShapeRequest?: LedgerShapeRequestState;
+  readonly onShapeRequest?: (surfaceId: string) => void;
+  /**
    * Scrub cursor — null = live; number = a `sequence_no` to time-travel
    * the surface to. The host (ChatScreen) reconciles this with the
    * swimlane and mini-timeline UIs.
@@ -246,6 +258,8 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     activeViewState,
     onRegenerateView,
     onSetViewPreference,
+    activeShapeRequest = "idle",
+    onShapeRequest,
     scrubbedSeq = null,
     onScrub,
     onSnapToNow,
@@ -488,6 +502,20 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
                   viewState={activeViewState}
                   onRegenerateView={onRegenerateView}
                   onSetViewPreference={onSetViewPreference}
+                />
+              ) : null}
+              {/* PRD-B4: "Suggest a shape" on the raw/generic fallback only. A
+                  shaped surface hides it (the automatic/invited upgrade already
+                  landed). Rendered when the host supplies the callback. */}
+              {onShapeRequest !== undefined &&
+              surfaceIdForTabUri(activeUri) !== null &&
+              (activeViewState == null ||
+                activeViewState.effectiveTier === "raw" ||
+                activeViewState.effectiveTier === "generic") ? (
+                <SuggestShapeButton
+                  surfaceId={surfaceIdForTabUri(activeUri) as string}
+                  shapeRequest={activeShapeRequest}
+                  onShapeRequest={onShapeRequest}
                 />
               ) : null}
               <TcStatusStrip line={statusLine} />

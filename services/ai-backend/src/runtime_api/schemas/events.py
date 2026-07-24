@@ -186,6 +186,10 @@ class RuntimeEventPresentationProjector:
             return cls._view_derived_payload(payload)
         if event_type is RuntimeApiEventType.VIEW_PREFERENCE:
             return cls._view_preference_payload(payload)
+        if event_type is RuntimeApiEventType.SHAPE_REQUESTED:
+            return cls._shape_requested_payload(payload)
+        if event_type is RuntimeApiEventType.SHAPE_RESOLVED:
+            return cls._shape_resolved_payload(payload)
         if event_type is RuntimeApiEventType.GATE_OPENED:
             return cls._gate_opened_payload(payload)
         if event_type is RuntimeApiEventType.GATE_RESOLVED:
@@ -312,6 +316,8 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.SURFACE_CREATED,
             RuntimeApiEventType.VIEW_DERIVED,
             RuntimeApiEventType.VIEW_PREFERENCE,
+            RuntimeApiEventType.SHAPE_REQUESTED,
+            RuntimeApiEventType.SHAPE_RESOLVED,
             RuntimeApiEventType.GATE_OPENED,
             RuntimeApiEventType.GATE_RESOLVED,
             RuntimeApiEventType.WRITE_STAGED,
@@ -936,6 +942,46 @@ class RuntimeEventPresentationProjector:
             _LedgerKeys.Field.SURFACE_ID,
             _LedgerKeys.Field.KEEP,
             _LedgerKeys.Field.ACTOR,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        return safe_payload
+
+    @classmethod
+    def _shape_requested_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``shape.requested`` through a strict allow-list (PRD-B4).
+
+        Keeps exactly the SDR §5 fields — ``v`` / ``surface_id`` / ``actor`` — so
+        a user-invited request append can never over-share.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.ACTOR,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        return safe_payload
+
+    @classmethod
+    def _shape_resolved_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project ``shape.resolved`` through a strict allow-list (PRD-B4).
+
+        Keeps ``v`` / ``surface_id`` / ``outcome`` / optional ``reason``. The
+        ``reason`` is the safe lint/validation summary the runner already
+        sanitised (never raw model output); re-filtered here as defence in depth.
+        """
+
+        safe_payload: JsonObject = {}
+        cls._copy_payload_version(payload, safe_payload)
+        for text_key in (
+            _LedgerKeys.Field.SURFACE_ID,
+            _LedgerKeys.Field.OUTCOME,
+            _LedgerKeys.Field.REASON,
         ):
             value = cls._text(payload.get(text_key))
             if value is not None:
