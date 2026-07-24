@@ -1,12 +1,24 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
+import {
+  mkdir,
+  open as openFile,
+  readFile,
+  rename,
+  unlink,
+} from "node:fs/promises";
 import { homedir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 
 import type { SafeStorageLike } from "../auth/secret-storage";
 
-import { assertGrantableRoot } from "./path-validation";
-import type { Grant, GrantMode, GrantProvider, GrantSnapshot } from "./types";
+import { assertGrantableRoot, normalizeVirtualPath } from "./path-validation";
+import type {
+  Grant,
+  GrantMode,
+  GrantProvider,
+  GrantRootIdentity,
+  GrantSnapshot,
+} from "./types";
 
 // Encrypted, main-owned persistence for host-folder grants (AC5 slice 1).
 //
@@ -38,6 +50,16 @@ export interface GrantStoreConfig {
   readonly uuid?: () => string;
   /** Injectable for tests. */
   readonly clock?: () => number;
+  /**
+   * Electron-main native identity query. Without it, a newly created grant is
+   * read-capable only; the v2 writer refuses a root without this identity.
+   */
+  readonly rootIdentity?: (root: string) => Promise<GrantRootIdentity>;
+  /** Local signed-in profile/device facts recorded on newly issued grants. */
+  readonly profileId?: string;
+  readonly deviceId?: string;
+  /** Default expiry for newly created grants. Defaults to thirty days. */
+  readonly grantTtlMs?: number;
 }
 
 export interface CreateGrantInput {
@@ -45,6 +67,9 @@ export interface CreateGrantInput {
   readonly root: string;
   readonly mode: GrantMode;
   readonly label: string;
+  /** Optional root-relative restrictions; all entries are checked by main. */
+  readonly allowedPathPrefixes?: readonly string[];
+  readonly expiresAt?: number;
 }
 
 interface PersistedShape {
@@ -61,6 +86,12 @@ export class GrantStore implements GrantProvider {
   readonly #audit: GrantStoreAudit;
   readonly #uuid: () => string;
   readonly #clock: () => number;
+  readonly #rootIdentity:
+    | ((root: string) => Promise<GrantRootIdentity>)
+    | undefined;
+  readonly #profileId: string | undefined;
+  readonly #deviceId: string | undefined;
+  readonly #grantTtlMs: number;
 
   #grants: Map<string, Grant> = new Map();
   #loaded = false;
@@ -75,6 +106,10 @@ export class GrantStore implements GrantProvider {
     this.#audit = config.audit ?? defaultAudit();
     this.#uuid = config.uuid ?? randomUUID;
     this.#clock = config.clock ?? Date.now;
+    this.#rootIdentity = config.rootIdentity;
+    this.#profileId = config.profileId;
+    this.#deviceId = config.deviceId;
+    this.#grantTtlMs = config.grantTtlMs ?? 30 * 24 * 60 * 60 * 1000;
   }
 
   async create(input: CreateGrantInput): Promise<Grant> {
@@ -93,6 +128,10 @@ export class GrantStore implements GrantProvider {
     });
     await this.#ensureLoaded();
     const now = this.#clock();
+    const rootIdentity =
+      this.#rootIdentity === undefined
+        ? undefined
+        : await this.#rootIdentity(input.root);
     const grant: Grant = {
       grantId: this.#uuid(),
       root: input.root,
@@ -101,6 +140,11 @@ export class GrantStore implements GrantProvider {
       status: "active",
       createdAt: now,
       updatedAt: now,
+      rootIdentity,
+      profileId: this.#profileId,
+      deviceId: this.#deviceId,
+      allowedPathPrefixes: normalizePrefixes(input.allowedPathPrefixes),
+      expiresAt: input.expiresAt ?? now + this.#grantTtlMs,
     };
     this.#grants.set(grant.grantId, grant);
     await this.#persist();
@@ -114,7 +158,12 @@ export class GrantStore implements GrantProvider {
 
   async listActive(): Promise<readonly Grant[]> {
     await this.#ensureLoaded();
-    return [...this.#grants.values()].filter((g) => g.status === "active");
+    const now = this.#clock();
+    return [...this.#grants.values()].filter(
+      (g) =>
+        g.status === "active" &&
+        (g.expiresAt === undefined || g.expiresAt > now),
+    );
   }
 
   async get(grantId: string): Promise<Grant | null> {
@@ -182,8 +231,35 @@ export class GrantStore implements GrantProvider {
       grants: [...this.#grants.values()],
     };
     const blob = this.#encode(payload);
-    await mkdir(join(this.#path, ".."), { recursive: true });
-    await writeFile(this.#path, blob, { mode: 0o600 });
+    const directory = dirname(this.#path);
+    await mkdir(directory, { recursive: true, mode: 0o700 });
+    // A grant file is an authority list.  A plain write can leave an empty or
+    // partial list after power loss, so persist through temp -> file fsync ->
+    // atomic rename -> directory fsync.  The temporary name is unguessable and
+    // created with O_EXCL; no plaintext ever touches disk in production.
+    const temporary = join(
+      directory,
+      `.grants-${randomBytes(16).toString("hex")}.tmp`,
+    );
+    let handle: Awaited<ReturnType<typeof openFile>> | undefined;
+    try {
+      handle = await openFile(temporary, "wx", 0o600);
+      await handle.writeFile(blob);
+      await handle.sync();
+      await handle.close();
+      handle = undefined;
+      await rename(temporary, this.#path);
+      const directoryHandle = await openFile(directory, "r");
+      try {
+        await directoryHandle.sync();
+      } finally {
+        await directoryHandle.close();
+      }
+    } catch (error) {
+      await handle?.close().catch(() => {});
+      await unlink(temporary).catch(() => {});
+      throw error;
+    }
   }
 
   #encode(payload: PersistedShape): Buffer {
@@ -254,6 +330,11 @@ function coerceGrant(row: unknown): Grant {
   const status = r.status;
   const createdAt = r.createdAt;
   const updatedAt = r.updatedAt;
+  const rootIdentity = r.rootIdentity;
+  const profileId = r.profileId;
+  const deviceId = r.deviceId;
+  const allowedPathPrefixes = r.allowedPathPrefixes;
+  const expiresAt = r.expiresAt;
   if (
     typeof grantId !== "string" ||
     typeof root !== "string" ||
@@ -263,11 +344,71 @@ function coerceGrant(row: unknown): Grant {
     typeof label !== "string" ||
     (status !== "active" && status !== "revoked") ||
     typeof createdAt !== "number" ||
-    typeof updatedAt !== "number"
+    typeof updatedAt !== "number" ||
+    (rootIdentity !== undefined && !isRootIdentity(rootIdentity)) ||
+    (profileId !== undefined && typeof profileId !== "string") ||
+    (deviceId !== undefined && typeof deviceId !== "string") ||
+    (allowedPathPrefixes !== undefined &&
+      (!Array.isArray(allowedPathPrefixes) ||
+        allowedPathPrefixes.some((value) => typeof value !== "string"))) ||
+    (expiresAt !== undefined && typeof expiresAt !== "number")
   ) {
     throw new Error("grant row has invalid fields");
   }
-  return { grantId, root, mode, label, status, createdAt, updatedAt };
+  return {
+    grantId,
+    root,
+    mode,
+    label,
+    status,
+    createdAt,
+    updatedAt,
+    rootIdentity: rootIdentity as GrantRootIdentity | undefined,
+    profileId: profileId as string | undefined,
+    deviceId: deviceId as string | undefined,
+    allowedPathPrefixes:
+      allowedPathPrefixes === undefined
+        ? undefined
+        : Object.freeze([...allowedPathPrefixes] as string[]),
+    expiresAt: expiresAt as number | undefined,
+  };
+}
+
+function isRootIdentity(value: unknown): value is GrantRootIdentity {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { volumeId?: unknown }).volumeId === "string" &&
+    typeof (value as { fileId?: unknown }).fileId === "string"
+  );
+}
+
+function normalizePrefixes(
+  value: readonly string[] | undefined,
+): readonly string[] {
+  if (value === undefined) return Object.freeze([""]);
+  const unique = new Set<string>();
+  for (const prefix of value) {
+    if (typeof prefix !== "string" || prefix.includes("\u0000")) {
+      throw new Error("grant path prefix is invalid");
+    }
+    const trimmed = prefix.replace(/^[/\\]+/u, "").replace(/[/\\]+$/u, "");
+    if (trimmed === "") {
+      unique.add("");
+      continue;
+    }
+    try {
+      // Prefixes become an authorization boundary below the root, so they use
+      // the exact same virtual-path grammar as an untrusted workspace entry.
+      unique.add(normalizeVirtualPath(trimmed).join("/"));
+    } catch (error) {
+      if (error instanceof Error) {
+        throw new Error("grant path prefix is invalid");
+      }
+      throw error;
+    }
+  }
+  return Object.freeze([...unique].sort());
 }
 
 function startsWith(raw: Buffer, marker: string): boolean {

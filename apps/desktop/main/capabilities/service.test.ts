@@ -9,7 +9,12 @@ import type { SafeStorageLike } from "../auth/secret-storage";
 import { CapabilityBroker } from "./broker";
 import { FolderPicker, type ShowOpenDialogResult } from "./folder-picker";
 import { GrantStore } from "./grant-store";
+import { UnavailableNativeWorkspaceAuthority } from "./native-workspace-authority";
 import { CapabilityService } from "./service";
+import {
+  InMemoryWorkspaceJournalStore,
+  LocalWorkspaceAuthority,
+} from "./workspace-authority";
 
 function fakeSafeStorage(): SafeStorageLike {
   return {
@@ -33,8 +38,27 @@ function makeService(
     realpath,
     stat: async () => ({ isDirectory: () => true }),
   });
-  const broker = new CapabilityBroker({ grants: store });
-  return { service: new CapabilityService({ store, picker, broker }), store };
+  const workspaceAuthority = new LocalWorkspaceAuthority({
+    grants: store,
+    native: new UnavailableNativeWorkspaceAuthority(),
+    journal: new InMemoryWorkspaceJournalStore(),
+    attestation: {
+      workspaceWriteIsolation: "unavailable",
+      nativeWorkspacePrimitives: "unavailable",
+    },
+    production: true,
+    deviceId: "test-device",
+  });
+  const broker = new CapabilityBroker({ grants: store, workspaceAuthority });
+  return {
+    service: new CapabilityService({
+      store,
+      picker,
+      broker,
+      workspaceAuthority,
+    }),
+    store,
+  };
 }
 
 describe("CapabilityService", () => {
