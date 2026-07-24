@@ -48,11 +48,12 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectClass,
     EffectDecisionKind,
     EffectPolicy,
+    LedgerEventType,
 )
 
-_EVENT_STAGED = "effect.staged"
-_EVENT_REVISED = "effect.revised"
-_EVENT_DECISION = "effect.decision_recorded"
+_EVENT_STAGED = LedgerEventType.EFFECT_STAGED.value
+_EVENT_REVISED = LedgerEventType.EFFECT_REVISED.value
+_EVENT_DECISION = LedgerEventType.EFFECT_DECISION_RECORDED.value
 
 
 @dataclass(frozen=True)
