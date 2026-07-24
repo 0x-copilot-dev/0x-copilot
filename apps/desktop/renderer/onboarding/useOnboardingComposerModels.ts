@@ -13,7 +13,7 @@
 // selectable lead. Its wire `model_name` tracks the resolved Ollama tag as it
 // lands, while its id stays stable so the selection never churns.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { QWEN3_4B_PRESET } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
@@ -31,6 +31,7 @@ export const LOCAL_ENGINE_MODEL_ID = "first-run-local";
 
 interface ModelCatalogResponseLite {
   readonly models?: readonly ModelCatalogModel[];
+  readonly default_model_id?: string;
 }
 interface LocalModelsResponseLite {
   readonly models?: readonly { readonly name?: string }[];
@@ -40,6 +41,13 @@ export interface OnboardingComposerModels {
   readonly models: CatalogModel[];
   readonly selectedModel: string;
   readonly onModelChange: (id: string) => void;
+  /**
+   * Refetch the backend catalog and, when `preferProvider` is given, auto-select
+   * that provider's first usable model. Called after a provider key is saved so
+   * the just-configured provider's model is picked (and its rows stop reading
+   * "needs key") without a surface remount.
+   */
+  readonly refresh: (preferProvider?: string) => void;
 }
 
 export interface OnboardingLocalEngine {
@@ -56,8 +64,18 @@ export function useOnboardingComposerModels(
   const [cloudModels, setCloudModels] = useState<readonly ModelCatalogModel[]>(
     [],
   );
+  const [defaultModelId, setDefaultModelId] = useState<string>("");
   const [localModelNames, setLocalModelNames] = useState<readonly string[]>([]);
   const [selectedModel, setSelectedModel] = useState<string>("");
+  // Bumping this re-runs the catalog fetch. `refresh()` bumps it after a key is
+  // saved so `configured` reflects the new BYOK key — the catalog was otherwise
+  // fetched once at mount (before any key existed), so every cloud row stayed
+  // "needs key" forever and the just-added model could never be selected.
+  const [reloadToken, setReloadToken] = useState(0);
+  // The provider whose key was just added — steers the NEXT selection to that
+  // provider's model (add OpenAI → GPT-5.4 Mini, not a leftover keyless pick).
+  // Consumed by the selection effect once the refetched models land.
+  const preferProviderRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -67,7 +85,9 @@ export function useOnboardingComposerModels(
         path: "/v1/agent/models",
       })
       .then((res) => {
-        if (!cancelled) setCloudModels(res.models ?? []);
+        if (cancelled) return;
+        setCloudModels(res.models ?? []);
+        setDefaultModelId(res.default_model_id ?? "");
       })
       .catch(() => {
         // Catalog probe failed → empty cloud list; the run-start gate is the
@@ -77,7 +97,14 @@ export function useOnboardingComposerModels(
     return () => {
       cancelled = true;
     };
-  }, [transport]);
+  }, [transport, reloadToken]);
+
+  const refresh = useCallback((preferProvider?: string): void => {
+    if (preferProvider !== undefined && preferProvider !== "") {
+      preferProviderRef.current = preferProvider;
+    }
+    setReloadToken((token) => token + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -123,20 +150,39 @@ export function useOnboardingComposerModels(
     return [localEntry, ...base.filter((m) => m.id !== LOCAL_ENGINE_MODEL_ID)];
   }, [cloudModels, localModelNames, isLocalEngine, local.modelName]);
 
-  // Keep a valid selection: preserve the user's pick when still present, else
-  // fall back to the first usable model (the on-device entry leads on the local
-  // path).
+  // Selection policy:
+  //   • a provider key was JUST added (`preferProviderRef`) → jump to that
+  //     provider's model, overriding a stale keyless / wrong-provider pick;
+  //   • otherwise preserve the user's pick when still present;
+  //   • else fall back to the provider-aware default (backend `default_model_id`
+  //     when usable, else first usable; the on-device entry leads on local).
   useEffect(() => {
+    const prefer = preferProviderRef.current;
+    if (prefer !== null) {
+      const picked = defaultSelectedModelId(models, {
+        preferProvider: prefer,
+        defaultModelId,
+      });
+      if (picked === "") {
+        // Preferred provider not usable yet — a refetch after the key save may
+        // still be in flight. Keep the hint and wait for the next catalog update
+        // rather than consuming it against a stale list.
+        return;
+      }
+      preferProviderRef.current = null;
+      setSelectedModel(picked);
+      return;
+    }
     setSelectedModel((current) =>
       current !== "" && models.some((m) => m.id === current)
         ? current
-        : defaultSelectedModelId(models),
+        : defaultSelectedModelId(models, { defaultModelId }),
     );
-  }, [models]);
+  }, [models, defaultModelId]);
 
   const onModelChange = useCallback((id: string): void => {
     setSelectedModel(id);
   }, []);
 
-  return { models, selectedModel, onModelChange };
+  return { models, selectedModel, onModelChange, refresh };
 }
