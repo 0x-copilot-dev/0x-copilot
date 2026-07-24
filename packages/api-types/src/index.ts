@@ -165,6 +165,7 @@ export type {
 } from "./ledger";
 export {
   LEDGER_EVENT_TYPES,
+  ARTIFACT_EVENT_TYPES,
   ARTIFACT_RUNTIME_EVENT_TYPES,
   isLedgerEventType,
   isSurfaceEventV2,

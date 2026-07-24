@@ -1,5 +1,16 @@
-import type { ArtifactKind, RuntimeEventEnvelope } from "@0x-copilot/api-types";
+import {
+  ARTIFACT_EVENT_TYPES,
+  type ArtifactKind,
+  type RuntimeEventEnvelope,
+} from "@0x-copilot/api-types";
 import { artifactUri } from "./uri";
+
+const [
+  ARTIFACT_CREATED,
+  ARTIFACT_REVISED,
+  _ARTIFACT_PROMOTED,
+  ARTIFACT_PRESENTATION_DECIDED,
+] = ARTIFACT_EVENT_TYPES;
 
 export interface ArtifactSurfaceTab {
   readonly artifactId: string;
@@ -22,22 +33,20 @@ export function projectArtifactTabs(
     const payload = record(event.payload);
     if (payload === null) continue;
     const eventType = event.event_type as string;
-    if (eventType === "artifact.presentation_decided") {
+    if (eventType === ARTIFACT_PRESENTATION_DECIDED) {
       const id = string(payload.artifact_id);
       if (id !== "")
         decisions.set(id, payload.decision === "canvas" ? "canvas" : "hidden");
       continue;
     }
-    if (eventType !== "artifact.created" && eventType !== "artifact.revised")
+    if (eventType !== ARTIFACT_CREATED && eventType !== ARTIFACT_REVISED)
       continue;
     const id = string(payload.artifact_id);
     const revision = number(payload.revision);
     if (id === "" || revision === null) continue;
     const prior = entries.get(id);
     const kind =
-      eventType === "artifact.created"
-        ? artifactKind(payload.kind)
-        : prior?.kind;
+      eventType === ARTIFACT_CREATED ? artifactKind(payload.kind) : prior?.kind;
     if (kind === undefined) continue;
     const sequence =
       typeof event.sequence_no === "number" ? event.sequence_no : 0;
