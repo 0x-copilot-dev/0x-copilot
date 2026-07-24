@@ -434,11 +434,18 @@ class RuntimeWorker:
         self,
         claim: RuntimeWorkerClaim,
     ) -> RuntimeEffectReconcileCommand:
-        """Deserialise a body-free A5 effect-reconciliation command."""
+        """Deserialise a body-free command and bind it to its durable queue scope."""
 
         payload = self._command_payload(claim)
         if payload:
-            return RuntimeEffectReconcileCommand.model_validate(payload)
+            command = RuntimeEffectReconcileCommand.model_validate(payload)
+            if command.org_id != claim.org_id or command.run_id != claim.run_id:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.VALIDATION_ERROR,
+                    "Effect-reconcile command scope does not match its durable queue claim.",
+                    retryable=False,
+                )
+            return command
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Effect-reconcile command payload is unavailable.",

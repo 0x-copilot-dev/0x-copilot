@@ -5,7 +5,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 import pytest
+from pydantic import ValidationError
 
+from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim
 from runtime_api.schemas import (
@@ -45,10 +47,7 @@ def _reconcile_command() -> RuntimeEffectReconcileCommand:
     return RuntimeEffectReconcileCommand(
         command_id="effect-reconcile-1",
         org_id="org_acme",
-        user_id="user_sarah",
-        conversation_id="conv_1",
         run_id="run_1",
-        stage_id="stg_00000000-0000-4000-8000-000000000001",
         claim_id="clm_abc123",
         created_at=_CREATED_AT,
     )
@@ -108,3 +107,44 @@ async def test_worker_dispatches_validated_effect_commands_only_to_injected_hand
 
     assert commit_spy.commands == [commit]
     assert reconcile_spy.commands == [reconcile]
+
+
+async def test_worker_rejects_legacy_reconcile_scope_fields_before_handler() -> None:
+    reconcile = _reconcile_command()
+    reconcile_spy = _ReconcileSpy()
+    worker = RuntimeWorker.__new__(RuntimeWorker)
+    worker.effect_reconcile_handler = reconcile_spy
+
+    legacy_payload = {
+        **reconcile.model_dump(mode="json"),
+        "user_id": "user_sarah",
+        "conversation_id": "conv_1",
+        "stage_id": "stg_00000000-0000-4000-8000-000000000001",
+    }
+
+    with pytest.raises(ValidationError):
+        await worker._dispatch(
+            _claim(
+                command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
+                payload=legacy_payload,
+            )
+        )
+
+    assert reconcile_spy.commands == []
+
+
+async def test_worker_rejects_reconcile_payload_outside_durable_queue_scope() -> None:
+    reconcile = _reconcile_command()
+    reconcile_spy = _ReconcileSpy()
+    worker = RuntimeWorker.__new__(RuntimeWorker)
+    worker.effect_reconcile_handler = reconcile_spy
+
+    with pytest.raises(AgentRuntimeError, match="durable queue claim"):
+        await worker._dispatch(
+            _claim(
+                command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
+                payload={**reconcile.model_dump(mode="json"), "run_id": "run_other"},
+            )
+        )
+
+    assert reconcile_spy.commands == []

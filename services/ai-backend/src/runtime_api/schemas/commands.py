@@ -112,17 +112,15 @@ class RuntimeEffectCommitCommand(RuntimeContract):
 class RuntimeEffectReconcileCommand(RuntimeContract):
     """Durable request to reconcile an existing uncertain A5 effect claim.
 
-    The command has no proposal or target body and cannot create a new effect.  A5
-    resolves ``claim_id`` within the supplied tenant/run/stage scope, then asks the
-    executor only to reconcile that already-claimed attempt.
+    The command has no proposal or target body and cannot create a new effect. It
+    names only the durable tenant/run/claim scope. The worker must rehydrate the
+    stage and principal from the claim and run records before asking an executor
+    to reconcile that already-claimed attempt.
     """
 
     command_id: str = Field(default_factory=lambda: uuid4().hex)
     org_id: str = Field(min_length=1, max_length=128)
-    user_id: str = Field(min_length=1, max_length=128)
-    conversation_id: str = Field(min_length=1, max_length=128)
     run_id: str = Field(min_length=1, max_length=128)
-    stage_id: str = Field(min_length=1, max_length=128)
     claim_id: str = Field(min_length=1, max_length=128)
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -42,10 +42,7 @@ def _reconcile_command() -> RuntimeEffectReconcileCommand:
     return RuntimeEffectReconcileCommand(
         command_id="effect-reconcile-1",
         org_id="org_acme",
-        user_id="user_sarah",
-        conversation_id="conv_1",
         run_id="run_1",
-        stage_id="stg_00000000-0000-4000-8000-000000000001",
         claim_id="clm_abc123",
     )
 
@@ -106,3 +103,10 @@ class TestEffectCommandRoundtrip:
             )
             == reconcile
         )
+        assert {
+            "user_id",
+            "conversation_id",
+            "stage_id",
+            "proposal_ref",
+            "target_ref",
+        }.isdisjoint(claimed_reconcile.payload)
