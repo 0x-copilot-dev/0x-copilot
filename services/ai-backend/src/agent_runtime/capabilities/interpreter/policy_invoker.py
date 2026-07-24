@@ -38,10 +38,29 @@ change.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 from uuid import uuid4
 
 from agent_runtime.api.constants import Keys
+from agent_runtime.capabilities.operations.builtin_adapter import (
+    BuiltinGatewayGateResolver,
+)
+from agent_runtime.capabilities.operations.builtin_catalog import (
+    DEFAULT_BUILTIN_OPERATION_CATALOG,
+)
+from agent_runtime.capabilities.operations.catalog import (
+    DEFAULT_OPERATION_DESCRIPTORS,
+)
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationRequestFactory,
+)
+from agent_runtime.capabilities.operations.contracts import (
+    OperationRawResult,
+    ProposedEffect,
+)
+from agent_runtime.capabilities.operations.gateway import OperationGateway
 from agent_runtime.capabilities.interpreter.contracts import (
     ExternalFunctionCall,
     ExternalFunctionSpec,
@@ -53,6 +72,10 @@ from agent_runtime.capabilities.interpreter.ports import (
 )
 from agent_runtime.capabilities.interpreter.service import ExternalFunctionResolver
 from agent_runtime.execution.contracts import JsonValue
+from agent_runtime.surfaces_v2.entities import OperationRequest
+from agent_runtime.surfaces_v2.ledger_models import (
+    OperationOutcome,
+)
 
 
 class ExternalToolDispatchError(Exception):
@@ -122,6 +145,25 @@ class ExternalCallDispatcher(Protocol):
     ) -> JsonValue: ...
 
 
+@runtime_checkable
+class ExternalCallProposalBuilder(Protocol):
+    """Build one staged external-call proposal without dispatching it.
+
+    D2 owns the interpreter boundary only.  The designated adapter (D1/A4/A5)
+    supplies this port for an effectful child operation; no interpreter module
+    receives a connector client or executor registry.
+    """
+
+    async def build_proposal(
+        self,
+        *,
+        spec: ExternalFunctionSpec,
+        call: ExternalFunctionCall,
+        context: PolicyInvocationContext,
+        operation_id: str,
+    ) -> ProposedEffect: ...
+
+
 class HitlPolicyToolInvoker:
     """Production :class:`PolicyToolInvoker`: budget -> approval -> dispatch.
 
@@ -150,40 +192,92 @@ class HitlPolicyToolInvoker:
     ) -> PolicyToolInvocationOutcome:
         """Route one external call through budget, approval, then dispatch."""
 
-        invocation_id = uuid4().hex
-        spec = context.spec
-        arguments = dict(call.arguments)
+        authorized = await self.authorize(call=call, context=context)
+        if authorized.status != PolicyToolInvocationOutcome.ALLOWED:
+            return authorized
+        return await self.dispatch_authorized(
+            call=call,
+            context=context,
+            invocation_id=authorized.invocation_id,
+        )
 
+    async def authorize(
+        self,
+        *,
+        call: ExternalFunctionCall,
+        context: PolicyInvocationContext,
+    ) -> PolicyToolInvocationOutcome:
+        """Run the shared budget and approval gates without dispatching.
+
+        The gateway-backed code-mode bridge uses this split to authorize an
+        external child operation before building its proposal.  Keeping it here
+        prevents a second, interpreter-specific budget/approval implementation.
+        """
+
+        budgeted = await self.charge_budget(call=call, context=context)
+        if budgeted.status != PolicyToolInvocationOutcome.ALLOWED:
+            return budgeted
+        approved = await self._approval.request_approval(
+            spec=context.spec, call=call, context=context
+        )
+        if not approved:
+            return PolicyToolInvocationOutcome(
+                status=PolicyToolInvocationOutcome.REJECTED,
+                invocation_id=budgeted.invocation_id,
+                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+                safe_message="the external tool call was rejected",
+            )
+        return PolicyToolInvocationOutcome(
+            status=PolicyToolInvocationOutcome.ALLOWED,
+            invocation_id=budgeted.invocation_id,
+        )
+
+    async def charge_budget(
+        self,
+        *,
+        call: ExternalFunctionCall,
+        context: PolicyInvocationContext,
+    ) -> PolicyToolInvocationOutcome:
+        """Charge a child operation without implicitly approving an effect.
+
+        Pure/internal interpreter children continue through ``authorize``.
+        Effectful children pass this budget gate and let the generic effect
+        stager record the user-reviewable policy decision. This prevents an
+        invisible interpreter approval from bypassing a staged write surface.
+        """
+
+        invocation_id = uuid4().hex
         admitted = await self._budget.charge(
-            tool_name=spec.tool_name,
-            arguments=arguments,
+            tool_name=context.spec.tool_name,
+            arguments=dict(call.arguments),
             context=context,
         )
         if not admitted:
-            # Denied before any approval prompt or dispatch — no side effect.
             return PolicyToolInvocationOutcome(
                 status=PolicyToolInvocationOutcome.DENIED,
                 invocation_id=invocation_id,
                 error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
                 safe_message="the external tool's budget is exhausted",
             )
-
-        approved = await self._approval.request_approval(
-            spec=spec, call=call, context=context
+        return PolicyToolInvocationOutcome(
+            status=PolicyToolInvocationOutcome.ALLOWED,
+            invocation_id=invocation_id,
         )
-        if not approved:
-            # A human rejected the call. The tool did NOT run; interpreted code
-            # sees a typed exception and can branch.
-            return PolicyToolInvocationOutcome(
-                status=PolicyToolInvocationOutcome.REJECTED,
-                invocation_id=invocation_id,
-                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
-                safe_message="the external tool call was rejected",
-            )
+
+    async def dispatch_authorized(
+        self,
+        *,
+        call: ExternalFunctionCall,
+        context: PolicyInvocationContext,
+        invocation_id: str,
+    ) -> PolicyToolInvocationOutcome:
+        """Dispatch exactly one already-authorized pure/internal child call."""
 
         try:
             return_value = await self._dispatcher.dispatch(
-                spec=spec, arguments=arguments, context=context
+                spec=context.spec,
+                arguments=dict(call.arguments),
+                context=context,
             )
         except ExternalToolDispatchError as exc:
             return PolicyToolInvocationOutcome(
@@ -197,6 +291,177 @@ class HitlPolicyToolInvoker:
             invocation_id=invocation_id,
             return_value=return_value,
         )
+
+
+class CodeModeChildOperationBlocked(RuntimeError):
+    """A child operation was denied or needs a proposal adapter."""
+
+    def __init__(self, outcome: PolicyToolInvocationOutcome) -> None:
+        super().__init__(outcome.safe_message or "external child operation was blocked")
+        self.outcome = outcome
+
+
+@dataclass
+class _GatewayChildAdapter:
+    """Operation gateway adapter for one interpreter external callback."""
+
+    legacy: object
+    call: ExternalFunctionCall
+    context: PolicyInvocationContext
+    proposal_builder: ExternalCallProposalBuilder | None
+    outcome: PolicyToolInvocationOutcome | None = None
+
+    async def execute_read(self, request: OperationRequest) -> OperationRawResult:
+        del request
+        authorize = getattr(self.legacy, "authorize", None)
+        dispatch_authorized = getattr(self.legacy, "dispatch_authorized", None)
+        if not callable(authorize) or not callable(dispatch_authorized):
+            self.outcome = PolicyToolInvocationOutcome(
+                status=PolicyToolInvocationOutcome.DENIED,
+                invocation_id=uuid4().hex,
+                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+                safe_message="code-mode child operation is not gateway-enabled",
+            )
+            raise CodeModeChildOperationBlocked(self.outcome)
+        authorized = await authorize(call=self.call, context=self.context)
+        if authorized.status != PolicyToolInvocationOutcome.ALLOWED:
+            self.outcome = authorized
+            raise CodeModeChildOperationBlocked(authorized)
+        self.outcome = await dispatch_authorized(
+            call=self.call,
+            context=self.context,
+            invocation_id=authorized.invocation_id,
+        )
+        if self.outcome.status != PolicyToolInvocationOutcome.ALLOWED:
+            raise CodeModeChildOperationBlocked(self.outcome)
+        return OperationRawResult(safe_summary="Code-mode child operation completed.")
+
+    async def build_proposal(self, request: OperationRequest) -> ProposedEffect:
+        charge_budget = getattr(self.legacy, "charge_budget", None)
+        if not callable(charge_budget):
+            self.outcome = PolicyToolInvocationOutcome(
+                status=PolicyToolInvocationOutcome.DENIED,
+                invocation_id=uuid4().hex,
+                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+                safe_message="code-mode child operation is not gateway-enabled",
+            )
+            raise CodeModeChildOperationBlocked(self.outcome)
+        if self.proposal_builder is None:
+            self.outcome = PolicyToolInvocationOutcome(
+                status=PolicyToolInvocationOutcome.DENIED,
+                invocation_id=uuid4().hex,
+                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+                safe_message="the external child operation must be staged before it can run",
+            )
+            raise CodeModeChildOperationBlocked(self.outcome)
+        budgeted = await charge_budget(call=self.call, context=self.context)
+        if budgeted.status != PolicyToolInvocationOutcome.ALLOWED:
+            self.outcome = budgeted
+            raise CodeModeChildOperationBlocked(budgeted)
+        return await self.proposal_builder.build_proposal(
+            spec=self.context.spec,
+            call=self.call,
+            context=self.context,
+            operation_id=request.operation_id,
+        )
+
+
+class GatewayPolicyToolInvoker:
+    """Route every code-mode external callback through a child operation.
+
+    The legacy invoker stays authoritative while the gateway is off or in
+    shadow mode.  In enforce mode, pure/internal descriptors authorize and
+    dispatch through the gateway; external/unknown descriptors can only use a
+    proposal builder and therefore cannot bypass staging.
+    """
+
+    def __init__(
+        self,
+        *,
+        legacy: object,
+        proposal_builder: ExternalCallProposalBuilder | None = None,
+    ) -> None:
+        self._legacy = legacy
+        self._proposal_builder = proposal_builder
+
+    async def invoke(
+        self,
+        *,
+        call: ExternalFunctionCall,
+        context: PolicyInvocationContext,
+    ) -> PolicyToolInvocationOutcome:
+        active = OperationContext.active()
+        legacy_invoke = getattr(self._legacy, "invoke", None)
+        if not callable(legacy_invoke):
+            return PolicyToolInvocationOutcome(
+                status=PolicyToolInvocationOutcome.DENIED,
+                invocation_id=uuid4().hex,
+                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+                safe_message="code-mode external calls are unavailable",
+            )
+        if active is None or active.mode.value != "enforce":
+            return await legacy_invoke(call=call, context=context)
+
+        capability, op = self._operation_key(context.spec.tool_name)
+        request = OperationRequestFactory.create(
+            capability=capability,
+            op=op,
+            arguments=dict(call.arguments),
+        )
+        adapter = _GatewayChildAdapter(
+            legacy=self._legacy,
+            call=call,
+            context=context,
+            proposal_builder=self._proposal_builder,
+        )
+        try:
+            disposition = await OperationGateway(
+                descriptors=DEFAULT_OPERATION_DESCRIPTORS,
+                gates=BuiltinGatewayGateResolver(),
+            ).invoke(request, adapter)
+        except CodeModeChildOperationBlocked as exc:
+            return exc.outcome
+        except Exception:
+            return PolicyToolInvocationOutcome(
+                status=PolicyToolInvocationOutcome.ERROR,
+                invocation_id=uuid4().hex,
+                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+                safe_message="the code-mode child operation failed safely",
+            )
+        if adapter.outcome is not None:
+            return adapter.outcome
+        if disposition.outcome is OperationOutcome.STAGED:
+            return PolicyToolInvocationOutcome(
+                status=PolicyToolInvocationOutcome.DENIED,
+                invocation_id=uuid4().hex,
+                error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+                safe_message="the external child operation was staged for review",
+            )
+        return PolicyToolInvocationOutcome(
+            status=PolicyToolInvocationOutcome.DENIED,
+            invocation_id=uuid4().hex,
+            error_code=InterpreterErrorCode.EXTERNAL_FUNCTION_DENIED,
+            safe_message=disposition.agent_summary,
+        )
+
+    @staticmethod
+    def _operation_key(tool_name: str) -> tuple[str, str]:
+        """Resolve reviewed built-ins exactly; unknown callbacks stay held."""
+
+        entry = DEFAULT_BUILTIN_OPERATION_CATALOG.resolve_tool_name(tool_name)
+        if entry is not None:
+            if (
+                DEFAULT_OPERATION_DESCRIPTORS.resolve_entry(entry.capability, entry.op)
+                is None
+            ):
+                raise RuntimeError("code-mode callable lacks an exact descriptor")
+            return entry.capability, entry.op
+        descriptor = DEFAULT_OPERATION_DESCRIPTORS.resolve_entry("builtin", tool_name)
+        if descriptor is not None:
+            return descriptor.descriptor.capability, descriptor.descriptor.op
+        # Dynamic names intentionally receive the gateway's unknown/held
+        # classification.  They never fall through to a dispatcher.
+        return "dynamic_tool", "invoke"
 
 
 class InterruptApprovalGate:
@@ -348,10 +613,13 @@ class AuthorizedToolResolver(ExternalFunctionResolver):
 
 __all__ = (
     "AuthorizedToolResolver",
+    "CodeModeChildOperationBlocked",
     "ExternalCallApprovalGate",
+    "ExternalCallProposalBuilder",
     "ExternalCallBudgetGuard",
     "ExternalCallDispatcher",
     "ExternalToolDispatchError",
+    "GatewayPolicyToolInvoker",
     "HitlPolicyToolInvoker",
     "InterruptApprovalGate",
     "LangChainToolDispatcher",

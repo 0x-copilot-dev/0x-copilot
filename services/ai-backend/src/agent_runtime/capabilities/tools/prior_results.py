@@ -9,7 +9,12 @@ from typing import Any
 
 from pydantic import Field, ValidationError
 
+from agent_runtime.capabilities.operations.builtin_adapter import (
+    BuiltinOperationAdapter,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
+
+_OPERATION = BuiltinOperationAdapter(tool_name="load_prior_tool_result")
 
 
 class LoadPriorToolResultInput(RuntimeContract):
@@ -47,17 +52,30 @@ class LoadPriorToolResultTool:
                 "Prior tool result loading is not available for this run.",
             )
 
-        result = load(
-            observation_id=parsed.observation_id,
-            runtime_context=self.runtime_context,
+        async def _legacy() -> dict[str, Any]:
+            result = load(
+                observation_id=parsed.observation_id,
+                runtime_context=self.runtime_context,
+            )
+            if inspect.isawaitable(result):
+                result = await result
+            if isinstance(result, dict):
+                return result
+            return self._fail(
+                "invalid_loader_result",
+                "Prior tool result loading returned an invalid response.",
+            )
+
+        invocation = await _OPERATION.execute(
+            arguments=parsed.model_dump(mode="json"),
+            legacy=_legacy,
+            safe_summary="Prior persisted result was loaded.",
         )
-        if inspect.isawaitable(result):
-            result = await result
-        if isinstance(result, dict):
-            return result
+        if invocation.value is not None:
+            return invocation.value
         return self._fail(
-            "invalid_loader_result",
-            "Prior tool result loading returned an invalid response.",
+            "operation_blocked",
+            invocation.safe_summary,
         )
 
     @classmethod
