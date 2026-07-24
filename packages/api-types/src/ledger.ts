@@ -98,6 +98,32 @@ export const ARTIFACT_EVENT_TYPES = [
   "artifact.presentation_decided",
 ] as const satisfies readonly LedgerEventType[];
 
+/** Canonical operation lifecycle events.  Client projections import this
+ * tuple rather than retyping v2.1 wire values. */
+export const OPERATION_EVENT_TYPES = [
+  "operation.requested",
+  "operation.classified",
+  "operation.completed",
+  "operation.failed",
+] as const satisfies readonly LedgerEventType[];
+
+/** Canonical universal-effect lifecycle events. */
+export const EFFECT_EVENT_TYPES = [
+  "effect.staged",
+  "effect.revised",
+  "effect.decision_recorded",
+  "effect.claimed",
+  "effect.applied",
+  "effect.indeterminate",
+  "effect.reconciled",
+] as const satisfies readonly LedgerEventType[];
+
+/** Canonical v2 gate lifecycle events. */
+export const GATE_V2_EVENT_TYPES = [
+  "gate.opened.v2",
+  "gate.resolved.v2",
+] as const satisfies readonly LedgerEventType[];
+
 /** Canonical artifact events that also travel on the Runtime API event stream.
  * Runtime API contracts import this subset instead of redeclaring SSOT values. */
 export const ARTIFACT_RUNTIME_EVENT_TYPES = [

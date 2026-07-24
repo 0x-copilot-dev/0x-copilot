@@ -4,7 +4,13 @@
 // the persisted SSE/replay envelopes directly, rather than carrying a second
 // React lifecycle flag. Tabs identify subjects, never untrusted titles.
 
-import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
+import {
+  ARTIFACT_EVENT_TYPES,
+  EFFECT_EVENT_TYPES,
+  GATE_V2_EVENT_TYPES,
+  OPERATION_EVENT_TYPES,
+  type RuntimeEventEnvelope,
+} from "@0x-copilot/api-types";
 
 export type CanvasLifecycleState =
   | "assembling"
@@ -50,11 +56,30 @@ interface SubjectAccumulator {
   rendererHint: string | null;
 }
 
-const ACTIVITY_EVENTS = new Set([
-  "operation.requested",
-  "operation.classified",
-  "operation.completed",
-  "operation.failed",
+const [
+  OPERATION_REQUESTED,
+  OPERATION_CLASSIFIED,
+  OPERATION_COMPLETED,
+  OPERATION_FAILED,
+] = OPERATION_EVENT_TYPES;
+const [ARTIFACT_CREATED, ARTIFACT_REVISED, , ARTIFACT_PRESENTATION_DECIDED] =
+  ARTIFACT_EVENT_TYPES;
+const [
+  EFFECT_STAGED,
+  ,
+  ,
+  ,
+  EFFECT_APPLIED,
+  EFFECT_INDETERMINATE,
+  EFFECT_RECONCILED,
+] = EFFECT_EVENT_TYPES;
+const [GATE_OPENED_V2, GATE_RESOLVED_V2] = GATE_V2_EVENT_TYPES;
+
+const ACTIVITY_EVENTS = new Set<string>([
+  OPERATION_REQUESTED,
+  OPERATION_CLASSIFIED,
+  OPERATION_COMPLETED,
+  OPERATION_FAILED,
   "read.executed",
   "tool_result",
   "tool_call_started",
@@ -90,7 +115,7 @@ export function projectCanvasLifecycle(
     const seq = sequence(event);
     if (ACTIVITY_EVENTS.has(type)) activityCount += 1;
     if (type === "final_response") hasFinalResponse = true;
-    if (type === "operation.failed" || type === "run_failed") {
+    if (type === OPERATION_FAILED || type === "run_failed") {
       failure = safeFailure(payload) ?? failure ?? "This run could not finish.";
     }
     if (type === "tool_result" && isFailed(payload)) {
@@ -108,7 +133,7 @@ export function projectCanvasLifecycle(
       terminalStatus = type.slice("run_".length);
     }
 
-    if (type === "artifact.created") {
+    if (type === ARTIFACT_CREATED) {
       const artifactId = text(payload.artifact_id);
       const kind = text(payload.kind) ?? "file";
       const revision = positiveInt(payload.revision);
@@ -130,7 +155,7 @@ export function projectCanvasLifecycle(
         subjects.set(key, candidate);
       continue;
     }
-    if (type === "artifact.revised") {
+    if (type === ARTIFACT_REVISED) {
       const artifactId = text(payload.artifact_id);
       const revision = positiveInt(payload.revision);
       if (artifactId === null || revision === null) continue;
@@ -149,7 +174,7 @@ export function projectCanvasLifecycle(
       }
       continue;
     }
-    if (type === "artifact.presentation_decided") {
+    if (type === ARTIFACT_PRESENTATION_DECIDED) {
       const artifactId = text(payload.artifact_id);
       const decision = text(payload.decision);
       if (artifactId === null || decision === null) continue;
@@ -190,7 +215,7 @@ export function projectCanvasLifecycle(
       if (subject !== undefined) subject.lastSeq = seq;
       continue;
     }
-    if (type === "write.staged" || type === "effect.staged") {
+    if (type === "write.staged" || type === EFFECT_STAGED) {
       const stageId = text(payload.stage_id);
       if (stageId === null) continue;
       const key = `effect:${stageId}`;
@@ -209,9 +234,9 @@ export function projectCanvasLifecycle(
       continue;
     }
     if (
-      type === "effect.applied" ||
-      type === "effect.indeterminate" ||
-      type === "effect.reconciled" ||
+      type === EFFECT_APPLIED ||
+      type === EFFECT_INDETERMINATE ||
+      type === EFFECT_RECONCILED ||
       type === "write.applied"
     ) {
       const key = effectKeys.get(text(payload.stage_id) ?? "");
@@ -222,12 +247,12 @@ export function projectCanvasLifecycle(
       }
       continue;
     }
-    if (type === "gate.opened" || type === "gate.opened.v2") {
+    if (type === "gate.opened" || type === GATE_OPENED_V2) {
       const gateId = text(payload.gate_id);
       if (gateId !== null) openGates.add(gateId);
       continue;
     }
-    if (type === "gate.resolved" || type === "gate.resolved.v2") {
+    if (type === "gate.resolved" || type === GATE_RESOLVED_V2) {
       const gateId = text(payload.gate_id);
       if (gateId !== null) openGates.delete(gateId);
       continue;

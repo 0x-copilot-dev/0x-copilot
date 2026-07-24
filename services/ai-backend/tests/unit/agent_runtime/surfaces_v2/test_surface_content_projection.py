@@ -65,6 +65,19 @@ class TestSurfaceContentProjection:
         )
         assert content == {"s1": {"data": {"id": 1}, "spec": {"archetype": "record"}}}
 
+    def test_production_surface_uri_keys_generated_spec(self) -> None:
+        content = SurfaceContentProjection.fold(
+            [
+                _surface("s1", "call-1"),
+                _tool_result("call-1", {"id": 1}),
+                _Event(
+                    event_type="surface_spec_generated",
+                    payload={"surface_uri": "s1", "spec": {"archetype": "record"}},
+                ),
+            ]
+        )
+        assert content == {"s1": {"data": {"id": 1}, "spec": {"archetype": "record"}}}
+
     def test_legacy_presentation_envelope_is_ignored(self) -> None:
         content = SurfaceContentProjection.fold(
             [

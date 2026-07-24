@@ -148,20 +148,23 @@ class RunSurfacesEndpointMixin:
     async def _append_surface_content(
         producer: RuntimeEventProducer, run: RunRecord
     ) -> None:
-        """Append the v1 ``tool_result`` surface envelope B2 hydrates content from."""
+        """Append the persisted result and derived spec the projection consumes."""
         await producer.append_api_event(
             run=run,
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.TOOL_RESULT,
             payload={
-                "surface": {
-                    "surface_uri": "record://linear/get_issue/issue-1",
-                    "archetype": "record",
-                    "state": {
-                        "spec": {"archetype": "record"},
-                        "data": {"id": "ENG-1", "title": "Fix"},
-                    },
-                }
+                "call_id": "call_1",
+                "output": {"id": "ENG-1", "title": "Fix"},
+            },
+        )
+        await producer.append_api_event(
+            run=run,
+            source=StreamEventSource.SYSTEM,
+            event_type=RuntimeApiEventType.SURFACE_SPEC_GENERATED,
+            payload={
+                "surface_uri": "record://linear/get_issue/issue-1",
+                "spec": {"archetype": "record"},
             },
         )
 

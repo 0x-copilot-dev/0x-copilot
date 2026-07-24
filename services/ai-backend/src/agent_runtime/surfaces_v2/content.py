@@ -30,6 +30,11 @@ class _Key:
     PAYLOAD_REF = "payload_ref"
     SPEC = "spec"
     SURFACE_ID = "surface_id"
+    # ``surface_spec_generated`` predates v2 ledger events and publishes the
+    # stable surface identity as ``surface_uri``.  The v2 alias stays accepted
+    # for replay compatibility, but production generation always uses this
+    # canonical field.
+    SURFACE_URI = "surface_uri"
 
 
 class SurfaceContentProjection:
@@ -77,8 +82,8 @@ class SurfaceContentProjection:
                     output_by_call[call_id] = payload[_Key.OUTPUT]
             elif event_type == _EventType.SURFACE_SPEC_GENERATED:
                 surface_id = SurfaceContentProjection._text(
-                    payload.get(_Key.SURFACE_ID)
-                )
+                    payload.get(_Key.SURFACE_URI)
+                ) or SurfaceContentProjection._text(payload.get(_Key.SURFACE_ID))
                 spec = payload.get(_Key.SPEC)
                 if surface_id in refs and isinstance(spec, Mapping):
                     spec_by_surface[surface_id] = dict(spec)
