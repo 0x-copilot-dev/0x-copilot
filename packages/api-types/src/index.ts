@@ -2397,9 +2397,9 @@ export interface ApprovalUndoRequestedPayload {
   [key: string]: unknown;
 }
 
-<<<<<<< HEAD
 export interface RuntimeEventPayloadByType
-  extends ArtifactRuntimeEventPayloadMap,
+  extends
+    ArtifactRuntimeEventPayloadMap,
     Pick<LedgerEventPayloadMap, RuntimeLedgerV21EventType> {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;

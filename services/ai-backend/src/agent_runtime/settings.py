@@ -422,8 +422,6 @@ class RuntimeSettings(BaseSettings):
                         OperationGatewayMode.OFF.value,
                     ).lower()
                 ),
-                artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
-                in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
