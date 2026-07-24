@@ -88,6 +88,9 @@ from runtime_api.sse.event_bus import (
 )
 from runtime_api.sse.postgres_event_bus import PostgresEventBus
 from runtime_worker import RuntimeWorker
+from agent_runtime.capabilities.operations.context import (
+    OperationGatewayStartupGuard,
+)
 
 
 # Structured logger for run-executor topology decisions. A "no run executor"
@@ -133,6 +136,10 @@ class RuntimeApiAppFactory:
         ``app.state`` so handlers can retrieve it via ``request.app.state``
         without module-level singletons or circular imports.
         """
+        settings = settings or RuntimeSettings.load()
+        OperationGatewayStartupGuard.validate(
+            mode=settings.execution.operation_gateway_mode,
+        )
         if configure_logging_on_create:
             LoggingConfigurator.configure()
         if configure_telemetry_on_create:
@@ -202,7 +209,6 @@ class RuntimeApiAppFactory:
             project_resolver=project_resolver,
             app=app,
         )
-
         # Expose ports and coordinators on app.state so route handlers and
         # lifespan helpers can access them via request.app.state.
         # Expose the resolved settings on state for both the production

@@ -15,6 +15,9 @@ from agent_runtime.api.ports import (
     PersistencePort,
     RuntimeQueuePort,
 )
+from agent_runtime.capabilities.operations.context import (
+    OperationGatewayStartupGuard,
+)
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
@@ -75,6 +78,9 @@ class RuntimeWorker:
         self.event_store: EventStorePort = event_store
         self.queue: RuntimeQueuePort = queue
         self.settings = settings or RuntimeSettings.load()
+        OperationGatewayStartupGuard.validate(
+            mode=self.settings.execution.operation_gateway_mode,
+        )
         self.worker_id = worker_id or f"runtime-worker-{uuid4().hex[:8]}"
         self.lock_seconds = lock_seconds
         self.retry_delay_seconds = retry_delay_seconds

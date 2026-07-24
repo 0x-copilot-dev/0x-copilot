@@ -1,4 +1,5 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
+import { LEDGER_EVENT_TYPES as WORK_LEDGER_EVENT_TYPES } from "./ledger";
 
 export type {
   ArtifactCreateMultipartFields,
@@ -203,6 +204,7 @@ import type {
 import type {
   ArtifactRuntimeEventPayloadMap,
   ArtifactRuntimeEventType,
+  LedgerEventPayloadMap,
   UsageRecordedPayload,
   ActionClassifiedPayload,
   ReadExecutedPayload,
@@ -219,7 +221,6 @@ import type {
   WriteAppliedPayload,
   ReceiptEmittedPayload,
 } from "./ledger";
-import { ARTIFACT_RUNTIME_EVENT_TYPES } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
@@ -477,6 +478,21 @@ export type RuntimeEventSource =
   | "subagent"
   | "summarization"
   | "system";
+
+// A1 owns these append-only tuple positions. Runtime transport references the
+// canonical ledger mirror instead of redeclaring v2.1 wire literals here.
+const RUNTIME_LEDGER_V21_EVENT_TYPES = [
+  WORK_LEDGER_EVENT_TYPES[15],
+  WORK_LEDGER_EVENT_TYPES[16],
+  WORK_LEDGER_EVENT_TYPES[17],
+  WORK_LEDGER_EVENT_TYPES[18],
+  WORK_LEDGER_EVENT_TYPES[19],
+  WORK_LEDGER_EVENT_TYPES[20],
+  WORK_LEDGER_EVENT_TYPES[21],
+] as const;
+type RuntimeLedgerV21EventType =
+  (typeof RUNTIME_LEDGER_V21_EVENT_TYPES)[number];
+
 export type RuntimeApiEventType =
   | "run_queued"
   | "run_started"
@@ -538,6 +554,7 @@ export type RuntimeApiEventType =
   | "write.applied"
   | "receipt.emitted"
   | ArtifactRuntimeEventType
+  | RuntimeLedgerV21EventType
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -611,7 +628,10 @@ export const RUNTIME_API_EVENT_TYPES = [
   "decision.recorded",
   "write.applied",
   "receipt.emitted",
-  ...ARTIFACT_RUNTIME_EVENT_TYPES,
+  // Artifact-created/revised/promoted are positions 19–21 in the v2.1 ledger
+  // slice above. Keeping a single spread makes the backend contract parser
+  // resolve the transport tuple without following imports across files.
+  ...RUNTIME_LEDGER_V21_EVENT_TYPES,
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2378,7 +2398,10 @@ export interface ApprovalUndoRequestedPayload {
   [key: string]: unknown;
 }
 
-export interface RuntimeEventPayloadByType extends ArtifactRuntimeEventPayloadMap {
+export interface RuntimeEventPayloadByType
+  extends
+    ArtifactRuntimeEventPayloadMap,
+    Pick<LedgerEventPayloadMap, RuntimeLedgerV21EventType> {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;
   run_cancelling: RuntimeLifecyclePayload;

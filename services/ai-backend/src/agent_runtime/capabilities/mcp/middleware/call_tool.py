@@ -35,6 +35,7 @@ from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.surfaces.generator import (
     GenToolDescriptor,
     SurfaceGenerationScheduler,
@@ -136,12 +137,25 @@ class CallMcpTool:
         try:
             client = resolution.provider.create_client(resolution.card)
             dispatch_started = time.perf_counter()
-            output = await asyncio.wait_for(
-                client.call_tool(
-                    tool_name=parsed_input.tool_name,
-                    arguments=parsed_input.arguments,
+
+            async def _dispatch() -> object:
+                return await asyncio.wait_for(
+                    client.call_tool(
+                        tool_name=parsed_input.tool_name,
+                        arguments=parsed_input.arguments,
+                    ),
+                    timeout=self.loader.timeout_seconds,
+                )
+
+            output = await OperationShadowProbe.invoke_legacy(
+                capability=parsed_input.server_name,
+                op=parsed_input.tool_name,
+                arguments=parsed_input.arguments,
+                legacy=_dispatch,
+                legacy_class=OperationShadowProbe.legacy_mcp_effect_class(
+                    parsed_input.server_name,
+                    parsed_input.tool_name,
                 ),
-                timeout=self.loader.timeout_seconds,
             )
             dispatch_latency_ms = int((time.perf_counter() - dispatch_started) * 1000)
         except (McpTimeoutError, TimeoutError):

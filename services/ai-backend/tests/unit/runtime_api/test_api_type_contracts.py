@@ -3,6 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from copilot_service_contracts.work_ledger import LEDGER_EVENT_TYPES
+
 from agent_runtime.execution.contracts import StreamEventSource
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -63,6 +65,21 @@ class TestApiTypeContracts:
 
     @classmethod
     def _string_array(cls, source: str, name: str) -> set[str]:
-        match = re.search(rf"export const {name} = \[(.*?)\] as const", source, re.S)
+        match = re.search(
+            rf"(?:export )?const {name} = \[(.*?)\] as const",
+            source,
+            re.S,
+        )
         assert match is not None
-        return set(re.findall(r'"([^"]+)"', match.group(1)))
+        body = match.group(1)
+        values = set(re.findall(r'"([^"]+)"', body))
+        values.update(
+            LEDGER_EVENT_TYPES[int(index)]
+            for index in re.findall(
+                r"WORK_LEDGER_EVENT_TYPES\[(\d+)\]",
+                body,
+            )
+        )
+        for spread in re.findall(r"\.\.\.([A-Z][A-Z0-9_]*)", body):
+            values.update(cls._string_array(source, spread))
+        return values

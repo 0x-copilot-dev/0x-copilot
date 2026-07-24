@@ -63,8 +63,18 @@ from agent_runtime.capabilities.mcp.annotations import (
     McpToolAnnotations,
     McpToolAnnotationsRegistry,
 )
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationEventEmitterAdapter,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
+)
+from agent_runtime.capabilities.tools.tool_use_enforcement import (
+    ToolUsePolicyResolver,
 )
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.persistence.ports import (
@@ -359,6 +369,7 @@ class RuntimeRunHandler:
             if work_ledger_emitter is not None
             else None
         )
+        operation_context_token: object | None = None
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -397,6 +408,25 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         try:
+            if (
+                self.settings.execution.operation_gateway_mode
+                is not OperationGatewayMode.OFF
+            ):
+                operation_context_token = OperationContext.bind_for_run(
+                    identity=VerifiedOperationIdentity(
+                        org_id=run.org_id,
+                        user_id=run.user_id,
+                        conversation_id=run.conversation_id,
+                        run_id=run.run_id,
+                    ),
+                    policy_snapshot=ToolUsePolicyResolver.resolve(
+                        command.runtime_context
+                    ),
+                    ledger_emitter=self._build_operation_ledger_emitter(run),
+                    artifact_service=None,
+                    mode=self.settings.execution.operation_gateway_mode,
+                    canonical_arguments_durable=False,
+                )
             tool_observation_index = await self._tool_observation_index(command, run)
             workspace_backend = await self._workspace_backend_for_run(command)
             dependencies = self._dependencies_for_run(
@@ -460,6 +490,7 @@ class RuntimeRunHandler:
                     value=result,
                 ):
                     result = {self._Fields.ACTION_REQUIRED: True}
+            await OperationShadowProbe.observe_model_result(result)
             if self._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -593,6 +624,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if operation_context_token is not None:
+                OperationContext.unbind(operation_context_token)  # type: ignore[arg-type]
             if work_ledger_emitter_token is not None:
                 WorkLedgerEmitter.unbind(work_ledger_emitter_token)
             if surface_scheduler_token is not None:
@@ -1163,9 +1196,6 @@ class RuntimeRunHandler:
         from agent_runtime.capabilities.actions.policy import (  # noqa: PLC0415
             ConnectorWritePolicyOverrides,
             EffectiveActionPolicyResolver,
-        )
-        from agent_runtime.capabilities.tools.tool_use_enforcement import (  # noqa: PLC0415
-            ToolUsePolicyResolver,
         )
         from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (  # noqa: PLC0415
             StageRowsetWriteTool,
@@ -1805,6 +1835,26 @@ class RuntimeRunHandler:
             )
 
         return WorkLedgerEmitter(emit=_emit)
+
+    def _build_operation_ledger_emitter(
+        self, run: RunRecord
+    ) -> OperationEventEmitterAdapter:
+        """Bind v2.1 operation rows to the existing append-only run transport."""
+
+        async def _emit(
+            event_type_value: str,
+            payload: Mapping[str, object],
+            summary: str | None,
+        ) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SYSTEM,
+                event_type=RuntimeApiEventType(event_type_value),
+                summary=summary,
+                payload=dict(payload),
+            )
+
+        return OperationEventEmitterAdapter(emit_fn=_emit)
 
     async def _bind_conversation_ordinal_allocator(
         self,
