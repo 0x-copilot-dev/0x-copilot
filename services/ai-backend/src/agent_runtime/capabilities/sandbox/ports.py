@@ -8,19 +8,29 @@ orchestration does not change.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from agent_runtime.capabilities.sandbox.contracts import (
+    ArtifactRef,
     ManagedSandboxSession,
+    SandboxArtifactPublication,
     SandboxCreateRequest,
     SandboxIsolationAttestation,
     SandboxLifecycleRecord,
+    SandboxPatchImportRequest,
+    SandboxRunRequest,
+    SandboxUsageAttribution,
 )
 
 if TYPE_CHECKING:
     from deepagents.backends.protocol import SandboxBackendProtocol
+    from agent_runtime.capabilities.sandbox.remote_execution_service import (
+        ActiveSandbox,
+    )
+    from agent_runtime.capabilities.sandbox.workspace_transfer import RawSnapshotEntry
 
 
 @dataclass(frozen=True)
@@ -173,3 +183,118 @@ class SandboxEvent:
     region: str | None = None
     detail: str | None = None
     at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class SandboxProcessOutput:
+    """Raw provider command result before D3 redaction and preview bounding."""
+
+    stdout: str
+    stderr: str
+    exit_code: int | None
+    duration_ms: int
+    truncated: bool = False
+
+
+@dataclass(frozen=True)
+class SandboxDownloadedFile:
+    """One provider file stream. Bytes are never placed in durable events."""
+
+    path: str
+    chunks: AsyncIterator[bytes]
+
+
+@dataclass(frozen=True)
+class SandboxPatchCollection:
+    """Verified provider listing used to construct a canonical patch manifest."""
+
+    result_entries: Mapping[str, "RawSnapshotEntry"]
+    directories: tuple[str, ...] = ()
+    moves: Mapping[str, str] = field(default_factory=dict)
+    complete: bool = True
+
+
+@runtime_checkable
+class SandboxSnapshotContentPort(Protocol):
+    """Authorized exact-byte reader for input artifact refs.
+
+    C3 provides a snapshot assembled from a versioned overlay. The coordinator
+    never accepts a local path, broker handle, or mutable mount as a substitute.
+    """
+
+    async def open(self, ref: ArtifactRef) -> AsyncIterator[bytes]:
+        """Open one authorized immutable snapshot blob."""
+        ...
+
+
+@runtime_checkable
+class SandboxRuntimePort(Protocol):
+    """Provider-independent execution/transfer surface used by D3."""
+
+    async def upload(
+        self,
+        *,
+        active: "ActiveSandbox",
+        request: SandboxRunRequest,
+        source: SandboxSnapshotContentPort,
+    ) -> int:
+        """Transfer and verify the approved snapshot; return uploaded bytes."""
+        ...
+
+    async def execute(
+        self, *, active: "ActiveSandbox", command: str
+    ) -> SandboxProcessOutput:
+        """Execute exactly one approved command in the active session."""
+        ...
+
+    async def download(
+        self,
+        *,
+        active: "ActiveSandbox",
+        paths: tuple[str, ...],
+    ) -> tuple[SandboxDownloadedFile, ...]:
+        """Return exact-byte deliverable streams for approved virtual paths."""
+        ...
+
+
+@runtime_checkable
+class SandboxPatchCollectorPort(Protocol):
+    """Provider-specific post-run workspace enumeration, isolated from C3."""
+
+    async def collect(
+        self, *, active: "ActiveSandbox", request: SandboxRunRequest
+    ) -> SandboxPatchCollection:
+        """Return a complete verified listing or mark the collection incomplete."""
+        ...
+
+
+@runtime_checkable
+class SandboxArtifactPublisherPort(Protocol):
+    """A2-backed exact-byte artifact publication boundary."""
+
+    async def publish(
+        self,
+        *,
+        publication: SandboxArtifactPublication,
+        chunks: AsyncIterator[bytes],
+    ) -> ArtifactRef:
+        """Persist one bounded stream and return a digest-matching artifact ref."""
+        ...
+
+
+@runtime_checkable
+class SandboxUsageMeterPort(Protocol):
+    """Once-only provider usage attribution keyed by sandbox operation id."""
+
+    async def record_once(self, attribution: SandboxUsageAttribution) -> None:
+        """Durably record usage, treating an identical operation retry as a no-op."""
+        ...
+
+
+@runtime_checkable
+class SandboxPatchImportPort(Protocol):
+    """C3 handoff: import a complete patch into an overlay, never host files."""
+
+    async def import_patch(self, request: SandboxPatchImportRequest) -> str:
+        """Return an opaque overlay revision ref after validation/staging."""
+        ...
