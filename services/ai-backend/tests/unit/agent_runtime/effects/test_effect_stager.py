@@ -85,6 +85,15 @@ async def test_approve_pins_exact_digests_and_enqueues_one_body_free_command() -
     assert "proposal_ref" not in type(command).model_fields
     assert "executor" not in type(command).model_fields
     emitted_payload = ledger.events_by_stage[state.stage_id][0].payload
+    assert {event.payload["v"] for event in ledger.events_by_stage[state.stage_id]} == {
+        1
+    }
+    assert emitted_payload["v"] == 1
+    assert emitted_payload["proposal_ref"] == f"proposal://{state.stage_id}/revisions/1"
+    assert emitted_payload["proposal_content_ref"] == proposed.proposal_content_ref
+    assert state.current_revision.proposal_ref == emitted_payload["proposal_ref"]
+    assert state.current_revision.proposal_content_ref == proposed.proposal_content_ref
+    assert state.current_revision.is_executable
     assert "body" not in emitted_payload
     assert "raw_args" not in emitted_payload
     assert all(
@@ -149,6 +158,20 @@ async def test_invalid_or_stale_mutations_emit_nothing() -> None:
             actor=user(),
             idempotency_key="changed-target",
         )
+    with pytest.raises(EffectStageImmutableTarget):
+        await stager.revise(
+            scope=scope(),
+            stage_id=state.stage_id,
+            expected_revision=1,
+            proposal=revision_from(proposed).model_copy(
+                update={
+                    "precondition_ref": "precondition://targets/changed-token",
+                    "precondition_digest": "e" * 64,
+                }
+            ),
+            actor=user(),
+            idempotency_key="changed-precondition",
+        )
 
     assert ledger.append_calls == baseline
     assert outbox.enqueue_calls == 0
@@ -200,7 +223,7 @@ async def test_revision_kind_must_remain_compatible_with_immutable_executor() ->
 async def test_revision_after_approval_supersedes_that_approval_and_returns_held() -> (
     None
 ):
-    stager, _, outbox = _stager()
+    stager, ledger, outbox = _stager()
     state, proposed = await _stage(stager)
     await stager.decide(
         scope=scope(),
@@ -224,6 +247,21 @@ async def test_revision_after_approval_supersedes_that_approval_and_returns_held
 
     assert revised.status is EffectStageStatus.HELD
     assert revised.current_revision.revision == 2
+    assert (
+        revised.current_revision.proposal_ref
+        == f"proposal://{state.stage_id}/revisions/2"
+    )
+    assert (
+        revised.current_revision.proposal_content_ref
+        == revision_from(proposed).proposal_content_ref
+    )
+    revised_payload = ledger.events_by_stage[state.stage_id][-1].payload
+    assert revised_payload["v"] == 1
+    assert revised_payload["proposal_ref"] == revised.current_revision.proposal_ref
+    assert (
+        revised_payload["proposal_content_ref"]
+        == revised.current_revision.proposal_content_ref
+    )
     assert revised.decision is None
     assert revised.superseded_revision == 1
     assert outbox.enqueue_calls == 1

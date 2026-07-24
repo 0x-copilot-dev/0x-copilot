@@ -20,11 +20,12 @@ from agent_runtime.effects.contracts import (
     EffectStageScope,
     EffectStageState,
     EffectStageStatus,
-    ProposedEffect,
+    validate_proposal_content_ref,
 )
 from agent_runtime.effects.errors import EffectStageNotFound
 from agent_runtime.effects.ports import StructuralEvent
 from agent_runtime.surfaces_v2.entities import EffectTarget
+from agent_runtime.surfaces_v2.ledger_ids import ProposalUriCodec
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectClass,
@@ -75,30 +76,21 @@ class EffectStageFold:
     def _state_from_staged(cls, event: StructuralEvent) -> EffectStageState | None:
         payload = event.payload
         try:
+            _validate_payload_version(payload)
+            stage_id = _string(payload, "stage_id")
+            proposal_ref, proposal_content_ref = _normalise_proposal_references(
+                payload=payload,
+                stage_id=stage_id,
+                revision=1,
+            )
+            executor = EffectExecutorKind(_string(payload, "executor"))
             target = EffectTarget(
-                executor=EffectExecutorKind(_string(payload, "executor")),
+                executor=executor,
                 capability=_string(payload, "capability"),
                 op=_string(payload, "op"),
                 target_ref=_string(payload, "target_ref"),
                 precondition_ref=_optional_string(payload, "precondition_ref"),
                 display_label=_string(payload, "display_target"),
-            )
-            proposed = ProposedEffect(
-                operation_id=_string(payload, "operation_id"),
-                executor=EffectExecutorKind(_string(payload, "executor")),
-                target=target,
-                target_digest=_string(payload, "target_digest"),
-                display_target=_string(payload, "display_target"),
-                proposal_kind=_string(payload, "proposal_kind"),
-                proposal_ref=_string(payload, "proposal_ref"),
-                proposal_digest=_string(payload, "proposal_digest"),
-                proposal_media_type=_string(payload, "proposal_media_type"),
-                precondition_ref=_optional_string(payload, "precondition_ref"),
-                precondition_digest=_optional_string(payload, "precondition_digest"),
-                effect_class=EffectClass(_string(payload, "effect_class")),
-                policy_snapshot_ref=_string(payload, "policy_snapshot_ref"),
-                agent_hold=_bool(payload, "agent_hold"),
-                safe_summary_ref=_optional_string(payload, "safe_summary_ref"),
             )
             policy = EffectPolicy(_string(payload, "policy"))
             author = EffectActorIdentity(
@@ -109,31 +101,32 @@ class EffectStageFold:
             created_at = _string(payload, "created_at")
             revision = EffectStageRevision(
                 revision=1,
-                proposal_kind=proposed.proposal_kind,
-                proposal_ref=proposed.proposal_ref,
-                proposal_digest=proposed.proposal_digest,
-                proposal_media_type=proposed.proposal_media_type,
-                target_ref=proposed.target.target_ref,
-                target_digest=proposed.target_digest,
-                display_target=proposed.display_target,
-                precondition_ref=proposed.precondition_ref,
-                precondition_digest=proposed.precondition_digest,
+                proposal_kind=_string(payload, "proposal_kind"),
+                proposal_ref=proposal_ref,
+                proposal_content_ref=proposal_content_ref,
+                proposal_digest=_string(payload, "proposal_digest"),
+                proposal_media_type=_string(payload, "proposal_media_type"),
+                target_ref=target.target_ref,
+                target_digest=_string(payload, "target_digest"),
+                display_target=_string(payload, "display_target"),
+                precondition_ref=_optional_string(payload, "precondition_ref"),
+                precondition_digest=_optional_string(payload, "precondition_digest"),
                 safe_diff_ref=None,
                 author=author,
                 created_at=created_at,
             )
             return EffectStageState(
-                stage_id=_string(payload, "stage_id"),
+                stage_id=stage_id,
                 scope=EffectStageScope(run_id=event.run_id, owner_ref=owner_ref),
-                operation_id=proposed.operation_id,
-                executor=proposed.executor,
-                target=proposed.target,
-                target_digest=proposed.target_digest,
-                display_target=proposed.display_target,
-                effect_class=proposed.effect_class,
-                policy_snapshot_ref=proposed.policy_snapshot_ref,
+                operation_id=_string(payload, "operation_id"),
+                executor=executor,
+                target=target,
+                target_digest=_string(payload, "target_digest"),
+                display_target=_string(payload, "display_target"),
+                effect_class=EffectClass(_string(payload, "effect_class")),
+                policy_snapshot_ref=_string(payload, "policy_snapshot_ref"),
                 policy=policy,
-                agent_hold=proposed.agent_hold,
+                agent_hold=_bool(payload, "agent_hold"),
                 revisions=(revision,),
                 status=(
                     EffectStageStatus.PROPOSED
@@ -157,13 +150,20 @@ class EffectStageFold:
             return state
         payload = event.payload
         try:
+            _validate_payload_version(payload)
             revision_no = _integer(payload, "revision")
             if revision_no != state.current_revision.revision + 1:
                 return state
+            proposal_ref, proposal_content_ref = _normalise_proposal_references(
+                payload=payload,
+                stage_id=state.stage_id,
+                revision=revision_no,
+            )
             revision = EffectStageRevision(
                 revision=revision_no,
                 proposal_kind=_string(payload, "proposal_kind"),
-                proposal_ref=_string(payload, "proposal_ref"),
+                proposal_ref=proposal_ref,
+                proposal_content_ref=proposal_content_ref,
                 proposal_digest=_string(payload, "proposal_digest"),
                 proposal_media_type=_string(payload, "proposal_media_type"),
                 target_ref=_string(payload, "target_ref"),
@@ -218,6 +218,7 @@ class EffectStageFold:
             return state
         payload = event.payload
         try:
+            _validate_payload_version(payload)
             decision = EffectStageDecision(
                 revision=_integer(payload, "revision"),
                 decision=EffectDecisionKind(_string(payload, "decision")),
@@ -279,6 +280,36 @@ def _revision_retains_target(
 def _event_stage_id(event: StructuralEvent) -> str | None:
     value = event.payload.get("stage_id")
     return value if isinstance(value, str) else None
+
+
+def _normalise_proposal_references(
+    *,
+    payload: dict[str, object],
+    stage_id: str,
+    revision: int,
+) -> tuple[str, str | None]:
+    """Normalize historical v1 events into the two-reference domain form."""
+
+    raw_identity = _string(payload, "proposal_ref")
+    content_ref = _optional_string(payload, "proposal_content_ref")
+    canonical_identity = ProposalUriCodec.format(stage_id, revision)
+    try:
+        parsed = ProposalUriCodec.parse(raw_identity)
+    except ValueError:
+        if content_ref is not None:
+            raise ValueError(
+                "proposal_ref is neither canonical nor a legacy content ref"
+            )
+        return canonical_identity, validate_proposal_content_ref(raw_identity)
+    if parsed.stage_id != stage_id or parsed.revision != revision:
+        raise ValueError("proposal_ref does not identify this stage revision")
+    return raw_identity, content_ref
+
+
+def _validate_payload_version(payload: dict[str, object]) -> None:
+    version = payload.get("v", 1)
+    if not isinstance(version, int) or isinstance(version, bool) or version != 1:
+        raise ValueError("effect event payload version must be 1")
 
 
 def _string(payload: dict[str, object], key: str) -> str:
