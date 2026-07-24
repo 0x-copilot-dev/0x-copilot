@@ -84,6 +84,48 @@ class RuntimeStageCommitCommand(RuntimeContract):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class RuntimeEffectCommitCommand(RuntimeContract):
+    """Durable transport envelope for one digest-pinned A4 effect approval.
+
+    This command intentionally carries references, digests, and the decision ledger
+    identifier only.  Proposal bytes, target bodies, credentials, and executor
+    arguments are resolved by the A5 worker coordinator after it has revalidated
+    the approved stage.  Enqueueing this command therefore cannot execute an
+    effect inline.
+    """
+
+    command_id: str = Field(default_factory=lambda: uuid4().hex)
+    org_id: str = Field(min_length=1, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    conversation_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    stage_id: str = Field(min_length=1, max_length=128)
+    revision: PositiveInt
+    decision_ledger_id: str = Field(min_length=1, max_length=128)
+    proposal_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    target_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class RuntimeEffectReconcileCommand(RuntimeContract):
+    """Durable request to reconcile an existing uncertain A5 effect claim.
+
+    The command has no proposal or target body and cannot create a new effect. It
+    names only the durable tenant/run/claim scope. The worker must rehydrate the
+    stage and principal from the claim and run records before asking an executor
+    to reconcile that already-claimed attempt.
+    """
+
+    command_id: str = Field(default_factory=lambda: uuid4().hex)
+    org_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    claim_id: str = Field(min_length=1, max_length=128)
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class RuntimeArtifactEventCommand(RuntimeContract):
     """Durable publication of one canonical artifact ledger event.
 

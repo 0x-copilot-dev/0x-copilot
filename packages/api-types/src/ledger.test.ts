@@ -24,6 +24,7 @@ import {
   type EffectExecutorKind,
   type EffectOutcome,
   type EffectPolicy,
+  type EffectProposalKind,
   type EffectStageStatus,
   type GateAuthState,
   type GateDecision,
@@ -219,6 +220,15 @@ const ENUM_TUPLES = {
     "sandbox",
     "builtin",
   ] as const satisfies readonly EffectExecutorKind[],
+  effect_proposal_kind: [
+    "canonical_arguments",
+    "artifact_revision",
+    "workspace_change_set",
+    "row_set",
+    "browser_submission",
+    "sandbox_patch",
+    "builtin_payload",
+  ] as const satisfies readonly EffectProposalKind[],
   effect_stage_status: [
     "staged",
     "approved",
