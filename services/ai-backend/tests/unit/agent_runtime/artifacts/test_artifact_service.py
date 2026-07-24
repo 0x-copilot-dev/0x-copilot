@@ -332,7 +332,16 @@ class TestArtifactService(ArtifactServiceFakes):
         assert metadata.create_command is not None
         assert tuple(
             event.event_type for event in metadata.create_command.ledger_events
-        ) == (LedgerEventType.ARTIFACT_CREATED,)
+        ) == (
+            LedgerEventType.ARTIFACT_CREATED,
+            LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
+        )
+        assert metadata.create_command.ledger_events[1].payload == {
+            "v": 1,
+            "artifact_id": result.record.artifact.artifact_id,
+            "decision": "canvas",
+            "basis": "durable_supported_artifact_auto",
+        }
         assert "print" not in str(metadata.create_command.ledger_events)
         assert blobs.put_calls == 1
 
@@ -360,7 +369,10 @@ class TestArtifactService(ArtifactServiceFakes):
         assert metadata.create_command.idempotency.route == "INTERNAL:artifact.publish"
         assert tuple(
             event.event_type for event in metadata.create_command.ledger_events
-        ) == (LedgerEventType.ARTIFACT_CREATED,)
+        ) == (
+            LedgerEventType.ARTIFACT_CREATED,
+            LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
+        )
         assert "published" not in str(metadata.create_command.ledger_events)
 
     @pytest.mark.asyncio
@@ -458,6 +470,7 @@ class TestArtifactService(ArtifactServiceFakes):
             event.event_type for event in metadata.create_command.ledger_events
         ) == (
             LedgerEventType.ARTIFACT_CREATED,
+            LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
             LedgerEventType.ARTIFACT_PROMOTED,
         )
         promoted = metadata.create_command.ledger_events[-1]
@@ -497,7 +510,10 @@ class TestArtifactService(ArtifactServiceFakes):
         assert revision.source_ref == source_ref
         assert tuple(
             event.event_type for event in metadata.create_command.ledger_events
-        ) == (LedgerEventType.ARTIFACT_CREATED,)
+        ) == (
+            LedgerEventType.ARTIFACT_CREATED,
+            LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
+        )
 
     @pytest.mark.asyncio
     async def test_range_stream_returns_exact_bytes(self) -> None:

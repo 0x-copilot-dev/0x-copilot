@@ -29,6 +29,7 @@ from agent_runtime.surfaces_v2.ledger_ids import (
 from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
     ArtifactKind,
+    ArtifactPresentationPreference,
     LedgerEventType,
     WorkLedgerVocabulary,
 )
@@ -167,6 +168,12 @@ class ArtifactCreateRequest(RuntimeContract):
     title: SafeTitle
     media_type: SafeMediaType
     suggested_filename: SafeFilename | None = None
+    # Presentation is a request persisted with the canonical artifact create
+    # command so the outbox can emit the decision atomically with creation.
+    # A caller cannot turn this into a renderer name or arbitrary UI config.
+    presentation_preference: ArtifactPresentationPreference = (
+        ArtifactPresentationPreference.AUTO
+    )
     expected_digest: Sha256Hex | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
 
@@ -305,6 +312,7 @@ class ArtifactLedgerEvent(RuntimeContract):
             LedgerEventType.ARTIFACT_CREATED,
             LedgerEventType.ARTIFACT_REVISED,
             LedgerEventType.ARTIFACT_PROMOTED,
+            LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
         }:
             raise ValueError("artifact repository outbox accepts artifact events only")
         WorkLedgerVocabulary.validate_payload(self.event_type, self.payload)

@@ -169,7 +169,11 @@ class SurfaceViewCoordinator:
         events, snapshot = await self._load_surface(
             org_id=org_id, run_id=run_id, surface_id=surface_id
         )
-        payload = self._stored_payload(events, surface_id=surface_id)
+        payload = self._stored_payload(
+            events,
+            surface_id=surface_id,
+            payload_ref=snapshot.payload_ref,
+        )
         regen_count = self._regen_count(events, surface_id=surface_id)
 
         deriver, sink = self._build_deriver(
@@ -332,7 +336,13 @@ class SurfaceViewCoordinator:
                 return list(events), snapshot
         raise self._surface_not_found()
 
-    def _stored_payload(self, events, *, surface_id: str) -> object:
+    def _stored_payload(
+        self,
+        events,
+        *,
+        surface_id: str,
+        payload_ref: str,
+    ) -> object:
         """The stored tool-output payload for a surface (B2 content fold).
 
         Prefers the surface's ``data`` (the tool output shape a spec is generated
@@ -340,7 +350,10 @@ class SurfaceViewCoordinator:
         present. ``None`` ⇒ the deriver raises ``surface_not_found``.
         """
 
-        content = SurfaceContentProjection.fold(events)
+        content = SurfaceContentProjection.fold(
+            events,
+            surface_payload_refs={surface_id: payload_ref},
+        )
         state = content.get(surface_id)
         if not isinstance(state, Mapping):
             return None

@@ -163,6 +163,7 @@ class RuntimeArtifactEventCommand(RuntimeContract):
             LedgerEventType.ARTIFACT_CREATED,
             LedgerEventType.ARTIFACT_REVISED,
             LedgerEventType.ARTIFACT_PROMOTED,
+            LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
         }:
             raise ValueError("artifact event command accepts artifact events only")
         WorkLedgerVocabulary.validate_payload(self.event_type, self.payload)

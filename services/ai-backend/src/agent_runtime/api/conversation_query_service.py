@@ -679,12 +679,11 @@ class ConversationQueryService:
         and honest. Scope check mirrors ``replay_events`` (404 on wrong-tenant or
         unknown run).
 
-        PRD-B2 — content hydration: each metadata snapshot is enriched with its
-        materialized ``state`` (``{spec?, data}``), resolved from the same events
-        by ``SurfaceContentProjection`` (the v1 surface envelope keyed by
-        ``surface_uri == surface_id``). The content fold runs only when the
-        metadata fold produced surfaces — with the flag off there are none, so the
-        response is byte-identical to before (empty ``surfaces``, no wasted scan).
+        PRD-B3 — content hydration: each metadata snapshot is enriched only by
+        resolving its declared ``payload_ref`` against the matching persisted
+        tool result. The content fold runs only when the metadata fold produced
+        surfaces — with the flag off there are none, so the response stays empty
+        and no presentation envelope is consulted.
         """
 
         await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -694,7 +693,17 @@ class ConversationQueryService:
             after_sequence=0,
         )
         state = SurfaceStoreProjection.fold(run_id, events)
-        content = SurfaceContentProjection.fold(events) if state.surfaces else {}
+        content = (
+            SurfaceContentProjection.fold(
+                events,
+                surface_payload_refs={
+                    snapshot.surface_id: snapshot.payload_ref
+                    for snapshot in state.surfaces
+                },
+            )
+            if state.surfaces
+            else {}
+        )
         surfaces = tuple(
             HydratedSurfaceSnapshot(
                 **snapshot.model_dump(),
