@@ -180,6 +180,46 @@ class FileArtifactPublicationCoordinator:
         self.quarantine.pop(blob_key, None)
         self._append_state_locked("reap", blob_key)
 
+    def discover_active_candidates_locked(
+        self,
+    ) -> tuple[tuple[str, FileArtifactCandidateState], ...]:
+        """Return a durable inventory of active bytes with no publication decision.
+
+        A content-addressed blob reaches the shared volume before its metadata
+        transaction can commit.  Recording the pending publication *before*
+        the rename makes that interval recoverable after a process crash.  We
+        also scan the active shards here so deployments upgraded from an older
+        coordinator (or interrupted between a historical rename and manifest
+        append) are brought under the same protocol.  This method never
+        deletes or quarantines bytes; its caller must take the authoritative
+        metadata lock and recheck references first.
+        """
+
+        for shard in self.layout.objects_dir.glob("[0-9a-f][0-9a-f]"):
+            if not shard.is_dir():
+                continue
+            for blob in shard.iterdir():
+                blob_key = blob.name
+                if (
+                    not blob.is_file()
+                    or len(blob_key) != 64
+                    or any(
+                        character not in "0123456789abcdef" for character in blob_key
+                    )
+                ):
+                    continue
+                if blob_key in self.candidates:
+                    continue
+                self.record_candidate_locked(
+                    blob_key=blob_key,
+                    provenance_org_id=None,
+                    candidate_since=datetime.fromtimestamp(
+                        blob.stat().st_mtime,
+                        tz=timezone.utc,
+                    ),
+                )
+        return tuple(sorted(self.candidates.items()))
+
     def _load_state_locked(self) -> None:
         self.candidates.clear()
         self.quarantine.clear()

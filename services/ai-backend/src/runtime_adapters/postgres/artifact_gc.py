@@ -17,9 +17,91 @@ from runtime_adapters.postgres.artifact_publication import (
 class PostgresArtifactGarbageCollector:
     """Use worker-global reference checks and a digest-global lock."""
 
+    # A publication can crash before the application knows which tenant will
+    # own it.  The worker role is allowed to sweep this synthetic provenance;
+    # it is never surfaced as a customer tenant.
+    ORPHAN_RECOVERY_ORG_ID = "__artifact_orphan_recovery__"
+
     def __init__(self, parent: object, blob_store: FileArtifactBlobStore) -> None:
         self._parent = parent
         self._blob_store = blob_store
+
+    def has_pending_publications(self) -> bool:
+        """Whether the durable shared-volume manifest needs a worker sweep."""
+
+        with self._blob_store.coordinator.locked():
+            return bool(
+                self._blob_store.coordinator.discover_active_candidates_locked()
+            )
+
+    async def discover_orphaned_publications(
+        self,
+        *,
+        provenance_org_id: str,
+        older_than: datetime,
+        limit: int,
+    ) -> tuple[ArtifactGcCandidate, ...]:
+        """Project durable physical publication manifests into GC candidates.
+
+        The filesystem manifest is written before ``os.replace`` by the blob
+        adapter.  Here, the worker takes the *same* digest advisory lock used
+        by metadata commits and GC, then either proves a reference exists and
+        retires the manifest, or records an ordinary durable candidate.  A
+        metadata commit racing this scan can therefore only commit first, or
+        restore a deterministic quarantine after the scan wins; it can never
+        lose active bytes to a blind orphan reaper.
+        """
+
+        coordinator = self._blob_store.coordinator
+        with coordinator.locked():
+            discovered = coordinator.discover_active_candidates_locked()
+        candidates: list[ArtifactGcCandidate] = []
+        for blob_key, state in discovered[: max(1, limit)]:
+            if state.candidate_since > older_than:
+                continue
+            referenced = False
+            async with self._parent._role_connection("worker") as conn:  # type: ignore[attr-defined]
+                async with conn.transaction():
+                    await acquire_artifact_advisory_lock(conn, blob_key=blob_key)
+                    referenced = await self._has_global_reference(conn, blob_key)
+                    if referenced:
+                        await conn.execute(
+                            "DELETE FROM runtime_artifact_gc_candidates WHERE blob_key = %s",
+                            (blob_key,),
+                        )
+                    else:
+                        await conn.execute(
+                            """
+                            INSERT INTO runtime_artifact_gc_candidates (
+                                provenance_org_id, blob_key, candidate_since,
+                                created_at
+                            ) VALUES (%s, %s, %s, now())
+                            ON CONFLICT (provenance_org_id, blob_key) DO UPDATE
+                                SET candidate_since = LEAST(
+                                    runtime_artifact_gc_candidates.candidate_since,
+                                    EXCLUDED.candidate_since
+                                )
+                            """,
+                            (
+                                provenance_org_id,
+                                blob_key,
+                                state.candidate_since,
+                            ),
+                        )
+            if referenced:
+                # The ref was observed while holding the digest transaction
+                # lock.  It is now safe to retire only the physical manifest;
+                # no content is moved or removed on this path.
+                with coordinator.locked():
+                    coordinator.cancel_candidate_locked(blob_key)
+                continue
+            candidates.append(
+                ArtifactGcCandidate(
+                    blob_key=blob_key,
+                    unreferenced_since=state.candidate_since,
+                )
+            )
+        return tuple(candidates)
 
     async def collect_if_unreferenced(
         self,
@@ -57,6 +139,12 @@ class PostgresArtifactGarbageCollector:
                     ):
                         return False
                     if await self._has_global_reference(conn, candidate.blob_key):
+                        await conn.execute(
+                            "DELETE FROM runtime_artifact_gc_candidates WHERE blob_key = %s",
+                            (candidate.blob_key,),
+                        )
+                        with coordinator.locked():
+                            coordinator.cancel_candidate_locked(candidate.blob_key)
                         return False
                     with coordinator.locked():
                         if quarantine.exists():

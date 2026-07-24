@@ -173,7 +173,20 @@ class ArtifactLifecycleJobs:
         )
 
     async def list_org_ids(self) -> Sequence[str]:
-        return await self.store.list_lifecycle_org_ids()
+        org_ids = set(await self.store.list_lifecycle_org_ids())
+        pending = getattr(self.garbage_collector, "has_pending_publications", None)
+        recovery_org_id = getattr(
+            self.garbage_collector,
+            "ORPHAN_RECOVERY_ORG_ID",
+            None,
+        )
+        if callable(pending) and isinstance(recovery_org_id, str) and pending():
+            # The physical manifest deliberately has no trusted tenant before
+            # metadata commits.  A synthetic worker-only scope gives the
+            # normal retention loop a chance to resolve it without exposing a
+            # cross-tenant artifact to a product caller.
+            org_ids.add(recovery_org_id)
+        return tuple(sorted(org_ids))
 
     async def on_conversation_deleted(
         self,
@@ -317,6 +330,16 @@ class ArtifactLifecycleJobs:
         quarantine_older_than: datetime,
         limit: int,
     ) -> ArtifactRetentionJobResult:
+        discover = getattr(
+            self.garbage_collector, "discover_orphaned_publications", None
+        )
+        physical_candidates: Sequence[ArtifactGcCandidate] = ()
+        if callable(discover):
+            physical_candidates = await discover(
+                provenance_org_id=scope.org_id,
+                older_than=candidate_grace_before,
+                limit=limit,
+            )
         purge = await self.retention_purger.purge_tombstones(
             scope=scope,
             deleted_before=deleted_before,
@@ -329,7 +352,11 @@ class ArtifactLifecycleJobs:
         )
         candidates = {
             candidate.blob_key: candidate
-            for candidate in (*purge.eligible_candidates, *durable_candidates)
+            for candidate in (
+                *physical_candidates,
+                *purge.eligible_candidates,
+                *durable_candidates,
+            )
         }
         quarantined: list[str] = []
         for candidate in sorted(

@@ -218,6 +218,16 @@ class FileArtifactBlobStore:
             if target.exists():
                 self._verify_existing(target, digest, byte_size)
                 return False
+            # This fsynced state-ledger row is the durable publication
+            # manifest.  It intentionally precedes the rename: a crash can
+            # leave either a harmless missing target or an active object that
+            # the Postgres/file recovery sweep will discover, never an
+            # invisible permanent orphan.
+            self.coordinator.record_candidate_locked(
+                blob_key=digest,
+                provenance_org_id=None,
+                candidate_since=datetime.now(timezone.utc),
+            )
             try:
                 os.replace(temp, target)
             except OSError as exc:

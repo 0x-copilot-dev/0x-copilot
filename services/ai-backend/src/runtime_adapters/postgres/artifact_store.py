@@ -43,6 +43,11 @@ from runtime_adapters.artifact_lifecycle import (
 )
 from runtime_adapters.artifact_references import artifact_revision_reference_edge
 from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
+from runtime_adapters.postgres.artifact_hold_fence import (
+    acquire_artifact_hold_fences,
+    active_hold_predicate,
+    has_active_hold_for_scope,
+)
 from runtime_adapters.postgres.artifact_publication import (
     acquire_artifact_advisory_lock,
     acquire_artifact_scope_lock,
@@ -389,6 +394,11 @@ class PostgresArtifactMetadataStore:
         async with self._parent._tenant_connection(org_id=command.org_id) as conn:  # type: ignore[attr-defined]
             async with conn.transaction():
                 await acquire_artifact_scope_lock(conn, org_id=command.org_id)
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=command.org_id,
+                    user_id=command.user_id,
+                )
                 replay = await self._idempotency_result(conn, command.idempotency)
                 if replay is not _IDEMPOTENCY_ABSENT:
                     return replay.record if replay is not None else None
@@ -409,6 +419,17 @@ class PostgresArtifactMetadataStore:
                         revision=None,
                     )
                     return None
+                if await has_active_hold_for_scope(
+                    conn,
+                    org_id=command.org_id,
+                    user_id=command.user_id,
+                    conversation_id=current.artifact.conversation_id,
+                ):
+                    # A held artifact remains readable and is never hidden by
+                    # an explicit soft-delete retry.  Returning the current
+                    # record keeps the endpoint idempotent without creating a
+                    # second policy outcome.
+                    return current
                 if current.artifact.deleted_at is not None:
                     await self._insert_idempotency(
                         conn,
@@ -427,7 +448,7 @@ class PostgresArtifactMetadataStore:
                 current = current.model_copy(update={"artifact": artifact})
                 await conn.execute(
                     """
-                    UPDATE runtime_artifacts
+                    UPDATE runtime_artifacts a
                        SET deleted_at = %s, updated_at = %s
                      WHERE org_id = %s AND user_id = %s AND artifact_id = %s
                     """,
@@ -537,6 +558,12 @@ class PostgresArtifactMetadataStore:
         async with self._parent._tenant_connection(org_id=scope.org_id) as conn:  # type: ignore[attr-defined]
             async with conn.transaction():
                 await acquire_artifact_scope_lock(conn, org_id=scope.org_id)
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=scope.org_id,
+                    user_id=scope.user_id,
+                    conversation_id=scope.conversation_id,
+                )
                 existing = await self._select_lifecycle_evidence(
                     conn,
                     evidence_id=evidence_id,
@@ -551,23 +578,24 @@ class PostgresArtifactMetadataStore:
                         ),
                     )
                 inventory_before = await self._deletion_inventory_conn(conn, scope)
-                clauses = ["org_id = %s", "deleted_at IS NULL"]
+                clauses = ["a.org_id = %s", "a.deleted_at IS NULL"]
                 params: list[object] = [scope.org_id]
                 if scope.user_id is not None:
-                    clauses.append("user_id = %s")
+                    clauses.append("a.user_id = %s")
                     params.append(scope.user_id)
                 if scope.conversation_id is not None:
-                    clauses.append("conversation_id = %s")
+                    clauses.append("a.conversation_id = %s")
                     params.append(scope.conversation_id)
                 if scope.protected_conversation_ids:
-                    clauses.append("NOT (conversation_id = ANY(%s))")
+                    clauses.append("NOT (a.conversation_id = ANY(%s))")
                     params.append(list(scope.protected_conversation_ids))
                 cursor = await conn.execute(
                     f"""
-                    UPDATE runtime_artifacts
+                    UPDATE runtime_artifacts a
                        SET deleted_at = %s, updated_at = %s
                      WHERE {" AND ".join(clauses)}
-                     RETURNING artifact_id
+                       AND {active_hold_predicate(artifact_alias="a")}
+                    RETURNING artifact_id
                     """,
                     (deleted_at, deleted_at, *params),
                 )
@@ -660,32 +688,39 @@ class PostgresArtifactMetadataStore:
         limit: int,
     ) -> ArtifactRetentionPurgeResult:
         clauses = [
-            "org_id = %s",
-            "deleted_at IS NOT NULL",
-            "deleted_at < %s",
+            "a.org_id = %s",
+            "a.deleted_at IS NOT NULL",
+            "a.deleted_at < %s",
         ]
         params: list[object] = [scope.org_id, deleted_before]
         if scope.user_id is not None:
-            clauses.append("user_id = %s")
+            clauses.append("a.user_id = %s")
             params.append(scope.user_id)
         if scope.conversation_id is not None:
-            clauses.append("conversation_id = %s")
+            clauses.append("a.conversation_id = %s")
             params.append(scope.conversation_id)
         if scope.protected_conversation_ids:
-            clauses.append("NOT (conversation_id = ANY(%s))")
+            clauses.append("NOT (a.conversation_id = ANY(%s))")
             params.append(list(scope.protected_conversation_ids))
         params.append(limit)
         async with self._parent._tenant_connection(org_id=scope.org_id) as conn:  # type: ignore[attr-defined]
             async with conn.transaction():
                 await acquire_artifact_scope_lock(conn, org_id=scope.org_id)
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=scope.org_id,
+                    user_id=scope.user_id,
+                    conversation_id=scope.conversation_id,
+                )
                 cursor = await conn.execute(
                     f"""
-                    SELECT artifact_id, deleted_at
-                      FROM runtime_artifacts
+                    SELECT a.artifact_id, a.deleted_at
+                      FROM runtime_artifacts a
                      WHERE {" AND ".join(clauses)}
-                     ORDER BY deleted_at ASC, artifact_id ASC
+                       AND {active_hold_predicate(artifact_alias="a")}
+                     ORDER BY a.deleted_at ASC, a.artifact_id ASC
                      LIMIT %s
-                     FOR UPDATE
+                     FOR UPDATE OF a
                     """,
                     tuple(params),
                 )
