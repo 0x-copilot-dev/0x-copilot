@@ -22,13 +22,13 @@ def _settings(mode: OperationGatewayMode) -> RuntimeSettings:
 
 
 class TestStartupGuardWiring:
-    def test_api_refuses_enforce_before_building_any_ports(self) -> None:
-        with pytest.raises(OperationEnforcementNotReadyError):
-            RuntimeApiAppFactory.create_app(
-                settings=_settings(OperationGatewayMode.ENFORCE),
-                configure_logging_on_create=False,
-                configure_telemetry_on_create=False,
-            )
+    def test_api_defers_enforce_validation_to_the_worker_composition_root(self) -> None:
+        app = RuntimeApiAppFactory.create_app(
+            settings=_settings(OperationGatewayMode.ENFORCE),
+            configure_logging_on_create=False,
+            configure_telemetry_on_create=False,
+        )
+        assert app is not None
 
     def test_worker_refuses_enforce_before_constructing_handlers(self) -> None:
         with pytest.raises(OperationEnforcementNotReadyError):

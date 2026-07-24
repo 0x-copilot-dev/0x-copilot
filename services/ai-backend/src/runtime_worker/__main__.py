@@ -94,6 +94,8 @@ class RuntimeWorkerEntrypoint:
                 mcp_discovery_cache=mcp_discovery_cache,
                 user_policies_resolver=user_policies_resolver,
                 artifact_service=ArtifactServiceComposition.build(async_ports),
+                artifact_blob_store=async_ports.artifact_blob_store,
+                artifact_reference_store=async_ports.artifact_reference_provider,
             )
             logger.info(
                 "worker_started",

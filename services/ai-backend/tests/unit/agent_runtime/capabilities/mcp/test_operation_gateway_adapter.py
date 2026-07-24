@@ -101,6 +101,20 @@ class _ResultStore:
         )
 
 
+@dataclass
+class _ArgumentStore:
+    rows: dict[str, tuple[str, bytes]] = field(default_factory=dict)
+
+    async def persist(self, *, ref: str, digest: str, canonical_bytes: bytes) -> None:
+        self.rows[ref] = (digest, canonical_bytes)
+
+    async def resolve(self, *, ref: str, digest: str) -> bytes | None:
+        stored = self.rows.get(ref)
+        if stored is None or stored[0] != digest:
+            return None
+        return stored[1]
+
+
 class _AuthSessions:
     async def create_auth_session(self, *, server_id: str, runtime_context):  # type: ignore[no-untyped-def]
         del runtime_context
@@ -182,6 +196,7 @@ class _Fixture(DynamicMcpLoadingMixin):
         classifier = OperationClassifier(descriptors=descriptors)
         ledger = FakeLedger()
         result_store = _ResultStore()
+        argument_store = _ArgumentStore()
         service_token = McpOperationGatewayContext.bind_for_run(
             McpOperationGatewayServices(
                 gateway=OperationGateway(
@@ -205,6 +220,7 @@ class _Fixture(DynamicMcpLoadingMixin):
                     principal_ref="principal://users/user_d1",
                 ),
                 result_store=result_store,
+                argument_store=argument_store,
                 connector_overrides=ConnectorWritePolicyOverrides(),
             )
         )
@@ -402,10 +418,18 @@ def test_material_resolver_returns_only_the_exact_canonical_stage_arguments() ->
             op="update_issue",
             arguments=arguments,
         )
+        argument_store = _ArgumentStore()
+        stored = OperationContext.require().arguments.get(request.canonical_args_ref)
+        assert stored is not None
+        asyncio.run(
+            argument_store.persist(
+                ref=request.canonical_args_ref,
+                digest=stored[0],
+                canonical_bytes=stored[1],
+            )
+        )
         material = asyncio.run(
-            McpOperationArgumentMaterialResolver(
-                arguments=OperationContext.require().arguments
-            ).resolve(
+            McpOperationArgumentMaterialResolver(arguments=argument_store).resolve(
                 type(
                     "Request",
                     (),

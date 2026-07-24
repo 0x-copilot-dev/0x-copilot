@@ -40,7 +40,10 @@ from agent_runtime.capabilities.mcp.operation_adapter import (
 )
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
-from agent_runtime.capabilities.operations.context import OperationRequestFactory
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationRequestFactory,
+)
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.surfaces.generator import (
     GenToolDescriptor,
@@ -365,6 +368,38 @@ class CallMcpTool:
             op=parsed_input.tool_name,
             arguments=parsed_input.arguments,
         )
+        operation_context = OperationContext.require()
+        stored_arguments = operation_context.arguments.get(request.canonical_args_ref)
+        if stored_arguments is None:
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        digest, canonical_bytes = stored_arguments
+        try:
+            await services.argument_store.persist(
+                ref=request.canonical_args_ref,
+                digest=digest,
+                canonical_bytes=canonical_bytes,
+            )
+        except Exception:  # noqa: BLE001 - never dispatch without durable material.
+            _LOGGER.warning(
+                "mcp_operation_arguments_unavailable",
+                extra={"operation_id": request.operation_id},
+                exc_info=True,
+            )
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
         adapter = McpOperationAdapter(
             registry=self.registry,
             runtime_context=self.runtime_context,

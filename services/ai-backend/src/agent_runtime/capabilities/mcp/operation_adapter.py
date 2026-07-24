@@ -168,6 +168,27 @@ class McpOperationResultStorePort(Protocol):
         """Return an immutable result ref and bounded model-visible projection."""
 
 
+class McpOperationArgumentStorePort(Protocol):
+    """Durably retain canonical MCP arguments before the gateway can dispatch."""
+
+    async def persist(
+        self,
+        *,
+        ref: str,
+        digest: str,
+        canonical_bytes: bytes,
+    ) -> None:
+        """Persist exactly one digest-pinned canonical argument body."""
+
+    async def resolve(
+        self,
+        *,
+        ref: str,
+        digest: str,
+    ) -> bytes | None:
+        """Return exactly the stored body, or ``None`` when it is unavailable."""
+
+
 @dataclass(frozen=True)
 class McpOperationGatewayServices:
     """Trusted per-run dependencies for an enforced MCP cohort.
@@ -184,6 +205,7 @@ class McpOperationGatewayServices:
     stage_scope: EffectStageScope
     stage_author: EffectActorIdentity
     result_store: McpOperationResultStorePort
+    argument_store: McpOperationArgumentStorePort
     connector_overrides: ConnectorWritePolicyOverrides = field(
         default_factory=ConnectorWritePolicyOverrides
     )
@@ -606,15 +628,14 @@ class McpOperationArgumentMaterialResolver:
         try:
             OperationArgsRefCodec.parse(proposal_content_ref)
             target = McpTargetRefCodec.parse(target_ref)
-            get = getattr(self.arguments, "get")
-            stored = get(proposal_content_ref)
-            if stored is None:
+            resolve = getattr(self.arguments, "resolve")
+            canonical_bytes = await resolve(
+                ref=proposal_content_ref,
+                digest=proposal_digest,
+            )
+            if canonical_bytes is None:
                 return None
-            digest, canonical_bytes = stored
-            if (
-                digest != proposal_digest
-                or sha256_hex(canonical_bytes) != proposal_digest
-            ):
+            if sha256_hex(canonical_bytes) != proposal_digest:
                 return None
             decoded = json.loads(canonical_bytes)
             if (
@@ -647,6 +668,7 @@ __all__ = [
     "McpOperationArgumentMaterialResolver",
     "McpOperationGatewayContext",
     "McpOperationGatewayServices",
+    "McpOperationArgumentStorePort",
     "McpOperationResultStorePort",
     "McpOperationStoredResult",
     "McpTargetRef",
