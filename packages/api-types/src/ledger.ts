@@ -808,6 +808,56 @@ export interface OperationDescriptor {
   readonly max_inline_result_bytes: number;
 }
 
+/** Immutable, append-only link from one metered call to an operation output. */
+export type UsageAttributionRelationship =
+  | "produced"
+  | "revised"
+  | "proposed"
+  | "shaped";
+
+export interface UsageAttributionEdge {
+  readonly usage_record_id: string;
+  readonly operation_id: string;
+  readonly artifact_id?: string;
+  readonly stage_id?: string;
+  readonly relationship: UsageAttributionRelationship;
+}
+
+export interface OperationUsageTotals {
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly total_tokens: number;
+  readonly cost_micro_usd?: number;
+}
+
+export type OperationNodeStatus =
+  | "requested"
+  | "classified"
+  | "succeeded"
+  | "staged"
+  | "blocked"
+  | "cancelled"
+  | "failed";
+
+/** Pure replay projection; clients may rebuild it from ledger events + edges. */
+export interface OperationNode {
+  readonly operation_id: string;
+  readonly parent_operation_id?: string;
+  readonly producer: Producer;
+  readonly capability: string;
+  readonly op: string;
+  readonly status: OperationNodeStatus;
+  readonly started_at: string;
+  readonly completed_at?: string;
+  readonly artifact_ids: readonly string[];
+  readonly stage_ids: readonly string[];
+  readonly usage_totals: OperationUsageTotals;
+}
+
+export interface OperationTree {
+  readonly nodes: readonly OperationNode[];
+}
+
 export interface OperationDisposition {
   readonly operation_id: string;
   readonly outcome: OperationOutcome;

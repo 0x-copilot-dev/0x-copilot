@@ -374,6 +374,22 @@
   },
   {
     "descriptor": {
+      "capability": "builtin",
+      "op": "load_tool_spec",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "dynamic tool specification load",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
       "capability": "draft",
       "op": "publish",
       "executor": "builtin",
