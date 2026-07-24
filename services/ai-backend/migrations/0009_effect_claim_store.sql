@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS runtime_effect_claims (
     safe_message        text,
     target_ref          text NOT NULL,
     proposal_ref        text NOT NULL,
+    proposal_content_ref text NOT NULL,
     actor               text NOT NULL,
     decision_ledger_id  text NOT NULL,
     created_at          timestamptz NOT NULL,

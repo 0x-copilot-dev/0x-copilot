@@ -78,20 +78,27 @@ def _claim(
     org_id: str,
     idempotency_key: str,
     digest: str = "a" * 64,
+    proposal_content_ref: str | None = None,
     offset: int = 0,
 ) -> EffectClaim:
     timestamp = (_BASE_TIME + timedelta(seconds=offset)).isoformat()
+    stage_id = "stg_123e4567-e89b-42d3-a456-426614174000"
     return EffectClaim(
         org_id=org_id,
         run_id=f"run_{uuid4().hex}",
-        stage_id="stg_123e4567-e89b-42d3-a456-426614174000",
+        stage_id=stage_id,
         revision=1,
         idempotency_key=idempotency_key,
         executor=EffectExecutorKind.BUILTIN,
         proposal_digest=digest,
         target_digest="b" * 64,
         target_ref=f"artifact://{org_id}/target",
-        proposal_ref=f"artifact://{org_id}/proposal",
+        proposal_ref=f"proposal://{stage_id}/revisions/1",
+        proposal_content_ref=(
+            proposal_content_ref
+            if proposal_content_ref is not None
+            else f"artifact://{org_id}/proposals/revision-1"
+        ),
         actor=EffectActor.USER,
         decision_ledger_id="rtest.1",
         created_at=timestamp,
@@ -133,6 +140,14 @@ class TestPostgresEffectClaimStore:
                     org_id=org_id,
                     idempotency_key="conflicting-effect",
                     digest="c" * 64,
+                )
+            )
+        with pytest.raises(EffectClaimConflict):
+            await claims.claim(
+                claim=_claim(
+                    org_id=org_id,
+                    idempotency_key="conflicting-effect",
+                    proposal_content_ref=f"artifact://{org_id}/proposals/revision-2",
                 )
             )
 

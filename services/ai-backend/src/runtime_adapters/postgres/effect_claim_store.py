@@ -22,6 +22,8 @@ from agent_runtime.effects.claims import (
     EffectClaimInvalidTransition,
     EffectClaimNotFound,
     EffectClaimStorageError,
+    normalize_persisted_effect_claim_payload,
+    require_persistable_effect_claim,
     validate_claim_transition,
 )
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
@@ -32,8 +34,8 @@ _WORKER_ROLE = "worker"
 _CLAIM_COLUMNS = """
     org_id, run_id, stage_id, revision, claim_id, idempotency_key, executor,
     proposal_digest, target_digest, state, attempt, prepared_ref, receipt_ref,
-    outcome, result_digest, safe_message, target_ref, proposal_ref, actor,
-    decision_ledger_id, created_at, updated_at
+    outcome, result_digest, safe_message, target_ref, proposal_ref,
+    proposal_content_ref, actor, decision_ledger_id, created_at, updated_at
 """
 
 
@@ -57,6 +59,7 @@ class PostgresEffectClaimStore:
         immutable request facts.
         """
 
+        require_persistable_effect_claim(claim)
         try:
             async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
                 async with conn.transaction():
@@ -65,7 +68,7 @@ class PostgresEffectClaimStore:
                         INSERT INTO {_TABLE} ({_CLAIM_COLUMNS})
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
                         )
                         ON CONFLICT (org_id, executor, idempotency_key)
                         DO NOTHING
@@ -285,6 +288,7 @@ def _claim_values(claim: EffectClaim) -> tuple[object, ...]:
         claim.safe_message,
         claim.target_ref,
         claim.proposal_ref,
+        claim.proposal_content_ref,
         claim.actor.value,
         claim.decision_ledger_id,
         claim.created_at,
@@ -299,7 +303,9 @@ def _claim_from_row(row: Mapping[str, object]) -> EffectClaim:
         if isinstance(value, datetime):
             payload[field] = value.isoformat()
     try:
-        return EffectClaim.model_validate(payload)
+        return EffectClaim.model_validate(
+            normalize_persisted_effect_claim_payload(payload)
+        )
     except Exception as exc:
         raise EffectClaimStorageError("A stored effect claim is invalid.") from exc
 

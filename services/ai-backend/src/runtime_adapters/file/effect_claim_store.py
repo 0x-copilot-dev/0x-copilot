@@ -30,6 +30,8 @@ from agent_runtime.effects.claims import (
     EffectClaimNotFound,
     EffectClaimState,
     EffectClaimStorageError,
+    normalize_persisted_effect_claim_payload,
+    require_persistable_effect_claim,
     validate_claim_transition,
 )
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
@@ -63,6 +65,7 @@ class FileEffectClaimStore:
     async def claim(self, *, claim: EffectClaim) -> EffectClaimAcquisition:
         """Atomically reserve or load a tenant/executor idempotency claim."""
 
+        require_persistable_effect_claim(claim)
         async with self._lock:
             with self._exclusive_lock():
                 path = self._path_for(
@@ -250,7 +253,9 @@ class FileEffectClaimStore:
             raw = json.loads(path.read_text(encoding="utf-8"))
             if not isinstance(raw, dict):
                 raise ValueError("effect claim record is not an object")
-            return EffectClaim.model_validate(raw)
+            return EffectClaim.model_validate(
+                normalize_persisted_effect_claim_payload(raw)
+            )
         except (OSError, json.JSONDecodeError, ValidationError, ValueError) as exc:
             raise EffectClaimStorageError() from exc
 
