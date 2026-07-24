@@ -290,6 +290,7 @@ class RuntimeApiEventType(StrEnum):
     ARTIFACT_CREATED = LedgerEventType.ARTIFACT_CREATED.value
     ARTIFACT_REVISED = LedgerEventType.ARTIFACT_REVISED.value
     ARTIFACT_PROMOTED = LedgerEventType.ARTIFACT_PROMOTED.value
+    ARTIFACT_PRESENTATION_DECIDED = LedgerEventType.ARTIFACT_PRESENTATION_DECIDED.value
     # Generative Surfaces v2.1 (PRD-A3). Reference-only operation lifecycle
     # events emitted by the Universal Operation Gateway and its shadow probes.
     # Canonical arguments and provider/tool result bytes never ride transport.

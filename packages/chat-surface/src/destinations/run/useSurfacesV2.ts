@@ -11,15 +11,11 @@
 // advances (a new surface event landed), coalescing concurrent advances into
 // exactly one follow-up, and fails soft — an HTTP error never throws into React.
 //
-// NOTE (integration, 2026-07-23 → B2): B1 shipped this hook forward-compatible
-// against a metadata-only `/surfaces` response; PRD-B2 delivered the content —
-// `list_run_surfaces` now enriches each `SurfaceSnapshot` with its materialized
-// `state` (`{spec?, data}`), resolved server-side from the run's v1 surface
-// envelopes (`SurfaceContentProjection`). `snapshotToPayload` reads that `state`
-// (its first structural branch), so hydration flows through exactly as designed
-// — zero client change was needed. A surface with no content event yet carries
-// `state: null`, and `stateFor` returns `undefined`, so the surface degrades to
-// its honest skeleton / tier-3 floor rather than a fabricated body.
+// B3: the endpoint enriches a snapshot only through its declared
+// `surface.created.payload_ref` → persisted tool-result binding. A surface with
+// no resolved reference carries `state: null`; `stateFor` returns `undefined`,
+// so the renderer shows its honest skeleton / tier-3 floor rather than a
+// fabricated body.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -42,10 +38,9 @@ const EMPTY = new Map<string, SurfacePayload>();
 
 /**
  * Adapt one A3 `SurfaceSnapshot` into the `SurfacePayload` envelope shape the
- * renderers read (`{spec?, data}`). A3 snapshots are metadata-only today, so
- * this reads a materialized `state`/`data`/`payload` structurally (forward
- * compatibility) and returns `undefined` when none is present — an honest
- * "not yet hydrated" signal, never a fabricated body.
+ * renderers read (`{spec?, data}`). The endpoint's only hydration field is
+ * declared `state`; other values are metadata and MUST NOT become synthetic
+ * renderer payloads.
  */
 function snapshotToPayload(
   snapshot: SurfaceSnapshot,
@@ -54,14 +49,6 @@ function snapshotToPayload(
   const state = raw.state;
   if (state !== null && typeof state === "object") {
     return state as SurfacePayload;
-  }
-  const data = raw.data;
-  if (data !== undefined) {
-    return { data } as SurfacePayload;
-  }
-  const payload = raw.payload;
-  if (payload !== null && typeof payload === "object") {
-    return payload as SurfacePayload;
   }
   return undefined;
 }

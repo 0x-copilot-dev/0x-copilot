@@ -209,6 +209,12 @@ export interface ThreadCanvasProps {
    */
   readonly rightRail?: ReactNode;
   /**
+   * B3 Focus-only compact review cards. The host derives them from the same
+   * lifecycle projection that owns Studio tabs; when present Focus suppresses
+   * the full tab strip and never mounts a canvas renderer.
+   */
+  readonly focusCards?: ReactNode;
+  /**
    * PR-3.6: gate the in-canvas Studio/Focus switcher. Defaults to `true`
    * (standalone / web usage). `RunDestination` passes `false` so `RunHeader`
    * is the single mode control (per the PR-3.5 seam note).
@@ -264,6 +270,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     onScrub,
     onSnapToNow,
     rightRail,
+    focusCards,
     showModeSwitcher = true,
     railWidth = DEFAULT_RAIL_WIDTH,
     onRailWidthChange,
@@ -424,7 +431,8 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   const showMiniTimeline =
     mode === "focus" ||
     (mode === "studio" && !(showSwimlanes && timelineEmpty));
-  const showTabs = mode === "studio" || mode === "focus";
+  const showTabs =
+    mode === "studio" || (mode === "focus" && focusCards === undefined);
 
   return (
     <div
@@ -565,6 +573,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
           data-rail={rightRail !== undefined ? "true" : "false"}
           style={chatSlotStyle(mode)}
         >
+          {mode === "focus" && focusCards !== undefined ? focusCards : null}
           {/* PR-3.6: when the host injects a right rail, it OWNS the chat
               column (its Chat tab hosts the single TcChat). Otherwise fall
               back to the built-in TcChat so standalone/web usage is

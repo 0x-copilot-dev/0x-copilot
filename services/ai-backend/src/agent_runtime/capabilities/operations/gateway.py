@@ -442,6 +442,7 @@ class OperationGateway:
             title=intent.title or "Untitled artifact",
             media_type=intent.media_type or "application/octet-stream",
             suggested_filename=intent.suggested_filename,
+            presentation_preference=intent.presentation_preference,
             idempotency_key=request.operation_id,
         )
         if publication.content is not None:

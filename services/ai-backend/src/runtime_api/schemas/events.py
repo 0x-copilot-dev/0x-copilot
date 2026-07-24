@@ -229,6 +229,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.ARTIFACT_CREATED,
             RuntimeApiEventType.ARTIFACT_REVISED,
             RuntimeApiEventType.ARTIFACT_PROMOTED,
+            RuntimeApiEventType.ARTIFACT_PRESENTATION_DECIDED,
         }:
             return cls._artifact_ledger_payload(
                 event_type=event_type,
@@ -379,6 +380,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.ARTIFACT_CREATED,
             RuntimeApiEventType.ARTIFACT_REVISED,
             RuntimeApiEventType.ARTIFACT_PROMOTED,
+            RuntimeApiEventType.ARTIFACT_PRESENTATION_DECIDED,
             RuntimeApiEventType.OPERATION_REQUESTED,
             RuntimeApiEventType.OPERATION_CLASSIFIED,
             RuntimeApiEventType.OPERATION_COMPLETED,

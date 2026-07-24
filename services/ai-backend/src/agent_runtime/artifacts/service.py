@@ -39,6 +39,10 @@ from agent_runtime.artifacts.ports import (
     ArtifactRunScopeResolverPort,
     ArtifactSourceResolverPort,
 )
+from agent_runtime.presentation.policy import (
+    PresentationPolicy,
+    PresentationPolicyInput,
+)
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.surfaces_v2.entities import Artifact, ArtifactRevision
 from agent_runtime.surfaces_v2.ledger_ids import (
@@ -49,6 +53,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
     ArtifactCreatedPayload,
     ArtifactKind,
+    ArtifactPresentationDecidedPayload,
     ArtifactPromotedPayload,
     ArtifactRevisedPayload,
     LedgerEventType,
@@ -612,6 +617,38 @@ class ArtifactService:
                 created_at=now,
             )
         ]
+        presentation = PresentationPolicy.decide(
+            PresentationPolicyInput(
+                explicit_preference=request.presentation_preference,
+                artifact_kind=request.kind,
+                artifact_size=written.byte_size,
+                # Artifact kind/media-type validation happened before this
+                # transaction. B2 owns the fixed renderer registry for each
+                # launch kind; an unsupported payload still receives its safe
+                # raw/file renderer rather than arbitrary UI.
+                renderer_supported=True,
+            )
+        )
+        decision = ArtifactPresentationDecidedPayload(
+            v=1,
+            artifact_id=artifact_id,
+            decision=presentation.decision,
+            basis=presentation.basis,
+            surface_id=None,
+        )
+        events.append(
+            self._event(
+                scope=scope,
+                event_type=LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
+                artifact_id=artifact_id,
+                revision=1,
+                ordinal=1,
+                payload=decision.model_dump(
+                    mode="json", by_alias=True, exclude_none=True
+                ),
+                created_at=now,
+            )
+        )
         if promoted_source_ref is not None:
             promoted = ArtifactPromotedPayload(
                 v=1,
@@ -626,7 +663,7 @@ class ArtifactService:
                     event_type=LedgerEventType.ARTIFACT_PROMOTED,
                     artifact_id=artifact_id,
                     revision=1,
-                    ordinal=1,
+                    ordinal=2,
                     payload=promoted.model_dump(mode="json", by_alias=True),
                     created_at=now,
                 )
@@ -639,6 +676,7 @@ class ArtifactService:
                 "title": request.title,
                 "media_type": request.media_type,
                 "suggested_filename": request.suggested_filename,
+                "presentation_preference": request.presentation_preference.value,
                 "author": provenance.author.value,
                 "source_ref": provenance.source_ref,
                 "content_digest": written.content_digest,

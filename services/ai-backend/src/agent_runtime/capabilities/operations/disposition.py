@@ -8,15 +8,20 @@ from agent_runtime.capabilities.operations.contracts import (
     OperationResultSummary,
     PresentationPlan,
 )
-from agent_runtime.surfaces_v2.ledger_models import (
-    ArtifactPresentationPreference,
-    EffectClass,
-    PresentationDecision,
+from agent_runtime.presentation.policy import (
+    PresentationPolicy,
+    PresentationPolicyInput,
 )
+from agent_runtime.surfaces_v2.ledger_models import PresentationDecision
 
 
 class PresentationDispositionPolicy:
-    """Pure table policy; Markdown and raw result text are never inspected."""
+    """A3 compatibility facade over the canonical B3 presentation policy.
+
+    The gateway still exposes its historical ``PresentationPlan`` to shadow
+    adapters, but it no longer owns a second decision table.  The B3 policy is
+    the source of truth for publication, operation, and replay semantics.
+    """
 
     @classmethod
     def decide(
@@ -34,43 +39,33 @@ class PresentationDispositionPolicy:
         descriptor: OperationDescriptor,
         result_summary: OperationResultSummary,
     ) -> PresentationPlan:
-        # Safety has highest precedence: external/unknown operations are stage
-        # subjects.  The canvas decision predicts that future subject; A3 shadow
-        # mode never creates or mounts it.
-        if descriptor.effect_class in {
-            EffectClass.EXTERNAL_REVERSIBLE,
-            EffectClass.EXTERNAL_DESTRUCTIVE,
-            EffectClass.UNKNOWN,
-        }:
-            return PresentationPlan(
-                decision=PresentationDecision.CANVAS,
-                basis="external_effect_stage_subject",
-            )
-
         intent = request.artifact_intent
-        if intent is not None:
-            preference = intent.presentation_preference
-            if preference is ArtifactPresentationPreference.CANVAS:
-                decision = PresentationDecision.CANVAS
-            elif preference is ArtifactPresentationPreference.CHAT_CARD:
-                decision = PresentationDecision.CHAT_CARD
-            elif preference is ArtifactPresentationPreference.NONE:
-                decision = PresentationDecision.NONE
-            else:
-                decision = PresentationDecision.CANVAS
-            return PresentationPlan(
-                decision=decision,
-                basis=f"explicit_artifact_{preference.value}",
+        policy = PresentationPolicy.decide(
+            PresentationPolicyInput(
+                explicit_preference=(
+                    intent.presentation_preference if intent is not None else None
+                ),
+                effect_class=descriptor.effect_class,
+                artifact_kind=intent.kind if intent is not None else None,
+                # B1's validated launch kinds have fixed renderer ownership;
+                # unsupported media is rejected before reaching the gateway.
+                renderer_supported=intent is not None,
+                # A result reference proves durability, not a request to open
+                # Studio.  The B3 contract permits a result canvas only when
+                # the operation descriptor records an explicit review intent;
+                # that fact is not part of the legacy A3 request yet.  Keeping
+                # this false prevents ordinary reads/scalars from becoming
+                # phantom tabs while retaining the existing compatibility API.
+                selected_for_review=False,
+                # A legacy operation with no result ref has no durable
+                # subject.  This remains a fact passed to the canonical B3
+                # policy rather than a compatibility-only decision branch.
+                has_presentable_subject=result_summary.result_ref is not None,
             )
-
-        if result_summary.result_ref is not None:
-            return PresentationPlan(
-                decision=PresentationDecision.ACTIVITY_ONLY,
-                basis="referenced_result_activity",
-            )
+        )
         return PresentationPlan(
-            decision=PresentationDecision.NONE,
-            basis="no_durable_subject",
+            decision=policy.decision,
+            basis=policy.basis,
         )
 
 

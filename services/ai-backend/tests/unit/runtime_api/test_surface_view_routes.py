@@ -164,11 +164,8 @@ class SurfaceViewMixin:
             source=StreamEventSource.SYSTEM,
             event_type=RuntimeApiEventType.TOOL_RESULT,
             payload={
-                "surface": {
-                    "surface_uri": surface_id,
-                    "archetype": "record",
-                    "state": {"data": {"issue": {"id": "ENG-1", "title": "Fix"}}},
-                }
+                "call_id": "call_1",
+                "output": {"issue": {"id": "ENG-1", "title": "Fix"}},
             },
         )
 
