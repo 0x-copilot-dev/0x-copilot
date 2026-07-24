@@ -283,8 +283,10 @@ class TestHappyPath(ShapeRequestMixin):
 class TestGuards(ShapeRequestMixin):
     async def test_flag_off_is_404_and_no_events(self) -> None:
         scheduler = _RecordingScheduler()
+        # E3 cutover: SURFACES_V2 defaults ON, so flag-off (route absence) is now
+        # the explicit kill switch, not the unset default.
         store, producer, coordinator, run = await self._setup(
-            environ={}, schedule=scheduler
+            environ={"SURFACES_V2": "false"}, schedule=scheduler
         )
         await self._append_generic_surface(producer, run)
         before = len(await self._events(store, run))
