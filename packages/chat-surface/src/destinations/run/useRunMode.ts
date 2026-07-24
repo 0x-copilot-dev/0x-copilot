@@ -35,8 +35,16 @@ import type { ThreadMode } from "../../thread-canvas";
  */
 export type RunMode = ThreadMode;
 
-/** Default layout when nothing is persisted (PRD US-3.2: default Studio). */
-export const DEFAULT_RUN_MODE: RunMode = "studio";
+/**
+ * Studio mode is temporarily disabled — the Run cockpit is Focus-only for now.
+ * Everything keys off this single flag: the default mode, the read coercion,
+ * the ⌘M toggle (all below), and RunHeader hides the Studio/Focus switcher when
+ * it is false. Flip to `true` to bring Studio (and the switcher) back — one line.
+ */
+export const STUDIO_ENABLED = false;
+
+/** Default layout when nothing is persisted. Focus-first while Studio is off. */
+export const DEFAULT_RUN_MODE: RunMode = STUDIO_ENABLED ? "studio" : "focus";
 
 // Per-conversation KV namespace. Shares the `chats.thread.<id>.*` prefix
 // used by `apps/frontend/src/features/chat/chatDepthKv.ts` — one thread
@@ -72,6 +80,10 @@ export function readRunMode(
   store: KeyValueStore,
   conversationId: ConversationId,
 ): RunMode {
+  // Studio disabled ⇒ always Focus, even if a stale "studio" pref is persisted.
+  if (!STUDIO_ENABLED) {
+    return "focus";
+  }
   return store.get(runModeKey(conversationId)) === "focus"
     ? "focus"
     : DEFAULT_RUN_MODE;
@@ -187,8 +199,10 @@ export function useRunMode({
 
   const setMode = useCallback(
     (next: RunMode): void => {
-      writeRunMode(store, conversationId, next);
-      setModeState(next);
+      // Studio disabled ⇒ pin to Focus, ignoring any request to enter Studio.
+      const coerced: RunMode = STUDIO_ENABLED ? next : "focus";
+      writeRunMode(store, conversationId, coerced);
+      setModeState(coerced);
     },
     [store, conversationId],
   );
@@ -209,7 +223,8 @@ export function useRunMode({
   // on unmount / dependency change. Gated to `enabled` (Run active) and
   // suppressed while a text input / composer is focused.
   useEffect(() => {
-    if (!enabled) {
+    // No Studio ⇒ nothing to toggle; don't attach the ⌘M listener at all.
+    if (!enabled || !STUDIO_ENABLED) {
       return;
     }
     const doc = globalThis.document;

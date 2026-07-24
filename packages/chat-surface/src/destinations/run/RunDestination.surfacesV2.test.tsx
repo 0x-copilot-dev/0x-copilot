@@ -30,6 +30,12 @@ import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
 import { RunDestination } from "./RunDestination";
+import { STUDIO_ENABLED } from "./useRunMode";
+
+// The Studio↔Focus visibility gate is driven by the mode switcher, which is
+// hidden while Studio is disabled. Gate the switcher-driven test behind the
+// flag so it runs again on re-enable.
+const studioIt = STUDIO_ENABLED ? it : it.skip;
 
 const CONV = "conv-1" as ConversationId;
 
@@ -263,34 +269,37 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
 
   // --- Studio shell & posture DoD -----------------------------------------
 
-  it("FR-F1: Studio mounts the canvas; Focus hides it (mode → visibility gate)", async () => {
-    seq = 0;
-    const transport = new FakeTransport();
-    const store = makeStore();
-    renderRun(transport, store, true);
-    await screen.findByTestId("thread-canvas");
-    stream(transport, [created("s_issue", "record", "ENG-142")]);
+  studioIt(
+    "FR-F1: Studio mounts the canvas; Focus hides it (mode → visibility gate)",
+    async () => {
+      seq = 0;
+      const transport = new FakeTransport();
+      const store = makeStore();
+      renderRun(transport, store, true);
+      await screen.findByTestId("thread-canvas");
+      stream(transport, [created("s_issue", "record", "ENG-142")]);
 
-    // Studio (default): the surface column is visible → canvas mounted.
-    const slot = screen.getByTestId("tc-surface-slot");
-    expect(slot.getAttribute("data-visible")).toBe("true");
+      // Studio (default): the surface column is visible → canvas mounted.
+      const slot = screen.getByTestId("tc-surface-slot");
+      expect(slot.getAttribute("data-visible")).toBe("true");
 
-    // Switch to Focus: the surface column is hidden → no generative surfaces.
-    fireEvent.click(screen.getByTestId("run-mode-focus"));
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
-      ).toBe("false"),
-    );
+      // Switch to Focus: the surface column is hidden → no generative surfaces.
+      fireEvent.click(screen.getByTestId("run-mode-focus"));
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
+        ).toBe("false"),
+      );
 
-    // Back to Studio: canvas re-shown.
-    fireEvent.click(screen.getByTestId("run-mode-studio"));
-    await waitFor(() =>
-      expect(
-        screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
-      ).toBe("true"),
-    );
-  });
+      // Back to Studio: canvas re-shown.
+      fireEvent.click(screen.getByTestId("run-mode-studio"));
+      await waitFor(() =>
+        expect(
+          screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
+        ).toBe("true"),
+      );
+    },
+  );
 
   it("FR-A7: a v2 gate surface renders no approval/decision control in the chat rail", async () => {
     seq = 0;
