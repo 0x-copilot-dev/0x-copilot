@@ -12,6 +12,7 @@ class ArtifactErrorCode(StrEnum):
     TOO_LARGE = "artifact_too_large"
     DIGEST_MISMATCH = "artifact_digest_mismatch"
     INVALID_SOURCE = "artifact_invalid_source"
+    INVALID_CURSOR = "artifact_invalid_cursor"
     BLOB_UNAVAILABLE = "artifact_blob_unavailable"
     RANGE_NOT_SATISFIABLE = "artifact_range_not_satisfiable"
     STORAGE_FAILURE = "artifact_storage_failure"
@@ -24,6 +25,7 @@ class _Messages:
     TOO_LARGE = "Artifact exceeds the configured size limit."
     DIGEST_MISMATCH = "Artifact content did not match the declared digest."
     INVALID_SOURCE = "Artifact source is not available for this scope."
+    INVALID_CURSOR = "Artifact cursor is invalid."
     BLOB_UNAVAILABLE = "Artifact content is temporarily unavailable."
     RANGE_NOT_SATISFIABLE = "Requested byte range is not satisfiable."
     STORAGE_FAILURE = "Artifact storage is temporarily unavailable."
@@ -84,6 +86,14 @@ class ArtifactInvalidSourceError(ArtifactError):
         )
 
 
+class ArtifactInvalidCursorError(ArtifactError):
+    def __init__(self) -> None:
+        super().__init__(
+            ArtifactErrorCode.INVALID_CURSOR,
+            _Messages.INVALID_CURSOR,
+        )
+
+
 class ArtifactBlobUnavailableError(ArtifactError):
     def __init__(self) -> None:
         super().__init__(
@@ -117,6 +127,7 @@ __all__ = (
     "ArtifactError",
     "ArtifactErrorCode",
     "ArtifactIdempotencyConflictError",
+    "ArtifactInvalidCursorError",
     "ArtifactInvalidSourceError",
     "ArtifactNotFoundError",
     "ArtifactRangeError",

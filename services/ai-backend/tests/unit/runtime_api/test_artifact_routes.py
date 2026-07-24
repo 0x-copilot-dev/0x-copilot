@@ -10,6 +10,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.testclient import TestClient
 
 from agent_runtime.artifacts import (
+    ArtifactInvalidCursorError,
     ArtifactListPage,
     ArtifactMutationResult,
     ArtifactNotFoundError,
@@ -106,26 +107,37 @@ class ArtifactRouteMixin:
         content: bytes,
         *,
         boundary: str = "artifact-test-boundary",
+        kind: str = "code",
+        content_first: bool = False,
     ) -> bytes:
-        return (
+        kind_part = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="kind"\r\n\r\n'
+            f"{kind}\r\n"
+        ).encode()
+        metadata_parts = (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="title"\r\n\r\n'
+            "bounded.txt\r\n"
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="media_type"\r\n\r\n'
+            "text/plain\r\n"
+        ).encode()
+        content_part = (
             (
-                f"--{boundary}\r\n"
-                'Content-Disposition: form-data; name="kind"\r\n\r\n'
-                "code\r\n"
-                f"--{boundary}\r\n"
-                'Content-Disposition: form-data; name="title"\r\n\r\n'
-                "bounded.txt\r\n"
-                f"--{boundary}\r\n"
-                'Content-Disposition: form-data; name="media_type"\r\n\r\n'
-                "text/plain\r\n"
                 f"--{boundary}\r\n"
                 'Content-Disposition: form-data; name="content"; '
                 'filename="bounded.txt"\r\n'
                 "Content-Type: text/plain\r\n\r\n"
             ).encode()
             + content
-            + f"\r\n--{boundary}--\r\n".encode()
+            + b"\r\n"
         )
+        return (
+            content_part + kind_part + metadata_parts
+            if content_first
+            else kind_part + metadata_parts + content_part
+        ) + f"--{boundary}--\r\n".encode()
 
     @classmethod
     def real_client(
@@ -324,6 +336,16 @@ class TestArtifactJsonRoutes(ArtifactRouteMixin):
         assert response.status_code == 404
         assert response.json() == {"detail": "Artifact was not found for this scope."}
 
+    def test_malformed_artifact_cursor_is_safe_422(self) -> None:
+        service = FakeArtifactService()
+        service.error = ArtifactInvalidCursorError()
+        response = self.client(service).get(
+            f"/v1/agent/runs/{self.RUN}/artifacts?cursor=%25%25%25bad",
+            headers=self.headers(),
+        )
+        assert response.status_code == 422
+        assert response.json() == {"detail": "Artifact cursor is invalid."}
+
 
 class TestArtifactMultipartRoutes(ArtifactRouteMixin):
     def test_create_streams_content_and_server_sets_user_author(self) -> None:
@@ -361,7 +383,8 @@ class TestArtifactMultipartRoutes(ArtifactRouteMixin):
         )
 
         assert response.status_code == 201, response.text
-        _, request, provenance, content = service.calls[0][1]
+        assert service.calls[0][0] == "get"
+        _, request, provenance, content = service.calls[1][1]
         assert request.parent_revision == 1
         assert not hasattr(request, "author")
         assert not hasattr(request, "source_ref")
@@ -374,8 +397,11 @@ class TestArtifactMultipartRoutes(ArtifactRouteMixin):
         response = self.client(FakeArtifactService()).post(
             f"/v1/agent/runs/{self.RUN}/artifacts",
             headers=self.headers(idempotency=True),
-            data={"kind": "code", "title": "x", "media_type": "text/plain"},
-            files={"other": ("other.txt", b"x", "text/plain")},
+            files=[
+                ("kind", (None, "code")),
+                ("title", (None, "x")),
+                ("media_type", (None, "text/plain")),
+            ],
         )
         assert response.status_code == 422
         assert response.json()["detail"] == "Multipart field `content` is required."
@@ -386,7 +412,12 @@ class TestArtifactMultipartRoutes(ArtifactRouteMixin):
         monkeypatch: pytest.MonkeyPatch,
         declared_length: str | None,
     ) -> None:
-        monkeypatch.setattr(ArtifactRoutes.Multipart, "MAXIMUM_FILE_BYTES", 16)
+        monkeypatch.setattr(
+            ArtifactRoutes.Multipart,
+            "KIND_FILE_LIMITS",
+            {"code": 16},
+        )
+        monkeypatch.setattr(ArtifactRoutes.Multipart, "MAXIMUM_FILE_BYTES", 1024)
         service = FakeArtifactService()
         boundary = "bounded-cap"
         body = self.multipart_body(b"x" * 17, boundary=boundary)
@@ -414,6 +445,89 @@ class TestArtifactMultipartRoutes(ArtifactRouteMixin):
             "Artifact exceeds the configured size limit."
         )
         assert service.calls == []
+
+    def test_create_rejects_content_before_kind_without_calling_service(self) -> None:
+        service = FakeArtifactService()
+        boundary = "content-before-kind"
+        response = self.client(service).post(
+            f"/v1/agent/runs/{self.RUN}/artifacts",
+            headers={
+                **self.headers(idempotency=True),
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+            content=self.multipart_body(
+                b"must-not-spool",
+                boundary=boundary,
+                content_first=True,
+            ),
+        )
+        assert response.status_code == 422
+        assert response.json() == {"detail": "Artifact multipart metadata is invalid."}
+        assert service.calls == []
+
+    def test_revision_authorizes_before_parsing_request_body(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        service = FakeArtifactService()
+        service.error = ArtifactNotFoundError()
+
+        async def fail_if_parsed(*args, **kwargs):
+            raise AssertionError("foreign revision body must not be parsed")
+
+        monkeypatch.setattr(ArtifactRoutes, "_multipart", fail_if_parsed)
+        response = self.client(service).post(
+            f"/v1/agent/artifacts/{self.ARTIFACT_ID}/revisions",
+            headers=self.headers(idempotency=True),
+            data={"parent_revision": "1"},
+            files={"content": ("demo.ts", b"secret bytes", "text/typescript")},
+        )
+        assert response.status_code == 404
+        assert response.json() == {"detail": "Artifact was not found for this scope."}
+
+    @pytest.mark.parametrize("declared_length", [None, "8"])
+    def test_revision_receipt_uses_authorized_artifact_kind_cap(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        declared_length: str | None,
+    ) -> None:
+        monkeypatch.setattr(
+            ArtifactRoutes.Multipart,
+            "KIND_FILE_LIMITS",
+            {"code": 16},
+        )
+        service = FakeArtifactService()
+        boundary = "revision-kind-cap"
+        body = (
+            (
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="parent_revision"\r\n\r\n'
+                "1\r\n"
+                f"--{boundary}\r\n"
+                'Content-Disposition: form-data; name="content"; '
+                'filename="revision.ts"\r\n'
+                "Content-Type: text/typescript\r\n\r\n"
+            ).encode()
+            + b"x" * 17
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        headers = {
+            **self.headers(idempotency=True),
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        }
+        if declared_length is not None:
+            headers["Content-Length"] = declared_length
+
+        response = self.client(service).post(
+            f"/v1/agent/artifacts/{self.ARTIFACT_ID}/revisions",
+            headers=headers,
+            content=body,
+        )
+        assert response.status_code == 413
+        assert response.json() == {
+            "detail": "Artifact exceeds the configured size limit."
+        }
+        assert [name for name, _ in service.calls] == ["get"]
 
     @pytest.mark.parametrize(
         ("path", "data"),
@@ -447,7 +561,11 @@ class TestArtifactMultipartRoutes(ArtifactRouteMixin):
             files={"content": ("x.txt", b"x", "text/plain")},
         )
         assert response.status_code == 422
-        assert service.calls == []
+        assert not {"create", "revise"} & {name for name, _ in service.calls}
+        if path.endswith("/revisions"):
+            assert [name for name, _ in service.calls] == ["get"]
+        else:
+            assert service.calls == []
 
 
 class TestArtifactContentRoute(ArtifactRouteMixin):

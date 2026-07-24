@@ -11,9 +11,11 @@ import pytest
 from agent_runtime.api.artifact_repository import (
     ArtifactServiceComposition,
     ArtifactSourceSnapshot,
+    INDEXED_ARTIFACT_SOURCE_SCHEMES,
     RuntimeArtifactRunScopeResolver,
     RuntimeArtifactSourceLookup,
     RuntimeArtifactSourceResolver,
+    UNINDEXED_ARTIFACT_SOURCE_SCHEMES,
 )
 from agent_runtime.artifacts import (
     ArtifactDigestMismatchError,
@@ -125,6 +127,13 @@ class TestRuntimeArtifactRunScopeResolver(ArtifactResolverMixin):
 
 
 class TestRuntimeArtifactSourceResolver(ArtifactResolverMixin):
+    def test_indexed_source_contract_exemption_is_explicit_and_closed(self) -> None:
+        assert INDEXED_ARTIFACT_SOURCE_SCHEMES == frozenset({"message"})
+        assert UNINDEXED_ARTIFACT_SOURCE_SCHEMES == frozenset({"operation", "payload"})
+        assert INDEXED_ARTIFACT_SOURCE_SCHEMES.isdisjoint(
+            UNINDEXED_ARTIFACT_SOURCE_SCHEMES
+        )
+
     @pytest.mark.asyncio
     async def test_rejects_physical_source_before_any_lookup(self) -> None:
         lookup = _Lookup()

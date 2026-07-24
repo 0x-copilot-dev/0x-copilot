@@ -24,6 +24,12 @@ from agent_runtime.artifacts import (
 )
 from agent_runtime.artifacts.contracts import validate_artifact_source_ref
 
+INDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset({"message"})
+# Explicit A2 contract exemption: the owning operation-result/payload stores do
+# not yet expose immutable indexed lookup ports. These schemes validate but
+# return scoped not-found; replay/scanning and filesystem fallback are forbidden.
+UNINDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset({"operation", "payload"})
+
 
 class _ArtifactMessageByIdPort(Protocol):
     """Exact, scoped message lookup implemented by each runtime store."""
@@ -249,7 +255,9 @@ __all__ = (
     "ArtifactServiceComposition",
     "ArtifactSourceLookupPort",
     "ArtifactSourceSnapshot",
+    "INDEXED_ARTIFACT_SOURCE_SCHEMES",
     "RuntimeArtifactRunScopeResolver",
     "RuntimeArtifactSourceLookup",
     "RuntimeArtifactSourceResolver",
+    "UNINDEXED_ARTIFACT_SOURCE_SCHEMES",
 )

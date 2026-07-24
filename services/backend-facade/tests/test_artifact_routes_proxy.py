@@ -23,11 +23,15 @@ class _AsyncBytes(httpx.AsyncByteStream):
     def __init__(self, *chunks: bytes) -> None:
         self._chunks = chunks
         self.yielded = 0
+        self.closed = False
 
     async def __aiter__(self):
         for chunk in self._chunks:
             self.yielded += 1
             yield chunk
+
+    async def aclose(self) -> None:
+        self.closed = True
 
 
 def _streaming_response(
@@ -82,6 +86,7 @@ class ArtifactFacadeMixin:
             FacadeSettings(
                 backend_url="http://backend.test",
                 ai_backend_url="http://ai-backend.test",
+                artifact_effects_v2=True,
             )
         )
         app.state.http_client = httpx.AsyncClient(
@@ -127,6 +132,7 @@ class TestArtifactFacade(ArtifactFacadeMixin):
         async def handler(request: httpx.Request) -> httpx.Response:
             captured["url"] = str(request.url)
             captured["headers"] = dict(request.headers)
+            captured["timeout"] = request.extensions["timeout"]
             chunks = [chunk async for chunk in request.stream]
             captured["request_chunks"] = chunks
             captured["body"] = b"".join(chunks)
@@ -167,6 +173,12 @@ class TestArtifactFacade(ArtifactFacadeMixin):
         assert headers["content-type"] == (f"multipart/form-data; boundary={boundary}")
         assert "content-length" not in headers
         assert "x-internal" not in response.headers
+        assert captured["timeout"] == {
+            "connect": 10.0,
+            "read": 900.0,
+            "write": 900.0,
+            "pool": 30.0,
+        }
 
     def test_proxy_hands_each_incoming_chunk_to_upstream_without_buffering(
         self,
@@ -174,9 +186,11 @@ class TestArtifactFacade(ArtifactFacadeMixin):
     ) -> None:
         request_chunks = (b"part-one", b"-part-two", b"-part-three")
         captured: list[bytes] = []
+        timeout_seen: list[httpx.Timeout] = []
 
         class IncrementalUpstream:
             def build_request(self, method, url, **kwargs):
+                timeout_seen.append(kwargs["timeout"])
                 return type(
                     "BuiltRequest",
                     (),
@@ -256,6 +270,7 @@ class TestArtifactFacade(ArtifactFacadeMixin):
         asyncio.run(exercise())
         # Starlette terminates Request.stream() with one empty sentinel.
         assert [chunk for chunk in captured if chunk] == list(request_chunks)
+        assert timeout_seen == [ArtifactProxy.UPSTREAM_TIMEOUT]
 
     def test_download_uses_raw_iterator_and_header_allowlists(
         self, monkeypatch: pytest.MonkeyPatch
@@ -305,6 +320,31 @@ class TestArtifactFacade(ArtifactFacadeMixin):
         assert upstream_headers["if-range"] == '"abc"'
         assert "x-storage-key" not in response.headers
         assert response.headers["x-content-type-options"] == "nosniff"
+
+    def test_downstream_disconnect_closes_upstream_without_draining(self) -> None:
+        upstream_stream = _AsyncBytes(b"one", b"two", b"three")
+        upstream = httpx.Response(200, stream=upstream_stream)
+
+        class DisconnectAfterFirst:
+            def __init__(self) -> None:
+                self.checks = 0
+
+            async def is_disconnected(self) -> bool:
+                self.checks += 1
+                return self.checks > 1
+
+        async def exercise() -> list[bytes]:
+            return [
+                chunk
+                async for chunk in ArtifactProxy._raw_response(
+                    request=DisconnectAfterFirst(),  # type: ignore[arg-type]
+                    upstream=upstream,
+                )
+            ]
+
+        assert asyncio.run(exercise()) == [b"one"]
+        assert upstream_stream.yielded == 2
+        assert upstream_stream.closed is True
 
     def test_list_forwards_only_supported_query_fields(
         self, monkeypatch: pytest.MonkeyPatch
@@ -374,3 +414,66 @@ class TestArtifactFacade(ArtifactFacadeMixin):
             ("POST", "/v1/agent/artifacts:promote"),
             ("DELETE", f"/v1/agent/artifacts/{self.ARTIFACT_ID}"),
         ]
+
+
+class TestArtifactFacadeFeatureGate(ArtifactFacadeMixin):
+    @staticmethod
+    def _artifact_operation_count(paths: dict[str, object]) -> int:
+        methods = {"get", "post", "delete", "put", "patch"}
+        return sum(
+            1
+            for path, operations in paths.items()
+            if "/artifacts" in path
+            for method in operations
+            if method in methods
+        )
+
+    @pytest.mark.parametrize("value", [None, "false", "0", "no", "off"])
+    def test_shared_setting_defaults_off(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        value: str | None,
+    ) -> None:
+        if value is None:
+            monkeypatch.delenv("ARTIFACT_EFFECTS_V2", raising=False)
+        else:
+            monkeypatch.setenv("ARTIFACT_EFFECTS_V2", value)
+        assert FacadeSettings.load().artifact_effects_v2 is False
+
+    @pytest.mark.parametrize("value", ["true", "1", "yes", "on"])
+    def test_shared_setting_explicitly_enables_routes(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        value: str,
+    ) -> None:
+        monkeypatch.setenv("ARTIFACT_EFFECTS_V2", value)
+        assert FacadeSettings.load().artifact_effects_v2 is True
+
+    def test_feature_off_preserves_route_table_and_returns_404(self) -> None:
+        app = create_app(
+            FacadeSettings(
+                backend_url="http://backend.test",
+                ai_backend_url="http://ai-backend.test",
+                artifact_effects_v2=False,
+            )
+        )
+        with TestClient(app) as client:
+            paths = client.get("/openapi.json").json()["paths"]
+            response = client.get(
+                f"/v1/agent/artifacts/{self.ARTIFACT_ID}",
+                headers={"authorization": self.bearer()},
+            )
+        assert self._artifact_operation_count(paths) == 0
+        assert response.status_code == 404
+
+    def test_feature_on_registers_all_eight_proxy_operations(self) -> None:
+        app = create_app(
+            FacadeSettings(
+                backend_url="http://backend.test",
+                ai_backend_url="http://ai-backend.test",
+                artifact_effects_v2=True,
+            )
+        )
+        with TestClient(app) as client:
+            paths = client.get("/openapi.json").json()["paths"]
+        assert self._artifact_operation_count(paths) == 8

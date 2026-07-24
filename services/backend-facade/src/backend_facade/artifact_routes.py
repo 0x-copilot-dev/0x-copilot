@@ -16,6 +16,15 @@ from backend_facade.settings import FacadeSettings
 class ArtifactProxy:
     """Authenticate once, then stream request and response bytes unchanged."""
 
+    # Artifact payloads are bounded but may be large (up to 250 MiB). Never
+    # disable timeouts: use short connection/pool bounds and generous finite
+    # read/write windows that still release stalled sockets deterministically.
+    UPSTREAM_TIMEOUT = httpx.Timeout(
+        connect=10.0,
+        write=900.0,
+        read=900.0,
+        pool=30.0,
+    )
     REQUEST_HEADERS = frozenset(
         {
             "content-type",
@@ -74,7 +83,7 @@ class ArtifactProxy:
                 params=params,
                 headers=headers,
                 content=body,
-                timeout=None,
+                timeout=cls.UPSTREAM_TIMEOUT,
             ),
             stream=True,
         )

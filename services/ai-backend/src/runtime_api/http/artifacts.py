@@ -35,6 +35,7 @@ from agent_runtime.artifacts import (
     ArtifactDigestMismatchError,
     ArtifactError,
     ArtifactIdempotencyConflictError,
+    ArtifactInvalidCursorError,
     ArtifactInvalidSourceError,
     ArtifactLimits,
     ArtifactNotFoundError,
@@ -49,8 +50,10 @@ from agent_runtime.artifacts import (
 from agent_runtime.surfaces_v2.ledger_models import ArtifactAuthor, ArtifactKind
 from runtime_api.http.artifact_content import ArtifactContentPolicy
 from runtime_api.http.artifact_multipart import (
+    ArtifactMultipartInvalid,
     ArtifactMultipartReader,
     ArtifactMultipartTooLarge,
+    PROCESS_ARTIFACT_UPLOAD_ADMISSION,
 )
 from runtime_api.identity import Identity
 from runtime_api.rbac import RequireScopes
@@ -63,6 +66,11 @@ from runtime_api.schemas.artifacts import (
     ArtifactRevisionMetadata,
     ArtifactRevisionResponse,
 )
+
+_ARTIFACT_LIMITS = ArtifactLimits()
+_ARTIFACT_KIND_FILE_LIMITS = {
+    kind.value: _ARTIFACT_LIMITS.for_kind(kind).maximum_bytes for kind in ArtifactKind
+}
 
 
 class ArtifactRoutes:
@@ -83,12 +91,15 @@ class ArtifactRoutes:
         MAX_FIELDS = 8
         MAX_METADATA_PART_BYTES = 16 * 1024
         CHUNK_BYTES = 64 * 1024
-        MAXIMUM_FILE_BYTES = ArtifactLimits().file.maximum_bytes
+        KIND_FILE_LIMITS = _ARTIFACT_KIND_FILE_LIMITS
+        MAXIMUM_FILE_BYTES = max(KIND_FILE_LIMITS.values())
         MAXIMUM_OVERHEAD_BYTES = 256 * 1024
+        ADMISSION = PROCESS_ARTIFACT_UPLOAD_ADMISSION
 
     _ERROR_STATUS: dict[type[ArtifactError], int] = {
         ArtifactNotFoundError: status.HTTP_404_NOT_FOUND,
         ArtifactInvalidSourceError: status.HTTP_404_NOT_FOUND,
+        ArtifactInvalidCursorError: status.HTTP_422_UNPROCESSABLE_CONTENT,
         ArtifactConflictError: status.HTTP_409_CONFLICT,
         ArtifactIdempotencyConflictError: status.HTTP_409_CONFLICT,
         ArtifactTooLargeError: status.HTTP_413_CONTENT_TOO_LARGE,
@@ -108,39 +119,44 @@ class ArtifactRoutes:
             ..., alias="Idempotency-Key", min_length=1, max_length=255
         ),
     ) -> ArtifactMutationResponse:
-        form, content = await cls._multipart(request)
-        try:
-            metadata = ArtifactCreateMetadata.model_validate(
-                cls._metadata_fields(form, excluding={cls.Multipart.CONTENT})
+        async with cls.Multipart.ADMISSION.slot():
+            form, content = await cls._multipart(
+                request,
+                maximum_file_bytes=cls.Multipart.MAXIMUM_FILE_BYTES,
+                kind_file_limits=cls.Multipart.KIND_FILE_LIMITS,
             )
-            result = await cls._service(request).create_from_stream(
-                org_id=identity.org_id,
-                user_id=identity.user_id,
-                request=ArtifactCreateRequest(
-                    run_id=run_id,
-                    kind=metadata.kind,
-                    title=metadata.title,
-                    media_type=metadata.media_type,
-                    suggested_filename=metadata.suggested_filename,
-                    expected_digest=metadata.expected_digest,
-                    idempotency_key=idempotency_key,
-                ),
-                provenance=ArtifactProvenance(
-                    author=ArtifactAuthor.USER,
-                    source_ref=None,
-                ),
-                chunks=cls._upload_chunks(content),
-            )
-        except ValidationError as exc:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                cls.Messages.INVALID_MULTIPART,
-            ) from exc
-        except ArtifactError as exc:
-            raise cls._http(exc) from exc
-        finally:
-            await content.close()
-            await form.close()
+            try:
+                metadata = ArtifactCreateMetadata.model_validate(
+                    cls._metadata_fields(form, excluding={cls.Multipart.CONTENT})
+                )
+                result = await cls._service(request).create_from_stream(
+                    org_id=identity.org_id,
+                    user_id=identity.user_id,
+                    request=ArtifactCreateRequest(
+                        run_id=run_id,
+                        kind=metadata.kind,
+                        title=metadata.title,
+                        media_type=metadata.media_type,
+                        suggested_filename=metadata.suggested_filename,
+                        expected_digest=metadata.expected_digest,
+                        idempotency_key=idempotency_key,
+                    ),
+                    provenance=ArtifactProvenance(
+                        author=ArtifactAuthor.USER,
+                        source_ref=None,
+                    ),
+                    chunks=cls._upload_chunks(content),
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    cls.Messages.INVALID_MULTIPART,
+                ) from exc
+            except ArtifactError as exc:
+                raise cls._http(exc) from exc
+            finally:
+                await content.close()
+                await form.close()
         return ArtifactMutationResponse.from_result(result)
 
     @classmethod
@@ -281,36 +297,51 @@ class ArtifactRoutes:
             ..., alias="Idempotency-Key", min_length=1, max_length=255
         ),
     ) -> ArtifactMutationResponse:
-        form, content = await cls._multipart(request)
+        service = cls._service(request)
         try:
-            metadata = ArtifactRevisionMetadata.model_validate(
-                cls._metadata_fields(form, excluding={cls.Multipart.CONTENT})
-            )
-            result = await cls._service(request).append_revision_from_stream(
+            record = await service.get_metadata(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
-                request=ArtifactRevisionRequest(
-                    artifact_id=artifact_id,
-                    parent_revision=metadata.parent_revision,
-                    expected_digest=metadata.expected_digest,
-                    idempotency_key=idempotency_key,
-                ),
-                provenance=ArtifactProvenance(
-                    author=ArtifactAuthor.USER,
-                    source_ref=None,
-                ),
-                chunks=cls._upload_chunks(content),
+                artifact_id=artifact_id,
             )
-        except ValidationError as exc:
-            raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_CONTENT,
-                cls.Messages.INVALID_MULTIPART,
-            ) from exc
         except ArtifactError as exc:
             raise cls._http(exc) from exc
-        finally:
-            await content.close()
-            await form.close()
+        maximum_file_bytes = cls.Multipart.KIND_FILE_LIMITS[record.artifact.kind.value]
+
+        async with cls.Multipart.ADMISSION.slot():
+            form, content = await cls._multipart(
+                request,
+                maximum_file_bytes=maximum_file_bytes,
+            )
+            try:
+                metadata = ArtifactRevisionMetadata.model_validate(
+                    cls._metadata_fields(form, excluding={cls.Multipart.CONTENT})
+                )
+                result = await service.append_revision_from_stream(
+                    org_id=identity.org_id,
+                    user_id=identity.user_id,
+                    request=ArtifactRevisionRequest(
+                        artifact_id=artifact_id,
+                        parent_revision=metadata.parent_revision,
+                        expected_digest=metadata.expected_digest,
+                        idempotency_key=idempotency_key,
+                    ),
+                    provenance=ArtifactProvenance(
+                        author=ArtifactAuthor.USER,
+                        source_ref=None,
+                    ),
+                    chunks=cls._upload_chunks(content),
+                )
+            except ValidationError as exc:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    cls.Messages.INVALID_MULTIPART,
+                ) from exc
+            except ArtifactError as exc:
+                raise cls._http(exc) from exc
+            finally:
+                await content.close()
+                await form.close()
         return ArtifactMutationResponse.from_result(result)
 
     @classmethod
@@ -363,20 +394,32 @@ class ArtifactRoutes:
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @classmethod
-    async def _multipart(cls, request: Request) -> tuple[FormData, UploadFile]:
+    async def _multipart(
+        cls,
+        request: Request,
+        *,
+        maximum_file_bytes: int,
+        kind_file_limits: dict[str, int] | None = None,
+    ) -> tuple[FormData, UploadFile]:
         try:
             form = await ArtifactMultipartReader.parse(
                 request,
-                maximum_file_bytes=cls.Multipart.MAXIMUM_FILE_BYTES,
+                maximum_file_bytes=maximum_file_bytes,
                 maximum_overhead_bytes=cls.Multipart.MAXIMUM_OVERHEAD_BYTES,
                 maximum_files=cls.Multipart.MAX_FILES,
                 maximum_fields=cls.Multipart.MAX_FIELDS,
                 maximum_field_bytes=cls.Multipart.MAX_METADATA_PART_BYTES,
+                kind_file_limits=kind_file_limits,
             )
         except ArtifactMultipartTooLarge as exc:
             raise HTTPException(
                 status.HTTP_413_CONTENT_TOO_LARGE,
                 ArtifactTooLargeError().safe_message,
+            ) from exc
+        except ArtifactMultipartInvalid as exc:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_CONTENT,
+                cls.Messages.INVALID_MULTIPART,
             ) from exc
         except AssertionError as exc:
             raise HTTPException(

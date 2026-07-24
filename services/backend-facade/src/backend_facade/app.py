@@ -155,7 +155,8 @@ def create_app(
 
     register_adapter_registry_routes(app)
     register_adapter_review_routes(app)
-    register_artifact_proxy_routes(app)
+    if app.state.settings.artifact_effects_v2:
+        register_artifact_proxy_routes(app)
     register_agents_routes(app)
     register_audit_routes(app)
     register_auth_routes(app)
