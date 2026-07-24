@@ -166,7 +166,7 @@
       "capability": "builtin",
       "op": "stage_rowset_write",
       "executor": "builtin",
-      "effect_class": "internal_reversible",
+      "effect_class": "external_reversible",
       "result_kind": "activity",
       "supports_prepare": true,
       "supports_reconcile": false,

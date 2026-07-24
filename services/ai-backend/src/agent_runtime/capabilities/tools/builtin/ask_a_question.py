@@ -11,8 +11,13 @@ from langgraph.types import interrupt as langgraph_interrupt
 from pydantic import Field, ValidationError, field_validator
 
 from agent_runtime.api.constants import Keys, Values
+from agent_runtime.capabilities.operations.builtin_adapter import (
+    BuiltinOperationAdapter,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 from agent_runtime.prompts.tools import ASK_A_QUESTION_TOOL_DESCRIPTION
+
+_OPERATION = BuiltinOperationAdapter(tool_name=Values.Tool.ASK_A_QUESTION)
 
 
 class _Fields:
@@ -115,26 +120,36 @@ class AskAQuestionTool:
         if isinstance(parsed, dict):
             return parsed
 
-        approval_id = self._approval_id()
-        payload: dict[str, Any] = {
-            Keys.Field.API_EVENT_TYPE: "approval_requested",
-            Keys.Field.EVENT_TYPE: "approval_requested",
-            Keys.Field.APPROVAL_ID: approval_id,
-            "action_id": approval_id,
-            Keys.Field.APPROVAL_KIND: Values.ApprovalKind.ASK_A_QUESTION,
-            _Fields.HEADER: parsed.header,
-            _Fields.QUESTION: parsed.question,
-            _Fields.HINT: parsed.hint,
-            _Fields.OPTIONS: [
-                option.model_dump(mode="json") for option in parsed.options
-            ],
-            _Fields.MULTI_SELECT: parsed.multi_select,
-            _Fields.ALLOW_FREE_TEXT: parsed.allow_free_text,
-            Keys.Field.STATUS: "pending",
-            "message": parsed.question,
-        }
-        resume = self.interrupt_handler(payload)
-        return self._resume_result(resume)
+        async def _legacy() -> dict[str, Any]:
+            approval_id = self._approval_id()
+            payload: dict[str, Any] = {
+                Keys.Field.API_EVENT_TYPE: "approval_requested",
+                Keys.Field.EVENT_TYPE: "approval_requested",
+                Keys.Field.APPROVAL_ID: approval_id,
+                "action_id": approval_id,
+                Keys.Field.APPROVAL_KIND: Values.ApprovalKind.ASK_A_QUESTION,
+                _Fields.HEADER: parsed.header,
+                _Fields.QUESTION: parsed.question,
+                _Fields.HINT: parsed.hint,
+                _Fields.OPTIONS: [
+                    option.model_dump(mode="json") for option in parsed.options
+                ],
+                _Fields.MULTI_SELECT: parsed.multi_select,
+                _Fields.ALLOW_FREE_TEXT: parsed.allow_free_text,
+                Keys.Field.STATUS: "pending",
+                "message": parsed.question,
+            }
+            resume = self.interrupt_handler(payload)
+            return self._resume_result(resume)
+
+        result = await _OPERATION.execute(
+            arguments=parsed.model_dump(mode="json"),
+            legacy=_legacy,
+            safe_summary="Question was presented to the user.",
+        )
+        if result.value is not None:
+            return result.value
+        return {"ok": False, "decision": "blocked", "message": result.safe_summary}
 
     async def __call__(
         self, raw_input: AskAQuestionInput | Mapping[str, Any] | str

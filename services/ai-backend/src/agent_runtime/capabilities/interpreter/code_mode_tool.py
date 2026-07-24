@@ -17,6 +17,9 @@ from dataclasses import dataclass
 
 from langchain_core.tools import StructuredTool
 
+from agent_runtime.capabilities.operations.builtin_adapter import (
+    BuiltinOperationAdapter,
+)
 from agent_runtime.capabilities.interpreter.contracts import (
     InterpreterCompleted,
     RunCodeModeInput,
@@ -45,6 +48,7 @@ TOOL_DESCRIPTION = (
     "need in `external_functions`; each call is still subject to normal "
     "approval and budget. Returns the program's JSON result."
 )
+_OPERATION = BuiltinOperationAdapter(tool_name=TOOL_NAME)
 
 
 class CodeModeToolFactory:
@@ -70,13 +74,33 @@ class CodeModeToolFactory:
                 inputs=inputs or {},
                 external_functions=tuple(external_functions),
             )
-            outcome = await service.run(
-                model_input,
-                run_id=identity.run_id,
-                org_id=identity.org_id,
-                user_id=identity.user_id,
+
+            async def _legacy() -> str:
+                outcome = await service.run(
+                    model_input,
+                    run_id=identity.run_id,
+                    org_id=identity.org_id,
+                    user_id=identity.user_id,
+                )
+                return cls._render(outcome)
+
+            invocation = await _OPERATION.execute(
+                arguments=model_input.model_dump(mode="json"),
+                legacy=_legacy,
+                safe_summary="Code-mode computation completed.",
             )
-            return cls._render(outcome)
+            if invocation.value is not None:
+                return invocation.value
+            return json.dumps(
+                {
+                    "status": "failed",
+                    "error_code": "operation_blocked",
+                    "message": invocation.safe_summary,
+                    "limit_kind": None,
+                    "retryable": False,
+                    "stdout": "",
+                }
+            )
 
         return StructuredTool.from_function(
             coroutine=_run_code_mode,
