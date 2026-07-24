@@ -60,6 +60,7 @@ class Values:
         CANCELLED = "cancelled"
         CONCURRENCY_LIMIT_EXCEEDED = "concurrency_limit_exceeded"
         MALFORMED_RESULT = "malformed_result"
+        PERMISSION_DENIED = "permission_denied"
         OVERSIZED_RESULT = "oversized_result"
         RUNNER_ERROR = "runner_error"
         STALE_TASK_ID = "stale_task_id"
@@ -137,6 +138,7 @@ class Messages:
 
     class Lifecycle:
         CANCELLED_TASK = "The subagent task has been cancelled."
+        PERMISSION_DENIED = "The subagent task is not authorized for this run."
         MALFORMED_RESULT = "The subagent returned an invalid result."
         OVERSIZED_RESULT = "The subagent returned too much output."
         RUNNER_ERROR = "The subagent task could not be updated right now."

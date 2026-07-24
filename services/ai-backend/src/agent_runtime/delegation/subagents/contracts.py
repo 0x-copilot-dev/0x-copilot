@@ -21,6 +21,10 @@ from agent_runtime.execution.contracts import (
     JsonScalar,
     RuntimeContract,
 )
+from agent_runtime.delegation.subagents.authority import (
+    SubagentCapabilityGrant,
+    SubagentPolicyGrant,
+)
 from agent_runtime.delegation.subagents.constants import (
     Defaults,
     Limits,
@@ -61,6 +65,7 @@ class SubagentErrorCode(StrEnum):
     CANCELLED = Values.ErrorCode.CANCELLED
     STALE_TASK_ID = Values.ErrorCode.STALE_TASK_ID
     MALFORMED_RESULT = Values.ErrorCode.MALFORMED_RESULT
+    PERMISSION_DENIED = Values.ErrorCode.PERMISSION_DENIED
     OVERSIZED_RESULT = Values.ErrorCode.OVERSIZED_RESULT
     RUNNER_ERROR = Values.ErrorCode.RUNNER_ERROR
     VALIDATION_ERROR = Values.ErrorCode.VALIDATION_ERROR
@@ -143,6 +148,10 @@ class SubagentDefinition(RuntimeContract):
     tools: frozenset[str] = Field(default_factory=frozenset)
     skills: frozenset[str] = Field(default_factory=frozenset)
     required_scopes: frozenset[str] = Field(default_factory=frozenset)
+    # Empty means "inherit the parent scope ceiling".  A non-empty set is an
+    # additional definition-owned ceiling, never an expansion.
+    allowed_scopes: frozenset[str] = Field(default_factory=frozenset)
+    policy: SubagentPolicyGrant = Field(default_factory=SubagentPolicyGrant)
     timeout_seconds: PositiveInt = Field(
         default=Defaults.SUBAGENT_TIMEOUT_SECONDS,
         le=Limits.TIMEOUT_MAX_SECONDS,
@@ -189,6 +198,11 @@ class SubagentDefinition(RuntimeContract):
         return SubagentValueNormalizer.normalize_scope_set(
             value, _Fields.REQUIRED_SCOPES
         )
+
+    @field_validator("allowed_scopes", mode="before")
+    @classmethod
+    def _normalize_allowed_scopes(cls, value: object) -> frozenset[str]:
+        return SubagentValueNormalizer.normalize_scope_set(value, "allowed_scopes")
 
 
 class SubagentOutputContract(RuntimeContract):
@@ -237,6 +251,9 @@ class SubagentTask(RuntimeContract):
     runtime_context_ref: RuntimeContextReference
     allowed_tools: frozenset[str] = Field(default_factory=frozenset)
     allowed_skills: frozenset[str] = Field(default_factory=frozenset)
+    # This is an effective, server-computed ceiling.  The lifecycle rebuilds
+    # it from the verified parent context before a runner ever receives a task.
+    authority: SubagentCapabilityGrant = Field(default_factory=SubagentCapabilityGrant)
     output_contract: SubagentOutputContract = Field(
         default_factory=SubagentOutputContract
     )
@@ -449,6 +466,11 @@ class AsyncTaskState(RuntimeContract):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     deadline_at: datetime | None = None
+    # Persist the verified child authority with lifecycle metadata.  Later
+    # update/cancel paths can then reject a handoff that tries to widen a task
+    # after its initial dispatch.
+    runtime_context_ref: RuntimeContextReference
+    authority: SubagentCapabilityGrant
 
     @field_validator(_Fields.TASK_ID, _Fields.THREAD_ID, _Fields.RUN_ID)
     @classmethod

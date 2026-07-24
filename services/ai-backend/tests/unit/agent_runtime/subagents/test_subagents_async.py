@@ -135,8 +135,10 @@ class TestSubagentsAndAsyncAgents(SubagentTestMixin):
         assert checked.state.status is AsyncTaskStatus.SUCCEEDED
         assert checked.result is not None
         assert checked.result.response == self.Values.RESPONSE
-        assert runner.started_tasks == [task]
-        assert runner.updated_tasks == [task]
+        assert len(runner.started_tasks) == 1
+        assert len(runner.updated_tasks) == 1
+        assert runner.started_tasks[0].authority == started.state.authority
+        assert runner.updated_tasks[0].authority == started.state.authority
 
         cancel_runner = self.make_runner()
         cancel_lifecycle = self.make_lifecycle(runner=cancel_runner)
