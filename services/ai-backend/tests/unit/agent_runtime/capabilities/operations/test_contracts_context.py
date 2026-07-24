@@ -153,17 +153,45 @@ class TestBoundedResultContracts:
 
 class TestGatewayModeSettings:
     def test_default_is_off_and_closed_values_parse(self) -> None:
-        assert (
-            RuntimeSettings.load(environ={}).execution.operation_gateway_mode
-            is OperationGatewayMode.OFF
-        )
+        defaults = RuntimeSettings.load(environ={}).execution
+        assert defaults.operation_gateway_mode is OperationGatewayMode.OFF
+        assert defaults.workspace_effect_mode is OperationGatewayMode.OFF
         for mode in OperationGatewayMode:
             settings = RuntimeSettings.load(
-                environ={"OPERATION_GATEWAY_MODE": mode.value}
+                environ={
+                    "OPERATION_GATEWAY_MODE": mode.value,
+                    "WORKSPACE_EFFECT_MODE": (
+                        mode.value
+                        if mode is not OperationGatewayMode.ENFORCE
+                        else OperationGatewayMode.OFF.value
+                    ),
+                }
             )
             assert settings.execution.operation_gateway_mode is mode
+            if mode is not OperationGatewayMode.ENFORCE:
+                assert settings.execution.workspace_effect_mode is mode
         with pytest.raises(ValueError, match="OperationGatewayMode"):
             RuntimeSettings.load(environ={"OPERATION_GATEWAY_MODE": "sometimes"})
+
+    def test_workspace_enforce_requires_universal_enforce(self) -> None:
+        with pytest.raises(
+            ValueError,
+            match="WORKSPACE_EFFECT_MODE=enforce requires",
+        ):
+            RuntimeSettings.load(
+                environ={
+                    "OPERATION_GATEWAY_MODE": "shadow",
+                    "WORKSPACE_EFFECT_MODE": "enforce",
+                }
+            )
+
+        settings = RuntimeSettings.load(
+            environ={
+                "OPERATION_GATEWAY_MODE": "enforce",
+                "WORKSPACE_EFFECT_MODE": "enforce",
+            }
+        )
+        assert settings.execution.workspace_effect_mode is OperationGatewayMode.ENFORCE
 
     def test_enforce_requires_all_three_authoritative_dependencies(self) -> None:
         for values in (

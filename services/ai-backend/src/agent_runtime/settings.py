@@ -55,6 +55,9 @@ class _EnvFields:
     # configuration fails honestly, but startup validation refuses it until
     # durable canonical arguments plus the generic stage/executor exist.
     OPERATION_GATEWAY_MODE = "OPERATION_GATEWAY_MODE"
+    # C3 workspace migration lane. ``enforce`` routes every /workspace mutation
+    # through A3 -> A4 -> A5; it never enables the retired direct broker path.
+    WORKSPACE_EFFECT_MODE = "WORKSPACE_EFFECT_MODE"
     # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
     # executor accumulates chunks for the window and flushes via
     # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
@@ -174,11 +177,22 @@ class RuntimeExecutionSettings(RuntimeContract):
     # v2.1 Universal Operation Gateway. A3 is observational only, so the
     # initial default is explicitly off.
     operation_gateway_mode: OperationGatewayMode = OperationGatewayMode.OFF
+    # v2.1 workspace product integration. Kept separately from the universal
+    # gateway flag so the workspace cohort can roll out and roll back without
+    # widening enforcement to unrelated capabilities.
+    workspace_effect_mode: OperationGatewayMode = OperationGatewayMode.OFF
 
     @model_validator(mode="after")
     def _artifact_drafts_require_repository(self) -> "RuntimeExecutionSettings":
         if self.artifact_drafts_v2 and not self.artifact_effects_v2:
             raise ValueError("ARTIFACT_DRAFTS_V2 requires ARTIFACT_EFFECTS_V2")
+        if (
+            self.workspace_effect_mode is OperationGatewayMode.ENFORCE
+            and self.operation_gateway_mode is not OperationGatewayMode.ENFORCE
+        ):
+            raise ValueError(
+                "WORKSPACE_EFFECT_MODE=enforce requires OPERATION_GATEWAY_MODE=enforce"
+            )
         return self
 
 
@@ -431,6 +445,13 @@ class RuntimeSettings(BaseSettings):
                     _s(
                         v,
                         E.OPERATION_GATEWAY_MODE,
+                        OperationGatewayMode.OFF.value,
+                    ).lower()
+                ),
+                workspace_effect_mode=OperationGatewayMode(
+                    _s(
+                        v,
+                        E.WORKSPACE_EFFECT_MODE,
                         OperationGatewayMode.OFF.value,
                     ).lower()
                 ),

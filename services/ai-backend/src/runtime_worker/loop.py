@@ -104,6 +104,8 @@ class RuntimeWorker:
         artifact_service: object | None = None,
         artifact_blob_store: object | None = None,
         artifact_reference_store: object | None = None,
+        workspace_host_sessions: object | None = None,
+        workspace_overlay_store: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -155,6 +157,12 @@ class RuntimeWorker:
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
         self.artifact_service = artifact_service
+        self.workspace_host_sessions = workspace_host_sessions
+        self.workspace_overlay_store = (
+            workspace_overlay_store
+            if workspace_overlay_store is not None
+            else self._default_workspace_overlay_store()
+        )
         self.run_handler = run_handler or RuntimeRunHandler(
             persistence=self.persistence,
             event_store=self.event_store,
@@ -171,6 +179,8 @@ class RuntimeWorker:
             artifact_service=artifact_service,
             artifact_blob_store=artifact_blob_store,
             artifact_reference_store=artifact_reference_store,
+            workspace_host_sessions=workspace_host_sessions,
+            workspace_overlay_store=self.workspace_overlay_store,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -220,6 +230,8 @@ class RuntimeWorker:
                     mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
                 ),
                 timeout_seconds=self.settings.default_timeout_seconds,
+                workspace_sessions=workspace_host_sessions,  # type: ignore[arg-type]
+                workspace_overlay_store=self.workspace_overlay_store,  # type: ignore[arg-type]
             )
             self.effect_commit_handler = RuntimeEffectCommitHandler(
                 persistence=self.persistence,
@@ -232,6 +244,28 @@ class RuntimeWorker:
             )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
+
+    def _default_workspace_overlay_store(self) -> object:
+        """Select C1 metadata persistence without inventing a Postgres side-store."""
+
+        if (
+            self.settings.store.backend == "file"
+            and self.settings.store.file_store_root
+        ):
+            from runtime_adapters.file.workspace_overlay_store import (
+                FileWorkspaceOverlayStore,
+            )
+
+            return FileWorkspaceOverlayStore(root=self.settings.store.file_store_root)
+        if self.settings.store.backend == "in_memory":
+            from runtime_adapters.in_memory.workspace_overlay_store import (
+                InMemoryWorkspaceOverlayStore,
+            )
+
+            return InMemoryWorkspaceOverlayStore()
+        # Local workspace is not a server-filesystem feature. Postgres/web
+        # deployments intentionally receive the tombstone backend in enforce.
+        return None
 
     def _effect_claim_store(self) -> object:
         """Select the A5 durable claim store for D1's exact MCP executor."""

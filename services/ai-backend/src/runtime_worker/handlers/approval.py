@@ -523,6 +523,19 @@ class RuntimeApprovalHandler:
         approval-gated exactly as on the initial run path. Both are ``None`` off
         the file backend, so the write path stays inert.
         """
+        if (
+            self.settings.execution.workspace_effect_mode
+            is OperationGatewayMode.ENFORCE
+        ):
+            # Enforce never resumes the retired filesystem interrupt into a
+            # broker mutation. A stale pre-cutover approval receives a mounted
+            # tombstone, so CompositeBackend cannot fall through to StateBackend.
+            from agent_runtime.capabilities.workspace.deep_backend import (  # noqa: PLC0415
+                WorkspaceTombstoneBackend,
+            )
+
+            return WorkspaceTombstoneBackend()
+
         file_store = self._file_store_wiring.file_store()
         snapshot_store = (
             getattr(file_store, "object_store", None)

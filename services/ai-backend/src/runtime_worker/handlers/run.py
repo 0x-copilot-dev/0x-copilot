@@ -225,6 +225,8 @@ class RuntimeRunHandler:
         artifact_service: object | None = None,
         artifact_blob_store: object | None = None,
         artifact_reference_store: object | None = None,
+        workspace_host_sessions: object | None = None,
+        workspace_overlay_store: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -238,6 +240,8 @@ class RuntimeRunHandler:
         self.artifact_service = artifact_service
         self._artifact_blob_store = artifact_blob_store
         self._artifact_reference_store = artifact_reference_store
+        self._workspace_host_sessions = workspace_host_sessions
+        self._workspace_overlay_store = workspace_overlay_store
         self.settings = settings or RuntimeSettings.load()
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
@@ -464,7 +468,11 @@ class RuntimeRunHandler:
                     mcp_gateway_services
                 )
             tool_observation_index = await self._tool_observation_index(command, run)
-            workspace_backend = await self._workspace_backend_for_run(command)
+            workspace_backend = await self._workspace_backend_for_run(
+                command,
+                run=run,
+                mcp_gateway_services=mcp_gateway_services,
+            )
             dependencies = self._dependencies_for_run(
                 command,
                 tool_observation_index,
@@ -1097,7 +1105,11 @@ class RuntimeRunHandler:
         )
 
     async def _workspace_backend_for_run(
-        self, command: RuntimeRunCommand
+        self,
+        command: RuntimeRunCommand,
+        *,
+        run: RunRecord,
+        mcp_gateway_services: McpOperationGatewayServices | None,
     ) -> object | None:
         """Construct the per-run ``/workspace/`` backend, or ``None``.
 
@@ -1114,6 +1126,15 @@ class RuntimeRunHandler:
         are ``None`` off the file backend, so the write path stays inert.
         """
 
+        if (
+            self.settings.execution.workspace_effect_mode
+            is OperationGatewayMode.ENFORCE
+        ):
+            return self._workspace_effect_backend_for_run(
+                run=run,
+                mcp_gateway_services=mcp_gateway_services,
+            )
+
         file_store = self._file_store_wiring().file_store()
         snapshot_store = (
             getattr(file_store, "object_store", None)
@@ -1129,6 +1150,93 @@ class RuntimeRunHandler:
             snapshot_store=snapshot_store,
             snapshot_emitter=snapshot_emitter,
         ).workspace_backend()
+
+    def _workspace_effect_backend_for_run(
+        self,
+        *,
+        run: RunRecord,
+        mcp_gateway_services: McpOperationGatewayServices | None,
+    ) -> object:
+        """Build C3's only enforced workspace path or a fail-closed tombstone."""
+
+        from agent_runtime.capabilities.operations.gateway import (  # noqa: PLC0415
+            OperationGateway,
+        )
+        from agent_runtime.capabilities.workspace.deep_backend import (  # noqa: PLC0415
+            WorkspaceGatewayBackend,
+            WorkspaceTombstoneBackend,
+        )
+        from agent_runtime.capabilities.workspace.effects import (  # noqa: PLC0415
+            WorkspaceGatewayServices,
+            WorkspaceGrantGate,
+            WorkspaceOperationAdapter,
+        )
+        from agent_runtime.capabilities.workspace.merged_backend import (  # noqa: PLC0415
+            MergedWorkspaceBackend,
+        )
+        from agent_runtime.capabilities.workspace.overlay import (  # noqa: PLC0415
+            WorkspaceOverlayService,
+        )
+        from runtime_worker.workspace_effect_storage import (  # noqa: PLC0415
+            RuntimeWorkspaceProposalStore,
+        )
+
+        if (
+            mcp_gateway_services is None
+            or self._workspace_host_sessions is None
+            or self._workspace_overlay_store is None
+            or self._artifact_blob_store is None
+            or self._artifact_reference_store is None
+        ):
+            return WorkspaceTombstoneBackend()
+        scope = EffectExecutionScope(
+            org_id=run.org_id,
+            user_id=run.user_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            owner_ref=f"principal://users/{run.user_id}",
+        )
+        session = self._workspace_host_sessions.get(scope)
+        if session is None:
+            return WorkspaceTombstoneBackend()
+        overlay = WorkspaceOverlayService(
+            run_id=run.run_id,
+            base_read=session.base_read,
+            overlay_store=self._workspace_overlay_store,
+            blob_store=self._artifact_blob_store,
+        )
+        merged = MergedWorkspaceBackend(
+            run_id=run.run_id,
+            base_read=session.base_read,
+            overlay_store=self._workspace_overlay_store,
+            blob_store=self._artifact_blob_store,
+            overlay_service=overlay,
+        )
+        gate = WorkspaceGrantGate(grants=session.grants)
+        gateway = OperationGateway(
+            descriptors=DEFAULT_OPERATION_DESCRIPTORS,
+            classifier=mcp_gateway_services.classifier,
+            gates=gate,
+        )
+        services = WorkspaceGatewayServices(
+            merged=merged,
+            overlay=overlay,
+            stager=mcp_gateway_services.stager,
+            scope=mcp_gateway_services.stage_scope,
+            actor=mcp_gateway_services.stage_author,
+            proposals=RuntimeWorkspaceProposalStore(
+                blobs=self._artifact_blob_store,
+                references=self._artifact_reference_store,
+                scope=scope,
+            ),
+            grants=session.grants,
+        )
+        return WorkspaceGatewayBackend(
+            merged=merged,
+            gateway=gateway,
+            adapter=WorkspaceOperationAdapter(services=services),
+            grants=session.grants,
+        )
 
     def _workspace_snapshot_emitter(self, command: RuntimeRunCommand) -> object:
         """Build the emitter the workspace backend records pre-image references through."""

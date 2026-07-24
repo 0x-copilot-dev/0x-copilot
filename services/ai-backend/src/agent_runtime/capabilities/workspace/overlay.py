@@ -61,6 +61,11 @@ class WorkspaceOverlayService:
         self._overlay_store = overlay_store
         self._blob_store = blob_store
 
+    async def manifest(self) -> OverlayManifest:
+        """Return the current immutable run overlay manifest."""
+
+        return await self._overlay_store.get_manifest(run_id=self._run_id)
+
     async def propose_create(
         self, virtual_path: str, content: bytes | str, *, author: str = "agent"
     ) -> WorkspaceMutationResult:
@@ -159,6 +164,8 @@ class WorkspaceOverlayService:
             entry_kind=WorkspaceEntryKind.TOMBSTONE,
             operation=WorkspaceOperation.DELETE,
             baseline=baseline,
+            stage_id=existing.stage_id if existing is not None else None,
+            stage_revision=existing.stage_revision if existing is not None else None,
             author=author,
         )
         return await self._append(
@@ -203,6 +210,10 @@ class WorkspaceOverlayService:
             entry_kind=WorkspaceEntryKind.TOMBSTONE,
             operation=WorkspaceOperation.MOVE,
             baseline=baseline,
+            stage_id=source_entry.stage_id if source_entry is not None else None,
+            stage_revision=(
+                source_entry.stage_revision if source_entry is not None else None
+            ),
             author=author,
         )
         content = (
@@ -221,6 +232,10 @@ class WorkspaceOverlayService:
             operation=WorkspaceOperation.MOVE,
             source_virtual_path=source,
             baseline=BasePrecondition(existence=BaseExistence.MUST_NOT_EXIST),
+            stage_id=source_entry.stage_id if source_entry is not None else None,
+            stage_revision=(
+                source_entry.stage_revision if source_entry is not None else None
+            ),
             author=author,
             **content,
         )
@@ -324,6 +339,7 @@ class WorkspaceOverlayService:
             chunks=self._single_chunk(content),
             byte_limit=self.MAX_FILE_BYTES,
         )
+        current = manifest.entry_at(path)
         entry = OverlayEntry(
             virtual_path=path,
             entry_kind=WorkspaceEntryKind.FILE,
@@ -332,6 +348,8 @@ class WorkspaceOverlayService:
             content_digest=written.content_digest,
             byte_size=written.byte_size,
             baseline=baseline,
+            stage_id=current.stage_id if current is not None else None,
+            stage_revision=(current.stage_revision if current is not None else None),
             author=author,
         )
         return await self._append(
@@ -351,6 +369,52 @@ class WorkspaceOverlayService:
         )
         return WorkspaceMutationResult(
             entry=updated.entry_at(mutation.virtual_path), manifest=updated
+        )
+
+    async def bind_stage(
+        self,
+        *,
+        virtual_paths: tuple[str, ...],
+        stage_id: str,
+        stage_revision: int,
+        expected_manifest_version: int,
+    ) -> OverlayManifest:
+        """Bind exact current overlay entries to one A4 stage revision.
+
+        The binding is a second optimistic manifest revision.  A stale caller
+        cannot silently attach an approval surface to newer overlay content:
+        the compare-and-append fails and the new content remains unbound/held.
+        """
+
+        manifest = await self._overlay_store.get_manifest(run_id=self._run_id)
+        if manifest.version != expected_manifest_version:
+            from agent_runtime.capabilities.workspace.errors import (  # noqa: PLC0415
+                WorkspaceOverlayConflictError,
+            )
+
+            raise WorkspaceOverlayConflictError()
+        mutations: list[OverlayMutation] = []
+        for raw_path in virtual_paths:
+            path = normalize_virtual_path(raw_path)
+            entry = manifest.entry_at(path)
+            if entry is None:
+                raise WorkspaceNotFoundError()
+            mutations.append(
+                OverlayMutation(
+                    kind=OverlayMutationKind.UPSERT,
+                    virtual_path=path,
+                    entry=entry.model_copy(
+                        update={
+                            "stage_id": stage_id,
+                            "stage_revision": stage_revision,
+                        }
+                    ),
+                )
+            )
+        return await self._overlay_store.append_revision(
+            run_id=self._run_id,
+            expected_version=manifest.version,
+            mutations=tuple(mutations),
         )
 
     async def _precondition_for_base(

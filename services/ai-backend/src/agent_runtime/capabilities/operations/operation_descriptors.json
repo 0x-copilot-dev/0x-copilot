@@ -342,6 +342,91 @@
   },
   {
     "descriptor": {
+      "capability": "workspace",
+      "op": "create",
+      "executor": "workspace",
+      "effect_class": "external_reversible",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["grant", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "create workspace file",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "replace",
+      "executor": "workspace",
+      "effect_class": "external_reversible",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["grant", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "replace workspace file",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "mkdir",
+      "executor": "workspace",
+      "effect_class": "external_reversible",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["grant", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "create workspace directory",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "move",
+      "executor": "workspace",
+      "effect_class": "external_reversible",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["grant", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "move workspace entry",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "delete",
+      "executor": "workspace",
+      "effect_class": "external_destructive",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["grant", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "delete workspace entry",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
       "capability": "model",
       "op": "artifact_content_part",
       "executor": "builtin",
