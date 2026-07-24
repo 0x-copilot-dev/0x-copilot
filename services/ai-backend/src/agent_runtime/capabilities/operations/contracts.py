@@ -170,6 +170,11 @@ class ArtifactPublicationSource:
 
     content: bytes | None = field(default=None, repr=False)
     content_ref: str | None = None
+    # An adapter may preserve its opaque upstream provenance without exposing
+    # the bytes or an implementation path.  This is distinct from
+    # ``content_ref``: inline bytes have no server-resolvable source transport
+    # but still need an auditable origin such as ``payload://browser/...``.
+    source_ref: str | None = None
 
     def __post_init__(self) -> None:
         if (self.content is None) == (self.content_ref is None):
@@ -180,6 +185,10 @@ class ArtifactPublicationSource:
             self.content_ref.startswith("/") or ":\\" in self.content_ref
         ):
             raise ValueError("artifact publication source reference must be logical")
+        if self.source_ref is not None and (
+            self.source_ref.startswith("/") or ":\\" in self.source_ref
+        ):
+            raise ValueError("artifact publication provenance must be logical")
 
 
 class OperationAdapter(Protocol):

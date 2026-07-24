@@ -190,6 +190,13 @@ export class BrowserBroker {
         const parsed = BrowserActionRequestSchema.safeParse(envelope.action);
         if (!parsed.success)
           return respondJson(res, 400, { error: "invalid_action" });
+        // The broker is a read-only MCP façade. Do not trust a caller that
+        // names a valid-but-unadvertised action such as browser_click directly:
+        // consequential browser actions flow only through the private A5 bridge.
+        const tools = await this.#worker.listTools();
+        if (!tools.some((tool) => tool.name === parsed.data.toolName)) {
+          return respondJson(res, 403, { error: "tool_not_advertised" });
+        }
         const result = await this.#worker.dispatch(parsed.data);
         return respondJson(res, 200, { result });
       }

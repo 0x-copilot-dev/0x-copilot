@@ -18,7 +18,9 @@ import {
 } from "./action-policy";
 import {
   BrowserActionClass,
+  BrowserEffectActionKind,
   BrowserProfileMode,
+  type BrowserActionPlan,
   type BrowserActionRequest,
   type BrowserOriginPolicy,
 } from "./protocol";
@@ -196,6 +198,33 @@ function req(
   };
 }
 
+function stagedClickPlan(
+  session: BrowserSession,
+  fingerprint: string,
+): BrowserActionPlan {
+  return {
+    sessionRef: session.sessionRef,
+    pageRef: session.pageRef,
+    origin: "https://example.com",
+    topLevelOrigin: "https://example.com",
+    actionKind: BrowserEffectActionKind.Click,
+    elementRef: "e2_0",
+    elementFingerprint: fingerprint,
+    canonicalFieldsRef:
+      "operation://op_00000000-0000-4000-8000-000000000001/args",
+    fieldsDigest: "a".repeat(64),
+    uploadArtifactRefs: [],
+    uploadArtifacts: [],
+    precondition: {
+      pageGeneration: session.generation,
+      origin: "https://example.com",
+      elementFingerprint: fingerprint,
+    },
+    preconditionDigest: "b".repeat(64),
+    userVisibleSummary: "Review browser click on https://example.com.",
+  };
+}
+
 describe("BrowserSession read-only actions", () => {
   it("navigates to an approved origin and bumps the generation", async () => {
     const engine = new FakeEngine();
@@ -283,6 +312,56 @@ describe("BrowserSession read-only actions", () => {
     const r = await session.dispatch(req("browser_close", {}));
     expect(r.status).toBe("succeeded");
     expect(engine.closed).toBe(true);
+  });
+});
+
+describe("BrowserSession staged effect bridge", () => {
+  it("prepares and consumes an exact click once", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const snapshot = await session.dispatch(req("browser_snapshot", {}));
+    const fingerprint = snapshot.snapshot?.fingerprint;
+    expect(fingerprint).toBeTruthy();
+    const prepared = await session.prepareAction(
+      stagedClickPlan(session, fingerprint!),
+    );
+    expect(prepared.preconditionDrift).toBe(false);
+    const applied = await session.applyPrepared(prepared.preparedRef!);
+    expect(applied.outcome).toBe("applied");
+    expect(engine.page.clicks).toHaveLength(1);
+    // One-use handle prevents a duplicate command from dispatching a click.
+    const replay = await session.applyPrepared(prepared.preparedRef!);
+    expect(replay.outcome).toBe("indeterminate");
+    expect(engine.page.clicks).toHaveLength(1);
+  });
+
+  it("never substitutes an element after page-generation drift", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const first = await session.dispatch(req("browser_snapshot", {}));
+    const prepared = await session.prepareAction(
+      stagedClickPlan(session, first.snapshot?.fingerprint!),
+    );
+    await session.dispatch(req("browser_snapshot", {}));
+    const result = await session.applyPrepared(prepared.preparedRef!);
+    expect(result.outcome).toBe("precondition_drift");
+    expect(engine.page.clicks).toHaveLength(0);
   });
 });
 

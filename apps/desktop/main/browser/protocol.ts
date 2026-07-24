@@ -221,6 +221,8 @@ export interface BrowserSnapshotNode {
   role: string;
   /** Redacted accessible name — never a raw value/secret. */
   name: string;
+  /** Generation-bound exact target fingerprint used by a staged plan. */
+  fingerprint?: string;
   children?: BrowserSnapshotNode[];
 }
 
@@ -230,6 +232,10 @@ export const BrowserSnapshotNodeSchema: z.ZodType<BrowserSnapshotNode> = z.lazy(
       ref: z.string(),
       role: z.string(),
       name: z.string(),
+      fingerprint: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/u)
+        .optional(),
       children: z.array(BrowserSnapshotNodeSchema).optional(),
     }),
 );
@@ -352,6 +358,203 @@ export const BrowserActionResultSchema = z.object({
   snapshot: BrowserSnapshotNodeSchema.optional(),
 });
 export type BrowserActionResult = z.infer<typeof BrowserActionResultSchema>;
+
+// --- Private staged-effect protocol ---------------------------------------
+//
+// These values travel only over Electron-main's private worker bridge. They
+// are intentionally NOT broker tool arguments: no remote service receives a
+// cookie, a browser-process credential, a selector, a host path, or an ability
+// to invoke a generic effect action.
+
+const SHA256_HEX = z.string().regex(/^[a-f0-9]{64}$/u);
+const OpaqueBrowserRefSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine(
+    (value) => {
+      if (
+        value.startsWith("/") ||
+        value.startsWith("~") ||
+        value.startsWith("\\") ||
+        /^file:/iu.test(value) ||
+        /^https?:/iu.test(value) ||
+        /^data:/iu.test(value) ||
+        /(?:^|[\\/])\.\.?([\\/]|$)/u.test(value)
+      )
+        return false;
+      try {
+        const parsed = new URL(value);
+        return (
+          parsed.protocol !== "file:" &&
+          parsed.protocol !== "http:" &&
+          parsed.protocol !== "https:" &&
+          parsed.protocol !== "data:" &&
+          parsed.hostname !== "" &&
+          parsed.search === "" &&
+          parsed.hash === ""
+        );
+      } catch {
+        return false;
+      }
+    },
+    { message: "browser reference must be opaque and scoped" },
+  );
+
+export const BrowserEffectActionKind = {
+  Click: "click",
+  Input: "input",
+  Select: "select",
+  Submit: "submit",
+  UploadSubmit: "upload_submit",
+} as const;
+export type BrowserEffectActionKind =
+  (typeof BrowserEffectActionKind)[keyof typeof BrowserEffectActionKind];
+
+export const BrowserPreconditionSchema = z.object({
+  pageGeneration: z.number().int().nonnegative(),
+  origin: CanonicalOriginSchema,
+  elementFingerprint: SHA256_HEX.optional(),
+  formFingerprint: SHA256_HEX.optional(),
+});
+export type BrowserPrecondition = z.infer<typeof BrowserPreconditionSchema>;
+
+/** Immutable A2 revision metadata authorized for a staged upload. */
+export const BrowserUploadArtifactSchema = z.object({
+  artifactRef: OpaqueBrowserRefSchema.refine(
+    (value) => value.startsWith("artifact://"),
+    { message: "upload source must be an artifact revision" },
+  ),
+  digest: SHA256_HEX,
+  byteSize: z.number().int().nonnegative(),
+  mediaType: z.string().min(1).max(255),
+  suggestedFilename: z
+    .string()
+    .min(1)
+    .max(255)
+    .refine(
+      (value) =>
+        value.trim() === value &&
+        value !== "." &&
+        value !== ".." &&
+        !/[\\/\u0000]/u.test(value),
+      { message: "upload filename must be safe metadata" },
+    ),
+});
+export type BrowserUploadArtifact = z.infer<typeof BrowserUploadArtifactSchema>;
+
+export const BrowserActionPlanSchema = z
+  .object({
+    sessionRef: OpaqueBrowserRefSchema,
+    pageRef: OpaqueBrowserRefSchema,
+    origin: CanonicalOriginSchema,
+    topLevelOrigin: CanonicalOriginSchema,
+    actionKind: z.enum([
+      BrowserEffectActionKind.Click,
+      BrowserEffectActionKind.Input,
+      BrowserEffectActionKind.Select,
+      BrowserEffectActionKind.Submit,
+      BrowserEffectActionKind.UploadSubmit,
+    ]),
+    elementRef: z.string().min(1).max(255).optional(),
+    elementFingerprint: SHA256_HEX.optional(),
+    formActionUrl: z.string().url().max(2048).optional(),
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
+    canonicalFieldsRef: OpaqueBrowserRefSchema,
+    fieldsDigest: SHA256_HEX,
+    uploadArtifactRefs: z.array(OpaqueBrowserRefSchema).max(32).readonly(),
+    uploadArtifacts: z.array(BrowserUploadArtifactSchema).max(32).readonly(),
+    precondition: BrowserPreconditionSchema,
+    preconditionDigest: SHA256_HEX,
+    userVisibleSummary: z.string().min(1).max(512),
+  })
+  .superRefine((plan, ctx) => {
+    const requiresElement = true;
+    if (
+      requiresElement &&
+      (plan.elementRef === undefined || plan.elementFingerprint === undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "browser action requires exact element identity",
+      });
+    }
+    const authorizedRefs = plan.uploadArtifacts.map(
+      (upload) => upload.artifactRef,
+    );
+    if (
+      plan.uploadArtifactRefs.length !== authorizedRefs.length ||
+      plan.uploadArtifactRefs.some(
+        (ref, index) => ref !== authorizedRefs[index],
+      )
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "upload authorization must bind every exact artifact revision",
+      });
+    }
+    if (
+      plan.actionKind === BrowserEffectActionKind.UploadSubmit &&
+      authorizedRefs.length === 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "upload_submit requires an artifact revision",
+      });
+    }
+    if (plan.precondition.origin !== plan.origin) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "precondition origin must match plan origin",
+      });
+    }
+    if (plan.precondition.elementFingerprint !== plan.elementFingerprint) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "precondition fingerprint must match action element",
+      });
+    }
+  });
+export type BrowserActionPlan = z.infer<typeof BrowserActionPlanSchema>;
+
+export const BrowserPrepareResultSchema = z
+  .object({
+    preparedRef: OpaqueBrowserRefSchema.optional(),
+    observedPreconditionDigest: SHA256_HEX,
+    expiresAt: z.string().max(64).optional(),
+    preconditionDrift: z.boolean(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.preconditionDrift === (value.preparedRef !== undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "prepared action must be either prepared or drifted",
+      });
+    }
+  });
+export type BrowserPrepareResult = z.infer<typeof BrowserPrepareResultSchema>;
+
+export const BrowserEffectOutcome = {
+  Applied: "applied",
+  PreconditionDrift: "precondition_drift",
+  Failed: "failed",
+  Indeterminate: "indeterminate",
+} as const;
+export type BrowserEffectOutcome =
+  (typeof BrowserEffectOutcome)[keyof typeof BrowserEffectOutcome];
+
+export const BrowserEffectReceiptSchema = z.object({
+  outcome: z.enum([
+    BrowserEffectOutcome.Applied,
+    BrowserEffectOutcome.PreconditionDrift,
+    BrowserEffectOutcome.Failed,
+    BrowserEffectOutcome.Indeterminate,
+  ]),
+  receiptRef: OpaqueBrowserRefSchema.optional(),
+  resultDigest: SHA256_HEX.optional(),
+  safeMessage: z.string().max(512).optional(),
+});
+export type BrowserEffectReceipt = z.infer<typeof BrowserEffectReceiptSchema>;
 
 // --- Bounds ---------------------------------------------------------------
 

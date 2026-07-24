@@ -197,4 +197,21 @@ describe("BrowserBroker", () => {
     expect(body.result.status).toBe("succeeded");
     expect(worker.lastRequest?.toolName).toBe("browser_navigate");
   });
+
+  it("refuses an unadvertised generic click even with a valid broker credential", async () => {
+    const action = {
+      ...actionRequest(),
+      actionClass: BrowserActionClass.ExternalEffect,
+      toolName: "browser_click",
+      arguments: { ref: "e1_0" },
+    };
+    const res = await fetch(`${baseUrl}/v1/browser/action`, {
+      method: "POST",
+      headers: H(),
+      body: envelope({ action }),
+    });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("tool_not_advertised");
+    expect(worker.lastRequest).toBeNull();
+  });
 });
