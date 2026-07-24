@@ -11,7 +11,7 @@
     "compile": "node esbuild.config.mjs",
     "copy:renderer-assets": "node -e \"require('node:fs').mkdirSync('out/renderer',{recursive:true}); require('node:fs').copyFileSync('renderer/index.html','out/renderer/index.html')\"",
     "build": "npm run compile",
-    "dev": "npm run build && ELECTRON_RUN_AS_NODE= electron .",
+    "dev": "npm run build && node scripts/dev-launch.mjs",
     "desktop:dev": "npm run dev",
     "stage:runtime": "node ../../tools/desktop-runtime/stage.mjs --platform $(node -p process.platform) --arch $(node -p process.arch)",
     "stage:runtime:mac:arm64": "node ../../tools/desktop-runtime/stage.mjs --platform darwin --arch arm64",
