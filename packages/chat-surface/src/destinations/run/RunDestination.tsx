@@ -95,6 +95,7 @@ import {
   TcStagedTableSurface,
   ViewUpgradeToast,
   projectSurfaceTabs,
+  projectToolCalls,
   projectLedger,
   ledgerTabsAsSurfaceTabs,
   surfaceIdForTabUri,
@@ -839,6 +840,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // same `runId`, so all three views stay in parity.
   const subagentProjection = useMemo(
     () => projectSubagents(session.events),
+    [session.events],
+  );
+
+  // Workstream D: the main-agent tool-call cards, projected off the SAME
+  // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
+  // inline tool-call card in TcChat so a ~6s `web_search` shows a running→done
+  // card in the transcript flow instead of dropping the tool activity entirely.
+  // Subagent tool calls are excluded upstream (they belong to the Agents views).
+  const toolCalls = useMemo(
+    () => projectToolCalls(session.events),
     [session.events],
   );
 
@@ -1591,6 +1602,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // `[[N]]` / `[c<id>]` anchors against the provider above.
         markdownComponents={markdownComponents}
         fleets={subagentProjection.fleets}
+        // Workstream D: inline tool-call cards, interleaved into the transcript
+        // by the point each tool ran (running spinner → done/error).
+        toolCalls={toolCalls}
         // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
         approvals={chatApprovals}
         onApprove={handleApprove}

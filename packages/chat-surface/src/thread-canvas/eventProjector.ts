@@ -139,6 +139,37 @@ export interface ChatEntry {
 }
 
 /**
+ * One MAIN-AGENT tool call, projected off the SINGLE run event stream for the
+ * inline tool-call card in `TcChat`. Collapsed per `call_id`: the
+ * `tool_call_started` frame seeds it (`running` + args), and the matching
+ * `tool_result` / `tool_call_completed` frame flips it to `complete` / `error`
+ * and attaches the output. Subagent tool calls are excluded — they belong to
+ * the subagent views (FR-3.17), not the main transcript.
+ */
+export interface ToolCallEntry {
+  /** Stable id across the started→result pair — the `call_id`, else `event_id`. */
+  readonly id: string;
+  /** The invoked tool (`web_search`, `get_issue`, …). */
+  readonly toolName: string;
+  /** Display label — backend `display_title`, falling back to `toolName`. */
+  readonly title: string;
+  /** Lifecycle: `running` until a result frame lands, then `complete`/`error`. */
+  readonly status: "running" | "complete" | "error";
+  /** Call arguments from the `tool_call_started` payload, when present. */
+  readonly args?: Record<string, unknown>;
+  /** Result output from the `tool_result` payload, when present. */
+  readonly result?: Record<string, unknown>;
+  /** Backend one-line summary, when present. */
+  readonly summary?: string;
+  /** Safe error message on a failed/timed-out/cancelled result. */
+  readonly errorMessage?: string;
+  /** Anchor: `sequence_no` of the first (started) frame. */
+  readonly sequenceNo: number;
+  /** Anchor timestamp (epoch ms) for interleave; null if unparseable. */
+  readonly createdAtMs: number | null;
+}
+
+/**
  * Minimal surface payload — opaque to the projector; the surface
  * renderer (sheet, email, slide, …) unpacks it. Today's mock-grade
  * renderers carry a flat `{ key: value }` record; richer renderers in
@@ -147,6 +178,8 @@ export interface ChatEntry {
 export type SurfacePayload = Record<string, unknown>;
 
 const EMPTY_SURFACE_TABS: readonly SurfaceTab[] = [];
+
+const EMPTY_TOOL_CALLS: readonly ToolCallEntry[] = [];
 
 const EMPTY_STATE: ProjectedState = {
   activity: [],
@@ -290,6 +323,56 @@ export function projectSurfaceTabs(
     applySurfaceEvent(event, surfaceState, surfaceMeta);
   }
   return buildSurfaceTabs(surfaceState, surfaceMeta);
+}
+
+/**
+ * Pure selector: the MAIN-AGENT tool-call cards for the transcript, projected
+ * off the SAME canonical `RuntimeEventEnvelope[]` the single projection reads
+ * (FR-3.3). A focused surface-only pass — NOT a second `project()` / SSE
+ * subscription — mirroring `projectSubagents` / `projectApprovals` /
+ * `projectSurfaceTabs`. `RunDestination` memoizes it against `session.events`
+ * and threads the result into `TcChat`, where each entry interleaves into the
+ * transcript at the point its tool ran.
+ *
+ * Collapsed per `call_id`: `tool_call_started` seeds a `running` card carrying
+ * the args; the matching `tool_result` / `tool_call_completed` flips it to
+ * `complete` / `error` and attaches the output. Subagent tool calls
+ * (`subagent_id` set) are skipped — they render inside the subagent views, not
+ * the main transcript. Idempotent on replay (deduplicates by `event_id`);
+ * ordered by the anchor (started) `sequence_no` ascending.
+ */
+export function projectToolCalls(
+  events: readonly RuntimeEventEnvelope[],
+): readonly ToolCallEntry[] {
+  if (events.length === 0) {
+    return EMPTY_TOOL_CALLS;
+  }
+  const seen = new Set<string>();
+  const byCall = new Map<string, MutableToolCall>();
+  const order: string[] = [];
+  for (const event of events) {
+    if (seen.has(event.event_id)) {
+      continue;
+    }
+    seen.add(event.event_id);
+    // Main-agent only — a subagent's tool calls render inside the subagent
+    // views (FR-3.17), never the main transcript.
+    if (event.subagent_id) {
+      continue;
+    }
+    if (event.event_type === "tool_call_started") {
+      reduceToolStarted(event, byCall, order);
+    } else if (
+      event.event_type === "tool_result" ||
+      event.event_type === "tool_call_completed"
+    ) {
+      reduceToolResult(event, byCall, order);
+    }
+  }
+  if (order.length === 0) {
+    return EMPTY_TOOL_CALLS;
+  }
+  return order.map((key) => buildToolCall(byCall.get(key)!));
 }
 
 /**
@@ -764,6 +847,129 @@ function uriTail(uri: string): string {
 function schemeOf(uri: string): string {
   const idx = uri.indexOf("://");
   return idx > 0 ? uri.slice(0, idx) : "system";
+}
+
+// --- Tool-call projection --------------------------------------------------
+
+interface MutableToolCall {
+  key: string;
+  toolName: string;
+  title: string | null;
+  status: "running" | "complete" | "error";
+  args?: Record<string, unknown>;
+  result?: Record<string, unknown>;
+  summary?: string;
+  errorMessage?: string;
+  sequenceNo: number;
+  createdAtMs: number | null;
+}
+
+function reduceToolStarted(
+  event: RuntimeEventEnvelope,
+  byCall: Map<string, MutableToolCall>,
+  order: string[],
+): void {
+  const key = toolCallKey(event);
+  const prior = byCall.get(key);
+  if (prior === undefined) {
+    order.push(key);
+  }
+  byCall.set(key, {
+    key,
+    toolName:
+      pickString(event.payload, "tool_name") ?? prior?.toolName ?? "tool",
+    title: event.display_title ?? prior?.title ?? null,
+    // A result may (on an out-of-order replay) have landed first — keep it.
+    status: prior?.status ?? "running",
+    args: readRecord(event.payload?.["args"]) ?? prior?.args,
+    result: prior?.result,
+    summary:
+      pickString(event.payload, "summary") ?? prior?.summary ?? undefined,
+    errorMessage: prior?.errorMessage,
+    // The started frame is the earliest, so it wins the anchor when present.
+    sequenceNo: prior?.sequenceNo ?? event.sequence_no,
+    createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
+  });
+}
+
+function reduceToolResult(
+  event: RuntimeEventEnvelope,
+  byCall: Map<string, MutableToolCall>,
+  order: string[],
+): void {
+  const key = toolCallKey(event);
+  const prior = byCall.get(key);
+  if (prior === undefined) {
+    order.push(key);
+  }
+  byCall.set(key, {
+    key,
+    toolName:
+      pickString(event.payload, "tool_name") ?? prior?.toolName ?? "tool",
+    title: event.display_title ?? prior?.title ?? null,
+    status: mapResultStatus(event),
+    args: prior?.args,
+    result: readRecord(event.payload?.["output"]) ?? prior?.result,
+    summary:
+      pickString(event.payload, "summary") ?? prior?.summary ?? undefined,
+    errorMessage:
+      pickString(event.payload, "error_message") ??
+      pickString(event.payload, "safe_message") ??
+      prior?.errorMessage,
+    sequenceNo: prior?.sequenceNo ?? event.sequence_no,
+    createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
+  });
+}
+
+function buildToolCall(m: MutableToolCall): ToolCallEntry {
+  return {
+    id: m.key,
+    toolName: m.toolName,
+    title: m.title ?? m.toolName,
+    status: m.status,
+    ...(m.args !== undefined ? { args: m.args } : {}),
+    ...(m.result !== undefined ? { result: m.result } : {}),
+    ...(m.summary !== undefined ? { summary: m.summary } : {}),
+    ...(m.errorMessage !== undefined ? { errorMessage: m.errorMessage } : {}),
+    sequenceNo: m.sequenceNo,
+    createdAtMs: m.createdAtMs,
+  };
+}
+
+/** A completed result frame flips the card to `complete`; anything else (failed,
+ *  timed_out, abandoned, cancelled, …) reads as `error`. The mere presence of a
+ *  result frame with no status means the tool returned — treat as complete. */
+function mapResultStatus(event: RuntimeEventEnvelope): "complete" | "error" {
+  const raw = pickString(event.payload, "status") ?? event.status ?? null;
+  if (raw === null) {
+    return "complete";
+  }
+  if (
+    raw === "completed" ||
+    raw === "complete" ||
+    raw === "success" ||
+    raw === "succeeded" ||
+    raw === "ok"
+  ) {
+    return "complete";
+  }
+  return "error";
+}
+
+function toolCallKey(event: RuntimeEventEnvelope): string {
+  return pickString(event.payload, "call_id") ?? event.event_id;
+}
+
+function readRecord(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function parseMs(iso: string): number | null {
+  const parsed = Date.parse(iso);
+  return Number.isNaN(parsed) ? null : parsed;
 }
 
 function pickString(
