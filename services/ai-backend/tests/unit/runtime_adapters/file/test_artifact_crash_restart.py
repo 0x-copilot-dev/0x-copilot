@@ -19,6 +19,7 @@ from runtime_adapters.artifact_references import (
     ArtifactReferenceKind,
     FileArtifactReferenceStore,
 )
+from runtime_adapters.artifact_lifecycle import ORPHAN_PUBLICATION_RECOVERY_ORG_ID
 from runtime_adapters.file.artifact_publication import (
     FileArtifactPublicationCoordinator,
 )
@@ -222,7 +223,7 @@ class TestFileArtifactCrashRestart:
 
         now = datetime.now(timezone.utc)
         candidates = await metadata.list_unreferenced_content(
-            org_id="org_orphan_recovery",
+            org_id=ORPHAN_PUBLICATION_RECOVERY_ORG_ID,
             older_than=now + timedelta(seconds=1),
             limit=10,
         )
@@ -231,7 +232,7 @@ class TestFileArtifactCrashRestart:
         )
         collector = FileArtifactGarbageCollector(layout, coordinator, references)
         assert await collector.collect_if_unreferenced(
-            org_id="org_orphan_recovery",
+            org_id=ORPHAN_PUBLICATION_RECOVERY_ORG_ID,
             candidate=candidate,
             grace_before=now + timedelta(seconds=1),
         )

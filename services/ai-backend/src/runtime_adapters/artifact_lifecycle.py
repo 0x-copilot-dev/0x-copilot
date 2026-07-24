@@ -22,6 +22,9 @@ _DEFAULT_METADATA_RETENTION_GRACE = timedelta(days=30)
 _DEFAULT_CANDIDATE_GRACE = timedelta(days=1)
 _DEFAULT_QUARANTINE_GRACE = timedelta(days=1)
 _DEFAULT_SWEEP_LIMIT = 500
+# A worker-only synthetic scope for an object that was published before any
+# tenant-owned metadata could commit.  It is never returned to product callers.
+ORPHAN_PUBLICATION_RECOVERY_ORG_ID = "__artifact_orphan_recovery__"
 
 
 @dataclass(frozen=True, slots=True)

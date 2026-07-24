@@ -19,6 +19,7 @@ from runtime_adapters._artifact_repository import ArtifactRetentionScope
 from runtime_adapters.artifact_lifecycle import (
     ArtifactLifecycleJobs,
     ArtifactLifecycleSchedule,
+    ORPHAN_PUBLICATION_RECOVERY_ORG_ID,
 )
 from runtime_adapters.artifact_references import (
     ArtifactReferenceEdge,
@@ -174,6 +175,26 @@ _ORG_B = _ORG_A_CONV_A.model_copy(
 
 
 class TestArtifactLifecycleJobs:
+    async def test_file_pending_publication_enqueues_only_synthetic_recovery_scope(
+        self,
+        lifecycle_bundle,
+    ) -> None:
+        blobs, _, lifecycle = lifecycle_bundle
+        if not isinstance(blobs, FileArtifactBlobStore):
+            pytest.skip("the in-memory blob adapter has no shared-volume manifest")
+
+        body = b"published before metadata"
+        await blobs.put_stream(
+            expected_digest=digest(body),
+            chunks=_chunks(body),
+            byte_limit=len(body),
+        )
+
+        # Normal tenant ids are absent because the metadata transaction never
+        # committed.  The worker receives exactly the synthetic scope needed
+        # to process the durable pending-publication manifest.
+        assert await lifecycle.list_org_ids() == (ORPHAN_PUBLICATION_RECOVERY_ORG_ID,)
+
     async def test_conversation_deletion_is_scoped_and_retains_evidence(
         self,
         lifecycle_bundle,

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from agent_runtime.artifacts.contracts import ArtifactGcCandidate
 from runtime_adapters._artifact_repository import ArtifactQuarantineReapResult
+from runtime_adapters.artifact_lifecycle import ORPHAN_PUBLICATION_RECOVERY_ORG_ID
 from runtime_adapters.artifact_references import FileArtifactReferenceStore
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_adapters.file.artifact_publication import (
@@ -16,6 +17,8 @@ from runtime_adapters.file.artifact_publication import (
 
 class FileArtifactGarbageCollector:
     """Authoritatively recheck ledgers and atomically quarantine bytes."""
+
+    ORPHAN_RECOVERY_ORG_ID = ORPHAN_PUBLICATION_RECOVERY_ORG_ID
 
     def __init__(
         self,
@@ -28,6 +31,15 @@ class FileArtifactGarbageCollector:
         self.layout = layout
         self.coordinator = coordinator
         self.reference_store = reference_store
+
+    def has_pending_publications(self) -> bool:
+        """Report only durable manifest work, never by walking object shards."""
+
+        with self.coordinator.locked():
+            return any(
+                state.provenance_org_id is None
+                for state in self.coordinator.candidates.values()
+            )
 
     async def collect_if_unreferenced(
         self,

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 
 from agent_runtime.artifacts.contracts import ArtifactGcCandidate
 from runtime_adapters._artifact_repository import ArtifactQuarantineReapResult
+from runtime_adapters.artifact_lifecycle import ORPHAN_PUBLICATION_RECOVERY_ORG_ID
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
 from runtime_adapters.postgres.artifact_publication import (
@@ -20,7 +21,7 @@ class PostgresArtifactGarbageCollector:
     # A publication can crash before the application knows which tenant will
     # own it.  The worker role is allowed to sweep this synthetic provenance;
     # it is never surfaced as a customer tenant.
-    ORPHAN_RECOVERY_ORG_ID = "__artifact_orphan_recovery__"
+    ORPHAN_RECOVERY_ORG_ID = ORPHAN_PUBLICATION_RECOVERY_ORG_ID
 
     def __init__(self, parent: object, blob_store: FileArtifactBlobStore) -> None:
         self._parent = parent

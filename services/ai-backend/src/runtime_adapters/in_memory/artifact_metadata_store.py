@@ -516,6 +516,7 @@ class InMemoryArtifactMetadataStore:
                     | {
                         candidate.provenance_org_id
                         for candidate in self.coordinator.candidates.values()
+                        if candidate.provenance_org_id is not None
                     }
                 )
             )
