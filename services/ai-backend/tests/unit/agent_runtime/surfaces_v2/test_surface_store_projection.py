@@ -54,7 +54,7 @@ class TestGoldenFold(GoldenFoldMixin):
         # The fixture is a valid ``SurfaceStoreState`` (guards against a hand
         # edit that drifts the fold's own contract).
         state = SurfaceStoreState.model_validate(self._expected_state())
-        assert state.latest_sequence_no == 20
+        assert state.latest_sequence_no == 22
         assert [s.surface_id for s in state.surfaces] == [
             "surface_issue",
             "surface_receipt",

@@ -16,7 +16,7 @@ import contract from "../../service-contracts/src/copilot_service_contracts/work
 // Event types
 // ---------------------------------------------------------------------------
 
-/** One of the 14 ledger event types (SDR §5). */
+/** One of the 15 ledger event types (SDR §5). */
 export type LedgerEventType =
   | "gate.opened"
   | "gate.resolved"
@@ -26,6 +26,7 @@ export type LedgerEventType =
   | "view.derived"
   | "view.preference"
   | "shape.requested"
+  | "shape.resolved"
   | "write.staged"
   | "revision.added"
   | "decision.recorded"
@@ -45,6 +46,7 @@ export const LEDGER_EVENT_TYPES = [
   "view.derived",
   "view.preference",
   "shape.requested",
+  "shape.resolved",
   "write.staged",
   "revision.added",
   "decision.recorded",
@@ -82,6 +84,8 @@ export type UsagePurpose =
   | "subagent"
   | "view_shaping"
   | "shape_request";
+/** Outcome of a user-invited `shape.requested` attempt (PRD-B4, SDR §5). */
+export type ShapeOutcome = "shaped" | "no_fit";
 
 // ---------------------------------------------------------------------------
 // Shared value objects
@@ -230,6 +234,16 @@ export interface ShapeRequestedPayload {
   actor: "user";
 }
 
+/** Outcome of a user-invited shaping attempt (PRD-B4, additive to SDR §5).
+ *  `reason` is the safe lint/validation summary on a `no_fit` (never raw model
+ *  output); absent on a `shaped` outcome. */
+export interface ShapeResolvedPayload {
+  v: 1;
+  surface_id: string;
+  outcome: ShapeOutcome;
+  reason?: string;
+}
+
 export interface WriteStagedPayload {
   v: 1;
   stage_id: string;
@@ -335,6 +349,7 @@ export interface LedgerEventPayloadMap {
   "view.derived": ViewDerivedPayload;
   "view.preference": ViewPreferencePayload;
   "shape.requested": ShapeRequestedPayload;
+  "shape.resolved": ShapeResolvedPayload;
   "write.staged": WriteStagedPayload;
   "revision.added": RevisionAddedPayload;
   "decision.recorded": DecisionRecordedPayload;
@@ -512,6 +527,27 @@ export interface StagedWriteView {
   /** PRD-D3 — populated for a bulk row-set stage; `null` for single-artifact. */
   rows?: readonly StageRowView[] | null;
   row_counts?: StageRowCountsView | null;
+}
+
+// ---------------------------------------------------------------------------
+// Suggest-a-shape HTTP wire types (PRD-B4). The user-invited shaping attempt
+// on a raw/generic fallback surface. `POST /v1/agent/surfaces/{surface_id}/
+// shape-request`; the outcome arrives over the run SSE stream as `shape.requested`
+// / `shape.resolved` ledger events (no polling). Additive.
+// ---------------------------------------------------------------------------
+
+/** Body for `POST /v1/agent/surfaces/{surface_id}/shape-request`. `run_id` is
+ *  required (the canvas is per-run — FR-A2); org/user are stamped by the facade
+ *  and are never client-supplied. */
+export interface ShapeRequestBody {
+  run_id: string;
+}
+
+/** `202 Accepted` body — the request is scheduled; the outcome streams as
+ *  ledger events. */
+export interface ShapeRequestAccepted {
+  surface_id: string;
+  status: "requested";
 }
 
 /** FR-E2 wording, wire-safe (NEW, A1-defined). Not a ledger event type — a

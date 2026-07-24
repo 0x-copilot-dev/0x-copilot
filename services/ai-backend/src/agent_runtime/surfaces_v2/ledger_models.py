@@ -40,7 +40,7 @@ from agent_runtime.execution.contracts import RuntimeContract
 
 
 class LedgerEventType(StrEnum):
-    """The 14 ledger event types, in contract order (SDR §5)."""
+    """The 15 ledger event types, in contract order (SDR §5)."""
 
     GATE_OPENED = "gate.opened"
     GATE_RESOLVED = "gate.resolved"
@@ -50,6 +50,7 @@ class LedgerEventType(StrEnum):
     VIEW_DERIVED = "view.derived"
     VIEW_PREFERENCE = "view.preference"
     SHAPE_REQUESTED = "shape.requested"
+    SHAPE_RESOLVED = "shape.resolved"
     WRITE_STAGED = "write.staged"
     REVISION_ADDED = "revision.added"
     DECISION_RECORDED = "decision.recorded"
@@ -116,6 +117,13 @@ class ViewBasis(StrEnum):
 class ViewKeep(StrEnum):
     GENERIC = "generic"
     SHAPED = "shaped"
+
+
+class ShapeOutcome(StrEnum):
+    """Outcome of a user-invited ``shape.requested`` attempt (PRD-B4, SDR §5)."""
+
+    SHAPED = "shaped"
+    NO_FIT = "no_fit"
 
 
 class RevisionAuthor(StrEnum):
@@ -273,6 +281,18 @@ class ShapeRequestedPayload(LedgerPayload):
     actor: Literal["user"]
 
 
+class ShapeResolvedPayload(LedgerPayload):
+    """Outcome of a user-invited shaping attempt (PRD-B4, additive to SDR §5).
+
+    ``reason`` is the safe lint/validation summary on a ``no_fit`` (never raw
+    model output); omitted on a ``shaped`` outcome.
+    """
+
+    surface_id: str
+    outcome: ShapeOutcome
+    reason: str | None = None
+
+
 class WriteStagedPayload(LedgerPayload):
     stage_id: str
     surface_id: str
@@ -397,6 +417,7 @@ class WorkLedgerVocabulary:
         LedgerEventType.VIEW_DERIVED: ViewDerivedPayload,
         LedgerEventType.VIEW_PREFERENCE: ViewPreferencePayload,
         LedgerEventType.SHAPE_REQUESTED: ShapeRequestedPayload,
+        LedgerEventType.SHAPE_RESOLVED: ShapeResolvedPayload,
         LedgerEventType.WRITE_STAGED: WriteStagedPayload,
         LedgerEventType.REVISION_ADDED: RevisionAddedPayload,
         LedgerEventType.DECISION_RECORDED: DecisionRecordedPayload,
@@ -421,6 +442,7 @@ class WorkLedgerVocabulary:
         "decision_actor": DecisionActor,
         "apply_result": ApplyResult,
         "usage_purpose": UsagePurpose,
+        "shape_outcome": ShapeOutcome,
     }
 
     @classmethod
@@ -471,7 +493,9 @@ __all__ = [
     "RevisionAddedPayload",
     "RevisionAuthor",
     "RevisionAuthorshipSpan",
+    "ShapeOutcome",
     "ShapeRequestedPayload",
+    "ShapeResolvedPayload",
     "SurfaceCreatedPayload",
     "SurfaceKind",
     "UsagePurpose",
