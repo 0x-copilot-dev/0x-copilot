@@ -13,6 +13,7 @@ from copilot_service_contracts.work_ledger import (
     LEDGER_EVENT_TYPES,
     LEDGER_PAYLOAD_VERSION,
     load_ledger_golden_events,
+    load_ledger_golden_journeys,
     load_work_ledger_contract,
 )
 
@@ -60,7 +61,7 @@ class TestLedgerContractParity(LedgerContractMixin):
         constant_values = set(LEDGER_EVENT_TYPES)
 
         assert contract_keys == enum_values == constant_values
-        assert len(contract_keys) == 15
+        assert len(contract_keys) == 32
 
     def test_event_type_order_is_stable(self) -> None:
         # Ordering is part of the contract: the JSON events insertion order, the
@@ -74,7 +75,7 @@ class TestLedgerContractParity(LedgerContractMixin):
         model_keys = set(WorkLedgerVocabulary.PAYLOAD_MODELS.keys())
 
         assert model_keys == set(LedgerEventType)
-        assert len(WorkLedgerVocabulary.PAYLOAD_MODELS) == 15
+        assert len(WorkLedgerVocabulary.PAYLOAD_MODELS) == 32
         for model in WorkLedgerVocabulary.PAYLOAD_MODELS.values():
             assert issubclass(model, LedgerPayload)
 
@@ -101,6 +102,17 @@ class TestLedgerContractParity(LedgerContractMixin):
             # `v` is always required (base class, no default).
             assert "v" in model_required
 
+    def test_complete_field_lists_match_models(self) -> None:
+        events = self.contract()["events"]
+        assert isinstance(events, dict)
+        for event_type in LedgerEventType:
+            metadata = events[event_type.value]
+            assert isinstance(metadata, dict)
+            declared = set(metadata["required"]) | set(metadata.get("optional") or [])
+            model = WorkLedgerVocabulary.PAYLOAD_MODELS[event_type]
+            schema = model.model_json_schema(by_alias=True)
+            assert set(schema["properties"]) == declared, event_type.value
+
     def test_payload_version_const_is_one(self) -> None:
         assert LEDGER_PAYLOAD_VERSION == 1
         assert self.contract()["payload_version"] == LEDGER_PAYLOAD_VERSION
@@ -124,8 +136,30 @@ class TestLedgerContractParity(LedgerContractMixin):
             assert isinstance(validated, LedgerPayload)
             seen.add(event_type)
 
-        # The golden run must exercise every event type at least once.
-        assert seen == {member.value for member in LedgerEventType}
+        # The immutable v2 fixture remains replayable without being rewritten.
+        assert seen == set(list(LEDGER_EVENT_TYPES)[:15])
+
+    def test_v2_1_golden_journeys_all_validate(self) -> None:
+        fixture = load_ledger_golden_journeys()
+        journeys = fixture["journeys"]
+        assert isinstance(journeys, list)
+        assert len(journeys) >= 12
+
+        seen: set[str] = set()
+        for journey in journeys:
+            assert isinstance(journey, dict)
+            events = journey["events"]
+            assert isinstance(events, list)
+            for event in events:
+                assert isinstance(event, dict)
+                event_type = event["event_type"]
+                payload = event["payload"]
+                assert isinstance(event_type, str)
+                assert isinstance(payload, dict)
+                WorkLedgerVocabulary.validate_payload(event_type, payload)
+                seen.add(event_type)
+
+        assert set(list(LEDGER_EVENT_TYPES)[15:]).issubset(seen)
 
     def test_no_org_or_user_fields_on_any_payload(self) -> None:
         # Wire-shape tenancy rule: attribution rides the run envelope, never the

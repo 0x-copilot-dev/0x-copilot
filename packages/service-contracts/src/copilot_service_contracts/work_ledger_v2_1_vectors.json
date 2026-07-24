@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "canonical_json": [
+    {
+      "id": "empty_object",
+      "value": {},
+      "canonical": "{}",
+      "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+    },
+    {
+      "id": "nested_unicode",
+      "value": {
+        "z": null,
+        "a": ["café", true, 1.5],
+        "emoji": "🧭"
+      },
+      "canonical": "{\"a\":[\"café\",true,1.5],\"emoji\":\"🧭\",\"z\":null}",
+      "sha256": "e6da0c7b7b495918d6f50f6bd0a146c359a7c3a7a8995b911ccecfe4cfd2e357"
+    },
+    {
+      "id": "booleans_null",
+      "value": { "false": false, "null": null, "true": true },
+      "canonical": "{\"false\":false,\"null\":null,\"true\":true}",
+      "sha256": "53738299ec37f4ace8cbfc30738ad03bfdc4ea019d2ad7a9376cd3e274a6625d"
+    },
+    {
+      "id": "array_order",
+      "value": [3, 2, 1, { "b": 2, "a": 1 }],
+      "canonical": "[3,2,1,{\"a\":1,\"b\":2}]",
+      "sha256": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc"
+    },
+    {
+      "id": "unicode_key_order",
+      "value": { "🧭": "compass", "é": "accent", "a": "first" },
+      "canonical": "{\"a\":\"first\",\"é\":\"accent\",\"🧭\":\"compass\"}",
+      "sha256": "bf7b1dbdeccf1b2e6cc5989b8ae024a15c53b2be9ad63472c843f3b5535d42e4"
+    },
+    {
+      "id": "number_normalization",
+      "value": {
+        "decimal": 1.5,
+        "integer_float": 1.0,
+        "negative_zero": 0,
+        "small": 1e-7
+      },
+      "canonical": "{\"decimal\":1.5,\"integer_float\":1,\"negative_zero\":0,\"small\":1e-7}",
+      "sha256": "25c18503af46a822908ae8d169b654b4bff4f3c9989f621fc60e019b0440d85f"
+    }
+  ],
+  "byte_digests": [
+    {
+      "id": "empty",
+      "utf8": "",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "ascii",
+      "utf8": "abc",
+      "sha256": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    },
+    {
+      "id": "unicode",
+      "utf8": "café",
+      "sha256": "850f7dc43910ff890f8879c0ed26fe697c93a067ad93a7d50f466a7028a9bf4e"
+    }
+  ],
+  "invalid_canonical_json": [
+    {
+      "id": "nan",
+      "recipe": { "kind": "non_finite", "variant": "nan" }
+    },
+    {
+      "id": "positive_infinity",
+      "recipe": { "kind": "non_finite", "variant": "positive" }
+    },
+    {
+      "id": "negative_infinity",
+      "recipe": { "kind": "non_finite", "variant": "negative" }
+    },
+    {
+      "id": "unsafe_integer",
+      "recipe": { "kind": "unsafe_integer", "decimal": "9007199254740992" }
+    },
+    {
+      "id": "unsupported_value",
+      "recipe": { "kind": "unsupported_binary" }
+    },
+    {
+      "id": "non_string_key",
+      "recipe": { "kind": "non_string_key" }
+    },
+    {
+      "id": "cycle",
+      "recipe": { "kind": "cycle" }
+    },
+    {
+      "id": "unpaired_surrogate",
+      "recipe": { "kind": "unpaired_surrogate", "code_unit": "d800" }
+    }
+  ],
+  "legacy_compatibility": {
+    "source_fixture": "work_ledger_golden_events.json",
+    "expected": {
+      "operations": [
+        {
+          "legacy_call_id": "call_01",
+          "connector": "linear",
+          "op": "get_issue",
+          "action_class": "read",
+          "classification_basis": "catalog",
+          "completed": true,
+          "latency_ms": 142,
+          "result_ref": "payload/read_01",
+          "semantic_event_types": [
+            "operation.classified",
+            "operation.completed"
+          ]
+        }
+      ],
+      "stages": [
+        {
+          "legacy_stage_id": "stage_01",
+          "surface_id": "surface_issue",
+          "executor": "mcp",
+          "target": { "connector": "linear", "op": "update_issue" },
+          "proposal_ref": "payload/proposal_01",
+          "latest_revision": 2,
+          "decision_count": 2,
+          "apply_results": ["applied", "partial"],
+          "semantic_event_types": [
+            "effect.staged",
+            "effect.revised",
+            "effect.decision_recorded",
+            "effect.applied"
+          ],
+          "authoritative_v21": false
+        }
+      ],
+      "presentation_events": [
+        { "event_type": "surface.created", "surface_id": "surface_issue" },
+        { "event_type": "view.derived", "surface_id": "surface_issue" },
+        { "event_type": "view.derived", "surface_id": "surface_issue" },
+        { "event_type": "surface.created", "surface_id": "surface_receipt" }
+      ],
+      "legacy_gates": [
+        {
+          "gate_id": "gate_01",
+          "connector": "linear",
+          "opened": true,
+          "resolved": true,
+          "outcome": "connected",
+          "valid_generalized_write_input": false
+        }
+      ],
+      "passthrough_event_types": [
+        "receipt.emitted",
+        "shape.requested",
+        "shape.resolved",
+        "usage.recorded",
+        "view.preference"
+      ]
+    }
+  },
+  "identifiers": [
+    {
+      "kind": "operation_id",
+      "uuid": "018f47a6-7b2c-7a10-8f21-123456789abc",
+      "formatted": "op_018f47a6-7b2c-7a10-8f21-123456789abc"
+    },
+    {
+      "kind": "artifact_id",
+      "uuid": "123e4567-e89b-42d3-a456-426614174000",
+      "formatted": "art_123e4567-e89b-42d3-a456-426614174000"
+    },
+    {
+      "kind": "effect_stage_id",
+      "uuid": "018f47a6-7b2c-7c10-8f21-123456789abc",
+      "formatted": "stg_018f47a6-7b2c-7c10-8f21-123456789abc"
+    }
+  ],
+  "references": [
+    {
+      "kind": "artifact_content",
+      "formatted": "artifact://art_123e4567-e89b-42d3-a456-426614174000/revisions/2",
+      "parts": {
+        "artifact_id": "art_123e4567-e89b-42d3-a456-426614174000",
+        "revision": 2
+      }
+    },
+    {
+      "kind": "operation_args",
+      "formatted": "operation://op_018f47a6-7b2c-7a10-8f21-123456789abc/args",
+      "parts": {
+        "operation_id": "op_018f47a6-7b2c-7a10-8f21-123456789abc"
+      }
+    },
+    {
+      "kind": "proposal",
+      "formatted": "proposal://stg_018f47a6-7b2c-7c10-8f21-123456789abc/revisions/3",
+      "parts": {
+        "stage_id": "stg_018f47a6-7b2c-7c10-8f21-123456789abc",
+        "revision": 3
+      }
+    },
+    {
+      "kind": "effect_receipt",
+      "formatted": "receipt://effects/stg_018f47a6-7b2c-7c10-8f21-123456789abc/claim_01",
+      "parts": {
+        "stage_id": "stg_018f47a6-7b2c-7c10-8f21-123456789abc",
+        "claim_id": "claim_01"
+      }
+    },
+    {
+      "kind": "workspace_target",
+      "formatted": "workspace-target://grant_01/pathToken_01",
+      "parts": { "grant_id": "grant_01", "path_token": "pathToken_01" }
+    }
+  ]
+}

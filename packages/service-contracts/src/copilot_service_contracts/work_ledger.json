@@ -1,11 +1,31 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "payload_version": 1,
   "ledger_id": {
     "prefix": "r",
     "short_len": 3,
     "separator": "·",
     "seq_min_width": 3
+  },
+  "identifiers": {
+    "operation_id": { "prefix": "op_", "uuid_versions": [4, 7] },
+    "artifact_id": { "prefix": "art_", "uuid_versions": [4, 7] },
+    "effect_stage_id": { "prefix": "stg_", "uuid_versions": [4, 7] }
+  },
+  "references": {
+    "max_length": 2048,
+    "claim_id_max_length": 128,
+    "artifact_content": "artifact://<artifact_id>/revisions/<positive-int>",
+    "operation_args": "operation://<operation_id>/args",
+    "proposal": "proposal://<stage_id>/revisions/<positive-int>",
+    "effect_receipt": "receipt://effects/<stage_id>/<claim-id>",
+    "workspace_target": "workspace-target://<grant-id>/<path-token>"
+  },
+  "digests": {
+    "algorithm": "sha256",
+    "encoding": "lowercase_hex",
+    "structured_input": "canonical_json_utf8",
+    "max_safe_integer": 9007199254740991
   },
   "enums": {
     "auth_state": ["missing", "expired", "insufficient"],
@@ -30,7 +50,205 @@
     "decision_actor": ["user", "policy"],
     "apply_result": ["applied", "partial", "failed"],
     "usage_purpose": ["run", "subagent", "view_shaping", "shape_request"],
-    "shape_outcome": ["shaped", "no_fit"]
+    "shape_outcome": ["shaped", "no_fit"],
+    "producer": ["model", "subagent", "user", "system"],
+    "effect_class": [
+      "none",
+      "internal_reversible",
+      "external_reversible",
+      "external_destructive",
+      "unknown"
+    ],
+    "operation_classification_basis": [
+      "descriptor",
+      "catalog",
+      "provider_annotation",
+      "policy_override",
+      "default"
+    ],
+    "operation_outcome": [
+      "succeeded",
+      "staged",
+      "blocked",
+      "cancelled",
+      "failed"
+    ],
+    "operation_result_kind": [
+      "none",
+      "artifact",
+      "activity",
+      "artifact_and_activity"
+    ],
+    "artifact_kind": ["code", "document", "dataset", "file"],
+    "artifact_author": ["model", "subagent", "user", "system", "import"],
+    "artifact_presentation_preference": ["auto", "canvas", "chat_card", "none"],
+    "presentation_decision": ["canvas", "chat_card", "activity_only", "none"],
+    "surface_subject_type": ["artifact", "stage", "record", "receipt", "gate"],
+    "effect_policy": ["auto", "ask", "require", "block"],
+    "effect_decision": ["approve", "reject", "restore", "cancel"],
+    "effect_actor": ["user", "policy", "system"],
+    "effect_outcome": [
+      "applied",
+      "partial",
+      "failed",
+      "cancelled",
+      "indeterminate",
+      "already_applied",
+      "precondition_drift"
+    ],
+    "effect_executor": ["mcp", "workspace", "browser", "sandbox", "builtin"],
+    "effect_stage_status": [
+      "staged",
+      "approved",
+      "rejected",
+      "cancelled",
+      "claimed",
+      "applied",
+      "partial",
+      "failed",
+      "indeterminate",
+      "precondition_drift"
+    ],
+    "gate_kind": ["authentication", "grant", "capability", "policy"],
+    "gate_decision": ["granted", "denied", "cancelled"]
+  },
+  "entities": {
+    "OperationRequest": {
+      "required": [
+        "operation_id",
+        "run_id",
+        "producer",
+        "capability",
+        "op",
+        "canonical_args_ref",
+        "args_digest",
+        "requested_at"
+      ],
+      "optional": ["artifact_intent", "effect_hint", "parent_operation_id"]
+    },
+    "OperationDescriptor": {
+      "required": [
+        "capability",
+        "op",
+        "executor",
+        "effect_class",
+        "result_kind",
+        "supports_prepare",
+        "supports_reconcile",
+        "required_gate_kinds",
+        "max_inline_result_bytes"
+      ],
+      "optional": []
+    },
+    "OperationDisposition": {
+      "required": [
+        "operation_id",
+        "outcome",
+        "artifact_ids",
+        "stage_ids",
+        "agent_summary",
+        "retryable"
+      ],
+      "optional": ["activity_ref"]
+    },
+    "Artifact": {
+      "required": [
+        "artifact_id",
+        "org_id",
+        "user_id",
+        "conversation_id",
+        "run_id",
+        "kind",
+        "title",
+        "media_type",
+        "current_revision",
+        "created_by",
+        "created_at",
+        "updated_at"
+      ],
+      "optional": ["deleted_at"]
+    },
+    "ArtifactRevision": {
+      "required": [
+        "artifact_id",
+        "revision",
+        "content_ref",
+        "content_digest",
+        "byte_size",
+        "author",
+        "created_at"
+      ],
+      "optional": ["parent_revision", "source_ref"]
+    },
+    "ArtifactIntent": {
+      "required": ["kind", "presentation_preference"],
+      "optional": ["title", "media_type", "suggested_filename"]
+    },
+    "SurfaceSubject": {
+      "required": ["subject_type", "subject_id"],
+      "optional": []
+    },
+    "EffectTarget": {
+      "required": [
+        "executor",
+        "capability",
+        "op",
+        "target_ref",
+        "display_label"
+      ],
+      "optional": ["precondition_ref"]
+    },
+    "ProposalRef": {
+      "required": ["proposal_ref", "proposal_digest", "media_type"],
+      "optional": ["byte_size"]
+    },
+    "EffectStage": {
+      "required": [
+        "stage_id",
+        "operation_id",
+        "run_id",
+        "executor",
+        "target",
+        "proposal",
+        "revision",
+        "status",
+        "policy_snapshot_ref",
+        "created_at",
+        "updated_at"
+      ],
+      "optional": []
+    },
+    "EffectDecision": {
+      "required": [
+        "stage_id",
+        "revision",
+        "decision",
+        "actor",
+        "proposal_digest",
+        "target_digest",
+        "decided_at",
+        "ledger_id"
+      ],
+      "optional": []
+    },
+    "EffectExecutionRequest": {
+      "required": [
+        "stage_id",
+        "revision",
+        "idempotency_key",
+        "target_ref",
+        "target_digest",
+        "proposal_ref",
+        "proposal_digest",
+        "actor",
+        "decision_ledger_id"
+      ],
+      "optional": []
+    },
+    "EffectExecutionResult": {
+      "required": ["outcome", "retryable"],
+      "optional": ["receipt_ref", "result_digest", "safe_message"]
+    }
   },
   "events": {
     "gate.opened": {
@@ -41,11 +259,25 @@
         "purpose",
         "scopes",
         "auth_state"
-      ]
+      ],
+      "optional": [],
+      "enum_fields": { "auth_state": "auth_state" }
     },
-    "gate.resolved": { "required": ["v", "gate_id", "outcome"] },
+    "gate.resolved": {
+      "required": ["v", "gate_id", "outcome"],
+      "optional": ["write_policy"],
+      "enum_fields": {
+        "outcome": "gate_outcome",
+        "write_policy": "write_policy"
+      }
+    },
     "action.classified": {
-      "required": ["v", "call_id", "connector", "op", "class", "basis"]
+      "required": ["v", "call_id", "connector", "op", "class", "basis"],
+      "optional": [],
+      "enum_fields": {
+        "class": "action_class",
+        "basis": "classification_basis"
+      }
     },
     "read.executed": {
       "required": [
@@ -55,28 +287,240 @@
         "op",
         "latency_ms",
         "payload_ref"
-      ]
+      ],
+      "optional": []
     },
     "surface.created": {
-      "required": ["v", "surface_id", "kind", "source", "title", "payload_ref"]
+      "required": ["v", "surface_id", "kind", "source", "title", "payload_ref"],
+      "optional": [],
+      "enum_fields": { "kind": "surface_kind" }
     },
-    "view.derived": { "required": ["v", "surface_id", "tier", "basis"] },
-    "view.preference": { "required": ["v", "surface_id", "keep", "actor"] },
-    "shape.requested": { "required": ["v", "surface_id", "actor"] },
-    "shape.resolved": { "required": ["v", "surface_id", "outcome"] },
+    "view.derived": {
+      "required": ["v", "surface_id", "tier", "basis"],
+      "optional": ["spec_ref", "gen"],
+      "enum_fields": { "tier": "view_tier", "basis": "view_basis" }
+    },
+    "view.preference": {
+      "required": ["v", "surface_id", "keep", "actor"],
+      "optional": [],
+      "enum_fields": { "keep": "view_keep" }
+    },
+    "shape.requested": {
+      "required": ["v", "surface_id", "actor"],
+      "optional": []
+    },
+    "shape.resolved": {
+      "required": ["v", "surface_id", "outcome"],
+      "optional": ["reason"],
+      "enum_fields": { "outcome": "shape_outcome" }
+    },
     "write.staged": {
-      "required": ["v", "stage_id", "surface_id", "target", "proposal_ref"]
+      "required": ["v", "stage_id", "surface_id", "target", "proposal_ref"],
+      "optional": ["rows", "agent_holds"]
     },
     "revision.added": {
-      "required": ["v", "stage_id", "rev", "author", "diff_ref"]
+      "required": ["v", "stage_id", "rev", "author", "diff_ref"],
+      "optional": ["proposal_ref", "authorship_spans", "rowset"],
+      "enum_fields": { "author": "revision_author" }
     },
     "decision.recorded": {
-      "required": ["v", "stage_id", "decision", "scope", "actor"]
+      "required": ["v", "stage_id", "decision", "scope", "actor"],
+      "optional": ["apply"],
+      "enum_fields": {
+        "decision": "decision_kind",
+        "actor": "decision_actor"
+      }
     },
-    "write.applied": { "required": ["v", "stage_id", "rev", "result"] },
+    "write.applied": {
+      "required": ["v", "stage_id", "rev", "result"],
+      "optional": [
+        "row_keys",
+        "connector_receipt_ref",
+        "failure",
+        "decided_by",
+        "row_results"
+      ],
+      "enum_fields": { "result": "apply_result" }
+    },
     "usage.recorded": {
-      "required": ["v", "purpose", "model", "tokens_in", "tokens_out"]
+      "required": ["v", "purpose", "model", "tokens_in", "tokens_out"],
+      "optional": ["surface_id"],
+      "enum_fields": { "purpose": "usage_purpose" }
     },
-    "receipt.emitted": { "required": ["v", "surface_id", "fold_ref"] }
+    "receipt.emitted": {
+      "required": ["v", "surface_id", "fold_ref"],
+      "optional": []
+    },
+    "operation.requested": {
+      "required": [
+        "v",
+        "operation_id",
+        "producer",
+        "capability",
+        "op",
+        "args_digest"
+      ],
+      "optional": ["parent_operation_id"],
+      "enum_fields": { "producer": "producer" }
+    },
+    "operation.classified": {
+      "required": ["v", "operation_id", "effect_class", "basis", "confidence"],
+      "optional": [],
+      "enum_fields": {
+        "effect_class": "effect_class",
+        "basis": "operation_classification_basis"
+      }
+    },
+    "operation.completed": {
+      "required": ["v", "operation_id", "outcome"],
+      "optional": ["result_ref", "latency_ms"],
+      "enum_fields": { "outcome": "operation_outcome" }
+    },
+    "operation.failed": {
+      "required": ["v", "operation_id", "failure_code", "retryable"],
+      "optional": []
+    },
+    "artifact.created": {
+      "required": [
+        "v",
+        "artifact_id",
+        "kind",
+        "revision",
+        "content_ref",
+        "content_digest",
+        "author"
+      ],
+      "optional": [],
+      "enum_fields": { "kind": "artifact_kind", "author": "artifact_author" }
+    },
+    "artifact.revised": {
+      "required": [
+        "v",
+        "artifact_id",
+        "revision",
+        "parent_revision",
+        "content_ref",
+        "content_digest",
+        "author"
+      ],
+      "optional": [],
+      "enum_fields": { "author": "artifact_author" }
+    },
+    "artifact.promoted": {
+      "required": ["v", "artifact_id", "source_ref", "kind", "revision"],
+      "optional": [],
+      "enum_fields": { "kind": "artifact_kind" }
+    },
+    "artifact.presentation_decided": {
+      "required": ["v", "artifact_id", "decision", "basis"],
+      "optional": ["surface_id"],
+      "enum_fields": { "decision": "presentation_decision" }
+    },
+    "effect.staged": {
+      "required": [
+        "v",
+        "stage_id",
+        "operation_id",
+        "executor",
+        "target_ref",
+        "target_digest",
+        "proposal_ref",
+        "proposal_digest",
+        "policy"
+      ],
+      "optional": [],
+      "enum_fields": {
+        "executor": "effect_executor",
+        "policy": "effect_policy"
+      }
+    },
+    "effect.revised": {
+      "required": [
+        "v",
+        "stage_id",
+        "revision",
+        "proposal_ref",
+        "proposal_digest",
+        "author"
+      ],
+      "optional": [],
+      "enum_fields": { "author": "artifact_author" }
+    },
+    "effect.decision_recorded": {
+      "required": [
+        "v",
+        "stage_id",
+        "revision",
+        "decision",
+        "actor",
+        "proposal_digest",
+        "target_digest"
+      ],
+      "optional": [],
+      "enum_fields": {
+        "decision": "effect_decision",
+        "actor": "effect_actor"
+      }
+    },
+    "effect.claimed": {
+      "required": [
+        "v",
+        "stage_id",
+        "revision",
+        "claim_id",
+        "executor",
+        "attempt"
+      ],
+      "optional": [],
+      "enum_fields": { "executor": "effect_executor" }
+    },
+    "effect.applied": {
+      "required": ["v", "stage_id", "revision", "outcome"],
+      "optional": ["receipt_ref", "result_digest"],
+      "enum_fields": { "outcome": "effect_outcome" }
+    },
+    "effect.indeterminate": {
+      "required": ["v", "stage_id", "revision", "claim_id", "reason"],
+      "optional": []
+    },
+    "effect.reconciled": {
+      "required": ["v", "stage_id", "revision", "claim_id", "outcome"],
+      "optional": ["receipt_ref"],
+      "enum_fields": { "outcome": "effect_outcome" }
+    },
+    "gate.opened.v2": {
+      "required": [
+        "v",
+        "gate_id",
+        "operation_id",
+        "gate_kind",
+        "capability",
+        "reason"
+      ],
+      "optional": [],
+      "enum_fields": { "gate_kind": "gate_kind" }
+    },
+    "gate.resolved.v2": {
+      "required": ["v", "gate_id", "decision", "actor"],
+      "optional": [],
+      "enum_fields": {
+        "decision": "gate_decision",
+        "actor": "effect_actor"
+      }
+    }
+  },
+  "compatibility": {
+    "read_side_only": true,
+    "event_mappings": {
+      "action.classified": "operation.classified",
+      "read.executed": "operation.completed",
+      "surface.created": "surface.created",
+      "view.derived": "view.derived",
+      "write.staged": "effect.staged",
+      "revision.added": "effect.revised",
+      "decision.recorded": "effect.decision_recorded",
+      "write.applied": "effect.applied"
+    },
+    "legacy_gate_write_input": false
   }
 }

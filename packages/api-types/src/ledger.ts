@@ -16,7 +16,7 @@ import contract from "../../service-contracts/src/copilot_service_contracts/work
 // Event types
 // ---------------------------------------------------------------------------
 
-/** One of the 15 ledger event types (SDR §5). */
+/** One canonical Work Ledger event type, in append-only contract order. */
 export type LedgerEventType =
   | "gate.opened"
   | "gate.resolved"
@@ -32,7 +32,24 @@ export type LedgerEventType =
   | "decision.recorded"
   | "write.applied"
   | "usage.recorded"
-  | "receipt.emitted";
+  | "receipt.emitted"
+  | "operation.requested"
+  | "operation.classified"
+  | "operation.completed"
+  | "operation.failed"
+  | "artifact.created"
+  | "artifact.revised"
+  | "artifact.promoted"
+  | "artifact.presentation_decided"
+  | "effect.staged"
+  | "effect.revised"
+  | "effect.decision_recorded"
+  | "effect.claimed"
+  | "effect.applied"
+  | "effect.indeterminate"
+  | "effect.reconciled"
+  | "gate.opened.v2"
+  | "gate.resolved.v2";
 
 /** Runtime SSOT tuple for the event-type union, in contract order. Pinned to
  * the service-contracts JSON `events` key order by `ledger.test.ts`. Later
@@ -53,6 +70,23 @@ export const LEDGER_EVENT_TYPES = [
   "write.applied",
   "usage.recorded",
   "receipt.emitted",
+  "operation.requested",
+  "operation.classified",
+  "operation.completed",
+  "operation.failed",
+  "artifact.created",
+  "artifact.revised",
+  "artifact.promoted",
+  "artifact.presentation_decided",
+  "effect.staged",
+  "effect.revised",
+  "effect.decision_recorded",
+  "effect.claimed",
+  "effect.applied",
+  "effect.indeterminate",
+  "effect.reconciled",
+  "gate.opened.v2",
+  "gate.resolved.v2",
 ] as const satisfies readonly LedgerEventType[];
 
 // ---------------------------------------------------------------------------
@@ -86,6 +120,83 @@ export type UsagePurpose =
   | "shape_request";
 /** Outcome of a user-invited `shape.requested` attempt (PRD-B4, SDR §5). */
 export type ShapeOutcome = "shaped" | "no_fit";
+export type Producer = "model" | "subagent" | "user" | "system";
+export type EffectClass =
+  | "none"
+  | "internal_reversible"
+  | "external_reversible"
+  | "external_destructive"
+  | "unknown";
+export type OperationClassificationBasis =
+  | "descriptor"
+  | "catalog"
+  | "provider_annotation"
+  | "policy_override"
+  | "default";
+export type OperationOutcome =
+  | "succeeded"
+  | "staged"
+  | "blocked"
+  | "cancelled"
+  | "failed";
+export type OperationResultKind =
+  | "none"
+  | "artifact"
+  | "activity"
+  | "artifact_and_activity";
+export type ArtifactKind = "code" | "document" | "dataset" | "file";
+export type ArtifactAuthor =
+  | "model"
+  | "subagent"
+  | "user"
+  | "system"
+  | "import";
+export type ArtifactPresentationPreference =
+  | "auto"
+  | "canvas"
+  | "chat_card"
+  | "none";
+export type PresentationDecision =
+  | "canvas"
+  | "chat_card"
+  | "activity_only"
+  | "none";
+export type SurfaceSubjectType =
+  | "artifact"
+  | "stage"
+  | "record"
+  | "receipt"
+  | "gate";
+export type EffectPolicy = "auto" | "ask" | "require" | "block";
+export type EffectDecisionKind = "approve" | "reject" | "restore" | "cancel";
+export type EffectActor = "user" | "policy" | "system";
+export type EffectOutcome =
+  | "applied"
+  | "partial"
+  | "failed"
+  | "cancelled"
+  | "indeterminate"
+  | "already_applied"
+  | "precondition_drift";
+export type EffectExecutorKind =
+  | "mcp"
+  | "workspace"
+  | "browser"
+  | "sandbox"
+  | "builtin";
+export type EffectStageStatus =
+  | "staged"
+  | "approved"
+  | "rejected"
+  | "cancelled"
+  | "claimed"
+  | "applied"
+  | "partial"
+  | "failed"
+  | "indeterminate"
+  | "precondition_drift";
+export type GateKind = "authentication" | "grant" | "capability" | "policy";
+export type GateDecision = "granted" | "denied" | "cancelled";
 
 // ---------------------------------------------------------------------------
 // Shared value objects
@@ -337,6 +448,157 @@ export interface ReceiptEmittedPayload {
   fold_ref: string;
 }
 
+export interface OperationRequestedPayload {
+  v: 1;
+  operation_id: string;
+  producer: Producer;
+  capability: string;
+  op: string;
+  args_digest: string;
+  parent_operation_id?: string;
+}
+
+export interface OperationClassifiedPayload {
+  v: 1;
+  operation_id: string;
+  effect_class: EffectClass;
+  basis: OperationClassificationBasis;
+  confidence: number;
+}
+
+export interface OperationCompletedPayload {
+  v: 1;
+  operation_id: string;
+  outcome: OperationOutcome;
+  result_ref?: string;
+  latency_ms?: number;
+}
+
+export interface OperationFailedPayload {
+  v: 1;
+  operation_id: string;
+  failure_code: string;
+  retryable: boolean;
+}
+
+export interface ArtifactCreatedPayload {
+  v: 1;
+  artifact_id: string;
+  kind: ArtifactKind;
+  revision: number;
+  content_ref: string;
+  content_digest: string;
+  author: ArtifactAuthor;
+}
+
+export interface ArtifactRevisedPayload {
+  v: 1;
+  artifact_id: string;
+  revision: number;
+  parent_revision: number;
+  content_ref: string;
+  content_digest: string;
+  author: ArtifactAuthor;
+}
+
+export interface ArtifactPromotedPayload {
+  v: 1;
+  artifact_id: string;
+  source_ref: string;
+  kind: ArtifactKind;
+  revision: number;
+}
+
+export interface ArtifactPresentationDecidedPayload {
+  v: 1;
+  artifact_id: string;
+  decision: PresentationDecision;
+  basis: string;
+  surface_id?: string;
+}
+
+export interface EffectStagedPayload {
+  v: 1;
+  stage_id: string;
+  operation_id: string;
+  executor: EffectExecutorKind;
+  target_ref: string;
+  target_digest: string;
+  proposal_ref: string;
+  proposal_digest: string;
+  policy: EffectPolicy;
+}
+
+export interface EffectRevisedPayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  proposal_ref: string;
+  proposal_digest: string;
+  author: ArtifactAuthor;
+}
+
+export interface EffectDecisionRecordedPayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  decision: EffectDecisionKind;
+  actor: EffectActor;
+  proposal_digest: string;
+  target_digest: string;
+}
+
+export interface EffectClaimedPayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  claim_id: string;
+  executor: EffectExecutorKind;
+  attempt: number;
+}
+
+export interface EffectAppliedPayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  outcome: EffectOutcome;
+  receipt_ref?: string;
+  result_digest?: string;
+}
+
+export interface EffectIndeterminatePayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  claim_id: string;
+  reason: string;
+}
+
+export interface EffectReconciledPayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  claim_id: string;
+  outcome: EffectOutcome;
+  receipt_ref?: string;
+}
+
+export interface GateOpenedV2Payload {
+  v: 1;
+  gate_id: string;
+  operation_id: string;
+  gate_kind: GateKind;
+  capability: string;
+  reason: string;
+}
+
+export interface GateResolvedV2Payload {
+  v: 1;
+  gate_id: string;
+  decision: GateDecision;
+  actor: EffectActor;
+}
+
 /** Event-type → payload map. The `SurfaceEventV2` definition below references
  * `LedgerEventPayloadMap[K]` for every `K in LedgerEventType`, so a missing key
  * is a compile error — that is the exhaustiveness pin. */
@@ -356,6 +618,23 @@ export interface LedgerEventPayloadMap {
   "write.applied": WriteAppliedPayload;
   "usage.recorded": UsageRecordedPayload;
   "receipt.emitted": ReceiptEmittedPayload;
+  "operation.requested": OperationRequestedPayload;
+  "operation.classified": OperationClassifiedPayload;
+  "operation.completed": OperationCompletedPayload;
+  "operation.failed": OperationFailedPayload;
+  "artifact.created": ArtifactCreatedPayload;
+  "artifact.revised": ArtifactRevisedPayload;
+  "artifact.promoted": ArtifactPromotedPayload;
+  "artifact.presentation_decided": ArtifactPresentationDecidedPayload;
+  "effect.staged": EffectStagedPayload;
+  "effect.revised": EffectRevisedPayload;
+  "effect.decision_recorded": EffectDecisionRecordedPayload;
+  "effect.claimed": EffectClaimedPayload;
+  "effect.applied": EffectAppliedPayload;
+  "effect.indeterminate": EffectIndeterminatePayload;
+  "effect.reconciled": EffectReconciledPayload;
+  "gate.opened.v2": GateOpenedV2Payload;
+  "gate.resolved.v2": GateResolvedV2Payload;
 }
 
 /** One v2 ledger event on the wire (envelope-lite: the fields every projector
@@ -431,6 +710,144 @@ export interface StagedWrite {
   revisions: readonly Revision[];
   decisions: readonly Decision[];
   latest_rev: number;
+}
+
+export interface ArtifactIntent {
+  readonly kind: ArtifactKind;
+  readonly title?: string;
+  readonly media_type?: string;
+  readonly suggested_filename?: string;
+  readonly presentation_preference: ArtifactPresentationPreference;
+}
+
+export interface OperationRequest {
+  readonly operation_id: string;
+  readonly run_id: string;
+  readonly producer: Producer;
+  readonly capability: string;
+  readonly op: string;
+  readonly canonical_args_ref: string;
+  readonly args_digest: string;
+  readonly requested_at: string;
+  readonly artifact_intent?: ArtifactIntent;
+  readonly effect_hint?: EffectClass;
+  readonly parent_operation_id?: string;
+}
+
+export interface OperationDescriptor {
+  readonly capability: string;
+  readonly op: string;
+  readonly executor: EffectExecutorKind;
+  readonly effect_class: EffectClass;
+  readonly result_kind: OperationResultKind;
+  readonly supports_prepare: boolean;
+  readonly supports_reconcile: boolean;
+  readonly required_gate_kinds: readonly GateKind[];
+  readonly max_inline_result_bytes: number;
+}
+
+export interface OperationDisposition {
+  readonly operation_id: string;
+  readonly outcome: OperationOutcome;
+  readonly artifact_ids: readonly string[];
+  readonly stage_ids: readonly string[];
+  readonly activity_ref?: string;
+  readonly agent_summary: string;
+  readonly retryable: boolean;
+}
+
+export interface Artifact {
+  readonly artifact_id: string;
+  readonly org_id: string;
+  readonly user_id: string;
+  readonly conversation_id: string;
+  readonly run_id: string;
+  readonly kind: ArtifactKind;
+  readonly title: string;
+  readonly media_type: string;
+  readonly current_revision: number;
+  readonly created_by: ArtifactAuthor;
+  readonly created_at: string;
+  readonly updated_at: string;
+  readonly deleted_at?: string;
+}
+
+export interface ArtifactRevision {
+  readonly artifact_id: string;
+  readonly revision: number;
+  readonly parent_revision?: number;
+  readonly content_ref: string;
+  readonly content_digest: string;
+  readonly byte_size: number;
+  readonly author: ArtifactAuthor;
+  readonly source_ref?: string;
+  readonly created_at: string;
+}
+
+export interface SurfaceSubject {
+  readonly subject_type: SurfaceSubjectType;
+  readonly subject_id: string;
+}
+
+export interface EffectTarget {
+  readonly executor: EffectExecutorKind;
+  readonly capability: string;
+  readonly op: string;
+  readonly target_ref: string;
+  readonly precondition_ref?: string;
+  readonly display_label: string;
+}
+
+export interface ProposalRef {
+  readonly proposal_ref: string;
+  readonly proposal_digest: string;
+  readonly media_type: string;
+  readonly byte_size?: number;
+}
+
+export interface EffectStage {
+  readonly stage_id: string;
+  readonly operation_id: string;
+  readonly run_id: string;
+  readonly executor: EffectExecutorKind;
+  readonly target: EffectTarget;
+  readonly proposal: ProposalRef;
+  readonly revision: number;
+  readonly status: EffectStageStatus;
+  readonly policy_snapshot_ref: string;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface EffectDecision {
+  readonly stage_id: string;
+  readonly revision: number;
+  readonly decision: EffectDecisionKind;
+  readonly actor: EffectActor;
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+  readonly decided_at: string;
+  readonly ledger_id: string;
+}
+
+export interface EffectExecutionRequest {
+  readonly stage_id: string;
+  readonly revision: number;
+  readonly idempotency_key: string;
+  readonly target_ref: string;
+  readonly target_digest: string;
+  readonly proposal_ref: string;
+  readonly proposal_digest: string;
+  readonly actor: EffectActor;
+  readonly decision_ledger_id: string;
+}
+
+export interface EffectExecutionResult {
+  readonly outcome: EffectOutcome;
+  readonly receipt_ref?: string;
+  readonly result_digest?: string;
+  readonly retryable: boolean;
+  readonly safe_message?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -700,12 +1117,36 @@ interface _LedgerContract {
     separator: string;
     seq_min_width: number;
   };
-  events: Record<string, { required: readonly string[] }>;
+  identifiers: Record<
+    string,
+    { prefix: string; uuid_versions: readonly number[] }
+  >;
+  references: {
+    max_length: number;
+    claim_id_max_length: number;
+  };
+  digests: {
+    max_safe_integer: number;
+  };
+  enums: Record<string, readonly string[]>;
+  events: Record<
+    string,
+    {
+      required: readonly string[];
+      optional?: readonly string[];
+      enum_fields?: Readonly<Record<string, string>>;
+    }
+  >;
+  compatibility: {
+    read_side_only: boolean;
+    event_mappings: Readonly<Record<string, string>>;
+    legacy_gate_write_input: boolean;
+  };
 }
 
 const _CONTRACT = contract as unknown as _LedgerContract;
 
-/** True when `x` is one of the 14 ledger event-type strings. */
+/** True when `x` is one of the contract-defined ledger event-type strings. */
 export function isLedgerEventType(x: unknown): x is LedgerEventType {
   return typeof x === "string" && _EVENT_TYPE_SET.has(x);
 }
@@ -735,6 +1176,571 @@ export function isSurfaceEventV2(x: unknown): x is SurfaceEventV2 {
     if (!(key in p)) return false;
   }
   return true;
+}
+
+/** Strict writer-side payload validation. Unlike the replay-tolerant event
+ * guard above, this rejects unknown fields and unknown closed-enum values. */
+export function isLedgerPayloadForWrite<K extends LedgerEventType>(
+  eventType: K,
+  payload: unknown,
+): payload is LedgerEventPayloadMap[K] {
+  if (!isLedgerEventType(eventType)) return false;
+  if (
+    typeof payload !== "object" ||
+    payload === null ||
+    Array.isArray(payload)
+  ) {
+    return false;
+  }
+  const value = payload as Record<string, unknown>;
+  if (value.v !== 1) return false;
+  const schema = _CONTRACT.events[eventType];
+  const allowed = new Set([
+    ...(schema.required ?? []),
+    ...(schema.optional ?? []),
+  ]);
+  if (schema.required.some((key) => !(key in value))) return false;
+  if (Object.keys(value).some((key) => !allowed.has(key))) return false;
+  for (const [field, enumName] of Object.entries(schema.enum_fields ?? {})) {
+    if (!(field in value)) continue;
+    if (!_CONTRACT.enums[enumName]?.includes(value[field] as string))
+      return false;
+  }
+  return _isV21PayloadForWrite(eventType, value);
+}
+
+const _SHA256_HEX = /^[0-9a-f]{64}$/;
+const _SAFE_CLAIM_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+
+function _isV21PayloadForWrite(
+  eventType: LedgerEventType,
+  value: Record<string, unknown>,
+): boolean {
+  const operationId = () =>
+    _validCodecValue(OperationIdCodec, value.operation_id);
+  const artifactId = () => _validCodecValue(ArtifactIdCodec, value.artifact_id);
+  const stageId = () => _validCodecValue(EffectStageIdCodec, value.stage_id);
+  const revision = () => _isPositiveSafeInteger(value.revision);
+
+  switch (eventType) {
+    case "operation.requested":
+      return (
+        operationId() &&
+        _isNonEmptyString(value.capability) &&
+        _isNonEmptyString(value.op) &&
+        _isSha256(value.args_digest) &&
+        _optionalCodecValue(value, "parent_operation_id", OperationIdCodec) &&
+        value.parent_operation_id !== value.operation_id
+      );
+    case "operation.classified":
+      return (
+        operationId() &&
+        typeof value.confidence === "number" &&
+        Number.isFinite(value.confidence) &&
+        value.confidence >= 0 &&
+        value.confidence <= 1
+      );
+    case "operation.completed":
+      return (
+        operationId() &&
+        _optionalNonPhysicalReference(value, "result_ref") &&
+        _optionalNonNegativeSafeInteger(value, "latency_ms")
+      );
+    case "operation.failed":
+      return (
+        operationId() &&
+        _isBoundedString(value.failure_code, 1, 128) &&
+        typeof value.retryable === "boolean"
+      );
+    case "artifact.created": {
+      if (!artifactId() || !revision() || !_isSha256(value.content_digest))
+        return false;
+      const parsed = _parseArtifactContentRef(value.content_ref);
+      return (
+        parsed !== null &&
+        parsed.artifact_id === value.artifact_id &&
+        parsed.revision === value.revision
+      );
+    }
+    case "artifact.revised": {
+      if (
+        !artifactId() ||
+        !revision() ||
+        !_isPositiveSafeInteger(value.parent_revision) ||
+        (value.parent_revision as number) >= (value.revision as number) ||
+        !_isSha256(value.content_digest)
+      ) {
+        return false;
+      }
+      const parsed = _parseArtifactContentRef(value.content_ref);
+      return (
+        parsed !== null &&
+        parsed.artifact_id === value.artifact_id &&
+        parsed.revision === value.revision
+      );
+    }
+    case "artifact.promoted":
+      return (
+        artifactId() && revision() && _isNonPhysicalReference(value.source_ref)
+      );
+    case "artifact.presentation_decided":
+      return (
+        artifactId() &&
+        _isBoundedString(value.basis, 1, 128) &&
+        _optionalNonEmptyString(value, "surface_id")
+      );
+    case "effect.staged": {
+      if (
+        !stageId() ||
+        !operationId() ||
+        !_isTargetReference(value.target_ref) ||
+        !_isSha256(value.target_digest) ||
+        !_isSha256(value.proposal_digest)
+      ) {
+        return false;
+      }
+      if (
+        value.executor === "workspace" &&
+        !_validCodecValue(WorkspaceTargetRefCodec, value.target_ref)
+      ) {
+        return false;
+      }
+      const parsed = _parseProposalRef(value.proposal_ref);
+      return (
+        parsed !== null &&
+        parsed.stage_id === value.stage_id &&
+        parsed.revision === 1
+      );
+    }
+    case "effect.revised": {
+      if (!stageId() || !revision() || !_isSha256(value.proposal_digest))
+        return false;
+      const parsed = _parseProposalRef(value.proposal_ref);
+      return (
+        parsed !== null &&
+        parsed.stage_id === value.stage_id &&
+        parsed.revision === value.revision
+      );
+    }
+    case "effect.decision_recorded":
+      return (
+        stageId() &&
+        revision() &&
+        _isSha256(value.proposal_digest) &&
+        _isSha256(value.target_digest)
+      );
+    case "effect.claimed":
+      return (
+        stageId() &&
+        revision() &&
+        _isClaimId(value.claim_id) &&
+        _isPositiveSafeInteger(value.attempt)
+      );
+    case "effect.applied": {
+      if (
+        !stageId() ||
+        !revision() ||
+        !_optionalSha256(value, "result_digest")
+      ) {
+        return false;
+      }
+      if (!("receipt_ref" in value)) return true;
+      const parsed = _parseReceiptRef(value.receipt_ref);
+      return parsed !== null && parsed.stage_id === value.stage_id;
+    }
+    case "effect.indeterminate":
+      return (
+        stageId() &&
+        revision() &&
+        _isClaimId(value.claim_id) &&
+        _isBoundedString(value.reason, 1, 512)
+      );
+    case "effect.reconciled": {
+      if (!stageId() || !revision() || !_isClaimId(value.claim_id))
+        return false;
+      if (!("receipt_ref" in value)) return true;
+      const parsed = _parseReceiptRef(value.receipt_ref);
+      return (
+        parsed !== null &&
+        parsed.stage_id === value.stage_id &&
+        parsed.claim_id === value.claim_id
+      );
+    }
+    case "gate.opened.v2":
+      return (
+        _isNonEmptyString(value.gate_id) &&
+        operationId() &&
+        _isNonEmptyString(value.capability) &&
+        _isBoundedString(value.reason, 1, 512)
+      );
+    case "gate.resolved.v2":
+      return _isNonEmptyString(value.gate_id);
+    default:
+      return true;
+  }
+}
+
+type _StringCodec = {
+  parse(text: string): unknown;
+};
+
+function _validCodecValue(codec: _StringCodec, value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  try {
+    codec.parse(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function _optionalCodecValue(
+  value: Record<string, unknown>,
+  key: string,
+  codec: _StringCodec,
+): boolean {
+  return !(key in value) || _validCodecValue(codec, value[key]);
+}
+
+function _isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+function _optionalNonEmptyString(
+  value: Record<string, unknown>,
+  key: string,
+): boolean {
+  return !(key in value) || _isNonEmptyString(value[key]);
+}
+
+function _isBoundedString(
+  value: unknown,
+  minLength: number,
+  maxLength: number,
+): value is string {
+  return (
+    typeof value === "string" &&
+    value.length >= minLength &&
+    value.length <= maxLength
+  );
+}
+
+function _isPositiveSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 1;
+}
+
+function _isNonNegativeSafeInteger(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function _optionalNonNegativeSafeInteger(
+  value: Record<string, unknown>,
+  key: string,
+): boolean {
+  return !(key in value) || _isNonNegativeSafeInteger(value[key]);
+}
+
+function _isSha256(value: unknown): value is string {
+  return typeof value === "string" && _SHA256_HEX.test(value);
+}
+
+function _optionalSha256(value: Record<string, unknown>, key: string): boolean {
+  return !(key in value) || _isSha256(value[key]);
+}
+
+function _isClaimId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    _SAFE_CLAIM_ID.test(value) &&
+    !value.includes("..")
+  );
+}
+
+function _isNonPhysicalReference(value: unknown): value is string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.length > _CONTRACT.references.max_length ||
+    value.trim() !== value
+  ) {
+    return false;
+  }
+  const lower = value.toLowerCase();
+  return !(
+    value.startsWith("/") ||
+    value.startsWith("~") ||
+    value.startsWith("\\") ||
+    lower.startsWith("file://") ||
+    lower.startsWith("filesystem://") ||
+    /^[a-zA-Z]:[\\/]/.test(value)
+  );
+}
+
+function _isTargetReference(value: unknown): value is string {
+  return (
+    _isNonPhysicalReference(value) &&
+    value.includes("://") &&
+    !value.split("/").some((part) => part === "." || part === "..")
+  );
+}
+
+function _optionalNonPhysicalReference(
+  value: Record<string, unknown>,
+  key: string,
+): boolean {
+  return !(key in value) || _isNonPhysicalReference(value[key]);
+}
+
+function _parseArtifactContentRef(
+  value: unknown,
+): ParsedArtifactContentRef | null {
+  if (typeof value !== "string") return null;
+  try {
+    return ArtifactContentRefCodec.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function _parseProposalRef(value: unknown): ParsedProposalRef | null {
+  if (typeof value !== "string") return null;
+  try {
+    return ProposalUriCodec.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+function _parseReceiptRef(value: unknown): ParsedEffectReceiptRef | null {
+  if (typeof value !== "string") return null;
+  try {
+    return EffectReceiptRefCodec.parse(value);
+  } catch {
+    return null;
+  }
+}
+
+/** Read-side semantic mapping for legacy v2 events. This names the destination
+ * concept only; it never rewrites payloads and writers must not use it. */
+export function compatibilityEventType(
+  eventType: string,
+): LedgerEventType | null {
+  const mapped = _CONTRACT.compatibility.event_mappings[eventType];
+  return mapped !== undefined && isLedgerEventType(mapped) ? mapped : null;
+}
+
+export interface LegacyOperationProjection {
+  readonly legacy_call_id: string;
+  readonly connector: string;
+  readonly op: string;
+  readonly action_class: string | null;
+  readonly classification_basis: string | null;
+  readonly completed: boolean;
+  readonly latency_ms: number | null;
+  readonly result_ref: string | null;
+  readonly semantic_event_types: readonly string[];
+}
+
+export interface LegacyStageProjection {
+  readonly legacy_stage_id: string;
+  readonly surface_id: string;
+  readonly executor: "mcp";
+  readonly target: Readonly<LedgerOpRef>;
+  readonly proposal_ref: string;
+  readonly latest_revision: number;
+  readonly decision_count: number;
+  readonly apply_results: readonly string[];
+  readonly semantic_event_types: readonly string[];
+  readonly authoritative_v21: false;
+}
+
+export interface LegacyPresentationProjection {
+  readonly event_type: "surface.created" | "view.derived";
+  readonly surface_id: string;
+}
+
+export interface LegacyGateProjection {
+  readonly gate_id: string;
+  readonly connector: string;
+  readonly opened: boolean;
+  readonly resolved: boolean;
+  readonly outcome: string | null;
+  readonly valid_generalized_write_input: false;
+}
+
+export interface LegacyCompatibilityProjection {
+  readonly operations: readonly LegacyOperationProjection[];
+  readonly stages: readonly LegacyStageProjection[];
+  readonly presentation_events: readonly LegacyPresentationProjection[];
+  readonly legacy_gates: readonly LegacyGateProjection[];
+  readonly passthrough_event_types: readonly string[];
+}
+
+interface LegacyReadableEvent {
+  readonly event_type: string;
+  readonly payload: Readonly<Record<string, unknown>>;
+}
+
+/** Read old v2 events without fabricating the ids/digests required by v2.1
+ * writers. The output is a compatibility view, never a source of new events. */
+export function projectLegacyLedgerForRead(
+  events: readonly LegacyReadableEvent[],
+): LegacyCompatibilityProjection {
+  const operations = new Map<string, Record<string, any>>();
+  const stages = new Map<string, Record<string, any>>();
+  const presentations: LegacyPresentationProjection[] = [];
+  const gates = new Map<string, Record<string, any>>();
+  const passthrough = new Set<string>();
+
+  for (const event of events) {
+    const payload = event.payload;
+    switch (event.event_type) {
+      case "action.classified": {
+        const callId = String(payload.call_id);
+        const operation = _legacyOperation(operations, callId, payload);
+        operation.action_class = String(payload.class);
+        operation.classification_basis = String(payload.basis);
+        _appendCompatibilitySemantic(operation, "operation.classified");
+        break;
+      }
+      case "read.executed": {
+        const callId = String(payload.call_id);
+        const operation = _legacyOperation(operations, callId, payload);
+        operation.completed = true;
+        operation.latency_ms = Number(payload.latency_ms);
+        operation.result_ref = String(payload.payload_ref);
+        _appendCompatibilitySemantic(operation, "operation.completed");
+        break;
+      }
+      case "surface.created":
+      case "view.derived":
+        presentations.push({
+          event_type: event.event_type,
+          surface_id: String(payload.surface_id),
+        });
+        break;
+      case "write.staged": {
+        const stageId = String(payload.stage_id);
+        const target = payload.target as Record<string, unknown>;
+        stages.set(stageId, {
+          legacy_stage_id: stageId,
+          surface_id: String(payload.surface_id),
+          executor: "mcp",
+          target: {
+            connector: String(target.connector),
+            op: String(target.op),
+          },
+          proposal_ref: String(payload.proposal_ref),
+          latest_revision: 0,
+          decision_count: 0,
+          apply_results: [],
+          semantic_event_types: ["effect.staged"],
+          authoritative_v21: false,
+        });
+        break;
+      }
+      case "revision.added": {
+        const stage = stages.get(String(payload.stage_id));
+        if (stage === undefined)
+          throw new Error("legacy revision has no staged write");
+        stage.latest_revision = Math.max(
+          Number(stage.latest_revision),
+          Number(payload.rev),
+        );
+        _appendCompatibilitySemantic(stage, "effect.revised");
+        break;
+      }
+      case "decision.recorded": {
+        const stage = stages.get(String(payload.stage_id));
+        if (stage === undefined)
+          throw new Error("legacy decision has no staged write");
+        stage.decision_count = Number(stage.decision_count) + 1;
+        _appendCompatibilitySemantic(stage, "effect.decision_recorded");
+        break;
+      }
+      case "write.applied": {
+        const stage = stages.get(String(payload.stage_id));
+        if (stage === undefined)
+          throw new Error("legacy apply has no staged write");
+        (stage.apply_results as string[]).push(String(payload.result));
+        _appendCompatibilitySemantic(stage, "effect.applied");
+        break;
+      }
+      case "gate.opened": {
+        const gateId = String(payload.gate_id);
+        gates.set(gateId, {
+          gate_id: gateId,
+          connector: String(payload.connector),
+          opened: true,
+          resolved: false,
+          outcome: null,
+          valid_generalized_write_input: false,
+        });
+        break;
+      }
+      case "gate.resolved": {
+        const gateId = String(payload.gate_id);
+        const gate = gates.get(gateId) ?? {
+          gate_id: gateId,
+          connector: "",
+          opened: false,
+          resolved: false,
+          outcome: null,
+          valid_generalized_write_input: false,
+        };
+        gate.resolved = true;
+        gate.outcome = String(payload.outcome);
+        gates.set(gateId, gate);
+        break;
+      }
+      default:
+        passthrough.add(event.event_type);
+    }
+  }
+
+  return {
+    operations: [...operations.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, operation]) => operation as LegacyOperationProjection),
+    stages: [...stages.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, stage]) => stage as LegacyStageProjection),
+    presentation_events: presentations,
+    legacy_gates: [...gates.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([, gate]) => gate as LegacyGateProjection),
+    passthrough_event_types: [...passthrough].sort(),
+  };
+}
+
+function _legacyOperation(
+  operations: Map<string, Record<string, any>>,
+  callId: string,
+  payload: Readonly<Record<string, unknown>>,
+): Record<string, any> {
+  const existing = operations.get(callId);
+  if (existing !== undefined) return existing;
+  const operation = {
+    legacy_call_id: callId,
+    connector: String(payload.connector),
+    op: String(payload.op),
+    action_class: null,
+    classification_basis: null,
+    completed: false,
+    latency_ms: null,
+    result_ref: null,
+    semantic_event_types: [] as string[],
+  };
+  operations.set(callId, operation);
+  return operation;
+}
+
+function _appendCompatibilitySemantic(
+  state: Record<string, any>,
+  eventType: string,
+): void {
+  const values = state.semantic_event_types as string[];
+  if (!values.includes(eventType)) values.push(eventType);
 }
 
 /** The two parts a ledger id decodes to (never a run handle). */
@@ -775,6 +1781,405 @@ export function parseLedgerId(text: string): ParsedLedgerId | null {
   const match = typeof text === "string" ? pattern.exec(text) : null;
   if (match === null) return null;
   return { run_short: match[1], sequence_no: Number(match[2]) };
+}
+
+// ---------------------------------------------------------------------------
+// v2.1 operation/artifact/effect ids, opaque references, and canonical digests
+// ---------------------------------------------------------------------------
+
+export class ArtifactEffectFormatError extends Error {
+  override readonly name = "ArtifactEffectFormatError";
+}
+
+export class CanonicalJsonError extends Error {
+  override readonly name = "CanonicalJsonError";
+}
+
+type _IdentifierKey = "operation_id" | "artifact_id" | "effect_stage_id";
+
+const _UUID_CANONICAL =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[47][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const _CLAIM_ID = /^[a-z0-9][a-z0-9._-]{0,127}$/;
+const _OPAQUE_TOKEN = /^[A-Za-z0-9_-]{1,256}$/;
+
+function _formatPrefixedUuid(key: _IdentifierKey, uuid: string): string {
+  _validateBareUuid(key, uuid);
+  return `${_CONTRACT.identifiers[key].prefix}${uuid}`;
+}
+
+function _parsePrefixedUuid(key: _IdentifierKey, text: string): string {
+  const prefix = _CONTRACT.identifiers[key].prefix;
+  if (typeof text !== "string" || !text.startsWith(prefix)) {
+    throw new ArtifactEffectFormatError(`not a valid ${key}: ${String(text)}`);
+  }
+  const uuid = text.slice(prefix.length);
+  _validateBareUuid(key, uuid);
+  return uuid;
+}
+
+function _validateBareUuid(key: _IdentifierKey, uuid: string): void {
+  if (!_UUID_CANONICAL.test(uuid)) {
+    throw new ArtifactEffectFormatError(
+      `${key} must contain a canonical lowercase UUID4 or UUID7`,
+    );
+  }
+  const version = Number(uuid[14]);
+  if (!_CONTRACT.identifiers[key].uuid_versions.includes(version)) {
+    throw new ArtifactEffectFormatError(
+      `${key} must contain a canonical lowercase UUID4 or UUID7`,
+    );
+  }
+}
+
+export class OperationIdCodec {
+  static format(uuid: string): string {
+    return _formatPrefixedUuid("operation_id", uuid);
+  }
+  static parse(text: string): string {
+    return _parsePrefixedUuid("operation_id", text);
+  }
+}
+
+export class ArtifactIdCodec {
+  static format(uuid: string): string {
+    return _formatPrefixedUuid("artifact_id", uuid);
+  }
+  static parse(text: string): string {
+    return _parsePrefixedUuid("artifact_id", text);
+  }
+}
+
+export class EffectStageIdCodec {
+  static format(uuid: string): string {
+    return _formatPrefixedUuid("effect_stage_id", uuid);
+  }
+  static parse(text: string): string {
+    return _parsePrefixedUuid("effect_stage_id", text);
+  }
+}
+
+export interface ParsedArtifactContentRef {
+  artifact_id: string;
+  revision: number;
+}
+
+export class ArtifactContentRefCodec {
+  static format(artifactId: string, revision: number): string {
+    ArtifactIdCodec.parse(artifactId);
+    _requirePositiveRevision(revision);
+    return `artifact://${artifactId}/revisions/${revision}`;
+  }
+  static parse(text: string): ParsedArtifactContentRef {
+    const match = _referenceMatch(
+      /^artifact:\/\/([^/]+)\/revisions\/([1-9][0-9]*)$/,
+      text,
+      "artifact content reference",
+    );
+    const artifactId = match[1];
+    ArtifactIdCodec.parse(artifactId);
+    return { artifact_id: artifactId, revision: _parseRevision(match[2]) };
+  }
+}
+
+export interface ParsedOperationArgsRef {
+  operation_id: string;
+}
+
+export class OperationArgsRefCodec {
+  static format(operationId: string): string {
+    OperationIdCodec.parse(operationId);
+    return `operation://${operationId}/args`;
+  }
+  static parse(text: string): ParsedOperationArgsRef {
+    const match = _referenceMatch(
+      /^operation:\/\/([^/]+)\/args$/,
+      text,
+      "operation args reference",
+    );
+    const operationId = match[1];
+    OperationIdCodec.parse(operationId);
+    return { operation_id: operationId };
+  }
+}
+
+export interface ParsedProposalRef {
+  stage_id: string;
+  revision: number;
+}
+
+export class ProposalUriCodec {
+  static format(stageId: string, revision: number): string {
+    EffectStageIdCodec.parse(stageId);
+    _requirePositiveRevision(revision);
+    return `proposal://${stageId}/revisions/${revision}`;
+  }
+  static parse(text: string): ParsedProposalRef {
+    const match = _referenceMatch(
+      /^proposal:\/\/([^/]+)\/revisions\/([1-9][0-9]*)$/,
+      text,
+      "proposal reference",
+    );
+    const stageId = match[1];
+    EffectStageIdCodec.parse(stageId);
+    return { stage_id: stageId, revision: _parseRevision(match[2]) };
+  }
+}
+
+export interface ParsedEffectReceiptRef {
+  stage_id: string;
+  claim_id: string;
+}
+
+export class EffectReceiptRefCodec {
+  static format(stageId: string, claimId: string): string {
+    EffectStageIdCodec.parse(stageId);
+    _validateClaimId(claimId);
+    return `receipt://effects/${stageId}/${claimId}`;
+  }
+  static parse(text: string): ParsedEffectReceiptRef {
+    const match = _referenceMatch(
+      /^receipt:\/\/effects\/([^/]+)\/([^/]+)$/,
+      text,
+      "effect receipt reference",
+    );
+    const stageId = match[1];
+    const claimId = match[2];
+    EffectStageIdCodec.parse(stageId);
+    _validateClaimId(claimId);
+    return { stage_id: stageId, claim_id: claimId };
+  }
+}
+
+export interface ParsedWorkspaceTargetRef {
+  grant_id: string;
+  path_token: string;
+}
+
+export class WorkspaceTargetRefCodec {
+  static format(grantId: string, pathToken: string): string {
+    _validateOpaqueToken(grantId, "grant_id");
+    _validateOpaqueToken(pathToken, "path_token");
+    return `workspace-target://${grantId}/${pathToken}`;
+  }
+  static parse(text: string): ParsedWorkspaceTargetRef {
+    const match = _referenceMatch(
+      /^workspace-target:\/\/([^/]+)\/([^/]+)$/,
+      text,
+      "workspace target reference",
+    );
+    const grantId = match[1];
+    const pathToken = match[2];
+    _validateOpaqueToken(grantId, "grant_id");
+    _validateOpaqueToken(pathToken, "path_token");
+    return { grant_id: grantId, path_token: pathToken };
+  }
+}
+
+function _referenceMatch(
+  pattern: RegExp,
+  text: string,
+  label: string,
+): RegExpExecArray {
+  if (
+    typeof text !== "string" ||
+    text.length > _CONTRACT.references.max_length ||
+    text.trim() !== text
+  ) {
+    throw new ArtifactEffectFormatError(
+      `not a valid ${label}: ${String(text)}`,
+    );
+  }
+  const match = pattern.exec(text);
+  if (
+    match === null ||
+    match.slice(1).some((part) => part === "." || part === "..")
+  ) {
+    throw new ArtifactEffectFormatError(`not a valid ${label}: ${text}`);
+  }
+  return match;
+}
+
+function _requirePositiveRevision(revision: number): void {
+  if (!Number.isSafeInteger(revision) || revision < 1) {
+    throw new ArtifactEffectFormatError(
+      "revision must be a positive safe integer",
+    );
+  }
+}
+
+function _parseRevision(text: string): number {
+  const revision = Number(text);
+  _requirePositiveRevision(revision);
+  return revision;
+}
+
+function _validateClaimId(claimId: string): void {
+  if (
+    typeof claimId !== "string" ||
+    claimId.length > _CONTRACT.references.claim_id_max_length ||
+    !_CLAIM_ID.test(claimId) ||
+    claimId.includes("..")
+  ) {
+    throw new ArtifactEffectFormatError("claim_id must be a safe opaque token");
+  }
+}
+
+function _validateOpaqueToken(value: string, fieldName: string): void {
+  if (typeof value !== "string" || !_OPAQUE_TOKEN.test(value)) {
+    throw new ArtifactEffectFormatError(
+      `${fieldName} must be a safe opaque token`,
+    );
+  }
+}
+
+export function canonicalJson(value: unknown): string {
+  return _renderCanonical(value, new Set<object>(), "$");
+}
+
+export function canonicalJsonBytes(value: unknown): Uint8Array {
+  return new TextEncoder().encode(canonicalJson(value));
+}
+
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  if (!(bytes instanceof Uint8Array)) {
+    throw new TypeError("sha256Hex accepts Uint8Array input only");
+  }
+  const input = new Uint8Array(bytes).buffer;
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", input);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+export async function canonicalJsonSha256(value: unknown): Promise<string> {
+  return sha256Hex(canonicalJsonBytes(value));
+}
+
+function _renderCanonical(
+  value: unknown,
+  active: Set<object>,
+  path: string,
+): string {
+  if (value === null) return "null";
+  if (value === true) return "true";
+  if (value === false) return "false";
+  if (typeof value === "string") {
+    _rejectUnpairedSurrogates(value, path);
+    return JSON.stringify(value) as string;
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new CanonicalJsonError(`${path} must be a finite JSON number`);
+    }
+    if (Number.isInteger(value) && !Number.isSafeInteger(value)) {
+      throw new CanonicalJsonError(
+        `${path} integer exceeds the cross-language safe range`,
+      );
+    }
+    return JSON.stringify(Object.is(value, -0) ? 0 : value) as string;
+  }
+  if (Array.isArray(value)) {
+    if (active.has(value))
+      throw new CanonicalJsonError(`${path} contains a cycle`);
+    const ownKeys = Reflect.ownKeys(value);
+    const indexKeys = Array.from({ length: value.length }, (_, index) =>
+      String(index),
+    );
+    const allowed = new Set(["length", ...indexKeys]);
+    if (
+      indexKeys.some((_, index) => !(index in value)) ||
+      ownKeys.some((key) => typeof key !== "string" || !allowed.has(key))
+    ) {
+      throw new CanonicalJsonError(
+        `${path} arrays must be dense and have no custom properties`,
+      );
+    }
+    active.add(value);
+    try {
+      return `[${value
+        .map((item, index) =>
+          _renderCanonical(item, active, `${path}[${index}]`),
+        )
+        .join(",")}]`;
+    } finally {
+      active.delete(value);
+    }
+  }
+  if (typeof value === "object") {
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) {
+      throw new CanonicalJsonError(`${path} must be a plain JSON object`);
+    }
+    if (active.has(value))
+      throw new CanonicalJsonError(`${path} contains a cycle`);
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== "string")) {
+      throw new CanonicalJsonError(`${path} object keys must be strings`);
+    }
+    const stringKeys = keys as string[];
+    for (const key of stringKeys) {
+      _rejectUnpairedSurrogates(key, `${path}.<key>`);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (
+        descriptor === undefined ||
+        !descriptor.enumerable ||
+        !("value" in descriptor)
+      ) {
+        throw new CanonicalJsonError(
+          `${path}.${key} must be an enumerable data property`,
+        );
+      }
+    }
+    stringKeys.sort(_compareCodePoints);
+    active.add(value);
+    try {
+      const record = value as Record<string, unknown>;
+      return `{${stringKeys
+        .map(
+          (key) =>
+            `${JSON.stringify(key) as string}:${_renderCanonical(
+              record[key],
+              active,
+              `${path}.${key}`,
+            )}`,
+        )
+        .join(",")}}`;
+    } finally {
+      active.delete(value);
+    }
+  }
+  throw new CanonicalJsonError(
+    `${path} contains unsupported value type ${typeof value}`,
+  );
+}
+
+function _rejectUnpairedSurrogates(value: string, path: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (!(next >= 0xdc00 && next <= 0xdfff)) {
+        throw new CanonicalJsonError(
+          `${path} contains an unpaired Unicode surrogate`,
+        );
+      }
+      index += 1;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      throw new CanonicalJsonError(
+        `${path} contains an unpaired Unicode surrogate`,
+      );
+    }
+  }
+}
+
+function _compareCodePoints(left: string, right: string): number {
+  const a = Array.from(left, (char) => char.codePointAt(0) ?? 0);
+  const b = Array.from(right, (char) => char.codePointAt(0) ?? 0);
+  const length = Math.min(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index];
+  }
+  return a.length - b.length;
 }
 
 // ---------------------------------------------------------------------------

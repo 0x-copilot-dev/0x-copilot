@@ -180,6 +180,9 @@ class TestMigrationApplies:
     def test_0043_projects_is_applied(self, migrated: list[str]) -> None:
         assert "0043_projects" in migrated
 
+    def test_0048_drops_legacy_activity_counts(self, migrated: list[str]) -> None:
+        assert "0048_drop_project_activity_counts" in migrated
+
     def test_projects_tables_exist(self, admin_conn: Any) -> None:
         with admin_conn.cursor() as cur:
             cur.execute(
@@ -198,7 +201,6 @@ class TestMigrationApplies:
             "project_memberships",
             "project_stars",
             "project_activity",
-            "project_activity_counts",
             "project_audit_events",
         }
 
@@ -398,29 +400,43 @@ class TestActivityAndCounts:
         rows, _ = store.list_activity(tenant_id=tenant.org_id, project_id=project.id)
         assert [a.id for a in rows] == [activity.id]
 
-    def test_counts_upsert_round_trip(self, store: Any, mk_tenant: Any) -> None:
-        from backend_app.projects.store import ProjectActivityCounts
+    def test_member_counts_are_computed_in_one_batched_read(
+        self, store: Any, mk_tenant: Any
+    ) -> None:
+        from backend_app.projects.store import ProjectMembershipRecord
 
         tenant = mk_tenant("cnt")
-        project = _mk_project(tenant)
-        store.insert_project(project)
-        assert store.get_counts(tenant_id=tenant.org_id, project_id=project.id) is None
-        counts = ProjectActivityCounts(
+        first = _mk_project(tenant, name="Counts first")
+        second = _mk_project(tenant, name="Counts second")
+        store.insert_project(first)
+        store.insert_project(second)
+        for project, user_id in (
+            (first, tenant.member),
+            (first, tenant.fan),
+            (second, tenant.member),
+        ):
+            store.insert_membership(
+                ProjectMembershipRecord(
+                    project_id=project.id,
+                    user_id=user_id,
+                    tenant_id=tenant.org_id,
+                    role="viewer",
+                    added_by=tenant.owner,
+                )
+            )
+
+        counts = store.count_members_by_project(
             tenant_id=tenant.org_id,
-            project_id=project.id,
-            chats=3,
-            todos_open=2,
-            todos_done=5,
-            inbox_items=1,
-            library_items=4,
-            routines_active=1,
-            members=2,
+            project_ids=(first.id, second.id, "prj_missing"),
         )
-        store.upsert_counts(counts)
-        store.upsert_counts(counts.model_copy(update={"chats": 7}))
-        fetched = store.get_counts(tenant_id=tenant.org_id, project_id=project.id)
-        assert fetched is not None
-        assert fetched.chats == 7 and fetched.members == 2
+        assert counts == {first.id: 2, second.id: 1}
+        assert (
+            store.count_members_by_project(
+                tenant_id=tenant.org_id,
+                project_ids=(),
+            )
+            == {}
+        )
 
 
 class TestAuditChainSigned:
