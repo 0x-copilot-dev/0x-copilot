@@ -42,7 +42,7 @@ from agent_runtime.effects.ports import (
     EffectStageIdGeneratorPort,
     EffectStageLedgerPort,
 )
-from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec
+from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec, ProposalUriCodec
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectClass,
@@ -120,6 +120,7 @@ class EffectStager:
         EffectStageIdCodec.parse(stage_id)
         created_at = self.clock.now()
         payload = {
+            "v": 1,
             "stage_id": stage_id,
             "operation_id": proposed_effect.operation_id,
             "executor": proposed_effect.executor.value,
@@ -129,7 +130,8 @@ class EffectStager:
             "target_digest": proposed_effect.target_digest,
             "display_target": proposed_effect.display_target,
             "proposal_kind": proposed_effect.proposal_kind.value,
-            "proposal_ref": proposed_effect.proposal_ref,
+            "proposal_ref": ProposalUriCodec.format(stage_id, 1),
+            "proposal_content_ref": proposed_effect.proposal_content_ref,
             "proposal_digest": proposed_effect.proposal_digest,
             "proposal_media_type": proposed_effect.proposal_media_type,
             "precondition_ref": proposed_effect.precondition_ref,
@@ -184,11 +186,14 @@ class EffectStager:
         validate_proposal_executor_pair(proposal.proposal_kind, state.executor)
         self._assert_revision_retains_target(state, proposal)
         revised_at = self.clock.now()
+        revision = expected_revision + 1
         payload = {
+            "v": 1,
             "stage_id": stage_id,
-            "revision": expected_revision + 1,
+            "revision": revision,
             "proposal_kind": proposal.proposal_kind.value,
-            "proposal_ref": proposal.proposal_ref,
+            "proposal_ref": ProposalUriCodec.format(stage_id, revision),
+            "proposal_content_ref": proposal.proposal_content_ref,
             "proposal_digest": proposal.proposal_digest,
             "proposal_media_type": proposal.proposal_media_type,
             "target_ref": proposal.target_ref,
@@ -281,6 +286,7 @@ class EffectStager:
             scope=scope,
             event_type=_EVENT_DECISION,
             payload={
+                "v": 1,
                 "stage_id": stage_id,
                 "revision": revision,
                 "decision": decision.value,

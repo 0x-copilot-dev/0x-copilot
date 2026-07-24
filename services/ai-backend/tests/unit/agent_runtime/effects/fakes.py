@@ -225,7 +225,7 @@ def proposal(
         target_digest=target_digest,
         display_target="Demo target",
         proposal_kind=kind,
-        proposal_ref=f"artifact://{_ARTIFACT_ID}/revisions/1",
+        proposal_content_ref=f"artifact://{_ARTIFACT_ID}/revisions/1",
         proposal_digest=proposal_digest,
         proposal_media_type="application/json",
         precondition_ref="precondition://targets/current-token",
@@ -246,7 +246,7 @@ def revision_from(
 ) -> EffectRevisionProposal:
     return EffectRevisionProposal(
         proposal_kind=proposed.proposal_kind,
-        proposal_ref=f"artifact://{_ARTIFACT_ID}/revisions/2",
+        proposal_content_ref=f"artifact://{_ARTIFACT_ID}/revisions/2",
         proposal_digest=proposal_digest,
         proposal_media_type=proposed.proposal_media_type,
         target_ref=target_ref or proposed.target.target_ref,

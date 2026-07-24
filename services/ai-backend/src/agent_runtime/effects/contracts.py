@@ -11,20 +11,23 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from urllib.parse import unquote
 
 from pydantic import Field, field_validator, model_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.entities import EffectTarget
-from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec
+from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec, ProposalUriCodec
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectClass,
     EffectDecisionKind,
     EffectExecutorKind,
     EffectPolicy,
+    EffectProposalKind,
     OperationIdText,
     Sha256Hex,
+    validate_immutable_content_ref,
 )
 
 _REF_MAX_LENGTH = 2048
@@ -32,18 +35,6 @@ _TEXT_MAX_LENGTH = 512
 _MEDIA_TYPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*/[A-Za-z0-9][A-Za-z0-9.+-]*$")
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
-
-
-class EffectProposalKind(StrEnum):
-    """The complete A4 proposal union; bodies are always behind ``proposal_ref``."""
-
-    CANONICAL_ARGUMENTS = "canonical_arguments"
-    ARTIFACT_REVISION = "artifact_revision"
-    WORKSPACE_CHANGE_SET = "workspace_change_set"
-    ROW_SET = "row_set"
-    BROWSER_SUBMISSION = "browser_submission"
-    SANDBOX_PATCH = "sandbox_patch"
-    BUILTIN_PAYLOAD = "builtin_payload"
 
 
 class EffectStageStatus(StrEnum):
@@ -133,7 +124,7 @@ class ProposedEffect(RuntimeContract):
     target_digest: Sha256Hex
     display_target: str
     proposal_kind: EffectProposalKind
-    proposal_ref: str
+    proposal_content_ref: str
     proposal_digest: Sha256Hex
     proposal_media_type: str
     precondition_ref: str | None = None
@@ -156,12 +147,17 @@ class ProposedEffect(RuntimeContract):
             raise ValueError("display_target must not contain a body or path")
         return value
 
-    @field_validator("proposal_ref", "policy_snapshot_ref", "safe_summary_ref")
+    @field_validator("policy_snapshot_ref", "safe_summary_ref")
     @classmethod
     def _refs_are_safe(cls, value: str | None) -> str | None:
         if value is None:
             return None
         return _safe_reference(value, "reference")
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_safe(cls, value: str) -> str:
+        return validate_proposal_content_ref(value)
 
     @field_validator("proposal_media_type")
     @classmethod
@@ -189,7 +185,7 @@ class EffectRevisionProposal(RuntimeContract):
     """A proposed replacement of the content for one immutable stage target."""
 
     proposal_kind: EffectProposalKind
-    proposal_ref: str
+    proposal_content_ref: str
     proposal_digest: Sha256Hex
     proposal_media_type: str
     target_ref: str
@@ -200,7 +196,6 @@ class EffectRevisionProposal(RuntimeContract):
     safe_diff_ref: str | None = None
 
     @field_validator(
-        "proposal_ref",
         "target_ref",
         "precondition_ref",
         "safe_diff_ref",
@@ -210,6 +205,11 @@ class EffectRevisionProposal(RuntimeContract):
         if value is None:
             return None
         return _safe_reference(value, "reference")
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_safe(cls, value: str) -> str:
+        return validate_proposal_content_ref(value)
 
     @field_validator("proposal_media_type")
     @classmethod
@@ -247,6 +247,7 @@ class EffectStageRevision(RuntimeContract):
     revision: int = Field(ge=1)
     proposal_kind: EffectProposalKind
     proposal_ref: str
+    proposal_content_ref: str | None
     proposal_digest: Sha256Hex
     proposal_media_type: str
     target_ref: str
@@ -259,7 +260,6 @@ class EffectStageRevision(RuntimeContract):
     created_at: str
 
     @field_validator(
-        "proposal_ref",
         "target_ref",
         "precondition_ref",
         "safe_diff_ref",
@@ -269,6 +269,19 @@ class EffectStageRevision(RuntimeContract):
         if value is None:
             return None
         return _safe_reference(value, "reference")
+
+    @field_validator("proposal_ref")
+    @classmethod
+    def _proposal_ref_is_canonical(cls, value: str) -> str:
+        ProposalUriCodec.parse(value)
+        return value
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_proposal_content_ref(value)
 
     @field_validator("proposal_media_type")
     @classmethod
@@ -285,6 +298,12 @@ class EffectStageRevision(RuntimeContract):
             "precondition",
         )
         return self
+
+    @property
+    def is_executable(self) -> bool:
+        """Whether immutable proposal bytes can be resolved for execution."""
+
+        return self.proposal_content_ref is not None
 
 
 class EffectStageDecision(RuntimeContract):
@@ -331,13 +350,31 @@ class EffectStageState(RuntimeContract):
         if not self.revisions:
             raise ValueError("an effect stage requires at least one revision")
         latest = self.revisions[-1]
-        if (
-            latest.target_ref != self.target.target_ref
-            or latest.target_digest != self.target_digest
-        ):
-            raise ValueError("latest revision must retain the immutable stage target")
-        if latest.display_target != self.display_target:
-            raise ValueError("latest revision display target must remain immutable")
+        initial = self.revisions[0]
+        for revision in self.revisions:
+            if (
+                revision.target_ref != self.target.target_ref
+                or revision.target_digest != self.target_digest
+                or revision.display_target != self.display_target
+            ):
+                raise ValueError(
+                    "every revision must retain the immutable stage target"
+                )
+            if (
+                revision.precondition_ref != initial.precondition_ref
+                or revision.precondition_digest != initial.precondition_digest
+            ):
+                raise ValueError(
+                    "every revision must retain the immutable stage precondition"
+                )
+            parsed_ref = ProposalUriCodec.parse(revision.proposal_ref)
+            if (
+                parsed_ref.stage_id != self.stage_id
+                or parsed_ref.revision != revision.revision
+            ):
+                raise ValueError(
+                    "proposal_ref must identify its owning stage and revision"
+                )
         if self.decision is not None and self.decision.revision != latest.revision:
             raise ValueError("decision must bind the current revision")
         return self
@@ -388,6 +425,13 @@ def validate_idempotency_key(value: str) -> str:
 
 
 def _safe_reference(value: str, label: str) -> str:
+    decoded = value
+    while isinstance(decoded, str):
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    normalised = decoded.replace("\\", "/") if isinstance(decoded, str) else decoded
     if (
         not isinstance(value, str)
         or not value
@@ -399,10 +443,25 @@ def _safe_reference(value: str, label: str) -> str:
         or value.startswith(("/", "~", "\\"))
         or value.lower().startswith(("file://", "filesystem://", "data:"))
         or (len(value) >= 3 and value[1:3] in {":/", ":\\"})
-        or any(part in {".", ".."} for part in value.split("/"))
+        or not isinstance(normalised, str)
+        or normalised.startswith(("/", "~"))
+        or normalised.lower().startswith(("file://", "filesystem://", "data:"))
+        or (len(normalised) >= 3 and normalised[1:3] == ":/")
+        or "\x00" in normalised
+        or any(part in {".", ".."} for part in normalised.split("/"))
     ):
         raise ValueError(f"{label} must be an opaque safe URI reference")
     return value
+
+
+def validate_proposal_content_ref(value: str) -> str:
+    """Validate one server-owned immutable content locator.
+
+    Schemes remain extensible; safety is structural and proposal identity is kept
+    separate.  Physical paths and inline bodies are never accepted.
+    """
+
+    return validate_immutable_content_ref(value)
 
 
 def _require_ref_digest_pair(
@@ -450,6 +509,7 @@ __all__ = [
     "EffectStageState",
     "EffectStageStatus",
     "ProposedEffect",
+    "validate_proposal_content_ref",
     "validate_proposal_executor_pair",
     "validate_idempotency_key",
 ]

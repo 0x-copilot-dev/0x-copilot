@@ -11,6 +11,7 @@ from agent_runtime.effects.claims import (
     EffectClaimConflict,
     EffectClaimNotFound,
     EffectClaimState,
+    require_persistable_effect_claim,
     validate_claim_transition,
 )
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
@@ -25,6 +26,7 @@ class InMemoryEffectClaimStore:
         self._by_claim_id: dict[tuple[str, str], EffectClaim] = {}
 
     async def claim(self, *, claim: EffectClaim) -> EffectClaimAcquisition:
+        require_persistable_effect_claim(claim)
         key = (claim.org_id, claim.executor, claim.idempotency_key)
         with self._lock:
             existing = self._by_key.get(key)

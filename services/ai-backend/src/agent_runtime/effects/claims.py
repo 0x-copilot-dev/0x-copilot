@@ -13,10 +13,11 @@ the domain never learns about a storage backend.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Protocol, runtime_checkable
+from urllib.parse import unquote, urlsplit
 from uuid import uuid4
 
 from pydantic import Field, field_validator, model_validator
@@ -26,6 +27,7 @@ from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.ledger_ids import (
     EffectReceiptRefCodec,
     EffectStageIdCodec,
+    ProposalUriCodec,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     ClaimIdText,
@@ -56,7 +58,9 @@ class EffectClaim(RuntimeContract):
     identifies the attempt for ledger and reconciliation work, while the
     idempotency key identifies the mutation a caller is asking to perform.
     Proposal and target bytes, provider response bodies, credentials, and paths
-    never occur in this record.
+    never occur in this record. ``proposal_ref`` is the canonical stage/revision
+    identity, while ``proposal_content_ref`` identifies the server-held immutable
+    bytes whose digest was approved.
     """
 
     org_id: str = Field(min_length=1, max_length=_IDENTIFIER_MAX_LENGTH)
@@ -79,10 +83,30 @@ class EffectClaim(RuntimeContract):
     # request without re-folding mutable state.  They are opaque, bounded refs.
     target_ref: str
     proposal_ref: str
+    # ``None`` is accepted only when loading an old canonical-only file record.
+    # Claim stores reject it for every new acquisition, so no new effect can
+    # execute without an immutable content reference.
+    proposal_content_ref: str | None = Field(default=None, max_length=_REF_MAX_LENGTH)
     actor: EffectActor
     decision_ledger_id: str = Field(min_length=1, max_length=_IDENTIFIER_MAX_LENGTH)
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_legacy_proposal_reference(cls, value: object) -> object:
+        """Accept an old overloaded input only at this durable boundary.
+
+        A4/A5 callers created before the split omit ``proposal_content_ref`` and
+        put an artifact/operation URI in ``proposal_ref``. Normalize that old
+        shape once, before field validation, so persisted claims always retain
+        canonical identity plus the immutable content locator. Supplying the new
+        field opts into strict canonical validation below.
+        """
+
+        if isinstance(value, Mapping):
+            return normalize_persisted_effect_claim_payload(value)
+        return value
 
     @field_validator("stage_id")
     @classmethod
@@ -95,25 +119,29 @@ class EffectClaim(RuntimeContract):
     def _idempotency_key_is_valid(cls, value: str) -> str:
         return validate_idempotency_key(value)
 
-    @field_validator("target_ref", "proposal_ref", "prepared_ref")
+    @field_validator("proposal_ref")
+    @classmethod
+    def _proposal_ref_is_canonical(cls, value: str) -> str:
+        ProposalUriCodec.parse(value)
+        return value
+
+    @field_validator("target_ref", "prepared_ref")
     @classmethod
     def _opaque_refs_are_safe(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        if (
-            not value
-            or len(value) > _REF_MAX_LENGTH
-            or value != value.strip()
-            or "\n" in value
-            or "\r" in value
-            or "://" not in value
-            or value.startswith(("/", "~", "\\"))
-            or value.lower().startswith(("file://", "filesystem://", "data:"))
-            or (len(value) >= 3 and value[1:3] in {":/", ":\\"})
-            or any(part in {".", ".."} for part in value.split("/"))
-        ):
-            raise ValueError("effect claim references must be opaque safe URIs")
-        return value
+        return _validate_safe_opaque_uri(value, field_name="effect claim reference")
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return _validate_safe_opaque_uri(
+            value,
+            field_name="proposal_content_ref",
+            forbid_proposal_scheme=True,
+        )
 
     @field_validator("receipt_ref")
     @classmethod
@@ -133,6 +161,12 @@ class EffectClaim(RuntimeContract):
 
     @model_validator(mode="after")
     def _state_is_consistent(self) -> "EffectClaim":
+        parsed_proposal = ProposalUriCodec.parse(self.proposal_ref)
+        if (
+            parsed_proposal.stage_id != self.stage_id
+            or parsed_proposal.revision != self.revision
+        ):
+            raise ValueError("proposal_ref must reference this stage and revision")
         if self.state is EffectClaimState.CLAIMED:
             if self.outcome is not None:
                 raise ValueError("a claimed effect cannot have a terminal outcome")
@@ -170,6 +204,7 @@ class EffectClaim(RuntimeContract):
             and self.target_digest == other.target_digest
             and self.target_ref == other.target_ref
             and self.proposal_ref == other.proposal_ref
+            and self.proposal_content_ref == other.proposal_content_ref
             and self.actor is other.actor
             and self.decision_ledger_id == other.decision_ledger_id
         )
@@ -258,6 +293,149 @@ class EffectClaimStorageError(EffectClaimError):
     safe_message = "The effect attempt could not be persisted safely."
 
 
+def require_persistable_effect_claim(claim: EffectClaim) -> None:
+    """Fail closed before a store creates a claim without content provenance.
+
+    ``EffectClaim`` deliberately keeps ``proposal_content_ref`` nullable so a
+    file adapter can read historical canonical-only records.  That leniency is
+    read compatibility only: a new claim must always carry both the canonical
+    proposal identity and the immutable content locator.
+    """
+
+    if claim.proposal_content_ref is None:
+        raise EffectClaimStorageError(
+            "The effect attempt lacks an immutable proposal content reference."
+        )
+
+
+def normalize_persisted_effect_claim_payload(
+    payload: Mapping[str, object],
+) -> dict[str, object]:
+    """Normalize a pre-``proposal_content_ref`` file/database record safely.
+
+    The old A4/A5 shape overloaded ``proposal_ref`` with an artifact or
+    operation content URI.  Preserve that immutable locator as
+    ``proposal_content_ref`` and derive the canonical identity from the stored
+    stage id and revision.  Canonical-only historical records remain readable
+    with a ``None`` content ref, which keeps them incapable of new execution.
+
+    This function is intentionally for persisted input only. New claim writers
+    must supply both fields and are checked by
+    :func:`require_persistable_effect_claim`.
+    """
+
+    normalized = dict(payload)
+    if "proposal_content_ref" in normalized:
+        return normalized
+
+    old_ref = normalized.get("proposal_ref")
+    if not isinstance(old_ref, str):
+        raise ValueError("stored effect claim has no proposal reference")
+
+    stage_id = normalized.get("stage_id")
+    revision = normalized.get("revision")
+    if (
+        not isinstance(stage_id, str)
+        or not isinstance(revision, int)
+        or isinstance(revision, bool)
+    ):
+        raise ValueError("stored effect claim has an invalid stage identity")
+
+    try:
+        parsed = ProposalUriCodec.parse(old_ref)
+    except ValueError:
+        _validate_safe_opaque_uri(
+            old_ref,
+            field_name="proposal_content_ref",
+            forbid_proposal_scheme=True,
+        )
+        normalized["proposal_ref"] = ProposalUriCodec.format(stage_id, revision)
+        normalized["proposal_content_ref"] = old_ref
+        return normalized
+
+    if parsed.stage_id != stage_id or parsed.revision != revision:
+        raise ValueError("stored canonical proposal_ref does not match its stage")
+    normalized["proposal_content_ref"] = None
+    return normalized
+
+
+def _validate_safe_opaque_uri(
+    value: str,
+    *,
+    field_name: str,
+    forbid_proposal_scheme: bool = False,
+) -> str:
+    """Validate a server-held logical URI without accepting a host path.
+
+    Content and target locators are opaque references resolved through trusted
+    adapters.  They must never be a filesystem path, a data URL, or traversal
+    disguised through percent encoding.  We deliberately do not maintain a
+    closed scheme allow-list here: new server-owned locator families can be
+    introduced without weakening the physical-path boundary. Direct web URLs
+    are not server-held content references and remain forbidden.
+    """
+
+    if (
+        not value
+        or len(value) > _REF_MAX_LENGTH
+        or value != value.strip()
+        or "\n" in value
+        or "\r" in value
+        or "\x00" in value
+        or value.startswith(("/", "~", "\\"))
+        or (len(value) >= 3 and value[1:3] in {":/", ":\\"})
+    ):
+        raise ValueError(f"{field_name} must be an opaque safe URI")
+
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an opaque safe URI") from exc
+    scheme = parsed.scheme.lower()
+    forbidden_schemes = {"file", "filesystem", "data", "http", "https"}
+    if forbid_proposal_scheme:
+        forbidden_schemes.add("proposal")
+    if (
+        not scheme
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or scheme in forbidden_schemes
+    ):
+        raise ValueError(f"{field_name} must be an opaque safe URI")
+
+    decoded = value
+    # Each successful unquote consumes at least one percent escape, and input
+    # length is bounded above, so this terminates while catching arbitrarily
+    # nested encoded traversal rather than only a fixed number of layers.
+    while True:
+        next_value = unquote(decoded)
+        if next_value == decoded:
+            break
+        decoded = next_value
+    try:
+        decoded_parts = urlsplit(decoded)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} must be an opaque safe URI") from exc
+    if (
+        "\\" in decoded
+        or "\x00" in decoded
+        or decoded_parts.query
+        or decoded_parts.fragment
+        or decoded_parts.path.startswith("//")
+    ):
+        raise ValueError(f"{field_name} must be an opaque safe URI")
+    for component in (
+        decoded_parts.netloc,
+        decoded_parts.path,
+        decoded_parts.query,
+        decoded_parts.fragment,
+    ):
+        if any(part in {".", ".."} for part in component.split("/")):
+            raise ValueError(f"{field_name} must be an opaque safe URI")
+    return value
+
+
 def validate_claim_transition(
     *, previous: EffectClaim, replacement: EffectClaim
 ) -> None:
@@ -313,5 +491,7 @@ __all__ = [
     "EffectClaimState",
     "EffectClaimStorageError",
     "EffectClaimStore",
+    "normalize_persisted_effect_claim_payload",
+    "require_persistable_effect_claim",
     "validate_claim_transition",
 ]

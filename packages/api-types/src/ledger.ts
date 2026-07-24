@@ -194,6 +194,14 @@ export type EffectExecutorKind =
   | "browser"
   | "sandbox"
   | "builtin";
+export type EffectProposalKind =
+  | "canonical_arguments"
+  | "artifact_revision"
+  | "workspace_change_set"
+  | "row_set"
+  | "browser_submission"
+  | "sandbox_patch"
+  | "builtin_payload";
 export type EffectStageStatus =
   | "staged"
   | "approved"
@@ -537,6 +545,23 @@ export interface EffectStagedPayload {
   proposal_ref: string;
   proposal_digest: string;
   policy: EffectPolicy;
+  capability?: string;
+  op?: string;
+  display_target?: string;
+  proposal_kind?: EffectProposalKind;
+  /** Immutable server-held bytes; never the `proposal://` audit identity. */
+  proposal_content_ref?: string;
+  proposal_media_type?: string;
+  precondition_ref?: string;
+  precondition_digest?: string;
+  effect_class?: EffectClass;
+  policy_snapshot_ref?: string;
+  agent_hold?: boolean;
+  safe_summary_ref?: string;
+  owner_ref?: string;
+  author_actor?: EffectActor;
+  author_ref?: string;
+  created_at?: string;
 }
 
 export interface EffectRevisedPayload {
@@ -545,7 +570,20 @@ export interface EffectRevisedPayload {
   revision: number;
   proposal_ref: string;
   proposal_digest: string;
-  author: ArtifactAuthor;
+  /** Legacy v:1 author field. New writers use `author_actor` and `author_ref`. */
+  author?: ArtifactAuthor;
+  proposal_kind?: EffectProposalKind;
+  proposal_content_ref?: string;
+  proposal_media_type?: string;
+  target_ref?: string;
+  target_digest?: string;
+  display_target?: string;
+  precondition_ref?: string;
+  precondition_digest?: string;
+  safe_diff_ref?: string;
+  author_actor?: EffectActor;
+  author_ref?: string;
+  created_at?: string;
 }
 
 export interface EffectDecisionRecordedPayload {
@@ -556,6 +594,8 @@ export interface EffectDecisionRecordedPayload {
   actor: EffectActor;
   proposal_digest: string;
   target_digest: string;
+  actor_ref?: string;
+  decided_at?: string;
 }
 
 export interface EffectClaimedPayload {
@@ -850,6 +890,8 @@ export interface EffectExecutionRequest {
   readonly target_ref: string;
   readonly target_digest: string;
   readonly proposal_ref: string;
+  /** Immutable server-held content; executors must never dereference proposal_ref. */
+  readonly proposal_content_ref: string;
   readonly proposal_digest: string;
   readonly actor: EffectActor;
   readonly decision_ledger_id: string;
@@ -1322,7 +1364,8 @@ function _isV21PayloadForWrite(
       return (
         parsed !== null &&
         parsed.stage_id === value.stage_id &&
-        parsed.revision === 1
+        parsed.revision === 1 &&
+        _validEffectStageMetadata(value)
       );
     }
     case "effect.revised": {
@@ -1332,7 +1375,8 @@ function _isV21PayloadForWrite(
       return (
         parsed !== null &&
         parsed.stage_id === value.stage_id &&
-        parsed.revision === value.revision
+        parsed.revision === value.revision &&
+        _validEffectRevisionMetadata(value)
       );
     }
     case "effect.decision_recorded":
@@ -1340,7 +1384,9 @@ function _isV21PayloadForWrite(
         stageId() &&
         revision() &&
         _isSha256(value.proposal_digest) &&
-        _isSha256(value.target_digest)
+        _isSha256(value.target_digest) &&
+        _optionalSafeOpaqueUriReference(value, "actor_ref") &&
+        _optionalBoundedString(value, "decided_at", 1, 128)
       );
     case "effect.claimed":
       return (
@@ -1426,6 +1472,15 @@ function _optionalNonEmptyString(
   return !(key in value) || _isNonEmptyString(value[key]);
 }
 
+function _optionalBoundedString(
+  value: Record<string, unknown>,
+  key: string,
+  minLength: number,
+  maxLength: number,
+): boolean {
+  return !(key in value) || _isBoundedString(value[key], minLength, maxLength);
+}
+
 function _isBoundedString(
   value: unknown,
   minLength: number,
@@ -1494,6 +1549,137 @@ function _isTargetReference(value: unknown): value is string {
     _isNonPhysicalReference(value) &&
     value.includes("://") &&
     !value.split("/").some((part) => part === "." || part === "..")
+  );
+}
+
+function _isSafeOpaqueUriReference(
+  value: unknown,
+  options: { forbidProposalScheme?: boolean; forbidWebScheme?: boolean } = {},
+): value is string {
+  if (!_isNonPhysicalReference(value) || !value.includes("://")) return false;
+  let decoded = value;
+  try {
+    while (true) {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    }
+  } catch {
+    return false;
+  }
+  const normalised = decoded.replaceAll("\\", "/");
+  const lower = normalised.toLowerCase();
+  const scheme = normalised.slice(0, normalised.indexOf("://")).toLowerCase();
+  if (
+    !scheme ||
+    lower.startsWith("file://") ||
+    lower.startsWith("filesystem://") ||
+    lower.startsWith("data:") ||
+    (options.forbidProposalScheme === true && scheme === "proposal") ||
+    (options.forbidWebScheme === true &&
+      (scheme === "http" || scheme === "https")) ||
+    normalised.includes("\u0000") ||
+    normalised.includes("?") ||
+    normalised.includes("#") ||
+    normalised.split("/").some((part) => part === "." || part === "..")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function _optionalSafeOpaqueUriReference(
+  value: Record<string, unknown>,
+  key: string,
+  options?: { forbidProposalScheme?: boolean; forbidWebScheme?: boolean },
+): boolean {
+  return !(key in value) || _isSafeOpaqueUriReference(value[key], options);
+}
+
+function _optionalSha256WithRef(
+  value: Record<string, unknown>,
+  refKey: string,
+  digestKey: string,
+): boolean {
+  return (
+    (!(refKey in value) && !(digestKey in value)) ||
+    (typeof value[refKey] === "string" && _isSha256(value[digestKey]))
+  );
+}
+
+const _EFFECT_PROPOSAL_KINDS = new Set<EffectProposalKind>([
+  "canonical_arguments",
+  "artifact_revision",
+  "workspace_change_set",
+  "row_set",
+  "browser_submission",
+  "sandbox_patch",
+  "builtin_payload",
+]);
+const _EFFECT_CLASSES = new Set<EffectClass>([
+  "none",
+  "internal_reversible",
+  "external_reversible",
+  "external_destructive",
+  "unknown",
+]);
+const _EFFECT_ACTORS = new Set<EffectActor>(["user", "policy", "system"]);
+const _ARTIFACT_AUTHORS = new Set<ArtifactAuthor>([
+  "model",
+  "subagent",
+  "user",
+  "system",
+  "import",
+]);
+
+function _validEffectStageMetadata(value: Record<string, unknown>): boolean {
+  return (
+    _optionalBoundedString(value, "capability", 1, 128) &&
+    _optionalBoundedString(value, "op", 1, 128) &&
+    _optionalBoundedString(value, "display_target", 1, 512) &&
+    (!("proposal_kind" in value) ||
+      _EFFECT_PROPOSAL_KINDS.has(value.proposal_kind as EffectProposalKind)) &&
+    _optionalSafeOpaqueUriReference(value, "proposal_content_ref", {
+      forbidProposalScheme: true,
+      forbidWebScheme: true,
+    }) &&
+    _optionalBoundedString(value, "proposal_media_type", 3, 255) &&
+    _optionalSafeOpaqueUriReference(value, "precondition_ref") &&
+    _optionalSha256WithRef(value, "precondition_ref", "precondition_digest") &&
+    (!("effect_class" in value) ||
+      _EFFECT_CLASSES.has(value.effect_class as EffectClass)) &&
+    _optionalSafeOpaqueUriReference(value, "policy_snapshot_ref") &&
+    (!("agent_hold" in value) || typeof value.agent_hold === "boolean") &&
+    _optionalSafeOpaqueUriReference(value, "safe_summary_ref") &&
+    _optionalSafeOpaqueUriReference(value, "owner_ref") &&
+    (!("author_actor" in value) ||
+      _EFFECT_ACTORS.has(value.author_actor as EffectActor)) &&
+    _optionalSafeOpaqueUriReference(value, "author_ref") &&
+    _optionalBoundedString(value, "created_at", 1, 128)
+  );
+}
+
+function _validEffectRevisionMetadata(value: Record<string, unknown>): boolean {
+  return (
+    (!("author" in value) ||
+      _ARTIFACT_AUTHORS.has(value.author as ArtifactAuthor)) &&
+    (!("proposal_kind" in value) ||
+      _EFFECT_PROPOSAL_KINDS.has(value.proposal_kind as EffectProposalKind)) &&
+    _optionalSafeOpaqueUriReference(value, "proposal_content_ref", {
+      forbidProposalScheme: true,
+      forbidWebScheme: true,
+    }) &&
+    _optionalBoundedString(value, "proposal_media_type", 3, 255) &&
+    _optionalSafeOpaqueUriReference(value, "target_ref") &&
+    _optionalSha256WithRef(value, "target_ref", "target_digest") &&
+    _optionalBoundedString(value, "display_target", 1, 512) &&
+    _optionalSafeOpaqueUriReference(value, "precondition_ref") &&
+    _optionalSha256WithRef(value, "precondition_ref", "precondition_digest") &&
+    _optionalSafeOpaqueUriReference(value, "safe_diff_ref") &&
+    (!("author_actor" in value) ||
+      _EFFECT_ACTORS.has(value.author_actor as EffectActor)) &&
+    _optionalSafeOpaqueUriReference(value, "author_ref") &&
+    _optionalBoundedString(value, "created_at", 1, 128)
   );
 }
 
