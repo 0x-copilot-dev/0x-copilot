@@ -1,9 +1,13 @@
-"""Draft surface-emission tests for ``make_event_emitter`` (generative-UI PRD-02, AC2).
+"""``make_event_emitter`` DRAFT_UPDATED emission after the v1 surface retirement
+(PRD-E3 D4).
 
-Drives ``DraftBackend`` through the emitter to assert every ``DRAFT_UPDATED``
-payload carries a ``message://draft/<id>`` surface, and that v2 carries a
-section-level diff. Also pins the ``RUNTIME_SURFACE_EMISSION=false`` byte-compat
-and the no-store (no-diff) path.
+The v1 ``message`` surface attach (``DraftSurfaceProjector``) was retired: a
+``DRAFT_UPDATED`` payload no longer carries ``surface`` / ``surface_uri``. Draft
+surfaces render from the D1-wave ``write.staged`` / ``revision.added`` ledger
+events instead. This file ports the still-relevant invariant from the old
+``TestDraftSurfaceEmission``: the in-package emitter still emits a well-formed
+``DRAFT_UPDATED`` event (draft_id / version / sections / status) through
+``append_api_event`` — now proven to carry **no** surface keys, in every branch.
 """
 
 from __future__ import annotations
@@ -72,8 +76,8 @@ def _backend(
     )
 
 
-class TestDraftSurfaceEmission:
-    async def test_v1_carries_message_surface_without_diff(self) -> None:
+class TestDraftEmissionIsSurfaceFree:
+    async def test_first_write_emits_draft_updated_without_surface(self) -> None:
         store = InMemoryDraftStore()
         producer = _CaptureProducer()
         backend = _backend(store=store, producer=producer)
@@ -81,15 +85,16 @@ class TestDraftSurfaceEmission:
         await backend.awrite(_path(), "# Greeting\nHello.")
 
         payload = producer.payloads()[0]
-        assert payload["surface_uri"] == f"message://draft/{_DRAFT_ID}"
-        surface = payload["surface"]
-        assert surface["archetype"] == "message"
-        assert "spec" not in surface["state"]
-        assert surface["state"]["data"]["subject"] == "Greeting"
-        # No prior version ⇒ no diff (excluded by exclude_none).
-        assert "diff" not in surface
+        # Retirement invariant: no v1 surface decoration on DRAFT_UPDATED.
+        assert "surface" not in payload
+        assert "surface_uri" not in payload
+        # The draft event itself is intact (ported non-surface invariant).
+        assert payload["draft_id"] == _DRAFT_ID
+        assert payload["version"] == 1
+        assert {s["heading"] for s in payload["sections"]} == {"Greeting"}
+        assert DraftPath.for_draft_id(_DRAFT_ID).endswith(f"{_DRAFT_ID}.md")
 
-    async def test_v2_carries_section_level_diff(self) -> None:
+    async def test_second_write_still_surface_free(self) -> None:
         store = InMemoryDraftStore()
         producer = _CaptureProducer()
         backend = _backend(store=store, producer=producer)
@@ -98,57 +103,18 @@ class TestDraftSurfaceEmission:
         await backend.awrite(_path(), "# Greeting\nHello there.")
 
         v2_payload = producer.payloads()[1]
-        assert v2_payload["surface_uri"] == f"message://draft/{_DRAFT_ID}"
-        diff = v2_payload["surface"]["diff"]
-        assert diff is not None
-        changes = diff["changes"]
-        assert {c["field"] for c in changes} == {"Greeting"}
-        change = changes[0]
-        assert change["old"] == "Hello."
-        assert change["new"] == "Hello there."
+        assert "surface" not in v2_payload
+        assert "surface_uri" not in v2_payload
+        assert v2_payload["version"] == 2
 
-    async def test_added_section_appears_as_diff_addition(self) -> None:
-        store = InMemoryDraftStore()
-        producer = _CaptureProducer()
-        backend = _backend(store=store, producer=producer)
-
-        await backend.awrite(_path(), "# Greeting\nHello.")
-        await backend.awrite(_path(), "# Greeting\nHello.\n\n# Ask\nCan we meet?")
-
-        diff = producer.payloads()[1]["surface"]["diff"]
-        added = [c for c in diff["changes"] if c["field"] == "Ask"]
-        assert len(added) == 1
-        # exclude_none omits a null ``old`` ⇒ new-only entry marks an addition.
-        assert added[0].get("old") is None
-        assert added[0]["new"] == "Can we meet?"
-
-    async def test_no_store_still_emits_surface_without_diff(self) -> None:
+    async def test_no_store_still_surface_free(self) -> None:
         store = InMemoryDraftStore()
         producer = _CaptureProducer()
         backend = _backend(store=store, producer=producer, with_store=False)
-
-        await backend.awrite(_path(), "# Greeting\nHello.")
-        await backend.awrite(_path(), "# Greeting\nHello there.")
-
-        # Surface still attaches, but with no store the emitter cannot read the
-        # prior version, so no diff is produced on v2.
-        v2 = producer.payloads()[1]
-        assert v2["surface_uri"] == f"message://draft/{_DRAFT_ID}"
-        assert "diff" not in v2["surface"]
-
-    async def test_emission_disabled_omits_surface(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("RUNTIME_SURFACE_EMISSION", "false")
-        store = InMemoryDraftStore()
-        producer = _CaptureProducer()
-        backend = _backend(store=store, producer=producer)
 
         await backend.awrite(_path(), "# Greeting\nHello.")
 
         payload = producer.payloads()[0]
         assert "surface" not in payload
         assert "surface_uri" not in payload
-        # The draft_id path is unchanged.
         assert payload["draft_id"] == _DRAFT_ID
-        assert DraftPath.for_draft_id(_DRAFT_ID).endswith(f"{_DRAFT_ID}.md")

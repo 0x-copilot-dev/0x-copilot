@@ -35,7 +35,6 @@ from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
-from agent_runtime.capabilities.surfaces.config import SurfaceEmissionFlag
 from agent_runtime.capabilities.surfaces.generator import (
     GenToolDescriptor,
     SurfaceGenerationScheduler,
@@ -284,26 +283,14 @@ class CallMcpTool:
             output=output,
         ).model_dump(mode="json", exclude_none=True)
 
-        # Generative-UI (PRD-02): project a SurfaceSpec envelope from the output
-        # and attach it alongside a top-level ``surface_uri`` mirror (the FE
-        # projector keys off ``payload.surface_uri``). Best-effort and gated by
-        # ``RUNTIME_SURFACE_EMISSION`` — a surface must never fail a tool call,
-        # and when disabled the payload is byte-for-byte unchanged.
-        self._attach_surface(
-            result=result,
-            server_name=parsed_input.server_name,
-            tool_name=parsed_input.tool_name,
-            output=output,
-            call_id=parsed_input.tool_call_id,
-        )
-
-        # Generative Surfaces v2 (PRD-A3): record the executed read + the
-        # just-attached v1 surface envelope on the Work Ledger. Awaited (not
-        # fire-and-forget) for deterministic event ordering; a no-op unless a
-        # ``WorkLedgerEmitter`` is bound, which happens only when ``SURFACES_V2``
-        # is on — so the flag-off event stream is byte-identical.
+        # Generative Surfaces v2 (PRD-A3/E3): record the executed read on the Work
+        # Ledger. Awaited (not fire-and-forget) for deterministic event ordering;
+        # a no-op unless a ``WorkLedgerEmitter`` is bound, which happens only when
+        # ``SURFACES_V2`` is on. The v1 ``result["surface"]`` appendage was retired
+        # in E3 — the surface envelope is now computed on-demand INSIDE
+        # ``_emit_ledger`` (only when an emitter is bound) and handed straight to
+        # the ledger; the tool result dict is never mutated with a surface.
         await CallMcpTool._emit_ledger(
-            result=result,
             server_name=parsed_input.server_name,
             tool_name=parsed_input.tool_name,
             call_id=parsed_input.tool_call_id,
@@ -315,7 +302,6 @@ class CallMcpTool:
     @staticmethod
     async def _emit_ledger(
         *,
-        result: dict[str, Any],
         server_name: str,
         tool_name: str,
         call_id: str | None,
@@ -324,24 +310,33 @@ class CallMcpTool:
     ) -> None:
         """Emit the v2 ledger read path for this tool call, if an emitter is bound.
 
-        No-ops when no :class:`WorkLedgerEmitter` is active (flag off). Passes the
-        just-attached v1 ``surface`` / ``surface_uri`` mirror so the emitter can
-        record ``surface.created`` / ``view.derived``. The emitter swallows its
-        own exceptions; this wrapper adds a second best-effort guard so a ledger
-        emit can never break a tool result.
+        No-ops when no :class:`WorkLedgerEmitter` is active (``SURFACES_V2`` off ⇒
+        no binding). When bound, computes the surface envelope on-demand
+        (:meth:`_compute_surface_envelope` — the builtin → store → schedule-
+        generation ladder that survives the v1 retirement) and hands it straight
+        to the emitter so it can record ``surface.created`` / ``view.derived``.
+        The v1 ``result["surface"]`` appendage no longer exists (E3 D4). The
+        emitter swallows its own exceptions; this wrapper adds a second
+        best-effort guard so a ledger emit can never break a tool result.
         """
 
         emitter = WorkLedgerEmitter.active()
         if emitter is None:
             return
+        surface, surface_uri = CallMcpTool._compute_surface_envelope(
+            server_name=server_name,
+            tool_name=tool_name,
+            output=output,
+            call_id=call_id,
+        )
         try:
             await emitter.on_tool_result(
                 server_name=server_name,
                 tool_name=tool_name,
                 call_id=call_id or "",
                 output=output,
-                surface=result.get("surface"),
-                surface_uri=result.get("surface_uri"),
+                surface=surface,
+                surface_uri=surface_uri,
                 latency_ms=latency_ms,
             )
         except Exception:  # noqa: BLE001 - best-effort; never break MCP results
@@ -353,26 +348,27 @@ class CallMcpTool:
             )
 
     @staticmethod
-    def _attach_surface(
+    def _compute_surface_envelope(
         *,
-        result: dict[str, Any],
         server_name: str,
         tool_name: str,
-        output: Mapping[str, Any],
+        output: object,
         call_id: str | None,
-    ) -> None:
-        """Attach ``surface`` + top-level ``surface_uri`` to a success result.
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Compute the surface envelope for a tool result, for v2 ledger emission.
 
-        No-ops when emission is disabled (byte-compatible payload) or when the
-        projector declines (non-mapping output). When a run-scoped generation
-        scheduler is bound (only when ``SURFACE_SPEC_MODEL`` is set), the
-        projector shares its store for rung-2 cache reads and schedules async
-        generation on a ladder miss. Any exception is logged and swallowed —
-        surface projection is display-only and never blocks a tool.
+        Runs the builtin → store → schedule-generation ladder (via
+        :meth:`_surface_projector`) and returns ``(surface_dump, surface_uri)``,
+        or ``(None, None)`` when the output is non-mapping / the projector declines
+        / it raises. Display-only and best-effort — surface projection never blocks
+        a tool call. Invoked ONLY from :meth:`_emit_ledger`, i.e. only when a
+        ``WorkLedgerEmitter`` is bound (``SURFACES_V2`` on); the v1
+        ``RUNTIME_SURFACE_EMISSION`` gate is gone — v2 is the sole consumer and its
+        own flag decides whether this runs at all.
         """
 
-        if not SurfaceEmissionFlag.enabled():
-            return
+        if not isinstance(output, Mapping):
+            return (None, None)
         try:
             projector, tool_descriptor = CallMcpTool._surface_projector(tool_name)
             envelope = projector.resolve(
@@ -383,9 +379,11 @@ class CallMcpTool:
                 tool_descriptor=tool_descriptor,
             )
             if envelope is None:
-                return
-            result["surface"] = envelope.model_dump(mode="json", exclude_none=True)
-            result["surface_uri"] = envelope.surface_uri
+                return (None, None)
+            return (
+                envelope.model_dump(mode="json", exclude_none=True),
+                envelope.surface_uri,
+            )
         except Exception:  # noqa: BLE001 - best-effort; never break MCP results
             _LOGGER.warning(
                 "[surfaces] mcp.surface_raised server=%s tool=%s",
@@ -393,6 +391,7 @@ class CallMcpTool:
                 tool_name,
                 exc_info=True,
             )
+            return (None, None)
 
     @staticmethod
     def _surface_projector(

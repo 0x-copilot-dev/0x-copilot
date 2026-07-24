@@ -183,7 +183,8 @@ def _build(monkeypatch, *, flag_on: bool) -> _AppBundle:
     if flag_on:
         monkeypatch.setenv("SURFACES_V2", "true")
     else:
-        monkeypatch.delenv("SURFACES_V2", raising=False)
+        # E3: SURFACES_V2 defaults ON, so flag-off is the explicit kill switch.
+        monkeypatch.setenv("SURFACES_V2", "false")
     store = InMemoryRuntimeApiStore()
     ports = RuntimeAdapterFactory.from_store(store)
     app = RuntimeApiAppFactory.create_app(ports=ports, settings=_settings())

@@ -39,6 +39,7 @@ import type {
 import type { ConversationId } from "@0x-copilot/api-types";
 
 import { registerSurfaces } from "../../app/registerSurfaces";
+import { SURFACES_V2_FLAG_KEY } from "../../app/featureFlags";
 import type { RequestIdentity } from "../../api/config";
 import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
 import { RunRoute } from "./RunRoute";
@@ -206,12 +207,35 @@ function recordSurfaceEvent(uri: string): Record<string, unknown> {
   };
 }
 
+// PRD-E3 flipped the Generative Surfaces v2 canvas ON by default. This suite
+// exercises the FE v1 `payload.surface` projection path (the record envelope
+// below is a v1 shape); that path is deliberately retained (its removal is a
+// tracked follow-up, out of scope for E3) but is now reachable only via the
+// opt-out. The test env enables node's experimental localStorage without a file,
+// so a plain `setItem` is a no-op — stub `window.localStorage` (as
+// featureFlags.test.ts does) to return the exact-"false" opt-out for the flag.
+const _originalLocalStorage = Object.getOwnPropertyDescriptor(
+  window,
+  "localStorage",
+);
+
 beforeEach(() => {
   registerSurfaces();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => (key === SURFACES_V2_FLAG_KEY ? "false" : null),
+      setItem: () => {},
+      removeItem: () => {},
+    },
+  });
 });
 
 afterEach(() => {
   clearRegistry();
+  if (_originalLocalStorage !== undefined) {
+    Object.defineProperty(window, "localStorage", _originalLocalStorage);
+  }
 });
 
 describe("RunRoute (PRD-05)", () => {

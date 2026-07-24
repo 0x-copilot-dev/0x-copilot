@@ -1570,15 +1570,15 @@ async def test_chunk_without_supervisor_metadata_falls_back_to_raw_subgraph_id()
     assert reasoning[0]["parent_task_id"] == "legacy_subgraph_uuid"
 
 
-# --- Generative-UI surface lift (PRD-02b) ------------------------------------
+# --- v1 surface lift RETIRED (PRD-E3 D4) -------------------------------------
 #
-# PRD-02 attaches ``surface_uri`` + ``surface`` to the MCP tool return dict.
-# ``tool_result_payload`` buckets every non-reserved field into ``output``, so
-# the surface must be hoisted back to the event-payload top level — the shape
-# the frontend event projector reads (``payload.surface_uri`` /
-# ``payload.surface``). Two carrier shapes reach the projector: a dict-shaped
-# tool message (surface spread at ``output`` top level) and the production
-# ToolMessage whose ``content`` is the JSON-serialised return dict.
+# PRD-02 used to attach ``surface_uri`` + ``surface`` to the MCP tool return dict,
+# and ``_lift_surface_fields`` hoisted them onto the event-payload top level. E3
+# retired both: the v1 appendage no longer exists, so ``tool_result_payload``
+# performs NO surface lift — any ``surface`` / ``surface_uri`` key is treated as
+# ordinary tool output (bucketed into ``output`` like every other non-reserved
+# field), never special-cased onto the payload top level. Surface data now reaches
+# clients via the Work Ledger (``surface.created`` / ``view.derived``) instead.
 
 _SURFACE_ENVELOPE: dict[str, object] = {
     "surface_uri": "record://linear/get_issue/ENG-1421",
@@ -1587,10 +1587,10 @@ _SURFACE_ENVELOPE: dict[str, object] = {
 }
 
 
-def test_tool_result_lifts_top_level_surface_out_of_output() -> None:
-    """A dict-shaped tool message carrying the surface at ``output`` top level
-    must yield an event payload with ``surface_uri`` + ``surface`` hoisted to the
-    top level and popped out of ``output`` (never duplicated)."""
+def test_tool_result_does_not_lift_top_level_surface() -> None:
+    """A dict-shaped tool message carrying ``surface`` / ``surface_uri`` keys must
+    NOT hoist them to the payload top level (v1 lift retired) — they stay bucketed
+    into ``output`` as ordinary fields."""
 
     payload = StreamMessageProcessor.tool_result_payload(
         {
@@ -1604,19 +1604,20 @@ def test_tool_result_lifts_top_level_surface_out_of_output() -> None:
         }
     )
 
-    assert payload["surface_uri"] == "record://linear/get_issue/ENG-1421"
-    assert payload["surface"] == _SURFACE_ENVELOPE
-    # Lifted, not duplicated: the surface no longer rides inside ``output``.
-    assert "surface_uri" not in payload["output"]
-    assert "surface" not in payload["output"]
-    # The real tool output survives the lift.
+    # No top-level lift.
+    assert "surface_uri" not in payload
+    assert "surface" not in payload
+    # The keys are just ordinary output fields now (not popped/special-cased).
+    assert payload["output"]["surface_uri"] == "record://linear/get_issue/ENG-1421"
+    assert payload["output"]["surface"] == _SURFACE_ENVELOPE
     assert payload["output"]["output"] == {"issue": {"identifier": "ENG-1421"}}
 
 
-def test_tool_result_lifts_surface_from_json_string_content() -> None:
+def test_tool_result_does_not_lift_surface_from_json_string_content() -> None:
     """Production path: the MCP return dict is JSON-serialised into
-    ``ToolMessage.content``. The surface must be lifted to the payload top level
-    while the model-facing ``content`` string is left intact."""
+    ``ToolMessage.content``. E3 retired the lift, so no surface is extracted from
+    the content string — ``content`` is left intact and no top-level surface
+    appears."""
 
     from langchain_core.messages import ToolMessage
 
@@ -1636,9 +1637,9 @@ def test_tool_result_lifts_surface_from_json_string_content() -> None:
 
     payload = StreamMessageProcessor.tool_result_payload(message)
 
-    assert payload["surface_uri"] == "record://linear/get_issue/ENG-1421"
-    assert payload["surface"] == _SURFACE_ENVELOPE
-    # ``content`` is the model-facing output PRD-02 writes; it stays intact.
+    assert "surface_uri" not in payload
+    assert "surface" not in payload
+    # ``content`` is left untouched (no parse-and-lift of the embedded surface).
     assert json.loads(payload["output"]["content"]) == return_dict
 
 
@@ -1678,9 +1679,10 @@ def test_tool_result_plain_string_content_is_unaffected() -> None:
     assert payload["output"] == {"content": "connection refused"}
 
 
-def test_tool_result_with_state_preserves_top_level_surface() -> None:
-    """``tool_result_payload_with_state`` re-wraps the payload; the top-level
-    surface must survive that pass."""
+def test_tool_result_with_state_never_lifts_surface() -> None:
+    """``tool_result_payload_with_state`` re-wraps the payload; with the v1 lift
+    retired, no top-level surface is ever produced (the surface keys stay inside
+    ``output``)."""
 
     producer = object()
     update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
@@ -1699,9 +1701,7 @@ def test_tool_result_with_state_preserves_top_level_surface() -> None:
             "surface": _SURFACE_ENVELOPE,
         }
     )
-    # No accumulated call state for this id ⇒ the enrichment returns the payload
-    # unchanged, which must still carry the lifted surface.
     enriched = processor.tool_result_payload_with_state("run_123", base)
 
-    assert enriched["surface_uri"] == "record://linear/get_issue/ENG-1421"
-    assert enriched["surface"] == _SURFACE_ENVELOPE
+    assert "surface_uri" not in enriched
+    assert "surface" not in enriched

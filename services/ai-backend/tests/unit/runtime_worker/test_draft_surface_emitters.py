@@ -1,13 +1,13 @@
-"""Surface-emission tests for the two *production* DRAFT_UPDATED emitters (PRD-02b).
+"""The two *production* DRAFT_UPDATED emitters after the v1 surface retirement
+(PRD-E3 D4).
 
-PRD-02 attached the ``message`` surface only inside
-``draft_backend.make_event_emitter``. The worker's own draft closures —
 ``RuntimeRunHandler._draft_event_emitter`` (drafts written during a live run) and
 ``RuntimeApprovalHandler._emit_draft_updated`` (drafts mutated across an approval)
-— built their own payloads and bypassed it, so their events shipped without a
-surface. These tests pin that both now carry a top-level ``surface_uri`` +
-``surface`` envelope (with a section-level diff on v2), share the single builder,
-and honour ``RUNTIME_SURFACE_EMISSION=false``.
+used to attach a ``message`` surface via ``DraftSurfaceProjector``; E3 retired
+that. These tests port the still-relevant invariant — both emitters still emit a
+well-formed ``DRAFT_UPDATED`` event (draft_id / version) — and pin the retirement:
+the payload carries **no** ``surface`` / ``surface_uri`` key. Draft surfaces now
+render from D1-wave ``write.staged`` / ``revision.added`` ledger events.
 """
 
 from __future__ import annotations
@@ -86,7 +86,7 @@ class TestRunHandlerDraftEmitter:
             draft_store=store,
         )
 
-    async def test_v1_carries_message_surface_without_diff(self) -> None:
+    async def test_emits_draft_updated_without_surface(self) -> None:
         store = InMemoryDraftStore()
         handler = self._handler(store)
         calls = _capture(handler)
@@ -95,38 +95,12 @@ class TestRunHandlerDraftEmitter:
         await emit(_record(version=1, content_text="# Greeting\nHello."))
 
         payload = _draft_updated_payload(calls)
-        assert payload["surface_uri"] == f"message://draft/{_draft_id()}"
-        surface = payload["surface"]
-        assert isinstance(surface, dict)
-        assert surface["archetype"] == "message"
-        assert surface["state"]["data"]["body"] == "# Greeting\nHello."
-        # v1: no prior version ⇒ exclude_none drops the diff.
-        assert "diff" not in surface
+        assert "surface" not in payload
+        assert "surface_uri" not in payload
+        assert payload["draft_id"] == _draft_id()
+        assert payload["version"] == 1
 
-    async def test_v2_carries_top_level_surface_with_section_diff(self) -> None:
-        store = InMemoryDraftStore()
-        await store.insert_version(
-            _record(version=1, content_text="# Greeting\nHello.")
-        )
-        handler = self._handler(store)
-        calls = _capture(handler)
-
-        emit = handler._draft_event_emitter(_COMMAND)
-        await emit(_record(version=2, content_text="# Greeting\nHello there."))
-
-        payload = _draft_updated_payload(calls)
-        assert payload["surface_uri"] == f"message://draft/{_draft_id()}"
-        diff = payload["surface"]["diff"]
-        assert diff is not None
-        changes = diff["changes"]
-        assert {c["field"] for c in changes} == {"Greeting"}
-        assert changes[0]["old"] == "Hello."
-        assert changes[0]["new"] == "Hello there."
-
-    async def test_disabled_flag_omits_surface(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("RUNTIME_SURFACE_EMISSION", "false")
+    async def test_v2_write_still_surface_free(self) -> None:
         store = InMemoryDraftStore()
         await store.insert_version(
             _record(version=1, content_text="# Greeting\nHello.")
@@ -140,8 +114,6 @@ class TestRunHandlerDraftEmitter:
         payload = _draft_updated_payload(calls)
         assert "surface" not in payload
         assert "surface_uri" not in payload
-        # The pre-surface payload is otherwise intact.
-        assert payload["draft_id"] == _draft_id()
         assert payload["version"] == 2
 
 
@@ -155,32 +127,7 @@ class TestApprovalHandlerDraftEmitter:
             draft_store=store,
         )
 
-    async def test_v2_carries_top_level_surface_with_section_diff(self) -> None:
-        store = InMemoryDraftStore()
-        await store.insert_version(
-            _record(version=1, content_text="# Greeting\nHello.")
-        )
-        handler = self._handler(store)
-        calls = _capture(handler)
-
-        await handler._emit_draft_updated(
-            run=_RUN,
-            record=_record(version=2, content_text="# Greeting\nHello there."),
-        )
-
-        payload = _draft_updated_payload(calls)
-        assert payload["surface_uri"] == f"message://draft/{_draft_id()}"
-        surface = payload["surface"]
-        assert surface["archetype"] == "message"
-        diff = surface["diff"]
-        assert diff is not None
-        assert {c["field"] for c in diff["changes"]} == {"Greeting"}
-        assert diff["changes"][0]["new"] == "Hello there."
-
-    async def test_disabled_flag_omits_surface(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        monkeypatch.setenv("RUNTIME_SURFACE_EMISSION", "false")
+    async def test_emits_draft_updated_without_surface(self) -> None:
         store = InMemoryDraftStore()
         await store.insert_version(
             _record(version=1, content_text="# Greeting\nHello.")
@@ -196,4 +143,5 @@ class TestApprovalHandlerDraftEmitter:
         payload = _draft_updated_payload(calls)
         assert "surface" not in payload
         assert "surface_uri" not in payload
+        assert payload["draft_id"] == _draft_id()
         assert payload["version"] == 2

@@ -147,9 +147,12 @@ class RuntimeExecutionSettings(RuntimeContract):
     # runtime. Off by default; ``POST /v1/local-models/runtime/start`` 404s
     # and ``runtime_state`` stays ``unknown`` while it is false.
     local_models_manage_runtime: bool = False
-    # Generative Surfaces v2 master flag (PRD-A1). Defaults false and is read by
-    # nothing in this PR; PRD-A3 gates emission + projector allow-lists on it.
-    surfaces_v2: bool = False
+    # Generative Surfaces v2 master flag (PRD-A1). **PRD-E3 flipped the default to
+    # true**: v2 now owns surface emission (the v1 ``result["surface"]`` appendage
+    # was retired), so unset ⇒ on. ``SURFACES_V2=false`` is the explicit kill
+    # switch (chat-only degradation). Resolves identically to
+    # ``SurfacesV2Flag.enabled()`` (same env var, same truthy set, same default).
+    surfaces_v2: bool = True
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -389,7 +392,7 @@ class RuntimeSettings(BaseSettings):
                     v, E.LOCAL_MODELS_MANAGE_RUNTIME, "false"
                 ).lower()
                 in _truthy,
-                surfaces_v2=_s(v, E.SURFACES_V2, "false").lower() in _truthy,
+                surfaces_v2=_s(v, E.SURFACES_V2, "true").lower() in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

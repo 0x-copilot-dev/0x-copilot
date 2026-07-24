@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from agent_runtime.capabilities.backends.draft_backend import (
-    DraftBackend,
-    DraftSurfaceProjector,
-)
+from agent_runtime.capabilities.backends.draft_backend import DraftBackend
 
-__all__ = ["DraftBackend", "DraftSurfaceProjector"]
+__all__ = ["DraftBackend"]

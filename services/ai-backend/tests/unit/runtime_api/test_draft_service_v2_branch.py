@@ -152,7 +152,9 @@ class TestFlagOffV1Path:
     async def test_flag_off_creates_v1_approval_and_no_v2_event(
         self, monkeypatch
     ) -> None:
-        monkeypatch.delenv("SURFACES_V2", raising=False)
+        monkeypatch.setenv(
+            "SURFACES_V2", "false"
+        )  # E3: default-on ⇒ explicit kill switch
         h = Harness(wire_stager=True)  # stager wired, but flag off ⇒ v1 path
         await h.seed_draft()
         result = await h.send()

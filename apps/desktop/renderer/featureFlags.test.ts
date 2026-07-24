@@ -1,4 +1,4 @@
-// PRD-B1 — the desktop `surfacesV2` opt-in (default OFF, fail-safe).
+// PRD-E3 — the desktop `surfacesV2` canvas is default ON (opt-out, fail toward ON).
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -22,26 +22,26 @@ afterEach(() => {
   }
 });
 
-describe("isSurfacesV2Enabled (PRD-B1)", () => {
-  it("defaults OFF with no opt-in signal", () => {
+describe("isSurfacesV2Enabled (PRD-E3: default ON opt-out)", () => {
+  it("defaults ON with no opt-out signal", () => {
     stubLocalStorage(() => null);
-    expect(isSurfacesV2Enabled()).toBe(false);
-  });
-
-  it("enables when localStorage opts in with the exact string 'true'", () => {
-    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "true" : null));
     expect(isSurfacesV2Enabled()).toBe(true);
   });
 
-  it("stays OFF for any non-'true' value (fail-safe)", () => {
-    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "yes" : null));
+  it("disables when localStorage opts out with the exact string 'false'", () => {
+    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "false" : null));
     expect(isSurfacesV2Enabled()).toBe(false);
   });
 
-  it("stays OFF when localStorage throws (storage disabled)", () => {
+  it("stays ON for any non-'false' value (fails toward the new default)", () => {
+    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "yes" : null));
+    expect(isSurfacesV2Enabled()).toBe(true);
+  });
+
+  it("stays ON when localStorage throws (storage disabled)", () => {
     stubLocalStorage(() => {
       throw new Error("storage disabled");
     });
-    expect(isSurfacesV2Enabled()).toBe(false);
+    expect(isSurfacesV2Enabled()).toBe(true);
   });
 });

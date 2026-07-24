@@ -1210,9 +1210,6 @@ class RuntimeRunHandler:
         """
 
         from agent_runtime.api.constants import Keys, Values  # noqa: PLC0415
-        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
-            DraftSurfaceProjector,
-        )
         from agent_runtime.execution.contracts import StreamEventSource  # noqa: PLC0415
         from runtime_api.schemas import RuntimeApiEventType  # noqa: PLC0415
 
@@ -1231,11 +1228,10 @@ class RuntimeRunHandler:
                 Keys.Field.SUMMARY: f"Draft v{getattr(record, 'version')}: "
                 f"{getattr(record, 'title') or 'Untitled'}",
             }
-            # Generative-UI (PRD-02b): attach the same ``message`` surface the
-            # in-package emitter builds, so drafts written during the live run
-            # carry ``surface_uri`` + ``surface`` (section diff on v2+). Shared
-            # builder — no envelope duplication; best-effort + flag-gated.
-            await DraftSurfaceProjector.attach(payload, record, self.draft_store)  # type: ignore[arg-type]
+            # PRD-E3: the v1 ``message`` surface attach was retired — a
+            # ``DRAFT_UPDATED`` payload no longer carries ``surface`` /
+            # ``surface_uri``. Draft surfaces render from D1-wave ``write.staged`` /
+            # ``revision.added`` ledger events instead.
             run = await self.persistence.get_run(
                 org_id=command.org_id, run_id=command.run_id
             )
@@ -1758,15 +1754,28 @@ class RuntimeRunHandler:
             meter=meter, run=run, purpose=Purpose.VIEW_SHAPING
         )
 
-        return build_surface_generation_scheduler(
-            store=_surface_store(),
-            emit=_emit,
-            environ=os.environ,
-            usage_meter=invocation,
-            # PRD-B3 shaping-on default: the run's provider drives the cheapest
-            # shaping model when SURFACE_SPEC_MODEL is unset and SURFACES_V2 is on.
-            run_provider=run.model_provider,
-        )
+        try:
+            return build_surface_generation_scheduler(
+                store=_surface_store(),
+                emit=_emit,
+                environ=os.environ,
+                usage_meter=invocation,
+                # PRD-B3 shaping-on default: the run's provider drives the cheapest
+                # shaping model when SURFACE_SPEC_MODEL is unset and SURFACES_V2 is on.
+                run_provider=run.model_provider,
+            )
+        except Exception:  # noqa: BLE001
+            # PRD-E3: with SURFACES_V2 default-on, this build now runs for every
+            # run. Constructing the shaping chat model can raise (e.g. no
+            # resolvable provider key). Spec generation is a display-only upgrade —
+            # degrade to no-generation (generic views still render via the honest
+            # ladder) rather than crash the run.
+            logging.getLogger(__name__).warning(
+                "[surfaces] run.generation_scheduler_unavailable run=%s",
+                run.run_id,
+                exc_info=True,
+            )
+            return None
 
     def _build_work_ledger_emitter(self, run: RunRecord) -> WorkLedgerEmitter | None:
         """Build a run-scoped Work Ledger emitter, or ``None`` (PRD-A3 D4).

@@ -88,7 +88,9 @@ def _build_client(monkeypatch, *, flag_on: bool) -> _Bundle:
     if flag_on:
         monkeypatch.setenv("SURFACES_V2", "true")
     else:
-        monkeypatch.delenv("SURFACES_V2", raising=False)
+        # E3: SURFACES_V2 defaults ON, so flag-off (route-absence) is the explicit
+        # kill switch — a bare delenv would now register the routes.
+        monkeypatch.setenv("SURFACES_V2", "false")
     store = InMemoryRuntimeApiStore()
     _seed_run(store)
     ports = RuntimeAdapterFactory.from_store(store)
