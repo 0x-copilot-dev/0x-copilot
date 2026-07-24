@@ -80,6 +80,16 @@ export {
   type ViewTierToggleProps,
 } from "./ViewTierToggle";
 // === end PRD-B3 ===
+
+// === Surfaces v2 — PRD-B4 suggest-a-shape ===
+export { type LedgerShapeRequestState } from "./ledgerProjection";
+export {
+  SuggestShapeButton,
+  SHAPE_NO_FIT_LINE,
+  type SuggestShapeButtonProps,
+} from "./SuggestShapeButton";
+// === end PRD-B4 ===
+// === end PRD-B3 ===
 // === Surfaces v2 — PRD-C2 tool-access gate card ===
 export { TcGateCard, type TcGateCardProps } from "./TcGateCard";
 // === end PRD-C2 ===

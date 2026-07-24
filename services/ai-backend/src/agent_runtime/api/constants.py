@@ -134,6 +134,8 @@ class Keys:
         # Generative Surfaces v2 (PRD-B3) — per-surface view-lifecycle mutations.
         REGENERATE_SURFACE_VIEW = "regenerate_surface_view"
         SET_SURFACE_VIEW_PREFERENCE = "set_surface_view_preference"
+        # Generative Surfaces v2 (PRD-B4) — user-invited "Suggest a shape".
+        SHAPE_REQUEST = "shape_request"
         # Generative Surfaces v2 (PRD-E3) — the tamper-evident receipt export.
         EXPORT_RUN_RECEIPT = "export_run_receipt"
         GET_MESSAGES = "get_messages"

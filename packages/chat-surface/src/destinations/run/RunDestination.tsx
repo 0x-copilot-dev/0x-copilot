@@ -104,6 +104,7 @@ import {
   type LedgerGateWritePolicy,
   type LedgerStagedWrite,
   type LedgerViewTier,
+  type LedgerShapeRequestState,
 } from "../../thread-canvas";
 // PRD-C2/D1/D3/E1/E2 — the Generative Surfaces v2 canvas mount pieces. All are
 // pure presentational components + pure ledger folds + one Transport-fed fetch;
@@ -998,6 +999,27 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [transport, session.runId],
   );
 
+  // PRD-B4: the user-invited "Suggest a shape". `run_id` rides the BODY (an
+  // untyped-dict passthrough the facade stamps org/user onto — SDR §4); the
+  // resulting shape.requested/shape.resolved (+ view.derived on success) events
+  // arrive on the ONE run stream and fold in — no second subscription.
+  const handleShapeRequest = useCallback(
+    (surfaceId: string): void => {
+      const runId = session.runId;
+      if (runId === null || runId === "") return;
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/surfaces/${encodeURIComponent(surfaceId)}/shape-request`,
+          body: { run_id: runId },
+        })
+        .catch(() => {
+          /* the resulting shape.resolved SSE frame is the authority */
+        });
+    },
+    [transport, session.runId],
+  );
+
   // WC-P3 (AD-4): the in-chat composer shows Stop while the bound run is
   // cancellable and no cancel is in flight (server `cancelling` state OR our
   // optimistic overlay for THIS run). `cancellingRunId` is compared to the bound
@@ -1155,6 +1177,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     const id = surfaceIdForTabUri(activeUri);
     if (id === null) return null;
     return ledger.surfaces.get(id)?.viewState ?? null;
+  }, [surfacesV2, activeUri, ledger]);
+
+  // PRD-B4: the active surface's folded "Suggest a shape" state (idle by default).
+  const activeShapeRequest = useMemo<LedgerShapeRequestState>(() => {
+    if (!surfacesV2) return "idle";
+    const id = surfaceIdForTabUri(activeUri);
+    if (id === null) return "idle";
+    return ledger.surfaces.get(id)?.shapeRequest ?? "idle";
   }, [surfacesV2, activeUri, ledger]);
 
   // ============================================================
@@ -1642,6 +1672,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       activeViewState={activeViewState}
       onRegenerateView={handleRegenerateView}
       onSetViewPreference={handleSetViewPreference}
+      // PRD-B4: the active surface's folded "Suggest a shape" state + the
+      // invited-shaping mutation. The button renders on the raw/generic
+      // fallback only (a shaped surface hides it).
+      activeShapeRequest={activeShapeRequest}
+      onShapeRequest={surfacesV2 ? handleShapeRequest : undefined}
       // PRD-04: the proposed surface diff for the active surface + the
       // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
       // which renders the Approve/Reject/Suggest controls around the diff.

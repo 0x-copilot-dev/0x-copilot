@@ -24,7 +24,7 @@ from importlib.resources.abc import Traversable
 # bump is a contract amendment to PRD-A1, never a local edit.
 LEDGER_PAYLOAD_VERSION: int = 1
 
-# The 14 ledger event types, in contract order. Mirrors ``events`` insertion
+# The 15 ledger event types, in contract order. Mirrors ``events`` insertion
 # order in ``work_ledger.json``; a parity test pins this tuple, the pydantic
 # ``LedgerEventType`` StrEnum, and the api-types ``LEDGER_EVENT_TYPES`` tuple to
 # that order. Later waves append (never reorder) — SDR §12.
@@ -37,6 +37,7 @@ LEDGER_EVENT_TYPES: tuple[str, ...] = (
     "view.derived",
     "view.preference",
     "shape.requested",
+    "shape.resolved",
     "write.staged",
     "revision.added",
     "decision.recorded",
