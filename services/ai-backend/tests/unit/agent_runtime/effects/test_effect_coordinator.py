@@ -224,6 +224,7 @@ async def test_duplicate_delivery_never_calls_apply_twice() -> None:
 
     assert first.status is EffectCoordinatorStatus.APPLIED
     assert replay.status is EffectCoordinatorStatus.REPLAYED
+    assert executor.calls.count("prepare") == 1
     assert executor.calls.count("apply") == 1
     assert [
         event.event_type for event in ledger.events_by_stage[command.stage_id]

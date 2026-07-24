@@ -25,6 +25,7 @@ from agent_runtime.execution.deep_agent_builder import (
     CODE_MODE_GUIDANCE,
     SANDBOX_EXECUTE_GUIDANCE,
     WORKSPACE_ACCESS_GUIDANCE,
+    WORKSPACE_STAGED_WRITE_GUIDANCE,
     WORKSPACE_WRITE_GUIDANCE,
     DeepAgentBuildRequest,
     DeepAgentsBackend,
@@ -209,7 +210,12 @@ async def _assemble_harness(
     # authority (a writable grant + a per-run capability context + a snapshot
     # store). This one signal gates BOTH the approval permission and the
     # writable prompt guidance.
-    workspace_writable = bool(getattr(workspace_backend, "supports_writes", False))
+    workspace_effect_staging = bool(
+        getattr(workspace_backend, "uses_effect_staging", False)
+    )
+    workspace_writable = bool(
+        getattr(workspace_backend, "supports_writes", False) or workspace_effect_staging
+    )
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
@@ -263,8 +269,12 @@ async def _assemble_harness(
                     ),
                     suggestions=runtime_context.suggested_connectors,
                 ),
-                workspace_active=workspace_backend is not None,
+                workspace_active=bool(
+                    workspace_backend is not None
+                    and getattr(workspace_backend, "advertise_workspace", True)
+                ),
                 workspace_writable=workspace_writable,
+                workspace_effect_staging=workspace_effect_staging,
             ),
             code_mode_active=runtime_dependencies.code_mode_tool is not None,
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
@@ -317,7 +327,10 @@ async def _assemble_harness(
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
                 interrupt_on=enforced_tools.interrupt_on,
-                permissions=_workspace_write_permissions(workspace_writable),
+                permissions=_workspace_write_permissions(
+                    workspace_writable,
+                    effect_staged=workspace_effect_staging,
+                ),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
             )
@@ -486,7 +499,11 @@ def _model_visible_tools(
 _WORKSPACE_WRITE_GLOB: Final = "/workspace/**"
 
 
-def _workspace_write_permissions(workspace_writable: bool) -> tuple[object, ...]:  # noqa: FBT001
+def _workspace_write_permissions(
+    workspace_writable: bool,  # noqa: FBT001
+    *,
+    effect_staged: bool = False,  # noqa: FBT001, FBT002
+) -> tuple[object, ...]:
     """Return the host-write approval permission when the run can write to host folders.
 
     A single Deep Agents ``FilesystemPermission`` with ``mode="interrupt"`` over
@@ -496,7 +513,7 @@ def _workspace_write_permissions(workspace_writable: bool) -> tuple[object, ...]
     empty tuple when the run has no writable host grant, so the read-only /
     non-desktop path installs no permission and stays byte-identical.
     """
-    if not workspace_writable:
+    if not workspace_writable or effect_staged:
         return ()
     # Imported lazily so the deepagents permission type is referenced in exactly
     # one place and non-workspace runs never touch it.
@@ -844,6 +861,7 @@ def _instructions_with_workspace(
     instructions: str,
     workspace_active: bool,
     workspace_writable: bool = False,
+    workspace_effect_staging: bool = False,
 ) -> str:
     """Append the ``/workspace/`` guidance block when the route is active.
 
@@ -858,7 +876,11 @@ def _instructions_with_workspace(
     if not workspace_active:
         return instructions
     guidance = (
-        WORKSPACE_WRITE_GUIDANCE if workspace_writable else WORKSPACE_ACCESS_GUIDANCE
+        WORKSPACE_STAGED_WRITE_GUIDANCE
+        if workspace_effect_staging
+        else WORKSPACE_WRITE_GUIDANCE
+        if workspace_writable
+        else WORKSPACE_ACCESS_GUIDANCE
     )
     return "\n\n".join((instructions, guidance))
 

@@ -329,6 +329,30 @@ class EffectCoordinator:
             return await self._refuse(command=command, code="immutable_ref_mismatch")
 
         request = _execution_request(state=state, command=command)
+        existing = await self._claims.get(
+            org_id=execution_scope.org_id,
+            executor=state.executor,
+            idempotency_key=command.idempotency_key,
+        )
+        if existing is not None:
+            candidate = _claim_from(
+                scope=execution_scope,
+                state=state,
+                command=command,
+                prepared=PreparedEffect(
+                    request=request,
+                    prepared_ref=existing.prepared_ref,
+                ),
+            )
+            if not existing.same_request_as(candidate):
+                return await self._refuse(
+                    command=command,
+                    code="effect_claim_conflict",
+                )
+            return await self._existing_claim_result(
+                scope=stage_scope,
+                claim=existing,
+            )
         executor = self._executors.resolve(kind=state.executor, scope=execution_scope)
         prepared = await self._prepare(executor=executor, request=request)
         if prepared is None:
@@ -361,6 +385,8 @@ class EffectCoordinator:
         )
         acquisition = await self._claims.claim(claim=proposed_claim)
         if not acquisition.created:
+            if acquisition.claim.prepared_ref != prepared.prepared_ref:
+                await _abort_safely(executor, prepared)
             return await self._existing_claim_result(
                 scope=stage_scope, claim=acquisition.claim
             )

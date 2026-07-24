@@ -27,6 +27,7 @@ from agent_runtime.capabilities.operations.contracts import OperationRequest
 from agent_runtime.effects.coordinator import EffectCoordinator
 from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.effects.executor_registry import EffectExecutorRegistry
+from agent_runtime.capabilities.workspace.ports import WorkspaceOverlayStorePort
 from agent_runtime.api.effect_ledger import RuntimeEffectLedger
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
@@ -39,6 +40,11 @@ from runtime_adapters.artifact_references import (
 )
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_worker.mcp_effect_executor import McpEffectExecutor
+from runtime_worker.workspace_effect_storage import (
+    RuntimeWorkspaceProposalStore,
+    WorkspaceHostSessionRegistryPort,
+    workspace_executor,
+)
 from agent_runtime.surfaces_v2.mcp_connector import McpStageCommitConnector
 
 MAX_CANONICAL_ARGUMENT_BYTES = 1_048_576
@@ -198,7 +204,12 @@ class RuntimeMcpOperationResultStore:
 
 @dataclass(frozen=True)
 class RuntimeMcpEffectCoordinatorFactory:
-    """Build the sole D1 MCP executor behind A5's claim-before-apply protocol."""
+    """Build the closed A5 executor registry for one verified run.
+
+    The historical class name is retained for import compatibility. C3 adds
+    the typed workspace executor beside MCP; it does not replace or intercept
+    the row-set proposal adapter.
+    """
 
     event_producer: RuntimeEventProducer
     claims: object
@@ -206,6 +217,8 @@ class RuntimeMcpEffectCoordinatorFactory:
     references: ArtifactReferenceRepositoryPort
     dependencies_factory: object
     timeout_seconds: float
+    workspace_sessions: WorkspaceHostSessionRegistryPort | None = None
+    workspace_overlay_store: WorkspaceOverlayStorePort | None = None
 
     def for_run(self, *, run: RunRecord) -> EffectCoordinator:
         owner_ref = f"principal://users/{run.user_id}"
@@ -222,6 +235,37 @@ class RuntimeMcpEffectCoordinatorFactory:
             org_id=run.org_id,
             user_id=run.user_id,
         )
+        workspace_proposals = RuntimeWorkspaceProposalStore(
+            blobs=self.blobs,
+            references=self.references,
+            scope=scope,
+        )
+        factories = {
+            EffectExecutorKind.MCP: lambda active_scope: McpEffectExecutor(
+                scope=active_scope,
+                connector=McpStageCommitConnector(
+                    runtime_context=run.runtime_context,
+                    dependencies_factory=self.dependencies_factory,  # type: ignore[arg-type]
+                    timeout_seconds=self.timeout_seconds,
+                ),
+                material_resolver=McpOperationArgumentMaterialResolver(
+                    arguments=arguments
+                ),
+                enabled=True,
+            )
+        }
+        if (
+            self.workspace_sessions is not None
+            and self.workspace_overlay_store is not None
+        ):
+            factories[EffectExecutorKind.WORKSPACE] = lambda active_scope: (
+                workspace_executor(
+                    scope=active_scope,
+                    proposals=workspace_proposals,
+                    sessions=self.workspace_sessions,  # type: ignore[arg-type]
+                    overlay_store=self.workspace_overlay_store,  # type: ignore[arg-type]
+                )
+            )
         return EffectCoordinator(
             ledger=RuntimeEffectLedger(
                 event_producer=self.event_producer,
@@ -230,23 +274,17 @@ class RuntimeMcpEffectCoordinatorFactory:
             ),
             claims=self.claims,  # type: ignore[arg-type]
             scopes=_StaticEffectScope(scope),
-            references=_McpImmutableReferences(scope=scope, arguments=arguments),
-            executors=EffectExecutorRegistry(
-                {
-                    EffectExecutorKind.MCP: lambda active_scope: McpEffectExecutor(
-                        scope=active_scope,
-                        connector=McpStageCommitConnector(
-                            runtime_context=run.runtime_context,
-                            dependencies_factory=self.dependencies_factory,  # type: ignore[arg-type]
-                            timeout_seconds=self.timeout_seconds,
-                        ),
-                        material_resolver=McpOperationArgumentMaterialResolver(
-                            arguments=arguments
-                        ),
-                        enabled=True,
-                    )
-                }
+            references=_McpImmutableReferences(
+                scope=scope,
+                arguments=arguments,
+                workspace=(
+                    workspace_proposals
+                    if self.workspace_sessions is not None
+                    and self.workspace_overlay_store is not None
+                    else None
+                ),
             ),
+            executors=EffectExecutorRegistry(factories),
         )
 
 
@@ -262,12 +300,19 @@ class _StaticEffectScope:
 class _McpImmutableReferences:
     scope: EffectExecutionScope
     arguments: RuntimeMcpOperationArgumentStore
+    workspace: RuntimeWorkspaceProposalStore | None = None
 
     def open(
         self, *, scope: EffectExecutionScope, reference: str
     ) -> AsyncIterator[bytes]:
         async def _stream() -> AsyncIterator[bytes]:
             if scope != self.scope:
+                return
+            if self.workspace is not None and reference.startswith("workspace-"):
+                async for chunk in self.workspace.open(
+                    scope=scope, reference=reference
+                ):
+                    yield chunk
                 return
             if reference.startswith("operation://"):
                 body = await self.arguments.resolve_reference(ref=reference)

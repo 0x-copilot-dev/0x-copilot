@@ -139,6 +139,22 @@ WORKSPACE_WRITE_GUIDANCE = (
     "edits minimal, and prefer `/drafts/` for brand-new authored content. "
     "Read-only mounts refuse writes."
 )
+# C3 replacement for the legacy write-through guidance. ``write_file`` and
+# ``edit_file`` update the run overlay and produce an exact A4 stage. They must
+# never imply that the host changed before A5 consumes an approved command.
+WORKSPACE_STAGED_WRITE_GUIDANCE = (
+    "The user has granted access to one or more host folders, mounted under "
+    "`/workspace/`. Each granted folder is a named mount: run `ls /workspace/` "
+    "to see the available mounts, then use `ls`, `read_file`, `glob`, and "
+    "`grep` under `/workspace/<mount>/<path>` to inspect their contents. These "
+    "are the user's real files — never assume a path exists; list a directory "
+    "first, then read. On writable mounts, `write_file` and `edit_file` create "
+    "a reviewable staged change in the run overlay; they do NOT immediately "
+    "modify the host file. Say that the change is staged, not saved. The exact "
+    "reviewed revision is applied later by the workspace effect coordinator. "
+    "Read-only or unavailable grants refuse mutations without falling through "
+    "to another filesystem."
+)
 # Appended to the supervisor system prompt ONLY when the gated ``run_code_mode``
 # tool is present for the run (AC6 Monty, ``RUNTIME_ENABLE_MONTY`` +
 # ``single_user_desktop``). Off that path the tool is absent and this block is
