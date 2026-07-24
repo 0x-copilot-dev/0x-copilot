@@ -1,5 +1,8 @@
-import type { Transport } from "../transport";
+import type { ArtifactCapableTransport } from "../transport";
 import {
+  type ArtifactContentRequest,
+  type ArtifactContentResponse,
+  type ArtifactRevisionRequest,
   type QueryParamValue,
   type Session,
   type SseSubscribeOptions,
@@ -37,7 +40,7 @@ const REQUEST_ID_HEADER = "x-request-id";
 const AUTHORIZATION_HEADER = "authorization";
 const JSON_CONTENT_TYPE = "application/json";
 
-export class WebTransport implements Transport {
+export class WebTransport implements ArtifactCapableTransport {
   readonly #baseUrl: string;
   readonly #bearerProvider: BearerProvider;
   readonly #onUnauthorized: UnauthorizedHandler;
@@ -62,6 +65,70 @@ export class WebTransport implements Transport {
     }
     const response = await this.#doFetch(url, init);
     return this.#parseResponse<TRes>(response);
+  }
+
+  async getArtifactContent(
+    request: ArtifactContentRequest,
+  ): Promise<ArtifactContentResponse> {
+    const response = await this.#doFetch(
+      this.#buildUrl(
+        `/v1/agent/artifacts/${encodeURIComponent(request.artifactId)}/revisions/${request.revision}/content`,
+        undefined,
+      ),
+      {
+        method: "GET",
+        headers: { ...this.#baseHeaders(), accept: "application/octet-stream" },
+        signal: request.signal,
+      },
+    );
+    if (!response.ok) {
+      await this.#parseResponse<never>(response);
+    }
+    if (response.body === null) {
+      throw new TransportHttpError(502, "Artifact content stream was empty");
+    }
+    return {
+      body: response.body,
+      contentType:
+        response.headers.get("content-type") ?? "application/octet-stream",
+      contentLength: parseContentLength(response.headers.get("content-length")),
+      etag: response.headers.get("etag"),
+      filename: filenameFromDisposition(
+        response.headers.get("content-disposition"),
+      ),
+    };
+  }
+
+  async createArtifactRevision(
+    request: ArtifactRevisionRequest,
+  ): Promise<unknown> {
+    const form = new FormData();
+    // A2's current multipart contract is flat fields plus the one `content`
+    // part; do not wrap metadata in JSON (the server rejects unknown fields).
+    form.append("parent_revision", String(request.parentRevision));
+    if (request.expectedDigest !== undefined) {
+      form.append("expected_digest", request.expectedDigest);
+    }
+    form.append(
+      "content",
+      // Copy into an ArrayBuffer so TS cannot treat a caller-owned
+      // SharedArrayBuffer view as a BlobPart. Bytes remain unchanged.
+      new Blob([new Uint8Array(request.content).buffer], {
+        type: request.contentType,
+      }),
+      request.filename,
+    );
+    const headers = this.#baseHeaders();
+    headers["idempotency-key"] = request.idempotencyKey;
+    if (request.etag !== undefined) headers["if-match"] = request.etag;
+    const response = await this.#doFetch(
+      this.#buildUrl(
+        `/v1/agent/artifacts/${encodeURIComponent(request.artifactId)}/revisions`,
+        undefined,
+      ),
+      { method: "POST", headers, body: form, signal: request.signal },
+    );
+    return this.#parseResponse<unknown>(response);
   }
 
   // Resolve fetch on every call rather than at construction so test code
@@ -172,6 +239,30 @@ export class WebTransport implements Transport {
     }
     throw new TransportHttpError(response.status, message, detail);
   }
+}
+
+function parseContentLength(value: string | null): number | null {
+  if (value === null || !/^\d+$/.test(value)) return null;
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) ? parsed : null;
+}
+
+function filenameFromDisposition(value: string | null): string | null {
+  if (value === null) return null;
+  // The server supplies a safe attachment filename. Decode only RFC5987
+  // filename*= UTF-8 values; never reflect arbitrary header text into the UI.
+  const extended = /filename\*=UTF-8''([^;]+)/i.exec(value)?.[1];
+  if (extended !== undefined) {
+    try {
+      return decodeURIComponent(extended);
+    } catch {
+      return null;
+    }
+  }
+  const quoted = /filename="([^"\r\n]+)"/i.exec(value)?.[1];
+  if (quoted !== undefined) return quoted;
+  const token = /filename=([^;\s\r\n]+)/i.exec(value)?.[1];
+  return token ?? null;
 }
 
 // FastAPI / Starlette serialises errors as `{"detail": <string | object>}`.

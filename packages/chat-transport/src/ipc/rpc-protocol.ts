@@ -7,6 +7,11 @@ import { TransportHttpError, UnauthorizedError } from "../types";
 // Both renderer and main import this constant — there is no other source.
 export const CHANNELS = {
   transportRequest: "transport.request",
+  // Artifact bytes traverse Electron as Uint8Array chunks, never JSON/base64.
+  transportArtifactContentOpen: "transport.artifact-content.open",
+  transportArtifactContentRead: "transport.artifact-content.read",
+  transportArtifactContentClose: "transport.artifact-content.close",
+  transportArtifactRevision: "transport.artifact-revision",
   transportSubscribe: "transport.subscribe",
   transportUnsubscribe: "transport.unsubscribe",
   // Single round-trip refresh of the cached session + capabilities. Phase 5
@@ -100,6 +105,42 @@ export const TransportRequestParamsSchema = z.object({
 });
 export type TransportRequestParams = z.infer<
   typeof TransportRequestParamsSchema
+>;
+
+export const ArtifactContentOpenParamsSchema = z
+  .object({
+    artifactId: z.string().min(1).max(256),
+    revision: z.number().int().positive(),
+  })
+  .strict();
+export type ArtifactContentOpenParams = z.infer<
+  typeof ArtifactContentOpenParamsSchema
+>;
+
+export const ArtifactContentHandleParamsSchema = z
+  .object({ handle: z.string().min(1).max(256) })
+  .strict();
+export type ArtifactContentHandleParams = z.infer<
+  typeof ArtifactContentHandleParamsSchema
+>;
+
+export const ArtifactRevisionParamsSchema = z
+  .object({
+    artifactId: z.string().min(1).max(256),
+    parentRevision: z.number().int().positive(),
+    expectedDigest: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional(),
+    etag: z.string().min(1).max(256).optional(),
+    content: z.instanceof(Uint8Array),
+    contentType: z.string().min(1).max(256),
+    filename: z.string().min(1).max(512),
+    idempotencyKey: z.string().min(1).max(256),
+  })
+  .strict();
+export type ArtifactRevisionParams = z.infer<
+  typeof ArtifactRevisionParamsSchema
 >;
 
 export const TransportSubscribeParamsSchema = z.object({
