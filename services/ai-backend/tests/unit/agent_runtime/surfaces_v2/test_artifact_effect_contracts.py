@@ -129,6 +129,60 @@ def test_every_event_sample_is_strict_for_missing_and_unknown_fields() -> None:
                 WorkLedgerVocabulary.validate_payload(event_type, missing)
 
 
+def test_full_v2_1_effect_writer_metadata_is_safe_and_legacy_rows_stay_readable() -> (
+    None
+):
+    """v:1 extensions carry content provenance without breaking prior replay."""
+
+    samples = _all_payload_samples()
+    staged = WorkLedgerVocabulary.validate_payload(
+        "effect.staged",
+        {
+            **samples["effect.staged"],
+            "capability": "workspace",
+            "op": "save_file",
+            "display_target": "docs/plan.md",
+            "proposal_kind": "artifact_revision",
+            "proposal_content_ref": f"artifact://{ARTIFACT_ID}/revisions/1",
+            "proposal_media_type": "text/markdown",
+            "precondition_ref": "workspace-precondition://snapshot_01",
+            "precondition_digest": DIGEST,
+            "effect_class": "external_reversible",
+            "policy_snapshot_ref": "policy://run_1/1",
+            "agent_hold": False,
+            "safe_summary_ref": "summary://run_1/effect_01",
+            "owner_ref": "principal://user_1",
+            "author_actor": "user",
+            "author_ref": "principal://user_1",
+            "created_at": "2026-07-24T00:00:00Z",
+        },
+    )
+    revised = WorkLedgerVocabulary.validate_payload(
+        "effect.revised",
+        {
+            **samples["effect.revised"],
+            "author": None,
+            "proposal_kind": "artifact_revision",
+            "proposal_content_ref": f"artifact://{ARTIFACT_ID}/revisions/2",
+            "proposal_media_type": "text/markdown",
+            "target_ref": "workspace-target://grant_01/pathToken_01",
+            "target_digest": DIGEST,
+            "display_target": "docs/plan.md",
+            "precondition_ref": "workspace-precondition://snapshot_02",
+            "precondition_digest": DIGEST,
+            "safe_diff_ref": "diff://stage_01/revisions/1-2",
+            "author_actor": "user",
+            "author_ref": "principal://user_1",
+            "created_at": "2026-07-24T00:01:00Z",
+        },
+    )
+
+    assert staged.proposal_ref.startswith("proposal://")
+    assert staged.proposal_content_ref == f"artifact://{ARTIFACT_ID}/revisions/1"
+    assert revised.author is None
+    assert revised.proposal_content_ref == f"artifact://{ARTIFACT_ID}/revisions/2"
+
+
 def test_unknown_enum_values_fail_writer_validation() -> None:
     contract = load_work_ledger_contract()
     events = contract["events"]
@@ -322,6 +376,19 @@ def test_cross_reference_mismatches_fail_closed() -> None:
                 "proposal_ref": (
                     "proposal://stg_018f47a6-7b2c-7c10-8f21-123456789abc/revisions/1"
                 ),
+            },
+        )
+    with pytest.raises(ValidationError, match="proposal_content_ref"):
+        WorkLedgerVocabulary.validate_payload(
+            "effect.staged",
+            {**staged, "proposal_content_ref": "file:///tmp/output.csv"},
+        )
+    with pytest.raises(ValidationError, match="proposal_content_ref"):
+        WorkLedgerVocabulary.validate_payload(
+            "effect.staged",
+            {
+                **staged,
+                "proposal_content_ref": "artifact://safe/%252e%252e/output.csv",
             },
         )
 

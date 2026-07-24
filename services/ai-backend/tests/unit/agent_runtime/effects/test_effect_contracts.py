@@ -52,6 +52,8 @@ def test_proposal_rejects_incompatible_kind_and_executor() -> None:
         ("proposal_content_ref", "artifact://safe/%2e%2e/secret"),
         ("proposal_content_ref", "artifact://safe/%252e%252e/secret"),
         ("proposal_content_ref", r"artifact://safe\..\secret"),
+        ("proposal_content_ref", "https://example.com/proposal.json"),
+        ("proposal_content_ref", "artifact://safe/revision?mutable=true"),
         (
             "proposal_content_ref",
             "proposal://stg_00000000-0000-4000-8000-000000000001/revisions/1",

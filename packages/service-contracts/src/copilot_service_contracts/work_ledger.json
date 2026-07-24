@@ -97,6 +97,15 @@
       "precondition_drift"
     ],
     "effect_executor": ["mcp", "workspace", "browser", "sandbox", "builtin"],
+    "effect_proposal_kind": [
+      "canonical_arguments",
+      "artifact_revision",
+      "workspace_change_set",
+      "row_set",
+      "browser_submission",
+      "sandbox_patch",
+      "builtin_payload"
+    ],
     "effect_stage_status": [
       "staged",
       "approved",
@@ -428,10 +437,30 @@
         "proposal_digest",
         "policy"
       ],
-      "optional": [],
+      "optional": [
+        "capability",
+        "op",
+        "display_target",
+        "proposal_kind",
+        "proposal_content_ref",
+        "proposal_media_type",
+        "precondition_ref",
+        "precondition_digest",
+        "effect_class",
+        "policy_snapshot_ref",
+        "agent_hold",
+        "safe_summary_ref",
+        "owner_ref",
+        "author_actor",
+        "author_ref",
+        "created_at"
+      ],
       "enum_fields": {
         "executor": "effect_executor",
-        "policy": "effect_policy"
+        "policy": "effect_policy",
+        "proposal_kind": "effect_proposal_kind",
+        "effect_class": "effect_class",
+        "author_actor": "effect_actor"
       }
     },
     "effect.revised": {
@@ -440,11 +469,28 @@
         "stage_id",
         "revision",
         "proposal_ref",
-        "proposal_digest",
-        "author"
+        "proposal_digest"
       ],
-      "optional": [],
-      "enum_fields": { "author": "artifact_author" }
+      "optional": [
+        "author",
+        "proposal_kind",
+        "proposal_content_ref",
+        "proposal_media_type",
+        "target_ref",
+        "target_digest",
+        "display_target",
+        "precondition_ref",
+        "precondition_digest",
+        "safe_diff_ref",
+        "author_actor",
+        "author_ref",
+        "created_at"
+      ],
+      "enum_fields": {
+        "author": "artifact_author",
+        "proposal_kind": "effect_proposal_kind",
+        "author_actor": "effect_actor"
+      }
     },
     "effect.decision_recorded": {
       "required": [
@@ -456,7 +502,7 @@
         "proposal_digest",
         "target_digest"
       ],
-      "optional": [],
+      "optional": ["actor_ref", "decided_at"],
       "enum_fields": {
         "decision": "effect_decision",
         "actor": "effect_actor"

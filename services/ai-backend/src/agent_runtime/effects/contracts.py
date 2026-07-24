@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from urllib.parse import unquote
+from urllib.parse import unquote, urlsplit
 
 from pydantic import Field, field_validator, model_validator
 
@@ -24,6 +24,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectDecisionKind,
     EffectExecutorKind,
     EffectPolicy,
+    EffectProposalKind,
     OperationIdText,
     Sha256Hex,
 )
@@ -33,18 +34,6 @@ _TEXT_MAX_LENGTH = 512
 _MEDIA_TYPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+-]*/[A-Za-z0-9][A-Za-z0-9.+-]*$")
 _IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
 _RUN_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$")
-
-
-class EffectProposalKind(StrEnum):
-    """The complete A4 proposal union; bodies are behind a content reference."""
-
-    CANONICAL_ARGUMENTS = "canonical_arguments"
-    ARTIFACT_REVISION = "artifact_revision"
-    WORKSPACE_CHANGE_SET = "workspace_change_set"
-    ROW_SET = "row_set"
-    BROWSER_SUBMISSION = "browser_submission"
-    SANDBOX_PATCH = "sandbox_patch"
-    BUILTIN_PAYLOAD = "builtin_payload"
 
 
 class EffectStageStatus(StrEnum):
@@ -472,10 +461,51 @@ def validate_proposal_content_ref(value: str) -> str:
     """
 
     value = _safe_reference(value, "proposal_content_ref")
-    if value.lower().startswith("proposal://"):
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ValueError(
+            "proposal_content_ref must locate immutable server content"
+        ) from exc
+    if (
+        not parsed.scheme
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or parsed.scheme.lower() in {"proposal", "http", "https"}
+    ):
         raise ValueError(
             "proposal_content_ref must locate immutable content, not proposal identity"
         )
+    decoded = value
+    while True:
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    try:
+        decoded_parts = urlsplit(decoded)
+    except ValueError as exc:
+        raise ValueError(
+            "proposal_content_ref must locate immutable server content"
+        ) from exc
+    if (
+        "\\" in decoded
+        or decoded_parts.query
+        or decoded_parts.fragment
+        or decoded_parts.path.startswith("//")
+        or any(
+            part in {".", ".."}
+            for component in (
+                decoded_parts.netloc,
+                decoded_parts.path,
+                decoded_parts.query,
+                decoded_parts.fragment,
+            )
+            for part in component.split("/")
+        )
+    ):
+        raise ValueError("proposal_content_ref must locate immutable server content")
     return value
 
 

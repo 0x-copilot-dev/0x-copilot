@@ -22,6 +22,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import Annotated, ClassVar, Literal
+from urllib.parse import unquote, urlsplit
 
 from pydantic import (
     AfterValidator,
@@ -294,6 +295,18 @@ class EffectExecutorKind(StrEnum):
     BROWSER = "browser"
     SANDBOX = "sandbox"
     BUILTIN = "builtin"
+
+
+class EffectProposalKind(StrEnum):
+    """The body-free proposal shapes the universal staging protocol accepts."""
+
+    CANONICAL_ARGUMENTS = "canonical_arguments"
+    ARTIFACT_REVISION = "artifact_revision"
+    WORKSPACE_CHANGE_SET = "workspace_change_set"
+    ROW_SET = "row_set"
+    BROWSER_SUBMISSION = "browser_submission"
+    SANDBOX_PATCH = "sandbox_patch"
+    BUILTIN_PAYLOAD = "builtin_payload"
 
 
 class EffectStageStatus(StrEnum):
@@ -719,6 +732,49 @@ class EffectStagedPayload(LedgerPayload):
     proposal_ref: str
     proposal_digest: Sha256Hex
     policy: EffectPolicy
+    # Additive v2.1 writer metadata. These remain optional at the transport
+    # boundary because v:1 history predates them; the A4 stager always emits the
+    # complete set and an old canonical-only row is deliberately non-executable.
+    capability: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+    op: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+    display_target: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    proposal_kind: EffectProposalKind | None = None
+    proposal_content_ref: str | None = None
+    proposal_media_type: (
+        Annotated[
+            str,
+            Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.+-]*/[A-Za-z0-9][A-Za-z0-9.+-]*$"),
+        ]
+        | None
+    ) = None
+    precondition_ref: str | None = None
+    precondition_digest: Sha256Hex | None = None
+    effect_class: EffectClass | None = None
+    policy_snapshot_ref: str | None = None
+    agent_hold: bool | None = None
+    safe_summary_ref: str | None = None
+    owner_ref: str | None = None
+    author_actor: EffectActor | None = None
+    author_ref: str | None = None
+    created_at: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+
+    @field_validator(
+        "precondition_ref",
+        "policy_snapshot_ref",
+        "safe_summary_ref",
+        "owner_ref",
+        "author_ref",
+    )
+    @classmethod
+    def _metadata_refs_are_safe(cls, value: str | None) -> str | None:
+        _validate_opaque_safe_uri(value, "effect metadata reference")
+        return value
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_safe(cls, value: str | None) -> str | None:
+        _validate_immutable_content_ref(value)
+        return value
 
     @model_validator(mode="after")
     def _references_match(self) -> EffectStagedPayload:
@@ -736,7 +792,44 @@ class EffectRevisedPayload(LedgerPayload):
     revision: SafePositiveInt
     proposal_ref: str
     proposal_digest: Sha256Hex
-    author: ArtifactAuthor
+    # ``author`` is the pre-v2.1 shape. The actor/ref pair is what new writers
+    # persist; keeping both readable is required for v:1 replay compatibility.
+    author: ArtifactAuthor | None = None
+    proposal_kind: EffectProposalKind | None = None
+    proposal_content_ref: str | None = None
+    proposal_media_type: (
+        Annotated[
+            str,
+            Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9.+-]*/[A-Za-z0-9][A-Za-z0-9.+-]*$"),
+        ]
+        | None
+    ) = None
+    target_ref: str | None = None
+    target_digest: Sha256Hex | None = None
+    display_target: Annotated[str, Field(min_length=1, max_length=512)] | None = None
+    precondition_ref: str | None = None
+    precondition_digest: Sha256Hex | None = None
+    safe_diff_ref: str | None = None
+    author_actor: EffectActor | None = None
+    author_ref: str | None = None
+    created_at: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+
+    @field_validator(
+        "target_ref",
+        "precondition_ref",
+        "safe_diff_ref",
+        "author_ref",
+    )
+    @classmethod
+    def _metadata_refs_are_safe(cls, value: str | None) -> str | None:
+        _validate_opaque_safe_uri(value, "effect metadata reference")
+        return value
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_safe(cls, value: str | None) -> str | None:
+        _validate_immutable_content_ref(value)
+        return value
 
     @model_validator(mode="after")
     def _proposal_ref_matches(self) -> EffectRevisedPayload:
@@ -753,6 +846,14 @@ class EffectDecisionRecordedPayload(LedgerPayload):
     actor: EffectActor
     proposal_digest: Sha256Hex
     target_digest: Sha256Hex
+    actor_ref: str | None = None
+    decided_at: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+
+    @field_validator("actor_ref")
+    @classmethod
+    def _actor_ref_is_safe(cls, value: str | None) -> str | None:
+        _validate_opaque_safe_uri(value, "actor_ref")
+        return value
 
 
 class EffectClaimedPayload(LedgerPayload):
@@ -818,17 +919,92 @@ class GateResolvedV2Payload(LedgerPayload):
 
 def _validate_target_ref(value: str) -> None:
     """Reject physical paths while permitting executor-specific opaque URIs."""
+    try:
+        _validate_opaque_safe_uri(value, "target_ref")
+    except ValueError as error:
+        raise ValueError(
+            "target_ref must be an opaque non-file URI reference"
+        ) from error
 
+
+def _validate_opaque_safe_uri(value: str | None, field_name: str) -> None:
+    """Reject physical, encoded-traversal, and inline-body references.
+
+    Event history is untrusted at replay boundaries. Decode repeatedly before
+    checking path segments so ``%252e%252e`` cannot become a physical path in a
+    downstream resolver.
+    """
+
+    if value is None:
+        return
+    try:
+        parsed = urlsplit(value)
+    except ValueError as error:
+        raise ValueError(
+            f"{field_name} must be an opaque safe URI reference"
+        ) from error
+    decoded = value
+    while isinstance(decoded, str):
+        next_decoded = unquote(decoded)
+        if next_decoded == decoded:
+            break
+        decoded = next_decoded
+    normalised = decoded.replace("\\", "/") if isinstance(decoded, str) else decoded
+    try:
+        decoded_parts = urlsplit(decoded)
+    except ValueError as error:
+        raise ValueError(
+            f"{field_name} must be an opaque safe URI reference"
+        ) from error
     if (
-        not value
+        not isinstance(value, str)
+        or not value
         or len(value) > _REFERENCE_MAX_LENGTH
         or value != value.strip()
+        or "\n" in value
+        or "\r" in value
         or "://" not in value
         or value.startswith(("/", "~", "\\"))
-        or value.lower().startswith(("file://", "filesystem://"))
+        or not parsed.scheme
+        or not parsed.netloc
+        or parsed.query
+        or parsed.fragment
+        or parsed.scheme.lower() in {"file", "filesystem", "data", "http", "https"}
         or (len(value) >= 3 and value[1:3] in {":\\", ":/"})
-        or any(segment in {".", ".."} for segment in value.split("/"))
+        or not isinstance(normalised, str)
+        or normalised.startswith(("/", "~"))
+        or decoded_parts.query
+        or decoded_parts.fragment
+        or decoded_parts.scheme.lower()
+        in {"file", "filesystem", "data", "http", "https"}
+        or (len(normalised) >= 3 and normalised[1:3] == ":/")
+        or "\x00" in normalised
+        or "\\" in decoded
+        or decoded_parts.path.startswith("//")
+        or any(
+            segment in {".", ".."}
+            for component in (
+                decoded_parts.netloc,
+                decoded_parts.path,
+                decoded_parts.query,
+                decoded_parts.fragment,
+            )
+            for segment in component.split("/")
+        )
     ):
+        raise ValueError(f"{field_name} must be an opaque safe URI reference")
+
+
+def _validate_immutable_content_ref(value: str | None) -> None:
+    """Validate a content locator without conflating it with proposal identity."""
+
+    if value is None:
+        return
+    _validate_opaque_safe_uri(value, "proposal_content_ref")
+    if value.lower().startswith("proposal://"):
+        raise ValueError(
+            "proposal_content_ref must locate immutable content, not proposal identity"
+        )
         raise ValueError("target_ref must be an opaque non-file URI reference")
 
 
@@ -951,6 +1127,7 @@ class WorkLedgerVocabulary:
         "effect_actor": EffectActor,
         "effect_outcome": EffectOutcome,
         "effect_executor": EffectExecutorKind,
+        "effect_proposal_kind": EffectProposalKind,
         "effect_stage_status": EffectStageStatus,
         "gate_kind": GateKind,
         "gate_decision": GateDecision,

@@ -258,6 +258,56 @@ describe("v2.1 strict writer contract", () => {
     }
   });
 
+  it("accepts full v2.1 effect provenance while retaining legacy v:1 replay", () => {
+    const samples = allPayloadSamples();
+    const staged = samples.get("effect.staged")!;
+    const revised = samples.get("effect.revised")!;
+    const { author: _legacyAuthor, ...revisedWithoutLegacyAuthor } = revised;
+    expect(
+      isLedgerPayloadForWrite("effect.staged", {
+        ...staged,
+        capability: "workspace",
+        op: "save_file",
+        display_target: "docs/plan.md",
+        proposal_kind: "artifact_revision",
+        proposal_content_ref:
+          "artifact://art_123e4567-e89b-42d3-a456-426614174000/revisions/1",
+        proposal_media_type: "text/markdown",
+        precondition_ref: "workspace-precondition://snapshot_01",
+        precondition_digest:
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        effect_class: "external_reversible",
+        policy_snapshot_ref: "policy://run_1/1",
+        agent_hold: false,
+        safe_summary_ref: "summary://run_1/effect_01",
+        owner_ref: "principal://user_1",
+        author_actor: "user",
+        author_ref: "principal://user_1",
+        created_at: "2026-07-24T00:00:00Z",
+      }),
+    ).toBe(true);
+    expect(
+      isLedgerPayloadForWrite("effect.revised", {
+        ...revisedWithoutLegacyAuthor,
+        proposal_kind: "artifact_revision",
+        proposal_content_ref:
+          "artifact://art_123e4567-e89b-42d3-a456-426614174000/revisions/2",
+        proposal_media_type: "text/markdown",
+        target_ref: "workspace-target://grant_01/pathToken_01",
+        target_digest:
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        display_target: "docs/plan.md",
+        precondition_ref: "workspace-precondition://snapshot_02",
+        precondition_digest:
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        safe_diff_ref: "diff://stage_01/revisions/1-2",
+        author_actor: "user",
+        author_ref: "principal://user_1",
+        created_at: "2026-07-24T00:01:00Z",
+      }),
+    ).toBe(true);
+  });
+
   it("rejects unknown closed-enum values", () => {
     const samples = allPayloadSamples();
     const schemas = contract.events as Record<
@@ -324,6 +374,20 @@ describe("v2.1 strict writer contract", () => {
         {
           ...staged,
           target_ref: "file:///Users/alice/private.csv",
+        },
+      ],
+      [
+        "effect.staged",
+        {
+          ...staged,
+          proposal_content_ref: "artifact://safe/%252e%252e/private.csv",
+        },
+      ],
+      [
+        "effect.staged",
+        {
+          ...staged,
+          proposal_content_ref: "https://example.com/immutable.csv",
         },
       ],
       [
