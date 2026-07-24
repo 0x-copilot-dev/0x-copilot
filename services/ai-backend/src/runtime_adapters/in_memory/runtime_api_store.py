@@ -73,6 +73,8 @@ from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
@@ -136,6 +138,8 @@ class InMemoryRuntimeApiStore:
         self.cancel_commands: list[RuntimeCancelCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
         self.stage_commit_commands: list[RuntimeStageCommitCommand] = []
+        self.effect_commit_commands: list[RuntimeEffectCommitCommand] = []
+        self.effect_reconcile_commands: list[RuntimeEffectReconcileCommand] = []
         self._queue_order: list[str] = []
         self._queue_payloads: dict[str, dict[str, object]] = {}
         self._queue_statuses: dict[str, OutboxStatus] = {}
@@ -2594,6 +2598,34 @@ class InMemoryRuntimeApiStore:
         self._register_command(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.STAGE_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        """Enqueue an A5 effect commit command for deterministic worker tests."""
+
+        self.effect_commit_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        """Enqueue an A5 effect reconciliation command for deterministic worker tests."""
+
+        self.effect_reconcile_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=None,

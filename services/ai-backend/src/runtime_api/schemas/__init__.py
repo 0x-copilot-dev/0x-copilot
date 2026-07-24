@@ -19,6 +19,8 @@ from runtime_api.schemas.commands import (
     RuntimeApprovalResolvedCommand,
     RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
 )
@@ -253,6 +255,8 @@ __all__ = [
     "RuntimeApprovalResolvedCommand",
     "RuntimeArtifactEventCommand",
     "RuntimeStageCommitCommand",
+    "RuntimeEffectCommitCommand",
+    "RuntimeEffectReconcileCommand",
     "Draft",
     "DraftDiscardRequest",
     "DraftListResponse",

@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
 import logging
+from typing import Protocol
 from uuid import uuid4
 
 from opentelemetry import trace as otel_trace
@@ -28,6 +29,8 @@ from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
 )
@@ -45,6 +48,24 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
+
+
+class EffectCommitHandlerPort(Protocol):
+    """Worker-only injection seam for A5's later effect-commit handler.
+
+    This transport slice deliberately has no default implementation.  Reaching the
+    queue cannot construct an executor or perform an external mutation by itself.
+    """
+
+    async def handle(self, command: RuntimeEffectCommitCommand) -> None:
+        """Consume one validated effect-commit command."""
+
+
+class EffectReconcileHandlerPort(Protocol):
+    """Worker-only injection seam for A5's later reconciliation handler."""
+
+    async def handle(self, command: RuntimeEffectReconcileCommand) -> None:
+        """Consume one validated effect-reconciliation command."""
 
 
 class RuntimeWorker:
@@ -65,6 +86,8 @@ class RuntimeWorker:
         approval_handler: RuntimeApprovalHandler | None = None,
         artifact_event_handler: RuntimeArtifactEventHandler | None = None,
         stage_commit_handler: RuntimeStageCommitHandler | None = None,
+        effect_commit_handler: EffectCommitHandlerPort | None = None,
+        effect_reconcile_handler: EffectReconcileHandlerPort | None = None,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: "DraftStorePort | None" = None,
         conversation_tool_ordinal_store: (
@@ -156,6 +179,8 @@ class RuntimeWorker:
             on_event_appended=on_event_appended,
             mcp_discovery_cache=mcp_discovery_cache,
         )
+        self.effect_commit_handler = effect_commit_handler
+        self.effect_reconcile_handler = effect_reconcile_handler
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
 
@@ -252,6 +277,10 @@ class RuntimeWorker:
         PersistenceValues.EventType.RUN_CANCEL_REQUESTED: "runtime_worker.cancel",
         PersistenceValues.EventType.APPROVAL_RESOLVED: "runtime_worker.approval_resolved",
         PersistenceValues.EventType.STAGE_COMMIT_REQUESTED: "runtime_worker.stage_commit",
+        PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED: "runtime_worker.effect_commit",
+        PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED: (
+            "runtime_worker.effect_reconcile"
+        ),
         PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED: (
             "runtime_worker.artifact_event"
         ),
@@ -282,6 +311,28 @@ class RuntimeWorker:
             if command_type == PersistenceValues.EventType.STAGE_COMMIT_REQUESTED:
                 command = self._runtime_stage_commit_command(claim)
                 await self.stage_commit_handler.handle(command)
+                return
+            if command_type == PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED:
+                handler = self.effect_commit_handler
+                if handler is None:
+                    raise AgentRuntimeError(
+                        RuntimeErrorCode.CONFIGURATION_ERROR,
+                        "Effect-commit worker handler is not configured.",
+                        retryable=False,
+                    )
+                command = self._runtime_effect_commit_command(claim)
+                await handler.handle(command)
+                return
+            if command_type == PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED:
+                handler = self.effect_reconcile_handler
+                if handler is None:
+                    raise AgentRuntimeError(
+                        RuntimeErrorCode.CONFIGURATION_ERROR,
+                        "Effect-reconcile worker handler is not configured.",
+                        retryable=False,
+                    )
+                command = self._runtime_effect_reconcile_command(claim)
+                await handler.handle(command)
                 return
             if (
                 command_type
@@ -361,6 +412,36 @@ class RuntimeWorker:
         raise AgentRuntimeError(
             RuntimeErrorCode.VALIDATION_ERROR,
             "Stage-commit command payload is unavailable.",
+            retryable=False,
+        )
+
+    def _runtime_effect_commit_command(
+        self,
+        claim: RuntimeWorkerClaim,
+    ) -> RuntimeEffectCommitCommand:
+        """Deserialise a body-free A5 effect-commit command."""
+
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeEffectCommitCommand.model_validate(payload)
+        raise AgentRuntimeError(
+            RuntimeErrorCode.VALIDATION_ERROR,
+            "Effect-commit command payload is unavailable.",
+            retryable=False,
+        )
+
+    def _runtime_effect_reconcile_command(
+        self,
+        claim: RuntimeWorkerClaim,
+    ) -> RuntimeEffectReconcileCommand:
+        """Deserialise a body-free A5 effect-reconciliation command."""
+
+        payload = self._command_payload(claim)
+        if payload:
+            return RuntimeEffectReconcileCommand.model_validate(payload)
+        raise AgentRuntimeError(
+            RuntimeErrorCode.VALIDATION_ERROR,
+            "Effect-reconcile command payload is unavailable.",
             retryable=False,
         )
 

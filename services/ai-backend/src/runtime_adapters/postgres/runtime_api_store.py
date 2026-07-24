@@ -109,6 +109,8 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
@@ -6010,6 +6012,30 @@ class PostgresRuntimeApiStore:
         await self._enqueue_command(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.STAGE_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            aggregate_id=command.run_id,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        """Enqueue a digest-pinned A5 effect commit command for workers."""
+
+        await self._enqueue_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            aggregate_id=command.run_id,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        """Enqueue reconciliation of an existing A5 effect claim for workers."""
+
+        await self._enqueue_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
             org_id=command.org_id,
             aggregate_id=command.run_id,
             payload=command.model_dump(mode="json"),

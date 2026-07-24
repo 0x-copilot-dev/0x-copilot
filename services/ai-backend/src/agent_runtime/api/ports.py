@@ -55,6 +55,8 @@ from runtime_api.schemas import (
     MessageRecord,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeRunCommand,
@@ -1226,6 +1228,14 @@ class RuntimeQueuePort(Protocol):
         worker-side CommitEngine handler is its sole consumer. The command is a
         durable record — the commit never runs inline in the API request path.
         """
+
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        """Enqueue a digest-pinned A5 effect commit for worker-only handling."""
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        """Enqueue reconciliation of an existing A5 effect claim only."""
 
     async def claim_next(
         self,

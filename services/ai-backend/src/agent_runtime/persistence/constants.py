@@ -85,6 +85,10 @@ class Values:
         # CommitEngine handler is its only consumer. The commit never runs inline
         # in the API (mirrors approval-resolution's "resume is never inline").
         STAGE_COMMIT_REQUESTED = "stage_commit_requested"
+        # PRD-A5 — durable delivery only.  RuntimeWorker owns deserialisation
+        # and dispatch; the later coordinator/handlers own every effectful step.
+        EFFECT_COMMIT_REQUESTED = "effect_commit_requested"
+        EFFECT_RECONCILE_REQUESTED = "effect_reconcile_requested"
         # PRD-A2 — artifact metadata adapters enqueue this command atomically
         # with a mutation; RuntimeArtifactEventHandler publishes it through the
         # existing run-event store using a stable idempotency key.
