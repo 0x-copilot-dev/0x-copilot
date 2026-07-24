@@ -1,8 +1,8 @@
 {
   "run_id": "a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
   "surface_id": "receipt://a7f3c9d2e5b14f60a7f3c9d2e5b14f60",
-  "fold_ref": "ledger://a7f3c9d2e5b14f60a7f3c9d2e5b14f60@20",
-  "generated_at": "2026-07-23T10:00:20Z",
+  "fold_ref": "ledger://a7f3c9d2e5b14f60a7f3c9d2e5b14f60@22",
+  "generated_at": "2026-07-23T10:00:22Z",
   "tiles": {
     "reads_auto_ran": 1,
     "writes_proposed": 3,

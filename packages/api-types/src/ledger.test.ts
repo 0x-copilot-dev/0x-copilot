@@ -18,6 +18,7 @@ import {
   type GateAuthState,
   type GateOutcome,
   type RevisionAuthor,
+  type ShapeOutcome,
   type SurfaceKind,
   type UsagePurpose,
   type ViewBasis,
@@ -98,6 +99,10 @@ const ENUM_TUPLES = {
     "view_shaping",
     "shape_request",
   ] as const satisfies readonly UsagePurpose[],
+  shape_outcome: [
+    "shaped",
+    "no_fit",
+  ] as const satisfies readonly ShapeOutcome[],
 } as const;
 
 interface GoldenEvent {
@@ -119,8 +124,8 @@ describe("LEDGER_EVENT_TYPES", () => {
     expect([...LEDGER_EVENT_TYPES]).toEqual(Object.keys(contract.events));
   });
 
-  it("covers all 14 event types", () => {
-    expect(LEDGER_EVENT_TYPES).toHaveLength(14);
+  it("covers all 15 event types", () => {
+    expect(LEDGER_EVENT_TYPES).toHaveLength(15);
   });
 
   it("isLedgerEventType accepts every listed type and rejects others", () => {

@@ -49,6 +49,14 @@ export type LedgerViewTier = "raw" | "generic" | "shaped";
  *  toggle state, folded from the ledger so it survives reload (PRD-B3). */
 export type LedgerViewKeep = "generic" | "shaped";
 
+/** User-invited "Suggest a shape" state, folded from `shape.requested` /
+ *  `shape.resolved` (PRD-B4). `idle` = no request in flight (initial, or a
+ *  `shaped` outcome — the `view.derived {shaped}` merge already flipped the
+ *  tier and hid the button); `requested` = the attempt is running (button
+ *  disabled, "Attempting a shape…"); `no_fit` = the last attempt found no
+ *  confident fit (honest line + the button re-enabled). */
+export type LedgerShapeRequestState = "idle" | "requested" | "no_fit";
+
 /** Per-surface view-lifecycle state (PRD-B3). Folds `view.derived` +
  *  `view.preference` into the explicit tier ladder the canvas renders:
  *  `effectiveTier` = `keep ?? tier-of-latest-view.derived`, where a
@@ -106,6 +114,10 @@ export interface LedgerSurface {
   /** PRD-B3 view-lifecycle state (tier ladder + preference + regen), or null
    *  until the first `view.derived` lands. Drives the toast + toggle + regen. */
   readonly viewState: LedgerSurfaceViewState | null;
+  /** PRD-B4 "Suggest a shape" state, folded from `shape.requested` /
+   *  `shape.resolved`. Drives the button's idle / assembling / no-fit states on
+   *  the raw|generic fallback surface. */
+  readonly shapeRequest: LedgerShapeRequestState;
   readonly createdSeq: number; // first `sequence_no` — anchors `ledgerId`
   readonly lastSeq: number; // highest seq touching this surface — tab order key
   readonly ledgerId: string; // "r<short>·<seq>" via the A1 formatter, from createdSeq
@@ -355,6 +367,8 @@ interface SurfaceAccumulator {
   keep: LedgerViewKeep | null;
   shapedAvailable: boolean;
   regenCount: number;
+  // PRD-B4 "Suggest a shape" fold state.
+  shapeRequest: LedgerShapeRequestState;
 }
 
 /** Mutable per-gate accumulator, frozen into a `LedgerGate` at the end. */
@@ -518,6 +532,8 @@ export function projectLedger(
       eventType !== "surface.created" &&
       eventType !== "view.derived" &&
       eventType !== "view.preference" &&
+      eventType !== "shape.requested" &&
+      eventType !== "shape.resolved" &&
       eventType !== "gate.opened" &&
       eventType !== "gate.resolved" &&
       eventType !== "write.staged" &&
@@ -545,6 +561,10 @@ export function projectLedger(
     } else if (eventType === "view.preference") {
       applyViewPreference(surfaces, seq, payload);
       if (seq > lastLedgerSeq) lastLedgerSeq = seq;
+    } else if (eventType === "shape.requested") {
+      applyShapeRequested(surfaces, payload);
+    } else if (eventType === "shape.resolved") {
+      applyShapeResolved(surfaces, payload);
     } else if (eventType === "gate.opened") {
       applyGateOpened(gates, event.run_id, seq, payload);
     } else if (eventType === "gate.resolved") {
@@ -1096,7 +1116,41 @@ function applySurfaceCreated(
     keep: null,
     shapedAvailable: false,
     regenCount: 0,
+    shapeRequest: "idle",
   });
+}
+
+/** Fold `shape.requested` (PRD-B4) — the user invited a shaping attempt. Sets
+ *  the surface's state to `requested` (button disabled, "Attempting a shape…").
+ *  A request for an unseen surface is ignored. Does NOT advance `lastSeq` (the
+ *  request/outcome pair is not a content change — parity with the Python
+ *  SurfaceStore fold, which skips these). */
+function applyShapeRequested(
+  surfaces: Map<string, SurfaceAccumulator>,
+  payload: Record<string, unknown>,
+): void {
+  const surfaceId = payload.surface_id;
+  if (typeof surfaceId !== "string") return;
+  const acc = surfaces.get(surfaceId);
+  if (acc === undefined) return;
+  acc.shapeRequest = "requested";
+}
+
+/** Fold `shape.resolved` (PRD-B4). `shaped` returns to `idle` — the paired
+ *  `view.derived {shaped}` already flipped the tier, so the button hides; a
+ *  `no_fit` keeps the fallback and surfaces the honest line. Ignored for an
+ *  unseen surface or an unknown outcome; never advances `lastSeq`. */
+function applyShapeResolved(
+  surfaces: Map<string, SurfaceAccumulator>,
+  payload: Record<string, unknown>,
+): void {
+  const surfaceId = payload.surface_id;
+  if (typeof surfaceId !== "string") return;
+  const acc = surfaces.get(surfaceId);
+  if (acc === undefined) return;
+  const outcome = payload.outcome;
+  if (outcome === "shaped") acc.shapeRequest = "idle";
+  else if (outcome === "no_fit") acc.shapeRequest = "no_fit";
 }
 
 function applyViewDerived(
@@ -1194,6 +1248,7 @@ function freeze(acc: SurfaceAccumulator): LedgerSurface {
     view: acc.view,
     viewTier: acc.view?.tier ?? null,
     viewState,
+    shapeRequest: acc.shapeRequest,
     createdSeq: acc.createdSeq,
     lastSeq: acc.lastSeq,
     ledgerId: acc.ledgerId,

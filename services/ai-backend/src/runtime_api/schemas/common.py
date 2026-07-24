@@ -237,6 +237,15 @@ class RuntimeApiEventType(StrEnum):
     # ("Keep generic") that survives reload by replay. Projects to
     # ``RuntimeActivityKind.EVENT`` (a SurfaceStore fold input, not a card).
     VIEW_PREFERENCE = LedgerEventType.VIEW_PREFERENCE.value
+    # Generative Surfaces v2 (PRD-B4, SDR §5). The user-invited "Suggest a shape"
+    # request + its outcome, emitted behind ``SURFACES_V2`` by the
+    # ShapeRequestCoordinator: ``shape.requested`` (the invited attempt starts)
+    # and the additive ``shape.resolved`` (``outcome: shaped|no_fit``). Both
+    # project to ``RuntimeActivityKind.EVENT`` (SurfaceStore + client ledger fold
+    # inputs, not timeline cards). Wire values come from the A1 ``LedgerEventType``
+    # vocabulary so the transport enum cannot drift.
+    SHAPE_REQUESTED = LedgerEventType.SHAPE_REQUESTED.value
+    SHAPE_RESOLVED = LedgerEventType.SHAPE_RESOLVED.value
     # Generative Surfaces v2 (PRD-C2, SDR §5). The ToolAccessGate's park/resume
     # ledger pair, emitted behind ``SURFACES_V2``: ``gate.opened`` beside the
     # ``mcp_auth_required`` interrupt (SYSTEM source), ``gate.resolved`` when the
