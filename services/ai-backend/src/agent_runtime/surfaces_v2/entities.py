@@ -352,8 +352,20 @@ class EffectExecutionRequest(RuntimeContract):
 
     @field_validator("proposal_ref")
     @classmethod
-    def _valid_proposal_ref(cls, value: str) -> str:
-        ProposalUriCodec.parse(value)
+    def _proposal_ref_not_physical_path(cls, value: str) -> str:
+        """Accept the immutable source reference pinned by the stage.
+
+        An effect stage is created *after* its proposal has been authored, so its
+        immutable proposal may be an artifact, operation, or executor-owned
+        reference rather than a synthetic ``proposal://`` URI.  The stage id and
+        revision fields above bind this request to one reviewed revision; forcing
+        the source reference into the synthetic URI shape would make a legitimate
+        artifact revision impossible to execute.  Keep the security boundary here:
+        physical paths and non-URI values are still rejected before an executor can
+        receive the request.
+        """
+
+        _validate_target_reference(value)
         return value
 
     @field_validator("target_ref")
@@ -361,13 +373,6 @@ class EffectExecutionRequest(RuntimeContract):
     def _target_ref_not_physical_path(cls, value: str) -> str:
         _reject_physical_reference(value, "target_ref")
         return value
-
-    @model_validator(mode="after")
-    def _proposal_matches_stage(self) -> EffectExecutionRequest:
-        parsed = ProposalUriCodec.parse(self.proposal_ref)
-        if parsed.stage_id != self.stage_id or parsed.revision != self.revision:
-            raise ValueError("proposal_ref must reference stage_id and revision")
-        return self
 
 
 class EffectExecutionResult(RuntimeContract):
