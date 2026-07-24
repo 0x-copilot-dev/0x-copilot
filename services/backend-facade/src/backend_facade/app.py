@@ -73,7 +73,19 @@ class FacadeConversationRequest(BaseModel):
 
 
 class FacadeRunRequest(BaseModel):
-    conversation_id: str
+    # desktop-run-identity §D3 — a new-chat first send OMITS conversation_id and
+    # instead carries a stable conversation_idempotency_key; ai-backend's route
+    # get-or-creates the conversation atomically. This field was required here,
+    # so the facade 422'd new-chat sends before ever proxying (the standby /
+    # RunEmptyComposer "Couldn't start the run" bug). Match ai-backend's optional
+    # contract; validation of the "one of the two must be present" rule stays
+    # server-authoritative in ai-backend's CreateRunRequest validator.
+    conversation_id: str | None = None
+    # Declared explicitly so Pydantic's default extra="ignore" doesn't drop it on
+    # model_dump (same trap as project_id / reasoning_depth below) — without this
+    # the key never reaches ai-backend and the new-chat ensure-conversation path
+    # 422s on "idempotency key required when conversation_id omitted".
+    conversation_idempotency_key: str | None = None
     org_id: str | None = None
     user_id: str | None = None
     user_input: str

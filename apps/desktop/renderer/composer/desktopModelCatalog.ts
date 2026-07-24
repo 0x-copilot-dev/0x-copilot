@@ -45,12 +45,42 @@ export function mergeCatalog(args: {
   return [...cloud, ...local];
 }
 
-/** First selectable (configured, non-disabled) model, else the first entry. */
+/**
+ * Pick the default model id. Priority — provider-aware auto-select so that
+ * "add a key → the matching model is picked and usable" holds instead of
+ * leaving a keyless or wrong-provider default selected:
+ *   1. `preferProvider` — the first usable model of a just-added provider
+ *      (BYOK: an OpenAI key → an OpenAI model, an Anthropic key → a Claude
+ *      model, an OpenRouter key → an OpenRouter model).
+ *   2. `defaultModelId` — the backend catalog's `default_model_id` when it is
+ *      itself usable (env ∪ BYOK configured).
+ *   3. the first usable (configured, non-disabled) model.
+ *   4. the first entry (nothing usable yet — the run-start gate is the backstop).
+ * "Usable" = configured AND not disabled.
+ */
 export function defaultSelectedModelId(
   models: readonly CatalogModel[],
+  opts?: {
+    readonly preferProvider?: string | null;
+    readonly defaultModelId?: string | null;
+  },
 ): string {
-  const usable = models.find((m) => m.configured && m.disabled !== true);
-  return (usable ?? models[0])?.id ?? "";
+  const usable = (m: CatalogModel): boolean =>
+    m.configured === true && m.disabled !== true;
+  if (opts?.preferProvider) {
+    const byProvider = models.find(
+      (m) => m.provider === opts.preferProvider && usable(m),
+    );
+    if (byProvider) return byProvider.id;
+  }
+  if (opts?.defaultModelId) {
+    const byDefault = models.find(
+      (m) => m.id === opts.defaultModelId && usable(m),
+    );
+    if (byDefault) return byDefault.id;
+  }
+  const firstUsable = models.find(usable);
+  return (firstUsable ?? models[0])?.id ?? "";
 }
 
 /** Wire `model` selection for a run-create body, resolved from the picked id. */

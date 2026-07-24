@@ -49,6 +49,12 @@ interface McpServersResponse {
 }
 interface ModelCatalogResponseLite {
   readonly models?: readonly ModelCatalogModel[];
+  // The backend's chosen default model id (env ∪ BYOK credential truth). The
+  // selection fallback prefers it when usable so the picked model matches the
+  // pill AND is one the run-create gate will accept — without it the fallback
+  // was "first usable in list order" (or `models[0]`, a keyless row when nothing
+  // scanned usable), which sent a model the backend can't run.
+  readonly default_model_id?: string;
 }
 interface WorkspaceDefaultsResponseLite {
   readonly default_model?: {
@@ -87,6 +93,13 @@ export interface RunComposerBindings {
   readonly onModelChange: (id: string) => void;
   readonly onAddCustomModel: (slug: string) => void;
   /**
+   * Refetch the backend catalog and, when `preferProvider` is given, auto-select
+   * that provider's first usable model. Called after a provider key is saved so
+   * the just-configured provider's model is picked (its rows stop reading
+   * "needs key") without a surface remount — the same seam the FTUE composer uses.
+   */
+  readonly refresh: (preferProvider?: string) => void;
+  /**
    * On-disk size in bytes of each installed LOCAL model, keyed by its Ollama
    * tag — the `GET /v1/local-models` half of the join the model popover needs
    * for "42 GB · never leaves this machine". Empty when local models are off.
@@ -121,6 +134,7 @@ export function useRunComposerBindings(): RunComposerBindings {
   const [cloudModels, setCloudModels] = useState<readonly ModelCatalogModel[]>(
     [],
   );
+  const [defaultModelId, setDefaultModelId] = useState<string>("");
   const [localModelNames, setLocalModelNames] = useState<readonly string[]>([]);
   const [localModelSizes, setLocalModelSizes] = useState<
     Readonly<Record<string, number>>
@@ -135,6 +149,14 @@ export function useRunComposerBindings(): RunComposerBindings {
   // fallback exactly once, and never over an explicit user pick.
   const seededDefaultRef = useRef(false);
   const userPickedRef = useRef(false);
+  // Bumping this re-runs the catalog fetch. `refresh()` bumps it after a key is
+  // saved so `configured` reflects the new BYOK key — the catalog was otherwise
+  // fetched once at mount (before any key existed), so a just-added provider's
+  // rows stayed "needs key" and its model could never be selected.
+  const [reloadToken, setReloadToken] = useState(0);
+  // The provider whose key was just added — steers the NEXT selection to that
+  // provider's model (add OpenAI → GPT-5.4 Mini, not a leftover keyless pick).
+  const preferProviderRef = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -180,7 +202,9 @@ export function useRunComposerBindings(): RunComposerBindings {
         path: "/v1/agent/models",
       })
       .then((res) => {
-        if (!cancelled) setCloudModels(res.models ?? []);
+        if (cancelled) return;
+        setCloudModels(res.models ?? []);
+        setDefaultModelId(res.default_model_id ?? "");
       })
       .catch(() => {
         // Catalog probe failed → empty cloud list (a configured user's run-start
@@ -190,7 +214,14 @@ export function useRunComposerBindings(): RunComposerBindings {
     return () => {
       cancelled = true;
     };
-  }, [transport]);
+  }, [transport, reloadToken]);
+
+  const refresh = useCallback((preferProvider?: string): void => {
+    if (preferProvider !== undefined && preferProvider !== "") {
+      preferProviderRef.current = preferProvider;
+    }
+    setReloadToken((token) => token + 1);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -292,10 +323,34 @@ export function useRunComposerBindings(): RunComposerBindings {
 
   // Selection resolution — ONE writer so the workspace-default seed and the
   // keep-valid fallback cannot race each other's stale closures:
-  //   1. seed the persisted default exactly once, when present and usable;
+  //   0. a provider key was JUST added (`preferProviderRef`) → jump to that
+  //      provider's model, overriding a stale keyless / wrong-provider pick;
+  //   1. seed the persisted workspace default exactly once, when present+usable;
   //   2. otherwise keep a valid current pick;
-  //   3. otherwise fall back to the first usable model.
+  //   3. otherwise fall back to the provider-aware default (backend
+  //      `default_model_id` when usable, else the first usable model) — NOT a
+  //      bare first-in-list pick, so the fallback matches the pill and is a model
+  //      the run-create gate will accept.
   useEffect(() => {
+    const prefer = preferProviderRef.current;
+    if (prefer !== null) {
+      const picked = defaultSelectedModelId(models, {
+        preferProvider: prefer,
+        defaultModelId,
+      });
+      if (picked === "") {
+        // Preferred provider not usable yet — the refetch after the key save may
+        // still be in flight. Keep the hint and wait for the next catalog update
+        // rather than consuming it against a stale list.
+        return;
+      }
+      preferProviderRef.current = null;
+      // An explicit post-key selection counts as seeded, so a late
+      // workspace-default fetch can't clobber the model the user just enabled.
+      seededDefaultRef.current = true;
+      setSelectedModel(picked);
+      return;
+    }
     setSelectedModel((current) => {
       if (
         !userPickedRef.current &&
@@ -316,9 +371,9 @@ export function useRunComposerBindings(): RunComposerBindings {
       }
       return current !== "" && models.some((m) => m.id === current)
         ? current
-        : defaultSelectedModelId(models);
+        : defaultSelectedModelId(models, { defaultModelId });
     });
-  }, [models, workspaceDefault]);
+  }, [models, workspaceDefault, defaultModelId]);
 
   const onModelChange = useCallback((id: string): void => {
     userPickedRef.current = true;
@@ -400,6 +455,7 @@ export function useRunComposerBindings(): RunComposerBindings {
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    refresh,
     localModelSizes,
     renderPlusMenu,
   };

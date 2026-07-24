@@ -20,6 +20,7 @@ import {
   createFirstRunLocalModelsPort,
   createModelsPort,
   createProviderKeysPort,
+  type ProviderKeysPort,
   firstRunAckAction,
   firstRunAckLines,
   firstRunAckNote,
@@ -226,10 +227,6 @@ export function FirstRunSurfaceMount({
     // attached in main, so the handle is otherwise stable.
     [workspaceId],
   );
-  const providerKeys = useMemo(
-    () => createProviderKeysPort(transport),
-    [transport],
-  );
   const models = useMemo(() => createModelsPort(transport), [transport]);
   // P4 — wallet-chip identity + the Tools popover's MCP connector surface.
   const profilePort = useMemo(
@@ -255,7 +252,32 @@ export function FirstRunSurfaceMount({
     localModelPct: local.localModelPct,
     modelName: local.modelName,
   });
-  const { models: composerModels, selectedModel, onModelChange } = catalog;
+  const {
+    models: composerModels,
+    selectedModel,
+    onModelChange,
+    refresh: refreshCatalog,
+  } = catalog;
+
+  // Provider-key writes must re-drive the composer's model catalog. Both add-key
+  // entry points — the State-A KeyForm and the composer's inline add-key — call
+  // this port's `save`, so wrapping it here refetches `/v1/agent/models` and
+  // auto-selects the just-added provider's model after every save. Without it
+  // the catalog stayed frozen at its pre-key fetch (every cloud row "needs key",
+  // a wrong-provider default selected), which is the "I added a key but can't
+  // use the model" bug. `refreshCatalog` is a stable callback, so the port
+  // identity (and the KeyForm state bound to it) survives re-renders.
+  const providerKeys = useMemo<ProviderKeysPort>(() => {
+    const base = createProviderKeysPort(transport);
+    return {
+      ...base,
+      save: async (provider, apiKey, options) => {
+        const summary = await base.save(provider, apiKey, options);
+        refreshCatalog(provider);
+        return summary;
+      },
+    };
+  }, [transport, refreshCatalog]);
 
   // Binder-authoritative model-ready + resolved run model (no parent/child lag):
   //   • a local download in flight ⇒ ready only at pct===100 (`localModelPct` is

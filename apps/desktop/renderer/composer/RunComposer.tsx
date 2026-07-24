@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useMemo,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -143,9 +144,27 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     selectedModel,
     onModelChange: handleModelChange,
     onAddCustomModel: handleAddCustomModel,
+    refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
   } = useRunComposerBindings();
+
+  // Provider-key writes must re-drive the catalog. The model popover's inline
+  // "Add a provider key" form calls this port's `save`, so wrapping it refetches
+  // `/v1/agent/models` and auto-selects the just-added provider's model — the
+  // same seam FirstRunGate / RunEmptyComposer use, so all three composers behave
+  // identically after a key is added (no frozen "needs key" rows).
+  const wrappedProviderKeysPort = useMemo<ProviderKeysPort | undefined>(() => {
+    if (providerKeysPort === undefined) return undefined;
+    return {
+      ...providerKeysPort,
+      save: async (provider, apiKey, options) => {
+        const summary = await providerKeysPort.save(provider, apiKey, options);
+        refreshCatalog(provider);
+        return summary;
+      },
+    };
+  }, [providerKeysPort, refreshCatalog]);
 
   // Inline Tools popover (when a connectors port is injected): owns the per-run
   // web-search toggle + active connector ids, and yields the trigger node + the
@@ -272,7 +291,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         // surface); takes precedence over the inline port below.
         onAddProviderKey={onOpenModelSettings}
         // Inline form fallback if navigation isn't wired (host-owned surface).
-        providerKeysPort={providerKeysPort}
+        providerKeysPort={wrappedProviderKeysPort}
         // Model popover footer → Settings → Local models. Same deep-link idiom
         // as the provider-keys CTA, just the other half of the picker.
         onGetLocalModels={onGetLocalModels}

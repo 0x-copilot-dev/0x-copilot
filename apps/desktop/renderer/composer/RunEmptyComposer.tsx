@@ -15,7 +15,7 @@
 // composer only disables while a start is in flight, and an unconfigured model
 // surfaces as this composer's own inline error strip + "Add a key" CTA.
 
-import { useCallback, type ReactElement } from "react";
+import { useCallback, useMemo, type ReactElement } from "react";
 
 import {
   ComposerConnectorsButton,
@@ -100,9 +100,28 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
   } = useRunComposerBindings();
+
+  // Provider-key writes must re-drive the composer's model catalog. The inline
+  // "Add a provider key" form in the model popover calls this port's `save`, so
+  // wrapping it here refetches `/v1/agent/models` and auto-selects the just-added
+  // provider's model — the same seam FirstRunGate uses for the FTUE composer.
+  // Without it the catalog stayed frozen at its pre-key fetch (rows "needs key",
+  // a keyless/wrong pick left selected) — the "added a key but can't run" bug.
+  const wrappedProviderKeysPort = useMemo<ProviderKeysPort | undefined>(() => {
+    if (providerKeysPort === undefined) return undefined;
+    return {
+      ...providerKeysPort,
+      save: async (provider, apiKey, options) => {
+        const summary = await providerKeysPort.save(provider, apiKey, options);
+        refreshCatalog(provider);
+        return summary;
+      },
+    };
+  }, [providerKeysPort, refreshCatalog]);
 
   // The CSV starter chip resolves to the bundled `airdrop-claims.csv` fixture
   // (rows read as model-visible text via the readable-attachment mapper).
@@ -185,7 +204,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       // `onAddProviderKey` to its inner AssistantComposer — the empty-state's
       // hero add-key already navigates (onAddKey below), so the pill footer keeps
       // the inline form here until OnboardingComposer threads the deep-link.
-      providerKeysPort={providerKeysPort}
+      providerKeysPort={wrappedProviderKeysPort}
       // Model popover footer → Settings → Local models. Same deep-link idiom as
       // the provider-keys CTA, just the other half of the picker.
       onGetLocalModels={onGetLocalModels}
