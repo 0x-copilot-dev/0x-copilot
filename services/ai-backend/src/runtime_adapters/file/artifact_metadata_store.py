@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timezone
 
 from agent_runtime.artifacts.contracts import (
     ArtifactAppendCommand,
@@ -53,6 +53,7 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
         coordinator: FileArtifactPublicationCoordinator | None = None,
         reference_store: FileArtifactReferenceStore | None = None,
     ) -> None:
+        self._layout = layout
         self.coordinator = coordinator or (
             reference_store.coordinator
             if reference_store is not None
@@ -531,6 +532,43 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
     ):
         with self._lock:
             self._refresh_locked()
+            known_revisions = {
+                revision.blob_key for revision in self._revisions.values()
+            }
+            active_edges = {
+                edge.blob_key
+                for edge in self.reference_store.inventory_edges_locked()
+                if edge.released_at is None
+            }
+            # A blob can be atomically published before a process crashes
+            # ahead of the metadata transaction.  Discover only blobs with no
+            # durable revision or edge; recording the candidate makes recovery
+            # idempotent across restarts and lets the normal two-phase reaper
+            # own deletion.
+            for shard in self._layout.objects_dir.glob("[0-9a-f][0-9a-f]"):
+                if not shard.is_dir():
+                    continue
+                for blob in shard.iterdir():
+                    if (
+                        not blob.is_file()
+                        or len(blob.name) != 64
+                        or any(
+                            character not in "0123456789abcdef"
+                            for character in blob.name
+                        )
+                        or blob.name in known_revisions
+                        or blob.name in active_edges
+                    ):
+                        continue
+                    modified = datetime.fromtimestamp(
+                        blob.stat().st_mtime,
+                        tz=timezone.utc,
+                    )
+                    self.coordinator.record_candidate_locked(
+                        blob_key=blob.name,
+                        provenance_org_id=org_id,
+                        candidate_since=modified,
+                    )
             return await super().list_unreferenced_content(
                 org_id=org_id,
                 older_than=older_than,
@@ -627,6 +665,9 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                 "org_id": evidence.scope.org_id,
                 "user_id": evidence.scope.user_id,
                 "conversation_id": evidence.scope.conversation_id,
+                "protected_conversation_ids": list(
+                    evidence.scope.protected_conversation_ids
+                ),
             },
             "reason": evidence.reason,
             "created_at": evidence.created_at.isoformat(),
@@ -665,6 +706,10 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                     str(scope_json["conversation_id"])
                     if scope_json.get("conversation_id") is not None
                     else None
+                ),
+                protected_conversation_ids=tuple(
+                    str(item)
+                    for item in scope_json.get("protected_conversation_ids", ())
                 ),
             ),
             reason=str(value["reason"]),

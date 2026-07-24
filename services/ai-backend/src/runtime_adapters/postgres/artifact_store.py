@@ -152,7 +152,8 @@ class PostgresArtifactMetadataStore:
                     return result
         except UniqueViolation as exc:
             if restored:
-                restore_quarantine_after_rollback(
+                await restore_quarantine_after_rollback(
+                    parent=self._parent,
                     blob_key=revision.blob_key,
                     blob_store=self._blob_store,
                 )
@@ -164,7 +165,8 @@ class PostgresArtifactMetadataStore:
             raise ArtifactConflictError() from exc
         except BaseException:
             if restored:
-                restore_quarantine_after_rollback(
+                await restore_quarantine_after_rollback(
+                    parent=self._parent,
                     blob_key=revision.blob_key,
                     blob_store=self._blob_store,
                 )
@@ -279,7 +281,8 @@ class PostgresArtifactMetadataStore:
                     return result
         except UniqueViolation as exc:
             if restored:
-                restore_quarantine_after_rollback(
+                await restore_quarantine_after_rollback(
+                    parent=self._parent,
                     blob_key=command.revision.blob_key,
                     blob_store=self._blob_store,
                 )
@@ -291,7 +294,8 @@ class PostgresArtifactMetadataStore:
             raise ArtifactConflictError() from exc
         except BaseException:
             if restored:
-                restore_quarantine_after_rollback(
+                await restore_quarantine_after_rollback(
+                    parent=self._parent,
                     blob_key=command.revision.blob_key,
                     blob_store=self._blob_store,
                 )
@@ -555,6 +559,9 @@ class PostgresArtifactMetadataStore:
                 if scope.conversation_id is not None:
                     clauses.append("conversation_id = %s")
                     params.append(scope.conversation_id)
+                if scope.protected_conversation_ids:
+                    clauses.append("NOT (conversation_id = ANY(%s))")
+                    params.append(list(scope.protected_conversation_ids))
                 cursor = await conn.execute(
                     f"""
                     UPDATE runtime_artifacts
@@ -664,6 +671,9 @@ class PostgresArtifactMetadataStore:
         if scope.conversation_id is not None:
             clauses.append("conversation_id = %s")
             params.append(scope.conversation_id)
+        if scope.protected_conversation_ids:
+            clauses.append("NOT (conversation_id = ANY(%s))")
+            params.append(list(scope.protected_conversation_ids))
         params.append(limit)
         async with self._parent._tenant_connection(org_id=scope.org_id) as conn:  # type: ignore[attr-defined]
             async with conn.transaction():
@@ -928,6 +938,9 @@ class PostgresArtifactMetadataStore:
                 "org_id": evidence.scope.org_id,
                 "user_id": evidence.scope.user_id,
                 "conversation_id": evidence.scope.conversation_id,
+                "protected_conversation_ids": list(
+                    evidence.scope.protected_conversation_ids
+                ),
             },
             "reason": evidence.reason,
             "created_at": evidence.created_at.isoformat(),
@@ -960,6 +973,9 @@ class PostgresArtifactMetadataStore:
                     str(scope["conversation_id"])
                     if scope.get("conversation_id") is not None
                     else None
+                ),
+                protected_conversation_ids=tuple(
+                    str(item) for item in scope.get("protected_conversation_ids", ())
                 ),
             ),
             reason=str(value["reason"]),

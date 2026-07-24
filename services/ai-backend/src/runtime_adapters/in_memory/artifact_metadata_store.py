@@ -374,6 +374,7 @@ class InMemoryArtifactMetadataStore:
                     scope.conversation_id is None
                     or record.artifact.conversation_id == scope.conversation_id
                 )
+                and not scope.protects_conversation(record.artifact.conversation_id)
             ]
             victims.sort(
                 key=lambda item: (
@@ -589,6 +590,7 @@ class InMemoryArtifactMetadataStore:
                 scope.conversation_id is None
                 or artifact.conversation_id == scope.conversation_id
             )
+            and not scope.protects_conversation(artifact.conversation_id)
         )
 
     def mark_outbox_terminal(self, command_id: str, status: str) -> None:

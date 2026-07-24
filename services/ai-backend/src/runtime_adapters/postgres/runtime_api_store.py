@@ -394,7 +394,54 @@ class PostgresRuntimeApiStore:
         jobs = self._artifact_lifecycle_jobs
         if jobs is None:
             return None
-        return await jobs.on_org_deleted(org_id=org_id, deleted_at=deleted_at)
+        return await jobs.on_org_deleted(
+            org_id=org_id,
+            deleted_at=deleted_at,
+            protected_conversation_ids=await self._held_conversation_ids(org_id=org_id),
+        )
+
+    async def _held_conversation_ids(
+        self,
+        *,
+        org_id: str,
+        user_id: str | None = None,
+    ) -> tuple[str, ...]:
+        """Resolve active hold ownership before destructive artifact work.
+
+        Holds are owned by the runtime retention subsystem, not the artifact
+        repository.  Mapping them to conversation ids here keeps the artifact
+        protocol scoped and protects a held conversation when a user- or
+        org-wide lifecycle operation is otherwise allowed to proceed.
+        """
+
+        params: list[object] = [org_id, org_id]
+        user_clause = ""
+        if user_id is not None:
+            user_clause = "AND c.user_id = %s"
+            params.append(user_id)
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cursor = await conn.execute(
+                f"""
+                SELECT c.id
+                  FROM agent_conversations c
+                 WHERE c.org_id = %s {user_clause}
+                   AND EXISTS (
+                        SELECT 1
+                          FROM runtime_legal_holds h
+                         WHERE h.org_id = %s
+                           AND h.released_at IS NULL
+                           AND (
+                                (h.scope = 'org' AND h.resource_id = c.org_id)
+                                OR (h.scope = 'user' AND h.user_id = c.user_id)
+                                OR (h.scope = 'conversation' AND h.resource_id = c.id)
+                           )
+                   )
+                 ORDER BY c.id
+                """,
+                tuple(params),
+            )
+            rows = await cursor.fetchall()
+        return tuple(str(row["id"]) for row in rows)
 
     def __init__(
         self,
@@ -1130,6 +1177,18 @@ class PostgresRuntimeApiStore:
     ) -> ConversationRecord | None:
         """Stamp ``deleted_at`` (idempotent on already-deleted rows)."""
 
+        if conversation_id in await self._held_conversation_ids(
+            org_id=org_id,
+            user_id=user_id,
+        ):
+            # Retain the conversation and its artifact records unchanged. The
+            # caller observes the existing row, matching other idempotent
+            # lifecycle operations without allowing a hold bypass.
+            return await self.get_conversation(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -4270,6 +4329,9 @@ class PostgresRuntimeApiStore:
                 org_id=org_id,
                 now=datetime.now(timezone.utc),
                 limit=chunk_size or None,
+                protected_conversation_ids=await self._held_conversation_ids(
+                    org_id=org_id
+                ),
             )
             return RetentionSweepOutcome(
                 org_id=org_id,

@@ -6,11 +6,13 @@ import json
 import asyncio
 import os
 from collections.abc import AsyncIterator
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
+from runtime_adapters.file.artifact_gc import FileArtifactGarbageCollector
 from runtime_adapters.file.artifact_metadata_store import FileArtifactMetadataStore
 from runtime_adapters.artifact_references import (
     ArtifactReferenceEdge,
@@ -200,3 +202,49 @@ class TestFileArtifactCrashRestart:
         )
         reopened = FileArtifactBlobStore(layout, recovered)
         assert await _read(await reopened.open_stream(written.blob_key)) == body
+
+    async def test_published_before_metadata_failure_is_durably_discovered_and_reaped(
+        self, tmp_path
+    ) -> None:
+        """A crash after publication cannot leave an invisible permanent blob."""
+
+        layout = FileStoreLayout(tmp_path / "store")
+        coordinator = FileArtifactPublicationCoordinator(layout)
+        blobs = FileArtifactBlobStore(layout, coordinator)
+        references = FileArtifactReferenceStore(layout, coordinator)
+        metadata = FileArtifactMetadataStore(layout, coordinator, references)
+        body = b"published but never committed"
+        written = await blobs.put_stream(
+            expected_digest=None,
+            chunks=_chunks(body),
+            byte_limit=len(body),
+        )
+
+        now = datetime.now(timezone.utc)
+        candidates = await metadata.list_unreferenced_content(
+            org_id="org_orphan_recovery",
+            older_than=now + timedelta(seconds=1),
+            limit=10,
+        )
+        candidate = next(
+            value for value in candidates if value.blob_key == written.blob_key
+        )
+        collector = FileArtifactGarbageCollector(layout, coordinator, references)
+        assert await collector.collect_if_unreferenced(
+            org_id="org_orphan_recovery",
+            candidate=candidate,
+            grace_before=now + timedelta(seconds=1),
+        )
+        assert written.blob_key in coordinator.quarantine
+
+        reopened = FileArtifactPublicationCoordinator(layout)
+        assert written.blob_key in reopened.quarantine
+        reap = await FileArtifactGarbageCollector(
+            layout,
+            reopened,
+            FileArtifactReferenceStore(layout, reopened),
+        ).reap_quarantine(
+            older_than=now + timedelta(days=1),
+            limit=10,
+        )
+        assert reap.reaped_blob_keys == (written.blob_key,)

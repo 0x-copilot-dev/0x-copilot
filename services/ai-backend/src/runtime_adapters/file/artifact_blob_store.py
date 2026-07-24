@@ -414,6 +414,12 @@ class FileArtifactBlobStore:
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
+        # Windows does not expose fsync-able directory descriptors. The blob
+        # and integrity files are individually fsynced before ``os.replace``;
+        # the coordinator's cross-process lock makes the replacement visible
+        # atomically to other runtime processes.
+        if os.name == "nt":
+            return
         descriptor = os.open(path, os.O_RDONLY)
         try:
             os.fsync(descriptor)

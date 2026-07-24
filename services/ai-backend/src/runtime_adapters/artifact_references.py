@@ -133,6 +133,10 @@ class InMemoryArtifactReferenceStore:
         edge_id: str,
         released_at: datetime | None = None,
     ) -> ArtifactReferenceEdge | None:
+        from runtime_adapters.in_memory.artifact_publication import (
+            InMemoryArtifactCandidateState,
+        )
+
         with self._lock:
             existing = self._edges.get((org_id, edge_id))
             if existing is None:
@@ -142,6 +146,15 @@ class InMemoryArtifactReferenceStore:
                     update={"released_at": released_at or datetime.now(timezone.utc)}
                 )
                 self._edges[(org_id, edge_id)] = existing
+                if not self.has_reference_locked(blob_key=existing.blob_key):
+                    candidate = self.coordinator.candidates.get(existing.blob_key)
+                    if candidate is None:
+                        self.coordinator.candidates[existing.blob_key] = (
+                            InMemoryArtifactCandidateState(
+                                provenance_org_id=org_id,
+                                candidate_since=existing.released_at,
+                            )
+                        )
             return existing
 
     async def has_reference(self, *, org_id: str, blob_key: str) -> bool:
@@ -286,6 +299,12 @@ class FileArtifactReferenceStore:
                 update={"released_at": released_at or datetime.now(timezone.utc)}
             )
             self._ledger.append_put(updated.model_dump(mode="json"))
+            if not self.has_reference_locked(blob_key=updated.blob_key):
+                self.coordinator.record_candidate_locked(
+                    blob_key=updated.blob_key,
+                    provenance_org_id=org_id,
+                    candidate_since=updated.released_at,
+                )
             return updated
 
     async def has_reference(self, *, org_id: str, blob_key: str) -> bool:
@@ -396,8 +415,10 @@ class PostgresArtifactReferenceStore:
                     return persisted
         except BaseException:
             if restored:
-                restore_quarantine_after_rollback(
-                    blob_key=edge.blob_key, blob_store=self._blob_store
+                await restore_quarantine_after_rollback(
+                    parent=self._parent,
+                    blob_key=edge.blob_key,
+                    blob_store=self._blob_store,
                 )
             raise
 
@@ -414,6 +435,7 @@ class PostgresArtifactReferenceStore:
         released_at: datetime | None = None,
     ) -> ArtifactReferenceEdge | None:
         from runtime_adapters.postgres.artifact_publication import (
+            acquire_artifact_advisory_lock,
             acquire_artifact_scope_lock,
         )
 
@@ -431,6 +453,40 @@ class PostgresArtifactReferenceStore:
                     (timestamp, org_id, edge_id),
                 )
                 row = await cursor.fetchone()
+                if row is not None:
+                    await acquire_artifact_advisory_lock(
+                        conn,
+                        blob_key=str(row["blob_key"]),
+                    )
+                    cursor = await conn.execute(
+                        """
+                        SELECT
+                            EXISTS (
+                                SELECT 1 FROM runtime_artifact_revisions
+                                 WHERE blob_key = %s
+                            )
+                            OR EXISTS (
+                                SELECT 1 FROM runtime_artifact_reference_edges
+                                 WHERE blob_key = %s AND released_at IS NULL
+                            ) AS has_reference
+                        """,
+                        (row["blob_key"], row["blob_key"]),
+                    )
+                    reference_state = await cursor.fetchone()
+                    if not bool(reference_state and reference_state["has_reference"]):
+                        await conn.execute(
+                            """
+                            INSERT INTO runtime_artifact_gc_candidates (
+                                provenance_org_id, blob_key, candidate_since, created_at
+                            ) VALUES (%s, %s, %s, now())
+                            ON CONFLICT (provenance_org_id, blob_key) DO UPDATE
+                                SET candidate_since = LEAST(
+                                    runtime_artifact_gc_candidates.candidate_since,
+                                    EXCLUDED.candidate_since
+                                )
+                            """,
+                            (org_id, row["blob_key"], timestamp),
+                        )
         return ArtifactReferenceEdge.model_validate(row) if row is not None else None
 
     async def has_reference(self, *, org_id: str, blob_key: str) -> bool:

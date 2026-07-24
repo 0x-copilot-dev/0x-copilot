@@ -34,6 +34,7 @@ from runtime_adapters.file.artifact_metadata_store import FileArtifactMetadataSt
 from runtime_adapters.file.artifact_publication import (
     FileArtifactPublicationCoordinator,
 )
+from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from runtime_adapters.in_memory.artifact_blob_store import InMemoryArtifactBlobStore
 from runtime_adapters.in_memory.artifact_gc import (
     InMemoryArtifactGarbageCollector,
@@ -254,6 +255,42 @@ class TestArtifactLifecycleJobs:
             is not None
         )
 
+    async def test_redelete_after_restoration_tombstones_new_artifacts(
+        self,
+        lifecycle_bundle,
+    ) -> None:
+        """Occurrence-scoped evidence must not suppress a later deletion."""
+
+        blobs, metadata, lifecycle = lifecycle_bundle
+        first_deleted_at = NOW + timedelta(hours=1)
+        await _seed(blobs, metadata, 1, b"before restore", _ORG_A_CONV_A)
+        await lifecycle.on_conversation_deleted(
+            org_id=_ORG_A_CONV_A.org_id,
+            user_id=_ORG_A_CONV_A.user_id,
+            conversation_id=_ORG_A_CONV_A.conversation_id,
+            deleted_at=first_deleted_at,
+        )
+
+        # A restored conversation can legitimately create a fresh artifact.
+        await _seed(blobs, metadata, 2, b"after restore", _ORG_A_CONV_A)
+        second_deleted_at = NOW + timedelta(hours=2)
+        result = await lifecycle.on_conversation_deleted(
+            org_id=_ORG_A_CONV_A.org_id,
+            user_id=_ORG_A_CONV_A.user_id,
+            conversation_id=_ORG_A_CONV_A.conversation_id,
+            deleted_at=second_deleted_at,
+        )
+
+        assert result.evidence.tombstoned_artifact_ids == (artifact_id(2),)
+        assert (
+            await metadata.get_artifact(
+                org_id=_ORG_A_CONV_A.org_id,
+                user_id=_ORG_A_CONV_A.user_id,
+                artifact_id=artifact_id(2),
+            )
+            is None
+        )
+
     async def test_org_deletion_does_not_tombstone_a_third_tenant(
         self,
         lifecycle_bundle,
@@ -337,6 +374,74 @@ class TestArtifactLifecycleJobs:
 
 
 class TestConfiguredArtifactLifecycle:
+    async def test_file_user_delete_keeps_artifacts_for_held_conversation(
+        self,
+        configured_runtime_ports,
+    ) -> None:
+        """The file store's real metadata hold reaches artifact lifecycle scope."""
+
+        ports = configured_runtime_ports
+        if not isinstance(ports.persistence, FileRuntimeApiStore):
+            pytest.skip("file runtime owns desktop legal-hold metadata")
+        held = await ports.persistence.create_conversation(
+            CreateConversationRequest(
+                org_id=_ORG_A_CONV_A.org_id,
+                user_id=_ORG_A_CONV_A.user_id,
+                assistant_id="assistant",
+                metadata={"legal_hold": True},
+            )
+        )
+        free = await ports.persistence.create_conversation(
+            CreateConversationRequest(
+                org_id=_ORG_A_CONV_A.org_id,
+                user_id=_ORG_A_CONV_A.user_id,
+                assistant_id="assistant",
+            )
+        )
+        held_scope = _ORG_A_CONV_A.model_copy(
+            update={"conversation_id": held.conversation_id}
+        )
+        free_scope = _ORG_A_CONV_A.model_copy(
+            update={"conversation_id": free.conversation_id}
+        )
+        await _seed(
+            ports.artifact_blob_store,
+            ports.artifact_metadata_store,
+            1,
+            b"held artifact",
+            held_scope,
+        )
+        await _seed(
+            ports.artifact_blob_store,
+            ports.artifact_metadata_store,
+            2,
+            b"free artifact",
+            free_scope,
+        )
+
+        await ports.persistence.delete_user_history(
+            org_id=held_scope.org_id,
+            user_id=held_scope.user_id,
+            reason="held conversation test",
+        )
+
+        assert (
+            await ports.artifact_metadata_store.get_artifact(
+                org_id=held_scope.org_id,
+                user_id=held_scope.user_id,
+                artifact_id=artifact_id(1),
+            )
+            is not None
+        )
+        assert (
+            await ports.artifact_metadata_store.get_artifact(
+                org_id=free_scope.org_id,
+                user_id=free_scope.user_id,
+                artifact_id=artifact_id(2),
+            )
+            is None
+        )
+
     async def test_conversation_delete_calls_live_hook_and_persists_evidence(
         self,
         configured_runtime_ports,
@@ -386,6 +491,7 @@ class TestConfiguredArtifactLifecycle:
             org_id=scope.org_id,
             user_id=scope.user_id,
             conversation_id=scope.conversation_id,
+            deleted_at=deleted_at,
         )
         evidence = await ports.artifact_metadata_store.get_lifecycle_evidence(
             org_id=scope.org_id,
@@ -416,17 +522,20 @@ class TestConfiguredArtifactLifecycle:
             _ORG_B,
         )
 
+        before_delete = datetime.now(timezone.utc)
         await ports.persistence.delete_user_history(
             org_id=_ORG_A_CONV_A.org_id,
             user_id=_ORG_A_CONV_A.user_id,
             reason="erasure",
         )
-        user_evidence = await ports.artifact_metadata_store.get_lifecycle_evidence(
-            org_id=_ORG_A_CONV_A.org_id,
-            evidence_id=ports.artifact_lifecycle_jobs.user_evidence_id(
-                org_id=_ORG_A_CONV_A.org_id,
-                user_id=_ORG_A_CONV_A.user_id,
-            ),
+        user_evidence = next(
+            evidence
+            for (evidence_org_id, _), evidence in (
+                ports.artifact_metadata_store._lifecycle_evidence.items()  # noqa: SLF001
+            )
+            if evidence_org_id == _ORG_A_CONV_A.org_id
+            and evidence.scope.user_id == _ORG_A_CONV_A.user_id
+            and evidence.created_at >= before_delete
         )
         assert user_evidence is not None
         assert user_evidence.tombstoned_artifact_ids == (artifact_id(1),)
@@ -439,15 +548,17 @@ class TestConfiguredArtifactLifecycle:
             is not None
         )
 
+        org_deleted_at = datetime.now(timezone.utc)
         org_result = await ports.persistence.tombstone_artifacts_for_org_deletion(
             org_id=_ORG_B.org_id,
-            deleted_at=datetime.now(timezone.utc),
+            deleted_at=org_deleted_at,
         )
         assert org_result is not None
         org_evidence = await ports.artifact_metadata_store.get_lifecycle_evidence(
             org_id=_ORG_B.org_id,
             evidence_id=ports.artifact_lifecycle_jobs.org_evidence_id(
-                org_id=_ORG_B.org_id
+                org_id=_ORG_B.org_id,
+                deleted_at=org_deleted_at,
             ),
         )
         assert org_evidence is not None

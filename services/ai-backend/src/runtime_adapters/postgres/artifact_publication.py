@@ -76,27 +76,55 @@ async def restore_gc_quarantine(
     return restored
 
 
-def restore_quarantine_after_rollback(
+async def restore_quarantine_after_rollback(
     *,
+    parent: object,
     blob_key: str,
     blob_store: FileArtifactBlobStore,
 ) -> None:
-    """Put transactionally restored bytes back when the DB commit fails."""
+    """Compensate a failed restoration without racing a committed reference.
 
-    coordinator = blob_store.coordinator
-    with coordinator.locked():
-        active = coordinator.layout.object_path(blob_key)
-        quarantine = coordinator.quarantine_path(blob_key)
-        if not active.exists() or quarantine.exists():
-            return
-        type(coordinator.layout).ensure_dir(quarantine.parent)
-        os.replace(active, quarantine)
-        coordinator._fsync_directory(active.parent)
-        coordinator._fsync_directory(quarantine.parent)
-        coordinator.mark_quarantined_locked(
-            blob_key=blob_key,
-            quarantined_at=datetime.now(timezone.utc),
-        )
+    The original transaction's advisory lock is gone once it rolls back.  Take
+    the same digest lock again, recheck durable references, and only then move
+    active bytes back to quarantine. A concurrent publication either commits
+    first (and wins the recheck) or waits and restores the deterministic
+    quarantine path afterwards.
+    """
+
+    async with parent._role_connection("worker") as conn:  # type: ignore[attr-defined]
+        async with conn.transaction():
+            await acquire_artifact_advisory_lock(conn, blob_key=blob_key)
+            cursor = await conn.execute(
+                """
+                SELECT
+                    EXISTS (
+                        SELECT 1 FROM runtime_artifact_revisions
+                         WHERE blob_key = %s
+                    )
+                    OR EXISTS (
+                        SELECT 1 FROM runtime_artifact_reference_edges
+                         WHERE blob_key = %s AND released_at IS NULL
+                    ) AS has_reference
+                """,
+                (blob_key, blob_key),
+            )
+            row = await cursor.fetchone()
+            if bool(row and row["has_reference"]):
+                return
+            coordinator = blob_store.coordinator
+            with coordinator.locked():
+                active = coordinator.layout.object_path(blob_key)
+                quarantine = coordinator.quarantine_path(blob_key)
+                if not active.exists() or quarantine.exists():
+                    return
+                type(coordinator.layout).ensure_dir(quarantine.parent)
+                os.replace(active, quarantine)
+                coordinator._fsync_directory(active.parent)
+                coordinator._fsync_directory(quarantine.parent)
+                coordinator.mark_quarantined_locked(
+                    blob_key=blob_key,
+                    quarantined_at=datetime.now(timezone.utc),
+                )
 
 
 __all__ = (

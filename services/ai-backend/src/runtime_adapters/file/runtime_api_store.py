@@ -232,7 +232,19 @@ class FileRuntimeApiStore:
         jobs = self._artifact_lifecycle_jobs
         if jobs is None:
             return None
-        return await jobs.on_org_deleted(org_id=org_id, deleted_at=deleted_at)
+        protected = tuple(
+            sorted(
+                conversation.conversation_id
+                for conversation in self.conversations.values()
+                if conversation.org_id == org_id
+                and LegalHoldPolicy.is_on_hold(conversation)
+            )
+        )
+        return await jobs.on_org_deleted(
+            org_id=org_id,
+            deleted_at=deleted_at,
+            protected_conversation_ids=protected,
+        )
 
     def __init__(
         self,
@@ -1313,6 +1325,11 @@ class FileRuntimeApiStore:
         )
         if conversation is None:
             return None
+        if LegalHoldPolicy.is_on_hold(conversation):
+            # The file profile stores the authoritative hold fact directly on
+            # the conversation.  Returning it unchanged keeps a held artifact
+            # out of the lifecycle tombstone path as well.
+            return conversation
         merged: dict[str, tuple[str, ...] | None] = dict(
             conversation.enabled_connectors
         )
@@ -2409,6 +2426,13 @@ class FileRuntimeApiStore:
                 org_id=org_id,
                 user_id=user_id,
                 deleted_at=now,
+                protected_conversation_ids=tuple(
+                    sorted(
+                        conversation.conversation_id
+                        for conversation in targets
+                        if LegalHoldPolicy.is_on_hold(conversation)
+                    )
+                ),
             )
         return result
 
@@ -3359,6 +3383,14 @@ class FileRuntimeApiStore:
                 org_id=org_id,
                 now=datetime.now(timezone.utc),
                 limit=chunk_size or None,
+                protected_conversation_ids=tuple(
+                    sorted(
+                        conversation.conversation_id
+                        for conversation in self.conversations.values()
+                        if conversation.org_id == org_id
+                        and LegalHoldPolicy.is_on_hold(conversation)
+                    )
+                ),
             )
             return RetentionSweepOutcome(
                 org_id=org_id,

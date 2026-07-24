@@ -143,16 +143,34 @@ class ArtifactLifecycleJobs:
         org_id: str,
         user_id: str,
         conversation_id: str,
+        deleted_at: datetime | None = None,
     ) -> str:
-        return cls._evidence_id("conversation", org_id, user_id, conversation_id)
+        return cls._evidence_id(
+            "conversation",
+            org_id,
+            user_id,
+            conversation_id,
+            deleted_at.isoformat() if deleted_at is not None else "legacy",
+        )
 
     @classmethod
-    def user_evidence_id(cls, *, org_id: str, user_id: str) -> str:
-        return cls._evidence_id("user", org_id, user_id)
+    def user_evidence_id(
+        cls, *, org_id: str, user_id: str, deleted_at: datetime | None = None
+    ) -> str:
+        return cls._evidence_id(
+            "user",
+            org_id,
+            user_id,
+            deleted_at.isoformat() if deleted_at is not None else "legacy",
+        )
 
     @classmethod
-    def org_evidence_id(cls, *, org_id: str) -> str:
-        return cls._evidence_id("org", org_id)
+    def org_evidence_id(cls, *, org_id: str, deleted_at: datetime | None = None) -> str:
+        return cls._evidence_id(
+            "org",
+            org_id,
+            deleted_at.isoformat() if deleted_at is not None else "legacy",
+        )
 
     async def list_org_ids(self) -> Sequence[str]:
         return await self.store.list_lifecycle_org_ids()
@@ -164,6 +182,7 @@ class ArtifactLifecycleJobs:
         user_id: str,
         conversation_id: str,
         deleted_at: datetime,
+        protected_conversation_ids: tuple[str, ...] = (),
     ) -> ArtifactLifecycleTombstoneResult:
         """Live hook called by persistence after conversation deletion."""
 
@@ -176,8 +195,10 @@ class ArtifactLifecycleJobs:
                 org_id=org_id,
                 user_id=user_id,
                 conversation_id=conversation_id,
+                deleted_at=deleted_at,
             ),
             reason="conversation_deleted",
+            protected_conversation_ids=protected_conversation_ids,
         )
 
     async def on_user_deleted(
@@ -186,6 +207,7 @@ class ArtifactLifecycleJobs:
         org_id: str,
         user_id: str,
         deleted_at: datetime,
+        protected_conversation_ids: tuple[str, ...] = (),
     ) -> ArtifactLifecycleTombstoneResult:
         """Live hook called by persistence after user-history deletion."""
 
@@ -193,8 +215,11 @@ class ArtifactLifecycleJobs:
             org_id=org_id,
             user_id=user_id,
             deleted_at=deleted_at,
-            evidence_id=self.user_evidence_id(org_id=org_id, user_id=user_id),
+            evidence_id=self.user_evidence_id(
+                org_id=org_id, user_id=user_id, deleted_at=deleted_at
+            ),
             reason="user_history_deleted",
+            protected_conversation_ids=protected_conversation_ids,
         )
 
     async def on_org_deleted(
@@ -202,14 +227,16 @@ class ArtifactLifecycleJobs:
         *,
         org_id: str,
         deleted_at: datetime,
+        protected_conversation_ids: tuple[str, ...] = (),
     ) -> ArtifactLifecycleTombstoneResult:
         """Executable org-erasure hook for the trusted account lifecycle."""
 
         return await self.tombstone_org(
             org_id=org_id,
             deleted_at=deleted_at,
-            evidence_id=self.org_evidence_id(org_id=org_id),
+            evidence_id=self.org_evidence_id(org_id=org_id, deleted_at=deleted_at),
             reason="org_deleted",
+            protected_conversation_ids=protected_conversation_ids,
         )
 
     async def tombstone_conversation(
@@ -221,12 +248,16 @@ class ArtifactLifecycleJobs:
         deleted_at: datetime,
         evidence_id: str,
         reason: str,
+        protected_conversation_ids: tuple[str, ...] = (),
     ) -> ArtifactLifecycleTombstoneResult:
         return await self.store.tombstone_for_lifecycle(
             scope=ArtifactRetentionScope(
                 org_id=org_id,
                 user_id=user_id,
                 conversation_id=conversation_id,
+                protected_conversation_ids=tuple(
+                    sorted(set(protected_conversation_ids))
+                ),
             ),
             deleted_at=deleted_at,
             evidence_id=evidence_id,
@@ -241,9 +272,16 @@ class ArtifactLifecycleJobs:
         deleted_at: datetime,
         evidence_id: str,
         reason: str,
+        protected_conversation_ids: tuple[str, ...] = (),
     ) -> ArtifactLifecycleTombstoneResult:
         return await self.store.tombstone_for_lifecycle(
-            scope=ArtifactRetentionScope(org_id=org_id, user_id=user_id),
+            scope=ArtifactRetentionScope(
+                org_id=org_id,
+                user_id=user_id,
+                protected_conversation_ids=tuple(
+                    sorted(set(protected_conversation_ids))
+                ),
+            ),
             deleted_at=deleted_at,
             evidence_id=evidence_id,
             reason=reason,
@@ -256,9 +294,15 @@ class ArtifactLifecycleJobs:
         deleted_at: datetime,
         evidence_id: str,
         reason: str,
+        protected_conversation_ids: tuple[str, ...] = (),
     ) -> ArtifactLifecycleTombstoneResult:
         return await self.store.tombstone_for_lifecycle(
-            scope=ArtifactRetentionScope(org_id=org_id),
+            scope=ArtifactRetentionScope(
+                org_id=org_id,
+                protected_conversation_ids=tuple(
+                    sorted(set(protected_conversation_ids))
+                ),
+            ),
             deleted_at=deleted_at,
             evidence_id=evidence_id,
             reason=reason,
@@ -315,12 +359,18 @@ class ArtifactLifecycleJobs:
         org_id: str,
         now: datetime,
         limit: int | None = None,
+        protected_conversation_ids: tuple[str, ...] = (),
     ) -> ArtifactRetentionJobResult:
         """Run all three durable phases for one org from the live sweeper."""
 
         schedule = self.schedule
         return await self.run_retention(
-            scope=ArtifactRetentionScope(org_id=org_id),
+            scope=ArtifactRetentionScope(
+                org_id=org_id,
+                protected_conversation_ids=tuple(
+                    sorted(set(protected_conversation_ids))
+                ),
+            ),
             deleted_before=now - schedule.metadata_retention_grace,
             candidate_grace_before=now - schedule.candidate_grace,
             quarantine_older_than=now - schedule.quarantine_grace,

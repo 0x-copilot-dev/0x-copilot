@@ -69,6 +69,14 @@ class ArtifactRetentionScope:
     org_id: str
     user_id: str | None = None
     conversation_id: str | None = None
+    # The runtime deletion owner supplies live legal-hold facts it already
+    # resolved under its own trust boundary.  Artifact adapters must honour
+    # them for both tombstoning and later purge work; they are never client
+    # supplied and are deliberately not an artifact API field.
+    protected_conversation_ids: tuple[str, ...] = ()
+
+    def protects_conversation(self, conversation_id: str) -> bool:
+        return conversation_id in self.protected_conversation_ids
 
 
 @dataclass(frozen=True, slots=True)

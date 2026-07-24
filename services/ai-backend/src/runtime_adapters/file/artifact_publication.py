@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fcntl
 import os
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ from typing import Iterator
 
 from runtime_adapters.file._jsonl import JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file._advisory_lock import acquire_exclusive, release_exclusive
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,7 @@ class FileArtifactQuarantineState:
 
 
 class FileArtifactPublicationCoordinator:
-    """Serialize artifact publication and GC across processes with ``flock``."""
+    """Serialize artifact publication and GC across processes portably."""
 
     def __init__(self, layout: FileStoreLayout) -> None:
         self.layout = layout
@@ -73,7 +73,7 @@ class FileArtifactPublicationCoordinator:
                 return
             descriptor = os.open(self.lock_path, os.O_CREAT | os.O_RDWR, 0o600)
             try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX)
+                acquire_exclusive(descriptor)
                 self._local.depth = 1
                 # Another process may have appended candidate/quarantine state
                 # since this coordinator instance was created. Refresh only
@@ -84,7 +84,7 @@ class FileArtifactPublicationCoordinator:
                 yield
             finally:
                 self._local.depth = 0
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
+                release_exclusive(descriptor)
                 os.close(descriptor)
 
     def quarantine_path(self, blob_key: str) -> Path:
@@ -259,6 +259,11 @@ class FileArtifactPublicationCoordinator:
 
     @staticmethod
     def _fsync_directory(path: Path) -> None:
+        # Windows does not permit opening a directory descriptor for fsync.
+        # Publication data itself is fsynced before the atomic replacement;
+        # the byte-range lock still gives equivalent cross-process visibility.
+        if os.name == "nt":
+            return
         descriptor = os.open(path, os.O_RDONLY)
         try:
             os.fsync(descriptor)
