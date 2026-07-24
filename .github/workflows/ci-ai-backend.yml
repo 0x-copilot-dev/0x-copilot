@@ -53,7 +53,10 @@ jobs:
 
       - name: Run pytest (ai-backend only)
         run: |
-          cd services/ai-backend && PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests
+          # Stream node IDs so a hosted-runner stall leaves actionable evidence
+          # in Actions logs. The duration report also guards against silently
+          # growing full-suite time as coverage expands.
+          cd services/ai-backend && PYTHONUNBUFFERED=1 PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest tests -vv --durations=30
 
       - name: A10 RBAC scope coverage check
         # Default-deny: every route must declare its RBAC policy via
