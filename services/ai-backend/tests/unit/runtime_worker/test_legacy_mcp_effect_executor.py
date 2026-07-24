@@ -25,6 +25,7 @@ from agent_runtime.surfaces_v2.ledger_models import EffectOutcome
 
 _STAGE_ID = "stg_00000000-0000-4000-8000-000000000001"
 _TARGET_REF = "mcp-target://linear/issue-123"
+_CONTENT_REF = "operation://op_00000000-0000-4000-8000-000000000001/args"
 
 
 def _scope() -> EffectExecutionScope:
@@ -45,6 +46,7 @@ def _request(arguments: dict[str, object]) -> EffectExecutionRequest:
         target_ref=_TARGET_REF,
         target_digest="b" * 64,
         proposal_ref=f"proposal://{_STAGE_ID}/revisions/1",
+        proposal_content_ref=_CONTENT_REF,
         proposal_digest=canonical_json_sha256(arguments),
         actor="user",
         decision_ledger_id="rlegacy·0001",
@@ -61,6 +63,7 @@ def _material(
         target_ref=request.target_ref,
         target_digest=request.target_digest,
         proposal_ref=request.proposal_ref,
+        proposal_content_ref=request.proposal_content_ref,
         proposal_digest=request.proposal_digest,
     )
 
@@ -139,6 +142,8 @@ async def test_exact_approved_arguments_use_existing_connector_row_args_lane() -
     assert dispatched.tool_arguments() == arguments
     assert dispatched.row_args == arguments
     assert dispatched.body == ""
+    assert request.proposal_ref.startswith("proposal://")
+    assert request.proposal_content_ref == _CONTENT_REF
 
 
 @pytest.mark.asyncio
@@ -160,7 +165,7 @@ async def test_prepare_rejects_mismatched_or_missing_material_before_dispatch() 
     arguments: dict[str, object] = {"body": "approved"}
     request = _request(arguments)
     mismatched = _material(request, arguments).model_copy(
-        update={"target_digest": "c" * 64}
+        update={"proposal_content_ref": "operation://op_safe/other_args"}
     )
     connector = _Connector()
     executor = _executor(resolver=_Resolver([mismatched]), connector=connector)

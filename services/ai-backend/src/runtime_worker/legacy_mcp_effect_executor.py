@@ -51,6 +51,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectExecutorKind,
     EffectOutcome,
     Sha256Hex,
+    validate_immutable_content_ref,
 )
 from agent_runtime.surfaces_v2.mcp_connector import McpStageCommitConnector
 
@@ -99,6 +100,7 @@ class LegacyMcpEffectMaterial(RuntimeContract):
     target_ref: str = Field(min_length=1, max_length=2048)
     target_digest: Sha256Hex
     proposal_ref: str = Field(min_length=1, max_length=2048)
+    proposal_content_ref: str = Field(min_length=1, max_length=2048)
     proposal_digest: Sha256Hex
 
     @field_validator("target_connector", "target_op")
@@ -107,6 +109,11 @@ class LegacyMcpEffectMaterial(RuntimeContract):
         if value != value.strip() or "\n" in value or "\r" in value:
             raise ValueError("MCP target names must be stable identifiers")
         return value
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_immutable(cls, value: str) -> str:
+        return validate_immutable_content_ref(value)
 
     @model_validator(mode="after")
     def _arguments_match_canonical_digest(self) -> "LegacyMcpEffectMaterial":
@@ -253,6 +260,7 @@ class LegacyMcpEffectExecutor:
             material.target_ref == request.target_ref
             and material.target_digest == request.target_digest
             and material.proposal_ref == request.proposal_ref
+            and material.proposal_content_ref == request.proposal_content_ref
             and material.proposal_digest == request.proposal_digest
         )
 
