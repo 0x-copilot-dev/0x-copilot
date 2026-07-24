@@ -16,6 +16,11 @@ export {
   isArtifactMutationResponse,
   isArtifactRevisionResponse,
 } from "./artifacts";
+export type {
+  ArtifactPreviewState,
+  ArtifactRenderState,
+} from "./artifactSurface";
+export { isArtifactRenderState } from "./artifactSurface";
 
 // Work Ledger vocabulary (Generative Surfaces v2, SDR §5 / PRD-A1). `ledger.ts`
 // is the single canonical home for all v2 ledger/domain type additions across
@@ -160,6 +165,7 @@ export type {
 } from "./ledger";
 export {
   LEDGER_EVENT_TYPES,
+  ARTIFACT_EVENT_TYPES,
   ARTIFACT_RUNTIME_EVENT_TYPES,
   isLedgerEventType,
   isSurfaceEventV2,

@@ -89,12 +89,21 @@ export const LEDGER_EVENT_TYPES = [
   "gate.resolved.v2",
 ] as const satisfies readonly LedgerEventType[];
 
-/** Canonical artifact events that also travel on the Runtime API event stream.
- * Runtime API contracts import this subset instead of redeclaring SSOT values. */
-export const ARTIFACT_RUNTIME_EVENT_TYPES = [
+/** Canonical artifact ledger events. Consumers import this tuple instead of
+ * redeclaring event values outside the contract mirror. */
+export const ARTIFACT_EVENT_TYPES = [
   "artifact.created",
   "artifact.revised",
   "artifact.promoted",
+  "artifact.presentation_decided",
+] as const satisfies readonly LedgerEventType[];
+
+/** Canonical artifact events that also travel on the Runtime API event stream.
+ * Runtime API contracts import this subset instead of redeclaring SSOT values. */
+export const ARTIFACT_RUNTIME_EVENT_TYPES = [
+  ARTIFACT_EVENT_TYPES[0],
+  ARTIFACT_EVENT_TYPES[1],
+  ARTIFACT_EVENT_TYPES[2],
 ] as const satisfies readonly LedgerEventType[];
 export type ArtifactRuntimeEventType =
   (typeof ARTIFACT_RUNTIME_EVENT_TYPES)[number];

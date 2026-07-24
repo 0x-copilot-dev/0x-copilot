@@ -36,6 +36,66 @@ export interface SseSubscription {
   close(): void;
 }
 
+/**
+ * A byte-preserving artifact response. This intentionally exposes a stream,
+ * rather than a JSON/base64 payload: artifact bytes may be code, CSV with a
+ * BOM/CRLFs, or an arbitrary binary file and must not be normalised by the
+ * transport layer.
+ */
+export interface ArtifactContentResponse {
+  readonly body: ReadableStream<Uint8Array>;
+  readonly contentType: string;
+  readonly contentLength: number | null;
+  readonly etag: string | null;
+  readonly filename: string | null;
+}
+
+export interface ArtifactContentRequest {
+  readonly artifactId: string;
+  readonly revision: number;
+  readonly signal?: AbortSignal;
+}
+
+/** The multipart fields accepted by the existing A2 revision endpoint. */
+export interface ArtifactRevisionRequest {
+  readonly artifactId: string;
+  readonly parentRevision: number;
+  readonly expectedDigest?: string;
+  /** The quoted ETag read with the revision; forwarded as `If-Match`. */
+  readonly etag?: string;
+  readonly content: Uint8Array;
+  readonly contentType: string;
+  readonly filename: string;
+  readonly idempotencyKey: string;
+  readonly signal?: AbortSignal;
+}
+
+/**
+ * Optional capability layered on top of the long-lived JSON/SSE Transport.
+ * It is deliberately separate so existing test and third-party transports
+ * remain source-compatible; clients must render an honest unavailable state
+ * when a host has not implemented artifact bytes yet.
+ */
+export interface ArtifactTransport {
+  getArtifactContent(
+    request: ArtifactContentRequest,
+  ): Promise<ArtifactContentResponse>;
+  createArtifactRevision(request: ArtifactRevisionRequest): Promise<unknown>;
+}
+
+export function isArtifactTransport(
+  transport: unknown,
+): transport is ArtifactTransport {
+  return (
+    typeof transport === "object" &&
+    transport !== null &&
+    typeof (transport as Partial<ArtifactTransport>).getArtifactContent ===
+      "function" &&
+    typeof (transport as Partial<ArtifactTransport>).createArtifactRevision ===
+      "function"
+  );
+}
+
 export class UnauthorizedError extends Error {
   readonly status = 401;
 

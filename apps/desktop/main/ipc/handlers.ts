@@ -29,6 +29,9 @@ import {
 import {
   AuthWorkspaceParamsSchema,
   AuthLinkWalletParamsSchema,
+  ArtifactContentHandleParamsSchema,
+  ArtifactContentOpenParamsSchema,
+  ArtifactRevisionParamsSchema,
   CHANNELS,
   EmptyParamsSchema,
   IpcValidationError,
@@ -178,6 +181,58 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       throw err;
     }
   });
+
+  ipcMain.handle(
+    CHANNELS.transportArtifactContentOpen,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactContentOpen,
+        ArtifactContentOpenParamsSchema,
+        raw,
+      );
+      return bridge.openArtifactContent(params);
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.transportArtifactContentRead,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactContentRead,
+        ArtifactContentHandleParamsSchema,
+        raw,
+      );
+      return bridge.readArtifactContent(params.handle);
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.transportArtifactContentClose,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactContentClose,
+        ArtifactContentHandleParamsSchema,
+        raw,
+      );
+      await bridge.closeArtifactContent(params.handle);
+      return { ok: true as const };
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.transportArtifactRevision,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactRevision,
+        ArtifactRevisionParamsSchema,
+        raw,
+      );
+      try {
+        return wrapTransportValue(await bridge.createArtifactRevision(params));
+      } catch (err) {
+        const wire = toTransportHttpErrorWire(err);
+        if (wire !== null) return wrapTransportError(wire);
+        throw err;
+      }
+    },
+  );
 
   ipcMain.handle(
     CHANNELS.transportSubscribe,
@@ -420,6 +475,10 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
   return () => {
     const channels: string[] = [
       CHANNELS.transportRequest,
+      CHANNELS.transportArtifactContentOpen,
+      CHANNELS.transportArtifactContentRead,
+      CHANNELS.transportArtifactContentClose,
+      CHANNELS.transportArtifactRevision,
       CHANNELS.transportSubscribe,
       CHANNELS.transportUnsubscribe,
       CHANNELS.transportSessionSnapshot,

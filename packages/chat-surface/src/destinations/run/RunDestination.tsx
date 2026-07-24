@@ -129,6 +129,12 @@ import type { PendingAgentRow } from "@0x-copilot/api-types";
 // the Transport port). Called unconditionally (Rules of Hooks) but inert when
 // `surfacesV2` is false (`enabled: false` ⇒ no request).
 import { useSurfacesV2 } from "./useSurfacesV2";
+import {
+  ArtifactSurface,
+  parseArtifactSurfaceUri,
+  projectArtifactTabs,
+} from "../../artifacts";
+import type { ArtifactDownloadPort } from "../../ports/ArtifactDownloadPort";
 
 // PR-3.10: pure selector projecting approval state off the SAME single canonical
 // event stream (FR-3.3). Feeds the in-chat ApprovalCard/conf-card (TcChat) and
@@ -416,6 +422,8 @@ export interface RunDestinationProps {
    */
   readonly onCopyText?: (text: string) => Promise<void>;
   readonly onSaveFile?: (text: string, filename: string) => Promise<void>;
+  /** B2: host-owned exact-byte save path for artifact downloads. */
+  readonly artifactDownloadPort?: ArtifactDownloadPort;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -439,6 +447,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     surfacesV2 = false,
     onCopyText,
     onSaveFile,
+    artifactDownloadPort,
   } = props;
 
   const transport = useTransport();
@@ -1119,13 +1128,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const ledger = useMemo(() => projectLedger(session.events), [session.events]);
   // SDR §11 strictness: flag on ⇒ tabs come ONLY from ledger events; flag off ⇒
   // the v1 selector, byte-identical to today. Never mix the two strips.
-  const surfaceTabList = useMemo(
-    () =>
-      surfacesV2
-        ? ledgerTabsAsSurfaceTabs(ledger)
-        : projectSurfaceTabs(session.events),
-    [surfacesV2, ledger, session.events],
+  const artifactTabList = useMemo(
+    () => (surfacesV2 ? projectArtifactTabs(session.events) : []),
+    [surfacesV2, session.events],
   );
+  const surfaceTabList = useMemo(() => {
+    if (!surfacesV2) return projectSurfaceTabs(session.events);
+    return [...ledgerTabsAsSurfaceTabs(ledger), ...artifactTabList].sort(
+      (left, right) => right.lastSeq - left.lastSeq,
+    );
+  }, [surfacesV2, ledger, session.events, artifactTabList]);
   // Content hydration for the v2 canvas (SurfaceStore endpoint via Transport).
   // Called unconditionally (Rules of Hooks); inert when `surfacesV2` is false
   // (`enabled: false` ⇒ no request, no state churn).
@@ -1407,6 +1419,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // the pure adapter registry). Only meaningful on the v2 path.
   const renderV2Surface = useCallback(
     (uri: string): ReactNode => {
+      if (parseArtifactSurfaceUri(uri) !== null) {
+        return (
+          <ArtifactSurface
+            uri={uri}
+            transport={transport}
+            downloadPort={artifactDownloadPort}
+          />
+        );
+      }
       const id = surfaceIdForTabUri(uri);
       if (id === null) return null;
       const stage = stageBySurfaceId.get(id);
@@ -1455,6 +1476,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       handleStageReject,
       handleStageRestore,
       copyReceiptText,
+      transport,
+      artifactDownloadPort,
     ],
   );
 

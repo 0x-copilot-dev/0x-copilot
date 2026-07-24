@@ -1130,6 +1130,7 @@ export function RunBinder({
       // renderer has the DOM); the package stays substrate-agnostic.
       onCopyText={copyTextToClipboard}
       onSaveFile={saveTextToFile}
+      artifactDownloadPort={{ saveArtifact: saveArtifactStream }}
     />
   );
 }
@@ -1153,6 +1154,31 @@ async function saveTextToFile(text: string, filename: string): Promise<void> {
     const anchor = document.createElement("a");
     anchor.href = url;
     anchor.download = filename;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}
+
+async function saveArtifactStream(input: {
+  readonly filename: string;
+  readonly contentType: string;
+  readonly body: ReadableStream<Uint8Array>;
+}): Promise<void> {
+  if (typeof document === "undefined") {
+    throw new Error("download unavailable: no document");
+  }
+  const blob = await new Response(input.body, {
+    headers: { "content-type": input.contentType },
+  }).blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = input.filename;
     anchor.rel = "noopener";
     document.body.appendChild(anchor);
     anchor.click();

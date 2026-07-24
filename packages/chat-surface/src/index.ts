@@ -20,6 +20,18 @@ export {
   type TcInlineDiffProps,
 } from "./thread-canvas";
 export { TransportProvider, useTransport } from "./providers/TransportProvider";
+export {
+  ArtifactDownloadAction,
+  ArtifactEditor,
+  ArtifactFrame,
+  ArtifactRevisionHistory,
+  ArtifactSurface,
+  artifactUri,
+  parseArtifactSurfaceUri,
+  projectArtifactTabs,
+  type ArtifactSurfaceTab,
+} from "./artifacts";
+export type { ArtifactDownloadPort } from "./ports/ArtifactDownloadPort";
 export { RouterProvider, useRouter } from "./providers/RouterProvider";
 export {
   KeyValueStoreProvider,

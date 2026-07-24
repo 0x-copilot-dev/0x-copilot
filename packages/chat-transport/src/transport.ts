@@ -1,4 +1,7 @@
 import type {
+  ArtifactContentRequest,
+  ArtifactContentResponse,
+  ArtifactRevisionRequest,
   Session,
   SseSubscribeOptions,
   SseSubscription,
@@ -24,4 +27,12 @@ export interface Transport {
   subscribeServerSentEvents(opts: SseSubscribeOptions): SseSubscription;
   getSession(): Session;
   capabilities(): TransportCapabilities;
+}
+
+/** A Transport implementation that also supports exact artifact bytes. */
+export interface ArtifactCapableTransport extends Transport {
+  getArtifactContent(
+    request: ArtifactContentRequest,
+  ): Promise<ArtifactContentResponse>;
+  createArtifactRevision(request: ArtifactRevisionRequest): Promise<unknown>;
 }
