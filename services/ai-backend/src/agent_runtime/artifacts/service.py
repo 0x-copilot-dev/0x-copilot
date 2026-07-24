@@ -170,6 +170,37 @@ class ArtifactService:
             promoted_source_ref=None,
         )
 
+    async def publish_from_stream(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        request: ArtifactCreateRequest,
+        provenance: ArtifactProvenance,
+        chunks: AsyncIterator[bytes],
+    ) -> ArtifactMutationResult:
+        """Persist trusted producer output without materializing its bytes.
+
+        This is the A2 publication lane for bounded server-side producers such
+        as D3.  It preserves the same scoped authorization, streaming digest
+        verification, immutable revision, idempotency, and outbox behaviour as
+        the bytes convenience method.
+        """
+
+        scope = await self._require_run_scope(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=request.run_id,
+        )
+        return await self._create_in_scope(
+            scope=scope,
+            request=request,
+            provenance=provenance,
+            chunks=chunks,
+            route=self.Routes.PUBLISH,
+            promoted_source_ref=None,
+        )
+
     async def publish_from_source(
         self,
         *,

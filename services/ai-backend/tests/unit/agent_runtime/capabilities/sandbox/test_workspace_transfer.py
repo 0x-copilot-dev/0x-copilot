@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from agent_runtime.capabilities.sandbox.config import SandboxLimitProfiles
+from agent_runtime.capabilities.sandbox.config import (
+    SandboxLimitProfile,
+    SandboxLimitProfiles,
+)
 from agent_runtime.capabilities.sandbox.contracts import (
     ArtifactRef,
     SandboxError,
@@ -184,6 +187,38 @@ class TestManifestBuilder:
             WorkspaceManifestBuilder.verify_manifest(tampered)
         assert excinfo.value.code is SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH
 
+    def test_rejects_noncanonical_path_at_transfer_boundary(self) -> None:
+        manifest = WorkspaceManifestBuilder.build(
+            workspace_id="ws",
+            root_grant_id="g",
+            raw_entries=[_raw("a.py")],
+            limits=LIMITS,
+        )
+        entries = (
+            manifest.entries[0].model_copy(update={"path": "/workspace/a/../a.py"}),
+        )
+        tampered = manifest.model_copy(
+            update={
+                "entries": entries,
+                "manifest_sha256": WorkspaceManifestBuilder._hash_entries(entries),
+            }
+        )
+        with pytest.raises(SandboxError) as excinfo:
+            WorkspaceManifestBuilder.verify_manifest(tampered)
+        assert excinfo.value.code is SandboxErrorCode.SNAPSHOT_INVALID
+
+    def test_rechecks_runtime_file_ceilings(self) -> None:
+        manifest = WorkspaceManifestBuilder.build(
+            workspace_id="ws",
+            root_grant_id="g",
+            raw_entries=[_raw("a.py", size=3)],
+            limits=LIMITS,
+        )
+        lower_ceiling = SandboxLimitProfile(name="lower", max_upload_file_bytes=2)
+        with pytest.raises(SandboxError) as excinfo:
+            WorkspaceManifestBuilder.verify_manifest(manifest, limits=lower_ceiling)
+        assert excinfo.value.code is SandboxErrorCode.SNAPSHOT_QUOTA_EXCEEDED
+
 
 class TestPatchBuilder:
     def _baseline(self):
@@ -194,7 +229,7 @@ class TestPatchBuilder:
             limits=LIMITS,
         )
 
-    def test_add_modify_delete(self) -> None:
+    def test_create_replace_delete(self) -> None:
         baseline = self._baseline()
         result = {
             "a.py": _raw("a.py", sha="c" * 64),  # modified
@@ -203,8 +238,8 @@ class TestPatchBuilder:
         }
         patch = WorkspacePatchBuilder.build(baseline=baseline, result_entries=result)
         ops = {(e.operation, e.path) for e in patch.entries}
-        assert ("modify", "/workspace/a.py") in ops
-        assert ("add", "/workspace/new.py") in ops
+        assert ("replace", "/workspace/a.py") in ops
+        assert ("create", "/workspace/new.py") in ops
         assert ("delete", "/workspace/gone.py") in ops
         assert patch.complete is True
         assert patch.baseline_manifest_sha256 == baseline.manifest_sha256
@@ -215,3 +250,25 @@ class TestPatchBuilder:
             baseline=baseline, result_entries={}, complete=False
         )
         assert patch.complete is False
+        with pytest.raises(SandboxError) as excinfo:
+            WorkspacePatchBuilder.verify_patch(patch, require_complete=True)
+        assert excinfo.value.code is SandboxErrorCode.SANDBOX_PATCH_INCOMPLETE
+
+    def test_move_and_mkdir_have_canonical_evidence(self) -> None:
+        baseline = WorkspaceManifestBuilder.build(
+            workspace_id="ws",
+            root_grant_id="g",
+            raw_entries=[_raw("src.py", sha="a" * 64)],
+            limits=LIMITS,
+        )
+        patch = WorkspacePatchBuilder.build(
+            baseline=baseline,
+            result_entries={"renamed.py": _raw("renamed.py", sha="a" * 64)},
+            directories=("generated",),
+            moves={"src.py": "renamed.py"},
+        )
+        assert {(entry.operation, entry.path) for entry in patch.entries} == {
+            ("move", "/workspace/renamed.py"),
+            ("mkdir", "/workspace/generated"),
+        }
+        WorkspacePatchBuilder.verify_patch(patch, require_complete=True)

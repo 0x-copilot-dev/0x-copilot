@@ -240,14 +240,69 @@ class WorkspaceTransferManifest(RuntimeContract):
 
 
 class WorkspacePatchEntry(RuntimeContract):
-    """One host-relative change produced by comparing ``/workspace`` to baseline."""
+    """One canonical, reviewable change from an immutable sandbox snapshot.
 
-    operation: Literal["add", "modify", "delete"]
+    A patch is not a sequence of imperative filesystem commands.  Each entry
+    describes one exact before/after fact, so C1 can import it into an overlay
+    and C3 can later stage it without ever granting the sandbox host authority.
+    """
+
+    operation: Literal["create", "replace", "delete", "move", "mkdir"]
     path: str = Field(min_length=1)
-    baseline_sha256: str | None = None
-    result_sha256: str | None = None
-    result_size_bytes: int | None = None
-    payload_ref: ArtifactRef | None = None
+    source_path: str | None = None
+    baseline_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    baseline_identity: str | None = Field(default=None, min_length=1, max_length=512)
+    result_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    result_size_bytes: int | None = Field(default=None, ge=0)
+    result_ref: ArtifactRef | None = None
+
+    @model_validator(mode="after")
+    def _operation_has_complete_evidence(self) -> "WorkspacePatchEntry":
+        has_any_result = any(
+            value is not None
+            for value in (self.result_digest, self.result_size_bytes, self.result_ref)
+        )
+        has_result = (
+            self.result_digest is not None
+            and self.result_size_bytes is not None
+            and self.result_ref is not None
+        )
+        if self.operation in {"create", "replace"}:
+            if not has_result:
+                raise ValueError(
+                    "create and replace entries require verified result bytes"
+                )
+            if (
+                self.result_ref is None
+                or self.result_ref.sha256 != self.result_digest
+                or self.result_ref.size_bytes != self.result_size_bytes
+            ):
+                raise ValueError("patch result reference must match declared bytes")
+            if self.operation == "replace" and self.baseline_digest is None:
+                raise ValueError("replace entries require a baseline digest")
+        elif self.operation == "delete":
+            if (
+                self.baseline_digest is None
+                or has_any_result
+                or self.source_path is not None
+            ):
+                raise ValueError("delete entries require only a baseline digest")
+        elif self.operation == "move":
+            if (
+                self.source_path is None
+                or self.baseline_digest is None
+                or has_any_result
+            ):
+                raise ValueError(
+                    "move entries require a source path and baseline digest"
+                )
+        elif self.operation == "mkdir" and (
+            self.source_path is not None
+            or self.baseline_digest is not None
+            or has_any_result
+        ):
+            raise ValueError("mkdir entries may not carry file evidence")
+        return self
 
 
 class WorkspacePatchManifest(RuntimeContract):
@@ -264,6 +319,30 @@ class WorkspacePatchManifest(RuntimeContract):
     entries: tuple[WorkspacePatchEntry, ...] = ()
     complete: bool = True
     manifest_sha256: str = Field(min_length=64, max_length=64)
+
+
+# D3's public name.  Keep the original class name during the migration so
+# existing AC7 callers do not mistake a schema rename for a different patch.
+SandboxPatchManifest = WorkspacePatchManifest
+
+
+class SandboxPatchImportRequest(RuntimeContract):
+    """Typed handoff from D3 to C3's overlay-only patch import port.
+
+    This is deliberately not a workspace-commit request.  A complete patch is
+    imported into C1's overlay and later goes through A4/A5 review and C3's
+    native executor; the sandbox never receives any broker or Electron handle.
+    """
+
+    run_id: str = Field(min_length=1, max_length=255)
+    operation_id: str = Field(min_length=1, max_length=255)
+    patch: WorkspacePatchManifest
+
+    @model_validator(mode="after")
+    def _only_complete_patch_can_cross_boundary(self) -> "SandboxPatchImportRequest":
+        if not self.patch.complete:
+            raise ValueError("an incomplete sandbox patch cannot be imported")
+        return self
 
 
 class SandboxCreateRequest(RuntimeContract):
@@ -448,3 +527,92 @@ class SandboxCommandResult(RuntimeContract):
     exit_code: int | None
     truncated: bool = False
     duration_ms: int = Field(ge=0)
+
+
+class SandboxDeliverable(RuntimeContract):
+    """An explicit sandbox file requested as an exact-byte artifact.
+
+    The model never receives an unrestricted ``download everything`` primitive.
+    Deliverables are part of the approved sandbox operation and are only read
+    from the virtual ``/workspace`` root by the runtime adapter.
+    """
+
+    path: str = Field(min_length=1, max_length=1024)
+    media_type: str = Field(min_length=1, max_length=255)
+    suggested_filename: str = Field(min_length=1, max_length=255)
+    title: str = Field(min_length=1, max_length=240)
+
+
+class SandboxArtifactPublication(RuntimeContract):
+    """Trusted metadata for one exact-byte artifact published by D3."""
+
+    run_id: str = Field(min_length=1, max_length=255)
+    operation_id: str = Field(min_length=1, max_length=255)
+    source_path: str = Field(min_length=1, max_length=1024)
+    media_type: str = Field(min_length=1, max_length=255)
+    suggested_filename: str = Field(min_length=1, max_length=255)
+    title: str = Field(min_length=1, max_length=240)
+    # The stream adapter calculates these values while the publisher consumes
+    # the bytes. They are optional at call start and verified against the
+    # returned artifact ref before a result becomes observable.
+    content_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    byte_size: int | None = Field(default=None, ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+
+
+class SandboxPublishedArtifact(RuntimeContract):
+    """A completed artifact result retaining sandbox operation provenance."""
+
+    source_path: str = Field(min_length=1, max_length=1024)
+    media_type: str = Field(min_length=1, max_length=255)
+    suggested_filename: str = Field(min_length=1, max_length=255)
+    artifact_ref: ArtifactRef
+
+
+class SandboxUsageAttribution(RuntimeContract):
+    """Provider execution usage attributed exactly once to an operation."""
+
+    operation_id: str = Field(min_length=1, max_length=255)
+    run_id: str = Field(min_length=1, max_length=255)
+    duration_ms: int = Field(ge=0)
+    commands: int = Field(ge=0)
+    uploaded_bytes: int = Field(ge=0)
+    downloaded_bytes: int = Field(ge=0)
+    provider_cost_microunits: int | None = Field(default=None, ge=0)
+
+
+class SandboxRunRequest(RuntimeContract):
+    """Approved, immutable input to D3's lifecycle coordinator."""
+
+    create_request: SandboxCreateRequest
+    command: str = Field(min_length=1, max_length=64 * 1024)
+    deliverables: tuple[SandboxDeliverable, ...] = ()
+    collect_patch: bool = False
+    # The trusted policy layer supplies concrete secret values that must be
+    # scrubbed from bounded output. They are transient and never written into
+    # the lifecycle store or emitted events.
+    redaction_terms: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _run_has_unique_workspace_paths(self) -> "SandboxRunRequest":
+        paths = [item.path for item in self.deliverables]
+        if len(paths) != len(set(paths)):
+            raise ValueError("sandbox deliverable paths must be unique")
+        if any(not term for term in self.redaction_terms):
+            raise ValueError("sandbox redaction terms must be non-empty")
+        return self
+
+
+class SandboxRunResult(RuntimeContract):
+    """Redaction-safe terminal projection returned from the coordinator."""
+
+    run_id: str = Field(min_length=1, max_length=255)
+    operation_id: str = Field(min_length=1, max_length=255)
+    state: SandboxLifecycleState
+    stdout: str = ""
+    stderr: str = ""
+    output_truncated: bool = False
+    exit_code: int | None = None
+    duration_ms: int = Field(default=0, ge=0)
+    artifacts: tuple[SandboxPublishedArtifact, ...] = ()
+    patch: WorkspacePatchManifest | None = None

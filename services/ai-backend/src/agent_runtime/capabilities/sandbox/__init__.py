@@ -30,9 +30,14 @@ from agent_runtime.capabilities.sandbox.contracts import (
     SandboxIsolationAttestation,
     SandboxLifecycleRecord,
     SandboxLifecycleState,
+    SandboxPatchImportRequest,
+    SandboxPatchManifest,
     SandboxProviderId,
+    SandboxRunRequest,
+    SandboxRunResult,
     SandboxSecretLeaseRef,
     SandboxSnapshot,
+    SandboxUsageAttribution,
     WorkspacePatchEntry,
     WorkspacePatchManifest,
     WorkspaceTransferEntry,
@@ -47,8 +52,13 @@ from agent_runtime.capabilities.sandbox.ports import (
     SandboxHandle,
     SandboxLifecycleAcquisition,
     SandboxLifecycleStore,
+    SandboxPatchCollectorPort,
+    SandboxPatchImportPort,
     SandboxProviderPort,
+    SandboxRuntimePort,
     SandboxSessionStore,
+    SandboxSnapshotContentPort,
+    SandboxUsageMeterPort,
 )
 from agent_runtime.capabilities.sandbox.provider_registry import (
     InMemorySandboxSessionStore,
@@ -66,6 +76,15 @@ from agent_runtime.capabilities.sandbox.remote_execution_service import (
     SandboxEventName,
 )
 from agent_runtime.capabilities.sandbox.seam import build_sandbox_backend
+from agent_runtime.capabilities.sandbox.coordinator import SandboxLifecycleCoordinator
+from agent_runtime.capabilities.sandbox.runtime_adapter import DeepAgentSandboxRuntime
+from agent_runtime.capabilities.sandbox.artifact_publisher import (
+    ArtifactServiceSandboxPublisher,
+)
+from agent_runtime.capabilities.sandbox.usage_meter import (
+    FileSandboxUsageMeter,
+    InMemorySandboxUsageMeter,
+)
 from agent_runtime.capabilities.sandbox.workspace_transfer import (
     WORKSPACE_ROOT,
     RawSnapshotEntry,
@@ -78,6 +97,9 @@ __all__ = [
     "WORKSPACE_ROOT",
     "ActiveSandbox",
     "ArtifactRef",
+    "ArtifactServiceSandboxPublisher",
+    "DeepAgentSandboxRuntime",
+    "FileSandboxUsageMeter",
     "InMemorySandboxSessionStore",
     "InMemorySandboxLifecycleStore",
     "FileSandboxLifecycleStore",
@@ -101,15 +123,26 @@ __all__ = [
     "SandboxLifecycleRecord",
     "SandboxLifecycleState",
     "SandboxLifecycleStore",
+    "SandboxLifecycleCoordinator",
     "SandboxLifecycleTransitionError",
     "SandboxLimitProfile",
     "SandboxLimitProfiles",
     "SandboxProviderId",
     "SandboxProviderPort",
     "SandboxProviderRegistry",
+    "SandboxPatchCollectorPort",
+    "SandboxPatchImportPort",
+    "SandboxPatchImportRequest",
+    "SandboxPatchManifest",
+    "SandboxRunRequest",
+    "SandboxRunResult",
+    "SandboxRuntimePort",
     "SandboxSecretLeaseRef",
     "SandboxSessionStore",
     "SandboxSnapshot",
+    "SandboxSnapshotContentPort",
+    "SandboxUsageAttribution",
+    "SandboxUsageMeterPort",
     "WorkspaceManifestBuilder",
     "WorkspacePatchBuilder",
     "WorkspacePatchEntry",
@@ -117,5 +150,6 @@ __all__ = [
     "WorkspacePathValidator",
     "WorkspaceTransferEntry",
     "WorkspaceTransferManifest",
+    "InMemorySandboxUsageMeter",
     "build_sandbox_backend",
 ]

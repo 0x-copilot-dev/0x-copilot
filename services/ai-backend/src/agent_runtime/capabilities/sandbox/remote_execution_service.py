@@ -173,6 +173,26 @@ class RemoteExecutionService:
         )
         return deleted
 
+    async def cleanup_provider_ref(
+        self, *, run_id: str, provider_session_ref: str
+    ) -> bool:
+        """Best-effort recovery cleanup when only durable lifecycle state remains.
+
+        After a worker crash the in-process session projection may be gone, but
+        the lifecycle store still has the opaque provider reference.  Recovery
+        is allowed to terminate that resource; it must never replay execution.
+        ``False`` is an honest cleanup-pending result rather than a success.
+        """
+
+        self._emit(SandboxEventName.CLEANUP_STARTED, run_id)
+        try:
+            await self._registry.provider.terminate(provider_session_ref)
+        except Exception:  # noqa: BLE001 - janitor will retry a failed cleanup
+            self._emit(SandboxEventName.CLEANUP_PENDING, run_id)
+            return False
+        self._emit(SandboxEventName.CLEANUP_CONFIRMED, run_id)
+        return True
+
     @asynccontextmanager
     async def session_scope(
         self, request: SandboxCreateRequest
