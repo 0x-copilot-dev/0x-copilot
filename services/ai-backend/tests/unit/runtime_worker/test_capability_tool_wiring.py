@@ -128,10 +128,12 @@ class TestContextBudgetGuard:
 
 
 class TestSandboxGating:
-    def test_built_when_flag_and_desktop_and_provider(self) -> None:
-        tool = _wiring(_SANDBOX_ON).sandbox_execute_tool()
-        assert tool is not None
-        assert getattr(tool, "name", None) == "run_in_sandbox"
+    def test_absent_when_production_provider_cannot_attest_isolation(self) -> None:
+        # D3 must not register a degraded execution surface. The shipped
+        # LangSmith adapter is selected by this deployment config but cannot
+        # yet prove the required isolation controls, so capability discovery
+        # honestly omits it.
+        assert _wiring(_SANDBOX_ON).sandbox_execute_tool() is None
 
     def test_absent_when_disabled(self) -> None:
         assert _wiring({}).sandbox_execute_tool() is None
