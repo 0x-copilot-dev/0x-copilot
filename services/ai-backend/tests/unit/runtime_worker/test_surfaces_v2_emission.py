@@ -21,13 +21,14 @@ from tests.unit.runtime_worker.test_runtime_worker import _TestHelpers
 
 
 def _settings(*, surfaces_v2: bool) -> RuntimeSettings:
+    # E3 flipped SURFACES_V2 default ON, so flag-off must be requested explicitly
+    # (the kill switch) rather than by omission.
     environ = {
         "OPENAI_API_KEY": "sk-test",
         "RUNTIME_DEFAULT_PROVIDER": "openai",
         "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+        "SURFACES_V2": "true" if surfaces_v2 else "false",
     }
-    if surfaces_v2:
-        environ["SURFACES_V2"] = "true"
     return RuntimeSettings.load(environ=environ)
 
 

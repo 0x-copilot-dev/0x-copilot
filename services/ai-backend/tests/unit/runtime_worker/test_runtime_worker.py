@@ -44,6 +44,11 @@ from runtime_worker.stream_parts import StreamNamespace
 class _TestSettings:
     @staticmethod
     def create(*, max_retries: int = 1, max_parallel_runs: int = 2) -> RuntimeSettings:
+        # This is the CORE worker-loop suite; it pins the base lifecycle event
+        # sequence and does not exercise Generative Surfaces v2 (the v2 emission +
+        # receipt path is covered by test_surfaces_v2_emission / test_receipt_emission
+        # flag-on). E3 flipped SURFACES_V2 default ON, so the kill switch is set
+        # here to keep the base sequence isolated (and to exercise the rollback).
         return RuntimeSettings.load(
             environ={
                 "OPENAI_API_KEY": "sk-test",
@@ -51,6 +56,7 @@ class _TestSettings:
                 "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
                 "RUNTIME_MAX_RETRIES": str(max_retries),
                 "RUNTIME_MAX_PARALLEL_RUNS": str(max_parallel_runs),
+                "SURFACES_V2": "false",
             }
         )
 
@@ -288,6 +294,7 @@ async def test_runtime_worker_processes_queued_run_with_fake_async_invoker() -> 
         run_handler=RuntimeRunHandler(
             persistence=store,
             event_store=store,
+            settings=settings,
             agent_factory=fake_agent_factory,
             runtime_invoker=fake_invoker,
         ),
@@ -1073,6 +1080,7 @@ async def test_runtime_worker_streams_model_deltas_before_final_response() -> No
         run_handler=RuntimeRunHandler(
             persistence=store,
             event_store=store,
+            settings=settings,
             agent_factory=fake_agent_factory,
             runtime_streamer=fake_streamer,
         ),
@@ -1174,6 +1182,7 @@ async def test_runtime_worker_completes_queue_item_when_stream_times_out() -> No
         run_handler=RuntimeRunHandler(
             persistence=store,
             event_store=store,
+            settings=settings,
             agent_factory=fake_agent_factory,
             runtime_streamer=slow_streamer,
         ),
@@ -1267,6 +1276,7 @@ async def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> No
         run_handler=RuntimeRunHandler(
             persistence=store,
             event_store=store,
+            settings=settings,
             agent_factory=fake_agent_factory,
             runtime_streamer=streamer_with_orphan_tool,
         ),

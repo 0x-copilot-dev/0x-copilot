@@ -4,21 +4,22 @@
 // `localStorage`), so a small localStorage read is the sanctioned flag
 // mechanism here — mirroring `apps/frontend/src/app/featureFlags.ts`.
 
-/** localStorage key for the Generative Surfaces v2 opt-in (shared with web). */
+/** localStorage key for the Generative Surfaces v2 opt-out (shared with web). */
 export const SURFACES_V2_FLAG_KEY = "enterprise.flags.surfaces-v2";
 
 /**
  * Whether the Generative Surfaces v2 canvas mounts in the desktop Run cockpit
- * (PRD-B1). **Default OFF.** ON iff
- * `localStorage["enterprise.flags.surfaces-v2"] === "true"` — a Wave-B
- * dev/preview toggle, enabled together with the runtime `SURFACES_V2` flag.
- * Read live so a devtools toggle takes effect on the next mount; any storage
- * error fails safe to OFF.
+ * (PRD-B1). **PRD-E3 flipped it ON by default** (opt-out), matching the server
+ * default flip: v2 now owns surface emission. OFF iff
+ * `localStorage["enterprise.flags.surfaces-v2"] === "false"` — the explicit kill
+ * switch / rollback. Read live so a devtools toggle takes effect on the next
+ * mount; anything other than an explicit "false" (stale value, garbage, storage
+ * error) fails toward the new ON default.
  */
 export function isSurfacesV2Enabled(): boolean {
   try {
-    return globalThis.localStorage?.getItem(SURFACES_V2_FLAG_KEY) === "true";
+    return globalThis.localStorage?.getItem(SURFACES_V2_FLAG_KEY) !== "false";
   } catch {
-    return false;
+    return true;
   }
 }

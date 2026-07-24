@@ -12,9 +12,9 @@ is therefore invocable only when BOTH conditions hold:
 The flag defaults **OFF** and is **not model-facing by default**: a normal run
 never reaches the generator, so shipping executable-codegen dark is impossible
 without deliberately flipping the flag. This follows the self-contained
-flag-reader precedent (``SurfaceEmissionFlag`` in
-``agent_runtime.capabilities.surfaces.config``) rather than threading a new
-setting through a central config object nothing else in this package reads.
+flag-reader precedent (e.g. ``QueueTracePropagator.enabled``) rather than
+threading a new setting through a central config object nothing else in this
+package reads.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from collections.abc import Mapping
 from typing import ClassVar
 
 # Values that read as "on". Anything else (including unset ⇒ default) is off:
-# the opposite default to ``SurfaceEmissionFlag`` because executable codegen is
-# a privileged escape hatch, not a best-effort display enhancement.
+# executable codegen is a privileged escape hatch that must be opted into, not a
+# best-effort display enhancement, so it defaults off.
 _ENABLED_VALUES: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 
 

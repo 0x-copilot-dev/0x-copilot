@@ -58,44 +58,39 @@ export function isRunCockpitWebEnabled(): boolean {
 
 // ---------------------------------------------------------------------------
 // Generative Surfaces v2 canvas (PRD-B1) — the CLIENT side of the runtime
-// `SURFACES_V2` flag. Opposite polarity to `runCockpitWeb`: **default OFF,
-// opt-in**. The v2 canvas reads ONLY ledger events; enable it together with the
-// runtime flag (a Wave-B dev/preview toggle). Any value other than the exact
-// string "true" (env or localStorage) keeps it OFF (fail-safe).
+// `SURFACES_V2` flag. **PRD-E3 flipped it ON by default** (opt-out), matching
+// the server default flip and the `runCockpitWeb` fail-toward-ON pattern: v2 now
+// owns surface emission (the v1 `result["surface"]` appendage was retired), so
+// the canvas mounts unless explicitly disabled. Two independent, fail-safe
+// OPT-OUTS force it off:
+//   - build-time: `VITE_SURFACES_V2=false` (statically inlined by Vite);
+//   - runtime:    `localStorage["enterprise.flags.surfaces-v2"] === "false"`.
+// Anything other than an explicit "false" keeps the canvas ON (so a stale opt-in
+// value, garbage, or a storage failure fails toward the new default).
 // ---------------------------------------------------------------------------
 
-/** localStorage key for the runtime `surfacesV2` opt-in. */
+/** localStorage key for the runtime `surfacesV2` opt-out. */
 export const SURFACES_V2_FLAG_KEY = "enterprise.flags.surfaces-v2";
 
-/** Build-time opt-in: `VITE_SURFACES_V2=true`. */
-function readEnvSurfacesV2(): boolean {
+/** Build-time opt-out: `VITE_SURFACES_V2=false` rolls back to no v2 canvas. */
+function readEnvSurfacesV2OptOut(): boolean {
   const value =
     typeof import.meta !== "undefined"
       ? import.meta.env?.VITE_SURFACES_V2
       : undefined;
-  return value === "true" || value === true;
-}
-
-/** Runtime opt-in: the localStorage key set to the string "true". */
-function readLocalStorageOptIn(key: string): boolean {
-  try {
-    return (
-      typeof window !== "undefined" &&
-      window.localStorage.getItem(key) === "true"
-    );
-  } catch {
-    // Private mode / storage disabled → no opt-in signal → OFF.
-    return false;
-  }
+  return value === "false" || value === false;
 }
 
 /**
  * Whether the Generative Surfaces v2 canvas mounts in the web Run cockpit.
- * **Default OFF.** ON iff `VITE_SURFACES_V2 === "true"` OR
- * `localStorage["enterprise.flags.surfaces-v2"] === "true"`. Read live (not a
- * module constant) so a devtools toggle / per-test seed takes effect on the
- * next `RunDestination` mount without a rebuild.
+ * **Default ON (E3).** OFF iff `VITE_SURFACES_V2 === "false"` OR
+ * `localStorage["enterprise.flags.surfaces-v2"] === "false"`. Read live (not a
+ * module constant) so a devtools opt-out toggle / per-test seed takes effect on
+ * the next `RunDestination` mount without a rebuild. Reuses the shared
+ * `readLocalStorageOptOut` (the same fail-toward-ON reader `runCockpitWeb` uses).
  */
 export function isSurfacesV2CanvasEnabled(): boolean {
-  return readEnvSurfacesV2() || readLocalStorageOptIn(SURFACES_V2_FLAG_KEY);
+  return (
+    !readEnvSurfacesV2OptOut() && !readLocalStorageOptOut(SURFACES_V2_FLAG_KEY)
+  );
 }

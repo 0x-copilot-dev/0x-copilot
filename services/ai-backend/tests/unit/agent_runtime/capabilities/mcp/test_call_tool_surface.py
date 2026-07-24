@@ -1,10 +1,20 @@
-"""Surface-emission tests for :class:`CallMcpTool` (generative-UI PRD-02, AC1/AC4).
+"""Ledger-emission tests for :class:`CallMcpTool` after the v1 surface retirement
+(PRD-E3 D4 / T5).
 
-Asserts a curated tool result carries a top-level ``surface_uri`` + a
-``surface`` envelope whose ``state.spec`` matches the builtin; an uncurated tool
-still gets a URI + data but no spec; an ``isError`` result gets neither; and
-``RUNTIME_SURFACE_EMISSION=false`` restores the byte-compatible pre-surface
-payload.
+The v1 ``result["surface"]`` / ``result["surface_uri"]`` appendage is GONE. A
+tool result now carries exactly the ``McpToolCallResult.ok`` fields
+(``server_name`` / ``tool_name`` / ``output``) — the surface envelope is computed
+on-demand ONLY when a :class:`WorkLedgerEmitter` is bound (``SURFACES_V2`` on) and
+handed straight to the ledger, never mutated onto the result. These tests pin:
+
+* the result dict is **never** decorated with a ``surface`` / ``surface_uri`` key;
+* a bound emitter records ``action.classified`` → ``read.executed`` →
+  ``surface.created`` → ``view.derived`` with the curated/uncurated tier the
+  surviving ``SurfaceProjector`` ladder computes (the invariant ported from the
+  old ``TestCallMcpToolSurfaceEmission``: curated ⇒ shaped, uncurated ⇒ generic,
+  ``isError`` ⇒ no surface);
+* no emitter bound (flag-off posture) ⇒ **no envelope computation, no generation
+  scheduling**, no ledger side effects, byte-identical result.
 """
 
 from __future__ import annotations
@@ -12,14 +22,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 
-import pytest
-
 from agent_runtime.capabilities.mcp import (
     CallMcpTool,
     DynamicMcpRegistry,
     McpLoader,
 )
-from agent_runtime.capabilities.surfaces import builtin
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
@@ -83,73 +90,34 @@ class SurfaceEmissionMixin(DynamicMcpLoadingMixin):
             )
         )
 
-
-class TestCallMcpToolSurfaceEmission(SurfaceEmissionMixin):
-    def test_curated_tool_result_carries_matching_surface(
-        self, runtime_context_admin: AgentRuntimeContext
-    ) -> None:
-        tool = self.make_call_tool(
-            runtime_context_admin,
-            server="linear",
-            tool="get_issue",
-            output=_LINEAR_ISSUE_OUTPUT,
-        )
-
-        result = self.invoke(tool, server="linear", tool_name="get_issue")
-
-        assert "error" not in result
-        assert result["surface_uri"] == "record://linear/get_issue/issue-uuid-1"
-        surface = result["surface"]
-        assert surface["archetype"] == "record"
-        expected_spec = builtin.lookup("linear", "get_issue").model_dump(
-            mode="json", exclude_none=True
-        )
-        assert surface["state"]["spec"] == expected_spec
-        assert surface["state"]["data"] == _LINEAR_ISSUE_OUTPUT
-
-    def test_uncurated_tool_result_has_uri_and_data_but_no_spec(
-        self, runtime_context_admin: AgentRuntimeContext
-    ) -> None:
-        tool = self.make_call_tool(
-            runtime_context_admin,
-            server="customsvc",
-            tool="do_thing",
-            output=_UNCURATED_OUTPUT,
-        )
-
-        result = self.invoke(tool, server="customsvc", tool_name="do_thing")
-
-        assert "error" not in result
-        assert result["surface_uri"] == "record://customsvc/do_thing/w-9"
-        surface = result["surface"]
-        assert "spec" not in surface["state"]
-        assert surface["state"]["data"] == _UNCURATED_OUTPUT
-
-    def test_is_error_result_gets_no_surface(
-        self, runtime_context_admin: AgentRuntimeContext
-    ) -> None:
-        tool = self.make_call_tool(
-            runtime_context_admin,
-            server="linear",
-            tool="get_issue",
-            output={
-                "content": [{"type": "text", "text": "boom"}],
-                "isError": True,
-            },
-        )
-
-        result = self.invoke(tool, server="linear", tool_name="get_issue")
-
-        assert "error" in result
-        assert "surface" not in result
-        assert "surface_uri" not in result
-
-    def test_emission_disabled_restores_byte_compatible_payload(
+    def bind_and_invoke(
         self,
-        runtime_context_admin: AgentRuntimeContext,
-        monkeypatch: pytest.MonkeyPatch,
+        tool: CallMcpTool,
+        *,
+        server: str,
+        tool_name: str,
+    ) -> tuple[dict[str, object], list[dict[str, object]]]:
+        """Invoke with a captured WorkLedgerEmitter bound; return (result, events)."""
+        recorded: list[dict[str, object]] = []
+
+        async def _emit(event_type_value, payload, summary):  # type: ignore[no-untyped-def]
+            recorded.append({"event_type": event_type_value, "payload": dict(payload)})
+
+        token = WorkLedgerEmitter.bind_for_run(WorkLedgerEmitter(emit=_emit))
+        try:
+            result = self.invoke(tool, server=server, tool_name=tool_name)
+        finally:
+            WorkLedgerEmitter.unbind(token)
+        return result, recorded
+
+
+class TestResultNeverCarriesSurface(SurfaceEmissionMixin):
+    """The v1 appendage is retired: the result dict is a bare
+    ``McpToolCallResult.ok`` shape, with or without an emitter bound."""
+
+    def test_no_emitter_result_is_bare_ok_shape(
+        self, runtime_context_admin: AgentRuntimeContext
     ) -> None:
-        monkeypatch.setenv("RUNTIME_SURFACE_EMISSION", "false")
         tool = self.make_call_tool(
             runtime_context_admin,
             server="linear",
@@ -165,31 +133,7 @@ class TestCallMcpToolSurfaceEmission(SurfaceEmissionMixin):
         assert set(result.keys()) == {"server_name", "tool_name", "output"}
         assert result["output"] == _LINEAR_ISSUE_OUTPUT
 
-
-class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
-    """PRD-A3 Hook 1: ``ainvoke`` records the v2 ledger read path when an
-    emitter is bound, and no-ops (result byte-identical) when it is not."""
-
-    def _bind_and_invoke(
-        self,
-        tool: CallMcpTool,
-        *,
-        server: str,
-        tool_name: str,
-    ) -> tuple[dict[str, object], list[dict[str, object]]]:
-        recorded: list[dict[str, object]] = []
-
-        async def _emit(event_type_value, payload, summary):  # type: ignore[no-untyped-def]
-            recorded.append({"event_type": event_type_value, "payload": dict(payload)})
-
-        token = WorkLedgerEmitter.bind_for_run(WorkLedgerEmitter(emit=_emit))
-        try:
-            result = self.invoke(tool, server=server, tool_name=tool_name)
-        finally:
-            WorkLedgerEmitter.unbind(token)
-        return result, recorded
-
-    def test_bound_emitter_records_ledger_events(
+    def test_bound_emitter_result_still_bare_ok_shape(
         self, runtime_context_admin: AgentRuntimeContext
     ) -> None:
         tool = self.make_call_tool(
@@ -199,12 +143,35 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
             output=_LINEAR_ISSUE_OUTPUT,
         )
 
-        result, recorded = self._bind_and_invoke(
+        result, _recorded = self.bind_and_invoke(
             tool, server="linear", tool_name="get_issue"
         )
 
-        # Result is unchanged (the emitter only reads the attached envelope).
-        assert result["surface_uri"] == "record://linear/get_issue/issue-uuid-1"
+        # Emitting to the ledger does NOT mutate the tool result.
+        assert "surface" not in result
+        assert "surface_uri" not in result
+        assert set(result.keys()) == {"server_name", "tool_name", "output"}
+
+
+class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
+    """PRD-A3 Hook 1 (reworked for E3): ``ainvoke`` records the v2 ledger read
+    path when an emitter is bound, computing the surface envelope on-demand from
+    the surviving ``SurfaceProjector`` ladder; no-ops when unbound."""
+
+    def test_curated_tool_records_shaped_surface(
+        self, runtime_context_admin: AgentRuntimeContext
+    ) -> None:
+        tool = self.make_call_tool(
+            runtime_context_admin,
+            server="linear",
+            tool="get_issue",
+            output=_LINEAR_ISSUE_OUTPUT,
+        )
+
+        _result, recorded = self.bind_and_invoke(
+            tool, server="linear", tool_name="get_issue"
+        )
+
         assert [row["event_type"] for row in recorded] == [
             LedgerEventType.ACTION_CLASSIFIED.value,
             LedgerEventType.READ_EXECUTED.value,
@@ -214,6 +181,12 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
         # payload_ref points back at this tool call's result (D1).
         read = recorded[1]["payload"]
         assert read["payload_ref"].startswith("call:")
+        # surface.created carries the projector-computed surface id (ported from
+        # the old ``result["surface_uri"] == "record://linear/get_issue/..."``).
+        assert (
+            recorded[2]["payload"]["surface_id"]
+            == "record://linear/get_issue/issue-uuid-1"
+        )
         # Curated tool ⇒ shaped/registry view.
         assert recorded[3]["payload"]["tier"] == "shaped"
 
@@ -227,7 +200,7 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
             output=_UNCURATED_OUTPUT,
         )
 
-        _result, recorded = self._bind_and_invoke(
+        _result, recorded = self.bind_and_invoke(
             tool, server="customsvc", tool_name="do_thing"
         )
 
@@ -237,15 +210,40 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
             LedgerEventType.SURFACE_CREATED.value,
             LedgerEventType.VIEW_DERIVED.value,
         ]
+        assert recorded[2]["payload"]["surface_id"] == "record://customsvc/do_thing/w-9"
         # No builtin spec ⇒ generic/schema view.
         assert recorded[3]["payload"]["tier"] == "generic"
         assert recorded[3]["payload"]["basis"] == "schema"
 
+    def test_is_error_result_emits_no_surface_events(
+        self, runtime_context_admin: AgentRuntimeContext
+    ) -> None:
+        # An isError output returns a fail result BEFORE the ledger hook, so no
+        # ledger events at all (ported from the old "isError gets no surface").
+        tool = self.make_call_tool(
+            runtime_context_admin,
+            server="linear",
+            tool="get_issue",
+            output={
+                "content": [{"type": "text", "text": "boom"}],
+                "isError": True,
+            },
+        )
+
+        result, recorded = self.bind_and_invoke(
+            tool, server="linear", tool_name="get_issue"
+        )
+
+        assert "error" in result
+        assert "surface" not in result
+        assert "surface_uri" not in result
+        assert recorded == []
+
     def test_no_emitter_bound_is_no_op_and_byte_identical(
         self, runtime_context_admin: AgentRuntimeContext
     ) -> None:
-        # No emitter bound (flag-off posture): active() is None, and the result
-        # is exactly the surface-emission shape — no ledger side effects.
+        # No emitter bound (flag-off posture): active() is None ⇒ no envelope
+        # computation, no generation scheduling, no ledger side effects.
         assert WorkLedgerEmitter.active() is None
         tool = self.make_call_tool(
             runtime_context_admin,
@@ -256,5 +254,5 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
 
         result = self.invoke(tool, server="linear", tool_name="get_issue")
 
-        assert result["surface_uri"] == "record://linear/get_issue/issue-uuid-1"
+        assert set(result.keys()) == {"server_name", "tool_name", "output"}
         assert WorkLedgerEmitter.active() is None

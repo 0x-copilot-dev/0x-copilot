@@ -404,7 +404,9 @@ class TestMixedModeAndForgery:
         """
 
         # 1. Flag OFF — first send creates a real v1 approval row A1.
-        monkeypatch.delenv("SURFACES_V2", raising=False)
+        monkeypatch.setenv(
+            "SURFACES_V2", "false"
+        )  # E3: default-on ⇒ explicit kill switch
         h = Harness()
         await h.seed_draft()
         v1_result = await h.send(expected_version=1)

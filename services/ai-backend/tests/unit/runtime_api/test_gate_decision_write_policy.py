@@ -269,7 +269,9 @@ class TestCoordinatorGatePolicy:
         assert "write_policy" not in payload
 
     async def test_flag_off_write_policy_rejected_422(self, monkeypatch) -> None:
-        monkeypatch.delenv("SURFACES_V2", raising=False)
+        monkeypatch.setenv(
+            "SURFACES_V2", "false"
+        )  # E3: default-on ⇒ explicit kill switch
         store = InMemoryRuntimeApiStore()
         await _seed_run(store)
         await _seed_approval(store)

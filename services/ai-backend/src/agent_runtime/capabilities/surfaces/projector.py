@@ -85,11 +85,13 @@ class SurfaceProjector:
     ``store`` is the optional rung-2 read seam. ``scheduler`` is the optional
     rung-3 seam: on a ladder miss the projector attaches the data-only envelope
     (tier-3 renders instantly) AND schedules async spec generation — never
-    blocking the tool-call path. ``enabled`` mirrors the
-    ``RUNTIME_SURFACE_EMISSION`` flag: when ``False`` the projector
-    short-circuits to ``None`` so payloads stay byte-for-byte identical to
-    pre-surface behaviour. Read the flag at the emission chokepoint and pass it
-    in — the projector itself never touches the environment.
+    blocking the tool-call path. ``enabled`` is a self-contained short-circuit:
+    when ``False`` the projector returns ``None`` without resolving — the caller
+    decides the toggle and passes it in; the projector never touches the
+    environment. (PRD-E3 retired the standalone ``RUNTIME_SURFACE_EMISSION`` env
+    gate; the projector is now driven on-demand by the ``SURFACES_V2`` Work Ledger
+    emitter, so the runtime construction path leaves ``enabled`` at its ``True``
+    default.)
     """
 
     store: SurfaceSpecReadPort | None = None

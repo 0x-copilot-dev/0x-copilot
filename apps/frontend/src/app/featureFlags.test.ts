@@ -59,26 +59,27 @@ describe("isRunCockpitWebEnabled (WC-P7)", () => {
   });
 });
 
-describe("isSurfacesV2CanvasEnabled (PRD-B1)", () => {
-  it("defaults OFF with no opt-in signal", () => {
+describe("isSurfacesV2CanvasEnabled (PRD-E3: default ON opt-out)", () => {
+  it("defaults ON when there is no opt-out signal", () => {
     stubLocalStorage(() => null);
+    expect(isSurfacesV2CanvasEnabled()).toBe(true);
+  });
+
+  it("disables when localStorage opts out with the exact string 'false'", () => {
+    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "false" : null));
     expect(isSurfacesV2CanvasEnabled()).toBe(false);
   });
 
-  it("enables when localStorage opts in with the exact string 'true'", () => {
+  it("stays ON for any non-'false' value (fails toward the new default)", () => {
+    // A stale opt-in ("true") or garbage value must NOT be read as an opt-out.
     stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "true" : null));
     expect(isSurfacesV2CanvasEnabled()).toBe(true);
   });
 
-  it("stays OFF for any non-'true' value (fail-safe)", () => {
-    stubLocalStorage((key) => (key === SURFACES_V2_FLAG_KEY ? "1" : null));
-    expect(isSurfacesV2CanvasEnabled()).toBe(false);
-  });
-
-  it("stays OFF when localStorage throws (private mode / storage disabled)", () => {
+  it("stays ON when localStorage throws (private mode / storage disabled)", () => {
     stubLocalStorage(() => {
       throw new Error("storage disabled");
     });
-    expect(isSurfacesV2CanvasEnabled()).toBe(false);
+    expect(isSurfacesV2CanvasEnabled()).toBe(true);
   });
 });

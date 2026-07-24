@@ -153,7 +153,8 @@ def fx() -> GateFixture:
 
 
 def test_flag_off_call_tool_bytes_identical(fx: GateFixture, monkeypatch) -> None:
-    monkeypatch.delenv("SURFACES_V2", raising=False)
+    # E3: SURFACES_V2 defaults ON, so flag-off is the explicit kill switch.
+    monkeypatch.setenv("SURFACES_V2", "false")
     # Same authenticated card; one tool with a gate wired, one without.
     interrupt = _Interrupt({"decision": "rejected"})
     with_gate = fx.make_call_tool(
@@ -254,8 +255,9 @@ def test_mcp_auth_error_regates_when_flag_on_terminal_failure_when_off(
     assert interrupt_on.calls == 1  # re-gated
     assert result_on["error"]["code"] == "auth_failure"
 
-    # Flag OFF: the same McpAuthError is the terminal failure — no re-gate.
-    monkeypatch.delenv("SURFACES_V2", raising=False)
+    # Flag OFF (E3 explicit kill switch): the same McpAuthError is the terminal
+    # failure — no re-gate.
+    monkeypatch.setenv("SURFACES_V2", "false")
     provider_off = fx.make_tool_and_provider(
         auth_state=McpAuthState.AUTHENTICATED, raising=True
     )
