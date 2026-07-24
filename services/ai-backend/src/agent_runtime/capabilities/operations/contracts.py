@@ -8,6 +8,7 @@ There is deliberately no ``apply`` method on :class:`OperationAdapter`.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Mapping
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -126,23 +127,59 @@ class GateResolution(RuntimeContract):
         return self
 
 
-class ModelArtifactContentPart(RuntimeContract):
-    """Provider-neutral typed model content part observed by A3.
+class ArtifactContentPart(RuntimeContract):
+    """Provider-neutral, explicit artifact content part.
 
+    It carries the same intent as ``publish_artifact`` and exactly one content
+    transport: bounded inline UTF-8 text or a server-resolvable logical ref.
     Plain strings and Markdown/code fences cannot validate as this contract.
-    Shadow mode records intent only; A3 does not publish the bytes.
     """
 
     type: str = Field(pattern=r"^artifact$")
     intent: ArtifactIntent
-    content_ref: str = Field(min_length=1, max_length=2048)
+    content: str | None = Field(default=None, max_length=1024 * 1024)
+    content_ref: str | None = Field(default=None, min_length=1, max_length=2048)
 
     @field_validator("content_ref")
     @classmethod
-    def _content_ref_is_logical(cls, value: str) -> str:
-        if value.startswith("/") or ":\\" in value:
+    def _content_ref_is_logical(cls, value: str | None) -> str | None:
+        if value is not None and (value.startswith("/") or ":\\" in value):
             raise ValueError("artifact content_ref must be logical")
         return value
+
+    @model_validator(mode="after")
+    def _one_content_transport(self) -> ArtifactContentPart:
+        if (self.content is None) == (self.content_ref is None):
+            raise ValueError(
+                "artifact content part requires exactly one content transport"
+            )
+        return self
+
+
+class ModelArtifactContentPart(ArtifactContentPart):
+    """A3-compatible name for the normalized B1 content-part contract."""
+
+
+@dataclass(frozen=True)
+class ArtifactPublicationSource:
+    """Ephemeral bytes/ref handed from a trusted adapter to the A2 repository.
+
+    Inline bytes are deliberately excluded from ``repr`` so failure telemetry
+    cannot accidentally include authored content.
+    """
+
+    content: bytes | None = field(default=None, repr=False)
+    content_ref: str | None = None
+
+    def __post_init__(self) -> None:
+        if (self.content is None) == (self.content_ref is None):
+            raise ValueError(
+                "artifact publication source requires exactly one transport"
+            )
+        if self.content_ref is not None and (
+            self.content_ref.startswith("/") or ":\\" in self.content_ref
+        ):
+            raise ValueError("artifact publication source reference must be logical")
 
 
 class OperationAdapter(Protocol):
@@ -153,6 +190,15 @@ class OperationAdapter(Protocol):
 
     async def build_proposal(self, request: OperationRequest) -> ProposedEffect:
         """Prepare and stage an external effect without applying it."""
+
+
+class ArtifactPublicationAdapter(Protocol):
+    """Optional adapter capability for explicit authored artifact bytes/refs."""
+
+    async def artifact_publication(
+        self, request: OperationRequest
+    ) -> ArtifactPublicationSource | None:
+        """Return the exact content transport to persist for this operation."""
 
 
 class OperationGateResolver(Protocol):
@@ -185,6 +231,12 @@ class ArtifactServicePort(Protocol):
 
     def promote_source(self, **kwargs: object) -> Awaitable[object]:
         """Stream one authorized immutable source into bounded artifact storage."""
+
+    def publish_from_bytes(self, **kwargs: object) -> Awaitable[object]:
+        """Persist trusted inline bytes through the A2 repository."""
+
+    def publish_from_source(self, **kwargs: object) -> Awaitable[object]:
+        """Persist one exact scoped source with trusted attribution."""
 
 
 class OperationMetricsPort(Protocol):
@@ -266,6 +318,9 @@ JsonArguments = JsonObject
 
 __all__ = (
     "ArtifactIntent",
+    "ArtifactContentPart",
+    "ArtifactPublicationAdapter",
+    "ArtifactPublicationSource",
     "ArtifactServicePort",
     "GateResolution",
     "JsonArguments",

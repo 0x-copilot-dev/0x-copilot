@@ -6,13 +6,18 @@ import asyncio
 import json
 import time
 
-from agent_runtime.artifacts.contracts import ArtifactPromotionRequest
+from agent_runtime.artifacts.contracts import (
+    ArtifactCreateRequest,
+    ArtifactPromotionRequest,
+    ArtifactProvenance,
+)
 from agent_runtime.artifacts.errors import ArtifactError
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.capabilities.operations.context import OperationContext
 from agent_runtime.capabilities.operations.contracts import (
     GateResolution,
+    ArtifactPublicationSource,
     OperationAdapter,
     OperationClassification,
     OperationDescriptor,
@@ -45,6 +50,7 @@ from agent_runtime.surfaces_v2.canonical_json import (
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectClass,
+    ArtifactAuthor,
     LedgerEventType,
     OperationClassifiedPayload,
     OperationCompletedPayload,
@@ -224,6 +230,7 @@ class OperationGateway:
             )
             artifact_ids = await self._persist_artifact(
                 request=request,
+                adapter=adapter,
                 raw_result=raw_result,
                 proposed=proposed,
             )
@@ -344,6 +351,7 @@ class OperationGateway:
     async def _persist_artifact(
         *,
         request: OperationRequest,
+        adapter: OperationAdapter,
         raw_result: OperationRawResult | None,
         proposed: ProposedEffect | None,
     ) -> tuple[str, ...]:
@@ -358,6 +366,14 @@ class OperationGateway:
                 "Artifact service is unavailable.",
                 retryable=True,
             )
+        publication = await OperationGateway._artifact_publication(adapter, request)
+        if publication is not None:
+            mutation = await OperationGateway._publish_authored_content(
+                request=request,
+                service=service,
+                publication=publication,
+            )
+            return (mutation.record.artifact.artifact_id,)
         source_ref = (
             raw_result.result_ref
             if raw_result is not None
@@ -385,6 +401,68 @@ class OperationGateway:
         )
         artifact_id = mutation.record.artifact.artifact_id
         return (artifact_id,)
+
+    @staticmethod
+    async def _artifact_publication(
+        adapter: OperationAdapter,
+        request: OperationRequest,
+    ) -> ArtifactPublicationSource | None:
+        publisher = getattr(adapter, "artifact_publication", None)
+        if not callable(publisher):
+            return None
+        result = await publisher(request)
+        if result is not None and not isinstance(result, ArtifactPublicationSource):
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                "Artifact publication adapter returned an invalid source.",
+            )
+        return result
+
+    @staticmethod
+    async def _publish_authored_content(
+        *,
+        request: OperationRequest,
+        service: object,
+        publication: ArtifactPublicationSource,
+    ) -> object:
+        intent = request.artifact_intent
+        if intent is None:  # pragma: no cover - guarded by caller
+            raise RuntimeError("artifact publication requires artifact intent")
+        context = OperationContext.require()
+        author = (
+            ArtifactAuthor.SUBAGENT
+            if request.producer.value == "subagent"
+            else ArtifactAuthor.MODEL
+            if request.producer.value == "model"
+            else ArtifactAuthor.SYSTEM
+        )
+        create_request = ArtifactCreateRequest(
+            run_id=context.identity.run_id,
+            kind=intent.kind,
+            title=intent.title or "Untitled artifact",
+            media_type=intent.media_type or "application/octet-stream",
+            suggested_filename=intent.suggested_filename,
+            idempotency_key=request.operation_id,
+        )
+        if publication.content is not None:
+            return await service.publish_from_bytes(
+                org_id=context.identity.org_id,
+                user_id=context.identity.user_id,
+                request=create_request,
+                provenance=ArtifactProvenance(author=author),
+                content=publication.content,
+            )
+        assert publication.content_ref is not None
+        return await service.publish_from_source(
+            org_id=context.identity.org_id,
+            user_id=context.identity.user_id,
+            request=create_request,
+            provenance=ArtifactProvenance(
+                author=author,
+                source_ref=publication.content_ref,
+            ),
+            source_ref=publication.content_ref,
+        )
 
     @staticmethod
     def _disposition(

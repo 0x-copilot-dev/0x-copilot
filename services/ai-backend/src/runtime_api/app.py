@@ -1193,6 +1193,7 @@ class RuntimeApiAppFactory:
             user_policies_resolver=getattr(
                 app.state, "runtime_user_policies_resolver", None
             ),
+            artifact_service=getattr(app.state, "artifact_service", None),
         )
         app.state.runtime_in_process_worker = worker
         app.state.runtime_in_process_worker_task = asyncio.create_task(

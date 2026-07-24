@@ -29,6 +29,12 @@ from agent_runtime.capabilities.operations.context import (
 )
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    ArtifactContentPartPublisher,
+    PublishArtifactTool,
+)
 from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyResolver,
 )
@@ -132,10 +138,12 @@ class RuntimeApprovalHandler:
         ) = None,
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
+        artifact_service: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
+        self.artifact_service = artifact_service
         # BYOK re-hydration on resume: the persisted run record's context was
         # serialized without ``provider_keys`` (excluded field), so the resumed
         # harness re-fetches them in memory only — same seam as the run handler.
@@ -335,10 +343,7 @@ class RuntimeApprovalHandler:
             RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
         )
         try:
-            if (
-                self.settings.execution.operation_gateway_mode
-                is not OperationGatewayMode.OFF
-            ):
+            if self._operation_context_required():
 
                 async def _emit_operation(
                     event_type_value: str,
@@ -366,7 +371,11 @@ class RuntimeApprovalHandler:
                     ledger_emitter=OperationEventEmitterAdapter(
                         emit_fn=_emit_operation
                     ),
-                    artifact_service=None,
+                    artifact_service=(
+                        self.artifact_service
+                        if self._artifact_publication_enabled()
+                        else None
+                    ),
                     mode=self.settings.execution.operation_gateway_mode,
                     canonical_arguments_durable=False,
                 )
@@ -391,7 +400,7 @@ class RuntimeApprovalHandler:
                 resume=resume,
                 metrics=metrics,
             )
-            await OperationShadowProbe.observe_model_result(result)
+            await self._process_model_artifact_content(result)
             if RuntimeRunHandler._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -594,7 +603,36 @@ class RuntimeApprovalHandler:
                 user_id=run.runtime_context.user_id,
                 emit_event=self._draft_backend_event_emitter(run),
             )
+        publish_artifact_tool = self._publish_artifact_tool()
+        if publish_artifact_tool is not None:
+            update["publish_artifact_tool"] = publish_artifact_tool
         return dependencies.model_copy(update=update)
+
+    def _artifact_publication_enabled(self) -> bool:
+        return bool(
+            self.settings.execution.artifact_effects_v2
+            and self.artifact_service is not None
+        )
+
+    def _operation_context_required(self) -> bool:
+        return bool(
+            self._artifact_publication_enabled()
+            or self.settings.execution.operation_gateway_mode
+            is not OperationGatewayMode.OFF
+        )
+
+    def _publish_artifact_tool(self) -> PublishArtifactTool | None:
+        if not self._artifact_publication_enabled():
+            return None
+        return PublishArtifactTool(
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+        )
+
+    async def _process_model_artifact_content(self, result: object) -> None:
+        if self._artifact_publication_enabled():
+            await ArtifactContentPartPublisher().publish(result)
+            return
+        await OperationShadowProbe.observe_model_result(result)
 
     def _draft_backend_event_emitter(
         self, run: RunRecord

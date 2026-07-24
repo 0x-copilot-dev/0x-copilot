@@ -70,6 +70,12 @@ from agent_runtime.capabilities.operations.context import (
 )
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    ArtifactContentPartPublisher,
+    PublishArtifactTool,
+)
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
@@ -201,6 +207,7 @@ class RuntimeRunHandler:
         user_policies_resolver: UserPoliciesResolver | None = None,
         token_counter: TokenCounterPort | None = None,
         queue: object | None = None,
+        artifact_service: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -209,6 +216,9 @@ class RuntimeRunHandler:
         # (FR-C8). ``None`` (unwired / minimal test handler) ⇒ the stager's
         # ``commit_queue`` is ``None`` and nothing auto-applies.
         self._queue = queue
+        # B1 publication uses the A2-composed service directly through the
+        # OperationContext. ``None`` on the dark path keeps the tool absent.
+        self.artifact_service = artifact_service
         self.settings = settings or RuntimeSettings.load()
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
@@ -408,10 +418,7 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         try:
-            if (
-                self.settings.execution.operation_gateway_mode
-                is not OperationGatewayMode.OFF
-            ):
+            if self._operation_context_required():
                 operation_context_token = OperationContext.bind_for_run(
                     identity=VerifiedOperationIdentity(
                         org_id=run.org_id,
@@ -423,7 +430,11 @@ class RuntimeRunHandler:
                         command.runtime_context
                     ),
                     ledger_emitter=self._build_operation_ledger_emitter(run),
-                    artifact_service=None,
+                    artifact_service=(
+                        self.artifact_service
+                        if self._artifact_publication_enabled()
+                        else None
+                    ),
                     mode=self.settings.execution.operation_gateway_mode,
                     canonical_arguments_durable=False,
                 )
@@ -490,7 +501,7 @@ class RuntimeRunHandler:
                     value=result,
                 ):
                     result = {self._Fields.ACTION_REQUIRED: True}
-            await OperationShadowProbe.observe_model_result(result)
+            await self._process_model_artifact_content(result)
             if self._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -1174,7 +1185,38 @@ class RuntimeRunHandler:
         stage_rowset_tool = self._stage_rowset_write_tool(command, run)
         if stage_rowset_tool is not None:
             update["stage_rowset_write_tool"] = stage_rowset_tool
+        publish_artifact_tool = self._publish_artifact_tool()
+        if publish_artifact_tool is not None:
+            update["publish_artifact_tool"] = publish_artifact_tool
         return dependencies.model_copy(update=update)
+
+    def _artifact_publication_enabled(self) -> bool:
+        return bool(
+            self.settings.execution.artifact_effects_v2
+            and self.artifact_service is not None
+        )
+
+    def _operation_context_required(self) -> bool:
+        return bool(
+            self._artifact_publication_enabled()
+            or self.settings.execution.operation_gateway_mode
+            is not OperationGatewayMode.OFF
+        )
+
+    def _publish_artifact_tool(self) -> PublishArtifactTool | None:
+        if not self._artifact_publication_enabled():
+            return None
+        return PublishArtifactTool(
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+        )
+
+    async def _process_model_artifact_content(self, result: object) -> None:
+        """Use B1's normalized publication path, or preserve A3 observation."""
+
+        if self._artifact_publication_enabled():
+            await ArtifactContentPartPublisher().publish(result)
+            return
+        await OperationShadowProbe.observe_model_result(result)
 
     def _stage_rowset_write_tool(
         self, command: RuntimeRunCommand, run: object | None

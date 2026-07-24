@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, TypeVar
 
 from langchain_core.runnables import RunnableConfig
@@ -35,6 +35,9 @@ from agent_runtime.capabilities.operations.contracts import (
 )
 from agent_runtime.capabilities.operations.disposition import (
     PresentationDispositionPolicy,
+)
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    iter_artifact_content_parts,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     LedgerEventType,
@@ -390,48 +393,14 @@ class OperationShadowProbe:
 
     @staticmethod
     def _artifact_parts(result: object) -> tuple[ModelArtifactContentPart, ...]:
-        candidates: list[object] = []
-        if isinstance(result, Mapping):
-            content = result.get("content")
-            if isinstance(content, Sequence) and not isinstance(
-                content, (str, bytes, bytearray)
-            ):
-                candidates.extend(content)
-            messages = result.get("messages")
-            if isinstance(messages, Sequence) and not isinstance(
-                messages, (str, bytes, bytearray)
-            ):
-                for message in messages:
-                    value = (
-                        message.get("content")
-                        if isinstance(message, Mapping)
-                        else getattr(message, "content", None)
-                    )
-                    if isinstance(value, Sequence) and not isinstance(
-                        value, (str, bytes, bytearray)
-                    ):
-                        candidates.extend(value)
-        else:
-            content = getattr(result, "content", None)
-            if isinstance(content, Sequence) and not isinstance(
-                content, (str, bytes, bytearray)
-            ):
-                candidates.extend(content)
-
-        parts: list[ModelArtifactContentPart] = []
-        for candidate in candidates:
-            if (
-                not isinstance(candidate, Mapping)
-                or candidate.get("type") != "artifact"
-            ):
-                continue
-            try:
-                parts.append(ModelArtifactContentPart.model_validate(candidate))
-            except Exception:
-                # Invalid explicit intent is observable only as a debug signal;
-                # final narrative remains untouched per SDR failure behavior.
-                _LOGGER.debug("operation_gateway.invalid_artifact_content_part")
-        return tuple(parts)
+        # A3's dark-path observer remains ref-only. Inline B1 content is
+        # intentionally ignored until the publication flag is enabled by the
+        # run handler, preserving the pre-B1 shadow behavior byte-for-byte.
+        return tuple(
+            ModelArtifactContentPart.model_validate(part.model_dump(mode="json"))
+            for part in iter_artifact_content_parts(result)
+            if part.content_ref is not None
+        )
 
 
 def wrap_model_tool_for_shadow(

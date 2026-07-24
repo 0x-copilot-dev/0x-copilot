@@ -54,6 +54,9 @@ from agent_runtime.capabilities.tools.builtin.ask_a_question import (
 from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
     StageRowsetWriteInput,
 )
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    PublishArtifactInput,
+)
 from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
     SuggestMcpConnectorInput,
     SuggestMcpConnectorTool,
@@ -225,6 +228,7 @@ async def _assemble_harness(
             code_mode_tool=runtime_dependencies.code_mode_tool,
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
+            publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             runtime_context=runtime_context,
         )
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
@@ -342,6 +346,7 @@ def _model_visible_tools(
     code_mode_tool: object | None = None,
     sandbox_execute_tool: object | None = None,
     stage_rowset_write_tool: object | None = None,
+    publish_artifact_tool: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = [
@@ -458,6 +463,10 @@ def _model_visible_tools(
         model_tools.append(
             _structured_tool(stage_rowset_write_tool, StageRowsetWriteInput)
         )
+    if publish_artifact_tool is not None:
+        model_tools.append(
+            _structured_tool(publish_artifact_tool, PublishArtifactInput)
+        )
     return tuple(model_tools)
 
 
@@ -534,7 +543,7 @@ def _structured_tool(tool_adapter: object, args_schema: type[object]) -> Structu
 
         # The provider dispatch inside ``CallMcpTool`` owns the MCP probe; an
         # umbrella-level probe here would double-count the same invocation.
-        if name == McpValues.ToolName.CALL_MCP_TOOL:
+        if name in {McpValues.ToolName.CALL_MCP_TOOL, "publish_artifact"}:
             return await _invoke_legacy()
         return await OperationShadowProbe.invoke_legacy(
             capability="builtin",

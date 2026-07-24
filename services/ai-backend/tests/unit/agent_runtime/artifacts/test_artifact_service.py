@@ -337,6 +337,33 @@ class TestArtifactService(ArtifactServiceFakes):
         assert blobs.put_calls == 1
 
     @pytest.mark.asyncio
+    async def test_publish_uses_create_transaction_with_model_attribution(self) -> None:
+        metadata = self.Metadata()
+        service = self.service(metadata=metadata)
+
+        result = await service.publish_from_bytes(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactCreateRequest(
+                run_id=SCOPE.run_id,
+                kind=ArtifactKind.CODE,
+                title="published.py",
+                media_type="text/x-python",
+                idempotency_key="test-publish",
+            ),
+            provenance=ArtifactProvenance(author=ArtifactAuthor.MODEL),
+            content=b"print('published')\n",
+        )
+
+        assert result.record.artifact.created_by is ArtifactAuthor.MODEL
+        assert metadata.create_command is not None
+        assert metadata.create_command.idempotency.route == "INTERNAL:artifact.publish"
+        assert tuple(
+            event.event_type for event in metadata.create_command.ledger_events
+        ) == (LedgerEventType.ARTIFACT_CREATED,)
+        assert "published" not in str(metadata.create_command.ledger_events)
+
+    @pytest.mark.asyncio
     async def test_foreign_run_is_rejected_before_blob_ingest(self) -> None:
         blobs = self.Blobs()
         service = self.service(scopes=self.Scopes(None), blobs=blobs)
@@ -436,6 +463,41 @@ class TestArtifactService(ArtifactServiceFakes):
         promoted = metadata.create_command.ledger_events[-1]
         assert promoted.payload["source_ref"] == source_ref
         assert "# Hello" not in str(metadata.create_command.ledger_events)
+
+    @pytest.mark.asyncio
+    async def test_publish_from_source_preserves_subagent_authorship(self) -> None:
+        metadata = self.Metadata()
+        source_ref = "payload://subagent-output"
+        service = self.service(
+            metadata=metadata,
+            sources=self.Sources(b"# Subagent notes\n", source_ref=source_ref),
+        )
+
+        result = await service.publish_from_source(
+            org_id=SCOPE.org_id,
+            user_id=SCOPE.user_id,
+            request=ArtifactCreateRequest(
+                run_id=SCOPE.run_id,
+                kind=ArtifactKind.DOCUMENT,
+                title="subagent-notes.md",
+                media_type="text/markdown",
+                idempotency_key="operation-publish-source-1",
+            ),
+            provenance=ArtifactProvenance(
+                author=ArtifactAuthor.SUBAGENT,
+                source_ref=source_ref,
+            ),
+            source_ref=source_ref,
+        )
+
+        assert result.record.artifact.created_by is ArtifactAuthor.SUBAGENT
+        assert metadata.create_command is not None
+        revision = metadata.create_command.record.current_revision.revision
+        assert revision.author is ArtifactAuthor.SUBAGENT
+        assert revision.source_ref == source_ref
+        assert tuple(
+            event.event_type for event in metadata.create_command.ledger_events
+        ) == (LedgerEventType.ARTIFACT_CREATED,)
 
     @pytest.mark.asyncio
     async def test_range_stream_returns_exact_bytes(self) -> None:
