@@ -1108,8 +1108,24 @@ export function CopilotApp({
         // deep composer subtree (ToolPicker / MentionPopover) reads it via
         // `useTransport`. The binder itself stays substrate-clean: its data
         // ports go through the typed `api/*` modules, not this transport.
+        //
+        // Web differs from the desktop gate: the web `FirstRunGate` holds no
+        // router (the web router speaks `AppRoute`, not the shared
+        // `ArtifactRoute` the desktop gate navigates), so the handoff binding
+        // happens HERE — on a real first run the mount hands back the created
+        // `FirstRunLaunchResult`, and App navigates the router to that
+        // conversation (`openConversation`) BEFORE flipping the gate flag, so
+        // the shell mounts bound to the first run rather than an empty standby
+        // that drops the first message. A resultless finish/skip just reveals
+        // the shell on a blank new run.
         <TransportProvider transport={getAppTransport()}>
-          <FirstRunSurfaceMount onComplete={onComplete} identity={identity} />
+          <FirstRunSurfaceMount
+            onComplete={(result) => {
+              if (result) openConversation(result.conversationId);
+              onComplete();
+            }}
+            identity={identity}
+          />
         </TransportProvider>
       )}
     >

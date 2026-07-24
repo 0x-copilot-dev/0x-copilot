@@ -146,6 +146,10 @@ export function App(): ReactElement {
               <FirstRunGate
                 bridge={window.bridge}
                 workspaceId={session.workspaceId}
+                // The shell binds its active conversation from this router; the
+                // gate navigates it to the created conversation at handoff so
+                // the first run opens bound, not on an empty standby composer.
+                router={router}
                 renderFirstRun={(onComplete) => (
                   <FirstRunSurfaceMount
                     workspaceId={session.workspaceId}
@@ -392,9 +396,11 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // (the cockpit binds by conversation id, not run id). Stops the old
             // silent argument discard (`() => handleNavigate("run")`).
             onOpenRun={(target) => openConversation(target.conversationId)}
-            // Chats' "New chat" + Skills' "Run" — the cockpit front door, no id.
-            // Dedicated new-chat intents (⌘N / palette) use openNewRun.
-            onNewChat={() => handleNavigate("run")}
+            // Chats' "New chat" + Skills' "Run" — start a FRESH chat: clear the
+            // bound conversation and land on Run (same as ⌘N / the palette).
+            // `handleNavigate("run")` alone kept the stale conversation id bound,
+            // so "New chat" re-opened the current run instead of a blank one.
+            onNewChat={openNewRun}
             // Chats → reopen threads the REAL conversation id (navigate to its
             // Run route); a new chat's first send that resolved to a real id
             // navigates the same way. Both bind the cockpit onto that id.

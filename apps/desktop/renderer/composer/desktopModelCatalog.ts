@@ -46,16 +46,37 @@ export function mergeCatalog(args: {
 }
 
 /**
+ * Provider preference order for auto-select among CONFIGURED providers, applied
+ * only to USABLE models. The backend catalog puts the deployment default item
+ * (gpt-5.4-mini) first, so a naive `models[0]` fallback preselected OpenAI even
+ * for a user with only an Anthropic key. This explicit order picks the first
+ * provider that actually has a usable model, honouring the user's stated
+ * priority: OpenAI > Anthropic > OpenRouter > Gemini(google).
+ */
+const PROVIDER_PRIORITY: readonly string[] = [
+  "openai",
+  "anthropic",
+  "openrouter",
+  "google",
+];
+
+/**
  * Pick the default model id. Priority — provider-aware auto-select so that
  * "add a key → the matching model is picked and usable" holds instead of
  * leaving a keyless or wrong-provider default selected:
  *   1. `preferProvider` — the first usable model of a just-added provider
  *      (BYOK: an OpenAI key → an OpenAI model, an Anthropic key → a Claude
  *      model, an OpenRouter key → an OpenRouter model).
- *   2. `defaultModelId` — the backend catalog's `default_model_id` when it is
- *      itself usable (env ∪ BYOK configured).
- *   3. the first usable (configured, non-disabled) model.
- *   4. the first entry (nothing usable yet — the run-start gate is the backstop).
+ *   2. PROVIDER_PRIORITY (OpenAI > Anthropic > OpenRouter > Gemini): the first
+ *      provider with a usable model wins — preferring `defaultModelId` when it
+ *      belongs to that provider, else that provider's first usable model. This
+ *      is what stops the OpenAI default from being preselected when the user has
+ *      no OpenAI key.
+ *   3. the first usable (configured, non-disabled) model of ANY provider (covers
+ *      local/ollama and any provider outside the priority list).
+ *   4. "" — nothing usable yet. NEVER an unusable entry: returning a keyless
+ *      `models[0]` is exactly the bug this replaces; the run-start gate is the
+ *      backstop for an empty selection.
  * "Usable" = configured AND not disabled.
  */
 export function defaultSelectedModelId(
@@ -73,14 +94,24 @@ export function defaultSelectedModelId(
     );
     if (byProvider) return byProvider.id;
   }
-  if (opts?.defaultModelId) {
-    const byDefault = models.find(
-      (m) => m.id === opts.defaultModelId && usable(m),
+  // Walk the provider priority; the first provider with any usable model wins.
+  for (const provider of PROVIDER_PRIORITY) {
+    const usableForProvider = models.filter(
+      (m) => m.provider === provider && usable(m),
     );
-    if (byDefault) return byDefault.id;
+    if (usableForProvider.length === 0) continue;
+    if (opts?.defaultModelId) {
+      const byDefault = usableForProvider.find(
+        (m) => m.id === opts.defaultModelId,
+      );
+      if (byDefault) return byDefault.id;
+    }
+    return usableForProvider[0].id;
   }
+  // No priority provider is configured — fall back to the first usable model of
+  // any provider (local/ollama/other). Never an unusable entry.
   const firstUsable = models.find(usable);
-  return (firstUsable ?? models[0])?.id ?? "";
+  return firstUsable?.id ?? "";
 }
 
 /** Wire `model` selection for a run-create body, resolved from the picked id. */

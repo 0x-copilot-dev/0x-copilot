@@ -48,6 +48,7 @@ vi.mock("@0x-copilot/chat-surface", async (importOriginal) => {
 });
 
 import { CHANNELS } from "@0x-copilot/chat-transport";
+import { HashRouter } from "@0x-copilot/chat-surface";
 
 import type { WindowBridge } from "../preload/window-bridge-types";
 import { FIRST_RUN_CHANNELS } from "../main/services/first-run-channels";
@@ -106,6 +107,7 @@ describe("FirstRunGate", () => {
       <FirstRunGate
         bridge={bridge}
         workspaceId="org_acme"
+        router={new HashRouter()}
         renderFirstRun={() => <div data-testid="onboarding">onboarding</div>}
       >
         <div data-testid="shell">workspace shell</div>
@@ -124,6 +126,7 @@ describe("FirstRunGate", () => {
       <FirstRunGate
         bridge={bridge}
         workspaceId="org_acme"
+        router={new HashRouter()}
         renderFirstRun={() => <div data-testid="onboarding">onboarding</div>}
       >
         <div data-testid="shell">workspace shell</div>
@@ -145,8 +148,13 @@ describe("FirstRunGate", () => {
       <FirstRunGate
         bridge={bridge}
         workspaceId="org_acme"
+        router={new HashRouter()}
         renderFirstRun={(onComplete) => (
-          <button type="button" data-testid="finish" onClick={onComplete}>
+          <button
+            type="button"
+            data-testid="finish"
+            onClick={() => onComplete()}
+          >
             finish
           </button>
         )}
@@ -168,6 +176,51 @@ describe("FirstRunGate", () => {
       workspaceId: "org_acme",
       completed: true,
     });
+  });
+
+  it("binds the router to the created conversation before revealing the shell (Bug B)", async () => {
+    // The gate navigates the App-owned router to the handed-off conversation
+    // BEFORE flipping to the shell, so `conversationIdFromRoute` seeds the
+    // cockpit onto the first run instead of `null` (empty standby).
+    const bridge = makeBridge({
+      [FIRST_RUN_CHANNELS.get]: async () => ({ completed: false }),
+      [FIRST_RUN_CHANNELS.set]: async () => undefined,
+    });
+    const router = new HashRouter();
+    render(
+      <FirstRunGate
+        bridge={bridge}
+        workspaceId="org_acme"
+        router={router}
+        renderFirstRun={(onComplete) => (
+          <button
+            type="button"
+            data-testid="finish"
+            onClick={() =>
+              onComplete({ conversationId: "conv_x", runId: "run_x" })
+            }
+          >
+            finish
+          </button>
+        )}
+      >
+        <div data-testid="shell">workspace shell</div>
+      </FirstRunGate>,
+    );
+
+    await waitFor(() => expect(screen.queryByTestId("finish")).not.toBeNull());
+    act(() => {
+      screen.getByTestId("finish").click();
+    });
+
+    await waitFor(() => expect(screen.queryByTestId("shell")).not.toBeNull());
+    // The router now points at the created conversation — the seed the shell
+    // reads on mount (a resultless finish would leave it null → standby).
+    expect(router.current()).toEqual({
+      kind: "conversation",
+      conversationId: "conv_x",
+    });
+    router.dispose();
   });
 });
 
@@ -247,6 +300,63 @@ describe("FirstRunSurfaceMount", () => {
       expect(screen.queryByTestId("first-run-ack")).not.toBeNull(),
     );
     expect(screen.queryByTestId("first-run-ack-placeholder")).toBeNull();
+  });
+
+  it("hands the created conversation identity to onComplete at the run handoff", async () => {
+    // Bug B regression: the FTUE created the run (conv_x / run_x) but discarded
+    // the identity at handoff, so the shell mounted unbound (empty standby) and
+    // the first message was lost. `onComplete` must receive the created
+    // `{ conversationId, runId }` so the host can bind the shell to that run.
+    vi.useFakeTimers();
+    try {
+      stubWindowBridge(
+        makeBridge({
+          [CHANNELS.transportRequest]: async (payload) => {
+            const path = (payload as { path?: string }).path;
+            if (path === "/v1/agent/conversations")
+              return { conversation_id: "conv_x" };
+            if (path === "/v1/agent/runs") return { run_id: "run_x" };
+            return {}; // provider-keys / local-models catalog probes
+          },
+        }),
+      );
+      const onComplete = vi.fn();
+      render(
+        <FirstRunSurfaceMount
+          workspaceId="org_acme"
+          onComplete={onComplete}
+          initialStage="ready"
+        />,
+      );
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      fireEvent.change(screen.getByTestId("composer-textarea"), {
+        target: { value: "watch my wallet" },
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Send message/i }));
+        // Flush the two create POSTs (conversation → run) into the handoff hold.
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      // The ~1.5s handoff hold has NOT elapsed → identity not yet handed off.
+      expect(onComplete).not.toHaveBeenCalled();
+
+      // Advance past the handoff hold → the hook fires onComplete ONCE with the
+      // created identity (never a resultless call that would strand the shell).
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1500);
+      });
+      expect(onComplete).toHaveBeenCalledTimes(1);
+      expect(onComplete).toHaveBeenCalledWith({
+        conversationId: "conv_x",
+        runId: "run_x",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

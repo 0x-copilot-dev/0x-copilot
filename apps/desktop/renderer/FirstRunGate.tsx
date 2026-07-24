@@ -29,11 +29,14 @@ import {
   useFirstRunLocalModel,
   type AcknowledgmentVariant,
   type AssistantComposerPlusMenuSlotArgs,
+  type ConversationId,
   type FirstRunAckCtx,
   type FirstRunAckEngine,
   type FirstRunComposerCtx,
   type FirstRunInstallableConnector,
+  type FirstRunLaunchResult,
   type FirstRunStage,
+  type HashRouter,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport } from "@0x-copilot/chat-transport";
 import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
@@ -77,12 +80,24 @@ export interface FirstRunGateProps {
   /** Namespacing key for the per-install flag (RendererSession.workspaceId). */
   readonly workspaceId: string;
   /**
-   * The onboarding surface. Receives `onComplete` — call it when the user
-   * finishes setup, sends their first run, or skips. The gate persists the
-   * per-workspace flag and swaps to `children` (the workspace shell). P0 passes
-   * a minimal placeholder here; P1 passes the full 3-state FirstRunSurface.
+   * The App-owned HashRouter the workspace shell binds its active conversation
+   * from (`conversationIdFromRoute(router.current())`). At handoff the gate
+   * navigates it to the just-created conversation BEFORE revealing the shell, so
+   * the shell mounts already bound to the first run's conversation rather than
+   * seeding `null` (an empty standby composer that silently drops the first
+   * message). See bootstrap.tsx `ChatShellForSession`.
    */
-  readonly renderFirstRun: (onComplete: () => void) => ReactNode;
+  readonly router: HashRouter;
+  /**
+   * The onboarding surface. Receives `onComplete` — call it when the user
+   * finishes setup, sends their first run, or skips. On a real first run it
+   * carries the created `FirstRunLaunchResult` (conversation + run id) so the
+   * gate can bind the shell to it; skip passes nothing. The gate persists the
+   * per-workspace flag and swaps to `children` (the workspace shell).
+   */
+  readonly renderFirstRun: (
+    onComplete: (result?: FirstRunLaunchResult) => void,
+  ) => ReactNode;
   /** The signed-in workspace shell, mounted once onboarding is complete. */
   readonly children: ReactNode;
 }
@@ -97,7 +112,7 @@ export interface FirstRunGateProps {
  * (passed via `renderFirstRun`) is the shared chat-surface component.
  */
 export function FirstRunGate(props: FirstRunGateProps): ReactElement {
-  const { bridge, workspaceId, renderFirstRun, children } = props;
+  const { bridge, workspaceId, router, renderFirstRun, children } = props;
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
 
   useEffect(() => {
@@ -118,14 +133,29 @@ export function FirstRunGate(props: FirstRunGateProps): ReactElement {
     };
   }, [bridge, workspaceId]);
 
-  const complete = useCallback(() => {
-    // Advance the UI immediately; persist is fire-and-forget — a write failure
-    // only means onboarding may show once more next launch (non-fatal).
-    setPhase({ kind: "complete" });
-    void bridge.ipc
-      .invoke(FIRST_RUN_CHANNELS.set, { workspaceId, completed: true })
-      .catch(() => undefined);
-  }, [bridge, workspaceId]);
+  const complete = useCallback(
+    (result?: FirstRunLaunchResult) => {
+      // A real first run hands back the created conversation/run identity. Bind
+      // the shell to it BEFORE revealing it: navigate the App-owned router so
+      // `ChatShellForSession`'s lazy `conversationIdFromRoute(router.current())`
+      // seed lands on the first run's conversation (opening its SSE tail) rather
+      // than `null` (the empty standby composer that dropped the first message).
+      // Skip / a resultless finish leave the router untouched → a blank new run.
+      if (result) {
+        router.navigate({
+          kind: "conversation",
+          conversationId: result.conversationId as ConversationId,
+        });
+      }
+      // Advance the UI immediately; persist is fire-and-forget — a write failure
+      // only means onboarding may show once more next launch (non-fatal).
+      setPhase({ kind: "complete" });
+      void bridge.ipc
+        .invoke(FIRST_RUN_CHANNELS.set, { workspaceId, completed: true })
+        .catch(() => undefined);
+    },
+    [bridge, workspaceId, router],
+  );
 
   switch (phase.kind) {
     case "loading":
@@ -179,11 +209,12 @@ export interface FirstRunSurfaceMountProps {
   readonly workspaceId: string;
   /**
    * Called at the handoff (P3: after the two-step run-create + ~1.5s ack hold)
-   * or on skip. The gate persists the first-run flag and swaps to the workspace
-   * shell. (Deep-linking the shell straight to the created run is a follow-up —
-   * PRD-P3 §4.4's `initialConversationId`/`initialRunId` seam into `RunBinder`.)
+   * with the created `FirstRunLaunchResult` (conversation + run id), or on skip
+   * with nothing. The gate persists the first-run flag, binds the shell to the
+   * created conversation (via the router), and swaps to the workspace shell — so
+   * the first run's conversation is what the cockpit opens, not an empty standby.
    */
-  readonly onComplete: () => void;
+  readonly onComplete: (result?: FirstRunLaunchResult) => void;
   /** Tests only — seed the surface stage (forwarded to `FirstRunSurface`). */
   readonly initialStage?: FirstRunStage;
 }
@@ -304,11 +335,6 @@ export function FirstRunSurfaceMount({
     [composerModels, selectedModel],
   );
 
-  // Bound handoff (`ctx.onComplete`) captured from the ack slot so the hook —
-  // the single owner of the ~1.5s timer — fires it exactly once. Falls back to
-  // the raw `onComplete` if the ack hasn't rendered yet (it always has by the
-  // time the timer elapses).
-  const ackHandoffRef = useRef<(() => void) | null>(null);
   // The surface's `onSent` (flips to the ack), captured from the composer slot.
   const onSentRef = useRef<(() => void) | null>(null);
   // P4 — the surface owns `webOn` + active-connector state; the composer ctx
@@ -325,8 +351,12 @@ export function FirstRunSurfaceMount({
     modelReady,
     modelBlocked,
     model,
-    onComplete: () => {
-      (ackHandoffRef.current ?? onComplete)();
+    // The hook is the single owner of the ~1.5s handoff timer and hands us the
+    // created identity; forward it verbatim so the gate can bind the shell to
+    // the first run's conversation (the surface's own `onComplete(engine)` slot
+    // carries the engine, not this run-create result, so we thread it here).
+    onComplete: (result) => {
+      onComplete(result);
     },
   });
 
@@ -472,7 +502,6 @@ export function FirstRunSurfaceMount({
 
   const renderAcknowledgment = useCallback(
     (ctx: FirstRunAckCtx): ReactNode => {
-      ackHandoffRef.current = ctx.onComplete;
       const isLocal = ctx.engine?.kind === "local";
       const ackEngine: FirstRunAckEngine = isLocal
         ? {
@@ -533,8 +562,13 @@ export function FirstRunSurfaceMount({
         profilePort={profilePort}
         connectorsPort={connectorsPort}
         onConnectCatalog={handleConnectCatalog}
-        onSkip={onComplete}
-        onComplete={onComplete}
+        // Skip / the surface's own engine-carrying `onComplete` slot both mean
+        // "reveal the shell with NO created run" — the real first-run handoff
+        // (carrying the conversation id) is fired by `useFirstRunLaunch` above,
+        // not through these slots. Pass a resultless call so the gate binds a
+        // blank new run rather than mis-forwarding a `FirstRunEngine`.
+        onSkip={() => onComplete()}
+        onComplete={() => onComplete()}
         initialStage={initialStage}
         onStartLocalDownload={local.start}
         localModelPct={local.localModelPct}

@@ -67,6 +67,7 @@ import {
   type FirstRunAckCtx,
   type FirstRunAckEngine,
   type FirstRunComposerCtx,
+  type FirstRunLaunchResult,
   type FirstRunStage,
 } from "@0x-copilot/chat-surface";
 
@@ -127,11 +128,13 @@ function openOllamaDownload(): void {
 
 export interface FirstRunSurfaceMountProps {
   /**
-   * Called at the handoff (after the two-step run-create + ~1.5s ack hold) or
-   * on skip. The gate persists the first-run flag and swaps to the workspace
-   * shell.
+   * Called at the handoff (after the two-step run-create + ~1.5s ack hold) with
+   * the created `FirstRunLaunchResult` (conversation + run id), or on skip with
+   * nothing. The host (App.tsx) navigates the router to the created conversation
+   * so the shell binds the first run rather than an empty standby, then persists
+   * the first-run flag and swaps to the workspace shell.
    */
-  readonly onComplete: () => void;
+  readonly onComplete: (result?: FirstRunLaunchResult) => void;
   /** Signed-in identity — threaded to the api-backed run + models ports. */
   readonly identity: RequestIdentity;
   /** Tests only — seed the surface stage (forwarded to `FirstRunSurface`). */
@@ -183,10 +186,6 @@ export function FirstRunSurfaceMount({
     [composerModels, selectedModel],
   );
 
-  // Bound handoff (`ctx.onComplete`) captured from the ack slot so the hook —
-  // the single owner of the ~1.5s timer — fires it exactly once. Falls back to
-  // the raw `onComplete` if the ack hasn't rendered yet.
-  const ackHandoffRef = useRef<(() => void) | null>(null);
   // The surface's `onSent` (flips to the ack), captured from the composer slot.
   const onSentRef = useRef<(() => void) | null>(null);
 
@@ -195,8 +194,12 @@ export function FirstRunSurfaceMount({
     modelReady,
     modelBlocked,
     model,
-    onComplete: () => {
-      (ackHandoffRef.current ?? onComplete)();
+    // The hook is the single owner of the ~1.5s handoff timer and hands us the
+    // created identity; forward it verbatim so the host can bind the shell to
+    // the first run's conversation (the surface's own `onComplete(engine)` slot
+    // carries the engine, not this run-create result, so we thread it here).
+    onComplete: (result) => {
+      onComplete(result);
     },
   });
 
@@ -289,7 +292,6 @@ export function FirstRunSurfaceMount({
 
   const renderAcknowledgment = useCallback(
     (ctx: FirstRunAckCtx): ReactNode => {
-      ackHandoffRef.current = ctx.onComplete;
       const isLocal = ctx.engine?.kind === "local";
       const ackEngine: FirstRunAckEngine = isLocal
         ? {
@@ -350,8 +352,11 @@ export function FirstRunSurfaceMount({
   return (
     <FirstRunSurface
       providerKeys={providerKeys}
-      onSkip={onComplete}
-      onComplete={onComplete}
+      // Skip / the surface's own engine-carrying `onComplete` slot both mean
+      // "reveal the shell with NO created run"; the real first-run handoff
+      // (carrying the conversation id) is fired by `useFirstRunLaunch` above.
+      onSkip={() => onComplete()}
+      onComplete={() => onComplete()}
       initialStage={initialStage}
       onStartLocalDownload={local.start}
       localModelPct={local.localModelPct}
