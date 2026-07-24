@@ -54,6 +54,11 @@ def test_history_erasure_fences_and_rechecks_before_first_destructive_update() -
 
 
 def test_direct_delete_cannot_leave_legal_hold_pins_behind() -> None:
+    before_function = _MIGRATION.split(
+        "CREATE OR REPLACE FUNCTION runtime_artifact_hold_pin_or_release()", 1
+    )[0]
     assert "TG_OP = 'DELETE'" in _MIGRATION
     assert "OR DELETE ON runtime_legal_holds" in _MIGRATION
     assert "REVOKE DELETE ON runtime_legal_holds FROM enterprise_app;" in _MIGRATION
+    assert "RETURN OLD;" in before_function
+    assert "COALESCE(NEW.released_at, now())" not in _MIGRATION

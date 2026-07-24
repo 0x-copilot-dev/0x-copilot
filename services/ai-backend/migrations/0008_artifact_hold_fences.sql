@@ -51,6 +51,11 @@ BEGIN
             )
         );
     END IF;
+    -- A BEFORE DELETE trigger must return OLD.  Returning NEW (which is not
+    -- assigned for DELETE) silently skips the delete and leaves pins behind.
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
     RETURN NEW;
 END;
 $$;
@@ -59,15 +64,22 @@ CREATE OR REPLACE FUNCTION runtime_artifact_hold_pin_or_release()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    v_released_at timestamptz;
 BEGIN
-    IF TG_OP = 'DELETE'
-       OR (
-            TG_OP = 'UPDATE'
-            AND OLD.released_at IS NULL
-            AND NEW.released_at IS NOT NULL
-       ) THEN
+    IF TG_OP = 'DELETE' THEN
+        v_released_at := now();
+    ELSIF (
+        TG_OP = 'UPDATE'
+        AND OLD.released_at IS NULL
+        AND NEW.released_at IS NOT NULL
+    ) THEN
+        v_released_at := NEW.released_at;
+    END IF;
+
+    IF v_released_at IS NOT NULL THEN
         UPDATE runtime_artifact_reference_edges
-           SET released_at = COALESCE(NEW.released_at, now())
+           SET released_at = v_released_at
          WHERE org_id = OLD.org_id
            AND reference_kind = 'legal_hold'
            AND reference_id = OLD.id
