@@ -16,6 +16,10 @@ from agent_runtime.capabilities.sandbox.remote_execution_service import (
     RemoteExecutionService,
     SandboxEventName,
 )
+from agent_runtime.capabilities.sandbox.workspace_transfer import (
+    RawSnapshotEntry,
+    WorkspaceManifestBuilder,
+)
 from tests.unit.agent_runtime.capabilities.sandbox.contracts_helpers import (  # noqa: F401
     active_config,
 )
@@ -101,6 +105,39 @@ class TestCreateTeardown:
         result = await service.teardown("run-1")
         assert result is not None
         assert result.cleanup_state == "cleanup_pending"
+
+    async def test_provider_never_receives_workspace_grant_or_host_path(self) -> None:
+        service, provider = _service()
+        from agent_runtime.capabilities.sandbox.contracts import ArtifactRef
+
+        manifest = WorkspaceManifestBuilder.build(
+            workspace_id="/Users/alice/Finance",
+            root_grant_id="grant-private-do-not-send",
+            raw_entries=[
+                RawSnapshotEntry(
+                    path="report.csv",
+                    sha256="a" * 64,
+                    size_bytes=3,
+                    payload_ref=ArtifactRef(
+                        artifact_id="artifact_1", sha256="a" * 64, size_bytes=3
+                    ),
+                )
+            ],
+            limits=active_config().resolve_limits(),
+        )
+        request = make_request()
+        request = request.model_copy(
+            update={
+                "snapshot": WorkspaceManifestBuilder.to_sandbox_snapshot(
+                    manifest, snapshot_id="snapshot:run-1"
+                )
+            }
+        )
+        await service.create(request)
+        received = provider.create_requests[-1].model_dump_json()
+        assert "/Users/alice" not in received
+        assert "grant-private" not in received
+        assert "root_grant_id" not in received
 
 
 class TestLeakDetection:

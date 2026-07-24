@@ -31,6 +31,7 @@ from agent_runtime.capabilities.sandbox.contracts import (
     ArtifactRef,
     SandboxError,
     SandboxErrorCode,
+    SandboxSnapshot,
     WorkspacePatchEntry,
     WorkspacePatchManifest,
     WorkspaceTransferEntry,
@@ -82,6 +83,14 @@ class RawSnapshotEntry:
     payload_ref: ArtifactRef | None = None
     is_symlink: bool = False
     is_special: bool = False
+    # Archive/import adapters must expose every ambiguity.  D3 rejects rather
+    # than dereferencing: symlink/device/socket/FIFO and hard-link semantics
+    # can all reach bytes outside the reviewed snapshot; sparse files can make
+    # a small archive materialise into an unbounded upload.
+    is_hardlink: bool = False
+    is_sparse: bool = False
+    link_count: int = 1
+    complete: bool = True
 
 
 class WorkspacePathValidator:
@@ -167,10 +176,17 @@ class WorkspaceManifestBuilder:
         total_bytes = 0
         seen: set[str] = set()
         for raw in raw_entries:
-            if raw.is_symlink or raw.is_special:
+            if (
+                raw.is_symlink
+                or raw.is_special
+                or raw.is_hardlink
+                or raw.is_sparse
+                or raw.link_count != 1
+                or not raw.complete
+            ):
                 raise SandboxError(
                     SandboxErrorCode.SNAPSHOT_INVALID,
-                    "Snapshot rejected: only regular files may be uploaded.",
+                    "Snapshot rejected: archive entries must be complete regular files.",
                 )
             normalized = WorkspacePathValidator.normalize(raw.path)
             if WorkspacePathValidator.is_excluded(normalized):
@@ -190,6 +206,14 @@ class WorkspaceManifestBuilder:
                 raise SandboxError(
                     SandboxErrorCode.SNAPSHOT_INVALID,
                     "Snapshot rejected: missing content reference for a file.",
+                )
+            if (
+                raw.payload_ref.sha256 != raw.sha256
+                or raw.payload_ref.size_bytes != raw.size_bytes
+            ):
+                raise SandboxError(
+                    SandboxErrorCode.SNAPSHOT_INVALID,
+                    "Snapshot rejected: content reference does not match metadata.",
                 )
             total_bytes += raw.size_bytes
             validated.append(
@@ -222,6 +246,56 @@ class WorkspaceManifestBuilder:
             total_bytes=total_bytes,
             manifest_sha256=manifest_sha,
         )
+
+    @classmethod
+    def to_sandbox_snapshot(
+        cls,
+        manifest: WorkspaceTransferManifest,
+        *,
+        snapshot_id: str,
+    ) -> SandboxSnapshot:
+        """Strip C3-private workspace/grant facts before provider transfer."""
+
+        cls.verify_manifest(manifest)
+        return SandboxSnapshot(
+            snapshot_id=snapshot_id,
+            entries=manifest.entries,
+            total_bytes=manifest.total_bytes,
+            manifest_sha256=manifest.manifest_sha256,
+        )
+
+    @classmethod
+    def verify_manifest(
+        cls, manifest: WorkspaceTransferManifest | SandboxSnapshot
+    ) -> None:
+        """Recompute every immutable manifest fact at the transfer boundary."""
+
+        entries = manifest.entries
+        if len({entry.path for entry in entries}) != len(entries):
+            raise SandboxError(
+                SandboxErrorCode.SNAPSHOT_INVALID,
+                "Snapshot rejected: duplicate virtual path.",
+            )
+        if sum(entry.size_bytes for entry in entries) != manifest.total_bytes:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox snapshot byte total verification failed.",
+            )
+        if cls._hash_entries(entries) != manifest.manifest_sha256:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox snapshot manifest verification failed.",
+            )
+        for entry in entries:
+            WorkspacePathValidator.normalize(entry.path)
+            if (
+                entry.payload_ref.sha256 != entry.sha256
+                or entry.payload_ref.size_bytes != entry.size_bytes
+            ):
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                    "Sandbox snapshot content reference verification failed.",
+                )
 
     @staticmethod
     def _hash_entries(entries: Sequence[WorkspaceTransferEntry]) -> str:

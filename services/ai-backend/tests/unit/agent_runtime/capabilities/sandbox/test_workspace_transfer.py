@@ -18,13 +18,13 @@ from agent_runtime.capabilities.sandbox.workspace_transfer import (
 )
 
 
-def _ref(size: int = 3) -> ArtifactRef:
-    return ArtifactRef(artifact_id="a", sha256="a" * 64, size_bytes=size)
+def _ref(size: int = 3, *, sha: str = "a" * 64) -> ArtifactRef:
+    return ArtifactRef(artifact_id="a", sha256=sha, size_bytes=size)
 
 
 def _raw(path: str, *, sha: str = "a" * 64, size: int = 3, **kw) -> RawSnapshotEntry:
     return RawSnapshotEntry(
-        path=path, sha256=sha, size_bytes=size, payload_ref=_ref(size), **kw
+        path=path, sha256=sha, size_bytes=size, payload_ref=_ref(size, sha=sha), **kw
     )
 
 
@@ -116,6 +116,73 @@ class TestManifestBuilder:
                 limits=LIMITS,
             )
         assert excinfo.value.code is SandboxErrorCode.SNAPSHOT_INVALID
+
+    @pytest.mark.parametrize(
+        "attack",
+        [
+            {"is_special": True},  # device/socket/FIFO adapters flag these
+            {"is_hardlink": True},
+            {"link_count": 2},
+            {"is_sparse": True},
+            {"complete": False},
+        ],
+    )
+    def test_rejects_ambiguous_archive_entry(self, attack: dict[str, object]) -> None:
+        with pytest.raises(SandboxError) as excinfo:
+            WorkspaceManifestBuilder.build(
+                workspace_id="ws",
+                root_grant_id="g",
+                raw_entries=[_raw("attack.bin", **attack)],
+                limits=LIMITS,
+            )
+        assert excinfo.value.code is SandboxErrorCode.SNAPSHOT_INVALID
+
+    def test_rejects_content_ref_digest_or_size_mismatch(self) -> None:
+        with pytest.raises(SandboxError) as excinfo:
+            WorkspaceManifestBuilder.build(
+                workspace_id="ws",
+                root_grant_id="g",
+                raw_entries=[
+                    RawSnapshotEntry(
+                        path="payload.bin",
+                        sha256="a" * 64,
+                        size_bytes=3,
+                        payload_ref=ArtifactRef(
+                            artifact_id="a", sha256="b" * 64, size_bytes=4
+                        ),
+                    )
+                ],
+                limits=LIMITS,
+            )
+        assert excinfo.value.code is SandboxErrorCode.SNAPSHOT_INVALID
+
+    def test_provider_snapshot_strips_private_workspace_and_grant_facts(self) -> None:
+        manifest = WorkspaceManifestBuilder.build(
+            workspace_id="/Users/alice/Finance",
+            root_grant_id="grant-secret-should-not-leave-c3",
+            raw_entries=[_raw("report.csv")],
+            limits=LIMITS,
+        )
+        snapshot = WorkspaceManifestBuilder.to_sandbox_snapshot(
+            manifest, snapshot_id="snapshot:op-1"
+        )
+        wire = snapshot.model_dump_json()
+        assert "/Users/alice" not in wire
+        assert "grant-secret" not in wire
+        assert "workspace_id" not in wire
+        assert snapshot.manifest_sha256 == manifest.manifest_sha256
+
+    def test_rejects_tampered_manifest_at_transfer_boundary(self) -> None:
+        manifest = WorkspaceManifestBuilder.build(
+            workspace_id="ws",
+            root_grant_id="g",
+            raw_entries=[_raw("a.py")],
+            limits=LIMITS,
+        )
+        tampered = manifest.model_copy(update={"manifest_sha256": "0" * 64})
+        with pytest.raises(SandboxError) as excinfo:
+            WorkspaceManifestBuilder.verify_manifest(tampered)
+        assert excinfo.value.code is SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH
 
 
 class TestPatchBuilder:

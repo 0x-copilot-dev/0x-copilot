@@ -30,6 +30,7 @@ from agent_runtime.capabilities.sandbox.contracts import (
     SandboxCreateRequest,
     SandboxError,
     SandboxErrorCode,
+    SandboxIsolationAttestation,
     SandboxProviderId,
     _utcnow,
 )
@@ -47,6 +48,27 @@ class LangSmithSandboxProvider:
     ) -> None:
         self._region = region
         self._session_ttl_seconds = session_ttl_seconds
+
+    @property
+    def isolation_ready(self) -> bool:
+        """Fail closed until effective controls are independently verified.
+
+        The current SDK adapter cannot prove compiled deny-all egress, resource
+        quota enforcement, credential stripping, full output enumeration, or
+        teardown semantics.  Provisioning it would make an unsupported security
+        claim, so the registry leaves the production tool absent.
+        """
+
+        return False
+
+    async def attest(
+        self, request: SandboxCreateRequest
+    ) -> SandboxIsolationAttestation:
+        del request
+        raise SandboxError(
+            SandboxErrorCode.SANDBOX_ISOLATION_UNVERIFIED,
+            "The sandbox provider cannot verify required isolation controls.",
+        )
 
     async def create(self, request: SandboxCreateRequest) -> SandboxHandle:
         """Provision a LangSmith sandbox and wrap it as a DeepAgents backend."""

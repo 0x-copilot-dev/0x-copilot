@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 from agent_runtime.capabilities.sandbox.contracts import (
     ManagedSandboxSession,
     SandboxCreateRequest,
+    SandboxIsolationAttestation,
+    SandboxLifecycleRecord,
 )
 
 if TYPE_CHECKING:
@@ -50,6 +52,22 @@ class SandboxProviderPort(Protocol):
         """Provision a session and return a live handle. Idempotent on
         ``request.idempotency_key`` — a retry must not create a duplicate paid
         session."""
+        ...
+
+    @property
+    def isolation_ready(self) -> bool:
+        """Whether the adapter can verify every required D3 control.
+
+        This is a construction-time fail-closed gate.  A provider whose SDK
+        merely *claims* a sandbox exists but cannot prove isolation and exact
+        egress enforcement must never produce a model-visible production tool.
+        """
+        ...
+
+    async def attest(
+        self, request: SandboxCreateRequest
+    ) -> SandboxIsolationAttestation:
+        """Return verified effective isolation and egress controls for launch."""
         ...
 
     async def status(self, provider_session_ref: str) -> ManagedSandboxSession:
@@ -90,6 +108,44 @@ class SandboxSessionStore(Protocol):
 
     async def delete(self, session_id: str) -> None:
         """Remove a session projection."""
+        ...
+
+
+@dataclass(frozen=True)
+class SandboxLifecycleAcquisition:
+    """Atomic create-or-read result for a sandbox idempotency key."""
+
+    created: bool
+    record: SandboxLifecycleRecord
+
+
+@runtime_checkable
+class SandboxLifecycleStore(Protocol):
+    """Durable lifecycle authority for replay-safe sandbox execution.
+
+    The unique identity is the operation's server-generated idempotency key.
+    A second request with different immutable facts is a conflict, never a
+    chance to overwrite history or reuse provider execution state.
+    """
+
+    async def acquire(
+        self, *, record: SandboxLifecycleRecord
+    ) -> SandboxLifecycleAcquisition:
+        """Atomically create ``record`` or return an identical prior record."""
+        ...
+
+    async def get(self, *, idempotency_key: str) -> SandboxLifecycleRecord | None:
+        """Return the exact persisted record for recovery."""
+        ...
+
+    async def update(self, *, record: SandboxLifecycleRecord) -> SandboxLifecycleRecord:
+        """Persist a validated monotonic state transition."""
+        ...
+
+    async def list_recoverable(
+        self, *, limit: int = 100
+    ) -> tuple[SandboxLifecycleRecord, ...]:
+        """List unresolved executions and cleanup-pending resources."""
         ...
 
 
