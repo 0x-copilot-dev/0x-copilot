@@ -51,6 +51,25 @@ STAGE_ROWSET_WRITE_TOOL_DESCRIPTION = (
 )
 
 
+PUBLISH_ARTIFACT_TOOL_DESCRIPTION = (
+    "Create one durable code, document, dataset, or file artifact in the app's "
+    "artifact library. Use this only when the user explicitly asks to create, "
+    "save, or produce a durable artifact. Ordinary prose and fenced code remain "
+    "chat text and must not be published automatically.\n\n"
+    "Fields:\n"
+    "- `kind` (required): `code`, `document`, `dataset`, or `file`.\n"
+    "- `title` and `media_type` (required): safe display metadata.\n"
+    "- exactly one of `content` (UTF-8, at most 1 MiB) or `content_ref` "
+    "(a sanctioned server result reference).\n"
+    "- `suggested_filename` (optional): download metadata only, never a path.\n"
+    "- `presentation_preference` (optional): `auto`, `canvas`, `chat_card`, or "
+    "`none`; this is a request and can be downgraded.\n\n"
+    "Publication stores content in the product artifact repository; it does not "
+    "save a file to the user's local workspace. Return a short normal response "
+    "after publishing."
+)
+
+
 AUTH_MCP_TOOL_DESCRIPTION = (
     "Request an authorization URL for an MCP server when the user has not "
     "authenticated it yet. Use this only when the server is needed."

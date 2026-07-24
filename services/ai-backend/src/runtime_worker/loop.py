@@ -73,6 +73,7 @@ class RuntimeWorker:
         citation_store: "CitationStorePort | None" = None,
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: object | None = None,
+        artifact_service: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -105,6 +106,7 @@ class RuntimeWorker:
         # default run / approval handler dependencies factories so every
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
+        self.artifact_service = artifact_service
         self.run_handler = run_handler or RuntimeRunHandler(
             persistence=self.persistence,
             event_store=self.event_store,
@@ -118,6 +120,7 @@ class RuntimeWorker:
             # PRD-D3 — lets the per-run bulk-staging tool enqueue an allow-always
             # auto-apply through the same durable queue the API uses.
             queue=self.queue,
+            artifact_service=artifact_service,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -132,6 +135,7 @@ class RuntimeWorker:
             conversation_tool_ordinal_store=self.conversation_tool_ordinal_store,
             mcp_discovery_cache=mcp_discovery_cache,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
+            artifact_service=artifact_service,
         )
         self.artifact_event_handler = (
             artifact_event_handler

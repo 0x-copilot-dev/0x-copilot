@@ -67,6 +67,7 @@ class ArtifactService:
         CREATE = "POST:/v1/agent/runs/{run_id}/artifacts"
         REVISE = "POST:/v1/agent/artifacts/{artifact_id}/revisions"
         PROMOTE = "POST:/v1/agent/artifacts:promote"
+        PUBLISH = "INTERNAL:artifact.publish"
         DELETE = "DELETE:/v1/agent/artifacts/{artifact_id}"
 
     class Defaults:
@@ -132,6 +133,84 @@ class ArtifactService:
             request=request,
             provenance=provenance,
             chunks=self._single_chunk(content),
+        )
+
+    async def publish_from_bytes(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        request: ArtifactCreateRequest,
+        provenance: ArtifactProvenance,
+        content: bytes,
+    ) -> ArtifactMutationResult:
+        """Persist explicitly authored bytes through the canonical repository.
+
+        This is the server-only publication lane for model/internal producers.
+        It deliberately shares A2's create transaction, idempotency record,
+        blob store, and artifact outbox; no second content store is involved.
+        """
+
+        scope = await self._require_run_scope(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=request.run_id,
+        )
+        return await self._create_in_scope(
+            scope=scope,
+            request=request,
+            provenance=provenance,
+            chunks=self._single_chunk(content),
+            route=self.Routes.PUBLISH,
+            promoted_source_ref=None,
+        )
+
+    async def publish_from_source(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        request: ArtifactCreateRequest,
+        provenance: ArtifactProvenance,
+        source_ref: str,
+    ) -> ArtifactMutationResult:
+        """Publish one exact, already-authorized logical source with attribution.
+
+        Unlike user-driven promotion this retains the supplied trusted author
+        (model or subagent) and does not emit ``artifact.promoted``.  It still
+        resolves bytes only through A2's scoped source resolver.
+        """
+
+        if self._sources is None:
+            raise ArtifactNotFoundError()
+        try:
+            canonical_source_ref = validate_artifact_source_ref(source_ref)
+        except ValueError as exc:
+            raise ArtifactInvalidSourceError() from exc
+        scope = await self._require_run_scope(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=request.run_id,
+        )
+        try:
+            descriptor = await self._sources.resolve_source(
+                scope=scope,
+                source_ref=canonical_source_ref,
+            )
+        except ValueError as exc:
+            raise ArtifactInvalidSourceError() from exc
+        if descriptor is None:
+            raise ArtifactNotFoundError()
+        chunks = await self._sources.open_source(scope=scope, source=descriptor)
+        return await self._create_in_scope(
+            scope=scope,
+            request=request,
+            provenance=provenance.model_copy(
+                update={"source_ref": canonical_source_ref}
+            ),
+            chunks=chunks,
+            route=self.Routes.PUBLISH,
+            promoted_source_ref=None,
         )
 
     async def append_revision_from_stream(
