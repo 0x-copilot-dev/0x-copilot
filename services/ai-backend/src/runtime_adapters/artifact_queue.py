@@ -13,6 +13,8 @@ from runtime_adapters._artifact_repository import (
 from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
 )
@@ -54,6 +56,14 @@ class ArtifactAwareRuntimeQueue:
 
     async def enqueue_stage_commit(self, command: RuntimeStageCommitCommand) -> None:
         await self._queue.enqueue_stage_commit(command)
+
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        await self._queue.enqueue_effect_commit(command)
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        await self._queue.enqueue_effect_reconcile(command)
 
     async def claim_next(
         self,
