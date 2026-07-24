@@ -13,6 +13,10 @@ export {
   TransportHttpError,
   UnauthorizedError,
 } from "./types";
+export {
+  promoteArtifact,
+  type PromoteArtifactRequest,
+} from "./artifactPromotion";
 export { WebTransport, type WebTransportConfig } from "./web/WebTransport";
 export {
   buildEmailEventSchedule,

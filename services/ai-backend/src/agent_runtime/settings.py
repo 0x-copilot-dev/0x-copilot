@@ -8,7 +8,7 @@ import logging
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
@@ -48,6 +48,9 @@ class _EnvFields:
     # SDR-19 single rollout gate for artifact/effect persistence. It stays
     # dark until E2 cutover; storage composition and API routes read it.
     ARTIFACT_EFFECTS_V2 = "ARTIFACT_EFFECTS_V2"
+    # B1 migration seam. New `/drafts/` writes use canonical Artifact
+    # revisions only when this is explicitly enabled alongside A2 storage.
+    ARTIFACT_DRAFTS_V2 = "ARTIFACT_DRAFTS_V2"
     # Generative Surfaces v2.1 (PRD-A3). ``enforce`` is parsed so deployment
     # configuration fails honestly, but startup validation refuses it until
     # durable canonical arguments plus the generic stage/executor exist.
@@ -167,9 +170,16 @@ class RuntimeExecutionSettings(RuntimeContract):
     # SDR-19 is dark by default. When false product routes remain absent and
     # no artifact repository is composed.
     artifact_effects_v2: bool = False
+    artifact_drafts_v2: bool = False
     # v2.1 Universal Operation Gateway. A3 is observational only, so the
     # initial default is explicitly off.
     operation_gateway_mode: OperationGatewayMode = OperationGatewayMode.OFF
+
+    @model_validator(mode="after")
+    def _artifact_drafts_require_repository(self) -> "RuntimeExecutionSettings":
+        if self.artifact_drafts_v2 and not self.artifact_effects_v2:
+            raise ValueError("ARTIFACT_DRAFTS_V2 requires ARTIFACT_EFFECTS_V2")
+        return self
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -414,6 +424,8 @@ class RuntimeSettings(BaseSettings):
                 in _truthy,
                 surfaces_v2=_s(v, E.SURFACES_V2, "true").lower() in _truthy,
                 artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
+                in _truthy,
+                artifact_drafts_v2=_s(v, E.ARTIFACT_DRAFTS_V2, "false").lower()
                 in _truthy,
                 operation_gateway_mode=OperationGatewayMode(
                     _s(
