@@ -19,15 +19,15 @@ function revision(number: number): ArtifactRevision {
     revision: number,
     ...(number > 1 ? { parent_revision: number - 1 } : {}),
     content_ref: ArtifactContentRefCodec.format(ARTIFACT_ID, number),
-    content_digest: String(number).repeat(64),
+    content_digest: (number % 16).toString(16).repeat(64),
     byte_size: 10,
     author: "user",
     created_at: "2026-01-01T00:00:00Z",
   };
 }
 
-function transport(): ArtifactCapableTransport {
-  const current = revision(3);
+function transport(currentNumber = 3): ArtifactCapableTransport {
+  const current = revision(currentNumber);
   const detail: ArtifactDetailResponse = {
     artifact: {
       artifact_id: ARTIFACT_ID,
@@ -69,7 +69,9 @@ function transport(): ArtifactCapableTransport {
     getArtifactContent: vi.fn(async ({ revision: number }) => ({
       body: new ReadableStream<Uint8Array>({
         start(controller) {
-          controller.enqueue(new TextEncoder().encode(`revision ${number}`));
+          controller.enqueue(
+            new TextEncoder().encode(`\ufeffrevision ${number}`),
+          );
           controller.close();
         },
       }),
@@ -90,6 +92,19 @@ describe("useArtifactSurface", () => {
     );
     await waitFor(() => expect(result.current.state?.revision).toBe(1));
     expect(result.current.latestRevision).toBe(3);
-    expect(result.current.state?.text).toBe("revision 1");
+    expect(result.current.state?.text).toBe("\ufeffrevision 1");
+  });
+
+  it("keeps a deep-linked historical revision actionable outside the newest history page", async () => {
+    const client = transport(30);
+    const { result } = renderHook(() =>
+      useArtifactSurface(client, ARTIFACT_ID, 1, true),
+    );
+    await waitFor(() =>
+      expect(result.current.revisions.some((item) => item.revision === 1)).toBe(
+        true,
+      ),
+    );
+    expect(result.current.hasOlderHistory).toBe(true);
   });
 });

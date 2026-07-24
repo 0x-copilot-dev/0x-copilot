@@ -55,7 +55,16 @@ export function registerArtifactAdapters(): void {
 
 export { ArtifactRenderer } from "./ArtifactRenderer";
 export { CodeArtifactRenderer } from "./CodeArtifactRenderer";
-export { DatasetArtifactRenderer, parseCsv } from "./DatasetArtifactRenderer";
+export {
+  DatasetArtifactRenderer,
+  parseCsv,
+  parseLosslessDelimited,
+  serializeDelimitedPatch,
+  serializeFormulaSafeDelimitedPatch,
+  type DatasetEditorActions,
+  type DatasetPatch,
+  type LosslessDelimitedDataset,
+} from "./DatasetArtifactRenderer";
 export { DocumentArtifactRenderer } from "./DocumentArtifactRenderer";
 export { FileArtifactRenderer } from "./FileArtifactRenderer";
 export { RawArtifactFallback } from "./RawArtifactFallback";

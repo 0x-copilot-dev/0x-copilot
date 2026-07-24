@@ -11,9 +11,11 @@ import {
   isTransportHttpError,
   type Transport,
 } from "@0x-copilot/chat-transport";
-
-const CODE_DOCUMENT_LIMIT = 5 * 1024 * 1024;
-const DATASET_LIMIT = 10 * 1024 * 1024;
+import {
+  decodeArtifactUtf8,
+  readBoundedArtifactBytes,
+  textPreviewLimit,
+} from "./artifactContent";
 const HISTORY_PAGE_SIZE = 25;
 
 export interface ArtifactSurfaceData {
@@ -102,10 +104,7 @@ export function useArtifactSurface(
           setStatus("error");
           return;
         }
-        const limit =
-          response.artifact.kind === "dataset"
-            ? DATASET_LIMIT
-            : CODE_DOCUMENT_LIMIT;
+        const limit = textPreviewLimit(response.artifact.kind);
         if (target.byte_size > limit) {
           setState({
             ...base,
@@ -120,8 +119,12 @@ export function useArtifactSurface(
           revision: target.revision,
           signal: abort.signal,
         });
-        const bytes = await readBounded(content.body, limit, abort.signal);
-        const text = decodeUtf8(bytes);
+        const bytes = await readBoundedArtifactBytes(
+          content.body,
+          limit,
+          abort.signal,
+        );
+        const text = decodeArtifactUtf8(bytes);
         if (text === null) {
           setState({
             ...base,
@@ -161,12 +164,21 @@ export function useArtifactSurface(
     const abort = new AbortController();
     const current = latestRevision;
     const start = Math.max(1, current - historyDepth + 1);
+    // A deep-linked historical artifact must stay actionable even when it is
+    // outside the first history page.
+    const requestedRevisions = new Set<number>([
+      detail.current_revision.revision,
+      ...Array.from(
+        { length: current - start + 1 },
+        (_, offset) => start + offset,
+      ),
+    ]);
     void Promise.all(
-      Array.from({ length: current - start + 1 }, (_, offset) =>
+      [...requestedRevisions].map((revision) =>
         revisionFor(
           transport,
           detail.artifact.artifact_id,
-          start + offset,
+          revision,
           abort.signal,
         ).catch(() => null),
       ),
@@ -194,7 +206,7 @@ export function useArtifactSurface(
     status,
     revisions,
     hasOlderHistory:
-      latestRevision !== null && revisions.length < latestRevision,
+      latestRevision !== null && latestRevision - historyDepth > 0,
     loadOlderHistory,
     reload,
   };
@@ -236,45 +248,6 @@ function stateFrom(
   };
 }
 
-async function readBounded(
-  body: ReadableStream<Uint8Array>,
-  maxBytes: number,
-  signal: AbortSignal,
-): Promise<Uint8Array> {
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    while (true) {
-      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-      const next = await reader.read();
-      if (next.done) break;
-      size += next.value.byteLength;
-      if (size > maxBytes) {
-        await reader.cancel();
-        throw new RangeError("Artifact preview exceeds the safe limit");
-      }
-      chunks.push(next.value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  const joined = new Uint8Array(size);
-  let at = 0;
-  for (const chunk of chunks) {
-    joined.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return joined;
-}
-
-function decodeUtf8(bytes: Uint8Array): string | null {
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return null;
-  }
-}
 function formatBytes(bytes: number): string {
   return `${Math.round(bytes / (1024 * 1024))} MiB`;
 }

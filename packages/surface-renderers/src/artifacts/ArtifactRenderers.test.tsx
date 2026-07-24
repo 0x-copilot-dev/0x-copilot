@@ -1,8 +1,20 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import { CodeArtifactRenderer } from "./CodeArtifactRenderer";
-import { DatasetArtifactRenderer, parseCsv } from "./DatasetArtifactRenderer";
+import {
+  DatasetArtifactRenderer,
+  parseCsv,
+  parseLosslessDelimited,
+  serializeDelimitedPatch,
+  serializeFormulaSafeDelimitedPatch,
+} from "./DatasetArtifactRenderer";
 import { DocumentArtifactRenderer } from "./DocumentArtifactRenderer";
 import type { ArtifactRenderState } from "./model";
 
@@ -27,7 +39,24 @@ function artifact(
 }
 
 describe("fixed artifact renderers", () => {
-  it("preserves RFC4180 CSV fidelity including BOM, CRLF, quotes, empty cells, Unicode and formula-like cells", () => {
+  it("round-trips the CSV corpus byte-for-byte and changes only the intended lossless cell", () => {
+    const source =
+      '\ufeffname,note,amount,amount\r\nAda,"hello, world",=1+1,\r\n李,,"line 1\r\nline 2",';
+    const lossless = parseLosslessDelimited(source);
+    expect(lossless.roundTripSafe).toBe(true);
+    expect(serializeDelimitedPatch(lossless, {})).toBe(source);
+    expect(serializeDelimitedPatch(lossless, { "1:1": "changed, note" })).toBe(
+      '\ufeffname,note,amount,amount\r\nAda,"changed, note",=1+1,\r\n李,,"line 1\r\nline 2",',
+    );
+    expect(serializeFormulaSafeDelimitedPatch(lossless, {})).toBe(
+      '\ufeffname,note,amount,amount\r\nAda,"hello, world",\'=1+1,\r\n李,,"line 1\r\nline 2",',
+    );
+
+    const lf = parseLosslessDelimited('name,note\nAda,"comma, retained"\n');
+    expect(serializeDelimitedPatch(lf, {})).toBe(
+      'name,note\nAda,"comma, retained"\n',
+    );
+
     const parsed = parseCsv(
       '\ufeffname,note,amount\r\nAda,"hello, world",=1+1\r\n李,,"line 1\r\nline 2"',
     );
@@ -42,10 +71,68 @@ describe("fixed artifact renderers", () => {
     );
     expect(
       screen.getByText(
-        "Formula-like cells are shown as text and are never evaluated.",
+        /Formula-like cells are shown as text and are never evaluated/,
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("=2+2")).toBeInTheDocument();
+  });
+
+  it("holds CSV cell changes in memory, saves a complete lossless revision, and gates formula-safe export", async () => {
+    const saveRevision = vi.fn(async () => "saved" as const);
+    const source = "\ufeffname,amount\r\nAda,=1+1\r\n";
+    const editable = {
+      ...artifact("dataset", source),
+      mediaType: "text/csv",
+      datasetEditor: { disabled: false, saveRevision },
+    } as unknown as ArtifactRenderState;
+    render(<DatasetArtifactRenderer artifact={editable} />);
+
+    expect(
+      screen.getByRole("grid", { name: "Dataset cell editor" }),
+    ).toHaveAttribute("aria-describedby", "dataset-cell-editor-help");
+    fireEvent.change(screen.getByLabelText("amount, row 2"), {
+      target: { value: "3" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save patched revision" }),
+    );
+    await waitFor(() =>
+      expect(saveRevision).toHaveBeenCalledWith(
+        "\ufeffname,amount\r\nAda,3\r\n",
+      ),
+    );
+
+    fireEvent.change(screen.getByLabelText("amount, row 2"), {
+      target: { value: "=1+1" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Create formula-safe revision" }),
+    );
+    const confirmation = screen.getByRole("alert");
+    expect(confirmation).toHaveTextContent("Formula-like cells");
+    fireEvent.click(
+      within(confirmation).getByRole("button", {
+        name: "Create formula-safe revision",
+      }),
+    );
+    await waitFor(() =>
+      expect(saveRevision).toHaveBeenLastCalledWith(
+        "\ufeffname,amount\r\nAda,'=1+1\r\n",
+      ),
+    );
+  });
+
+  it("disables cell editing and gives a visible fidelity warning for malformed CSV", () => {
+    const editable = {
+      ...artifact("dataset", 'name,note\nAda,"unterminated'),
+      mediaType: "text/csv",
+      datasetEditor: { disabled: false, saveRevision: vi.fn() },
+    } as unknown as ArtifactRenderState;
+    render(<DatasetArtifactRenderer artifact={editable} />);
+    expect(screen.getByText(/malformed/i)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Save patched revision" }),
+    ).toBeDisabled();
   });
 
   it("renders TSV and bounded JSON object datasets without treating values as UI", () => {
@@ -68,6 +155,20 @@ describe("fixed artifact renderers", () => {
       />,
     );
     expect(screen.getByText("<script>nope</script>")).toBeInTheDocument();
+  });
+
+  it("windows large dataset rows instead of creating an unbounded table DOM", () => {
+    const rows = Array.from({ length: 101 }, (_, index) => `row-${index}`);
+    render(
+      <DatasetArtifactRenderer
+        artifact={artifact("dataset", `name\n${rows.join("\n")}`)}
+      />,
+    );
+    expect(screen.getByText("row-0")).toBeInTheDocument();
+    expect(screen.queryByText("row-100")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Next rows" }));
+    expect(screen.getByText("row-100")).toBeInTheDocument();
+    expect(screen.getByText("Showing rows 101–101 of 101")).toBeInTheDocument();
   });
 
   it("drops raw document HTML rather than creating a DOM node", () => {
