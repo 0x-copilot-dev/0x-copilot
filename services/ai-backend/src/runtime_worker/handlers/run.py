@@ -470,6 +470,7 @@ class RuntimeRunHandler:
                 tool_observation_index,
                 workspace_backend=workspace_backend,
                 run=run,
+                mcp_gateway_services=mcp_gateway_services,
             )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry
@@ -1149,6 +1150,7 @@ class RuntimeRunHandler:
         *,
         workspace_backend: object | None = None,
         run: object | None = None,
+        mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts, workspace)."""
         dependencies = self.dependencies_factory(command.runtime_context)
@@ -1203,7 +1205,11 @@ class RuntimeRunHandler:
         # PRD-D3 — the gated bulk row-set staging tool. Built only when SURFACES_V2
         # is on (mirroring the A3 emitter gate); `None` otherwise, so the model's
         # tool surface is byte-identical with the flag off.
-        stage_rowset_tool = self._stage_rowset_write_tool(command, run)
+        stage_rowset_tool = self._stage_rowset_write_tool(
+            command,
+            run,
+            mcp_gateway_services=mcp_gateway_services,
+        )
         if stage_rowset_tool is not None:
             update["stage_rowset_write_tool"] = stage_rowset_tool
         publish_artifact_tool = self._publish_artifact_tool()
@@ -1368,7 +1374,11 @@ class RuntimeRunHandler:
         await OperationShadowProbe.observe_model_result(result)
 
     def _stage_rowset_write_tool(
-        self, command: RuntimeRunCommand, run: object | None
+        self,
+        command: RuntimeRunCommand,
+        run: object | None,
+        *,
+        mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> object | None:
         """Build the per-run ``stage_rowset_write`` tool, or ``None`` (flag off).
 
@@ -1395,13 +1405,30 @@ class RuntimeRunHandler:
             RowsetPolicyResolver,
         )
         from agent_runtime.surfaces_v2.staging import WriteStager  # noqa: PLC0415
+        from runtime_worker.rowset_effect_staging import (  # noqa: PLC0415
+            RuntimeRowSetEffectProposalPort,
+        )
 
         rc = command.runtime_context
+        overrides = ConnectorWritePolicyOverrides.from_user_policies(
+            rc.user_policies_json
+        )
+        if mcp_gateway_services is not None:
+            return StageRowsetWriteTool(
+                proposal_stager=RuntimeRowSetEffectProposalPort(
+                    stager=mcp_gateway_services.stager,
+                    scope=mcp_gateway_services.stage_scope,
+                    actor=mcp_gateway_services.stage_author,
+                    argument_store=mcp_gateway_services.argument_store,
+                    connector_overrides=overrides,
+                ),
+                run=run,
+                org_id=command.org_id,
+                run_id=command.run_id,
+            )
         resolver = EffectiveActionPolicyResolver(
             snapshot=ToolUsePolicyResolver.resolve(rc),
-            overrides=ConnectorWritePolicyOverrides.from_user_policies(
-                rc.user_policies_json
-            ),
+            overrides=overrides,
         )
         stager = WriteStager(
             draft_store=self.draft_store,  # type: ignore[arg-type] — rowsets never touch drafts
