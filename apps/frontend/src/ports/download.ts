@@ -28,3 +28,29 @@ export async function downloadTextFile(
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
 }
+
+/** Save an exact stream without decoding, serialising, or base64 expansion. */
+export async function downloadArtifactStream(input: {
+  readonly filename: string;
+  readonly contentType: string;
+  readonly body: ReadableStream<Uint8Array>;
+}): Promise<void> {
+  if (typeof document === "undefined") {
+    throw new Error("download unavailable: no document");
+  }
+  const blob = await new Response(input.body, {
+    headers: { "content-type": input.contentType },
+  }).blob();
+  const url = URL.createObjectURL(blob);
+  try {
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = input.filename;
+    anchor.rel = "noopener";
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }
+}

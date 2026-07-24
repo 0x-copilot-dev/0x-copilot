@@ -14,6 +14,7 @@ import { registerSlideAdapter } from "./slide";
 
 // === Wave 1 (PRD-03) archetype renderers ===
 import { registerArchetypeAdapters } from "./archetypes";
+import { registerArtifactAdapters } from "./artifacts";
 // === end Wave 1 ===
 
 export {
@@ -91,6 +92,18 @@ export {
   boardAdapter,
 } from "./archetypes";
 export {
+  ARTIFACT_ADAPTERS,
+  ArtifactRenderer,
+  CodeArtifactRenderer,
+  DatasetArtifactRenderer,
+  DocumentArtifactRenderer,
+  FileArtifactRenderer,
+  RawArtifactFallback,
+  parseCsv,
+  registerArtifactAdapters,
+  type ArtifactRenderState,
+} from "./artifacts";
+export {
   formatValue,
   isSafeHttpUrl,
   resolvePath,
@@ -126,5 +139,6 @@ export function registerAll(): void {
   // === end Phase 4-F ===
   // === Wave 1 (PRD-03) archetype renderers ===
   registerArchetypeAdapters();
+  registerArtifactAdapters();
   // === end Wave 1 ===
 }

@@ -1,5 +1,8 @@
-import type { Transport } from "../transport";
+import type { ArtifactCapableTransport } from "../transport";
 import type {
+  ArtifactContentRequest,
+  ArtifactContentResponse,
+  ArtifactRevisionRequest,
   Session,
   SseSubscribeOptions,
   SseSubscription,
@@ -60,7 +63,20 @@ function defaultRandomId(): string {
 // event was in flight, and the re-subscribe is still being processed.
 // After the microtask, still-unknown events are dropped. The buffer has a
 // hard cap so a misbehaving main can't grow it without bound.
-export class IpcTransport implements Transport {
+interface ArtifactContentOpenWire {
+  readonly handle: string;
+  readonly contentType: string;
+  readonly contentLength: number | null;
+  readonly etag: string | null;
+  readonly filename: string | null;
+}
+
+interface ArtifactContentReadWire {
+  readonly done: boolean;
+  readonly chunk: Uint8Array | null;
+}
+
+export class IpcTransport implements ArtifactCapableTransport {
   readonly #bridge: WindowBridge;
   readonly #session: Session;
   readonly #capabilities: TransportCapabilities;
@@ -98,6 +114,81 @@ export class IpcTransport implements Transport {
       payload,
     );
     return unwrapTransportResult<TRes>(raw);
+  }
+
+  async getArtifactContent(
+    request: ArtifactContentRequest,
+  ): Promise<ArtifactContentResponse> {
+    const opened = await this.#bridge.ipc.invoke<ArtifactContentOpenWire>(
+      CHANNELS.transportArtifactContentOpen,
+      { artifactId: request.artifactId, revision: request.revision },
+    );
+    let closed = false;
+    const close = (): void => {
+      if (closed) return;
+      closed = true;
+      void this.#bridge.ipc
+        .invoke(CHANNELS.transportArtifactContentClose, {
+          handle: opened.handle,
+        })
+        .catch(() => {});
+    };
+    const body = new ReadableStream<Uint8Array>({
+      pull: async (controller): Promise<void> => {
+        if (request.signal?.aborted) {
+          close();
+          controller.error(new DOMException("Aborted", "AbortError"));
+          return;
+        }
+        try {
+          const next = await this.#bridge.ipc.invoke<ArtifactContentReadWire>(
+            CHANNELS.transportArtifactContentRead,
+            { handle: opened.handle },
+          );
+          if (next.done) {
+            closed = true;
+            controller.close();
+            return;
+          }
+          if (next.chunk === null) {
+            throw new Error("Artifact stream returned an empty chunk");
+          }
+          controller.enqueue(next.chunk);
+        } catch (error) {
+          close();
+          controller.error(error);
+        }
+      },
+      cancel: close,
+    });
+    return {
+      body,
+      contentType: opened.contentType,
+      contentLength: opened.contentLength,
+      etag: opened.etag,
+      filename: opened.filename,
+    };
+  }
+
+  async createArtifactRevision(
+    request: ArtifactRevisionRequest,
+  ): Promise<unknown> {
+    const raw = await this.#bridge.ipc.invoke<unknown>(
+      CHANNELS.transportArtifactRevision,
+      {
+        artifactId: request.artifactId,
+        parentRevision: request.parentRevision,
+        ...(request.expectedDigest !== undefined
+          ? { expectedDigest: request.expectedDigest }
+          : {}),
+        ...(request.etag !== undefined ? { etag: request.etag } : {}),
+        content: request.content,
+        contentType: request.contentType,
+        filename: request.filename,
+        idempotencyKey: request.idempotencyKey,
+      },
+    );
+    return unwrapTransportResult(raw);
   }
 
   subscribeServerSentEvents(opts: SseSubscribeOptions): SseSubscription {

@@ -46,7 +46,7 @@ import type { ConversationId } from "@0x-copilot/api-types";
 
 import { isSurfacesV2CanvasEnabled } from "../../app/featureFlags";
 import { WebClipboardPort } from "../../ports/ClipboardWeb";
-import { downloadTextFile } from "../../ports/download";
+import { downloadArtifactStream, downloadTextFile } from "../../ports/download";
 import type { RequestIdentity } from "../../api/config";
 import { installMcpServer, skipMcpAuth, startMcpAuth } from "../../api/mcpApi";
 import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
@@ -372,6 +372,10 @@ export function RunRoute({
     (text: string, filename: string) => downloadTextFile(text, filename),
     [],
   );
+  const artifactDownloadPort = useMemo(
+    () => ({ saveArtifact: downloadArtifactStream }),
+    [],
+  );
 
   // Full-bleed: the `run` slug owns full height in ChatShell (no topbar /
   // context / right rail). RunDestination is itself height:100%.
@@ -407,6 +411,7 @@ export function RunRoute({
         // PRD-B2: raw-fallback Copy / Download, bound to the web substrate.
         onCopyText={onCopyText}
         onSaveFile={onSaveFile}
+        artifactDownloadPort={artifactDownloadPort}
       />
     </section>
   );

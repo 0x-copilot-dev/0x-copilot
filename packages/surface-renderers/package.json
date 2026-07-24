@@ -16,6 +16,7 @@
     "react-dom": "^19.0.0"
   },
   "dependencies": {
+    "@0x-copilot/api-types": "0.1.0",
     "@0x-copilot/chat-surface": "0.1.0",
     "@0x-copilot/chat-transport": "0.1.0"
   },

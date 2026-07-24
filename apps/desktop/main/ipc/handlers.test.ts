@@ -128,6 +128,10 @@ describe("registerIpcHandlers — channel registration", () => {
   it("registers every documented channel", () => {
     const { ipcMain } = setup();
     expect(ipcMain.has(CHANNELS.transportRequest)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactContentOpen)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactContentRead)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactContentClose)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactRevision)).toBe(true);
     expect(ipcMain.has(CHANNELS.transportSubscribe)).toBe(true);
     expect(ipcMain.has(CHANNELS.transportUnsubscribe)).toBe(true);
     expect(ipcMain.has(CHANNELS.transportSessionSnapshot)).toBe(true);

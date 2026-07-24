@@ -1,5 +1,9 @@
-export type { Transport } from "./transport";
+export type { ArtifactCapableTransport, Transport } from "./transport";
 export type {
+  ArtifactContentRequest,
+  ArtifactContentResponse,
+  ArtifactRevisionRequest,
+  ArtifactTransport,
   HttpMethod,
   QueryParamValue,
   Session,
@@ -9,6 +13,7 @@ export type {
   TypedRequest,
 } from "./types";
 export {
+  isArtifactTransport,
   isTransportHttpError,
   TransportHttpError,
   UnauthorizedError,
@@ -53,6 +58,9 @@ export {
   wrapTransportError,
   wrapTransportValue,
   AuthWorkspaceParamsSchema,
+  ArtifactContentHandleParamsSchema,
+  ArtifactContentOpenParamsSchema,
+  ArtifactRevisionParamsSchema,
   AuthPosturePayloadSchema,
   AuthLinkWalletParamsSchema,
   AuthLinkOutcomeSchema,
@@ -67,6 +75,9 @@ export {
   UpdateStatusKindSchema,
   UpdateStatusPayloadSchema,
   type AuthWorkspaceParams,
+  type ArtifactContentHandleParams,
+  type ArtifactContentOpenParams,
+  type ArtifactRevisionParams,
   type AuthPosturePayload,
   type AuthLinkWalletParams,
   type AuthLinkOutcome,
