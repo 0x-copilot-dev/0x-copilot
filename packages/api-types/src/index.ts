@@ -5,6 +5,8 @@ export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
 // every wave; this barrel only ever gains re-export lines, never a type body.
 export type {
   LedgerEventType,
+  ArtifactRuntimeEventType,
+  ArtifactRuntimeEventPayloadMap,
   GateAuthState,
   GateOutcome,
   WritePolicy,
@@ -141,6 +143,7 @@ export type {
 } from "./ledger";
 export {
   LEDGER_EVENT_TYPES,
+  ARTIFACT_RUNTIME_EVENT_TYPES,
   isLedgerEventType,
   isSurfaceEventV2,
   isLedgerPayloadForWrite,
@@ -182,6 +185,8 @@ import type {
 // Local binding for the shared ledger payloads used in RuntimeEventPayloadByType
 // below (the block above re-exports them but does not bind them into local scope).
 import type {
+  ArtifactRuntimeEventPayloadMap,
+  ArtifactRuntimeEventType,
   UsageRecordedPayload,
   ActionClassifiedPayload,
   ReadExecutedPayload,
@@ -197,10 +202,8 @@ import type {
   DecisionRecordedPayload,
   WriteAppliedPayload,
   ReceiptEmittedPayload,
-  ArtifactCreatedPayload,
-  ArtifactRevisedPayload,
-  ArtifactPromotedPayload,
 } from "./ledger";
+import { ARTIFACT_RUNTIME_EVENT_TYPES } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
@@ -518,9 +521,7 @@ export type RuntimeApiEventType =
   | "decision.recorded"
   | "write.applied"
   | "receipt.emitted"
-  | "artifact.created"
-  | "artifact.revised"
-  | "artifact.promoted"
+  | ArtifactRuntimeEventType
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -594,9 +595,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   "decision.recorded",
   "write.applied",
   "receipt.emitted",
-  "artifact.created",
-  "artifact.revised",
-  "artifact.promoted",
+  ...ARTIFACT_RUNTIME_EVENT_TYPES,
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2363,7 +2362,7 @@ export interface ApprovalUndoRequestedPayload {
   [key: string]: unknown;
 }
 
-export interface RuntimeEventPayloadByType {
+export interface RuntimeEventPayloadByType extends ArtifactRuntimeEventPayloadMap {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;
   run_cancelling: RuntimeLifecyclePayload;
@@ -2478,11 +2477,6 @@ export interface RuntimeEventPayloadByType {
    * {kind: receipt}`) at run termination. Carries only `surface_id` + `fold_ref`
    * (the receipt is re-derivable by folding the ledger, never a stored blob). */
   "receipt.emitted": ReceiptEmittedPayload;
-  /** Generative Surfaces v2.1 (PRD-A2). Canonical artifact mutations are
-   * reference-only run-ledger rows; content bytes remain in the repository. */
-  "artifact.created": ArtifactCreatedPayload;
-  "artifact.revised": ArtifactRevisedPayload;
-  "artifact.promoted": ArtifactPromotedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

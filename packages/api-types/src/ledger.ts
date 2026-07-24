@@ -89,6 +89,16 @@ export const LEDGER_EVENT_TYPES = [
   "gate.resolved.v2",
 ] as const satisfies readonly LedgerEventType[];
 
+/** Canonical artifact events that also travel on the Runtime API event stream.
+ * Runtime API contracts import this subset instead of redeclaring SSOT values. */
+export const ARTIFACT_RUNTIME_EVENT_TYPES = [
+  "artifact.created",
+  "artifact.revised",
+  "artifact.promoted",
+] as const satisfies readonly LedgerEventType[];
+export type ArtifactRuntimeEventType =
+  (typeof ARTIFACT_RUNTIME_EVENT_TYPES)[number];
+
 // ---------------------------------------------------------------------------
 // Value unions (one per `enums` key in the JSON, values verbatim)
 // ---------------------------------------------------------------------------
@@ -602,7 +612,13 @@ export interface GateResolvedV2Payload {
 /** Event-type → payload map. The `SurfaceEventV2` definition below references
  * `LedgerEventPayloadMap[K]` for every `K in LedgerEventType`, so a missing key
  * is a compile error — that is the exhaustiveness pin. */
-export interface LedgerEventPayloadMap {
+export interface ArtifactRuntimeEventPayloadMap {
+  "artifact.created": ArtifactCreatedPayload;
+  "artifact.revised": ArtifactRevisedPayload;
+  "artifact.promoted": ArtifactPromotedPayload;
+}
+
+export interface LedgerEventPayloadMap extends ArtifactRuntimeEventPayloadMap {
   "gate.opened": GateOpenedPayload;
   "gate.resolved": GateResolvedPayload;
   "action.classified": ActionClassifiedPayload;
@@ -622,9 +638,6 @@ export interface LedgerEventPayloadMap {
   "operation.classified": OperationClassifiedPayload;
   "operation.completed": OperationCompletedPayload;
   "operation.failed": OperationFailedPayload;
-  "artifact.created": ArtifactCreatedPayload;
-  "artifact.revised": ArtifactRevisedPayload;
-  "artifact.promoted": ArtifactPromotedPayload;
   "artifact.presentation_decided": ArtifactPresentationDecidedPayload;
   "effect.staged": EffectStagedPayload;
   "effect.revised": EffectRevisedPayload;
