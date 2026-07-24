@@ -1,0 +1,236 @@
+[
+  {
+    "tool_name": "ask_a_question",
+    "capability": "builtin",
+    "op": "ask_a_question",
+    "source": "capabilities.tools.builtin.ask_a_question",
+    "kind": "builtin",
+    "execution": "pure",
+    "model_visible": true
+  },
+  {
+    "tool_name": "load_mcp_server",
+    "capability": "builtin",
+    "op": "load_mcp_server",
+    "source": "capabilities.mcp.middleware.load_mcp_server",
+    "kind": "builtin",
+    "execution": "pure",
+    "model_visible": true
+  },
+  {
+    "tool_name": "call_mcp_tool",
+    "capability": "builtin",
+    "op": "call_mcp_tool",
+    "source": "capabilities.mcp.middleware.call_tool",
+    "kind": "builtin",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "auth_mcp",
+    "capability": "builtin",
+    "op": "auth_mcp",
+    "source": "capabilities.mcp.middleware.auth_mcp",
+    "kind": "builtin",
+    "execution": "internal",
+    "model_visible": true
+  },
+  {
+    "tool_name": "load_skill",
+    "capability": "builtin",
+    "op": "load_skill",
+    "source": "capabilities.skills.loader",
+    "kind": "builtin",
+    "execution": "pure",
+    "model_visible": true
+  },
+  {
+    "tool_name": "load_prior_tool_result",
+    "capability": "builtin",
+    "op": "load_prior_tool_result",
+    "source": "capabilities.tools.prior_results",
+    "kind": "builtin",
+    "execution": "pure",
+    "model_visible": true
+  },
+  {
+    "tool_name": "suggest_mcp_connector",
+    "capability": "builtin",
+    "op": "suggest_mcp_connector",
+    "source": "capabilities.tools.builtin.suggest_mcp_connector",
+    "kind": "builtin",
+    "execution": "pure",
+    "model_visible": true
+  },
+  {
+    "tool_name": "run_code_mode",
+    "capability": "builtin",
+    "op": "run_code_mode",
+    "source": "capabilities.interpreter.code_mode_tool",
+    "kind": "builtin",
+    "execution": "internal",
+    "model_visible": true
+  },
+  {
+    "tool_name": "run_in_sandbox",
+    "capability": "builtin",
+    "op": "run_in_sandbox",
+    "source": "capabilities.sandbox.execute_tool",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "stage_rowset_write",
+    "capability": "builtin",
+    "op": "stage_rowset_write",
+    "source": "capabilities.tools.builtin.stage_rowset_write",
+    "kind": "builtin",
+    "execution": "staged",
+    "model_visible": true
+  },
+  {
+    "tool_name": "publish_artifact",
+    "capability": "artifact",
+    "op": "publish",
+    "source": "capabilities.tools.builtin.publish_artifact",
+    "kind": "builtin",
+    "execution": "internal",
+    "model_visible": true
+  },
+  {
+    "tool_name": "load_tool_spec",
+    "capability": "builtin",
+    "op": "load_tool_spec",
+    "source": "capabilities.tools.builtin.load_tool",
+    "kind": "dynamic_loader",
+    "execution": "pure",
+    "model_visible": false
+  },
+  {
+    "tool_name": "web_search",
+    "capability": "builtin",
+    "op": "web_search",
+    "source": "execution.runtime_dependencies",
+    "kind": "builtin",
+    "execution": "pure",
+    "model_visible": true
+  },
+  {
+    "tool_name": "write_todos",
+    "capability": "builtin",
+    "op": "write_todos",
+    "source": "delegation.middleware.todo_list",
+    "kind": "builtin",
+    "execution": "internal",
+    "model_visible": true
+  },
+  {
+    "tool_name": "execute",
+    "capability": "builtin",
+    "op": "execute",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "ls",
+    "capability": "workspace",
+    "op": "ls",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "read",
+    "capability": "workspace",
+    "op": "read",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "glob",
+    "capability": "workspace",
+    "op": "glob",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "grep",
+    "capability": "workspace",
+    "op": "grep",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "write",
+    "capability": "workspace",
+    "op": "write",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "edit",
+    "capability": "workspace",
+    "op": "edit",
+    "source": "delegation.middleware.filesystem",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": true
+  },
+  {
+    "tool_name": "dynamic_tool",
+    "capability": "dynamic_tool",
+    "op": "invoke",
+    "source": "capabilities.tools.loader",
+    "kind": "dynamic_tool",
+    "execution": "gateway",
+    "model_visible": false
+  },
+  {
+    "tool_name": "task",
+    "capability": "builtin",
+    "op": "task",
+    "source": "delegation.subagents.atlas_task_tool",
+    "kind": "builtin",
+    "execution": "delegated",
+    "model_visible": true
+  },
+  {
+    "tool_name": "subagent_dispatch",
+    "capability": "subagent",
+    "op": "dispatch",
+    "source": "delegation.subagents.runner",
+    "kind": "subagent",
+    "execution": "delegated",
+    "model_visible": false
+  },
+  {
+    "tool_name": "workspace_filesystem",
+    "capability": "workspace",
+    "op": "filesystem",
+    "source": "capabilities.desktop.workspace_backend",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": false
+  },
+  {
+    "tool_name": "browser_operation",
+    "capability": "desktop_browser",
+    "op": "operation",
+    "source": "capabilities.browser.operation_adapter",
+    "kind": "placeholder",
+    "execution": "gateway",
+    "model_visible": false
+  }
+]
