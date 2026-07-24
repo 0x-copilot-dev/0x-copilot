@@ -11,7 +11,11 @@ from datetime import datetime, timezone
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.mcp.dispatcher import McpDispatcherUnwrap
-from agent_runtime.execution.contracts import JsonObject, StreamEventSource
+from agent_runtime.execution.contracts import (
+    ConnectorAccessMode,
+    JsonObject,
+    StreamEventSource,
+)
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.persistence.records import ToolInvocationRecord
 from agent_runtime.persistence.records.common import ToolInvocationStatus
@@ -210,6 +214,11 @@ class StreamMessageProcessor:
         if StreamMessageParser.is_tool_result_message(message):
             payload = self.tool_result_payload(message)
             payload = self.tool_result_payload_with_state(run.run_id, payload)
+            self.add_tool_presentation_fields(
+                run=run,
+                payload=payload,
+                parent_task_id=parent_task_id,
+            )
             # Desktop file store only: park an oversized ``output`` in the object
             # store, leaving the event with a bounded preview + ``output_ref``.
             # No-op (offloader is None) on every other backend, and the ``task``
@@ -237,11 +246,12 @@ class StreamMessageProcessor:
                         else None,
                     ),
                     metadata=metadata,
+                    parent_task_id=parent_task_id,
                 )
                 return
             duration_ms = self._tool_duration_ms(run.run_id, payload)
             if duration_ms is not None:
-                payload["duration_ms"] = duration_ms
+                payload[Keys.Field.DURATION_MS] = duration_ms
             await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.TOOL,
@@ -266,7 +276,14 @@ class StreamMessageProcessor:
                 ),
             }
             if duration_ms is not None:
-                completed_payload["duration_ms"] = duration_ms
+                completed_payload[Keys.Field.DURATION_MS] = duration_ms
+            for key in (
+                Keys.Field.PROVENANCE,
+                Keys.Field.ACCESS_MODE,
+                Keys.Field.SUBAGENT_TASK_IDS,
+            ):
+                if key in payload:
+                    completed_payload[key] = payload[key]
             if (
                 StreamTextHelper.extract(payload.get(Keys.Field.VISIBILITY))
                 == RuntimeEventVisibility.INTERNAL.value
@@ -309,6 +326,11 @@ class StreamMessageProcessor:
             state.pending_start = True
             return
         payload = self.tool_call_payload_from_state(state)
+        self.add_tool_presentation_fields(
+            run=run,
+            payload=payload,
+            parent_task_id=parent_task_id,
+        )
         event_type = (
             RuntimeApiEventType.TOOL_CALL_STARTED
             if not state.started_emitted
@@ -413,6 +435,10 @@ class StreamMessageProcessor:
             event_type=RuntimeApiEventType.SUBAGENT_STARTED,
             payload=payload,
             metadata=metadata,
+            parent_task_id=self._update_processor.subagent_call_id_for_subgraph(
+                run_id=run.run_id,
+                subgraph_task_id=state.namespace.subagent_task_id,
+            ),
         )
         state.started_emitted = True
 
@@ -659,6 +685,54 @@ class StreamMessageProcessor:
             return None
         elapsed = datetime.now(timezone.utc) - state.started_at
         return max(0, round(elapsed.total_seconds() * 1000))
+
+    def add_tool_presentation_fields(
+        self,
+        *,
+        run: RunRecord,
+        payload: JsonObject,
+        parent_task_id: str | None,
+    ) -> None:
+        """Attach source-backed optional details to a public tool event.
+
+        MCP provenance is disclosed only when the dispatcher event contains a
+        concrete ``args.server_name``. The frozen access-mode context is keyed
+        by server ID, whereas the stream carries a server name; an exact key
+        match is the only safe resolution available at this seam. A missing or
+        non-matching key remains absent rather than being guessed. ``read_act``
+        is reported strictly as that configured authority mode, not as a claim
+        about the side effect of this particular call.
+        """
+
+        provenance_payload: Mapping[str, object] = payload
+        if McpDispatcherUnwrap.effective_server_name(provenance_payload) is None:
+            state = self.tool_call_state_for_payload(run.run_id, payload)
+            if state is not None:
+                provenance_payload = {
+                    Keys.Field.TOOL_NAME: state.tool_name,
+                    Keys.Field.ARGS: state.args
+                    or self.parse_args_text(state.args_text),
+                }
+        server_name = McpDispatcherUnwrap.effective_server_name(provenance_payload)
+        if server_name is not None:
+            payload[Keys.Field.PROVENANCE] = {
+                "source": Values.Provenance.MCP,
+                Keys.Field.SERVER_NAME: server_name,
+            }
+            access_mode = run.runtime_context.connector_access_modes.get(server_name)
+            if access_mode is not None:
+                access_mode_value = getattr(access_mode, "value", access_mode)
+                if isinstance(access_mode_value, str):
+                    try:
+                        payload[Keys.Field.ACCESS_MODE] = ConnectorAccessMode(
+                            access_mode_value
+                        ).value
+                    except ValueError:
+                        # Pydantic validates persisted contexts; retain this
+                        # guard for synthetic/replay objects that bypass it.
+                        pass
+        if parent_task_id is not None:
+            payload[Keys.Field.SUBAGENT_TASK_IDS] = [parent_task_id]
 
     @classmethod
     def apply_tool_visibility(cls, payload: JsonObject) -> None:

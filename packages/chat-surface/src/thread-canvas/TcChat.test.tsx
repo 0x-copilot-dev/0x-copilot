@@ -558,10 +558,10 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
     const card = await screen.findByTestId("tc-chat-tool-call-1");
     expect(card).toHaveAttribute("data-tool-status", "running");
     expect(within(card).getByText("web_search")).toBeInTheDocument();
-    expect(card.querySelector(".tc-tool-spinner")).not.toBeNull();
+    expect(card.querySelector(".tc-tool-card__spinner")).not.toBeNull();
   });
 
-  it("shows args + result behind the details expand for a completed call", async () => {
+  it("uses the full compact header as the native detail disclosure", async () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(
       withTransport(
@@ -574,18 +574,73 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
               status: "complete",
               args: { query: "aurora" },
               result: { hits: 2 },
+              provenance: { source: "mcp", serverName: "Brave Search" },
+              accessMode: "read_act",
+              durationMs: 1200,
             }),
           ]}
         />,
       ),
     );
-    const card = await screen.findByTestId("tc-chat-tool-call-1");
-    expect(card).toHaveAttribute("data-tool-status", "complete");
+    const item = await screen.findByTestId("tc-chat-tool-call-1");
+    expect(item).toHaveAttribute("data-tool-status", "complete");
+    const card = item.querySelector("details");
+    expect(card).not.toBeNull();
+    expect(card!).not.toHaveAttribute("open");
+    const header = card!.querySelector("summary");
+    expect(header).not.toBeNull();
+    expect(within(header!).getByText("web_search")).toBeInTheDocument();
+    expect(within(header!).getByText("MCP · Brave Search")).toBeInTheDocument();
+    expect(within(header!).getByText("read + act")).toBeInTheDocument();
+    expect(within(header!).getByText("1.2s")).toBeInTheDocument();
+
+    fireEvent.click(header!);
+    expect(card!).toHaveAttribute("open");
+    expect(within(card!).getByText("args")).toBeInTheDocument();
+    expect(within(card!).getByText("result")).toBeInTheDocument();
+    expect(within(card!).getByText("source")).toBeInTheDocument();
+    expect(within(card!).getAllByText("MCP · Brave Search")).toHaveLength(2);
     expect(screen.getByTestId("tc-chat-tool-call-1-args")).toHaveTextContent(
       '"query": "aurora"',
     );
     expect(screen.getByTestId("tc-chat-tool-call-1-result")).toHaveTextContent(
       '"hits": 2',
+    );
+  });
+
+  it("bounds selectable payloads and rolls delegated work up to agent anchors", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[
+            toolCall({
+              args: { note: "x".repeat(700) },
+              subagentTaskIds: ["task-research", "task-verify"],
+            }),
+          ]}
+        />,
+      ),
+    );
+    const item = await screen.findByTestId("tc-chat-tool-call-1");
+    fireEvent.click(item.querySelector("summary")!);
+
+    const args = screen.getByTestId("tc-chat-tool-call-1-args");
+    expect(args).toHaveAttribute("data-truncated", "true");
+    expect(args).toHaveAttribute("tabindex", "0");
+    expect(args).toHaveAccessibleName(/truncated to 600 characters/i);
+    expect(args.textContent?.length).toBeLessThanOrEqual(601);
+    expect(screen.getByText("2 delegated tasks")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "task-research" })).toHaveAttribute(
+      "href",
+      "#subagent-task-task-research",
+    );
+    expect(screen.getByRole("link", { name: "task-verify" })).toHaveAttribute(
+      "data-subagent-task-id",
+      "task-verify",
     );
   });
 

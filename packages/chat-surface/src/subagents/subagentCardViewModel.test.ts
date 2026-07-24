@@ -59,6 +59,19 @@ describe("subagentCardFromEntry", () => {
     expect(vm.finding).toContain("Wrote a 30-line");
   });
 
+  it("flattens headings, list markers, and emphasis into plaintext findings", () => {
+    const vm = subagentCardFromEntry(
+      entry({
+        result_summary:
+          "## Findings\n1. **Key feature:** Fast retrieval\n- __Citations__ remain traceable\n* Ready to ship",
+      }),
+    );
+
+    expect(vm.finding).toBe(
+      "Findings Key feature: Fast retrieval Citations remain traceable Ready to ship",
+    );
+  });
+
   it("collapses whitespace and newlines into single spaces in the task", () => {
     const vm = subagentCardFromEntry(
       entry({

@@ -7,6 +7,10 @@
 
 export { SubagentCard, type SubagentCardProps } from "./SubagentCard";
 export {
+  AgentActivityRow,
+  type AgentActivityRowProps,
+} from "./AgentActivityRow";
+export {
   FleetSubagentRow,
   type FleetSubagentRowProps,
 } from "./FleetSubagentRow";
@@ -28,6 +32,14 @@ export {
   type SubagentCardViewModel,
   type SubagentPauseReason,
 } from "./subagentCardViewModel";
+export {
+  agentActivityRowFromEntry,
+  agentPresentationFields,
+  displayAgentRole,
+  type AgentActivityRowViewModel,
+  type AgentPresentationFields,
+  type ProjectedSubagentEntry,
+} from "./agentActivityRowViewModel";
 export {
   formatSubagentDuration,
   pauseAriaLabel,

@@ -948,6 +948,105 @@ async def test_tool_event_inside_subagent_carries_subagent_id() -> None:
     # `subagent_started` card via a shared identifier.
     assert event["parent_task_id"] == "call_supervisor_abc"
     assert event["subagent_id"] == "general-purpose"
+    assert event["payload"]["subagent_task_ids"] == ["call_supervisor_abc"]
+
+
+async def test_mcp_tool_events_carry_source_backed_provenance_and_access_mode() -> None:
+    """MCP metadata comes from the dispatcher payload, never a tool-name guess."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+    run = run.model_copy(
+        update={
+            "runtime_context": run.runtime_context.model_copy(
+                update={"connector_access_modes": {"notion": "read_act"}}
+            )
+        }
+    )
+    namespace = StreamNamespace.from_value(())
+
+    await orchestrator.message_processor.append_tool_call_chunk_event(
+        run=run,
+        namespace=namespace,
+        tool_call={
+            "name": "call_mcp_tool",
+            "id": "call_notion_1",
+            "index": 0,
+            "args": {
+                "server_name": "notion",
+                "tool_name": "search",
+                "arguments": {"query": "run cockpit"},
+            },
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+    await orchestrator.message_processor.process(
+        run=run,
+        namespace=namespace,
+        message={
+            "type": "tool",
+            "name": "call_mcp_tool",
+            "tool_call_id": "call_notion_1",
+            "content": "found a page",
+        },
+        delta=None,
+    )
+
+    expected_provenance = {"source": "mcp", "server_name": "notion"}
+    tool_events = [
+        event
+        for event in producer.events
+        if event["event_type"]
+        in {
+            RuntimeApiEventType.TOOL_CALL_STARTED,
+            RuntimeApiEventType.TOOL_RESULT,
+            RuntimeApiEventType.TOOL_CALL_COMPLETED,
+        }
+    ]
+    assert len(tool_events) == 3
+    for event in tool_events:
+        assert event["payload"]["provenance"] == expected_provenance
+        # `read_act` is the run's frozen authority mode; it does not classify
+        # the individual `search` invocation as a write.
+        assert event["payload"]["access_mode"] == "read_act"
+
+
+async def test_native_tool_omits_mcp_provenance_and_access_mode() -> None:
+    """A native tool name that resembles a connector must not gain MCP metadata."""
+
+    producer = RecordingEventProducer()
+    orchestrator = StreamOrchestrator(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+    run = run.model_copy(
+        update={
+            "runtime_context": run.runtime_context.model_copy(
+                update={"connector_access_modes": {"notion": "read_act"}}
+            )
+        }
+    )
+
+    await orchestrator.message_processor.append_tool_call_chunk_event(
+        run=run,
+        namespace=StreamNamespace.from_value(()),
+        tool_call={
+            "name": "notion_search",
+            "id": "call_native_1",
+            "index": 0,
+            "args": {"query": "run cockpit"},
+        },
+        metadata={},
+        parent_task_id=None,
+    )
+
+    event = next(
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.TOOL_CALL_STARTED
+    )
+    assert "provenance" not in event["payload"]
+    assert "access_mode" not in event["payload"]
 
 
 def test_task_tool_payload_includes_concise_user_facing_summary() -> None:
@@ -970,6 +1069,35 @@ def test_task_tool_payload_includes_concise_user_facing_summary() -> None:
     )
     assert payload["display_title"] == payload["short_summary"]
     assert len(str(payload["short_summary"])) <= 120
+
+
+async def test_subagent_lifecycle_carries_model_role_and_current_activity() -> None:
+    """The presentation fields are derived from task/run facts, not agent-name defaults."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+    payload = StreamUpdateProcessor.task_tool_call_payload(
+        call_id="call_research_1",
+        args_payload={
+            "subagent_type": "researcher",
+            "description": "Research the current market landscape.",
+        },
+    )
+
+    await update_processor.append_task_lifecycle_event(
+        run=run,
+        event_type=RuntimeApiEventType.SUBAGENT_STARTED,
+        payload=payload,
+        metadata={},
+    )
+
+    event = producer.events[-1]
+    assert event["payload"]["parent_agent_role"] == "supervisor"
+    assert event["payload"]["model_display_label"] == "GPT-5.4 Mini"
+    assert event["payload"]["current_activity"] == payload["short_summary"]
+    # The runtime does not hold a trusted lead display identity.
+    assert "parent_agent_name" not in event["payload"]
 
 
 async def test_tool_result_carries_duration_ms_back_to_started_event() -> None:

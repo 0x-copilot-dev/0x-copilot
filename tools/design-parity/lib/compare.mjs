@@ -92,9 +92,48 @@ const px = (v) => {
 const fam = (v) => (v || "").toLowerCase();
 const isMono = (v) => fam(v).includes("mono");
 
+/** Browsers serialize an equivalent token color in more than one computed
+ * form: older style rules commonly become `rgba(95, 178, 236, 0.35)`, while
+ * `color-mix()` becomes `color(srgb 0.372549 0.698039 0.92549 / 0.35)`. Treat
+ * those as the same rendered color instead of manufacturing a HIGH delta. */
+function parsedColor(value) {
+  const rgb = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(value);
+  if (rgb) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3]), 1];
+  const rgba = /^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([\d.]+)\)$/.exec(value);
+  if (rgba) {
+    return [Number(rgba[1]), Number(rgba[2]), Number(rgba[3]), Number(rgba[4])];
+  }
+  const srgb =
+    /^color\(srgb\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\/\s*([\d.]+)\)$/.exec(
+      value,
+    );
+  if (srgb) {
+    return [
+      Number(srgb[1]) * 255,
+      Number(srgb[2]) * 255,
+      Number(srgb[3]) * 255,
+      Number(srgb[4]),
+    ];
+  }
+  return null;
+}
+
+function colorsMatch(left, right) {
+  if (left === right) return true;
+  const a = parsedColor(left);
+  const b = parsedColor(right);
+  if (!a || !b) return false;
+  return (
+    Math.abs(a[0] - b[0]) < 0.01 &&
+    Math.abs(a[1] - b[1]) < 0.01 &&
+    Math.abs(a[2] - b[2]) < 0.01 &&
+    Math.abs(a[3] - b[3]) < 0.001
+  );
+}
+
 // Classify one property mismatch → { severity, note } or null (no material diff).
 function classify(prop, d, l) {
-  if (d === l) return null;
+  if (d === l || (COLOR.has(prop) && colorsMatch(d, l))) return null;
 
   if (prop === "fontFamily") {
     // Only flag a *typeface class* change (mono<->sans), not vendor-string noise.

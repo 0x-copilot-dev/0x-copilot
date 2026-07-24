@@ -546,6 +546,41 @@ describe("eventProjector.projectToolCalls", () => {
     expect(entries[0].result).toBeUndefined();
   });
 
+  it("carries only safe supplied provenance, authority, duration, and delegated task ids", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: {
+          call_id: "call-safe-metadata",
+          tool_name: "web_search",
+          provenance: { source: "mcp", server_name: "Brave Search" },
+          access_mode: "read_act",
+          subagent_task_ids: ["task-research", "task-research", 7, ""],
+        },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "call-safe-metadata",
+          tool_name: "web_search",
+          status: "completed",
+          duration_ms: 1200,
+          // Unknown presentation data must not overwrite or fabricate the
+          // facts accepted from the started frame.
+          provenance: { source: "unknown", server_name: "guess" },
+          access_mode: "write",
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      provenance: { source: "mcp", serverName: "Brave Search" },
+      accessMode: "read_act",
+      durationMs: 1200,
+      subagentTaskIds: ["task-research"],
+    });
+  });
+
   it("marks a failed result as error and carries the safe message", () => {
     nextSeq = 0;
     const entries = projectToolCalls([

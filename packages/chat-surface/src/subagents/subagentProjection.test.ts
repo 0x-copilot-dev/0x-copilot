@@ -144,6 +144,36 @@ describe("projectSubagents", () => {
     expect(out.subagents.get("solo")?.status).toBe("running");
   });
 
+  it("retains safe Focus presentation fields and progress summary across lifecycle frames", () => {
+    nextSeq = 0;
+    const out = projectSubagents([
+      child("subagent_started", "task_research", {
+        subagent_id: "researcher",
+        payload: {
+          parent_task_id: "main-agent",
+          parent_agent_role: "orchestrator",
+          parent_agent_name: "Orchestrator",
+          model_display_label: "Haiku 4.5",
+        },
+      }),
+      child("subagent_progress", "task_research", {
+        summary: "Searching primary documentation",
+        payload: {},
+      }),
+      child("subagent_progress", "task_research", {
+        payload: { current_activity: "Comparing conflicting claims" },
+      }),
+    ]);
+
+    expect(out.subagents.get("task_research")).toMatchObject({
+      parent_task_id: "main-agent",
+      parent_agent_role: "orchestrator",
+      parent_agent_name: "Orchestrator",
+      model_display_label: "Haiku 4.5",
+      current_activity: "Comparing conflicting claims",
+    });
+  });
+
   it("projects a lone subagent as a fleet-of-one, running → done with a result", () => {
     nextSeq = 0;
     const out = projectSubagents([

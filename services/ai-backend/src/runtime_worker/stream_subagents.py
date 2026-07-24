@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from agent_runtime.execution.contracts import JsonObject, StreamEventSource
-from agent_runtime.api.constants import Keys, Messages
+from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.litellm_model_source import ModelDisplayName
 from agent_runtime.observability.tracing import TraceContext
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -109,6 +110,7 @@ class StreamUpdateProcessor:
         event_type: RuntimeApiEventType,
         payload: JsonObject,
         metadata: JsonObject,
+        parent_task_id: str | None = None,
     ) -> None:
         """Persist a deduplicated subagent lifecycle event, enriching COMPLETED with duration and usage."""
         task_id = StreamTextHelper.extract(payload.get(self._Fields.TASK_ID))
@@ -125,12 +127,18 @@ class StreamUpdateProcessor:
         if event_type is RuntimeApiEventType.SUBAGENT_COMPLETED and task_id is not None:
             duration_ms = self._subagent_duration_ms(run.run_id, task_id)
             if duration_ms is not None:
-                payload["duration_ms"] = duration_ms
+                payload[Keys.Field.DURATION_MS] = duration_ms
             metrics = self._metrics_by_run.get(run.run_id)
             if metrics is not None:
                 rollup = metrics.per_call.subagent_rollup(task_id)
                 if rollup.call_count > 0:
                     payload["usage"] = rollup.model_dump(mode="json")
+        self.add_subagent_presentation_fields(
+            run=run,
+            event_type=event_type,
+            payload=payload,
+            parent_task_id=parent_task_id,
+        )
         subagent_id = StreamTextHelper.extract(payload.get(self._Fields.SUBAGENT_NAME))
         await self.event_producer.append_api_event(
             run=run,
@@ -138,8 +146,53 @@ class StreamUpdateProcessor:
             event_type=event_type,
             payload=payload,
             metadata=metadata,
+            parent_task_id=parent_task_id,
             subagent_id=subagent_id,
         )
+
+    @classmethod
+    def add_subagent_presentation_fields(
+        cls,
+        *,
+        run: RunRecord,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+        parent_task_id: str | None,
+    ) -> None:
+        """Attach optional fields that the task runtime already establishes.
+
+        A task lifecycle event is emitted by the deep-agent supervisor, so its
+        parent role is factual. The human-facing lead name is not part of the
+        persisted run or task contract and is deliberately not invented. Every
+        subagent shares the run's resolved model profile, allowing a stable
+        model display label. ``current_activity`` is copied only from existing
+        user-visible task/progress text, never inferred from a tool name.
+        """
+
+        payload.setdefault(Keys.Field.PARENT_AGENT_ROLE, Values.AgentRole.SUPERVISOR)
+        if parent_task_id is not None:
+            payload.setdefault(Keys.Field.PARENT_TASK_ID, parent_task_id)
+        payload.setdefault(
+            Keys.Field.MODEL_DISPLAY_LABEL,
+            ModelDisplayName.derive(run.runtime_context.model_profile.model_name),
+        )
+        if event_type not in {
+            RuntimeApiEventType.SUBAGENT_STARTED,
+            RuntimeApiEventType.SUBAGENT_PROGRESS,
+            RuntimeApiEventType.SUBAGENT_UPDATE,
+        }:
+            return
+        for key in (
+            Keys.Field.CURRENT_ACTIVITY,
+            Keys.Field.SHORT_SUMMARY,
+            Keys.Field.SUMMARY,
+            cls._Fields.MESSAGE,
+            cls._Fields.DISPLAY_TITLE,
+        ):
+            activity = StreamTextHelper.extract(payload.get(key))
+            if activity is not None:
+                payload.setdefault(Keys.Field.CURRENT_ACTIVITY, activity)
+                return
 
     def _subagent_duration_ms(self, run_id: str, task_id: str) -> int | None:
         """Pop the started-at timestamp and return the elapsed milliseconds, or ``None`` if not recorded."""
@@ -256,6 +309,10 @@ class StreamUpdateProcessor:
         """Append lifecycle events derived from documented Deep Agents update chunks."""
 
         emitted = False
+        parent_task_id = self.cached_subagent_call_id_for_subgraph(
+            run_id=run.run_id,
+            subgraph_task_id=namespace.subagent_task_id,
+        )
         start_payloads = self.task_tool_call_payloads(data)
         # PR A2 / WS-E — whenever the supervisor dispatches ≥1 task tool call
         # in the same update tick, emit a SUBAGENT_FLEET_STARTED bookend first
@@ -283,6 +340,7 @@ class StreamUpdateProcessor:
                 event_type=RuntimeApiEventType.SUBAGENT_STARTED,
                 payload=payload,
                 metadata=metadata,
+                parent_task_id=parent_task_id,
             )
             emitted = True
         for payload in self.task_tool_result_payloads(data):
@@ -299,6 +357,7 @@ class StreamUpdateProcessor:
                 event_type=RuntimeApiEventType.SUBAGENT_COMPLETED,
                 payload=payload,
                 metadata=metadata,
+                parent_task_id=parent_task_id,
             )
             emitted = True
             if child_fleet_id is not None and task_id is not None:
@@ -316,13 +375,19 @@ class StreamUpdateProcessor:
             return True
         payload.setdefault(self._Fields.TASK_ID, namespace.subagent_task_id)
         payload.setdefault(self._Fields.STATUS, "running")
+        self.add_subagent_presentation_fields(
+            run=run,
+            event_type=RuntimeApiEventType.SUBAGENT_PROGRESS,
+            payload=payload,
+            parent_task_id=parent_task_id,
+        )
         await self.event_producer.append_api_event(
             run=run,
             source=StreamEventSource.SUBAGENT,
             event_type=RuntimeApiEventType.SUBAGENT_PROGRESS,
             payload=payload,
             metadata=metadata,
-            parent_task_id=namespace.subagent_task_id,
+            parent_task_id=parent_task_id or namespace.subagent_task_id,
         )
         return True
 

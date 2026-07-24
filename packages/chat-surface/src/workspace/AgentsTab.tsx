@@ -9,23 +9,28 @@
 // SubagentCard block; a lightweight scroll helper here keeps the
 // integration shallow.
 //
-// PR 3.2.1 — each card body wraps in a native `<details>` disclosure
-// that reveals the per-subagent step timeline (the same activities the
-// in-thread `SubagentTool` shows, projected from the chat tree by
-// `useSubagentActivities`).
+// PR 3.2.1 — the rail preserves the per-subagent step timeline (the same
+// activities the in-thread `SubagentTool` shows, projected from the chat tree
+// by `useSubagentActivities`) behind an explicit accessible control.
 //
-// PR 3.2.2 — both surfaces (in-thread + this pane) now render via the
-// shared `<SubagentCard>` primitive (PR-1.5, chat-surface). The pane
-// composes the narrow timeline variant on top of the in-thread base
-// styling.
+// The in-thread surface retains its richer `<SubagentCard>`. Focus uses the
+// compact shared `<AgentActivityRow>` instead, with a separate, explicit
+// detail control for the accessible timeline.
 
 import { classNames } from "@0x-copilot/design-system";
-import type { SubagentEntry } from "@0x-copilot/api-types";
+import type {
+  SubagentEntry,
+  SubagentLifecycleStatus,
+} from "@0x-copilot/api-types";
 import { useEffect, useRef, type ReactElement } from "react";
 
 import { scrollChatToEvent } from "../citations/scrollChatToCitation";
-import { SubagentCard } from "../subagents/SubagentCard";
-import { subagentCardFromEntry } from "../subagents/subagentCardViewModel";
+import { AgentActivityRow } from "../subagents/AgentActivityRow";
+import {
+  agentActivityRowFromEntry,
+  displayAgentRole,
+  type AgentActivityRowViewModel,
+} from "../subagents/agentActivityRowViewModel";
 import {
   isRunningStatus,
   subagentsByRecency,
@@ -173,78 +178,241 @@ function renderHistoryGroups({
           <time>{formatGroupTime(group.timestamp)}</time>
         </button>
         <ul className="atlas-workspace-agent-group__list">
-          {entries.map((entry) =>
-            renderEntry({
-              entry,
-              focusTaskId,
-              focusRef,
-              activitiesByTask,
-              onJumpToSubagent,
-              onJumpToApproval,
-            }),
-          )}
+          {renderFocusRows({
+            entries,
+            focusTaskId,
+            focusRef,
+            activitiesByTask,
+            onJumpToSubagent,
+            onJumpToApproval,
+          })}
         </ul>
       </li>,
     );
   }
+  const ungrouped: SubagentEntry[] = [];
   for (const entry of ordered) {
     if (groupedTaskIds.has(entry.task_id)) continue;
-    rendered.push(
-      renderEntry({
-        entry,
-        focusTaskId,
-        focusRef,
-        activitiesByTask,
-        onJumpToSubagent,
-        onJumpToApproval,
-      }),
-    );
+    ungrouped.push(entry);
   }
+  rendered.push(
+    ...renderFocusRows({
+      entries: ungrouped,
+      focusTaskId,
+      focusRef,
+      activitiesByTask,
+      onJumpToSubagent,
+      onJumpToApproval,
+    }),
+  );
   return rendered;
 }
 
-function renderEntry({
-  entry,
+function renderFocusRows({
+  entries,
   focusTaskId,
   focusRef,
   activitiesByTask,
   onJumpToSubagent,
   onJumpToApproval,
 }: {
-  entry: SubagentEntry;
+  entries: readonly SubagentEntry[];
+  focusTaskId?: string | null;
+  focusRef: React.MutableRefObject<HTMLLIElement | null>;
+  activitiesByTask?: SubagentActivitiesByTask;
+  onJumpToSubagent?: (subagent: SubagentEntry) => void;
+  onJumpToApproval: (sourceEventId: string) => void;
+}): ReactElement[] {
+  return focusRows(entries).map((row) =>
+    renderEntry({
+      entry: row.entry,
+      lead: row.lead,
+      depth: row.depth,
+      focusTaskId,
+      focusRef,
+      activitiesByTask,
+      onJumpToSubagent,
+      onJumpToApproval,
+    }),
+  );
+}
+
+function renderEntry({
+  entry,
+  lead,
+  depth,
+  focusTaskId,
+  focusRef,
+  activitiesByTask,
+  onJumpToSubagent,
+  onJumpToApproval,
+}: {
+  entry?: SubagentEntry;
+  lead?: AgentActivityRowViewModel;
+  depth: number;
   focusTaskId?: string | null;
   focusRef: React.MutableRefObject<HTMLLIElement | null>;
   activitiesByTask?: SubagentActivitiesByTask;
   onJumpToSubagent?: (subagent: SubagentEntry) => void;
   onJumpToApproval: (sourceEventId: string) => void;
 }): ReactElement {
-  const isFocused = entry.task_id === focusTaskId;
-  const view = subagentCardFromEntry(entry);
-  const activities = activitiesByTask?.get(entry.task_id) ?? [];
+  const view = lead ?? agentActivityRowFromEntry(entry!);
+  const isLead = lead !== undefined;
+  const taskId = entry?.task_id;
+  const isFocused = taskId === focusTaskId;
+  const activities = taskId ? (activitiesByTask?.get(taskId) ?? []) : [];
   return (
     <li
-      key={entry.task_id}
+      key={isLead ? `lead-${view.taskId ?? view.name}` : taskId}
       ref={isFocused ? focusRef : undefined}
       className={classNames(
         "atlas-workspace-tab__item",
+        depth > 0 && "atlas-workspace-tab__item--child",
         isFocused && "atlas-workspace-tab__item--focused",
       )}
-      data-task-id={entry.task_id}
-      data-status={entry.status}
+      id={taskId ? `subagent-task-${taskId}` : undefined}
+      data-task-id={taskId}
+      data-status={view.status}
     >
-      <SubagentCard
+      <AgentActivityRow
         view={view}
         activities={activities}
         timelineClassName={PANE_TIMELINE_CLASS}
         onJumpToThread={
-          onJumpToSubagent ? () => onJumpToSubagent(entry) : undefined
+          entry && onJumpToSubagent ? () => onJumpToSubagent(entry) : undefined
         }
         onJumpToApproval={onJumpToApproval}
         defaultOpen={isFocused}
-        compact
+        depth={depth}
+        lead={isLead}
       />
     </li>
   );
+}
+
+interface FocusRow {
+  readonly entry?: SubagentEntry;
+  readonly lead?: AgentActivityRowViewModel;
+  readonly depth: number;
+}
+
+/**
+ * Preserve stream/archive order while expressing the parent relation when the
+ * additive projection fields are present. A real parent entry wins. When the
+ * parent is the main orchestrator (and therefore has no child task entry), a
+ * synthetic lead keeps the hierarchy visible without inventing backend data.
+ */
+function focusRows(entries: readonly SubagentEntry[]): readonly FocusRow[] {
+  const byTaskId = new Map(entries.map((entry) => [entry.task_id, entry]));
+  const childByParent = new Map<string, SubagentEntry[]>();
+  const orphanGroups = new Map<string, SubagentEntry[]>();
+  const parentLabels = new Map<string, { name: string; role: string | null }>();
+
+  for (const entry of entries) {
+    const view = agentActivityRowFromEntry(entry);
+    if (view.parentTaskId && byTaskId.has(view.parentTaskId)) {
+      const children = childByParent.get(view.parentTaskId) ?? [];
+      children.push(entry);
+      childByParent.set(view.parentTaskId, children);
+      continue;
+    }
+    const parentName =
+      view.parentAgentName ?? displayAgentRole(view.parentAgentRole);
+    if (parentName) {
+      const key =
+        view.parentTaskId ?? `${view.parentAgentRole ?? "agent"}:${parentName}`;
+      const children = orphanGroups.get(key) ?? [];
+      children.push(entry);
+      orphanGroups.set(key, children);
+      parentLabels.set(key, { name: parentName, role: view.parentAgentRole });
+    }
+  }
+
+  const rendered = new Set<string>();
+  const output: FocusRow[] = [];
+  const appendEntry = (entry: SubagentEntry, depth: number): void => {
+    if (rendered.has(entry.task_id)) return;
+    rendered.add(entry.task_id);
+    output.push({ entry, depth });
+    for (const child of childByParent.get(entry.task_id) ?? []) {
+      appendEntry(child, depth + 1);
+    }
+  };
+
+  for (const entry of entries) {
+    if (rendered.has(entry.task_id)) continue;
+    const view = agentActivityRowFromEntry(entry);
+    const hasRealParent =
+      view.parentTaskId !== null && byTaskId.has(view.parentTaskId);
+    if (hasRealParent) continue;
+    const parentName =
+      view.parentAgentName ?? displayAgentRole(view.parentAgentRole);
+    const orphanKey = parentName
+      ? (view.parentTaskId ??
+        `${view.parentAgentRole ?? "agent"}:${parentName}`)
+      : null;
+    if (orphanKey && orphanGroups.has(orphanKey)) {
+      const children = orphanGroups.get(orphanKey)!;
+      output.push({
+        lead: syntheticLead(orphanKey, parentLabels.get(orphanKey)!, children),
+        depth: 0,
+      });
+      for (const child of children) appendEntry(child, 1);
+      continue;
+    }
+    appendEntry(entry, 0);
+  }
+  return output;
+}
+
+function syntheticLead(
+  key: string,
+  parent: { name: string; role: string | null },
+  children: readonly SubagentEntry[],
+): AgentActivityRowViewModel {
+  const status = aggregateLeadStatus(children);
+  const activeCount = children.filter((entry) =>
+    isRunningStatus(entry.status),
+  ).length;
+  const childLabel = children.length === 1 ? "agent" : "agents";
+  return {
+    taskId: `parent-${key}`,
+    name: parent.name,
+    status,
+    terminal: status === "completed",
+    task: null,
+    finding: null,
+    fullResult: null,
+    startedAt: null,
+    completedAt: null,
+    durationMs: null,
+    isError: status === "failed",
+    parentTaskId: null,
+    parentAgentRole: parent.role,
+    parentAgentName: parent.name,
+    modelDisplayLabel: null,
+    currentActivity:
+      activeCount > 0
+        ? `Coordinating ${activeCount} active ${childLabel}`
+        : `Coordinated ${children.length} ${childLabel}`,
+  };
+}
+
+function aggregateLeadStatus(
+  children: readonly SubagentEntry[],
+): SubagentLifecycleStatus {
+  if (children.some((entry) => isRunningStatus(entry.status))) return "running";
+  if (children.some((entry) => entry.status === "paused")) return "paused";
+  if (
+    children.some(
+      (entry) => entry.status === "failed" || entry.status === "timed_out",
+    )
+  ) {
+    return "failed";
+  }
+  if (children.some((entry) => entry.status === "cancelled"))
+    return "cancelled";
+  return "completed";
 }
 
 function mergeOrderedSubagents(

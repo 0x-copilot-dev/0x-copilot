@@ -72,7 +72,7 @@ function activityMap(
   return new Map(Object.entries(byTask));
 }
 
-describe("AgentsTab disclosure", () => {
+describe("AgentsTab Focus rows", () => {
   it("renders the empty hint when no subagents have been dispatched", () => {
     render(<AgentsTab subagents={emptySubagentMap()} />);
     expect(
@@ -82,12 +82,17 @@ describe("AgentsTab disclosure", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders one details disclosure per subagent, closed by default", () => {
+  it("renders one explicit native detail control per subagent, closed by default", () => {
     const subagents = seedSubagentMap([entry()]);
     render(<AgentsTab subagents={subagents} />);
-    const details = screen.getByTestId("subagent-card-details-task_doc_reader");
-    expect(details).toBeInstanceOf(HTMLDetailsElement);
-    expect((details as HTMLDetailsElement).open).toBe(false);
+    const details = screen.getByTestId(
+      "agent-activity-row-details-task_doc_reader",
+    ) as HTMLDetailsElement;
+    expect(details.open).toBe(false);
+    expect(details.querySelector("summary")).toHaveAttribute(
+      "aria-label",
+      "Toggle Doc reader activity details",
+    );
   });
 
   it("renders thread-derived history groups even when the snapshot is empty", async () => {
@@ -137,23 +142,22 @@ describe("AgentsTab disclosure", () => {
         })}
       />,
     );
-    // Closed: timeline rows are present in the DOM (browsers preserve
-    // <details> children) but the user agent treats them as collapsed.
-    // Open the disclosure by clicking the summary.
-    const summary = screen.getByText(/Completed in 18s/);
-    await user.click(summary);
     const details = screen.getByTestId(
-      "subagent-card-details-task_doc_reader",
+      "agent-activity-row-details-task_doc_reader",
     ) as HTMLDetailsElement;
+    await user.click(details.querySelector("summary")!);
     expect(details.open).toBe(true);
+    const region = screen.getByRole("region", {
+      name: "Doc reader activity details",
+    });
     expect(
-      details.querySelectorAll(".aui-tool-card__timeline-item").length,
+      region.querySelectorAll(".aui-tool-card__timeline-item").length,
     ).toBe(2);
-    expect(details).toHaveTextContent("4 hits");
-    expect(details).toHaveTextContent("GTM/FY26-Q1 plan");
+    expect(region).toHaveTextContent("4 hits");
+    expect(region).toHaveTextContent("GTM/FY26-Q1 plan");
   });
 
-  it("auto-opens the focused subagent's disclosure on first render", () => {
+  it("auto-opens the focused subagent's explicit native detail region", () => {
     const subagents = seedSubagentMap([entry()]);
     render(
       <AgentsTab
@@ -165,9 +169,12 @@ describe("AgentsTab disclosure", () => {
       />,
     );
     const details = screen.getByTestId(
-      "subagent-card-details-task_doc_reader",
+      "agent-activity-row-details-task_doc_reader",
     ) as HTMLDetailsElement;
     expect(details.open).toBe(true);
+    expect(
+      screen.getByRole("region", { name: "Doc reader activity details" }),
+    ).toBeInTheDocument();
   });
 
   it("falls back to the empty-activity message when the subagent has no inner steps and no result text", async () => {
@@ -182,13 +189,17 @@ describe("AgentsTab disclosure", () => {
         activitiesByTask={activityMap({ task_doc_reader: [] })}
       />,
     );
-    await user.click(screen.getByText(/Completed in 18s/));
+    await user.click(
+      screen
+        .getByTestId("agent-activity-row-details-task_doc_reader")
+        .querySelector("summary")!,
+    );
     expect(
       screen.getByText(/Single-shot response — no inner tool calls\./),
     ).toBeInTheDocument();
   });
 
-  it("composes the workspace-narrow timeline class on top of the in-thread base class", () => {
+  it("composes the workspace-narrow timeline class on top of the in-thread base class", async () => {
     const subagents = seedSubagentMap([entry()]);
     const { container } = render(
       <AgentsTab
@@ -198,6 +209,13 @@ describe("AgentsTab disclosure", () => {
         })}
       />,
     );
+    await userEvent
+      .setup()
+      .click(
+        screen
+          .getByTestId("agent-activity-row-details-task_doc_reader")
+          .querySelector("summary")!,
+      );
     const timeline = container.querySelector(
       ".atlas-workspace-agent__timeline",
     );
@@ -227,19 +245,47 @@ describe("AgentsTab disclosure", () => {
     expect(onJumpToSubagent).toHaveBeenCalledOnce();
   });
 
-  it("renders a danger badge for failed subagents", () => {
+  it("renders a compact accessible lifecycle glyph for failed subagents", () => {
     const status: SubagentLifecycleStatus = "failed";
     const subagents = seedSubagentMap([entry({ status, duration_ms: 4200 })]);
     render(<AgentsTab subagents={subagents} />);
-    // Badge content is the user-facing label.
-    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Failed" })).toBeInTheDocument();
   });
 
-  it("shows working… for in-flight subagents inside the disclosure summary", () => {
+  it("keeps legacy objective text as the quiet activity fallback", () => {
     const subagents = seedSubagentMap([
       entry({ status: "running", duration_ms: null, completed_at: null }),
     ]);
     render(<AgentsTab subagents={subagents} />);
-    expect(screen.getByText(/working…/)).toBeInTheDocument();
+    expect(
+      screen.getByText("Read positioning + GTM plan, extract claims"),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a synthetic Orchestrator lead, child indent, model chip, and delegated-work anchor from additive fields", () => {
+    const orchestrated = {
+      ...entry({
+        task_id: "task_research",
+        display_title: "Research agent",
+        status: "running",
+        completed_at: null,
+        duration_ms: null,
+      }),
+      parent_task_id: "main-agent",
+      parent_agent_name: "Orchestrator",
+      parent_agent_role: "orchestrator",
+      model_display_label: "Haiku 4.5",
+      current_activity: "Searching trusted source material",
+    } as SubagentEntry;
+    render(<AgentsTab subagents={seedSubagentMap([orchestrated])} />);
+
+    expect(screen.getByText("Orchestrator")).toBeInTheDocument();
+    expect(screen.getByText("Haiku 4.5")).toBeInTheDocument();
+    expect(
+      screen.getByText("Searching trusted source material"),
+    ).toBeInTheDocument();
+    const child = document.getElementById("subagent-task-task_research");
+    expect(child).toHaveAttribute("data-task-id", "task_research");
+    expect(child).toHaveClass("atlas-workspace-tab__item--child");
   });
 });

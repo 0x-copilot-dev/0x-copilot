@@ -1,0 +1,126 @@
+{
+  "surface": "chat-tool-calls",
+  "note": "Chat & Tool Calls.dc.html's Focus / Web search walkthrough state compared with the actual shared TcChat tool card and Run-cockpit AgentsTab. The local design is the source of truth. Selector correspondence is intentionally explicit: a live tool card is not a design mock clone, and two absent pieces of the source design (lead/orchestrator row and model chip) are reported as real parity gaps rather than waived.",
+  "state": "web-search",
+  "elements": [
+    {
+      "label": "tool.card",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"]",
+      "live": "#tool [data-testid=\"tc-chat-tool-web-search\"] > details",
+      "what": "Completed web search's compact outer card."
+    },
+    {
+      "label": "tool.header",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__h",
+      "live": "#tool .tc-tool-card__summary > div",
+      "what": "Primary tool-call summary row."
+    },
+    {
+      "label": "tool.logo",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__logo",
+      "live": "#tool .tc-tool-card__summary > div > span:first-child",
+      "what": "Tool-status/glyph slot."
+    },
+    {
+      "label": "tool.name",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__h .mono",
+      "live": "#tool .tc-tool-card__summary > div > span:nth-child(2) > span:first-child > span:first-child",
+      "what": "Monospace executable tool name."
+    },
+    {
+      "label": "tool.summary",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__h > div > div:nth-child(2)",
+      "live": "#tool .tc-tool-card__summary > div > span:nth-child(2) > span:nth-child(2)",
+      "what": "One-line outcome summary."
+    },
+    {
+      "label": "tool.details",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__body",
+      "live": "#tool [data-testid=\"tc-chat-tool-web-search-details\"]",
+      "what": "Expandable arguments/result/source area. The full visual header is the native disclosure target."
+    },
+    {
+      "label": "tool.details.label",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__body .kv b",
+      "live": "#tool [data-testid=\"tc-chat-tool-web-search-details\"] > div:first-child > span:first-child",
+      "what": "Quiet mono field label in the expanded payload body."
+    },
+    {
+      "label": "tool.provenance",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__h .pbadge",
+      "live": "#tool .tc-tool-card__summary > div > span:nth-child(2) > span:first-child > span:nth-child(2)",
+      "what": "Compact server provenance, rendered only when the runtime sent it."
+    },
+    {
+      "label": "tool.duration",
+      "group": "Tool call",
+      "design": ".tcall[data-parity-tool=\"web-search\"] .tcall__h > span:last-child",
+      "live": "#tool .tc-tool-card__summary > div > span:nth-child(2) > span:first-child > span:nth-child(4)",
+      "what": "Elapsed time, rendered only when the runtime sent it."
+    },
+    {
+      "label": "agents.panel",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"]",
+      "live": "#agents",
+      "what": "Focus right-hand Agents workspace."
+    },
+    {
+      "label": "agents.orchestrator",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(1)",
+      "live": "#agents .agent-activity-row[data-lead=\"true\"]",
+      "what": "Synthetic lead row derived from an actual child parent relation; it is not fabricated when that relation is absent."
+    },
+    {
+      "label": "agents.card",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2)",
+      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row",
+      "what": "Active research subagent row."
+    },
+    {
+      "label": "agents.icon",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > span:first-child",
+      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__lifecycle",
+      "what": "Active-agent status glyph."
+    },
+    {
+      "label": "agents.name",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > div > div:first-child > span:first-child",
+      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__name",
+      "what": "Agent title."
+    },
+    {
+      "label": "agents.model",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) .pbadge",
+      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__model",
+      "what": "Model identity, rendered only when the runtime sent a safe display label."
+    },
+    {
+      "label": "agents.activity",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > div > div:nth-child(2)",
+      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__activity",
+      "what": "Current subagent work line."
+    },
+    {
+      "label": "agents.status",
+      "group": "Agents",
+      "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > span:first-child .spin",
+      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__spinner",
+      "what": "Running status treatment."
+    }
+  ]
+}

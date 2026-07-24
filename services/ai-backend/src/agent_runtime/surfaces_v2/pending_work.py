@@ -472,10 +472,6 @@ class PendingWorkService:
             if not conversation_id:
                 continue
             runs = await self._list_runs(org_id=org_id, conversation_id=conversation_id)
-            active_run = await self._active_run(
-                org_id=org_id, conversation_id=conversation_id
-            )
-            active_run_id = getattr(active_run, "run_id", None)
 
             per_run_pending: dict[str, int] = {}
             for run in runs:
@@ -495,9 +491,8 @@ class PendingWorkService:
                 if not run_id or getattr(run, "user_id", None) != user_id:
                     continue
                 pending_count = per_run_pending.get(run_id, 0)
-                is_active = run_id == active_run_id
-                if not is_active and pending_count == 0:
-                    # Terminal run with nothing waiting — not a fleet row.
+                if pending_count == 0:
+                    # A quiet run, including the current run, has no fleet signal.
                     continue
                 agents.append(
                     PendingAgentRow(
@@ -552,12 +547,6 @@ class PendingWorkService:
             conversation_id=conversation_id,
             limit=Values.CAP_RUNS_PER_CONVERSATION,
         )
-
-    async def _active_run(self, *, org_id: str, conversation_id: str) -> object | None:
-        method = getattr(self.persistence, "get_active_run_for_conversation", None)
-        if method is None:
-            return None
-        return await method(org_id=org_id, conversation_id=conversation_id)
 
     # -- helpers ------------------------------------------------------------
 
