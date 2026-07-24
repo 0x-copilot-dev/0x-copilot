@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
-from urllib.parse import unquote, urlsplit
+from urllib.parse import unquote
 
 from pydantic import Field, field_validator, model_validator
 
@@ -27,6 +27,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectProposalKind,
     OperationIdText,
     Sha256Hex,
+    validate_immutable_content_ref,
 )
 
 _REF_MAX_LENGTH = 2048
@@ -460,53 +461,7 @@ def validate_proposal_content_ref(value: str) -> str:
     separate.  Physical paths and inline bodies are never accepted.
     """
 
-    value = _safe_reference(value, "proposal_content_ref")
-    try:
-        parsed = urlsplit(value)
-    except ValueError as exc:
-        raise ValueError(
-            "proposal_content_ref must locate immutable server content"
-        ) from exc
-    if (
-        not parsed.scheme
-        or not parsed.netloc
-        or parsed.query
-        or parsed.fragment
-        or parsed.scheme.lower() in {"proposal", "http", "https"}
-    ):
-        raise ValueError(
-            "proposal_content_ref must locate immutable content, not proposal identity"
-        )
-    decoded = value
-    while True:
-        next_decoded = unquote(decoded)
-        if next_decoded == decoded:
-            break
-        decoded = next_decoded
-    try:
-        decoded_parts = urlsplit(decoded)
-    except ValueError as exc:
-        raise ValueError(
-            "proposal_content_ref must locate immutable server content"
-        ) from exc
-    if (
-        "\\" in decoded
-        or decoded_parts.query
-        or decoded_parts.fragment
-        or decoded_parts.path.startswith("//")
-        or any(
-            part in {".", ".."}
-            for component in (
-                decoded_parts.netloc,
-                decoded_parts.path,
-                decoded_parts.query,
-                decoded_parts.fragment,
-            )
-            for part in component.split("/")
-        )
-    ):
-        raise ValueError("proposal_content_ref must locate immutable server content")
-    return value
+    return validate_immutable_content_ref(value)
 
 
 def _require_ref_digest_pair(

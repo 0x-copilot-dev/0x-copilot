@@ -166,6 +166,7 @@ const ENTITY_KEYS = {
     "target_ref",
     "target_digest",
     "proposal_ref",
+    "proposal_content_ref",
     "proposal_digest",
     "actor",
     "decision_ledger_id",

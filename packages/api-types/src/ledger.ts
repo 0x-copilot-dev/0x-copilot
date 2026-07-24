@@ -890,6 +890,8 @@ export interface EffectExecutionRequest {
   readonly target_ref: string;
   readonly target_digest: string;
   readonly proposal_ref: string;
+  /** Immutable server-held content; executors must never dereference proposal_ref. */
+  readonly proposal_content_ref: string;
   readonly proposal_digest: string;
   readonly actor: EffectActor;
   readonly decision_ledger_id: string;

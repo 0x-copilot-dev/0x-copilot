@@ -512,10 +512,15 @@ class EffectCoordinator:
     async def _references_match(
         self, *, scope: EffectExecutionScope, state: EffectStageState
     ) -> bool:
+        proposal_content_ref = state.current_revision.proposal_content_ref
+        if proposal_content_ref is None:
+            # Canonical proposal identity without immutable bytes is replayable
+            # history, not executable authority.
+            return False
         proposal_digest = await _digest_reference(
             resolver=self._references,
             scope=scope,
-            reference=state.current_revision.proposal_ref,
+            reference=proposal_content_ref,
         )
         target_digest = await _digest_reference(
             resolver=self._references,
@@ -642,6 +647,9 @@ def _execution_request(
     decision = state.decision
     if decision is None:  # defensive; caller passed the approval gate.
         raise ValueError("an approved effect stage requires an approval decision")
+    proposal_content_ref = state.current_revision.proposal_content_ref
+    if proposal_content_ref is None:
+        raise ValueError("an executable effect stage requires proposal content")
     return EffectExecutionRequest(
         stage_id=state.stage_id,
         revision=command.revision,
@@ -649,6 +657,7 @@ def _execution_request(
         target_ref=state.target.target_ref,
         target_digest=state.target_digest,
         proposal_ref=state.current_revision.proposal_ref,
+        proposal_content_ref=proposal_content_ref,
         proposal_digest=state.current_revision.proposal_digest,
         actor=decision.actor.actor,
         decision_ledger_id=decision.ledger_id,
@@ -665,6 +674,9 @@ def _claim_from(
     decision = state.decision
     if decision is None:  # defensive; approval is checked before this call.
         raise ValueError("an approved effect stage requires an approval decision")
+    proposal_content_ref = state.current_revision.proposal_content_ref
+    if proposal_content_ref is None:
+        raise ValueError("an executable effect stage requires proposal content")
     return EffectClaim(
         org_id=scope.org_id,
         run_id=scope.run_id,
@@ -677,6 +689,7 @@ def _claim_from(
         prepared_ref=prepared.prepared_ref,
         target_ref=state.target.target_ref,
         proposal_ref=state.current_revision.proposal_ref,
+        proposal_content_ref=proposal_content_ref,
         actor=decision.actor.actor,
         decision_ledger_id=decision.ledger_id,
     )

@@ -138,7 +138,7 @@ async def _approved_command(
         ledger,
         _References(
             {
-                proposed.proposal_ref: proposal_bytes,
+                proposed.proposal_content_ref: proposal_bytes,
                 proposed.target.target_ref: target_bytes,
             }
         ),
@@ -189,6 +189,10 @@ async def test_prepare_claim_apply_complete_in_that_order() -> None:
 
     assert result.status is EffectCoordinatorStatus.APPLIED
     assert executor.calls == ["prepare", "apply"]
+    assert executor.prepared_requests[0].proposal_ref == (
+        f"proposal://{command.stage_id}/revisions/{command.revision}"
+    )
+    assert executor.prepared_requests[0].proposal_content_ref.startswith("artifact://")
     assert [event.event_type for event in ledger.events_by_stage[command.stage_id]] == [
         "effect.staged",
         "effect.decision_recorded",
@@ -256,6 +260,33 @@ async def test_prepare_drift_aborts_without_claim_or_apply() -> None:
     assert ledger.events_by_stage[command.stage_id][-1].payload["outcome"] == (
         EffectOutcome.PRECONDITION_DRIFT.value
     )
+
+
+@pytest.mark.asyncio
+async def test_canonical_only_historical_stage_is_replayable_but_never_executable() -> (
+    None
+):
+    command, ledger, references = await _approved_command()
+    historical = ledger.events_by_stage[command.stage_id][0]
+    payload = dict(historical.payload)
+    payload.pop("proposal_content_ref")
+    ledger.events_by_stage[command.stage_id][0] = historical.model_copy(
+        update={"payload": payload}
+    )
+    claims = InMemoryEffectClaimStore()
+    executor = _matching_executor()
+
+    result = await _coordinator(
+        ledger=ledger,
+        references=references,
+        claims=claims,
+        executor=executor,
+    ).handle(command)
+
+    assert result.status is EffectCoordinatorStatus.REFUSED
+    assert result.safe_code == "immutable_ref_mismatch"
+    assert executor.calls == []
+    assert await claims.list_incomplete() == ()
 
 
 @pytest.mark.asyncio

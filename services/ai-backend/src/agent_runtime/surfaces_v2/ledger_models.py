@@ -1005,7 +1005,13 @@ def _validate_immutable_content_ref(value: str | None) -> None:
         raise ValueError(
             "proposal_content_ref must locate immutable content, not proposal identity"
         )
-        raise ValueError("target_ref must be an opaque non-file URI reference")
+
+
+def validate_immutable_content_ref(value: str) -> str:
+    """Public validator shared by body-free effect contracts and entity mirrors."""
+
+    _validate_immutable_content_ref(value)
+    return value
 
 
 def _validate_non_physical_reference(value: str | None, field_name: str) -> None:
