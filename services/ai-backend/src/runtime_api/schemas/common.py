@@ -297,6 +297,17 @@ class RuntimeApiEventType(StrEnum):
     OPERATION_CLASSIFIED = LedgerEventType.OPERATION_CLASSIFIED.value
     OPERATION_COMPLETED = LedgerEventType.OPERATION_COMPLETED.value
     OPERATION_FAILED = LedgerEventType.OPERATION_FAILED.value
+    # Generative Surfaces v2.1 (PRD-A5). Universal-effect stage facts share
+    # the ordinary durable run-event stream. The worker coordinator is the
+    # sole execution path; these rows describe only staged intent, claims, and
+    # observed outcomes. Values come from the A1 ledger vocabulary.
+    EFFECT_STAGED = LedgerEventType.EFFECT_STAGED.value
+    EFFECT_REVISED = LedgerEventType.EFFECT_REVISED.value
+    EFFECT_DECISION_RECORDED = LedgerEventType.EFFECT_DECISION_RECORDED.value
+    EFFECT_CLAIMED = LedgerEventType.EFFECT_CLAIMED.value
+    EFFECT_APPLIED = LedgerEventType.EFFECT_APPLIED.value
+    EFFECT_INDETERMINATE = LedgerEventType.EFFECT_INDETERMINATE.value
+    EFFECT_RECONCILED = LedgerEventType.EFFECT_RECONCILED.value
 
     @classmethod
     def from_stream_event_type(
