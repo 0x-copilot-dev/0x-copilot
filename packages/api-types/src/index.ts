@@ -221,7 +221,6 @@ import type {
   WriteAppliedPayload,
   ReceiptEmittedPayload,
 } from "./ledger";
-import { ARTIFACT_RUNTIME_EVENT_TYPES } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
 export type McpAuthMode = "none" | "oauth2" | "api_key" | "service_account";
@@ -629,7 +628,9 @@ export const RUNTIME_API_EVENT_TYPES = [
   "decision.recorded",
   "write.applied",
   "receipt.emitted",
-  ...ARTIFACT_RUNTIME_EVENT_TYPES,
+  // Artifact-created/revised/promoted are positions 19–21 in the v2.1 ledger
+  // slice above. Keeping a single spread makes the backend contract parser
+  // resolve the transport tuple without following imports across files.
   ...RUNTIME_LEDGER_V21_EVENT_TYPES,
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
