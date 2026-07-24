@@ -11,6 +11,7 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.contracts import (
     ModelConfig,
     ModelReasoningConfig,
@@ -47,6 +48,10 @@ class _EnvFields:
     # SDR-19 single rollout gate for artifact/effect persistence. It stays
     # dark until E2 cutover; storage composition and API routes read it.
     ARTIFACT_EFFECTS_V2 = "ARTIFACT_EFFECTS_V2"
+    # Generative Surfaces v2.1 (PRD-A3). ``enforce`` is parsed so deployment
+    # configuration fails honestly, but startup validation refuses it until
+    # durable canonical arguments plus the generic stage/executor exist.
+    OPERATION_GATEWAY_MODE = "OPERATION_GATEWAY_MODE"
     # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
     # executor accumulates chunks for the window and flushes via
     # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
@@ -162,6 +167,9 @@ class RuntimeExecutionSettings(RuntimeContract):
     # SDR-19 is dark by default. When false product routes remain absent and
     # no artifact repository is composed.
     artifact_effects_v2: bool = False
+    # v2.1 Universal Operation Gateway. A3 is observational only, so the
+    # initial default is explicitly off.
+    operation_gateway_mode: OperationGatewayMode = OperationGatewayMode.OFF
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -405,6 +413,15 @@ class RuntimeSettings(BaseSettings):
                 ).lower()
                 in _truthy,
                 surfaces_v2=_s(v, E.SURFACES_V2, "true").lower() in _truthy,
+                artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
+                in _truthy,
+                operation_gateway_mode=OperationGatewayMode(
+                    _s(
+                        v,
+                        E.OPERATION_GATEWAY_MODE,
+                        OperationGatewayMode.OFF.value,
+                    ).lower()
+                ),
                 artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
                 in _truthy,
             ),

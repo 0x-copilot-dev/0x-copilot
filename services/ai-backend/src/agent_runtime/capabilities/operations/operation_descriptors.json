@@ -1,0 +1,471 @@
+[
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "web_search",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 16384
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "web search",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "load_mcp_server",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 16384
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "connector discovery",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "call_mcp_tool",
+      "executor": "mcp",
+      "effect_class": "unknown",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["authentication", "capability", "policy"],
+      "max_inline_result_bytes": 16384
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "connector operation",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "auth_mcp",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["authentication"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "connector authentication",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "load_skill",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "skill load",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "load_prior_tool_result",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "prior result load",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "ask_a_question",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "question",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "suggest_mcp_connector",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "connector suggestion",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "run_code_mode",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "code computation",
+    "timeout_ms": 120000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "run_in_sandbox",
+      "executor": "sandbox",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "sandbox command",
+    "timeout_ms": 120000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "stage_rowset_write",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["policy"],
+      "max_inline_result_bytes": 32768
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "row-set proposal",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "write_todos",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 16384
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "task-list update",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "execute",
+      "executor": "sandbox",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "workspace command",
+    "timeout_ms": 120000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "task",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "subagent delegation",
+    "timeout_ms": 600000
+  },
+  {
+    "descriptor": {
+      "capability": "subagent",
+      "op": "dispatch",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "subagent task",
+    "timeout_ms": 600000
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "ls",
+      "executor": "workspace",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["grant"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "list workspace",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "read",
+      "executor": "workspace",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["grant"],
+      "max_inline_result_bytes": 1048576
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "read workspace file",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "glob",
+      "executor": "workspace",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["grant"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "search workspace paths",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "grep",
+      "executor": "workspace",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["grant"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "search workspace content",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "write",
+      "executor": "workspace",
+      "effect_class": "external_reversible",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["grant", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "save workspace file",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "workspace",
+      "op": "edit",
+      "executor": "workspace",
+      "effect_class": "external_reversible",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["grant", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "edit workspace file",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "model",
+      "op": "artifact_content_part",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "artifact",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 0
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "model artifact",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "artifact",
+      "op": "publish",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "artifact_and_activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 0
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "artifact publication",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "draft",
+      "op": "publish",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "artifact_and_activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": [],
+      "max_inline_result_bytes": 0
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "draft publication",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "browser",
+      "op": "navigate",
+      "executor": "browser",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "browser navigation",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "browser",
+      "op": "snapshot",
+      "executor": "browser",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 65536
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "browser snapshot",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "browser",
+      "op": "wait",
+      "executor": "browser",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "browser wait",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "browser",
+      "op": "screenshot",
+      "executor": "browser",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 0
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "browser screenshot",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "browser",
+      "op": "close",
+      "executor": "browser",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-24.1",
+    "display_name": "close browser",
+    "timeout_ms": 60000
+  }
+]

@@ -97,6 +97,26 @@ class _Fields:
     USAGE_SURFACE_ID = "surface_id"
 
 
+class _OperationFields:
+    """A1 operation-event wire keys; all projection remains reference-only."""
+
+    VERSION = "v"
+    OPERATION_ID = "operation_id"
+    PRODUCER = "producer"
+    CAPABILITY = "capability"
+    OP = "op"
+    ARGS_DIGEST = "args_digest"
+    PARENT_OPERATION_ID = "parent_operation_id"
+    EFFECT_CLASS = "effect_class"
+    BASIS = "basis"
+    CONFIDENCE = "confidence"
+    OUTCOME = "outcome"
+    RESULT_REF = "result_ref"
+    LATENCY_MS = "latency_ms"
+    FAILURE_CODE = "failure_code"
+    RETRYABLE = "retryable"
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -214,6 +234,14 @@ class RuntimeEventPresentationProjector:
                 event_type=event_type,
                 payload=payload,
             )
+        if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
+            return cls._operation_requested_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
+            return cls._operation_classified_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_COMPLETED:
+            return cls._operation_completed_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_FAILED:
+            return cls._operation_failed_payload(payload)
         return payload
 
     @classmethod
@@ -338,6 +366,10 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.ARTIFACT_CREATED,
             RuntimeApiEventType.ARTIFACT_REVISED,
             RuntimeApiEventType.ARTIFACT_PROMOTED,
+            RuntimeApiEventType.OPERATION_REQUESTED,
+            RuntimeApiEventType.OPERATION_CLASSIFIED,
+            RuntimeApiEventType.OPERATION_COMPLETED,
+            RuntimeApiEventType.OPERATION_FAILED,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -827,6 +859,89 @@ class RuntimeEventPresentationProjector:
             tokens = payload.get(token_key)
             if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
                 safe_payload[token_key] = tokens
+        return safe_payload
+
+    @classmethod
+    def _operation_requested_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project the operation identity/digest row without argument content."""
+
+        safe_payload = cls._operation_base(payload)
+        for text_key in (
+            _OperationFields.PRODUCER,
+            _OperationFields.CAPABILITY,
+            _OperationFields.OP,
+            _OperationFields.ARGS_DIGEST,
+            _OperationFields.PARENT_OPERATION_ID,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        return safe_payload
+
+    @classmethod
+    def _operation_classified_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project bounded classification facts; reasons and arguments stay private."""
+
+        safe_payload = cls._operation_base(payload)
+        for text_key in (
+            _OperationFields.EFFECT_CLASS,
+            _OperationFields.BASIS,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        confidence = payload.get(_OperationFields.CONFIDENCE)
+        if (
+            isinstance(confidence, (int, float))
+            and not isinstance(confidence, bool)
+            and 0 <= confidence <= 1
+        ):
+            safe_payload[_OperationFields.CONFIDENCE] = confidence
+        return safe_payload
+
+    @classmethod
+    def _operation_completed_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project a bounded outcome and optional immutable result reference."""
+
+        safe_payload = cls._operation_base(payload)
+        for text_key in (
+            _OperationFields.OUTCOME,
+            _OperationFields.RESULT_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        latency_ms = payload.get(_OperationFields.LATENCY_MS)
+        if (
+            isinstance(latency_ms, int)
+            and not isinstance(latency_ms, bool)
+            and latency_ms >= 0
+        ):
+            safe_payload[_OperationFields.LATENCY_MS] = latency_ms
+        return safe_payload
+
+    @classmethod
+    def _operation_failed_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project a safe code and retry hint; exception text is never exposed."""
+
+        safe_payload = cls._operation_base(payload)
+        failure_code = cls._text(payload.get(_OperationFields.FAILURE_CODE))
+        if failure_code is not None:
+            safe_payload[_OperationFields.FAILURE_CODE] = failure_code
+        retryable = payload.get(_OperationFields.RETRYABLE)
+        if isinstance(retryable, bool):
+            safe_payload[_OperationFields.RETRYABLE] = retryable
+        return safe_payload
+
+    @classmethod
+    def _operation_base(cls, payload: JsonObject) -> JsonObject:
+        safe_payload: JsonObject = {}
+        version = payload.get(_OperationFields.VERSION)
+        if isinstance(version, int) and not isinstance(version, bool):
+            safe_payload[_OperationFields.VERSION] = version
+        operation_id = cls._text(payload.get(_OperationFields.OPERATION_ID))
+        if operation_id is not None:
+            safe_payload[_OperationFields.OPERATION_ID] = operation_id
         return safe_payload
 
     @classmethod

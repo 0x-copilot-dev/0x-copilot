@@ -22,6 +22,16 @@ from agent_runtime.api.user_policies_resolver import (
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationEventEmitterAdapter,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.capabilities.tools.tool_use_enforcement import (
+    ToolUsePolicyResolver,
+)
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
@@ -315,6 +325,7 @@ class RuntimeApprovalHandler:
         # the resumed graph starts emitting tool events. The resumed run runs in a
         # fresh async task, so the original RuntimeRunHandler bindings are gone.
         workspace_backend = await self._workspace_backend_for_resume(running)
+        operation_context_token: object | None = None
         dependencies = self._dependencies_for_resume(
             running, workspace_backend=workspace_backend
         )
@@ -324,6 +335,41 @@ class RuntimeApprovalHandler:
             RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
         )
         try:
+            if (
+                self.settings.execution.operation_gateway_mode
+                is not OperationGatewayMode.OFF
+            ):
+
+                async def _emit_operation(
+                    event_type_value: str,
+                    payload: Mapping[str, object],
+                    summary: str | None,
+                ) -> None:
+                    await self.event_producer.append_api_event(
+                        run=running,
+                        source=StreamEventSource.SYSTEM,
+                        event_type=RuntimeApiEventType(event_type_value),
+                        summary=summary,
+                        payload=dict(payload),
+                    )
+
+                operation_context_token = OperationContext.bind_for_run(
+                    identity=VerifiedOperationIdentity(
+                        org_id=running.org_id,
+                        user_id=running.user_id,
+                        conversation_id=running.conversation_id,
+                        run_id=running.run_id,
+                    ),
+                    policy_snapshot=ToolUsePolicyResolver.resolve(
+                        running.runtime_context
+                    ),
+                    ledger_emitter=OperationEventEmitterAdapter(
+                        emit_fn=_emit_operation
+                    ),
+                    artifact_service=None,
+                    mode=self.settings.execution.operation_gateway_mode,
+                    canonical_arguments_durable=False,
+                )
             resume_context = running.runtime_context
             if self._provider_keys_hydrator is not None:
                 resume_context = await self._provider_keys_hydrator.hydrate(
@@ -345,6 +391,7 @@ class RuntimeApprovalHandler:
                 resume=resume,
                 metrics=metrics,
             )
+            await OperationShadowProbe.observe_model_result(result)
             if RuntimeRunHandler._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -371,6 +418,8 @@ class RuntimeApprovalHandler:
             )
             raise
         finally:
+            if operation_context_token is not None:
+                OperationContext.unbind(operation_context_token)  # type: ignore[arg-type]
             CitationResolver.unbind(resolver_token)
             ConversationOrdinalAllocator.unbind(allocator_token)
             ToolDisplayLookupContext.unbind(display_token)

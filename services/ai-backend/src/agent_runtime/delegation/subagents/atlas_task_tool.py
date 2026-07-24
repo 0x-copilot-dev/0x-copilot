@@ -57,6 +57,9 @@ from deepagents.middleware.subagents import (  # type: ignore[import-untyped]
     _subagent_tracing_context,
     create_sub_agent,
 )
+from agent_runtime.capabilities.operations.context import OperationContext
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.surfaces_v2.ledger_models import Producer
 
 
 # Stable contract: anything emitted from a subagent's runtime carries this
@@ -263,8 +266,35 @@ def build_atlas_task_tool(
             subagent_type, description, runtime
         )
         subagent_config = _build_subagent_config(runtime)
-        with _subagent_tracing_context():
-            result = await subagent.ainvoke(subagent_state, subagent_config)
+
+        async def _invoke_subagent() -> object:
+            with OperationContext.producer_scope(Producer.SUBAGENT):
+
+                async def _dispatch() -> object:
+                    with _subagent_tracing_context():
+                        return await subagent.ainvoke(subagent_state, subagent_config)
+
+                dispatched = await OperationShadowProbe.invoke_legacy(
+                    capability="subagent",
+                    op="dispatch",
+                    arguments={
+                        "description": description,
+                        "subagent_type": subagent_type,
+                    },
+                    legacy=_dispatch,
+                )
+                await OperationShadowProbe.observe_model_result(dispatched)
+                return dispatched
+
+        result = await OperationShadowProbe.invoke_legacy(
+            capability="builtin",
+            op="task",
+            arguments={
+                "description": description,
+                "subagent_type": subagent_type,
+            },
+            legacy=_invoke_subagent,
+        )
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
     return StructuredTool.from_function(

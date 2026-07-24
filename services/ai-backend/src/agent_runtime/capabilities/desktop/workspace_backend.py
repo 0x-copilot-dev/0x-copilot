@@ -92,6 +92,7 @@ from agent_runtime.capabilities.desktop.broker_client import (
     FsDirEntry,
     FsReadResult,
 )
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 
 logger = logging.getLogger(__name__)
 
@@ -597,6 +598,17 @@ class BrokeredWorkspaceBackend(BackendProtocol):
         broker write; a pure CREATE (target absent) needs no pre-image. The
         broker write carries the ``run_capability_context``.
         """
+        return await OperationShadowProbe.invoke_legacy(
+            capability="workspace",
+            op="write",
+            arguments={"file_path": file_path, "content": content},
+            legacy=lambda: self._awrite_legacy(file_path, content),
+            legacy_class="external_reversible",
+        )
+
+    async def _awrite_legacy(self, file_path: str, content: str) -> WriteResult:
+        """Execute the existing authoritative workspace write path exactly once."""
+
         if not self.supports_writes:
             raise WorkspaceWriteNotSupportedError
         try:
@@ -653,6 +665,33 @@ class BrokeredWorkspaceBackend(BackendProtocol):
         send the full new content to ``/v1/fs/edit`` with the
         ``run_capability_context``.
         """
+        return await OperationShadowProbe.invoke_legacy(
+            capability="workspace",
+            op="edit",
+            arguments={
+                "file_path": file_path,
+                "old_string": old_string,
+                "new_string": new_string,
+                "replace_all": replace_all,
+            },
+            legacy=lambda: self._aedit_legacy(
+                file_path,
+                old_string,
+                new_string,
+                replace_all,
+            ),
+            legacy_class="external_reversible",
+        )
+
+    async def _aedit_legacy(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,  # noqa: FBT001, FBT002
+    ) -> EditResult:
+        """Execute the existing authoritative workspace edit path exactly once."""
+
         if not self.supports_writes:
             raise WorkspaceWriteNotSupportedError
         try:

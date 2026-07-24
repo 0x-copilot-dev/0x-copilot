@@ -41,6 +41,10 @@ from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
 )
+from agent_runtime.capabilities.operations.probes import (
+    OperationShadowProbe,
+    wrap_model_tool_for_shadow,
+)
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -340,7 +344,9 @@ def _model_visible_tools(
     stage_rowset_write_tool: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
-    model_tools = list(tools)
+    model_tools = [
+        wrap_model_tool_for_shadow(tool, capability="builtin") for tool in tools
+    ]
     auth_session_creator = _auth_session_creator(mcp_registry)
     local_tool_names = _local_tool_names(
         model_tools,
@@ -432,9 +438,19 @@ def _model_visible_tools(
     # is off. Appended last so they receive the SAME tool-policy / approval /
     # budget middleware every other model tool does — they are not privileged.
     if code_mode_tool is not None:
-        model_tools.append(code_mode_tool)
+        model_tools.append(
+            wrap_model_tool_for_shadow(
+                code_mode_tool,
+                capability="builtin",
+            )
+        )
     if sandbox_execute_tool is not None:
-        model_tools.append(sandbox_execute_tool)
+        model_tools.append(
+            wrap_model_tool_for_shadow(
+                sandbox_execute_tool,
+                capability="builtin",
+            )
+        )
     # PRD-D3 — the gated bulk row-set staging tool. Injected as a domain adapter
     # (the worker builds it per run when SURFACES_V2 is on) and wrapped here with
     # its typed schema, like the other builtin tools. Flag off ⇒ `None` ⇒ absent.
@@ -510,12 +526,26 @@ def _local_tool_names(
 def _structured_tool(tool_adapter: object, args_schema: type[object]) -> StructuredTool:
     """Wrap a domain tool adapter as a LangChain ``StructuredTool`` with a typed schema."""
 
+    name = str(getattr(tool_adapter, "name"))
+
     async def invoke_adapter(**kwargs: Any) -> object:
-        return await tool_adapter.ainvoke(kwargs)  # type: ignore[attr-defined]
+        async def _invoke_legacy() -> object:
+            return await tool_adapter.ainvoke(kwargs)  # type: ignore[attr-defined]
+
+        # The provider dispatch inside ``CallMcpTool`` owns the MCP probe; an
+        # umbrella-level probe here would double-count the same invocation.
+        if name == McpValues.ToolName.CALL_MCP_TOOL:
+            return await _invoke_legacy()
+        return await OperationShadowProbe.invoke_legacy(
+            capability="builtin",
+            op=name,
+            arguments=kwargs,
+            legacy=_invoke_legacy,
+        )
 
     return StructuredTool.from_function(
         coroutine=invoke_adapter,
-        name=str(getattr(tool_adapter, "name")),
+        name=name,
         description=str(getattr(tool_adapter, "description")),
         args_schema=args_schema,
     )
