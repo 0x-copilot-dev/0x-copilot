@@ -82,9 +82,7 @@ export {
 // === end PRD-B3 ===
 
 // === Surfaces v2 — PRD-B4 suggest-a-shape ===
-export {
-  type LedgerShapeRequestState,
-} from "./ledgerProjection";
+export { type LedgerShapeRequestState } from "./ledgerProjection";
 export {
   SuggestShapeButton,
   SHAPE_NO_FIT_LINE,

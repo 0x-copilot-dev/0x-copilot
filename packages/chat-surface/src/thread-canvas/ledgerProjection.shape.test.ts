@@ -46,7 +46,12 @@ function created(surface_id: string): RuntimeEventEnvelope {
 }
 
 function generic(surface_id: string): RuntimeEventEnvelope {
-  return ev("view.derived", { v: 1, surface_id, tier: "generic", basis: "schema" });
+  return ev("view.derived", {
+    v: 1,
+    surface_id,
+    tier: "generic",
+    basis: "schema",
+  });
 }
 
 describe("shapeRequest fold (PRD-B4)", () => {
