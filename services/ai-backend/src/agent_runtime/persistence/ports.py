@@ -85,6 +85,24 @@ class RuntimeEventSequenceConflict(RuntimeError):
         self.attempts = attempts
 
 
+class RuntimeEventIdempotencyConflict(RuntimeError):
+    """Raised when a stable event id is reused for a different event body.
+
+    Runtime outbox consumers may retry after appending an event but before
+    acknowledging their command.  Reusing the same event id with the same
+    body is therefore a successful replay; reusing it for a different body is
+    a contract violation and must fail closed.
+    """
+
+    def __init__(self, *, run_id: str, event_id: str) -> None:
+        super().__init__(
+            f"runtime event {event_id} for run {run_id} conflicts with "
+            "an existing event body"
+        )
+        self.run_id = run_id
+        self.event_id = event_id
+
+
 @runtime_checkable
 class DraftStorePort(Protocol):
     """Versioned, append-only draft artifact persistence boundary.

@@ -11,6 +11,7 @@ old persisted runs. New runs never emit it.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.presentation import PresentationGenerator
@@ -69,8 +70,15 @@ class RuntimeEventProducer:
         subagent_id: str | None = None,
         summary: str | None = None,
         status: str | None = None,
+        event_id: str | None = None,
+        created_at: datetime | None = None,
     ) -> RuntimeEventEnvelope:
-        """Append an API-authored event and update the run sequence cursor."""
+        """Append an API-authored event and update the run sequence cursor.
+
+        ``event_id`` and ``created_at`` are reserved for durable domain-outbox
+        publication. Existing stream producers leave them unset and preserve
+        the historical adapter-assigned identity and append timestamp.
+        """
 
         safe_payload = RuntimeEventPresentationProjector.payload_for_event(
             event_type=event_type,
@@ -105,6 +113,8 @@ class RuntimeEventProducer:
             run_id=run.run_id,
             conversation_id=run.conversation_id,
             org_id=run.org_id,
+            event_id=event_id,
+            created_at=created_at,
             source=source,
             event_type=event_type,
             trace_id=run.trace_id,

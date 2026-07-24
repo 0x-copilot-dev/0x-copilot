@@ -283,6 +283,13 @@ class RuntimeApiEventType(StrEnum):
     # (the receipt is a fold of the ledger, not a timeline card). Wire value comes
     # from the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
     RECEIPT_EMITTED = LedgerEventType.RECEIPT_EMITTED.value
+    # Generative Surfaces v2.1 (PRD-A2). Canonical artifact mutations publish
+    # through the existing run-event transport after their metadata + outbox
+    # transaction commits. These are reference-only ledger rows; artifact bytes
+    # never ride SSE/replay.
+    ARTIFACT_CREATED = LedgerEventType.ARTIFACT_CREATED.value
+    ARTIFACT_REVISED = LedgerEventType.ARTIFACT_REVISED.value
+    ARTIFACT_PROMOTED = LedgerEventType.ARTIFACT_PROMOTED.value
 
     @classmethod
     def from_stream_event_type(

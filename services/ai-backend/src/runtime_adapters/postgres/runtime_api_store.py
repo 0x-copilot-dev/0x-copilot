@@ -24,7 +24,10 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.persistence._reader import reader
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.ports import RuntimeEventSequenceConflict
+from agent_runtime.persistence.ports import (
+    RuntimeEventIdempotencyConflict,
+    RuntimeEventSequenceConflict,
+)
 from agent_runtime.persistence.encryption import (
     FieldCodec,
     FieldEncryption,
@@ -140,6 +143,7 @@ class _AppendEventRetry:
     """
 
     SEQUENCE_INDEX = "idx_runtime_events_run_sequence"
+    EVENT_ID_CONSTRAINT = "runtime_events_pkey"
     MAX_ATTEMPTS = 3
     BASE_DELAY_SECONDS = 0.005
     MAX_DELAY_SECONDS = 0.050
@@ -5304,18 +5308,29 @@ class PostgresRuntimeApiStore:
         """
 
         last_exc: psycopg_errors.UniqueViolation | None = None
+        last_conflict_was_stable_id = False
         for attempt in range(_AppendEventRetry.MAX_ATTEMPTS):
             try:
                 return await self._append_event_once(event)
             except psycopg_errors.UniqueViolation as exc:
-                if not self._is_event_sequence_conflict(exc):
+                stable_id_conflict = self._is_stable_event_id_conflict(
+                    exc,
+                    event=event,
+                )
+                if not (self._is_event_sequence_conflict(exc) or stable_id_conflict):
                     raise
                 last_exc = exc
+                last_conflict_was_stable_id = stable_id_conflict
                 # Don't sleep after the final attempt — caller is about
                 # to see :class:`RuntimeEventSequenceConflict` anyway.
                 if attempt + 1 < _AppendEventRetry.MAX_ATTEMPTS:
                     await asyncio.sleep(self._retry_backoff(attempt))
         assert last_exc is not None  # loop only exits via return or exception
+        if last_conflict_was_stable_id and event.event_id is not None:
+            raise RuntimeEventIdempotencyConflict(
+                run_id=event.run_id,
+                event_id=event.event_id,
+            ) from last_exc
         raise RuntimeEventSequenceConflict(
             run_id=event.run_id,
             attempts=_AppendEventRetry.MAX_ATTEMPTS,
@@ -5334,6 +5349,20 @@ class PostgresRuntimeApiStore:
                     (event.run_id,),
                 )
                 run = await cur.fetchone()
+                if event.event_id is not None:
+                    cur = await conn.execute(
+                        "SELECT * FROM runtime_events WHERE id = %s",
+                        (event.event_id,),
+                    )
+                    existing_row = await cur.fetchone()
+                    if existing_row is not None:
+                        existing = self._event_envelope(existing_row)
+                        if event.matches_envelope(existing):
+                            return existing
+                        raise RuntimeEventIdempotencyConflict(
+                            run_id=event.run_id,
+                            event_id=event.event_id,
+                        )
                 cur = await conn.execute(
                     """
                     SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_sequence
@@ -5350,6 +5379,11 @@ class PostgresRuntimeApiStore:
                         source=event.source,
                     )
                 )
+                envelope_kwargs: dict[str, object] = {}
+                if event.event_id is not None:
+                    envelope_kwargs["event_id"] = event.event_id
+                if event.created_at is not None:
+                    envelope_kwargs["created_at"] = event.created_at
                 envelope = RuntimeEventEnvelope(
                     run_id=event.run_id,
                     conversation_id=event.conversation_id,
@@ -5372,6 +5406,7 @@ class PostgresRuntimeApiStore:
                     presentation=event.presentation,
                     payload=event.payload,
                     metadata=event.metadata,
+                    **envelope_kwargs,
                 )
                 # Encrypt payload_json_redacted +
                 # metadata_json_redacted with AAD bound to (table,
@@ -5500,6 +5535,20 @@ class PostgresRuntimeApiStore:
         return constraint == _AppendEventRetry.SEQUENCE_INDEX
 
     @staticmethod
+    def _is_stable_event_id_conflict(
+        exc: psycopg_errors.UniqueViolation,
+        *,
+        event: RuntimeEventDraft,
+    ) -> bool:
+        """Return whether a concurrent publisher won the same stable event id."""
+
+        constraint = getattr(exc.diag, "constraint_name", None)
+        return (
+            event.event_id is not None
+            and constraint == _AppendEventRetry.EVENT_ID_CONSTRAINT
+        )
+
+    @staticmethod
     def _retry_backoff(attempt: int) -> float:
         """Jittered exponential backoff for the lock-free append retry loop.
 
@@ -5544,6 +5593,11 @@ class PostgresRuntimeApiStore:
 
         if not events:
             return ()
+        if any(event.event_id is not None for event in events):
+            raise ValueError(
+                "stable event ids require append_event; batch append is reserved "
+                "for newly allocated stream events"
+            )
         run_ids = {event.run_id for event in events}
         if len(run_ids) > 1:
             raise ValueError(

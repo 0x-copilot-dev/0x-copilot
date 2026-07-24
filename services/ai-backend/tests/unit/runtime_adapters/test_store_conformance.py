@@ -21,6 +21,7 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.models import ModelConfigResolver
+from agent_runtime.persistence.ports import RuntimeEventIdempotencyConflict
 from agent_runtime.persistence.records import RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
@@ -146,6 +147,73 @@ class _CrudSeedMixin:
                 summary=summary,
             )
         )
+
+
+class TestStableEventIdConformance(_CrudSeedMixin):
+    """Durable outbox retries behave identically on every event-store adapter."""
+
+    async def test_identical_stable_event_retry_returns_original_envelope(
+        self, store
+    ) -> None:
+        conversation, run = await self._new_run(store)
+        created_at = datetime(2026, 7, 24, 7, 0, tzinfo=timezone.utc)
+        draft = RuntimeEventDraft(
+            org_id=self._ORG,
+            event_id=f"artevt_{'a' * 64}",
+            created_at=created_at,
+            run_id=run.run_id,
+            conversation_id=conversation.conversation_id,
+            trace_id=run.trace_id,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.PROGRESS,
+            summary="artifact event",
+            payload={"artifact_id": "art_1"},
+        )
+        before = await store.get_latest_sequence(run_id=run.run_id)
+
+        first = await store.append_event(draft)
+        retried = await store.append_event(draft)
+
+        assert retried == first
+        assert first.event_id == draft.event_id
+        assert first.created_at == created_at
+        assert await store.get_latest_sequence(run_id=run.run_id) == before + 1
+
+    async def test_stable_event_id_with_different_body_fails_closed(
+        self, store
+    ) -> None:
+        conversation, run = await self._new_run(store)
+        draft = RuntimeEventDraft(
+            org_id=self._ORG,
+            event_id=f"artevt_{'b' * 64}",
+            run_id=run.run_id,
+            conversation_id=conversation.conversation_id,
+            trace_id=run.trace_id,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.PROGRESS,
+            summary="artifact event",
+        )
+        await store.append_event(draft)
+
+        with pytest.raises(RuntimeEventIdempotencyConflict):
+            await store.append_event(
+                draft.model_copy(update={"summary": "different body"})
+            )
+
+    async def test_batch_rejects_stable_event_ids(self, store) -> None:
+        conversation, run = await self._new_run(store)
+        draft = RuntimeEventDraft(
+            org_id=self._ORG,
+            event_id=f"artevt_{'c' * 64}",
+            run_id=run.run_id,
+            conversation_id=conversation.conversation_id,
+            trace_id=run.trace_id,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.PROGRESS,
+        )
+
+        with pytest.raises(ValueError, match="stable event ids require append_event"):
+            await store.append_events_batch((draft,))
 
 
 class TestConversationCrudConformance(_CrudSeedMixin):

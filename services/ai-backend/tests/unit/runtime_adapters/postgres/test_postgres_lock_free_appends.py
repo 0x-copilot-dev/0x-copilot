@@ -233,6 +233,23 @@ class TestLockFreeAppendIntegration:
         latest = await postgres_store.get_latest_sequence(run_id=run_id)
         assert latest == 30
 
+    async def test_stable_event_retry_returns_one_postgres_row(
+        self, postgres_store: PostgresRuntimeApiStore
+    ) -> None:
+        org_id, _, run_id, conv_id = await _seed_run(postgres_store)
+        draft = _draft(
+            run_id=run_id,
+            conv_id=conv_id,
+            org_id=org_id,
+            payload_index=1,
+        ).model_copy(update={"event_id": f"artevt_{'a' * 64}"})
+
+        first = await postgres_store.append_event(draft)
+        retried = await postgres_store.append_event(draft)
+
+        assert retried == first
+        assert await postgres_store.get_latest_sequence(run_id=run_id) == 1
+
 
 # --------------------------------------------------------------------------
 # Unit tests for the retry-loop helpers (no DB)
@@ -264,6 +281,28 @@ class TestIsEventSequenceConflict:
     def test_missing_constraint_name_does_not_match(self) -> None:
         exc = self._unique_violation(None)
         assert PostgresRuntimeApiStore._is_event_sequence_conflict(exc) is False
+
+    def test_stable_event_primary_key_matches_only_with_assigned_id(self) -> None:
+        exc = self._unique_violation(_AppendEventRetry.EVENT_ID_CONSTRAINT)
+        stable = TestRetryLoopBehavior._draft().model_copy(
+            update={"event_id": f"artevt_{'b' * 64}"}
+        )
+        ordinary = TestRetryLoopBehavior._draft()
+
+        assert (
+            PostgresRuntimeApiStore._is_stable_event_id_conflict(
+                exc,
+                event=stable,
+            )
+            is True
+        )
+        assert (
+            PostgresRuntimeApiStore._is_stable_event_id_conflict(
+                exc,
+                event=ordinary,
+            )
+            is False
+        )
 
 
 class TestRetryBackoff:
@@ -385,6 +424,32 @@ class TestRetryLoopBehavior:
             await store.append_event(self._draft())
         # Exactly one attempt — non-matching constraint propagates immediately.
         assert call_count["n"] == 1
+
+        with suppress(Exception):
+            await store.close()
+
+    async def test_stable_event_primary_key_race_retries(self, monkeypatch) -> None:
+        store = self._store()
+        sentinel = MagicMock(name="envelope")
+        attempts = {"n": 0}
+        draft = self._draft().model_copy(update={"event_id": f"artevt_{'c' * 64}"})
+
+        async def fake_once(event: RuntimeEventDraft):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise _FakeUniqueViolation(
+                    constraint_name=_AppendEventRetry.EVENT_ID_CONSTRAINT
+                )
+            return sentinel
+
+        async def fake_sleep(_seconds: float) -> None:
+            return None
+
+        monkeypatch.setattr(store, "_append_event_once", fake_once)
+        monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+
+        assert await store.append_event(draft) is sentinel
+        assert attempts["n"] == 2
 
         with suppress(Exception):
             await store.close()

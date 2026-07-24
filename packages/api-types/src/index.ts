@@ -197,6 +197,9 @@ import type {
   DecisionRecordedPayload,
   WriteAppliedPayload,
   ReceiptEmittedPayload,
+  ArtifactCreatedPayload,
+  ArtifactRevisedPayload,
+  ArtifactPromotedPayload,
 } from "./ledger";
 
 export type McpTransport = "http" | "sse" | "stdio";
@@ -515,6 +518,9 @@ export type RuntimeApiEventType =
   | "decision.recorded"
   | "write.applied"
   | "receipt.emitted"
+  | "artifact.created"
+  | "artifact.revised"
+  | "artifact.promoted"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -588,6 +594,9 @@ export const RUNTIME_API_EVENT_TYPES = [
   "decision.recorded",
   "write.applied",
   "receipt.emitted",
+  "artifact.created",
+  "artifact.revised",
+  "artifact.promoted",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2469,6 +2478,11 @@ export interface RuntimeEventPayloadByType {
    * {kind: receipt}`) at run termination. Carries only `surface_id` + `fold_ref`
    * (the receipt is re-derivable by folding the ledger, never a stored blob). */
   "receipt.emitted": ReceiptEmittedPayload;
+  /** Generative Surfaces v2.1 (PRD-A2). Canonical artifact mutations are
+   * reference-only run-ledger rows; content bytes remain in the repository. */
+  "artifact.created": ArtifactCreatedPayload;
+  "artifact.revised": ArtifactRevisedPayload;
+  "artifact.promoted": ArtifactPromotedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

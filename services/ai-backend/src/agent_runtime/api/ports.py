@@ -1151,6 +1151,9 @@ class EventStorePort(Protocol):
 
         Implementations MUST serialize concurrent appends per ``run_id`` so the
         returned ``sequence_no`` is monotonically increasing without gaps.
+        When ``event.event_id`` is set, an identical retry MUST return the
+        existing envelope and a different body MUST raise
+        ``RuntimeEventIdempotencyConflict``.
         """
 
     async def append_events_batch(
@@ -1175,6 +1178,9 @@ class EventStorePort(Protocol):
             ``append_event`` cursor consolidation).
 
         An empty input list returns ``()`` without touching the store.
+        Stable producer-assigned event ids are intentionally unsupported here;
+        durable outbox publishers use :meth:`append_event` one command at a
+        time so retry equivalence is unambiguous.
         """
 
     async def list_events_after(

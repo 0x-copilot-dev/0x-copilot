@@ -54,6 +54,7 @@ from starlette import status
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.ports import RuntimeEventIdempotencyConflict
 from copilot_audit_chain import AuditChainSigner, ChainVerificationResult
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
@@ -1770,6 +1771,11 @@ class FileRuntimeApiStore:
         :meth:`append_event` calls.
         """
 
+        envelope_kwargs: dict[str, object] = {}
+        if event.event_id is not None:
+            envelope_kwargs["event_id"] = event.event_id
+        if event.created_at is not None:
+            envelope_kwargs["created_at"] = event.created_at
         return RuntimeEventEnvelope(
             run_id=event.run_id,
             conversation_id=event.conversation_id,
@@ -1796,11 +1802,24 @@ class FileRuntimeApiStore:
             presentation=event.presentation,
             payload=event.payload,
             metadata=event.metadata,
+            **envelope_kwargs,
         )
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         async with self._conversation_lock(event.conversation_id):
             events = self.events_by_run.setdefault(event.run_id, [])
+            if event.event_id is not None:
+                existing = next(
+                    (item for item in events if item.event_id == event.event_id),
+                    None,
+                )
+                if existing is not None:
+                    if event.matches_envelope(existing):
+                        return existing
+                    raise RuntimeEventIdempotencyConflict(
+                        run_id=event.run_id,
+                        event_id=event.event_id,
+                    )
             envelope = self._envelope_for(event, sequence_no=len(events) + 1)
             events.append(envelope)
             self._persist_event(envelope, org_id=event.org_id)
@@ -1829,6 +1848,11 @@ class FileRuntimeApiStore:
 
         if not events:
             return ()
+        if any(event.event_id is not None for event in events):
+            raise ValueError(
+                "stable event ids require append_event; batch append is reserved "
+                "for newly allocated stream events"
+            )
         run_ids = {event.run_id for event in events}
         if len(run_ids) > 1:
             raise ValueError(
