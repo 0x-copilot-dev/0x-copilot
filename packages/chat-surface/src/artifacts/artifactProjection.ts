@@ -1,4 +1,8 @@
-import type { ArtifactKind, RuntimeEventEnvelope } from "@0x-copilot/api-types";
+import {
+  ARTIFACT_LEDGER_EVENTS,
+  type ArtifactKind,
+  type RuntimeEventEnvelope,
+} from "@0x-copilot/api-types";
 import { artifactUri } from "./uri";
 
 export interface ArtifactSurfaceTab {
@@ -22,20 +26,23 @@ export function projectArtifactTabs(
     const payload = record(event.payload);
     if (payload === null) continue;
     const eventType = event.event_type as string;
-    if (eventType === "artifact.presentation_decided") {
+    if (eventType === ARTIFACT_LEDGER_EVENTS.presentationDecided) {
       const id = string(payload.artifact_id);
       if (id !== "")
         decisions.set(id, payload.decision === "canvas" ? "canvas" : "hidden");
       continue;
     }
-    if (eventType !== "artifact.created" && eventType !== "artifact.revised")
+    if (
+      eventType !== ARTIFACT_LEDGER_EVENTS.created &&
+      eventType !== ARTIFACT_LEDGER_EVENTS.revised
+    )
       continue;
     const id = string(payload.artifact_id);
     const revision = number(payload.revision);
     if (id === "" || revision === null) continue;
     const prior = entries.get(id);
     const kind =
-      eventType === "artifact.created"
+      eventType === ARTIFACT_LEDGER_EVENTS.created
         ? artifactKind(payload.kind)
         : prior?.kind;
     if (kind === undefined) continue;

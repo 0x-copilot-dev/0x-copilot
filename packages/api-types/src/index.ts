@@ -166,6 +166,7 @@ export type {
 export {
   LEDGER_EVENT_TYPES,
   ARTIFACT_RUNTIME_EVENT_TYPES,
+  ARTIFACT_LEDGER_EVENTS,
   isLedgerEventType,
   isSurfaceEventV2,
   isLedgerPayloadForWrite,

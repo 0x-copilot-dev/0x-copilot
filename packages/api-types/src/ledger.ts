@@ -99,6 +99,20 @@ export const ARTIFACT_RUNTIME_EVENT_TYPES = [
 export type ArtifactRuntimeEventType =
   (typeof ARTIFACT_RUNTIME_EVENT_TYPES)[number];
 
+/**
+ * Named artifact ledger rows for consumers that fold the replay stream.
+ *
+ * Keeping the wire values in this contract mirror prevents presentation code
+ * from redeclaring append-only ledger strings. `presentationDecided` is not a
+ * Runtime API event type, but it is still a canonical ledger row consumed by
+ * the Studio canvas projection.
+ */
+export const ARTIFACT_LEDGER_EVENTS = {
+  created: "artifact.created",
+  revised: "artifact.revised",
+  presentationDecided: "artifact.presentation_decided",
+} as const satisfies Readonly<Record<string, LedgerEventType>>;
+
 // ---------------------------------------------------------------------------
 // Value unions (one per `enums` key in the JSON, values verbatim)
 // ---------------------------------------------------------------------------
