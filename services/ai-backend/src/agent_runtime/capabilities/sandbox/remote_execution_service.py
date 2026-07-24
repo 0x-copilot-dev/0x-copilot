@@ -45,6 +45,9 @@ from agent_runtime.capabilities.sandbox.ports import (
 from agent_runtime.capabilities.sandbox.provider_registry import (
     SandboxProviderRegistry,
 )
+from agent_runtime.capabilities.sandbox.workspace_transfer import (
+    WorkspaceManifestBuilder,
+)
 
 
 class SandboxEventName:
@@ -107,6 +110,13 @@ class RemoteExecutionService:
         """Provision a session, record its projection, and wrap it in policy."""
 
         limits = self._config.resolve_limits()
+        WorkspaceManifestBuilder.verify_manifest(request.snapshot)
+        attestation = await self._registry.provider.attest(request)
+        if not attestation.satisfies(request.egress):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_ISOLATION_UNVERIFIED,
+                "The sandbox provider could not verify required isolation controls.",
+            )
         self._emit(SandboxEventName.PROVISION_STARTED, request.run_id)
         try:
             handle: SandboxHandle = await self._registry.provider.create(request)

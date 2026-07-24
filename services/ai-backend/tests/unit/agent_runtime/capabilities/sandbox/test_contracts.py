@@ -12,6 +12,8 @@ from agent_runtime.capabilities.sandbox.contracts import (
     ManagedSandboxSession,
     SandboxError,
     SandboxErrorCode,
+    SandboxEgressPolicy,
+    SandboxIsolationAttestation,
     SandboxProviderId,
     WorkspaceTransferEntry,
 )
@@ -33,6 +35,49 @@ class TestWorkspaceTransferEntry:
             WorkspaceTransferEntry(
                 path="/workspace/a", sha256="a" * 64, size_bytes=1, executable=False
             )  # type: ignore[call-arg]
+
+    def test_rejects_mismatched_content_metadata(self) -> None:
+        with pytest.raises(ValidationError):
+            WorkspaceTransferEntry(
+                path="/workspace/a",
+                sha256="a" * 64,
+                size_bytes=1,
+                payload_ref=ArtifactRef(artifact_id="a", sha256="b" * 64, size_bytes=1),
+            )
+
+
+class TestEgressAndAttestation:
+    @pytest.mark.parametrize(
+        "destination",
+        ["*.example.com", "https://example.com", "127.0.0.1", "example.com:443"],
+    )
+    def test_egress_policy_rejects_broadened_destination(
+        self, destination: str
+    ) -> None:
+        with pytest.raises(ValidationError):
+            SandboxEgressPolicy(mode="allowlist", destinations=(destination,))
+
+    def test_deny_all_cannot_smuggle_destination(self) -> None:
+        with pytest.raises(ValidationError):
+            SandboxEgressPolicy(mode="deny_all", destinations=("api.example.com",))
+
+    def test_process_only_attestation_is_not_a_security_boundary(self) -> None:
+        attestation = SandboxIsolationAttestation(
+            provider=SandboxProviderId.LANGSMITH,
+            isolation="process",
+            process_isolated=True,
+            filesystem_fresh=True,
+            teardown_guaranteed=True,
+            host_credentials_absent=True,
+            cpu_quota_enforced=True,
+            memory_quota_enforced=True,
+            wall_clock_quota_enforced=True,
+            process_quota_enforced=True,
+            file_quota_enforced=True,
+            egress_mode="deny_all",
+            attestation_ref="attestation://test/process-only",
+        )
+        assert attestation.satisfies(SandboxEgressPolicy()) is False
 
 
 class TestSandboxError:

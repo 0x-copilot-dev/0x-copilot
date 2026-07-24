@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from agent_runtime.capabilities.sandbox.config import RemoteSandboxConfig
-from agent_runtime.capabilities.sandbox.contracts import SandboxProviderId
+from agent_runtime.capabilities.sandbox.contracts import SandboxError, SandboxProviderId
 from agent_runtime.capabilities.sandbox.ports import (
     SandboxEventSink,
     SandboxProviderPort,
@@ -56,9 +56,14 @@ def build_sandbox_backend(
     resolved = config if config is not None else RemoteSandboxConfig.from_env()
     if not resolved.is_active:
         return None
-    registry = SandboxProviderRegistry.from_config(
-        resolved, overrides=provider_overrides
-    )
+    try:
+        registry = SandboxProviderRegistry.from_config(
+            resolved, overrides=provider_overrides
+        )
+    except SandboxError:
+        # An unverified provider is not a degraded sandbox.  Returning None
+        # keeps run_in_sandbox out of the model-visible toolset entirely.
+        return None
     return RemoteExecutionService(
         registry=registry,
         config=resolved,

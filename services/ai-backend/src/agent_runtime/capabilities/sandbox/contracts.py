@@ -21,9 +21,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
+import ipaddress
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
 
@@ -64,6 +65,11 @@ class SandboxErrorCode(StrEnum):
     SANDBOX_CLEANUP_PENDING = "sandbox_cleanup_pending"
     SANDBOX_COMMAND_BUDGET_EXCEEDED = "sandbox_command_budget_exceeded"
     SANDBOX_PATH_NOT_ALLOWED = "sandbox_path_not_allowed"
+    SANDBOX_ISOLATION_UNVERIFIED = "sandbox_isolation_unverified"
+    SANDBOX_SNAPSHOT_REQUIRED = "sandbox_snapshot_required"
+    SANDBOX_MANIFEST_MISMATCH = "sandbox_manifest_mismatch"
+    SANDBOX_EXECUTION_INDETERMINATE = "sandbox_execution_indeterminate"
+    SANDBOX_LIFECYCLE_CONFLICT = "sandbox_lifecycle_conflict"
 
 
 class SandboxError(Exception):
@@ -91,7 +97,7 @@ class ArtifactRef(RuntimeContract):
     """
 
     artifact_id: str = Field(min_length=1)
-    sha256: str = Field(min_length=64, max_length=64)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: int = Field(ge=0)
 
 
@@ -107,6 +113,55 @@ class SandboxEgressPolicy(RuntimeContract):
 
     mode: Literal["deny_all", "allowlist"] = "deny_all"
     destinations: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _exact_policy(self) -> "SandboxEgressPolicy":
+        """Reject policy shapes a provider could accidentally broaden.
+
+        The launch posture is deny-all.  Allowlists are retained for a future
+        provider that can prove enforcement, but are intentionally limited to
+        exact host names: no wildcards, schemes, ports, paths, or raw IPs.
+        """
+
+        if self.mode == "deny_all":
+            if self.destinations:
+                raise ValueError("deny_all egress may not include destinations")
+            return self
+        if not self.destinations:
+            raise ValueError("allowlist egress requires at least one destination")
+        for destination in self.destinations:
+            try:
+                ipaddress.ip_address(destination)
+            except ValueError:
+                is_ip_address = False
+            else:
+                is_ip_address = True
+            if (
+                not destination
+                or len(destination) > 253
+                or destination != destination.lower()
+                or destination.startswith(("http://", "https://", "."))
+                or any(character in destination for character in "/*:@?#[]\\")
+                or "." not in destination
+                or any(
+                    not (label.isalnum() or "-" in label)
+                    for label in destination.split(".")
+                )
+                or any(
+                    label.startswith("-") or label.endswith("-")
+                    for label in destination.split(".")
+                )
+                or is_ip_address
+            ):
+                raise ValueError("egress destinations must be exact DNS host names")
+        if len(set(self.destinations)) != len(self.destinations):
+            raise ValueError("egress destinations must be unique")
+        return self
+
+    def is_deny_all(self) -> bool:
+        """Whether this is the launch-safe no-egress policy."""
+
+        return self.mode == "deny_all" and not self.destinations
 
 
 class SandboxSecretLeaseRef(RuntimeContract):
@@ -133,9 +188,43 @@ class WorkspaceTransferEntry(RuntimeContract):
     executable: bool = False
     payload_ref: ArtifactRef
 
+    @model_validator(mode="after")
+    def _content_ref_matches_declared_bytes(self) -> "WorkspaceTransferEntry":
+        if (
+            self.payload_ref.sha256 != self.sha256
+            or self.payload_ref.size_bytes != self.size_bytes
+        ):
+            raise ValueError("snapshot content reference must match declared bytes")
+        return self
+
+
+class SandboxSnapshot(RuntimeContract):
+    """Provider-safe immutable snapshot envelope.
+
+    This is deliberately distinct from C3's private workspace materialisation
+    record.  It contains virtual sandbox paths plus content-addressed artifact
+    references only; it must never contain a host path, grant, broker handle,
+    root identity, or credential.
+    """
+
+    format_version: Literal[1] = 1
+    snapshot_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
+    entries: tuple[WorkspaceTransferEntry, ...] = ()
+    total_bytes: int = Field(ge=0)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _entries_are_immutable_and_bounded(self) -> "SandboxSnapshot":
+        if sum(entry.size_bytes for entry in self.entries) != self.total_bytes:
+            raise ValueError("sandbox snapshot byte total does not match entries")
+        paths = [entry.path for entry in self.entries]
+        if len(paths) != len(set(paths)):
+            raise ValueError("sandbox snapshot paths must be unique")
+        return self
+
 
 class WorkspaceTransferManifest(RuntimeContract):
-    """Deterministic description of the bytes uploaded to ``/workspace``.
+    """C3-private materialisation record, never passed to a sandbox provider.
 
     The manifest hash is order-independent (see ``workspace_transfer``) so two
     hosts enumerating the same tree in different orders produce the same hash.
@@ -182,13 +271,145 @@ class SandboxCreateRequest(RuntimeContract):
     provider/region/egress/secret/limits after approval."""
 
     run_id: str = Field(min_length=1)
-    workspace_snapshot: WorkspaceTransferManifest
+    operation_id: str = Field(min_length=1, max_length=255)
+    snapshot: SandboxSnapshot
     egress: SandboxEgressPolicy = SandboxEgressPolicy()
     secret_refs: tuple[SandboxSecretLeaseRef, ...] = ()
     limit_profile: str = Field(min_length=1)
     approval_id: str = Field(min_length=1)
     owner_tag: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
+
+
+class SandboxIsolationAttestation(RuntimeContract):
+    """Provider proof required before an untrusted command may launch.
+
+    A request describes desired egress; this object describes controls the
+    provider has actually verified.  Any missing control makes the provider
+    unavailable rather than a best-effort isolation boundary.
+    """
+
+    provider: SandboxProviderId
+    isolation: Literal["container", "microvm", "process"]
+    process_isolated: bool
+    filesystem_fresh: bool
+    teardown_guaranteed: bool
+    host_credentials_absent: bool
+    cpu_quota_enforced: bool
+    memory_quota_enforced: bool
+    wall_clock_quota_enforced: bool
+    process_quota_enforced: bool
+    file_quota_enforced: bool
+    egress_mode: Literal["deny_all", "allowlist"]
+    attestation_ref: str = Field(min_length=1, max_length=2048)
+
+    def satisfies(self, policy: SandboxEgressPolicy) -> bool:
+        """Return whether every D3 launch invariant is proven effective."""
+
+        return (
+            self.isolation in {"container", "microvm"}
+            and self.process_isolated
+            and self.filesystem_fresh
+            and self.teardown_guaranteed
+            and self.host_credentials_absent
+            and self.cpu_quota_enforced
+            and self.memory_quota_enforced
+            and self.wall_clock_quota_enforced
+            and self.process_quota_enforced
+            and self.file_quota_enforced
+            and self.egress_mode == policy.mode
+        )
+
+
+class SandboxLifecycleState(StrEnum):
+    """Durable, replay-safe states of one sandbox operation."""
+
+    REQUESTED = "requested"
+    PROVISIONED = "provisioned"
+    UPLOADING = "uploading"
+    RUNNING = "running"
+    COLLECTING = "collecting"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INDETERMINATE = "indeterminate"
+    CLEANUP_PENDING = "cleanup_pending"
+    CLEANED = "cleaned"
+
+
+class SandboxLifecycleRecord(RuntimeContract):
+    """Credential-free durable fact record for one idempotent operation.
+
+    The record deliberately stores no command, provider client, token, host
+    path, grant, or output bytes.  ``execution_started`` is the no-blind-retry
+    boundary: after it becomes true a worker may reconcile or clean up, but it
+    must not issue another execution call based on the same request.
+    """
+
+    operation_id: str = Field(min_length=1, max_length=255)
+    run_id: str = Field(min_length=1, max_length=255)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    state: SandboxLifecycleState = SandboxLifecycleState.REQUESTED
+    execution_started: bool = False
+    provider_session_ref: str | None = Field(
+        default=None,
+        max_length=2048,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    cleanup_attempts: int = Field(default=0, ge=0)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+    @model_validator(mode="after")
+    def _state_has_no_impossible_execution_fact(self) -> "SandboxLifecycleRecord":
+        if self.execution_started and self.state is SandboxLifecycleState.REQUESTED:
+            raise ValueError("started sandbox execution cannot remain requested")
+        if (
+            self.state
+            in {
+                SandboxLifecycleState.RUNNING,
+                SandboxLifecycleState.COLLECTING,
+                SandboxLifecycleState.INDETERMINATE,
+            }
+            and not self.execution_started
+        ):
+            raise ValueError(
+                "active or indeterminate sandbox execution must be marked started"
+            )
+        return self
+
+    def transition(
+        self,
+        *,
+        state: SandboxLifecycleState,
+        execution_started: bool | None = None,
+        provider_session_ref: str | None = None,
+        cleanup_attempts: int | None = None,
+    ) -> "SandboxLifecycleRecord":
+        """Return an immutable record after a monotonic transition."""
+
+        return self.model_copy(
+            update={
+                "state": state,
+                "execution_started": (
+                    self.execution_started
+                    if execution_started is None
+                    else execution_started
+                ),
+                "provider_session_ref": (
+                    self.provider_session_ref
+                    if provider_session_ref is None
+                    else provider_session_ref
+                ),
+                "cleanup_attempts": (
+                    self.cleanup_attempts
+                    if cleanup_attempts is None
+                    else cleanup_attempts
+                ),
+                "updated_at": _utcnow(),
+            }
+        )
 
 
 CleanupState = Literal["active", "terminating", "deleted", "cleanup_pending"]
