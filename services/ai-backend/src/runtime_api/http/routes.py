@@ -859,7 +859,7 @@ class RuntimeApiRouter:
     """Build and configure the ``/v1/agent`` FastAPI router."""
 
     @classmethod
-    def create_router(cls) -> APIRouter:
+    def create_router(cls, *, artifact_effects_v2: bool = False) -> APIRouter:
         """Return a router with every agent-runtime route registered under ``/v1/agent``."""
         # Every /v1/agent/* route requires the runtime:use scope. The
         # router-level dependency covers all routes below; admins,
@@ -1084,6 +1084,13 @@ class RuntimeApiRouter:
             response_model=HistoryDeletionResponse,
             name=Keys.RouteName.DELETE_USER_HISTORY,
         )
+        # PRD-A2 — canonical Artifact Repository. The literal
+        # ``/artifacts:promote`` route is registered by this helper before its
+        # broad artifact-id siblings.
+        if artifact_effects_v2:
+            from runtime_api.http.artifacts import register_artifact_routes
+
+            register_artifact_routes(router)
         # PR 1.3 — Workspace-pane draft artifacts.
         from runtime_api.http.drafts import register_draft_routes
 

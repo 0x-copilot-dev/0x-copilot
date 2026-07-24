@@ -1227,6 +1227,32 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._message_record(row) for row in reversed(rows))
 
+    async def get_message_by_id(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str,
+        message_id: str,
+    ) -> MessageRecord | None:
+        """Return one live message through the ``agent_messages`` primary key."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT *
+                FROM agent_messages
+                WHERE id = %s
+                  AND org_id = %s
+                  AND conversation_id = %s
+                  AND run_id = %s
+                  AND deleted_at IS NULL
+                """,
+                (message_id, org_id, conversation_id, run_id),
+            )
+            row = await cur.fetchone()
+        return self._message_record(row) if row is not None else None
+
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""
 

@@ -1,5 +1,21 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
 
+export type {
+  ArtifactCreateMultipartFields,
+  ArtifactDetailResponse,
+  ArtifactListResponse,
+  ArtifactMutationResponse,
+  ArtifactPromotionRequest,
+  ArtifactRevisionMultipartFields,
+  ArtifactRevisionResponse,
+} from "./artifacts";
+export {
+  isArtifactDetailResponse,
+  isArtifactListResponse,
+  isArtifactMutationResponse,
+  isArtifactRevisionResponse,
+} from "./artifacts";
+
 // Work Ledger vocabulary (Generative Surfaces v2, SDR §5 / PRD-A1). `ledger.ts`
 // is the single canonical home for all v2 ledger/domain type additions across
 // every wave; this barrel only ever gains re-export lines, never a type body.

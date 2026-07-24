@@ -44,6 +44,9 @@ class _EnvFields:
     # Generative Surfaces v2 master flag (PRD-A1). Registered now but read by
     # nothing until emission lands in PRD-A3 — flag-off byte-identical.
     SURFACES_V2 = "SURFACES_V2"
+    # Generative Surfaces v2.1 artifact/effect migration flag. Default OFF
+    # until the E2 cutover; API route composition reads the resolved setting.
+    ARTIFACT_EFFECTS_V2 = "ARTIFACT_EFFECTS_V2"
     # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
     # executor accumulates chunks for the window and flushes via
     # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
@@ -153,6 +156,8 @@ class RuntimeExecutionSettings(RuntimeContract):
     # switch (chat-only degradation). Resolves identically to
     # ``SurfacesV2Flag.enabled()`` (same env var, same truthy set, same default).
     surfaces_v2: bool = True
+    # SDR §19 migration flag. Unset/false keeps artifact product routes absent.
+    artifact_effects_v2: bool = False
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -393,6 +398,8 @@ class RuntimeSettings(BaseSettings):
                 ).lower()
                 in _truthy,
                 surfaces_v2=_s(v, E.SURFACES_V2, "true").lower() in _truthy,
+                artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
+                in _truthy,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

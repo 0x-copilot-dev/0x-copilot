@@ -1238,6 +1238,27 @@ class FileRuntimeApiStore:
         )[:limit]
         return tuple(reversed(newest_first))
 
+    async def get_message_by_id(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str,
+        message_id: str,
+    ) -> MessageRecord | None:
+        """Return one live message through the loaded primary-key map."""
+
+        message = self.messages.get(message_id)
+        if (
+            message is None
+            or message.org_id != org_id
+            or message.conversation_id != conversation_id
+            or message.run_id != run_id
+            or message.deleted_at is not None
+        ):
+            return None
+        return message
+
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         async with self._conversation_lock(message.conversation_id):
             self.messages[message.message_id] = message

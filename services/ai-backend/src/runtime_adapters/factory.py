@@ -10,12 +10,17 @@ from copilot_service_contracts.deployment_profile import (
     PROFILE_SINGLE_USER_DESKTOP,
 )
 
+from agent_runtime.api.artifact_repository import (
+    ArtifactSourceLookupPort,
+    RuntimeArtifactSourceLookup,
+)
 from agent_runtime.api.ports import (
     EventStorePort,
     PersistencePort,
     RuntimeQueuePort,
     RuntimeStoreLifecyclePort,
 )
+from agent_runtime.artifacts import ArtifactBlobStorePort, ArtifactMetadataStorePort
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.persistence.ports import (
@@ -114,6 +119,7 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         # is now the write-side port too, so run citations persist to disk
         # instead of an ephemeral in-memory sibling.
         citation_store=citation_store,
+        artifact_source_lookup=RuntimeArtifactSourceLookup(file_store),
     )
 
 
@@ -149,6 +155,14 @@ class RuntimePorts:
     # None so any legacy constructor still works — the worker then falls back to
     # its historical isinstance resolution.
     citation_store: CitationStorePort | None = None
+    # A2 canonical artifacts. Metadata/blob construction belongs to the
+    # storage adapter lane; older bundles leave these unset and product routes
+    # fail safely rather than creating a shadow repository.
+    artifact_metadata_store: ArtifactMetadataStorePort | None = None
+    artifact_blob_store: ArtifactBlobStorePort | None = None
+    # Exact logical-source lookup is composed for every runtime backend. It is
+    # independent of artifact storage and never scans message/event history.
+    artifact_source_lookup: ArtifactSourceLookupPort | None = None
 
 
 class RuntimeAdapterFactory:
@@ -177,6 +191,7 @@ class RuntimeAdapterFactory:
             # write-side port, so a run's citations are visible to Sources.
             source_store=InMemorySourceStore(in_memory_citation),
             citation_store=in_memory_citation,
+            artifact_source_lookup=RuntimeArtifactSourceLookup(store),
         )
 
     @classmethod
@@ -214,6 +229,7 @@ class RuntimeAdapterFactory:
                 # Shared instance: read-side projector and write-side port agree.
                 source_store=InMemorySourceStore(in_memory_citation),
                 citation_store=in_memory_citation,
+                artifact_source_lookup=RuntimeArtifactSourceLookup(in_memory_store),
             )
         if backend == "postgres":
             if settings.store.database_url is None:
@@ -244,6 +260,7 @@ class RuntimeAdapterFactory:
                 # The Postgres store IS a CitationStorePort — same instance the
                 # worker resolved historically, so write behavior is unchanged.
                 citation_store=postgres_store,
+                artifact_source_lookup=RuntimeArtifactSourceLookup(postgres_store),
             )
         if backend == "file":
             return _build_file_ports(settings)

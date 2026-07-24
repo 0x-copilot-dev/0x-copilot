@@ -416,6 +416,45 @@ class TestMessageOrderingConformance(_CrudSeedMixin):
         texts = [m.content_text for m in messages]
         assert texts == ["msg-0", "msg-1", "msg-2"]
 
+    async def test_exact_message_lookup_is_primary_key_and_scope_bounded(
+        self,
+        store,
+    ) -> None:
+        conversation, run = await self._new_run(store)
+        message = await store.append_message(
+            MessageRecord(
+                message_id="msg_artifact_source",
+                conversation_id=conversation.conversation_id,
+                org_id=self._ORG,
+                run_id=run.run_id,
+                role=MessageRole.USER,
+                content_text="older-but-addressable",
+            )
+        )
+
+        found = await store.get_message_by_id(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+            run_id=run.run_id,
+            message_id=message.message_id,
+        )
+        foreign_run = await store.get_message_by_id(
+            org_id=self._ORG,
+            conversation_id=conversation.conversation_id,
+            run_id="run_foreign",
+            message_id=message.message_id,
+        )
+        foreign_org = await store.get_message_by_id(
+            org_id="org_foreign",
+            conversation_id=conversation.conversation_id,
+            run_id=run.run_id,
+            message_id=message.message_id,
+        )
+
+        assert found == message
+        assert foreign_run is None
+        assert foreign_org is None
+
 
 class TestMessageKeysetWindowConformance(_CrudSeedMixin):
     """list_messages returns the most-recent window (ASC) with keyset paging.

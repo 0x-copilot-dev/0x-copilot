@@ -47,6 +47,7 @@ from agent_runtime.api.user_policies_resolver import (
     UserPoliciesResolver,
 )
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
+from agent_runtime.artifacts import ArtifactService
 from agent_runtime.deployment import (
     DeploymentProfile,
     log_profile,
@@ -119,6 +120,7 @@ class RuntimeApiAppFactory:
         user_policies_resolver: UserPoliciesResolver | None = None,
         suggestible_connectors_resolver: SuggestibleConnectorsResolver | None = None,
         project_resolver: ProjectResolverPort | None = None,
+        artifact_service: ArtifactService | None = None,
         configure_logging_on_create: bool = True,
         configure_telemetry_on_create: bool = True,
         deployment: DeploymentProfile | None = None,
@@ -214,6 +216,16 @@ class RuntimeApiAppFactory:
         app.state.conversation_query_service = _cqs
         app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
+        # A2 — explicit composition seam for the canonical Artifact Repository.
+        # The API layer never constructs metadata/blob adapters. The storage
+        # integration lane injects one fully composed service here; until then,
+        # mounted routes fail safely with 503 rather than creating a shadow
+        # in-memory repository.
+        app.state.artifact_service = (
+            artifact_service
+            if artifact_service is not None
+            else cls.default_artifact_service(app)
+        )
         app.state.draft_service = cls.default_draft_service(app)
         # PRD-D1 — the single-artifact staged-write service (v2). Registered on
         # app state always (harmless when the flag is off — the stage routes are
@@ -256,7 +268,11 @@ class RuntimeApiAppFactory:
                 "run_executor": cls.classify_run_executor(app),
             }
 
-        app.include_router(RuntimeApiRouter.create_router())
+        app.include_router(
+            RuntimeApiRouter.create_router(
+                artifact_effects_v2=_settings.execution.artifact_effects_v2,
+            )
+        )
         app.include_router(UsageApiRouter.create_router())
         # P8-A4 — per-agent usage aggregation (read-only over the canonical
         # ``runtime_model_call_usage`` tracker; cross-audit §5.5 invariant).
@@ -563,6 +579,23 @@ class RuntimeApiAppFactory:
             backend_base_url=backend_base_url,
             service_token=service_token,
         )
+
+    @classmethod
+    def default_artifact_service(cls, app: FastAPI) -> ArtifactService | None:
+        """Compose ArtifactService from storage-owned runtime ports.
+
+        Older/pre-storage port bundles intentionally return ``None`` so the
+        mounted routes fail with a safe 503. Once the storage lane contributes
+        ``artifact_metadata_store`` and ``artifact_blob_store``, this seam
+        composes the production service with scoped run/source resolvers.
+        """
+
+        from agent_runtime.api.artifact_repository import ArtifactServiceComposition
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return ArtifactServiceComposition.build(ports)
 
     @classmethod
     def _httpx_membership_fetcher(cls):
