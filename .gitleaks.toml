@@ -29,4 +29,9 @@ description = "Known non-secret test fixtures"
 regexes = [
   '''test-vault-secret-32-chars-min-length-yes''',
   '''enterprise\.flags\.[a-z0-9._-]+''',
+  # `SURFACES_V2_FLAG_KEY` is the exported constant holding the
+  # `enterprise.flags.surfaces-v2` localStorage key; test files compare against
+  # the constant (`key === SURFACES_V2_FLAG_KEY`), which gitleaks' generic-api-key
+  # rule matches by entropy. Not a secret — allowlist the identifier.
+  '''SURFACES_V2_FLAG_KEY''',
 ]
