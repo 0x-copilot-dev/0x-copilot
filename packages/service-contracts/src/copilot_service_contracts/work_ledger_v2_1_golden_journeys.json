@@ -1,0 +1,1622 @@
+{
+  "schema_version": 1,
+  "journeys": [
+    {
+      "id": "chat_only_answer",
+      "description": "A model answers in chat without creating an artifact or effect.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_chat",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:00:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a001",
+            "producer": "model",
+            "capability": "reasoning",
+            "op": "answer",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.classified",
+          "run_id": "run_v21_chat",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:00:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a001",
+            "effect_class": "none",
+            "basis": "descriptor",
+            "confidence": 1.0
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_chat",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:00:03Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a001",
+            "outcome": "succeeded",
+            "result_ref": "chat://run_v21_chat/final",
+            "latency_ms": 12
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [],
+        "canvas": [],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 1,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 0,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "model_authored_code_artifact",
+      "description": "The model authors code and presents the artifact on canvas.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_code",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:01:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a002",
+            "producer": "model",
+            "capability": "authoring",
+            "op": "create_code",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.classified",
+          "run_id": "run_v21_code",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:01:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a002",
+            "effect_class": "internal_reversible",
+            "basis": "descriptor",
+            "confidence": 1.0
+          }
+        },
+        {
+          "event_type": "artifact.created",
+          "run_id": "run_v21_code",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:01:03Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b002",
+            "kind": "code",
+            "revision": 1,
+            "content_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b002/revisions/1",
+            "content_digest": "e6da0c7b7b495918d6f50f6bd0a146c359a7c3a7a8995b911ccecfe4cfd2e357",
+            "author": "model"
+          }
+        },
+        {
+          "event_type": "artifact.presentation_decided",
+          "run_id": "run_v21_code",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:01:04Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b002",
+            "decision": "canvas",
+            "basis": "artifact_intent",
+            "surface_id": "surface_code_01"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_code",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:01:05Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a002",
+            "outcome": "succeeded",
+            "result_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b002/revisions/1"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [
+          {
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b002",
+            "kind": "code",
+            "revision": 1,
+            "content_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b002/revisions/1",
+            "content_digest": "e6da0c7b7b495918d6f50f6bd0a146c359a7c3a7a8995b911ccecfe4cfd2e357",
+            "author": "model",
+            "presentation": {
+              "decision": "canvas",
+              "basis": "artifact_intent",
+              "surface_id": "surface_code_01"
+            }
+          }
+        ],
+        "stages": [],
+        "canvas": [
+          {
+            "subject_type": "artifact",
+            "subject_id": "art_018f47a6-7b2c-7b10-8f21-12345678b002",
+            "surface_id": "surface_code_01"
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 1,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 0,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "mcp_read_activity_only",
+      "description": "An MCP read completes and remains an activity row.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_read_activity",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:02:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a003",
+            "producer": "model",
+            "capability": "mcp.linear",
+            "op": "get_issue",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.classified",
+          "run_id": "run_v21_read_activity",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:02:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a003",
+            "effect_class": "none",
+            "basis": "catalog",
+            "confidence": 0.99
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_read_activity",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:02:03Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a003",
+            "outcome": "succeeded",
+            "result_ref": "activity://run_v21_read_activity/3",
+            "latency_ms": 41
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [],
+        "canvas": [],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 1,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 0,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "mcp_read_table_surface",
+      "description": "An MCP read creates a generic table surface.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_read_table",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:03:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a004",
+            "producer": "model",
+            "capability": "mcp.linear",
+            "op": "list_issues",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.classified",
+          "run_id": "run_v21_read_table",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:03:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a004",
+            "effect_class": "none",
+            "basis": "catalog",
+            "confidence": 1.0
+          }
+        },
+        {
+          "event_type": "surface.created",
+          "run_id": "run_v21_read_table",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:03:03Z",
+          "payload": {
+            "v": 1,
+            "surface_id": "surface_table_01",
+            "kind": "table",
+            "source": { "connector": "linear", "op": "list_issues" },
+            "title": "Open issues",
+            "payload_ref": "operation://op_018f47a6-7b2c-7a10-8f21-12345678a004/result"
+          }
+        },
+        {
+          "event_type": "view.derived",
+          "run_id": "run_v21_read_table",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:03:04Z",
+          "payload": {
+            "v": 1,
+            "surface_id": "surface_table_01",
+            "tier": "generic",
+            "basis": "schema"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_read_table",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:03:05Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a004",
+            "outcome": "succeeded",
+            "result_ref": "operation://op_018f47a6-7b2c-7a10-8f21-12345678a004/result",
+            "latency_ms": 57
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [],
+        "canvas": [
+          {
+            "subject_type": "record",
+            "subject_id": "surface_table_01",
+            "surface_id": "surface_table_01"
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 1,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 0,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "csv_artifact_edited_then_staged",
+      "description": "A CSV is promoted to an internal artifact, edited, and staged to a workspace.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_csv",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:04:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a005",
+            "producer": "model",
+            "capability": "artifact",
+            "op": "create_csv",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "artifact.promoted",
+          "run_id": "run_v21_csv",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:04:02Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b005",
+            "source_ref": "sandbox://objects/csv_01",
+            "kind": "dataset",
+            "revision": 1
+          }
+        },
+        {
+          "event_type": "artifact.created",
+          "run_id": "run_v21_csv",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:04:03Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b005",
+            "kind": "dataset",
+            "revision": 1,
+            "content_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b005/revisions/1",
+            "content_digest": "e6da0c7b7b495918d6f50f6bd0a146c359a7c3a7a8995b911ccecfe4cfd2e357",
+            "author": "model"
+          }
+        },
+        {
+          "event_type": "artifact.revised",
+          "run_id": "run_v21_csv",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:04:04Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b005",
+            "revision": 2,
+            "parent_revision": 1,
+            "content_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b005/revisions/2",
+            "content_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+            "author": "user"
+          }
+        },
+        {
+          "event_type": "artifact.presentation_decided",
+          "run_id": "run_v21_csv",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:04:05Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b005",
+            "decision": "canvas",
+            "basis": "user_edit",
+            "surface_id": "surface_csv_01"
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_csv",
+          "sequence_no": 6,
+          "created_at": "2026-07-24T00:04:06Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c005",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a005",
+            "executor": "workspace",
+            "target_ref": "workspace-target://grant_05/pathToken_05",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c005/revisions/1",
+            "proposal_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+            "policy": "ask"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_csv",
+          "sequence_no": 7,
+          "created_at": "2026-07-24T00:04:07Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a005",
+            "outcome": "staged",
+            "result_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c005/revisions/1"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [
+          {
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b005",
+            "kind": "dataset",
+            "revision": 2,
+            "content_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b005/revisions/2",
+            "content_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+            "author": "user",
+            "presentation": {
+              "decision": "canvas",
+              "basis": "user_edit",
+              "surface_id": "surface_csv_01"
+            }
+          }
+        ],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c005",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a005",
+            "executor": "workspace",
+            "target_ref": "workspace-target://grant_05/pathToken_05",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c005/revisions/1",
+            "proposal_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+            "revision": 1,
+            "status": "staged",
+            "policy": "ask",
+            "decision": null,
+            "claim_id": null,
+            "outcome": null
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "artifact",
+            "subject_id": "art_018f47a6-7b2c-7b10-8f21-12345678b005",
+            "surface_id": "surface_csv_01"
+          },
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c005",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 1,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": [
+          {
+            "kind": "effect",
+            "id": "stg_018f47a6-7b2c-7c10-8f21-12345678c005"
+          }
+        ]
+      }
+    },
+    {
+      "id": "workspace_commit_success",
+      "description": "A workspace effect is approved, claimed, and applied.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_workspace_ok",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:05:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a006",
+            "producer": "user",
+            "capability": "workspace",
+            "op": "save_file",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.classified",
+          "run_id": "run_v21_workspace_ok",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:05:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a006",
+            "effect_class": "external_reversible",
+            "basis": "descriptor",
+            "confidence": 1.0
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_workspace_ok",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:05:03Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c006",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a006",
+            "executor": "workspace",
+            "target_ref": "workspace-target://grant_06/pathToken_06",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c006/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "policy": "ask"
+          }
+        },
+        {
+          "event_type": "effect.decision_recorded",
+          "run_id": "run_v21_workspace_ok",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:05:04Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c006",
+            "revision": 1,
+            "decision": "approve",
+            "actor": "user",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          }
+        },
+        {
+          "event_type": "effect.claimed",
+          "run_id": "run_v21_workspace_ok",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:05:05Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c006",
+            "revision": 1,
+            "claim_id": "claim_06",
+            "executor": "workspace",
+            "attempt": 1
+          }
+        },
+        {
+          "event_type": "effect.applied",
+          "run_id": "run_v21_workspace_ok",
+          "sequence_no": 6,
+          "created_at": "2026-07-24T00:05:06Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c006",
+            "revision": 1,
+            "outcome": "applied",
+            "receipt_ref": "receipt://effects/stg_018f47a6-7b2c-7c10-8f21-12345678c006/claim_06",
+            "result_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_workspace_ok",
+          "sequence_no": 7,
+          "created_at": "2026-07-24T00:05:07Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a006",
+            "outcome": "staged"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c006",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a006",
+            "executor": "workspace",
+            "target_ref": "workspace-target://grant_06/pathToken_06",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c006/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "revision": 1,
+            "status": "applied",
+            "policy": "ask",
+            "decision": { "decision": "approve", "actor": "user" },
+            "claim_id": "claim_06",
+            "outcome": "applied"
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c006",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 1,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 1,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "workspace_precondition_drift",
+      "description": "A workspace commit detects precondition drift and does not mutate the host.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_workspace_drift",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:06:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a007",
+            "producer": "user",
+            "capability": "workspace",
+            "op": "save_file",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_workspace_drift",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:06:02Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c007",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a007",
+            "executor": "workspace",
+            "target_ref": "workspace-target://grant_07/pathToken_07",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c007/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "policy": "ask"
+          }
+        },
+        {
+          "event_type": "effect.decision_recorded",
+          "run_id": "run_v21_workspace_drift",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:06:03Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c007",
+            "revision": 1,
+            "decision": "approve",
+            "actor": "user",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          }
+        },
+        {
+          "event_type": "effect.claimed",
+          "run_id": "run_v21_workspace_drift",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:06:04Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c007",
+            "revision": 1,
+            "claim_id": "claim_07",
+            "executor": "workspace",
+            "attempt": 1
+          }
+        },
+        {
+          "event_type": "effect.applied",
+          "run_id": "run_v21_workspace_drift",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:06:05Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c007",
+            "revision": 1,
+            "outcome": "precondition_drift"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_workspace_drift",
+          "sequence_no": 6,
+          "created_at": "2026-07-24T00:06:06Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a007",
+            "outcome": "staged"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c007",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a007",
+            "executor": "workspace",
+            "target_ref": "workspace-target://grant_07/pathToken_07",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c007/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "revision": 1,
+            "status": "precondition_drift",
+            "policy": "ask",
+            "decision": { "decision": "approve", "actor": "user" },
+            "claim_id": "claim_07",
+            "outcome": "precondition_drift"
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c007",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 1,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 1
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": [
+          {
+            "kind": "effect",
+            "id": "stg_018f47a6-7b2c-7c10-8f21-12345678c007"
+          }
+        ]
+      }
+    },
+    {
+      "id": "mcp_write_revised_and_applied",
+      "description": "An MCP write is staged, revised, approved, claimed, and applied.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:07:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a008",
+            "producer": "model",
+            "capability": "mcp.linear",
+            "op": "update_issue",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.classified",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:07:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a008",
+            "effect_class": "external_reversible",
+            "basis": "provider_annotation",
+            "confidence": 0.9
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:07:03Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c008",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a008",
+            "executor": "mcp",
+            "target_ref": "mcp-target://linear/issue_ENG_1",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c008/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "policy": "ask"
+          }
+        },
+        {
+          "event_type": "effect.revised",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:07:04Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c008",
+            "revision": 2,
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c008/revisions/2",
+            "proposal_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+            "author": "user"
+          }
+        },
+        {
+          "event_type": "effect.decision_recorded",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:07:05Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c008",
+            "revision": 2,
+            "decision": "approve",
+            "actor": "user",
+            "proposal_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          }
+        },
+        {
+          "event_type": "effect.claimed",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 6,
+          "created_at": "2026-07-24T00:07:06Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c008",
+            "revision": 2,
+            "claim_id": "claim_08",
+            "executor": "mcp",
+            "attempt": 1
+          }
+        },
+        {
+          "event_type": "effect.applied",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 7,
+          "created_at": "2026-07-24T00:07:07Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c008",
+            "revision": 2,
+            "outcome": "applied",
+            "receipt_ref": "receipt://effects/stg_018f47a6-7b2c-7c10-8f21-12345678c008/claim_08",
+            "result_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_mcp_write",
+          "sequence_no": 8,
+          "created_at": "2026-07-24T00:07:08Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a008",
+            "outcome": "staged"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c008",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a008",
+            "executor": "mcp",
+            "target_ref": "mcp-target://linear/issue_ENG_1",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c008/revisions/2",
+            "proposal_digest": "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+            "revision": 2,
+            "status": "applied",
+            "policy": "ask",
+            "decision": { "decision": "approve", "actor": "user" },
+            "claim_id": "claim_08",
+            "outcome": "applied"
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c008",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 1,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 1,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "claim_crash_then_reconcile",
+      "description": "A worker crashes after claiming an effect and reconciliation proves it applied.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_reconcile",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:08:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a009",
+            "producer": "model",
+            "capability": "mcp.github",
+            "op": "create_issue",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_reconcile",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:08:02Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c009",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a009",
+            "executor": "mcp",
+            "target_ref": "mcp-target://github/repo_01",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c009/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "policy": "ask"
+          }
+        },
+        {
+          "event_type": "effect.decision_recorded",
+          "run_id": "run_v21_reconcile",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:08:03Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c009",
+            "revision": 1,
+            "decision": "approve",
+            "actor": "user",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          }
+        },
+        {
+          "event_type": "effect.claimed",
+          "run_id": "run_v21_reconcile",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:08:04Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c009",
+            "revision": 1,
+            "claim_id": "claim_09",
+            "executor": "mcp",
+            "attempt": 1
+          }
+        },
+        {
+          "event_type": "effect.indeterminate",
+          "run_id": "run_v21_reconcile",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:08:05Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c009",
+            "revision": 1,
+            "claim_id": "claim_09",
+            "reason": "worker_lost_after_dispatch"
+          }
+        },
+        {
+          "event_type": "operation.failed",
+          "run_id": "run_v21_reconcile",
+          "sequence_no": 6,
+          "created_at": "2026-07-24T00:08:06Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a009",
+            "failure_code": "worker_lost_after_dispatch",
+            "retryable": false
+          }
+        },
+        {
+          "event_type": "effect.reconciled",
+          "run_id": "run_v21_reconcile",
+          "sequence_no": 7,
+          "created_at": "2026-07-24T00:08:07Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c009",
+            "revision": 1,
+            "claim_id": "claim_09",
+            "outcome": "already_applied",
+            "receipt_ref": "receipt://effects/stg_018f47a6-7b2c-7c10-8f21-12345678c009/claim_09"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c009",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a009",
+            "executor": "mcp",
+            "target_ref": "mcp-target://github/repo_01",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c009/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "revision": 1,
+            "status": "applied",
+            "policy": "ask",
+            "decision": { "decision": "approve", "actor": "user" },
+            "claim_id": "claim_09",
+            "outcome": "already_applied"
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c009",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 1
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 1,
+            "already_applied": 1,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "generalized_grant_gate",
+      "description": "A workspace grant gate parks and then resumes an operation.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_gate",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:09:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a010",
+            "producer": "user",
+            "capability": "workspace",
+            "op": "load_file",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "gate.opened.v2",
+          "run_id": "run_v21_gate",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:09:02Z",
+          "payload": {
+            "v": 1,
+            "gate_id": "gate_workspace_10",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a010",
+            "gate_kind": "grant",
+            "capability": "workspace",
+            "reason": "Select a workspace folder"
+          }
+        },
+        {
+          "event_type": "gate.resolved.v2",
+          "run_id": "run_v21_gate",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:09:03Z",
+          "payload": {
+            "v": 1,
+            "gate_id": "gate_workspace_10",
+            "decision": "granted",
+            "actor": "user"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_gate",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:09:04Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a010",
+            "outcome": "succeeded",
+            "result_ref": "activity://run_v21_gate/4"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [],
+        "canvas": [],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 1,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 0,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 1, "resolved": 1 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "subagent_authored_artifact",
+      "description": "A child operation authored by a subagent creates an artifact with parent attribution.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_subagent",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:10:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a011",
+            "producer": "model",
+            "capability": "delegation",
+            "op": "research",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_subagent",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:10:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a111",
+            "producer": "subagent",
+            "capability": "authoring",
+            "op": "write_report",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+            "parent_operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a011"
+          }
+        },
+        {
+          "event_type": "artifact.created",
+          "run_id": "run_v21_subagent",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:10:03Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b011",
+            "kind": "document",
+            "revision": 1,
+            "content_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b011/revisions/1",
+            "content_digest": "e6da0c7b7b495918d6f50f6bd0a146c359a7c3a7a8995b911ccecfe4cfd2e357",
+            "author": "subagent"
+          }
+        },
+        {
+          "event_type": "artifact.presentation_decided",
+          "run_id": "run_v21_subagent",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:10:04Z",
+          "payload": {
+            "v": 1,
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b011",
+            "decision": "canvas",
+            "basis": "artifact_intent",
+            "surface_id": "surface_report_11"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_subagent",
+          "sequence_no": 5,
+          "created_at": "2026-07-24T00:10:05Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a111",
+            "outcome": "succeeded",
+            "result_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b011/revisions/1"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_subagent",
+          "sequence_no": 6,
+          "created_at": "2026-07-24T00:10:06Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a011",
+            "outcome": "succeeded",
+            "result_ref": "operation://op_018f47a6-7b2c-7a10-8f21-12345678a111/result"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [
+          {
+            "artifact_id": "art_018f47a6-7b2c-7b10-8f21-12345678b011",
+            "kind": "document",
+            "revision": 1,
+            "content_ref": "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b011/revisions/1",
+            "content_digest": "e6da0c7b7b495918d6f50f6bd0a146c359a7c3a7a8995b911ccecfe4cfd2e357",
+            "author": "subagent",
+            "presentation": {
+              "decision": "canvas",
+              "basis": "artifact_intent",
+              "surface_id": "surface_report_11"
+            }
+          }
+        ],
+        "stages": [],
+        "canvas": [
+          {
+            "subject_type": "artifact",
+            "subject_id": "art_018f47a6-7b2c-7b10-8f21-12345678b011",
+            "surface_id": "surface_report_11"
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 2,
+            "succeeded": 2,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 0,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    },
+    {
+      "id": "destructive_effect_held",
+      "description": "A destructive effect stays staged even when the connector posture is allow_always.",
+      "policy_context": {
+        "configured_write_policy": "allow_always",
+        "effect_class": "external_destructive",
+        "resolved_effect_policy": "require"
+      },
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_destructive",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:11:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a012",
+            "producer": "model",
+            "capability": "mcp.github",
+            "op": "delete_repository",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "operation.classified",
+          "run_id": "run_v21_destructive",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:11:02Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a012",
+            "effect_class": "external_destructive",
+            "basis": "catalog",
+            "confidence": 1.0
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_destructive",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:11:03Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c012",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a012",
+            "executor": "mcp",
+            "target_ref": "mcp-target://github/repository_12",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c012/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "policy": "require"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_destructive",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:11:04Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a012",
+            "outcome": "staged"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c012",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a012",
+            "executor": "mcp",
+            "target_ref": "mcp-target://github/repository_12",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c012/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "revision": 1,
+            "status": "staged",
+            "policy": "require",
+            "decision": null,
+            "claim_id": null,
+            "outcome": null
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c012",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 1,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": [
+          {
+            "kind": "effect",
+            "id": "stg_018f47a6-7b2c-7c10-8f21-12345678c012"
+          }
+        ]
+      }
+    },
+    {
+      "id": "browser_effect_cancelled",
+      "description": "A browser form submission is staged and explicitly cancelled.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_browser_cancel",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:12:01Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a013",
+            "producer": "user",
+            "capability": "browser",
+            "op": "submit_form",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_browser_cancel",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:12:02Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c013",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a013",
+            "executor": "browser",
+            "target_ref": "browser-target://page_13/form_13",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c013/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "policy": "ask"
+          }
+        },
+        {
+          "event_type": "effect.decision_recorded",
+          "run_id": "run_v21_browser_cancel",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:12:03Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c013",
+            "revision": 1,
+            "decision": "cancel",
+            "actor": "user",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_browser_cancel",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:12:04Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a013",
+            "outcome": "cancelled"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c013",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a013",
+            "executor": "browser",
+            "target_ref": "browser-target://page_13/form_13",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c013/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "revision": 1,
+            "status": "cancelled",
+            "policy": "ask",
+            "decision": { "decision": "cancel", "actor": "user" },
+            "claim_id": null,
+            "outcome": null
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c013",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 0,
+            "blocked": 0,
+            "cancelled": 1,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": []
+      }
+    }
+  ]
+}

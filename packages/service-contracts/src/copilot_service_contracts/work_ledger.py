@@ -24,28 +24,6 @@ from importlib.resources.abc import Traversable
 # bump is a contract amendment to PRD-A1, never a local edit.
 LEDGER_PAYLOAD_VERSION: int = 1
 
-# The 15 ledger event types, in contract order. Mirrors ``events`` insertion
-# order in ``work_ledger.json``; a parity test pins this tuple, the pydantic
-# ``LedgerEventType`` StrEnum, and the api-types ``LEDGER_EVENT_TYPES`` tuple to
-# that order. Later waves append (never reorder) — SDR §12.
-LEDGER_EVENT_TYPES: tuple[str, ...] = (
-    "gate.opened",
-    "gate.resolved",
-    "action.classified",
-    "read.executed",
-    "surface.created",
-    "view.derived",
-    "view.preference",
-    "shape.requested",
-    "shape.resolved",
-    "write.staged",
-    "revision.added",
-    "decision.recorded",
-    "write.applied",
-    "usage.recorded",
-    "receipt.emitted",
-)
-
 
 class _ContractResource:
     """Where the JSON siblings live inside the installed package."""
@@ -59,6 +37,11 @@ class _ContractResource:
     # in a py-only test dir) so BOTH the ai-backend py fold and the chat-surface
     # ts fold consume the same referee.
     EXPECTED_RECEIPT_FILENAME: str = "work_ledger_expected_receipt.json"
+    # PRD-A1 v2.1: deterministic, independent journeys that exercise the
+    # operation/artifact/effect vocabulary without requiring a runtime.
+    GOLDEN_JOURNEYS_FILENAME: str = "work_ledger_v2_1_golden_journeys.json"
+    # Cross-language canonical-JSON, digest, identifier, and reference vectors.
+    CONTRACT_VECTORS_FILENAME: str = "work_ledger_v2_1_vectors.json"
 
 
 # Traversable handle to the contract file, resolvable whether the package is
@@ -81,6 +64,14 @@ LEDGER_EXPECTED_RECEIPT_PATH: Traversable = files(_ContractResource.PACKAGE).joi
     _ContractResource.EXPECTED_RECEIPT_FILENAME
 )
 
+LEDGER_GOLDEN_JOURNEYS_PATH: Traversable = files(_ContractResource.PACKAGE).joinpath(
+    _ContractResource.GOLDEN_JOURNEYS_FILENAME
+)
+
+LEDGER_CONTRACT_VECTORS_PATH: Traversable = files(_ContractResource.PACKAGE).joinpath(
+    _ContractResource.CONTRACT_VECTORS_FILENAME
+)
+
 
 def load_work_ledger_contract() -> dict[str, object]:
     """Return the Work Ledger vocabulary contract as a parsed dict."""
@@ -100,13 +91,39 @@ def load_ledger_expected_receipt() -> dict[str, object]:
     return json.loads(raw)
 
 
+def load_ledger_golden_journeys() -> dict[str, object]:
+    """Return the deterministic v2.1 operation/artifact/effect journeys."""
+    raw = LEDGER_GOLDEN_JOURNEYS_PATH.read_text(encoding="utf-8")
+    return json.loads(raw)
+
+
+def load_ledger_contract_vectors() -> dict[str, object]:
+    """Return shared canonicalization, digest, identifier, and ref vectors."""
+    raw = LEDGER_CONTRACT_VECTORS_PATH.read_text(encoding="utf-8")
+    return json.loads(raw)
+
+
+# Read the JSON once at import, then expose stable immutable values. This keeps
+# the contract file as the sole source of event values while avoiding dynamic
+# JSON parsing on request paths.
+_WORK_LEDGER_CONTRACT = load_work_ledger_contract()
+_EVENTS = _WORK_LEDGER_CONTRACT.get("events")
+if not isinstance(_EVENTS, dict):  # pragma: no cover - package corruption
+    raise RuntimeError("work_ledger.json must define an object-valued 'events' key")
+LEDGER_EVENT_TYPES: tuple[str, ...] = tuple(str(key) for key in _EVENTS)
+
+
 __all__ = [
     "LEDGER_PAYLOAD_VERSION",
     "LEDGER_EVENT_TYPES",
     "WORK_LEDGER_CONTRACT_PATH",
     "LEDGER_GOLDEN_EVENTS_PATH",
     "LEDGER_EXPECTED_RECEIPT_PATH",
+    "LEDGER_GOLDEN_JOURNEYS_PATH",
+    "LEDGER_CONTRACT_VECTORS_PATH",
     "load_work_ledger_contract",
     "load_ledger_golden_events",
     "load_ledger_expected_receipt",
+    "load_ledger_golden_journeys",
+    "load_ledger_contract_vectors",
 ]

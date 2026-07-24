@@ -12,14 +12,32 @@ import {
   parseLedgerId,
   type ActionClass,
   type ApplyResult,
+  type ArtifactAuthor,
+  type ArtifactKind,
+  type ArtifactPresentationPreference,
   type ClassificationBasis,
   type DecisionActor,
   type DecisionKind,
+  type EffectActor,
+  type EffectClass,
+  type EffectDecisionKind,
+  type EffectExecutorKind,
+  type EffectOutcome,
+  type EffectPolicy,
+  type EffectStageStatus,
   type GateAuthState,
+  type GateDecision,
+  type GateKind,
   type GateOutcome,
+  type OperationClassificationBasis,
+  type OperationOutcome,
+  type OperationResultKind,
+  type PresentationDecision,
+  type Producer,
   type RevisionAuthor,
   type ShapeOutcome,
   type SurfaceKind,
+  type SurfaceSubjectType,
   type UsagePurpose,
   type ViewBasis,
   type ViewKeep,
@@ -103,6 +121,127 @@ const ENUM_TUPLES = {
     "shaped",
     "no_fit",
   ] as const satisfies readonly ShapeOutcome[],
+  producer: [
+    "model",
+    "subagent",
+    "user",
+    "system",
+  ] as const satisfies readonly Producer[],
+  effect_class: [
+    "none",
+    "internal_reversible",
+    "external_reversible",
+    "external_destructive",
+    "unknown",
+  ] as const satisfies readonly EffectClass[],
+  operation_classification_basis: [
+    "descriptor",
+    "catalog",
+    "provider_annotation",
+    "policy_override",
+    "default",
+  ] as const satisfies readonly OperationClassificationBasis[],
+  operation_outcome: [
+    "succeeded",
+    "staged",
+    "blocked",
+    "cancelled",
+    "failed",
+  ] as const satisfies readonly OperationOutcome[],
+  operation_result_kind: [
+    "none",
+    "artifact",
+    "activity",
+    "artifact_and_activity",
+  ] as const satisfies readonly OperationResultKind[],
+  artifact_kind: [
+    "code",
+    "document",
+    "dataset",
+    "file",
+  ] as const satisfies readonly ArtifactKind[],
+  artifact_author: [
+    "model",
+    "subagent",
+    "user",
+    "system",
+    "import",
+  ] as const satisfies readonly ArtifactAuthor[],
+  artifact_presentation_preference: [
+    "auto",
+    "canvas",
+    "chat_card",
+    "none",
+  ] as const satisfies readonly ArtifactPresentationPreference[],
+  presentation_decision: [
+    "canvas",
+    "chat_card",
+    "activity_only",
+    "none",
+  ] as const satisfies readonly PresentationDecision[],
+  surface_subject_type: [
+    "artifact",
+    "stage",
+    "record",
+    "receipt",
+    "gate",
+  ] as const satisfies readonly SurfaceSubjectType[],
+  effect_policy: [
+    "auto",
+    "ask",
+    "require",
+    "block",
+  ] as const satisfies readonly EffectPolicy[],
+  effect_decision: [
+    "approve",
+    "reject",
+    "restore",
+    "cancel",
+  ] as const satisfies readonly EffectDecisionKind[],
+  effect_actor: [
+    "user",
+    "policy",
+    "system",
+  ] as const satisfies readonly EffectActor[],
+  effect_outcome: [
+    "applied",
+    "partial",
+    "failed",
+    "cancelled",
+    "indeterminate",
+    "already_applied",
+    "precondition_drift",
+  ] as const satisfies readonly EffectOutcome[],
+  effect_executor: [
+    "mcp",
+    "workspace",
+    "browser",
+    "sandbox",
+    "builtin",
+  ] as const satisfies readonly EffectExecutorKind[],
+  effect_stage_status: [
+    "staged",
+    "approved",
+    "rejected",
+    "cancelled",
+    "claimed",
+    "applied",
+    "partial",
+    "failed",
+    "indeterminate",
+    "precondition_drift",
+  ] as const satisfies readonly EffectStageStatus[],
+  gate_kind: [
+    "authentication",
+    "grant",
+    "capability",
+    "policy",
+  ] as const satisfies readonly GateKind[],
+  gate_decision: [
+    "granted",
+    "denied",
+    "cancelled",
+  ] as const satisfies readonly GateDecision[],
 } as const;
 
 interface GoldenEvent {
@@ -124,8 +263,8 @@ describe("LEDGER_EVENT_TYPES", () => {
     expect([...LEDGER_EVENT_TYPES]).toEqual(Object.keys(contract.events));
   });
 
-  it("covers all 15 event types", () => {
-    expect(LEDGER_EVENT_TYPES).toHaveLength(15);
+  it("covers all 32 event types", () => {
+    expect(LEDGER_EVENT_TYPES).toHaveLength(32);
   });
 
   it("isLedgerEventType accepts every listed type and rejects others", () => {

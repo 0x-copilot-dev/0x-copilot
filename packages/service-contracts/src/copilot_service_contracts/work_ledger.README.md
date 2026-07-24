@@ -1,11 +1,11 @@
 # Work Ledger Vocabulary — Single Source of Truth
 
 `work_ledger.json` is the canonical specification of the **Work Ledger** event
-vocabulary: the 14 typed events (SDR §5) an agent's work appends to the
+vocabulary: the typed events an agent's work appends to the
 runtime's per-run event log, from which canvas state, receipts, sources, and
 usage totals are pure _projections_. It is the frozen cross-PRD interface for
-the Generative Surfaces v2 effort (PRD-A1). Three mirrors derive from this one
-file:
+the Generative Surfaces v2/v2.1 effort (PRD-A1). Three mirrors derive from
+this one file:
 
 - **AI backend** —
   `services/ai-backend/src/agent_runtime/surfaces_v2/ledger_models.py`
@@ -14,11 +14,9 @@ file:
   against them (loaded via
   `copilot_service_contracts.work_ledger.load_work_ledger_contract`).
 - **Frontend / api-types** — `packages/api-types/src/ledger.ts` mirrors the
-  `SurfaceEventV2` union, the 14 payload interfaces, the value unions, the six
-  entity types, and the runtime guards (`isLedgerEventType`,
-  `isSurfaceEventV2`) + the ledger-id codec (`formatLedgerId`,
-  `parseLedgerId`). It imports this JSON directly by relative path so the same
-  on-disk file drives its guards.
+  `SurfaceEventV2` union, payload interfaces, value unions, entities, strict
+  writer guard, digest helpers, and codecs. It imports this JSON directly by
+  relative path so the same on-disk file drives its guards.
 
 Cross-language parity tests
 (`test_ledger_contract_parity.py`, `ledger.test.ts`) assert that the pydantic
@@ -35,7 +33,7 @@ and trivial loaders.
 
 ```jsonc
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "payload_version": 1, // every event payload carries `v: 1` from day one
   "ledger_id": {
     // user-visible id format `r<short>·<seq>` (e.g. `ra7f·042`)
@@ -59,17 +57,17 @@ and trivial loaders.
         "auth_state",
       ],
     },
-    // ... 14 events total, in contract order ...
+    // ... 32 events total, in append-only contract order ...
   },
 }
 ```
 
-### The 14 event types (contract order)
+### Event types (contract order)
 
-`gate.opened | gate.resolved | action.classified | read.executed |
-surface.created | view.derived | view.preference | shape.requested |
-write.staged | revision.added | decision.recorded | write.applied |
-usage.recorded | receipt.emitted`.
+The original 15 v2 values remain first and unchanged. v2.1 appends
+`operation.*`, `artifact.*`, `effect.*`, and generalized
+`gate.opened.v2`/`gate.resolved.v2` values. The `.v2` suffix prevents a
+payload-meaning change to legacy gate events.
 
 Order is part of the contract: the JSON `events` insertion order, the
 `LEDGER_EVENT_TYPES` tuple, the pydantic `LedgerEventType` StrEnum, and the ts
@@ -78,11 +76,11 @@ Order is part of the contract: the JSON `events` insertion order, the
 
 ### Required vs optional fields
 
-Each event's `required` array lists the fields present on every instance
-(always `v` first). Optional fields (SDR §5) are validated when present but not
-required: `gate.resolved.write_policy`; `view.derived.spec_ref` + `gen`;
-`write.staged.rows` + `agent_holds`; `write.applied.row_keys` +
-`connector_receipt_ref`; `usage.recorded.surface_id`.
+Each event declares both `required` (always `v` first) and `optional` keys.
+Python rejects extras through `RuntimeContract`; TypeScript's
+`isLedgerPayloadForWrite` rejects missing/extra fields, unknown closed-enum
+values, malformed v2.1 ids/digests/refs/scalars, and cross-reference
+mismatches. `isSurfaceEventV2` remains a replay-tolerant read guard.
 
 ### The `class` wire key
 
@@ -97,11 +95,42 @@ Both pin `actor` to the constant `"user"` (SDR §5) — modelled as
 `Literal["user"]` (py) / `"user"` (ts), **not** the `decision_actor` enum
 (which also permits `policy`). It deliberately has no `enums` entry.
 
-### Wire-shape tenancy rule
+### Ownership and wire-shape tenancy
 
-No `org_id` / `user_id` on any payload or entity — attribution rides the run
-envelope server-side (mirrors the `RuntimeEventDraft` vs `RuntimeEventEnvelope`
-split). A parity test asserts no payload model carries an org/user field.
+No event payload carries `org_id` / `user_id`; attribution rides the run
+envelope. Durable v2.1 `Artifact` entities explicitly carry ownership because
+they can outlive a run. Legacy per-run projection entities remain unchanged.
+
+## v2.1 identifiers, references, and digests
+
+`OperationIdCodec`, `ArtifactIdCodec`, and `EffectStageIdCodec` accept only
+prefixed canonical lowercase UUID4/UUID7 values. Reference codecs accept only
+the exact `artifact://`, `operation://`, `proposal://`, `receipt://effects`,
+and opaque `workspace-target://` shapes in the JSON. Physical host paths,
+traversal, extra segments, revision zero, and overlong values fail closed.
+
+Structured digests use UTF-8 canonical JSON (code-point-sorted object keys,
+dense order-preserving arrays, no insignificant whitespace, finite numbers)
+and lowercase SHA-256. `work_ledger_v2_1_vectors.json` is the Python/TypeScript
+referee.
+
+## Golden journeys
+
+`work_ledger_v2_1_golden_journeys.json` contains deterministic journeys for
+chat-only work, model/subagent artifacts, MCP reads and writes, workspace
+staging/commit/drift, crash reconciliation, generalized gates, and destructive
+holds. Every prefix must fold without throwing; both language tests compare
+final artifact/stage/canvas/receipt/pending snapshots to the same fixture.
+
+## Legacy read compatibility
+
+`project_legacy_ledger_for_read` (Python) and `projectLegacyLedgerForRead`
+(TypeScript) replay the old v2 fixture into one shared compatibility snapshot.
+They retain legacy call/stage identifiers and the information actually present
+in old payloads; they never invent v2.1 operation ids, digests, policy
+snapshots, or valid writer payloads. Legacy gates remain readable and are
+explicitly marked invalid as generalized-gate write inputs. The expected
+snapshot lives in `work_ledger_v2_1_vectors.json`.
 
 ## The ledger id — `r<short>·<seq>`
 
@@ -133,7 +162,7 @@ and both parity tests. When you change this file:
 
 - The pydantic payload models + validator (live in ai-backend `surfaces_v2/`).
 - The ts types + guards + codec (live in `packages/api-types/src/ledger.ts`).
-- Event **emission**, projections, receipts, HTTP routes (later waves — A1
-  emits nothing).
+- New v2.1 event **emission**, artifact persistence, projections, and routes
+  (later PRs — A1 adds contracts only).
 
 This file is a vocabulary contract only.
