@@ -1363,9 +1363,11 @@ async def test_parallel_dispatch_wraps_subagents_in_a_fleet() -> None:
     assert fleet_finished[0]["payload"]["fleet_id"] == fleet_id
 
 
-async def test_single_dispatch_does_not_wrap_in_a_fleet() -> None:
-    """A single subagent dispatch keeps the singleton path with no fleet
-    bookend events — fleet wrapping is only for parallel batches."""
+async def test_single_dispatch_wraps_in_a_fleet_of_one() -> None:
+    """WS-E — a lone subagent dispatch is wrapped as a fleet-of-one so it
+    still renders inline: SUBAGENT_FLEET_STARTED carries the single agent id,
+    the child SUBAGENT_STARTED is stamped with `parent_fleet_id`, and the
+    fleet closes with SUBAGENT_FLEET_FINISHED when the child completes."""
 
     producer = RecordingEventProducer()
     update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
@@ -1397,15 +1399,77 @@ async def test_single_dispatch_does_not_wrap_in_a_fleet() -> None:
         metadata={},
     )
 
-    event_types = [event["event_type"] for event in producer.events]
-    assert RuntimeApiEventType.SUBAGENT_FLEET_STARTED not in event_types
+    fleet_started = [
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_FLEET_STARTED
+    ]
+    assert len(fleet_started) == 1
+    fleet_payload = fleet_started[0]["payload"]
+    assert tuple(fleet_payload["agent_ids"]) == ("researcher",)
+    fleet_id = fleet_payload["fleet_id"]
+    assert isinstance(fleet_id, str) and fleet_id
+
     started_payloads = [
         event["payload"]
         for event in producer.events
         if event["event_type"] is RuntimeApiEventType.SUBAGENT_STARTED
     ]
     assert len(started_payloads) == 1
-    assert "parent_fleet_id" not in started_payloads[0]
+    assert started_payloads[0]["parent_fleet_id"] == fleet_id
+
+    # The lone child completes — the fleet closes.
+    completion_solo = {
+        "tools": {
+            "messages": [
+                {
+                    "type": "tool",
+                    "name": "task",
+                    "tool_call_id": "task_solo",
+                    "content": "Launch investigated.",
+                }
+            ]
+        }
+    }
+    await update_processor.append_subagent_lifecycle_events(
+        run=run,
+        namespace=namespace,
+        data=completion_solo,
+        metadata={},
+    )
+    completed_solo = next(
+        event["payload"]
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_COMPLETED
+        and event["payload"]["task_id"] == "task_solo"
+    )
+    assert completed_solo["parent_fleet_id"] == fleet_id
+    fleet_finished = [
+        event
+        for event in producer.events
+        if event["event_type"] is RuntimeApiEventType.SUBAGENT_FLEET_FINISHED
+    ]
+    assert len(fleet_finished) == 1
+    assert fleet_finished[0]["payload"]["fleet_id"] == fleet_id
+
+
+async def test_empty_dispatch_tick_emits_no_fleet() -> None:
+    """A tick with no task tool calls emits no fleet bookend at all."""
+
+    producer = RecordingEventProducer()
+    update_processor = StreamUpdateProcessor(event_producer=producer)  # type: ignore[arg-type]
+    run = TestFixtures.run_record()
+    namespace = StreamNamespace.from_value(())
+
+    await update_processor.append_subagent_lifecycle_events(
+        run=run,
+        namespace=namespace,
+        data={"model_request": {"messages": [{"tool_calls": []}]}},
+        metadata={},
+    )
+
+    event_types = [event["event_type"] for event in producer.events]
+    assert RuntimeApiEventType.SUBAGENT_FLEET_STARTED not in event_types
 
 
 async def test_subagent_completed_without_started_omits_duration_ms() -> None:

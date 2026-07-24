@@ -9,9 +9,13 @@ import type { ConversationId } from "@0x-copilot/api-types";
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
 import {
+  readRunFocusPanelCollapsed,
   readRunMode,
+  runFocusPanelCollapsedKey,
   runModeKey,
   useRunMode,
+  useRunPanelCollapsed,
+  writeRunFocusPanelCollapsed,
   writeRunMode,
   type RunMode,
 } from "./useRunMode";
@@ -257,5 +261,84 @@ describe("useRunMode — result stability", () => {
     // Type-level anchor: RunMode must be exactly "studio" | "focus".
     const modes: RunMode[] = ["studio", "focus"];
     expect(modes).toHaveLength(2);
+  });
+});
+
+// ============================================================
+// WS-F — useRunPanelCollapsed (Focus Run-details collapse)
+// ============================================================
+
+function renderPanelCollapsed(
+  store: KeyValueStore,
+  conversationId: ConversationId = CONV,
+) {
+  return renderHook(() => useRunPanelCollapsed({ conversationId }), {
+    wrapper: wrapperFor(store),
+  });
+}
+
+describe("readRunFocusPanelCollapsed / persistence helpers", () => {
+  it("defaults to expanded (false) when nothing is persisted", () => {
+    expect(readRunFocusPanelCollapsed(makeStore(), CONV)).toBe(false);
+  });
+
+  it('reads only the literal "1" as collapsed', () => {
+    const key = runFocusPanelCollapsedKey(CONV);
+    expect(readRunFocusPanelCollapsed(makeStore({ [key]: "1" }), CONV)).toBe(
+      true,
+    );
+    expect(readRunFocusPanelCollapsed(makeStore({ [key]: "0" }), CONV)).toBe(
+      false,
+    );
+    expect(readRunFocusPanelCollapsed(makeStore({ [key]: "yes" }), CONV)).toBe(
+      false,
+    );
+  });
+
+  it("round-trips through write/read", () => {
+    const store = makeStore();
+    writeRunFocusPanelCollapsed(store, CONV, true);
+    expect(readRunFocusPanelCollapsed(store, CONV)).toBe(true);
+    writeRunFocusPanelCollapsed(store, CONV, false);
+    expect(readRunFocusPanelCollapsed(store, CONV)).toBe(false);
+  });
+});
+
+describe("useRunPanelCollapsed", () => {
+  it("hydrates the persisted collapse flag on mount", () => {
+    const store = makeStore({ [runFocusPanelCollapsedKey(CONV)]: "1" });
+    const { result } = renderPanelCollapsed(store);
+    expect(result.current.collapsed).toBe(true);
+  });
+
+  it("persists an explicit setCollapsed to the KeyValueStore", () => {
+    const store = makeStore();
+    const { result } = renderPanelCollapsed(store);
+    act(() => result.current.setCollapsed(true));
+    expect(result.current.collapsed).toBe(true);
+    expect(store.get(runFocusPanelCollapsedKey(CONV))).toBe("1");
+  });
+
+  it("toggles collapsed↔expanded and persists", () => {
+    const store = makeStore();
+    const { result } = renderPanelCollapsed(store);
+    act(() => result.current.toggle());
+    expect(result.current.collapsed).toBe(true);
+    act(() => result.current.toggle());
+    expect(result.current.collapsed).toBe(false);
+    expect(store.get(runFocusPanelCollapsedKey(CONV))).toBe("0");
+  });
+
+  it("re-hydrates when the conversation changes (per-conversation state)", () => {
+    const other = "conv-2" as ConversationId;
+    const store = makeStore({ [runFocusPanelCollapsedKey(other)]: "1" });
+    const { result, rerender } = renderHook(
+      ({ id }: { id: ConversationId }) =>
+        useRunPanelCollapsed({ conversationId: id }),
+      { wrapper: wrapperFor(store), initialProps: { id: CONV } },
+    );
+    expect(result.current.collapsed).toBe(false);
+    rerender({ id: other });
+    expect(result.current.collapsed).toBe(true);
   });
 });

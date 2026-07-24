@@ -43,10 +43,21 @@ export const DEFAULT_RUN_MODE: RunMode = "studio";
 // namespace, one suffix per persisted preference.
 const RUN_MODE_KEY_PREFIX = "chats.thread.";
 const RUN_MODE_KEY_SUFFIX = ".run_mode";
+// Focus mode's Run-details panel collapsed state (WS-F). Same per-conversation
+// namespace + persistence discipline as the mode above — one suffix per
+// preference, "unknown ⇒ default (expanded)".
+const RUN_FOCUS_PANEL_KEY_SUFFIX = ".run_focus_panel_collapsed";
 
 /** Per-conversation KeyValueStore key for the persisted Run mode. */
 export function runModeKey(conversationId: ConversationId): string {
   return `${RUN_MODE_KEY_PREFIX}${conversationId}${RUN_MODE_KEY_SUFFIX}`;
+}
+
+/** Per-conversation KeyValueStore key for the Focus Run-details collapse flag. */
+export function runFocusPanelCollapsedKey(
+  conversationId: ConversationId,
+): string {
+  return `${RUN_MODE_KEY_PREFIX}${conversationId}${RUN_FOCUS_PANEL_KEY_SUFFIX}`;
 }
 
 /**
@@ -73,6 +84,34 @@ export function writeRunMode(
   mode: RunMode,
 ): void {
   store.set(runModeKey(conversationId), mode);
+}
+
+/**
+ * Default Focus Run-details panel state when nothing is persisted: EXPANDED
+ * (the design's default — the panel opens with the run).
+ */
+export const DEFAULT_RUN_FOCUS_PANEL_COLLAPSED = false;
+
+/**
+ * Read the persisted Focus Run-details collapse flag. Only the literal `"1"`
+ * resolves to collapsed; everything else — `"0"`, `null`, and any
+ * unrecognised value — resolves to the default (expanded). "Unknown ⇒
+ * default" so a value written by a newer client degrades safely.
+ */
+export function readRunFocusPanelCollapsed(
+  store: KeyValueStore,
+  conversationId: ConversationId,
+): boolean {
+  return store.get(runFocusPanelCollapsedKey(conversationId)) === "1";
+}
+
+/** Persist the Focus Run-details collapse flag for a conversation. */
+export function writeRunFocusPanelCollapsed(
+  store: KeyValueStore,
+  conversationId: ConversationId,
+  collapsed: boolean,
+): void {
+  store.set(runFocusPanelCollapsedKey(conversationId), collapsed ? "1" : "0");
 }
 
 export interface UseRunModeOptions {
@@ -199,4 +238,60 @@ export function useRunMode({
   }, [enabled, toggle]);
 
   return { mode, setMode, toggle };
+}
+
+// ============================================================
+// Focus Run-details panel collapse (WS-F)
+// ============================================================
+
+export interface UseRunPanelCollapsedOptions {
+  /** Conversation whose panel state is read/persisted (per-conversation key). */
+  readonly conversationId: ConversationId;
+}
+
+export interface UseRunPanelCollapsedResult {
+  /** True when the Focus Run-details panel is collapsed to the icon rail. */
+  readonly collapsed: boolean;
+  /** Set an explicit collapsed state; persists to the KeyValueStore. */
+  readonly setCollapsed: (collapsed: boolean) => void;
+  /** Flip collapsed↔expanded; persists to the KeyValueStore. */
+  readonly toggle: () => void;
+}
+
+/**
+ * KeyValueStore-backed owner of the Focus Run-details panel's collapsed state,
+ * mirroring `useRunMode`: the *value* lives here (per-conversation, persisted),
+ * `RunWorkspaceRail` stays a controlled presentation host. Re-hydrates when the
+ * conversation (or store) changes so each run restores its last panel state.
+ */
+export function useRunPanelCollapsed({
+  conversationId,
+}: UseRunPanelCollapsedOptions): UseRunPanelCollapsedResult {
+  const store = useKeyValueStore();
+  const [collapsed, setCollapsedState] = useState<boolean>(() =>
+    readRunFocusPanelCollapsed(store, conversationId),
+  );
+
+  useEffect(() => {
+    setCollapsedState(readRunFocusPanelCollapsed(store, conversationId));
+  }, [store, conversationId]);
+
+  const setCollapsed = useCallback(
+    (next: boolean): void => {
+      writeRunFocusPanelCollapsed(store, conversationId, next);
+      setCollapsedState(next);
+    },
+    [store, conversationId],
+  );
+
+  const collapsedRef = useRef(collapsed);
+  useEffect(() => {
+    collapsedRef.current = collapsed;
+  }, [collapsed]);
+
+  const toggle = useCallback((): void => {
+    setCollapsed(!collapsedRef.current);
+  }, [setCollapsed]);
+
+  return { collapsed, setCollapsed, toggle };
 }

@@ -113,6 +113,48 @@ describe("FleetSubagentRow", () => {
     ).not.toBeInTheDocument();
   });
 
+  it("shows the objective as the secondary line while running", () => {
+    const { container } = render(<FleetSubagentRow view={vm()} />);
+    const secondary = container.querySelector(".subagent-fleet-row__task");
+    expect(secondary).toHaveAttribute("data-role", "task");
+    expect(secondary).toHaveTextContent(
+      "Read positioning + GTM plan, extract claims",
+    );
+  });
+
+  it("surfaces the result as the secondary line once terminal", () => {
+    const { container } = render(
+      <FleetSubagentRow
+        view={vm({
+          status: "completed",
+          terminal: true,
+          durationMs: 9000,
+          finding: "Found 3 competitor claims to verify",
+        })}
+      />,
+    );
+    const secondary = container.querySelector(".subagent-fleet-row__task");
+    expect(secondary).toHaveAttribute("data-role", "result");
+    expect(secondary).toHaveTextContent("Found 3 competitor claims to verify");
+    // The running objective is replaced by the result, not shown twice.
+    expect(
+      screen.queryByText("Read positioning + GTM plan, extract claims"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("falls back to the objective when terminal with no result", () => {
+    const { container } = render(
+      <FleetSubagentRow
+        view={vm({ status: "completed", terminal: true, finding: null })}
+      />,
+    );
+    const secondary = container.querySelector(".subagent-fleet-row__task");
+    expect(secondary).toHaveAttribute("data-role", "task");
+    expect(secondary).toHaveTextContent(
+      "Read positioning + GTM plan, extract claims",
+    );
+  });
+
   it("renders paused chrome when status is paused", () => {
     const { container } = render(
       <FleetSubagentRow

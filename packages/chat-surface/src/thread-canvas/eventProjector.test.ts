@@ -9,6 +9,7 @@ import {
   project,
   projectAt,
   projectSurfaceTabs,
+  projectToolCalls,
   selectors,
 } from "./eventProjector";
 
@@ -489,5 +490,113 @@ describe("eventProjector — one projector, multiple consumers", () => {
     expect(selectors.surfaceFor(state, "sheet://x")).toBeDefined();
     // Approvals tab
     expect(selectors.pendingApprovals(state)).toHaveLength(1);
+  });
+});
+
+describe("eventProjector.projectToolCalls", () => {
+  it("returns an empty array for zero events", () => {
+    nextSeq = 0;
+    expect(projectToolCalls([])).toEqual([]);
+  });
+
+  it("collapses a started→result pair into one complete card with the right fields", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        display_title: "Search the web",
+        payload: {
+          call_id: "call-1",
+          tool_name: "web_search",
+          args: { query: "0xcopilot launch" },
+        },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "call-1",
+          tool_name: "web_search",
+          status: "completed",
+          output: { hits: 3 },
+          summary: "3 results",
+        },
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    const entry = entries[0];
+    expect(entry.id).toBe("call-1");
+    expect(entry.toolName).toBe("web_search");
+    expect(entry.title).toBe("Search the web");
+    expect(entry.status).toBe("complete");
+    expect(entry.args).toEqual({ query: "0xcopilot launch" });
+    expect(entry.result).toEqual({ hits: 3 });
+    expect(entry.summary).toBe("3 results");
+    // Anchor is the started frame's sequence + timestamp, not the result's.
+    expect(entry.sequenceNo).toBe(0);
+    expect(entry.createdAtMs).toBe(1700000000000);
+  });
+
+  it("keeps a started-only call in the running state", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "call-x", tool_name: "get_issue" },
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe("running");
+    expect(entries[0].result).toBeUndefined();
+  });
+
+  it("marks a failed result as error and carries the safe message", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "c9", tool_name: "send_email" },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "c9",
+          tool_name: "send_email",
+          status: "failed",
+          error_message: "connector timed out",
+        },
+      }),
+    ]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].status).toBe("error");
+    expect(entries[0].errorMessage).toBe("connector timed out");
+  });
+
+  it("excludes subagent tool calls (they belong to the subagent views)", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        subagent_id: "sub-7",
+        payload: { call_id: "sc-1", tool_name: "read_doc" },
+      }),
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "mc-1", tool_name: "web_search" },
+      }),
+    ]);
+    expect(entries.map((e) => e.id)).toEqual(["mc-1"]);
+  });
+
+  it("is idempotent on replay (deduplicates by event_id)", () => {
+    nextSeq = 0;
+    const started = makeEnvelope("tool_call_started", {
+      event_id: "evt-started",
+      payload: { call_id: "call-1", tool_name: "web_search" },
+    });
+    const result = makeEnvelope("tool_result", {
+      event_id: "evt-result",
+      payload: {
+        call_id: "call-1",
+        tool_name: "web_search",
+        status: "completed",
+      },
+    });
+    const once = projectToolCalls([started, result]);
+    const twice = projectToolCalls([started, result, started, result]);
+    expect(twice).toEqual(once);
+    expect(twice).toHaveLength(1);
   });
 });

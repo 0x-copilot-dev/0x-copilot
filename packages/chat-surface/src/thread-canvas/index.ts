@@ -40,6 +40,12 @@ export {
 export { projectSurfaceTabs, type SurfaceTab } from "./eventProjector";
 // === end PRD-04 (genui) ===
 
+// === Inline tool-call cards (Workstream D) ===
+// Pure selector over the single canonical run stream — the main-agent tool-call
+// cards for the transcript. No second subscription / projector (FR-3.3).
+export { projectToolCalls, type ToolCallEntry } from "./eventProjector";
+// === end inline tool-call cards ===
+
 // === PRD-B1 (Generative Surfaces v2) client ledger fold ===
 // Pure PEER of `projectSurfaceTabs` over the SAME `session.events` array — folds
 // the v2 Work Ledger (`surface.created`/`view.derived`) into named tabs. Its

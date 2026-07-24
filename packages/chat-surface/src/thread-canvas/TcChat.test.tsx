@@ -19,6 +19,7 @@ import type {
 } from "@0x-copilot/chat-transport";
 
 import type { FleetProjection } from "../subagents";
+import type { ToolCallEntry } from "./eventProjector";
 import type { McpAuthPort } from "../destinations/run/mcpAuthPort";
 import { TransportProvider } from "../providers/TransportProvider";
 import { SwimlaneScrubProvider } from "./SwimlaneScrubContext";
@@ -438,6 +439,42 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
     expect(within(card).getByText("Press scout")).toBeInTheDocument();
   });
 
+  it("renders a sensible single card for a fleet-of-one (WS-E)", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ messages: [] }),
+    );
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          fleets={[
+            fleet({
+              fleetId: "solo",
+              agentIds: ["researcher"],
+              total: 1,
+              running: 1,
+              done: 0,
+              children: [
+                subagentEntry({
+                  task_id: "task_solo",
+                  display_title: "Research",
+                }),
+              ],
+            }),
+          ]}
+        />,
+      ),
+    );
+    const card = await screen.findByTestId("tc-chat-fleet-solo");
+    // Singular headline — never the awkward "1 subagents in parallel".
+    expect(card).toHaveTextContent("Dispatched a subagent");
+    expect(card).not.toHaveTextContent("1 subagents");
+    // The lone child renders exactly one row.
+    expect(within(card).getByText("Research")).toBeInTheDocument();
+  });
+
   it("renders no fleet card when no fleet is projected (linear run)", async () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(
@@ -493,6 +530,125 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
     expect(
       screen.queryByTestId("tc-chat-fleet-fleet-1"),
     ).not.toBeInTheDocument();
+  });
+});
+
+// Workstream D — inline tool-call card fixtures + interleave.
+function toolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
+  return {
+    id: "call-1",
+    toolName: "web_search",
+    title: "Search the web",
+    status: "running",
+    sequenceNo: 3,
+    createdAtMs: 1716000030000,
+    ...overrides,
+  };
+}
+
+describe("TcChat — inline tool-call card (Workstream D)", () => {
+  it("renders a running tool card with a spinner in the transcript", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat conversationId="c" mode="studio" toolCalls={[toolCall()]} />,
+      ),
+    );
+    const card = await screen.findByTestId("tc-chat-tool-call-1");
+    expect(card).toHaveAttribute("data-tool-status", "running");
+    expect(within(card).getByText("web_search")).toBeInTheDocument();
+    expect(card.querySelector(".tc-tool-spinner")).not.toBeNull();
+  });
+
+  it("shows args + result behind the details expand for a completed call", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[
+            toolCall({
+              status: "complete",
+              args: { query: "aurora" },
+              result: { hits: 2 },
+            }),
+          ]}
+        />,
+      ),
+    );
+    const card = await screen.findByTestId("tc-chat-tool-call-1");
+    expect(card).toHaveAttribute("data-tool-status", "complete");
+    expect(screen.getByTestId("tc-chat-tool-call-1-args")).toHaveTextContent(
+      '"query": "aurora"',
+    );
+    expect(screen.getByTestId("tc-chat-tool-call-1-result")).toHaveTextContent(
+      '"hits": 2',
+    );
+  });
+
+  it("interleaves the tool card into the message stream by timestamp", async () => {
+    // Messages sit at t0 = …000000 and t1 = …060000; the tool ran at …030000
+    // and must land between them.
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[toolCall({ createdAtMs: 1716000030000 })]}
+        />,
+      ),
+    );
+    await screen.findByTestId("tc-chat-tool-call-1");
+    const list = screen.getByTestId("tc-chat-messages");
+    const ids = Array.from(list.querySelectorAll("li")).map((li) =>
+      li.getAttribute("data-testid"),
+    );
+    expect(ids).toEqual([
+      "tc-chat-message-m1",
+      "tc-chat-tool-call-1",
+      "tc-chat-message-m2",
+    ]);
+  });
+
+  it("renders the tool card in focus mode too (shared transcript)", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="focus"
+          messages={SAMPLE_MESSAGES}
+          toolCalls={[toolCall()]}
+        />,
+      ),
+    );
+    expect(
+      await screen.findByTestId("tc-chat-tool-call-1"),
+    ).toBeInTheDocument();
+  });
+
+  it("hides a tool call that ran after the scrub cut in ghost mode", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(
+        transport,
+        <SwimlaneScrubProvider value={{ scrubbedTo: 1716000030000 }}>
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            toolCalls={[toolCall({ createdAtMs: 1716000060000 })]}
+          />
+        </SwimlaneScrubProvider>,
+      ),
+    );
+    await screen.findByTestId("tc-chat-ghost-banner");
+    expect(screen.queryByTestId("tc-chat-tool-call-1")).not.toBeInTheDocument();
   });
 });
 

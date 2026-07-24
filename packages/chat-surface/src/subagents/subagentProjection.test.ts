@@ -144,6 +144,44 @@ describe("projectSubagents", () => {
     expect(out.subagents.get("solo")?.status).toBe("running");
   });
 
+  it("projects a lone subagent as a fleet-of-one, running → done with a result", () => {
+    nextSeq = 0;
+    const out = projectSubagents([
+      evt("subagent_fleet_started", {
+        source: "main_agent",
+        payload: { fleet_id: "solo-fleet", agent_ids: ["researcher"] },
+      }),
+      child("subagent_started", "t_solo", {
+        subagent_id: "researcher",
+        summary: "Investigate the launch",
+        payload: { parent_fleet_id: "solo-fleet" },
+      }),
+      child("subagent_completed", "t_solo", {
+        status: "completed",
+        summary: "Launch looks on track",
+        payload: { parent_fleet_id: "solo-fleet" },
+      }),
+      evt("subagent_fleet_finished", {
+        source: "main_agent",
+        payload: { fleet_id: "solo-fleet", elapsed: "8s" },
+      }),
+    ]);
+
+    expect(out.fleets).toHaveLength(1);
+    const fleet = out.fleets[0];
+    expect(fleet.fleetId).toBe("solo-fleet");
+    expect(fleet.total).toBe(1);
+    expect(fleet.running).toBe(0);
+    expect(fleet.done).toBe(1);
+    expect(fleet.finished).toBe(true);
+    expect(fleet.elapsed).toBe("8s");
+    expect(fleet.children).toHaveLength(1);
+    const child0 = fleet.children[0];
+    expect(child0.task_id).toBe("t_solo");
+    expect(child0.status).toBe("completed");
+    expect(child0.result_summary).toBe("Launch looks on track");
+  });
+
   it("marks a paused child not-running and clears it on resume", () => {
     nextSeq = 0;
     const paused = projectSubagents([

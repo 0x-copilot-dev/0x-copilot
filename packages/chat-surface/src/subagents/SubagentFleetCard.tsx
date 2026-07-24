@@ -43,12 +43,23 @@ export function SubagentFleetCard({
   children,
   onOpenWorkspace,
 }: SubagentFleetCardProps): ReactElement {
+  const solo = total === 1;
   const headStatus =
     running > 0
       ? `${running} running · ${done}/${total} done`
       : `${done}/${total} done`;
   const displayTitle =
-    total > 0 ? `Dispatched ${total} subagents in parallel` : title;
+    total > 0
+      ? solo
+        ? "Dispatched a subagent"
+        : `Dispatched ${total} subagents in parallel`
+      : title;
+  const subDefault = solo
+    ? "It'll keep working while we draft. Live status in the Agents tab."
+    : "They'll keep working while we draft. Live status in the Agents tab.";
+  const footText = solo
+    ? "This subagent runs in the background — keep chatting and it'll report back."
+    : "Subagents run in parallel — keep chatting and they'll report back.";
   return (
     <section
       className="aui-fleet-card"
@@ -62,16 +73,12 @@ export function SubagentFleetCard({
         <span className="aui-fleet-card__title">{displayTitle}</span>
         <span className="aui-fleet-card__count">{headStatus}</span>
       </header>
-      <p className="aui-fleet-card__sub">
-        {sub ??
-          "They'll keep working while we draft. Live status in the Agents tab."}
-      </p>
+      <p className="aui-fleet-card__sub">{sub ?? subDefault}</p>
       {children ? <div className="aui-fleet-card__rows">{children}</div> : null}
       <footer className="aui-fleet-card__foot">
         <span className="aui-fleet-card__foot-text">
           <FleetStackIcon />
-          Subagents run in parallel — keep chatting and they&apos;ll report
-          back.
+          {footText}
         </span>
         {onOpenWorkspace ? (
           <button

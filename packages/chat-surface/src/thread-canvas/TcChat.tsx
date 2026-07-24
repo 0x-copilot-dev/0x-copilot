@@ -39,6 +39,11 @@ import {
 // boundary so the card can branch a `mcp_auth` gate off the `/decision` path.
 import type { McpAuthPort } from "../destinations/run/mcpAuthPort";
 import type { ApprovalsQueueItem } from "../workspace";
+// Workstream D — the main-agent tool-call cards, projected off the SINGLE run
+// stream (`projectToolCalls(session.events)`) and interleaved into the
+// transcript at the point each tool ran. The projection is the single source of
+// truth; TcChat never re-derives tool state from raw events.
+import type { ToolCallEntry } from "./eventProjector";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 
 export type TcChatMode = "studio" | "focus";
@@ -209,6 +214,15 @@ export interface TcChatProps {
    */
   readonly fleets?: readonly FleetProjection[];
   /**
+   * Workstream D — main-agent tool-call cards projected off the run stream
+   * (`projectToolCalls(session.events)`). Each entry interleaves into the
+   * transcript at the point its tool ran (running spinner → done/error), in
+   * BOTH Studio and Focus (shared transcript). Empty/omitted in standalone
+   * usage — a run with no tool calls renders no card. Subagent tool calls are
+   * excluded upstream (they belong to the subagent views, FR-3.17).
+   */
+  readonly toolCalls?: readonly ToolCallEntry[];
+  /**
    * PR-3.10 — pending + recently-resolved approvals projected off the run
    * stream. Studio renders each pending one as the hoisted 4-zone
    * `ApprovalCard` (Approve ⌘↵ / Reject ⌘⌫) and each resolved one as an
@@ -250,6 +264,7 @@ export interface TcChatProps {
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
+const EMPTY_TOOL_CALLS: readonly ToolCallEntry[] = [];
 const EMPTY_APPROVALS: readonly TcChatApproval[] = [];
 const APPROVAL_REASSURANCE =
   "You're always asked before Copilot acts outside this chat.";
@@ -277,6 +292,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     portalTarget,
     markdownComponents,
     fleets = EMPTY_FLEETS,
+    toolCalls = EMPTY_TOOL_CALLS,
     approvals = EMPTY_APPROVALS,
     onApprove,
     onReject,
@@ -336,6 +352,9 @@ export function TcChat(props: TcChatProps): ReactElement {
   // PR-3.8 — fleet cards follow the same scrub cursor as messages so a
   // time-travelled conversation never shows a batch dispatched after the cut.
   const filteredFleets = filterFleetsByScrub(fleets, scrub.scrubbedTo);
+  // Workstream D — tool cards follow the SAME scrub cursor so a tool that ran
+  // after the cut never appears in a time-travelled transcript.
+  const filteredToolCalls = filterToolCallsByScrub(toolCalls, scrub.scrubbedTo);
 
   // Focus and Studio render the SAME transcript + composer (single-mount,
   // FR-3.9): the streamed reply, the ghost banner, and the composer are shared.
@@ -358,6 +377,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         state={state}
         messages={filteredMessages}
         fleets={filteredFleets}
+        toolCalls={filteredToolCalls}
         markdownComponents={markdownComponents}
       />
     </div>
@@ -610,11 +630,12 @@ interface MessageListBodyProps {
   readonly state: LoadState;
   readonly messages: ReadonlyArray<TcChatMessage>;
   readonly fleets: readonly FleetProjection[];
+  readonly toolCalls: readonly ToolCallEntry[];
   readonly markdownComponents?: MarkdownTextProps["components"];
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
-  const { state, messages, fleets, markdownComponents } = props;
+  const { state, messages, fleets, toolCalls, markdownComponents } = props;
   if (state.status === "loading" || state.status === "idle") {
     return (
       <div role="status" style={statusStyle} data-testid="tc-chat-loading">
@@ -629,23 +650,30 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
       </div>
     );
   }
-  if (messages.length === 0 && fleets.length === 0) {
+  if (messages.length === 0 && fleets.length === 0 && toolCalls.length === 0) {
     return (
       <div role="status" style={statusStyle} data-testid="tc-chat-empty">
         No messages yet.
       </div>
     );
   }
-  // PR-3.8 — messages (GET) and fleet cards (projected off the run stream) are
-  // interleaved by timestamp so a dispatched batch lands where it happened.
-  const items = mergeStream(messages, fleets);
+  // Messages (GET) plus the two projected-off-the-run-stream card families —
+  // fleet cards (PR-3.8) and tool-call cards (Workstream D) — are interleaved by
+  // timestamp so each lands where it happened in the flow.
+  const items = mergeStream(messages, fleets, toolCalls);
   return (
     <ul style={ulStyle}>
-      {items.map((item) =>
-        item.kind === "fleet"
-          ? renderFleetCard(item.fleet)
-          : renderMessage(item.message, markdownComponents),
-      )}
+      {/* Scoped spinner keyframes — one style node per mount is enough. */}
+      <style>{TOOL_SPINNER_CSS}</style>
+      {items.map((item) => {
+        if (item.kind === "fleet") {
+          return renderFleetCard(item.fleet);
+        }
+        if (item.kind === "tool") {
+          return renderToolCard(item.toolCall);
+        }
+        return renderMessage(item.message, markdownComponents);
+      })}
     </ul>
   );
 }
@@ -729,44 +757,153 @@ function renderFleetCard(fleet: FleetProjection): ReactNode {
   );
 }
 
+// Workstream D — the compact inline tool-call card. Renders in the transcript
+// flow at the point the tool ran: a mono tool name, a running spinner that
+// resolves to ✓ (done) or ! (failed), and the args/result behind a lightweight
+// `<details>` expand (blobs are truncated, never dumped whole). Pure
+// presentation over the injected `projectToolCalls` entry — the projection is
+// the single source of truth (FR-3.3). Rendered identically in Studio + Focus
+// (the transcript is shared).
+function renderToolCard(toolCall: ToolCallEntry): ReactNode {
+  const running = toolCall.status === "running";
+  const error = toolCall.status === "error";
+  const hasDetails =
+    toolCall.args !== undefined ||
+    toolCall.result !== undefined ||
+    toolCall.errorMessage !== undefined;
+  const statusLabel = running ? "running…" : error ? "failed" : "done";
+  return (
+    <li
+      key={`tool-${toolCall.id}`}
+      style={toolItemStyle}
+      data-testid={`tc-chat-tool-${toolCall.id}`}
+      data-tool-status={toolCall.status}
+    >
+      <div
+        style={toolCardStyle}
+        role="group"
+        aria-label={`Tool: ${toolCall.title}`}
+      >
+        <div style={toolHeadStyle}>
+          <span style={toolMarkStyle(toolCall.status)} aria-hidden="true">
+            {running ? (
+              <span className="tc-tool-spinner" style={toolSpinnerStyle} />
+            ) : error ? (
+              "!"
+            ) : (
+              "✓"
+            )}
+          </span>
+          <span style={toolNameStyle}>{toolCall.toolName}</span>
+          <span style={toolStatusStyle}>{statusLabel}</span>
+        </div>
+        {toolCall.summary !== undefined ? (
+          <p style={toolSummaryStyle}>{toolCall.summary}</p>
+        ) : null}
+        {hasDetails ? (
+          <details style={toolDetailsStyle}>
+            <summary style={toolDetailsSummaryStyle}>Details</summary>
+            {toolCall.args !== undefined ? (
+              <pre
+                style={toolPreStyle}
+                data-testid={`tc-chat-tool-${toolCall.id}-args`}
+              >
+                {formatBlob(toolCall.args)}
+              </pre>
+            ) : null}
+            {toolCall.result !== undefined ? (
+              <pre
+                style={toolPreStyle}
+                data-testid={`tc-chat-tool-${toolCall.id}-result`}
+              >
+                {formatBlob(toolCall.result)}
+              </pre>
+            ) : null}
+            {toolCall.errorMessage !== undefined ? (
+              <p style={toolErrorStyle}>{toolCall.errorMessage}</p>
+            ) : null}
+          </details>
+        ) : null}
+      </div>
+    </li>
+  );
+}
+
+// Keep blobs compact — pretty-print then hard-cap so a huge tool payload never
+// blows out the transcript. Non-serialisable values degrade to a placeholder.
+const TOOL_BLOB_CAP = 600;
+function formatBlob(value: Record<string, unknown>): string {
+  let text: string;
+  try {
+    text = JSON.stringify(value, null, 2);
+  } catch {
+    return "[unserialisable]";
+  }
+  if (text.length <= TOOL_BLOB_CAP) {
+    return text;
+  }
+  return `${text.slice(0, TOOL_BLOB_CAP)}…`;
+}
+
 type StreamItem =
   | { readonly kind: "message"; readonly message: TcChatMessage }
-  | { readonly kind: "fleet"; readonly fleet: FleetProjection };
+  | { readonly kind: "fleet"; readonly fleet: FleetProjection }
+  | { readonly kind: "tool"; readonly toolCall: ToolCallEntry };
+
+/** A non-message card anchored to a timestamp, for the interleave pass. */
+interface AnchoredItem {
+  readonly at: number;
+  readonly item: StreamItem;
+}
 
 /**
- * Interleave fleet cards into the message stream WITHOUT reordering messages:
- * messages keep their exact GET order (they may lack timestamps), and each
- * fleet slots in just before the first message dated after its dispatch. Any
- * fleet with no earlier-dated message anchor falls to the end.
+ * Interleave the projected card families (fleets, tool calls) into the message
+ * stream WITHOUT reordering messages: messages keep their exact GET order (they
+ * may lack timestamps), and each card slots in just before the first message
+ * dated after its anchor. Any card with no earlier-dated message anchor falls
+ * to the end. Fleets are pushed before tool calls, so cards sharing a timestamp
+ * keep a stable fleet-then-tool order (ES sort is stable).
  */
 function mergeStream(
   messages: ReadonlyArray<TcChatMessage>,
   fleets: readonly FleetProjection[],
+  toolCalls: readonly ToolCallEntry[],
 ): readonly StreamItem[] {
-  if (fleets.length === 0) {
+  if (fleets.length === 0 && toolCalls.length === 0) {
     return messages.map((message) => ({ kind: "message", message }));
   }
-  const pending = [...fleets].sort((a, b) => fleetAt(a) - fleetAt(b));
+  const anchored: AnchoredItem[] = [];
+  for (const fleet of fleets) {
+    anchored.push({ at: fleetAt(fleet), item: { kind: "fleet", fleet } });
+  }
+  for (const toolCall of toolCalls) {
+    anchored.push({ at: toolAt(toolCall), item: { kind: "tool", toolCall } });
+  }
+  anchored.sort((a, b) => a.at - b.at);
   const out: StreamItem[] = [];
-  let fi = 0;
+  let ai = 0;
   for (const message of messages) {
     const at =
       typeof message.created_at_ms === "number" ? message.created_at_ms : null;
-    while (fi < pending.length && at !== null && fleetAt(pending[fi]) <= at) {
-      out.push({ kind: "fleet", fleet: pending[fi] });
-      fi += 1;
+    while (ai < anchored.length && at !== null && anchored[ai].at <= at) {
+      out.push(anchored[ai].item);
+      ai += 1;
     }
     out.push({ kind: "message", message });
   }
-  while (fi < pending.length) {
-    out.push({ kind: "fleet", fleet: pending[fi] });
-    fi += 1;
+  while (ai < anchored.length) {
+    out.push(anchored[ai].item);
+    ai += 1;
   }
   return out;
 }
 
 function fleetAt(fleet: FleetProjection): number {
   return fleet.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+}
+
+function toolAt(toolCall: ToolCallEntry): number {
+  return toolCall.createdAtMs ?? Number.MAX_SAFE_INTEGER;
 }
 
 function filterFleetsByScrub(
@@ -778,6 +915,19 @@ function filterFleetsByScrub(
   }
   return fleets.filter(
     (fleet) => fleet.createdAtMs === null || fleet.createdAtMs <= scrubbedTo,
+  );
+}
+
+function filterToolCallsByScrub(
+  toolCalls: readonly ToolCallEntry[],
+  scrubbedTo: number | "now",
+): readonly ToolCallEntry[] {
+  if (scrubbedTo === "now") {
+    return toolCalls;
+  }
+  return toolCalls.filter(
+    (toolCall) =>
+      toolCall.createdAtMs === null || toolCall.createdAtMs <= scrubbedTo,
   );
 }
 
@@ -899,6 +1049,127 @@ const messageItemStyle = (role: TcChatMessage["role"]): CSSProperties => ({
 const fleetItemStyle: CSSProperties = {
   listStyle: "none",
   padding: 0,
+};
+
+// Workstream D — the inline tool-call card. Quiet v3 aesthetic: small, muted,
+// a mono tool label; design-system tokens only (no hardcoded hex). Scoped
+// spinner keyframes are injected once per mount (design-system owns no spinner
+// primitive) and gated off under reduce-motion.
+const TOOL_SPINNER_CSS = `
+@keyframes tc-tool-spin { to { transform: rotate(360deg); } }
+.tc-tool-spinner { animation: tc-tool-spin 0.7s linear infinite; }
+[data-reduce-motion="1"] .tc-tool-spinner,
+[data-reduce-motion="always"] .tc-tool-spinner { animation: none; }
+@media (prefers-reduced-motion: reduce) { .tc-tool-spinner { animation: none; } }
+`;
+
+const toolItemStyle: CSSProperties = {
+  listStyle: "none",
+  padding: 0,
+};
+
+const toolCardStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: 5,
+  padding: "7px 10px",
+  borderRadius: 8,
+  background: "var(--color-surface-muted)",
+  border: `1px solid ${PALETTE.cardBorder}`,
+  color: PALETTE.textHi,
+};
+
+const toolHeadStyle: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 8,
+  minWidth: 0,
+};
+
+const toolNameStyle: CSSProperties = {
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs)",
+  letterSpacing: "var(--tracking-caption)",
+  color: PALETTE.textHi,
+  overflow: "hidden",
+  textOverflow: "ellipsis",
+  whiteSpace: "nowrap",
+};
+
+const toolStatusStyle: CSSProperties = {
+  marginLeft: "auto",
+  flexShrink: 0,
+  fontSize: "var(--font-size-2xs)",
+  color: PALETTE.textLo,
+};
+
+const toolMarkStyle = (status: ToolCallEntry["status"]): CSSProperties => ({
+  display: "inline-flex",
+  alignItems: "center",
+  justifyContent: "center",
+  width: 14,
+  height: 14,
+  flexShrink: 0,
+  fontSize: "var(--font-size-2xs)",
+  fontWeight: 700,
+  lineHeight: 1,
+  color:
+    status === "error"
+      ? "var(--color-danger)"
+      : status === "complete"
+        ? "var(--color-success)"
+        : PALETTE.textLo,
+});
+
+const toolSpinnerStyle: CSSProperties = {
+  width: 10,
+  height: 10,
+  borderRadius: "50%",
+  border: "1.5px solid var(--color-border-strong)",
+  borderTopColor: "var(--color-accent)",
+  boxSizing: "border-box",
+};
+
+const toolSummaryStyle: CSSProperties = {
+  margin: 0,
+  fontSize: "var(--font-size-2xs)",
+  lineHeight: 1.5,
+  color: PALETTE.textLo,
+};
+
+const toolDetailsStyle: CSSProperties = {
+  margin: 0,
+};
+
+const toolDetailsSummaryStyle: CSSProperties = {
+  cursor: "pointer",
+  fontSize: "var(--font-size-2xs)",
+  color: PALETTE.textLo,
+  userSelect: "none",
+};
+
+const toolPreStyle: CSSProperties = {
+  margin: "6px 0 0",
+  padding: "6px 8px",
+  borderRadius: 6,
+  background: "var(--color-surface)",
+  border: `1px solid ${PALETTE.cardBorder}`,
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs)",
+  lineHeight: 1.45,
+  color: PALETTE.textLo,
+  overflowX: "auto",
+  maxHeight: 180,
+  overflowY: "auto",
+  whiteSpace: "pre-wrap",
+  wordBreak: "break-word",
+};
+
+const toolErrorStyle: CSSProperties = {
+  margin: "6px 0 0",
+  fontSize: "var(--font-size-2xs)",
+  lineHeight: 1.45,
+  color: "var(--color-danger)",
 };
 
 // Focus mode: the SAME transcript + composer as Studio, in a centered reading

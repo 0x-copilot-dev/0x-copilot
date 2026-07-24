@@ -95,6 +95,7 @@ import {
   TcStagedTableSurface,
   ViewUpgradeToast,
   projectSurfaceTabs,
+  projectToolCalls,
   projectLedger,
   ledgerTabsAsSurfaceTabs,
   surfaceIdForTabUri,
@@ -158,7 +159,7 @@ import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
-import { useRunMode } from "./useRunMode";
+import { useRunMode, useRunPanelCollapsed } from "./useRunMode";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -520,6 +521,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     enabled,
   });
   const { mode, setMode } = useRunMode({ conversationId, enabled });
+  // WS-F: the Focus Run-details panel's collapse state, persisted per
+  // conversation (mirrors `useRunMode`) so it restores on reopen.
+  const {
+    collapsed: focusPanelCollapsed,
+    setCollapsed: setFocusPanelCollapsed,
+  } = useRunPanelCollapsed({ conversationId });
   // Persisted, draggable width of the Studio workspace rail (global preference).
   const { width: railWidth, setWidth: setRailWidth } = useRailWidth();
 
@@ -839,6 +846,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // same `runId`, so all three views stay in parity.
   const subagentProjection = useMemo(
     () => projectSubagents(session.events),
+    [session.events],
+  );
+
+  // Workstream D: the main-agent tool-call cards, projected off the SAME
+  // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
+  // inline tool-call card in TcChat so a ~6s `web_search` shows a running→done
+  // card in the transcript flow instead of dropping the tool activity entirely.
+  // Subagent tool calls are excluded upstream (they belong to the Agents views).
+  const toolCalls = useMemo(
+    () => projectToolCalls(session.events),
     [session.events],
   );
 
@@ -1591,6 +1608,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // `[[N]]` / `[c<id>]` anchors against the provider above.
         markdownComponents={markdownComponents}
         fleets={subagentProjection.fleets}
+        // Workstream D: inline tool-call cards, interleaved into the transcript
+        // by the point each tool ran (running spinner → done/error).
+        toolCalls={toolCalls}
         // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
         approvals={chatApprovals}
         onApprove={handleApprove}
@@ -1634,6 +1654,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       ledgerSources={ledgerSourcesProjection}
       pendingV2={railPendingV2}
       focusApprovalsSignal={surfacesV2 ? approvalsFocusSignal : undefined}
+      // WS-F: Focus Run-details panel collapse — persisted per conversation.
+      panelCollapsed={focusPanelCollapsed}
+      onPanelCollapsedChange={setFocusPanelCollapsed}
     />
   );
 
