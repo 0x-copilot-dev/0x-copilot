@@ -257,11 +257,13 @@ class StreamUpdateProcessor:
 
         emitted = False
         start_payloads = self.task_tool_call_payloads(data)
-        # PR A2 — when the supervisor dispatches >1 task tool call in the
-        # same update tick, emit a SUBAGENT_FLEET_STARTED bookend first and
-        # stamp `parent_fleet_id` on each child SUBAGENT_STARTED payload so
-        # the FE renders one card. A single-dispatch tick keeps the
-        # singleton path (no fleet wrapper).
+        # PR A2 / WS-E — whenever the supervisor dispatches ≥1 task tool call
+        # in the same update tick, emit a SUBAGENT_FLEET_STARTED bookend first
+        # and stamp `parent_fleet_id` on each child SUBAGENT_STARTED payload so
+        # the FE always renders the subagent(s) inline as one fleet card —
+        # including a lone subagent (a "fleet of one"), which previously
+        # produced no inline representation at all. The `_fleet_title` helper
+        # renders a singular label for the one-agent case.
         fleet_id = await self._maybe_emit_fleet_started(
             run=run,
             payloads=start_payloads,
@@ -331,9 +333,13 @@ class StreamUpdateProcessor:
         payloads: tuple[JsonObject, ...],
         metadata: JsonObject,
     ) -> str | None:
-        """Emit SUBAGENT_FLEET_STARTED when this tick dispatches >1 subagent."""
+        """Emit SUBAGENT_FLEET_STARTED when this tick dispatches ≥1 subagent.
 
-        if len(payloads) < 2:
+        A lone subagent is wrapped as a fleet-of-one so it still renders
+        inline; only an empty tick (no task tool calls) skips the bookend.
+        """
+
+        if not payloads:
             return None
         agent_ids: list[str] = []
         task_ids: list[str] = []

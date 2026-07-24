@@ -56,6 +56,14 @@ export function FleetSubagentRow({
   const showStatusWord =
     view.terminal && (view.status === "failed" || view.status === "cancelled");
   const toggle = useCallback(() => setExpanded((s) => !s), []);
+  // The secondary line conveys the subagent's live status: while running it
+  // shows what it was asked to do (the objective); once terminal it surfaces
+  // the result it reported. Both come straight from the projected view model
+  // (SSOT) — the component invents nothing.
+  const secondaryLine =
+    view.terminal && view.finding !== null ? view.finding : view.task;
+  const secondaryRole =
+    view.terminal && view.finding !== null ? "result" : "task";
   const showJump =
     isPaused &&
     typeof view.pauseSourceEventId === "string" &&
@@ -90,9 +98,13 @@ export function FleetSubagentRow({
           <div className="subagent-fleet-row__name" title={view.name}>
             {view.name}
           </div>
-          {view.task ? (
-            <div className="subagent-fleet-row__task" title={view.task}>
-              {view.task}
+          {secondaryLine ? (
+            <div
+              className="subagent-fleet-row__task"
+              data-role={secondaryRole}
+              title={secondaryLine}
+            >
+              {secondaryLine}
             </div>
           ) : null}
         </div>

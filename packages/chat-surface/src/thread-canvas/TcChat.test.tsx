@@ -439,6 +439,42 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
     expect(within(card).getByText("Press scout")).toBeInTheDocument();
   });
 
+  it("renders a sensible single card for a fleet-of-one (WS-E)", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ messages: [] }),
+    );
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          fleets={[
+            fleet({
+              fleetId: "solo",
+              agentIds: ["researcher"],
+              total: 1,
+              running: 1,
+              done: 0,
+              children: [
+                subagentEntry({
+                  task_id: "task_solo",
+                  display_title: "Research",
+                }),
+              ],
+            }),
+          ]}
+        />,
+      ),
+    );
+    const card = await screen.findByTestId("tc-chat-fleet-solo");
+    // Singular headline — never the awkward "1 subagents in parallel".
+    expect(card).toHaveTextContent("Dispatched a subagent");
+    expect(card).not.toHaveTextContent("1 subagents");
+    // The lone child renders exactly one row.
+    expect(within(card).getByText("Research")).toBeInTheDocument();
+  });
+
   it("renders no fleet card when no fleet is projected (linear run)", async () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(
