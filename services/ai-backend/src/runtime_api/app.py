@@ -63,6 +63,10 @@ from agent_runtime.observability.http_logging import (
 )
 from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
+    LifecycleReferenceConformanceGate,
+    LifecycleReferenceSnapshotCollector,
+)
 from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
 from runtime_api.http.account_merge_routes import AccountMergeApiRouter
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
@@ -146,6 +150,10 @@ class RuntimeApiAppFactory:
             TelemetryBootstrap.instrument_httpx_clients()
         resolved_deployment = deployment or resolve_or_exit()
         log_profile(resolved_deployment)
+        # E1 D9 — static, closed owner/scheme inventory.  This deliberately
+        # has no storage or network dependency: a new lifecycle ref cannot
+        # reach a running API until it has one reviewed owner strategy.
+        LifecycleReferenceConformanceGate.validate_current()
 
         @asynccontextmanager
         async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -227,6 +235,15 @@ class RuntimeApiAppFactory:
         app.state.runtime_persistence = _ports.persistence
         app.state.runtime_event_store = _ports.event_store
         app.state.runtime_notifications = _notifications
+        # D9 — a route-free composition seam for future retention/export jobs.
+        # The collector refuses unbounded/fake stores instead of silently
+        # falling back to ``list_events_after``.
+        app.state.lifecycle_reference_snapshot_collector = (
+            LifecycleReferenceSnapshotCollector(
+                event_store=_ports.event_store,
+                persistence=_ports.persistence,
+            )
+        )
         app.state.run_coordinator = _run
         app.state.approval_coordinator = _approval
         app.state.conversation_coordinator = _conv

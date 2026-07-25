@@ -55,6 +55,9 @@ from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.ports import RuntimeEventIdempotencyConflict
+from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
+    LifecycleReferenceEventWindow,
+)
 from copilot_audit_chain import AuditChainSigner, ChainVerificationResult
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
@@ -2123,6 +2126,39 @@ class FileRuntimeApiStore:
             run_id=run_id, after_sequence=after_sequence
         )
         return tuple(RuntimeEventEnvelope.model_validate_json(doc) for doc in docs)
+
+    async def list_lifecycle_reference_events_window(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> LifecycleReferenceEventWindow:
+        """Read one bounded lifecycle page through the disposable catalog index."""
+
+        if limit < 1:
+            raise ValueError("lifecycle event window limit must be positive")
+        run = await self.get_run(org_id=org_id, run_id=run_id)
+        if run is None:
+            return LifecycleReferenceEventWindow(
+                events=(),
+                has_more=False,
+                next_after_sequence=None,
+            )
+        docs = self._index.list_events_after(
+            run_id=run_id,
+            after_sequence=after_sequence,
+            limit=limit + 1,
+        )
+        envelopes = tuple(RuntimeEventEnvelope.model_validate_json(doc) for doc in docs)
+        page = envelopes[:limit]
+        has_more = len(envelopes) > limit
+        return LifecycleReferenceEventWindow(
+            events=page,
+            has_more=has_more,
+            next_after_sequence=page[-1].sequence_no if has_more and page else None,
+        )
 
     async def get_event_by_id(
         self,

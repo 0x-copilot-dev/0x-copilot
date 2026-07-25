@@ -1213,14 +1213,34 @@ class LifecycleReferenceEnumerator:
         LedgerEventType.EFFECT_APPLIED: (LifecycleReferenceField.RECEIPT_REF,),
         LedgerEventType.EFFECT_RECONCILED: (LifecycleReferenceField.RECEIPT_REF,),
     }
-    _ENTITY_FIELDS: ClassVar[Mapping[str, LifecycleNodeKind]] = {
-        "artifact_id": LifecycleNodeKind.ARTIFACT,
-        "call_id": LifecycleNodeKind.CALL,
-        "gate_id": LifecycleNodeKind.GATE,
-        "operation_id": LifecycleNodeKind.OPERATION,
-        "parent_operation_id": LifecycleNodeKind.OPERATION,
-        "stage_id": LifecycleNodeKind.EFFECT_STAGE,
-        "surface_id": LifecycleNodeKind.SURFACE,
+    _ENTITY_FIELDS: ClassVar[
+        Mapping[str, tuple[LifecycleNodeKind, LifecycleReferenceOwner]]
+    ] = {
+        "artifact_id": (
+            LifecycleNodeKind.ARTIFACT,
+            LifecycleReferenceOwner.ARTIFACT_REPOSITORY,
+        ),
+        "call_id": (
+            LifecycleNodeKind.CALL,
+            LifecycleReferenceOwner.RUNTIME_EVENT_STORE,
+        ),
+        "gate_id": (LifecycleNodeKind.GATE, LifecycleReferenceOwner.OPERATION_GATEWAY),
+        "operation_id": (
+            LifecycleNodeKind.OPERATION,
+            LifecycleReferenceOwner.OPERATION_GATEWAY,
+        ),
+        "parent_operation_id": (
+            LifecycleNodeKind.OPERATION,
+            LifecycleReferenceOwner.OPERATION_GATEWAY,
+        ),
+        "stage_id": (
+            LifecycleNodeKind.EFFECT_STAGE,
+            LifecycleReferenceOwner.EFFECT_STAGE,
+        ),
+        "surface_id": (
+            LifecycleNodeKind.SURFACE,
+            LifecycleReferenceOwner.SURFACE_PRESENTATION,
+        ),
     }
 
     def __init__(self, registry: LifecycleReferenceRegistry | None = None) -> None:
@@ -1321,7 +1341,7 @@ class LifecycleReferenceEnumerator:
             nodes,
             kind=LifecycleNodeKind.RUN,
             identifier=run_id,
-            owner=None,
+            owner=LifecycleReferenceOwner.RUNTIME_EVENT_STORE,
         )
         seen_sequences: set[int] = set()
         for index, event in enumerate(events, start=1):
@@ -1459,7 +1479,7 @@ class LifecycleReferenceEnumerator:
         ],
         diagnostics: list[LifecycleReferenceDiagnostic],
     ) -> None:
-        for field_name, kind in self._ENTITY_FIELDS.items():
+        for field_name, (kind, owner) in self._ENTITY_FIELDS.items():
             value = payload.get(field_name)
             if value is None:
                 continue
@@ -1483,7 +1503,12 @@ class LifecycleReferenceEnumerator:
                     )
                 )
                 continue
-            entity_node = self._node(nodes, kind=kind, identifier=value, owner=None)
+            entity_node = self._node(
+                nodes,
+                kind=kind,
+                identifier=value,
+                owner=owner,
+            )
             self._edge(edges, event_node, entity_node, LifecycleEdgeKind.IDENTIFIES)
 
     def _add_surface_node(

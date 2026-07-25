@@ -592,6 +592,40 @@ class TestEventOrderingConformance(_CrudSeedMixin):
             base + 5,
         ]
 
+    async def test_lifecycle_reference_window_is_bounded_and_tenant_scoped(
+        self, store
+    ) -> None:
+        """D9 uses a separate bounded query, never the unbounded replay port."""
+
+        conversation, run = await self._new_run(store)
+        for index in range(3):
+            await self._append_event(
+                store,
+                run=run,
+                conversation_id=conversation.conversation_id,
+                summary=f"lifecycle-{index}",
+            )
+
+        page = await store.list_lifecycle_reference_events_window(
+            org_id=self._ORG,
+            run_id=run.run_id,
+            after_sequence=0,
+            limit=2,
+        )
+        assert len(page.events) == 2
+        assert page.has_more is True
+        assert page.next_after_sequence == page.events[-1].sequence_no
+
+        foreign = await store.list_lifecycle_reference_events_window(
+            org_id="org_other",
+            run_id=run.run_id,
+            after_sequence=0,
+            limit=2,
+        )
+        assert foreign.events == ()
+        assert foreign.has_more is False
+        assert foreign.next_after_sequence is None
+
 
 class TestIdempotencyConformance(_CrudSeedMixin):
     """Idempotent creates and last-write-wins upserts match across backends."""

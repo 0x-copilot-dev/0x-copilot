@@ -13,6 +13,9 @@ from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.ports import RuntimeEventIdempotencyConflict
+from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
+    LifecycleReferenceEventWindow,
+)
 from copilot_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
@@ -2746,6 +2749,43 @@ class InMemoryRuntimeApiStore:
             event
             for event in self.events_by_run.get(run_id, ())
             if event.sequence_no > after_sequence
+        )
+
+    async def list_lifecycle_reference_events_window(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> LifecycleReferenceEventWindow:
+        """Return a bounded tenant-scoped event page for lifecycle snapshots.
+
+        This is intentionally a separate capability from ``list_events_after``:
+        lifecycle/retention work must observe a truthful ``has_more`` bit and
+        must never accidentally materialize an unbounded run history.
+        """
+
+        if limit < 1:
+            raise ValueError("lifecycle event window limit must be positive")
+        run = await self.get_run(org_id=org_id, run_id=run_id)
+        if run is None:
+            return LifecycleReferenceEventWindow(
+                events=(),
+                has_more=False,
+                next_after_sequence=None,
+            )
+        candidates = tuple(
+            event
+            for event in self.events_by_run.get(run_id, ())
+            if event.sequence_no > after_sequence
+        )
+        page = candidates[:limit]
+        has_more = len(candidates) > limit
+        return LifecycleReferenceEventWindow(
+            events=page,
+            has_more=has_more,
+            next_after_sequence=page[-1].sequence_no if has_more and page else None,
         )
 
     async def get_event_by_id(

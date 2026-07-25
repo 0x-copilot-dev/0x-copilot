@@ -496,12 +496,24 @@ class CatalogIndex:
         params.append(limit)
         return [row[0] for row in self._c.execute(sql, params).fetchall()]
 
-    def list_events_after(self, *, run_id: str, after_sequence: int) -> list[str]:
-        rows = self._c.execute(
+    def list_events_after(
+        self,
+        *,
+        run_id: str,
+        after_sequence: int,
+        limit: int | None = None,
+    ) -> list[str]:
+        sql = (
             "SELECT doc FROM events WHERE run_id=? AND sequence_no>?"
-            " ORDER BY sequence_no ASC",
-            (run_id, after_sequence),
-        ).fetchall()
+            " ORDER BY sequence_no ASC"
+        )
+        params: list[object] = [run_id, after_sequence]
+        if limit is not None:
+            if limit < 1:
+                raise ValueError("event list limit must be positive")
+            sql += " LIMIT ?"
+            params.append(limit)
+        rows = self._c.execute(sql, params).fetchall()
         return [row[0] for row in rows]
 
     def latest_sequence(self, *, run_id: str) -> int:
