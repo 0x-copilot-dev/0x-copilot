@@ -222,6 +222,9 @@ class _PurgeOutcome:
 class FileRuntimeApiStore:
     """On-disk implementation of persistence, event store, and queue ports."""
 
+    # The file adapter persists append-only audit material across process restarts.
+    receipt_export_v2_available = True
+
     def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
         """Attach the gated repository lifecycle to existing store operations."""
 

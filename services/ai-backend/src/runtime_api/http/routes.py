@@ -66,6 +66,7 @@ from agent_runtime.surfaces_v2.receipt_export import (
     ReceiptExportBundle,
     ReceiptExportUnavailable,
 )
+from agent_runtime.surfaces_v2.receipt_export_v2 import ReceiptExportV2
 from runtime_api.schemas.budgets import (
     BudgetCreateRequest,
     BudgetListResponse,
@@ -521,6 +522,26 @@ class RuntimeApiRoutes:
         org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return await cls.cqs(request).export_run_receipt(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+            )
+        except ReceiptExportUnavailable as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+    @classmethod
+    async def export_run_receipt_v2(
+        cls,
+        request: Request,
+        run_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ReceiptExportV2:
+        """Return the authorized run's redacted, signed D7 receipt bundle."""
+
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        try:
+            return await cls.cqs(request).export_run_receipt_v2(
                 org_id=org_id,
                 user_id=user_id,
                 run_id=run_id,
@@ -1017,6 +1038,13 @@ class RuntimeApiRouter:
             methods=["GET"],
             response_model=ReceiptExportBundle,
             name=Keys.RouteName.EXPORT_RUN_RECEIPT,
+        )
+        router.add_api_route(
+            "/runs/{run_id}/receipt/export-v2",
+            RuntimeApiRoutes.export_run_receipt_v2,
+            methods=["GET"],
+            response_model=ReceiptExportV2,
+            name=Keys.RouteName.EXPORT_RUN_RECEIPT_V2,
         )
         # ``surface_id`` (a v1 surface_uri) carries slashes → the ``:path``
         # converter captures the whole tail before the literal action suffix.

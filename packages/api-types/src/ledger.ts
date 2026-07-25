@@ -1375,6 +1375,46 @@ export interface ReceiptExportBundle {
 }
 
 // ---------------------------------------------------------------------------
+// Receipt export v2 (PRD-E1 D7). Served by
+// `GET /v1/agent/runs/{run_id}/receipt/export-v2`. Unlike the legacy export,
+// these rows carry only a payload digest plus a narrow safe projection; raw
+// bodies, physical paths, opaque refs, cookies, tokens, and arguments are not
+// part of the public bundle.
+// ---------------------------------------------------------------------------
+
+export type ReceiptExportRefClassV2 =
+  | "none"
+  | "opaque_reference"
+  | "private_body_omitted";
+
+export interface ReceiptExportV2Row {
+  readonly sequence_no: number;
+  readonly event_type: LedgerEventType | "receipt.v2";
+  readonly created_at: string;
+  /** SHA-256 over the original canonical payload; the payload itself is absent. */
+  readonly payload_digest: string;
+  /** Narrow fold facts, or the terminal `RunReceiptV2` for `receipt.v2`. */
+  readonly safe_payload: RunReceiptV2 | Readonly<Record<string, unknown>>;
+  readonly ref_class: ReceiptExportRefClassV2;
+  readonly prev_hash: string | null;
+  readonly signature: string;
+  readonly key_id: string;
+  readonly key_version: number;
+}
+
+export interface ReceiptExportV2 {
+  readonly bundle_version: 2;
+  readonly run_id: string;
+  readonly generated_at: string;
+  readonly key_id: string;
+  readonly rows: readonly ReceiptExportV2Row[];
+  readonly row_count: number;
+  /** SHA-256 of the terminal `RunReceiptV2` safe payload. */
+  readonly receipt_digest: string;
+  readonly head_hash: string;
+}
+
+// ---------------------------------------------------------------------------
 // SurfaceStore fold projection (PRD-A3). Served by
 // `GET /v1/agent/runs/{run_id}/surfaces`. Distinct from the `Surface` ledger
 // entity above (2026-07-23 close-out; PRD-A3 Open questions item 1): these carry

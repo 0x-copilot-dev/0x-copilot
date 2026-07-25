@@ -90,6 +90,10 @@ from runtime_api.schemas import (
 class InMemoryRuntimeApiStore:
     """In-memory implementation of persistence, event store, and queue ports."""
 
+    # D7 receipts are durable audit artifacts. This test/dev adapter can model
+    # signatures but cannot truthfully claim a durable, exportable audit record.
+    receipt_export_v2_available = False
+
     def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
         """Attach the gated artifact hooks without changing legacy construction."""
 

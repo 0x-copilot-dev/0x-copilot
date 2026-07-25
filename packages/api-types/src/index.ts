@@ -162,6 +162,9 @@ export type {
   // PRD-E3 — tamper-evident receipt export bundle.
   ReceiptExportRow,
   ReceiptExportBundle,
+  ReceiptExportRefClassV2,
+  ReceiptExportV2Row,
+  ReceiptExportV2,
   SurfaceViewState,
   SurfaceSnapshot,
   RunSurfacesResponse,

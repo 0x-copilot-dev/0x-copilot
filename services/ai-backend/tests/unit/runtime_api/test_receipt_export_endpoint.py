@@ -24,6 +24,7 @@ from agent_runtime.surfaces_v2.receipt_export import (
     ReceiptExportUnavailable,
     ReceiptExportVerifier,
 )
+from agent_runtime.surfaces_v2.receipt_export_v2 import ReceiptExportV2Verifier
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
@@ -41,8 +42,12 @@ class ReceiptExportEndpointMixin:
     ORG = "org_e3"
     USER = "user_e3"
 
-    async def _setup(self):
-        store = InMemoryRuntimeApiStore()
+    async def _setup(
+        self,
+        *,
+        store_type: type[InMemoryRuntimeApiStore] = InMemoryRuntimeApiStore,
+    ):
+        store = store_type()
         settings = RuntimeSettings.load(
             environ={
                 "OPENAI_API_KEY": "sk-test",
@@ -118,6 +123,26 @@ class ReceiptExportEndpointMixin:
         store: InMemoryRuntimeApiStore, run: RunRecord, status: AgentRunStatus
     ) -> None:
         store.runs[run.run_id] = run.model_copy(update={"status": status})
+
+    async def _app_and_run(
+        self,
+        status: AgentRunStatus,
+        *,
+        store_type: type[InMemoryRuntimeApiStore] = InMemoryRuntimeApiStore,
+    ):
+        store, producer, _cqs, run = await self._setup(store_type=store_type)
+        await self._append_ledger(producer, run)
+        self._mark_terminal(store, run, status)
+        settings = RuntimeSettings.load(
+            environ={
+                "OPENAI_API_KEY": "sk-test",
+                "RUNTIME_DEFAULT_PROVIDER": "openai",
+                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+            }
+        )
+        ports = RuntimeAdapterFactory.from_store(store)
+        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
+        return app, run
 
 
 class TestExportRunReceiptService(ReceiptExportEndpointMixin):
@@ -206,21 +231,6 @@ class TestExportRunReceiptService(ReceiptExportEndpointMixin):
 
 
 class TestExportRunReceiptHttp(ReceiptExportEndpointMixin):
-    async def _app_and_run(self, status: AgentRunStatus):
-        store, producer, _cqs, run = await self._setup()
-        await self._append_ledger(producer, run)
-        self._mark_terminal(store, run, status)
-        settings = RuntimeSettings.load(
-            environ={
-                "OPENAI_API_KEY": "sk-test",
-                "RUNTIME_DEFAULT_PROVIDER": "openai",
-                "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            }
-        )
-        ports = RuntimeAdapterFactory.from_store(store)
-        app = RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
-        return app, run
-
     async def test_http_happy_path_returns_verifiable_bundle(
         self, runtime_context_admin: AgentRuntimeContext
     ) -> None:
@@ -278,5 +288,93 @@ class TestExportRunReceiptHttp(ReceiptExportEndpointMixin):
                 f"/v1/agent/runs/{run.run_id}/receipt/export",
                 params={"org_id": self.ORG, "user_id": self.USER},
             )
+        assert response.status_code == 503
+        assert "AUDIT_HMAC_KEY" not in response.text
+
+
+class _AuditExportCapableTestStore(InMemoryRuntimeApiStore):
+    """Test-only durable-capability stand-in for the HTTP contract path.
+
+    Production adapters opt in explicitly; the ordinary in-memory store stays
+    unavailable so it cannot claim audit exportability.
+    """
+
+    receipt_export_v2_available = True
+
+
+class TestExportRunReceiptV2Http(ReceiptExportEndpointMixin):
+    async def test_http_foreign_run_is_404_before_capability_disclosure(self) -> None:
+        app, run = await self._app_and_run(AgentRunStatus.COMPLETED)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
+                params={"org_id": self.ORG, "user_id": "foreign_user"},
+            )
+
+        assert response.status_code == 404
+        assert "export" not in response.text.lower()
+
+    async def test_http_in_memory_store_returns_safe_503(self) -> None:
+        app, run = await self._app_and_run(AgentRunStatus.COMPLETED)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
+                params={"org_id": self.ORG, "user_id": self.USER},
+            )
+
+        assert response.status_code == 503
+        assert "AUDIT_HMAC_KEY" not in response.text
+        assert "in_memory" not in response.text
+
+    async def test_http_returns_verifiable_v2_bundle_when_adapter_is_capable(
+        self,
+    ) -> None:
+        app, run = await self._app_and_run(
+            AgentRunStatus.COMPLETED,
+            store_type=_AuditExportCapableTestStore,
+        )
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
+                params={"org_id": self.ORG, "user_id": self.USER},
+            )
+
+        assert response.status_code == 200
+        body = response.json()
+        signer = AuditChainSigner.from_env(
+            environment_env_var="RUNTIME_ENVIRONMENT", fail_closed=False
+        )
+        assert body["bundle_version"] == 2
+        assert body["run_id"] == run.run_id
+        assert ReceiptExportV2Verifier(signer=signer).verify(body).ok is True
+
+    async def test_http_production_without_key_is_safe_503(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        app, run = await self._app_and_run(
+            AgentRunStatus.COMPLETED,
+            store_type=_AuditExportCapableTestStore,
+        )
+        monkeypatch.setenv("RUNTIME_ENVIRONMENT", "production")
+        monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://test"
+        ) as client:
+            response = await client.get(
+                f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
+                params={"org_id": self.ORG, "user_id": self.USER},
+            )
+
         assert response.status_code == 503
         assert "AUDIT_HMAC_KEY" not in response.text

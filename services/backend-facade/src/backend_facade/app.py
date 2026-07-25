@@ -1228,6 +1228,23 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/runs/{run_id}/receipt/export-v2")
+    async def run_receipt_export_v2(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        # D7 is deliberately additive: the v1 export stays stable while the
+        # facade stamps verified identity onto the safe, versioned v2 contract.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}/receipt/export-v2",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     # ``surface_id`` is a v1 surface_uri (``<archetype>://<server>/<tool>/<id>``)
     # — it carries slashes, so both routes use the ``:path`` converter (Starlette
     # captures the whole tail before the literal ``/regenerate`` suffix). The

@@ -138,6 +138,8 @@ class Keys:
         SHAPE_REQUEST = "shape_request"
         # Generative Surfaces v2 (PRD-E3) — the tamper-evident receipt export.
         EXPORT_RUN_RECEIPT = "export_run_receipt"
+        # PRD-E1 D7 — safe, versioned receipt export with offline verification.
+        EXPORT_RUN_RECEIPT_V2 = "export_run_receipt_v2"
         GET_MESSAGES = "get_messages"
         GET_CONVERSATION_RUNS = "get_conversation_runs"
         # PRD-05 — org-scoped, paginated, newest-first run history (one row per
