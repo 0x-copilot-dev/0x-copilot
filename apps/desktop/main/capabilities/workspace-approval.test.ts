@@ -35,6 +35,7 @@ const TAKE_INPUT = Object.freeze({
   stageId: SNAPSHOT.stageId,
   revision: SNAPSHOT.revision,
   decisionLedgerId: "ledger_c3_001",
+  changeSetDigest: "c".repeat(64),
   proposalDigest: SNAPSHOT.proposalDigest,
   targetDigest: SNAPSHOT.targetDigest,
 });
@@ -46,6 +47,7 @@ function receipt(
     stage_id: SNAPSHOT.stageId,
     revision: SNAPSHOT.revision,
     decision_ledger_id: TAKE_INPUT.decisionLedgerId,
+    change_set_digest: TAKE_INPUT.changeSetDigest,
     proposal_digest: SNAPSHOT.proposalDigest,
     target_digest: SNAPSHOT.targetDigest,
     decision: "approve",
@@ -260,6 +262,24 @@ describe("WorkspaceApprovalHost", () => {
 
     expect(await harness.permits.take(TAKE_INPUT)).toBeNull();
     expect(await harness.permits.take(TAKE_INPUT)).toBeNull();
+    expect(harness.authorizeWorkspaceCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("binds the reservation to the exact server-derived change-set digest", async () => {
+    const harness = hostHarness();
+    await harness.host.decide({ snapshot: SNAPSHOT, decision: "approve" });
+
+    expect(
+      await harness.permits.take({
+        ...TAKE_INPUT,
+        changeSetDigest: "f".repeat(64),
+      }),
+    ).toBeNull();
+    // A mismatch must not consume the real reservation; only C2's prepared
+    // binding can produce the exact digest and take the permit once.
+    expect(await harness.permits.take(TAKE_INPUT)).toBe(
+      "wcp_main_private_one_use",
+    );
     expect(harness.authorizeWorkspaceCommit).toHaveBeenCalledTimes(1);
   });
 

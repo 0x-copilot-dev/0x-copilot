@@ -142,10 +142,6 @@ class UnusedAuthority:
     pass
 
 
-class UnusedPermits:
-    pass
-
-
 def _handler(
     *,
     sessions: InMemoryWorkspaceHostSessionRegistry | None,
@@ -215,9 +211,8 @@ async def test_enforce_backend_reuses_real_a4_stager_and_has_no_host_writer() ->
                 ),
             ),
             base_read=EmptyReadBase(),
-            read_capability="wrc_main_issued",
+            host_session_ref=f"whs_{'x' * 43}",
             authority=UnusedAuthority(),  # type: ignore[arg-type]
-            permit_source=UnusedPermits(),  # type: ignore[arg-type]
         ),
     )
     handler, _store = _handler(sessions=sessions)

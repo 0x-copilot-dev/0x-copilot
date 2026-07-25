@@ -1134,7 +1134,7 @@ class RuntimeRunHandler:
             self.settings.execution.workspace_effect_mode
             is OperationGatewayMode.ENFORCE
         ):
-            return self._workspace_effect_backend_for_run(
+            return await self._workspace_effect_backend_for_run(
                 run=run,
                 mcp_gateway_services=mcp_gateway_services,
             )
@@ -1155,7 +1155,7 @@ class RuntimeRunHandler:
             snapshot_emitter=snapshot_emitter,
         ).workspace_backend()
 
-    def _workspace_effect_backend_for_run(
+    async def _workspace_effect_backend_for_run(
         self,
         *,
         run: RunRecord,
@@ -1200,8 +1200,15 @@ class RuntimeRunHandler:
             run_id=run.run_id,
             owner_ref=f"principal://users/{run.user_id}",
         )
-        session = self._workspace_host_sessions.get(scope)
-        if session is None:
+        from runtime_worker.workspace_effect_storage import (  # noqa: PLC0415
+            resolve_workspace_host_session,
+        )
+
+        session = await resolve_workspace_host_session(
+            self._workspace_host_sessions,
+            scope,
+        )
+        if session is None or session.base_read is None:
             return WorkspaceTombstoneBackend()
         overlay = WorkspaceOverlayService(
             run_id=run.run_id,

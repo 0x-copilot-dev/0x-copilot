@@ -149,9 +149,9 @@ let supervisorStopped = false;
 let browserSubsystem: ProductionDesktopBrowserSubsystem | null = null;
 let browserSubsystemStopped = false;
 let capabilityService: CapabilityService | null = null;
-// C3 decision reservations are main-only. A future private host-session
-// binding gives this typed source to A5; it is never installed in preload,
-// renderer globals, or the loopback broker.
+// C3 decision reservations are main-only. The private broker handoff consumes
+// this typed source after C2 prepare; it is never installed in preload or
+// renderer globals.
 let workspaceApprovalPermitSource: WorkspaceApprovalPermitSource | null = null;
 // AC9 — desktop connector OAuth service. Constructed once the facade is
 // reachable (WebTransport mode). Held at module scope so the deep-link
@@ -296,7 +296,10 @@ function startAutoUpdate(): void {
 // delivered OUT OF BAND to intended children (slice 2 wiring); it is never
 // logged and never crosses renderer IPC. A broker failure must never block
 // boot — the app is fully usable without host-folder grants.
-function startCapabilitySubsystem(): void {
+async function startCapabilitySubsystem(): Promise<{
+  readonly baseUrl: string;
+  readonly token: string;
+} | null> {
   try {
     // Plaintext is legitimate in dev AND whenever the user's secure-storage
     // policy is "file" (the default) — the gated safeStorage reports
@@ -331,17 +334,29 @@ function startCapabilitySubsystem(): void {
     workspaceApprovalPermitSource = capabilityService.workspaceWritesAvailable()
       ? new WorkspaceApprovalPermitSource(capabilityService)
       : null;
-    capabilityService
-      .startBroker()
-      .then((handle) => {
-        // baseUrl (host+port) is non-secret; the token is NOT logged.
-        console.log("[capability-broker] listening on", handle.baseUrl);
-      })
-      .catch((err: unknown) => {
-        console.error("[capability-broker] failed to start:", err);
-      });
+    if (workspaceApprovalPermitSource !== null) {
+      // D6/D7 private handoff: only Electron main retains the verified
+      // approval reservation. The broker exposes no renderer-visible permit
+      // or prepared reference and consumes the reservation after C2 prepare.
+      capabilityService.installWorkspaceApprovalPermitHandoff(
+        workspaceApprovalPermitSource,
+      );
+    }
+    const handle = await capabilityService.startBroker();
+    // baseUrl (host+port) is non-secret; the token is NOT logged.  The
+    // supervised ai-backend receives the credential only when C2's writable
+    // host authority is available, so an unavailable workspace fails closed.
+    console.log("[capability-broker] listening on", handle.baseUrl);
+    if (workspaceApprovalPermitSource === null) return null;
+    return {
+      baseUrl: handle.baseUrl,
+      token: capabilityService.brokerAuthToken(),
+    };
   } catch (err) {
+    workspaceApprovalPermitSource = null;
+    capabilityService = null;
     console.error("[capabilities] init failed (continuing without):", err);
+    return null;
   }
 }
 
@@ -511,9 +526,10 @@ if (hasSingleInstanceLock) {
     // RUNTIME_ENABLE_DESKTOP_FILESYSTEM, read ONCE at boot — when unset/false
     // the broker never binds and (because capabilityService stays null) the
     // capability IPC channels are never registered, so calls fail closed.
-    if (isDesktopFilesystemEnabled(process.env)) {
-      startCapabilitySubsystem();
-    } else {
+    const workspaceBroker = isDesktopFilesystemEnabled(process.env)
+      ? await startCapabilitySubsystem()
+      : null;
+    if (!isDesktopFilesystemEnabled(process.env)) {
       console.log(
         "[capabilities] desktop filesystem disabled " +
           "(set RUNTIME_ENABLE_DESKTOP_FILESYSTEM=1 to enable)",
@@ -532,6 +548,15 @@ if (hasSingleInstanceLock) {
       );
       console.log(`[auth] google oauth client source: ${googleOAuth.applied}`);
       const supervisedEnv: NodeJS.ProcessEnv = { ...process.env };
+      if (workspaceBroker !== null) {
+        supervisedEnv.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "true";
+        supervisedEnv.DESKTOP_WORKSPACE_BROKER_URL = workspaceBroker.baseUrl;
+        supervisedEnv.DESKTOP_WORKSPACE_BROKER_TOKEN = workspaceBroker.token;
+      } else {
+        supervisedEnv.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "false";
+        delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_URL;
+        delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_TOKEN;
+      }
       if (isDesktopBrowserEnabled(process.env)) {
         try {
           const runtimePaths = resolveRuntimePaths({

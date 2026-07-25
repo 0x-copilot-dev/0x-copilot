@@ -10,6 +10,7 @@ import {
   type WorkspaceRunFacts,
   type WorkspaceWriteAttestation,
 } from "./workspace-authority";
+import type { WorkspaceApprovalPermitHandoff } from "./workspace-approval";
 
 // Application service that composes the folder picker, the encrypted grant
 // store, and the loopback broker (AC5 slice 1). This is the object the IPC
@@ -151,5 +152,16 @@ export class CapabilityService {
   /** Main-only launch gate for the C3 approval host. */
   workspaceWritesAvailable(): boolean {
     return this.#workspaceAuthority.writableAvailable();
+  }
+
+  /**
+   * Main-only C3 wiring. The handoff source is never represented in an IPC
+   * type, renderer grant, or broker response; it is retained solely by the
+   * authenticated local broker while consuming a prepared effect.
+   */
+  installWorkspaceApprovalPermitHandoff(
+    handoff: WorkspaceApprovalPermitHandoff,
+  ): void {
+    this.#broker.installWorkspaceApprovalPermitHandoff(handoff);
   }
 }

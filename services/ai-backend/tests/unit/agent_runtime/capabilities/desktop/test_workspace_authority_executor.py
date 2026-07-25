@@ -12,7 +12,6 @@ from agent_runtime.capabilities.desktop.broker_client import (
 from agent_runtime.capabilities.desktop.workspace_authority import (
     WorkspaceAuthorityPort,
     WorkspaceChangeEntry,
-    WorkspaceCommitPermitSource,
     WorkspaceEffectExecutor,
     WorkspacePrecondition,
     WorkspacePrepareCommand,
@@ -77,7 +76,7 @@ def material() -> WorkspaceProposalMaterial:
 @dataclass
 class Authority(WorkspaceAuthorityPort):
     uploaded: list[tuple[str, str]] = field(default_factory=list)
-    committed: list[tuple[str, str]] = field(default_factory=list)
+    committed: list[str] = field(default_factory=list)
     aborted: list[str] = field(default_factory=list)
 
     async def prepare(
@@ -93,10 +92,8 @@ class Authority(WorkspaceAuthorityPort):
     async def upload(self, prepared_ref: str, content_ref: str) -> None:
         self.uploaded.append((prepared_ref, content_ref))
 
-    async def commit(
-        self, prepared_ref: str, commit_permit: str
-    ) -> WorkspaceCommitResult:
-        self.committed.append((prepared_ref, commit_permit))
+    async def commit(self, prepared_ref: str) -> WorkspaceCommitResult:
+        self.committed.append(prepared_ref)
         return WorkspaceCommitResult(
             outcome="applied",
             receipt_ref="workspace-receipt://private",
@@ -119,36 +116,19 @@ class Resolver(WorkspaceProposalResolver):
         return WorkspacePrepareCommand(
             scope=scope,
             request=request,
-            read_capability="wrc_main_issued",
+            host_session_ref=f"whs_{'x' * 43}",
             material=material(),
         )
 
 
-class Permits(WorkspaceCommitPermitSource):
-    def __init__(self, permit: str | None) -> None:
-        self.permit = permit
-        self.calls = 0
-
-    async def take(
-        self,
-        *,
-        scope: EffectExecutionScope,
-        request: EffectExecutionRequest,
-        prepared_ref: str,
-    ) -> str | None:
-        del scope, request, prepared_ref
-        self.calls += 1
-        return self.permit
-
-
 class TestWorkspaceEffectExecutor:
-    async def test_no_main_issued_permit_means_no_commit(self) -> None:
+    async def test_authority_denial_means_no_commit(self) -> None:
         authority = Authority()
+        authority.commit = _denied_commit  # type: ignore[method-assign]
         executor = WorkspaceEffectExecutor(
             scope=scope(),
             authority=authority,
             proposal_resolver=Resolver(),
-            permit_source=Permits(None),
         )
         prepared = await executor.prepare(request())
         result = await executor.apply(prepared)
@@ -158,7 +138,7 @@ class TestWorkspaceEffectExecutor:
         assert result.outcome.value == "failed"
         assert authority.committed == []
 
-    async def test_exact_main_issued_permit_commits_the_prepared_effect_once(
+    async def test_private_authority_commits_the_prepared_effect_once(
         self,
     ) -> None:
         authority = Authority()
@@ -166,7 +146,6 @@ class TestWorkspaceEffectExecutor:
             scope=scope(),
             authority=authority,
             proposal_resolver=Resolver(),
-            permit_source=Permits("wcp_from_electron_main"),
         )
         prepared = await executor.prepare(request())
         result = await executor.apply(prepared)
@@ -174,9 +153,7 @@ class TestWorkspaceEffectExecutor:
         assert (
             result.receipt_ref is None
         )  # local native receipt never enters A5 ledger data.
-        assert authority.committed == [
-            ("workspace-prepared://prepared_1", "wcp_from_electron_main")
-        ]
+        assert authority.committed == ["workspace-prepared://prepared_1"]
 
     async def test_abort_releases_only_the_prepared_reservation(self) -> None:
         authority = Authority()
@@ -184,9 +161,16 @@ class TestWorkspaceEffectExecutor:
             scope=scope(),
             authority=authority,
             proposal_resolver=Resolver(),
-            permit_source=Permits("wcp_from_electron_main"),
         )
         prepared = await executor.prepare(request())
         await executor.abort(prepared)
         assert authority.aborted == ["workspace-prepared://prepared_1"]
         assert authority.committed == []
+
+
+async def _denied_commit(_prepared_ref: str) -> WorkspaceCommitResult:
+    return WorkspaceCommitResult(
+        outcome="failed",
+        receipt_ref="workspace-receipt://private",
+        safe_message="Workspace approval is unavailable.",
+    )

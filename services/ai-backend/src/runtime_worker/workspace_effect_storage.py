@@ -9,17 +9,18 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import AsyncIterator
+import os
+from collections.abc import AsyncIterator, Awaitable
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Protocol, runtime_checkable
+from typing import Mapping, Protocol, runtime_checkable
 
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
 from agent_runtime.capabilities.desktop.workspace_authority import (
+    BrokerWorkspaceAuthority,
     WorkspaceAuthorityContractError,
     WorkspaceAuthorityPort,
     WorkspaceChangeEntry,
-    WorkspaceCommitPermitSource,
     WorkspaceEffectExecutor,
     WorkspacePrecondition,
     WorkspacePrepareCommand,
@@ -27,6 +28,9 @@ from agent_runtime.capabilities.desktop.workspace_authority import (
     WorkspaceProposalResolver,
 )
 from agent_runtime.capabilities.desktop.broker_client import (
+    BrokerClientConfig,
+    BrokerError,
+    DesktopBrokerClient,
     WorkspaceCommitResult,
     WorkspacePreparedEffect,
 )
@@ -62,6 +66,10 @@ _MAX_MATERIAL_BYTES = 2 * 1024 * 1024
 _MATERIAL_PREFIX = "workspace-material://sha256/"
 _TARGET_PREFIX = "workspace-target://sha256/"
 _PRECONDITION_PREFIX = "workspace-precondition://sha256/"
+_DESKTOP_WORKSPACE_ENABLED = "RUNTIME_ENABLE_DESKTOP_WORKSPACE"
+_DESKTOP_WORKSPACE_BROKER_URL = "DESKTOP_WORKSPACE_BROKER_URL"
+_DESKTOP_WORKSPACE_BROKER_TOKEN = "DESKTOP_WORKSPACE_BROKER_TOKEN"
+_DESKTOP_WORKSPACE_BROKER_PROTOCOL = "DESKTOP_WORKSPACE_BROKER_PROTOCOL"
 
 
 @dataclass(frozen=True)
@@ -69,14 +77,13 @@ class WorkspaceHostSession:
     """Main-established, run-scoped C2 authority; AI-backend cannot mint it."""
 
     grants: tuple[WorkspaceGrantBinding, ...]
-    base_read: WorkspaceBaseReadPort
-    read_capability: str
+    base_read: WorkspaceBaseReadPort | None
+    host_session_ref: str
     authority: WorkspaceAuthorityPort
-    permit_source: WorkspaceCommitPermitSource
 
     def __post_init__(self) -> None:
-        if not self.read_capability:
-            raise ValueError("workspace host session requires a read capability")
+        if not self.host_session_ref.startswith("whs_"):
+            raise ValueError("workspace host session requires an opaque reference")
         names = [grant.mount_name for grant in self.grants]
         if len(names) != len(set(names)):
             raise ValueError("workspace host session mounts must be unique")
@@ -86,7 +93,9 @@ class WorkspaceHostSession:
 class WorkspaceHostSessionRegistryPort(Protocol):
     """Read an already-established host session for a verified run scope."""
 
-    def get(self, scope: EffectExecutionScope) -> WorkspaceHostSession | None:
+    def get(
+        self, scope: EffectExecutionScope
+    ) -> WorkspaceHostSession | None | Awaitable[WorkspaceHostSession | None]:
         """Return current authority, or ``None`` when web/offline/revoked."""
 
 
@@ -113,6 +122,121 @@ class InMemoryWorkspaceHostSessionRegistry:
     @staticmethod
     def _key(scope: EffectExecutionScope) -> tuple[str, str, str]:
         return scope.org_id, scope.user_id, scope.run_id
+
+
+async def resolve_workspace_host_session(
+    registry: WorkspaceHostSessionRegistryPort,
+    scope: EffectExecutionScope,
+) -> WorkspaceHostSession | None:
+    """Resolve sync test registries and the authenticated async desktop registry."""
+
+    resolved = registry.get(scope)
+    if isinstance(resolved, Awaitable):
+        return await resolved
+    return resolved
+
+
+class DesktopWorkspaceHostSessionRegistry:
+    """Authenticated worker-side bootstrap for the private desktop host session.
+
+    The broker response carries only a run-bound opaque ``whs_*`` reference and
+    path-free grants.  It never conveys a read capability, device identity,
+    prepared reference, or raw commit permit to the AI backend.
+    """
+
+    def __init__(
+        self,
+        *,
+        client: DesktopBrokerClient,
+        blobs: ArtifactBlobStorePort,
+        references: ArtifactReferenceRepositoryPort,
+    ) -> None:
+        self._client = client
+        self._blobs = blobs
+        self._references = references
+        self._sessions: dict[
+            tuple[str, str, str], tuple[int, WorkspaceHostSession]
+        ] = {}
+
+    async def get(self, scope: EffectExecutionScope) -> WorkspaceHostSession | None:
+        key = InMemoryWorkspaceHostSessionRegistry._key(scope)
+        now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+        cached = self._sessions.get(key)
+        if cached is not None and cached[0] > now_ms:
+            return cached[1]
+        self._sessions.pop(key, None)
+        try:
+            binding = await self._client.workspace_host_session(
+                run_id=scope.run_id,
+                user_id=scope.user_id,
+            )
+        except BrokerError:
+            return None
+        grants = tuple(
+            WorkspaceGrantBinding(
+                mount_name=grant.mount,
+                grant_id=grant.grant_id,
+                mount_label=grant.label or grant.mount,
+                mode=grant.mode,
+                status=grant.status,
+            )
+            for grant in binding.grants
+            if grant.status == "active"
+        )
+        if not grants:
+            return None
+        proposals = RuntimeWorkspaceProposalStore(
+            blobs=self._blobs,
+            references=self._references,
+            scope=scope,
+        )
+        session = WorkspaceHostSession(
+            grants=grants,
+            base_read=None,
+            host_session_ref=binding.host_session_ref,
+            authority=BrokerWorkspaceAuthority(
+                client=self._client,
+                content=proposals,
+            ),
+        )
+        self._sessions[key] = (binding.expires_at, session)
+        return session
+
+
+def desktop_workspace_host_sessions_from_env(
+    *,
+    blobs: ArtifactBlobStorePort,
+    references: ArtifactReferenceRepositoryPort,
+    env: Mapping[str, str] | None = None,
+) -> DesktopWorkspaceHostSessionRegistry | None:
+    """Build the worker's private host-session registry, or fail closed.
+
+    This intentionally reads a dedicated desktop-workspace credential rather
+    than the older general-purpose filesystem broker configuration. The
+    resulting registry can bootstrap only ``whs_*`` references; it never
+    constructs a model-facing filesystem adapter or exposes a C2 permit.
+    """
+
+    source = os.environ if env is None else env
+    enabled = source.get(_DESKTOP_WORKSPACE_ENABLED, "").strip().lower()
+    if enabled != "true":
+        return None
+    base_url = source.get(_DESKTOP_WORKSPACE_BROKER_URL, "").strip()
+    token = source.get(_DESKTOP_WORKSPACE_BROKER_TOKEN, "").strip()
+    if not base_url or not token:
+        return None
+    protocol = source.get(_DESKTOP_WORKSPACE_BROKER_PROTOCOL, "1").strip() or "1"
+    return DesktopWorkspaceHostSessionRegistry(
+        client=DesktopBrokerClient(
+            BrokerClientConfig(
+                base_url=base_url,
+                token=token,
+                protocol_version=protocol,
+            )
+        ),
+        blobs=blobs,
+        references=references,
+    )
 
 
 @dataclass(frozen=True)
@@ -354,7 +478,7 @@ class RuntimeWorkspaceProposalResolver(WorkspaceProposalResolver):
         if scope != self.scope:
             raise WorkspaceAuthorityContractError("workspace scope changed")
         material = await self.proposals.resolve_material(request=request)
-        session = self.sessions.get(scope)
+        session = await resolve_workspace_host_session(self.sessions, scope)
         if material is None or session is None:
             raise WorkspaceAuthorityContractError("workspace material is unavailable")
         grant = next(
@@ -389,7 +513,7 @@ class RuntimeWorkspaceProposalResolver(WorkspaceProposalResolver):
         return WorkspacePrepareCommand(
             scope=scope,
             request=request,
-            read_capability=session.read_capability,
+            host_session_ref=session.host_session_ref,
             material=material,
         )
 
@@ -436,7 +560,7 @@ class RuntimeWorkspaceAuthority(WorkspaceAuthorityPort):
     async def prepare(
         self, command: WorkspacePrepareCommand
     ) -> WorkspacePreparedEffect:
-        session = self._sessions.get(self._scope)
+        session = await resolve_workspace_host_session(self._sessions, self._scope)
         if session is None:
             raise WorkspaceAuthorityContractError("workspace authority is unavailable")
         prepared = await session.authority.prepare(command)
@@ -446,15 +570,11 @@ class RuntimeWorkspaceAuthority(WorkspaceAuthorityPort):
     async def upload(self, prepared_ref: str, content_ref: str) -> None:
         await self._authority_for(prepared_ref).upload(prepared_ref, content_ref)
 
-    async def commit(
-        self, prepared_ref: str, commit_permit: str
-    ) -> WorkspaceCommitResult:
-        return await self._authority_for(prepared_ref).commit(
-            prepared_ref, commit_permit
-        )
+    async def commit(self, prepared_ref: str) -> WorkspaceCommitResult:
+        return await self._authority_for(prepared_ref).commit(prepared_ref)
 
     async def reconcile(self, claim_id: str) -> WorkspaceCommitResult:
-        session = self._sessions.get(self._scope)
+        session = await resolve_workspace_host_session(self._sessions, self._scope)
         if session is None:
             raise WorkspaceAuthorityContractError("workspace authority is unavailable")
         return await session.authority.reconcile(claim_id)
@@ -471,32 +591,6 @@ class RuntimeWorkspaceAuthority(WorkspaceAuthorityPort):
                 "workspace prepared authority is unavailable"
             )
         return authority
-
-
-@dataclass(frozen=True)
-class RuntimeWorkspacePermitSource(WorkspaceCommitPermitSource):
-    """Read, but never mint, a C2 one-use permit from the active host session."""
-
-    scope: EffectExecutionScope
-    sessions: WorkspaceHostSessionRegistryPort
-
-    async def take(
-        self,
-        *,
-        scope: EffectExecutionScope,
-        request: EffectExecutionRequest,
-        prepared_ref: str,
-    ) -> str | None:
-        if scope != self.scope:
-            return None
-        session = self.sessions.get(scope)
-        if session is None:
-            return None
-        return await session.permit_source.take(
-            scope=scope,
-            request=request,
-            prepared_ref=prepared_ref,
-        )
 
 
 def workspace_executor(
@@ -516,10 +610,6 @@ def workspace_executor(
             proposals=proposals,
             sessions=sessions,
             overlay_store=overlay_store,
-        ),
-        permit_source=RuntimeWorkspacePermitSource(
-            scope=scope,
-            sessions=sessions,
         ),
     )
 
@@ -652,10 +742,13 @@ def _material_virtual_paths(
 
 
 __all__ = (
+    "DesktopWorkspaceHostSessionRegistry",
     "InMemoryWorkspaceHostSessionRegistry",
     "RuntimeWorkspaceProposalResolver",
     "RuntimeWorkspaceProposalStore",
     "WorkspaceHostSession",
     "WorkspaceHostSessionRegistryPort",
+    "desktop_workspace_host_sessions_from_env",
+    "resolve_workspace_host_session",
     "workspace_executor",
 )

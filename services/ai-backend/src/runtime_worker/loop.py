@@ -157,6 +157,22 @@ class RuntimeWorker:
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
         self.artifact_service = artifact_service
+        if workspace_host_sessions is None and (
+            callable(getattr(artifact_blob_store, "put_stream", None))
+            and callable(getattr(artifact_reference_store, "acquire", None))
+        ):
+            # Desktop C3 is opt-in and fails closed: a missing/invalid private
+            # broker credential leaves this ``None``. The registry contains
+            # only opaque host-session references, never a renderer token or a
+            # raw C2 commit permit.
+            from runtime_worker.workspace_effect_storage import (  # noqa: PLC0415
+                desktop_workspace_host_sessions_from_env,
+            )
+
+            workspace_host_sessions = desktop_workspace_host_sessions_from_env(
+                blobs=artifact_blob_store,  # type: ignore[arg-type]
+                references=artifact_reference_store,  # type: ignore[arg-type]
+            )
         self.workspace_host_sessions = workspace_host_sessions
         self.workspace_overlay_store = (
             workspace_overlay_store

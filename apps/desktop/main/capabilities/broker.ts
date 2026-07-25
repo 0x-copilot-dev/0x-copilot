@@ -31,7 +31,9 @@ import {
   type WorkspaceChangeEntry,
   type WorkspaceChangeSet,
   type WorkspaceCommitResult,
+  type WorkspaceRunFacts,
 } from "./workspace-authority";
+import type { WorkspaceApprovalPermitHandoff } from "./workspace-approval";
 
 // Authenticated loopback capability broker (AC5 slice 1 — skeleton).
 //
@@ -97,6 +99,7 @@ const ROUTES = {
   fsDelete: "/v1/fs/delete",
   fsMove: "/v1/fs/move",
   workspacePrepare: "/internal/workspace/v2/prepare",
+  workspaceHostSessions: "/internal/workspace/v2/host-sessions",
   workspaceCommit: "/internal/workspace/v2/prepared",
   workspaceClaims: "/internal/workspace/v2/claims",
 } as const;
@@ -197,12 +200,41 @@ export interface CapabilityBrokerHandle {
   readonly port: number;
 }
 
+/**
+ * Main-owned session state.  Its read capability and device identity never
+ * leave Electron main; the child process sees only the opaque map key.
+ */
+interface WorkspaceHostSessionState {
+  readonly facts: WorkspaceRunFacts;
+  readonly readCapability: string;
+  readonly grantIds: readonly string[];
+  readonly expiresAt: number;
+}
+
+interface CompletedWorkspaceCommit {
+  readonly hostSessionRef: string;
+  readonly result: WorkspaceCommitResult;
+}
+
+const HOST_SESSION_REF = /^whs_[A-Za-z0-9_-]{32,160}$/u;
+
 export class CapabilityBroker {
   readonly #grants: GrantProvider;
   readonly #hostFs: HostFs | null;
   readonly #randomBytes: (size: number) => Buffer;
   readonly #runContexts: RunContextStore;
   readonly #workspaceAuthority: LocalWorkspaceAuthority | null;
+  #workspaceApprovalPermitHandoff: WorkspaceApprovalPermitHandoff | null = null;
+  readonly #workspaceHostSessions = new Map<
+    string,
+    WorkspaceHostSessionState
+  >();
+  readonly #preparedHostSessions = new Map<string, string>();
+  readonly #completedWorkspaceCommits = new Map<
+    string,
+    CompletedWorkspaceCommit
+  >();
+  #workspaceHostSessionSequence = 0;
 
   #server: Server | null = null;
   #tokenBuf: Buffer | null = null;
@@ -223,6 +255,22 @@ export class CapabilityBroker {
 
   isRunning(): boolean {
     return this.#server !== null;
+  }
+
+  /**
+   * Main-only wiring seam for C3's verified-approval reservation source.
+   * There is intentionally no IPC, environment, or HTTP route for setting it.
+   */
+  installWorkspaceApprovalPermitHandoff(
+    handoff: WorkspaceApprovalPermitHandoff,
+  ): void {
+    if (
+      this.#workspaceApprovalPermitHandoff !== null &&
+      this.#workspaceApprovalPermitHandoff !== handoff
+    ) {
+      throw new Error("workspace approval permit handoff is already installed");
+    }
+    this.#workspaceApprovalPermitHandoff = handoff;
   }
 
   /**
@@ -280,6 +328,10 @@ export class CapabilityBroker {
     this.#tokenBuf = null;
     this.#saltBuf = null;
     this.#port = 0;
+    this.#workspaceHostSessions.clear();
+    this.#preparedHostSessions.clear();
+    this.#completedWorkspaceCommits.clear();
+    this.#workspaceHostSessionSequence = 0;
     // Per-run snapshots are RAM-only and MUST NOT survive a restart — drop them
     // so a fresh boot never inherits a prior boot's pinned authority.
     this.#runContexts.clear();
@@ -435,6 +487,9 @@ export class CapabilityBroker {
         respondJson(res, 200, { released });
         return;
       }
+      case ROUTES.workspaceHostSessions:
+        await this.#handleWorkspaceHostSession(body, res);
+        return;
       case ROUTES.workspacePrepare:
         await this.#handleWorkspacePrepare(body, res);
         return;
@@ -516,10 +571,13 @@ export class CapabilityBroker {
     }
     try {
       const params = requireRecord(body);
+      const hostSessionRef = requireHostSessionRef(params);
+      const session = this.#requireWorkspaceHostSession(hostSessionRef);
       const prepared = await authority.prepareChangeSet(
-        requireString(params, "read_capability"),
+        session.readCapability,
         parseWorkspaceChangeSet(params),
       );
+      this.#preparedHostSessions.set(prepared.preparedRef, hostSessionRef);
       respondJson(res, 201, {
         prepared_ref: prepared.preparedRef,
         expires_at: prepared.expiresAt,
@@ -529,6 +587,52 @@ export class CapabilityBroker {
           digest: slot.digest,
           size: slot.size,
         })),
+      });
+    } catch (error) {
+      respondWorkspaceError(res, error);
+    }
+  }
+
+  /**
+   * Bootstrap a run-scoped, main-owned C2 read capability for the intended
+   * supervised worker.  The request's boot bearer authenticates transport only;
+   * the authority derives device identity and live grants in Electron main.
+   * The response deliberately contains just one opaque session reference and
+   * path-free grant projections — never a capability, root, permit, or path.
+   */
+  async #handleWorkspaceHostSession(
+    body: unknown,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#workspaceAuthority;
+    if (authority === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    try {
+      const params = requireRecord(body);
+      const host = await authority.createPrivateHostSession(
+        requireOpaqueId(params, "run_id"),
+        requireOpaqueId(params, "user_id"),
+      );
+      const hostSessionRef = this.#newWorkspaceHostSessionRef();
+      this.#workspaceHostSessions.set(
+        hostSessionRef,
+        Object.freeze({
+          facts: Object.freeze({ ...host.facts }),
+          readCapability: host.readCapability,
+          grantIds: Object.freeze([...host.grantIds]),
+          expiresAt: host.expiresAt,
+        }),
+      );
+      const grantIds = new Set(host.grantIds);
+      const grants = (await this.#grants.listAll())
+        .filter((grant) => grantIds.has(grant.grantId))
+        .map((grant) => toBrokerGrant(grant, this.#mountId(grant.root)));
+      respondJson(res, 201, {
+        host_session_ref: hostSessionRef,
+        expires_at: host.expiresAt,
+        grants,
       });
     } catch (error) {
       respondWorkspaceError(res, error);
@@ -567,6 +671,12 @@ export class CapabilityBroker {
       await authority
         .abortPreparedChangeSet(upload.preparedRef)
         .catch(() => {});
+      // Preserve the exact host-session association until the caller aborts
+      // or the session expires. A later commit can then ask the C2 authority
+      // for its terminal staging state and return `workspace_conflict` (409)
+      // before touching a one-use approval reservation. Dropping it here
+      // would incorrectly turn a failed upload into permit-denied (403).
+      this.#completedWorkspaceCommits.delete(upload.preparedRef);
       respondWorkspaceError(res, error);
     }
   }
@@ -589,13 +699,63 @@ export class CapabilityBroker {
     try {
       if (prepared.action === "abort") {
         await authority.abortPreparedChangeSet(prepared.preparedRef);
+        this.#preparedHostSessions.delete(prepared.preparedRef);
+        this.#completedWorkspaceCommits.delete(prepared.preparedRef);
         respondJson(res, 200, { aborted: true });
         return;
       }
       const params = requireRecord(body);
+      const hostSessionRef = requireHostSessionRef(params);
+      const session = this.#requireWorkspaceHostSession(hostSessionRef);
+      const completed = this.#completedWorkspaceCommits.get(
+        prepared.preparedRef,
+      );
+      if (completed !== undefined) {
+        if (completed.hostSessionRef !== hostSessionRef) {
+          throw new WorkspaceAuthorityError("workspace_permit_denied");
+        }
+        respondJson(res, 200, workspaceCommitWire(completed.result));
+        return;
+      }
+      if (
+        this.#preparedHostSessions.get(prepared.preparedRef) !== hostSessionRef
+      ) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      const binding = await authority.commitEligibleBinding(
+        prepared.preparedRef,
+      );
+      if (!sameWorkspaceFacts(binding.facts, session.facts)) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      const handoff = this.#workspaceApprovalPermitHandoff;
+      if (handoff === null) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      // The exact approval binding comes exclusively from C2's prepared state.
+      // The worker supplied only the opaque host-session reference above.
+      const permit = await handoff.take({
+        facts: binding.facts,
+        preparedRef: binding.preparedRef,
+        stageId: binding.stageId,
+        revision: binding.revision,
+        decisionLedgerId: binding.decisionLedgerId,
+        changeSetDigest: binding.changeSetDigest,
+        targetDigest: binding.targetDigest,
+        proposalDigest: binding.proposalDigest,
+      });
+      if (permit === null) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      // The raw C2 permit exists only in this Electron-main stack frame. It is
+      // neither returned to the child nor accepted as a child-controlled body.
       const result = await authority.commitPreparedChangeSet(
         prepared.preparedRef,
-        requireString(params, "permit"),
+        permit,
+      );
+      this.#completedWorkspaceCommits.set(
+        prepared.preparedRef,
+        Object.freeze({ hostSessionRef, result }),
       );
       respondJson(res, 200, workspaceCommitWire(result));
     } catch (error) {
@@ -627,6 +787,20 @@ export class CapabilityBroker {
     } catch (error) {
       respondWorkspaceError(res, error);
     }
+  }
+
+  #newWorkspaceHostSessionRef(): string {
+    this.#workspaceHostSessionSequence += 1;
+    return `whs_${this.#randomBytes(32).toString("base64url")}_${this.#workspaceHostSessionSequence}`;
+  }
+
+  #requireWorkspaceHostSession(ref: string): WorkspaceHostSessionState {
+    const session = this.#workspaceHostSessions.get(ref);
+    if (session === undefined || session.expiresAt <= Date.now()) {
+      this.#workspaceHostSessions.delete(ref);
+      throw new WorkspaceAuthorityError("workspace_capability_denied");
+    }
+    return session;
   }
 
   /**
@@ -758,6 +932,33 @@ function requireString(params: object, key: string): string {
     throw new FsError("invalid_request", `missing ${key}`);
   }
   return value;
+}
+
+function requireOpaqueId(params: object, key: string): string {
+  const value = requireString(params, key);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value)) {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value;
+}
+
+function requireHostSessionRef(params: object): string {
+  const value = requireString(params, "host_session_ref");
+  if (!HOST_SESSION_REF.test(value)) {
+    throw new FsError("invalid_request", "invalid host_session_ref");
+  }
+  return value;
+}
+
+function sameWorkspaceFacts(
+  left: WorkspaceRunFacts,
+  right: WorkspaceRunFacts,
+): boolean {
+  return (
+    left.runId === right.runId &&
+    left.userId === right.userId &&
+    left.deviceId === right.deviceId
+  );
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {

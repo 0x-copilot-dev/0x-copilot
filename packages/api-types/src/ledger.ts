@@ -1034,6 +1034,8 @@ export interface WorkspaceApprovalDecisionReceipt {
   readonly stage_id: string;
   readonly revision: number;
   readonly decision_ledger_id: string;
+  /** Digest of the exact C2 change set, projected from immutable server material. */
+  readonly change_set_digest: string;
   readonly proposal_digest: string;
   readonly target_digest: string;
   readonly decision: "approve" | "reject";
