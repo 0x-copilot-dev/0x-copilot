@@ -257,6 +257,18 @@ class RuntimeApiAppFactory:
         # not mounted, so nothing reaches it); the same ``WriteStager`` is shared
         # with the DraftService propose seam.
         app.state.stage_service = cls.default_stage_service(app)
+        # C3 — the workspace-only A4 decision receipt is composed separately
+        # from legacy staged writes.  It receives no executor or host path;
+        # approval still enqueues a body-free A5 command only.
+        workspace_approval_enabled = (
+            _settings.execution.surfaces_v2
+            and _settings.execution.workspace_effect_mode.value == "enforce"
+        )
+        app.state.workspace_approval_decision_service = (
+            cls.default_workspace_approval_decision_service(app)
+            if workspace_approval_enabled
+            else None
+        )
         # PRD-E2 — the cross-run pending-work read service. Registered on app
         # state always (harmless when the flag is off — the route is not mounted,
         # so nothing reaches it); folds the caller's runs on read (no new table).
@@ -296,6 +308,7 @@ class RuntimeApiAppFactory:
         app.include_router(
             RuntimeApiRouter.create_router(
                 artifact_effects_v2=_settings.execution.artifact_effects_v2,
+                workspace_approval_enabled=workspace_approval_enabled,
             )
         )
         app.include_router(UsageApiRouter.create_router())
@@ -733,6 +746,27 @@ class RuntimeApiAppFactory:
         if ports is None or stager is None:
             return None
         return StageService(stager=stager, persistence=ports.persistence)
+
+    @classmethod
+    def default_workspace_approval_decision_service(cls, app):  # type: ignore[no-untyped-def]
+        """Compose C3's canonical workspace decision route without A5 access."""
+
+        from agent_runtime.api.events import RuntimeEventProducer
+        from agent_runtime.api.workspace_approval_service import (
+            WorkspaceApprovalDecisionService,
+        )
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return WorkspaceApprovalDecisionService(
+            persistence=ports.persistence,
+            event_producer=RuntimeEventProducer(
+                persistence=ports.persistence,
+                event_store=ports.event_store,
+            ),
+            queue=ports.queue,
+        )
 
     @classmethod
     def default_pending_work_service(cls, app):  # type: ignore[no-untyped-def]

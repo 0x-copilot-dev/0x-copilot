@@ -1017,6 +1017,29 @@ export interface EffectDecision {
   readonly ledger_id: string;
 }
 
+/** Request body for the C3 workspace-only canonical effect decision route. */
+export interface WorkspaceApprovalDecisionRequest {
+  readonly revision: number;
+  readonly decision: "approve" | "reject";
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+}
+
+/**
+ * Canonical approval evidence returned by ``/effect-stages/{id}/decisions``.
+ * It is intentionally path-, content-, prepared-ref-, and permit-free so a
+ * desktop host can verify it before minting a local one-use permit.
+ */
+export interface WorkspaceApprovalDecisionReceipt {
+  readonly stage_id: string;
+  readonly revision: number;
+  readonly decision_ledger_id: string;
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+  readonly decision: "approve" | "reject";
+  readonly status: "approved" | "rejected";
+}
+
 export interface EffectExecutionRequest {
   readonly stage_id: string;
   readonly revision: number;

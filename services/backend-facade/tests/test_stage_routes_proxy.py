@@ -165,6 +165,34 @@ def test_facade_proxies_decision_body_including_hold(
         assert captured[0]["params"]["org_id"] == _ORG_ID
 
 
+def test_facade_proxies_workspace_effect_receipt_decision_verbatim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _install_capturing_forwarder(
+        monkeypatch,
+        expected_path=f"/v1/agent/effect-stages/{_STAGE_ID}/decisions",
+        expected_method="POST",
+    )
+    client = TestClient(create_app(FacadeSettings()))
+    body = {
+        "revision": 3,
+        "decision": "approve",
+        "proposal_digest": "a" * 64,
+        "target_digest": "b" * 64,
+    }
+
+    response = client.post(
+        f"/v1/agent/effect-stages/{_STAGE_ID}/decisions?run_id={_RUN_ID}",
+        headers=_headers(),
+        json=body,
+    )
+
+    assert response.status_code == 200, response.text
+    assert captured[0]["json"] == body
+    assert captured[0]["params"]["run_id"] == _RUN_ID
+    assert captured[0]["params"]["org_id"] == _ORG_ID
+
+
 def test_facade_proxies_row_scoped_decision_verbatim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
