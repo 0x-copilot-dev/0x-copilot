@@ -13,6 +13,9 @@ COPY packages/design-system/src ./packages/design-system/src
 COPY packages/chat-transport/package.json ./packages/chat-transport/package.json
 COPY packages/chat-transport/tsconfig.json ./packages/chat-transport/tsconfig.json
 COPY packages/chat-transport/src ./packages/chat-transport/src
+COPY packages/surface-renderers/package.json ./packages/surface-renderers/package.json
+COPY packages/surface-renderers/tsconfig.json ./packages/surface-renderers/tsconfig.json
+COPY packages/surface-renderers/src ./packages/surface-renderers/src
 COPY packages/service-contracts/src ./packages/service-contracts/src
 COPY packages/chat-surface/package.json ./packages/chat-surface/package.json
 COPY packages/chat-surface/tsconfig.json ./packages/chat-surface/tsconfig.json

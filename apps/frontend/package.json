@@ -13,6 +13,7 @@
   "dependencies": {
     "@0x-copilot/api-types": "0.1.0",
     "@0x-copilot/design-system": "0.1.0",
+    "@0x-copilot/surface-renderers": "0.1.0",
     "@opentelemetry/api": "1.9.1",
     "@opentelemetry/context-zone": "2.9.0",
     "@opentelemetry/exporter-trace-otlp-http": "0.220.0",

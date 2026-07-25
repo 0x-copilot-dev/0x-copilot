@@ -127,7 +127,6 @@ import {
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import { projectReceiptV2, type ReceiptV2Projection } from "./projectReceiptV2";
 import { projectSourcesV2 } from "../../projections/sourcesV2";
-import type { PendingAgentRow } from "@0x-copilot/api-types";
 import {
   projectLegacyV2Replay,
   type LegacyV2ReplayProjection,
@@ -2767,8 +2766,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         />
       ) : null}
       {mode === "studio" &&
-        !legacyV2ReadOnlyStream &&
-        ledger.openGates.length > 0 ? (
+      !legacyV2ReadOnlyStream &&
+      ledger.openGates.length > 0 ? (
         <div data-testid="run-v2-gate-region" style={gateRegionStyle}>
           {ledger.openGates.map((gate) => (
             <TcGateCard

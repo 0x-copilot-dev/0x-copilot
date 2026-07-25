@@ -20,7 +20,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from contextlib import suppress
+from contextlib import AbstractAsyncContextManager, suppress
+from tempfile import mkdtemp
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -39,13 +40,30 @@ from runtime_api.sse.event_bus import InMemoryEventBus
 
 
 def _settings(backend: str, *, start_worker: bool = True) -> RuntimeSettings:
+    file_root = mkdtemp(prefix="run-executor-readiness-file-root-")
     return RuntimeSettings.load(
         environ={
             "OPENAI_API_KEY": "sk-test",
             "RUNTIME_STORE_BACKEND": backend,
             "RUNTIME_START_IN_PROCESS_WORKER": "true" if start_worker else "false",
+            **({"RUNTIME_FILE_STORE_ROOT": file_root} if backend == "file" else {}),
         }
     )
+
+
+class _InMemoryRuntimeApiStoreRoleConnection(AbstractAsyncContextManager[None]):
+    """Fake worker-role connection for Postgres-backed adapters in unit tests."""
+
+    async def __aenter__(self) -> None:
+        return None
+
+    async def __aexit__(
+        self,
+        exc_type: object,
+        exc: object,
+        tb: object,
+    ) -> None:
+        return None
 
 
 def _deployment(name: str):
@@ -177,6 +195,12 @@ class TestRunExecutorReadinessChecker:
 
 def _build_app(*, backend: str, profile: str):
     ports = RuntimeAdapterFactory.from_store(InMemoryRuntimeApiStore())
+    if backend == "postgres":
+        setattr(
+            ports.persistence,
+            "_role_connection",
+            lambda *_args, **_kwargs: _InMemoryRuntimeApiStoreRoleConnection(),
+        )
     return RuntimeApiAppFactory.create_app(
         ports=ports,
         settings=_settings(backend),
