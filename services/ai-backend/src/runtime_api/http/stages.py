@@ -49,7 +49,10 @@ from runtime_api.schemas.stages import (
 _ERROR_STATUS: dict[type[StagedWriteError], int] = {
     StageNotFound: http_status.HTTP_404_NOT_FOUND,
     UnknownRowKey: http_status.HTTP_404_NOT_FOUND,
-    StageForbidden: http_status.HTTP_403_FORBIDDEN,
+    # A stage id is not an authorization capability.  Foreign and absent
+    # stage/run combinations deliberately share the same opaque 404 so a
+    # caller cannot enumerate a co-tenant's pending writes.
+    StageForbidden: http_status.HTTP_404_NOT_FOUND,
     StaleRevision: http_status.HTTP_409_CONFLICT,
     StageFrozen: http_status.HTTP_409_CONFLICT,
     EditConflict: http_status.HTTP_409_CONFLICT,
@@ -198,6 +201,10 @@ class StageRoutes:
         """Map a typed domain error to a safe HTTPException (500 as last resort)."""
 
         code = _ERROR_STATUS.get(type(exc), http_status.HTTP_500_INTERNAL_SERVER_ERROR)
+        if code == http_status.HTTP_404_NOT_FOUND:
+            # Do not let the domain's more specific text distinguish an absent
+            # stage from a foreign stage or row key.
+            return HTTPException(status_code=code, detail="resource not found")
         return HTTPException(status_code=code, detail=exc.safe_message)
 
 

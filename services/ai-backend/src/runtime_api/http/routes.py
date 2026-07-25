@@ -25,6 +25,7 @@ from agent_runtime.api.usage_service import UsageQueryService
 from agent_runtime.api.user_policies_resolver import ProviderKeysParser
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 from runtime_api.auth import RuntimeServiceAuthenticator
+from runtime_api.identity import Identity
 from runtime_api.rbac import RequireAnyScope, RequireScopes
 from runtime_api.schemas import (
     ActiveRunCountResponse,
@@ -508,8 +509,7 @@ class RuntimeApiRoutes:
         cls,
         request: Request,
         run_id: str,
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
+        identity: Identity,
     ) -> ReceiptExportBundle:
         """Return the run's tamper-evident receipt export (PRD-E3 D2).
 
@@ -519,11 +519,10 @@ class RuntimeApiRoutes:
         ``AUDIT_HMAC_KEY``) maps :class:`ReceiptExportUnavailable` to HTTP 503
         with a safe message.
         """
-        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return await cls.cqs(request).export_run_receipt(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 run_id=run_id,
             )
         except ReceiptExportUnavailable as exc:
@@ -534,16 +533,14 @@ class RuntimeApiRoutes:
         cls,
         request: Request,
         run_id: str,
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
+        identity: Identity,
     ) -> ReceiptExportV2:
         """Return the authorized run's redacted, signed D7 receipt bundle."""
 
-        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
         try:
             return await cls.cqs(request).export_run_receipt_v2(
-                org_id=org_id,
-                user_id=user_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
                 run_id=run_id,
             )
         except ReceiptExportUnavailable as exc:
@@ -1219,14 +1216,11 @@ class UsageApiRoutes:
     async def usage_me(
         cls,
         request: Request,
+        identity: Identity,
         period: Literal["today", "7d", "30d", "month"] = Query("7d"),
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
     ) -> UsageMeResponse:
         """Return the caller's token usage totals, daily rollups, and connector breakdown."""
-        org_id, user_id = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id=user_id
-        )
+        org_id, user_id = identity.org_id, identity.user_id
         start, end = UsageQueryService.parse_period(period)
         persistence = cls._persistence(request)
         rows = await persistence.query_user_daily_usage(
@@ -1267,15 +1261,12 @@ class UsageApiRoutes:
     async def usage_me_conversations(
         cls,
         request: Request,
+        identity: Identity,
         period: Literal["today", "7d", "30d", "month"] = Query("7d"),
         limit: int = Query(10, ge=1, le=100),
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
     ) -> tuple[UsageConversationRow, ...]:
         """Return the caller's top N conversations by token usage over the period."""
-        org_id, user_id = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id=user_id
-        )
+        org_id, user_id = identity.org_id, identity.user_id
         start, end = UsageQueryService.parse_period(period)
         persistence = cls._persistence(request)
         rows = await persistence.query_top_conversations(
@@ -1304,13 +1295,10 @@ class UsageApiRoutes:
         cls,
         request: Request,
         run_id: str,
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
+        identity: Identity,
     ) -> RunUsageBreakdown:
         """Return per-run token usage joined with per-call breakdown."""
-        org_id, user_id = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id=user_id
-        )
+        org_id, user_id = identity.org_id, identity.user_id
         persistence = cls._persistence(request)
         run_row = await persistence.query_run_usage(org_id=org_id, run_id=run_id)
         if run_row is None or run_row.user_id != user_id:
@@ -1352,8 +1340,7 @@ class UsageApiRoutes:
         cls,
         request: Request,
         run_id: str,
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
+        identity: Identity,
     ) -> RunUsageCallsResponse:
         """Return real per-invocation usage rows for one owned run.
 
@@ -1362,9 +1349,7 @@ class UsageApiRoutes:
         payload for call-detail consumers.
         """
 
-        org_id, user_id = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id=user_id
-        )
+        org_id, user_id = identity.org_id, identity.user_id
         persistence = cls._persistence(request)
         run_row = await persistence.query_run_usage(org_id=org_id, run_id=run_id)
         if run_row is None or run_row.user_id != user_id:
@@ -1384,14 +1369,11 @@ class UsageApiRoutes:
         cls,
         request: Request,
         conversation_id: str,
+        identity: Identity,
         period: Literal["today", "7d", "30d", "month"] = Query("30d"),
-        org_id: str | None = Query(None, min_length=1),
-        user_id: str | None = Query(None, min_length=1),
     ) -> ConversationUsageResponse:
         """Return per-run and per-connector usage totals for one conversation."""
-        org_id, user_id = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id=user_id
-        )
+        org_id, user_id = identity.org_id, identity.user_id
         start, end = UsageQueryService.parse_period(period)
         persistence = cls._persistence(request)
         conversation = await persistence.get_conversation(
@@ -1460,16 +1442,12 @@ class UsageApiRoutes:
     async def usage_org(
         cls,
         request: Request,
+        identity: Identity,
         period: Literal["today", "7d", "30d", "month"] = Query("month"),
-        org_id: str | None = Query(None, min_length=1),
     ) -> UsageOrgResponse:
         """Return org-wide token usage totals, daily rollups, and connector breakdown (admin only)."""
-        # ``user_id`` is unused for the admin org view but the standard
-        # scoped_identity helper requires it; pass a placeholder so the
-        # facade-derived identity can override.
-        org_id, _ = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id="__org_admin__"
-        )
+        cls._require_org_usage_reader(identity)
+        org_id = identity.org_id
         start, end = UsageQueryService.parse_period(period)
         persistence = cls._persistence(request)
         rows = await persistence.query_org_daily_usage(
@@ -1510,6 +1488,24 @@ class UsageApiRoutes:
         """Retrieve the runtime persistence port from app state."""
 
         return request.app.state.runtime_persistence
+
+    @staticmethod
+    def _require_org_usage_reader(identity: Identity) -> None:
+        """Hard-enforce the narrow admin/auditor usage read capability.
+
+        ``RequireAnyScope`` remains registered on the route so audit-mode
+        rollout records a denial.  The aggregate itself must nevertheless
+        never be released in audit mode to a caller without ``audit:read`` or
+        ``admin:users``; it is a tenant-wide support/admin surface rather than
+        an ordinary member read.
+        """
+
+        scopes = frozenset(identity.permission_scopes)
+        if RUNTIME_USE not in scopes or not ({AUDIT_READ, ADMIN_USERS} & scopes):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "Audit or user-administrator permission is required",
+            )
 
     @classmethod
     async def _run_call_details(
@@ -1888,8 +1884,8 @@ class UsageApiRoutes:
     async def usage_org_subagents(
         cls,
         request: Request,
+        identity: Identity,
         period: Literal["today", "7d", "30d", "month"] = Query("month"),
-        org_id: str | None = Query(None, min_length=1),
     ) -> UsageOrgSubagentsResponse:
         """Sub-PRD 01d — org-scoped per-subagent breakdown.
 
@@ -1898,9 +1894,8 @@ class UsageApiRoutes:
         cold-start cap when the rollup is empty.
         """
 
-        org_id, _ = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id="__org_admin__"
-        )
+        cls._require_org_usage_reader(identity)
+        org_id = identity.org_id
         start, end = UsageQueryService.parse_period(period)
         persistence = cls._persistence(request)
         rollup_rows = await persistence.query_subagent_daily_usage(
@@ -1930,8 +1925,8 @@ class UsageApiRoutes:
     async def usage_org_purpose(
         cls,
         request: Request,
+        identity: Identity,
         period: Literal["today", "7d", "30d", "month"] = Query("month"),
-        org_id: str | None = Query(None, min_length=1),
     ) -> UsageOrgPurposeResponse:
         """Sub-PRD 01d — org-scoped per-purpose breakdown.
 
@@ -1940,9 +1935,8 @@ class UsageApiRoutes:
         ``_COLD_START_CAP_DAYS`` window.
         """
 
-        org_id, _ = RuntimeApiRoutes.scoped_identity(
-            request, org_id=org_id, user_id="__org_admin__"
-        )
+        cls._require_org_usage_reader(identity)
+        org_id = identity.org_id
         start, end = UsageQueryService.parse_period(period)
         persistence = cls._persistence(request)
         rollup_rows = await persistence.query_purpose_daily_usage(

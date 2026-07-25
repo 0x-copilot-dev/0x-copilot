@@ -32,6 +32,18 @@ _USER_2 = "user_2"
 _NOW = datetime.now(timezone.utc) - timedelta(hours=1)
 
 
+def _headers(
+    user_id: str = _USER_1,
+    *,
+    scopes: str = "runtime:use,audit:read",
+) -> dict[str, str]:
+    return {
+        "x-enterprise-org-id": _ORG,
+        "x-enterprise-user-id": user_id,
+        "x-enterprise-permission-scopes": scopes,
+    }
+
+
 class _Call:
     """One seeded per-call row's fixed inputs (tokens sum to total)."""
 
@@ -189,9 +201,9 @@ def _seeded_client_and_store() -> tuple[TestClient, InMemoryRuntimeApiStore]:
             status="completed",
         )
     ports = RuntimeAdapterFactory.from_store(store)
-    return TestClient(
-        RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
-    ), store
+    client = TestClient(RuntimeApiAppFactory.create_app(ports=ports, settings=settings))
+    client.headers.update(_headers())
+    return client, store
 
 
 def _seeded_client() -> TestClient:
@@ -206,9 +218,7 @@ class TestPerRunRollup:
     def test_run_total_equals_independent_sum(self) -> None:
         client = _seeded_client()
         r1_calls = [c for c in _CALLS if c.run_id == "r1"]
-        response = client.get(
-            "/v1/usage/runs/r1", params={"org_id": _ORG, "user_id": _USER_1}
-        )
+        response = client.get("/v1/usage/runs/r1")
         assert response.status_code == 200
         total = response.json()["total"]
         assert total["input"] == _sum(r1_calls, "input_tokens")  # 130
@@ -219,9 +229,7 @@ class TestPerRunRollup:
 
     def test_by_call_carries_purpose_and_surface_id(self) -> None:
         client = _seeded_client()
-        response = client.get(
-            "/v1/usage/runs/r1", params={"org_id": _ORG, "user_id": _USER_1}
-        )
+        response = client.get("/v1/usage/runs/r1")
         by_call = response.json()["by_call"]
         assert len(by_call) == 3
         by_purpose = {row["purpose"]: row for row in by_call}
@@ -270,9 +278,7 @@ class TestPerRunRollup:
         )
         # A no-edge historical row (call-1) remains visible and contributes to
         # the canonical run total exactly as it did before attribution existed.
-        run_response = client.get(
-            "/v1/usage/runs/r1", params={"org_id": _ORG, "user_id": _USER_1}
-        )
+        run_response = client.get("/v1/usage/runs/r1")
         assert run_response.status_code == 200
         body = run_response.json()
         assert body["total"]["input"] == 130
@@ -298,7 +304,6 @@ class TestPerRunRollup:
 
         calls_response = client.get(
             "/v1/usage/runs/r1/calls",
-            params={"org_id": _ORG, "user_id": _USER_1},
         )
         assert calls_response.status_code == 200
         assert calls_response.json()["run_id"] == "r1"
@@ -310,12 +315,11 @@ class TestPerRunRollup:
 
     def test_foreign_user_gets_404_for_run_and_conversation_usage(self) -> None:
         client = _seeded_client()
-        run_response = client.get(
-            "/v1/usage/runs/r1", params={"org_id": _ORG, "user_id": _USER_2}
-        )
+        run_response = client.get("/v1/usage/runs/r1", headers=_headers(_USER_2))
         conversation_response = client.get(
             "/v1/usage/conversations/conv-1",
-            params={"org_id": _ORG, "user_id": _USER_2, "period": "30d"},
+            params={"period": "30d"},
+            headers=_headers(_USER_2),
         )
         assert run_response.status_code == 404
         assert conversation_response.status_code == 404
@@ -327,7 +331,7 @@ class TestPerUserRollup:
         user_1_calls = [c for c in _CALLS if c.user_id == _USER_1]
         response = client.get(
             "/v1/usage/me",
-            params={"org_id": _ORG, "user_id": _USER_1, "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         total = response.json()["total"]
@@ -340,7 +344,8 @@ class TestPerUserRollup:
         user_2_calls = [c for c in _CALLS if c.user_id == _USER_2]
         response = client.get(
             "/v1/usage/me",
-            params={"org_id": _ORG, "user_id": _USER_2, "period": "30d"},
+            params={"period": "30d"},
+            headers=_headers(_USER_2),
         )
         total = response.json()["total"]
         assert total["runs_count"] == 1  # r3 only
@@ -353,7 +358,7 @@ class TestPerConversationRollup:
         conv_1_calls = [c for c in _CALLS if c.conversation_id == "conv-1"]
         response = client.get(
             "/v1/usage/conversations/conv-1",
-            params={"org_id": _ORG, "user_id": _USER_1, "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         body = response.json()
@@ -367,7 +372,8 @@ class TestPerConversationRollup:
         conv_2_calls = [c for c in _CALLS if c.conversation_id == "conv-2"]
         response = client.get(
             "/v1/usage/conversations/conv-2",
-            params={"org_id": _ORG, "user_id": _USER_2, "period": "30d"},
+            params={"period": "30d"},
+            headers=_headers(_USER_2),
         )
         body = response.json()
         assert body["total"]["input"] == _sum(conv_2_calls, "input_tokens")  # 215
@@ -377,9 +383,7 @@ class TestPerConversationRollup:
 class TestOrgPurposeRollup:
     def test_v2_purposes_bucket(self) -> None:
         client = _seeded_client()
-        response = client.get(
-            "/v1/usage/org/purpose", params={"org_id": _ORG, "period": "30d"}
-        )
+        response = client.get("/v1/usage/org/purpose", params={"period": "30d"})
         assert response.status_code == 200
         by_purpose = {row["purpose"]: row for row in response.json()["rows"]}
         # The v2 shaping purposes flow through as string dimensions untouched.

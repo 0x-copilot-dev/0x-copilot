@@ -88,12 +88,10 @@ class WorkspaceEffectStageRoutes:
 
     @staticmethod
     def _http(exc: EffectStageError) -> HTTPException:
-        return HTTPException(
-            status_code=_ERROR_STATUS.get(
-                type(exc), http_status.HTTP_500_INTERNAL_SERVER_ERROR
-            ),
-            detail=exc.safe_message,
-        )
+        code = _ERROR_STATUS.get(type(exc), http_status.HTTP_500_INTERNAL_SERVER_ERROR)
+        if code == http_status.HTTP_404_NOT_FOUND:
+            return HTTPException(status_code=code, detail="resource not found")
+        return HTTPException(status_code=code, detail=exc.safe_message)
 
 
 def register_workspace_effect_stage_routes(router: APIRouter) -> None:

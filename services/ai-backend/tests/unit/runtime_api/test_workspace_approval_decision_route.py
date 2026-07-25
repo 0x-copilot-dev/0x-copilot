@@ -503,6 +503,12 @@ class TestWorkspaceApprovalDecisionReceipt:
             _url(mcp_stage.stage_id), headers=_headers(), json=_body(mcp_stage)
         )
         assert mcp_response.status_code == 404
+        assert (
+            unknown_response.json()
+            == foreign_response.json()
+            == mcp_response.json()
+            == {"detail": "resource not found"}
+        )
         assert bundle.store.effect_commit_commands == []
 
     def test_route_is_absent_when_workspace_effects_are_not_enforced(self) -> None:
