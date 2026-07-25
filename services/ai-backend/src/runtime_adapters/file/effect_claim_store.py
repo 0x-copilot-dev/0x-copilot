@@ -18,6 +18,7 @@ import json
 import os
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import ClassVar
 
@@ -28,6 +29,7 @@ from agent_runtime.effects.claims import (
     EffectClaimAcquisition,
     EffectClaimConflict,
     EffectClaimNotFound,
+    EffectClaimScanCursor,
     EffectClaimState,
     EffectClaimStorageError,
     normalize_persisted_effect_claim_payload,
@@ -153,6 +155,37 @@ class FileEffectClaimStore:
         return tuple(
             sorted(claims, key=lambda claim: (claim.created_at, claim.claim_id))[:limit]
         )
+
+    async def list_incomplete_after(
+        self,
+        *,
+        cursor: EffectClaimScanCursor | None,
+        limit: int = 100,
+    ) -> Sequence[EffectClaim]:
+        """Return a bounded read-only keyset page for the D12 planner."""
+
+        if limit < 1:
+            return ()
+        unresolved = {EffectClaimState.CLAIMED, EffectClaimState.INDETERMINATE}
+        async with self._lock:
+            with self._exclusive_lock():
+                claims = [
+                    claim
+                    for path in self._claim_paths()
+                    if (claim := self._read(path=path)).state in unresolved
+                ]
+        try:
+            ordered = sorted(claims, key=_scan_key)
+            if cursor is not None:
+                after = (
+                    cursor.after_created_at,
+                    cursor.after_org_id,
+                    cursor.after_claim_id,
+                )
+                ordered = [claim for claim in ordered if _scan_key(claim) > after]
+            return tuple(ordered[:limit])
+        except (TypeError, ValueError) as exc:
+            raise EffectClaimStorageError() from exc
 
     @contextmanager
     def _exclusive_lock(self) -> Iterator[None]:
@@ -282,6 +315,13 @@ class FileEffectClaimStore:
             pass
         finally:
             os.close(fd)
+
+
+def _scan_key(claim: EffectClaim) -> tuple[datetime, str, str]:
+    created_at = datetime.fromisoformat(claim.created_at)
+    if created_at.tzinfo is None or created_at.utcoffset() is None:
+        raise ValueError("claim timestamp must be timezone-aware")
+    return (created_at.astimezone(UTC), claim.org_id, claim.claim_id)
 
 
 __all__ = ["FileEffectClaimStore"]

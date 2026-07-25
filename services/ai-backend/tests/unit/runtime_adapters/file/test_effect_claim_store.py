@@ -6,6 +6,7 @@ import asyncio
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -13,6 +14,7 @@ from agent_runtime.effects.claims import (
     EffectClaim,
     EffectClaimAcquisition,
     EffectClaimConflict,
+    EffectClaimScanCursor,
     EffectClaimStorageError,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -218,3 +220,48 @@ async def test_unsafe_old_overloaded_file_claim_fails_closed(tmp_path) -> None:
             executor=claim.executor,
             idempotency_key=claim.idempotency_key,
         )
+
+
+async def test_global_incomplete_keyset_scan_survives_file_adapter_restart(
+    tmp_path,
+) -> None:
+    store = FileEffectClaimStore(root=tmp_path)
+    created = datetime(2026, 7, 25, tzinfo=UTC)
+    first = _claim().model_copy(
+        update={
+            "org_id": "org_a",
+            "claim_id": "clm_scan_a",
+            "idempotency_key": "scan-a",
+            "created_at": created.isoformat(),
+        }
+    )
+    second = _claim().model_copy(
+        update={
+            "org_id": "org_b",
+            "claim_id": "clm_scan_b",
+            "idempotency_key": "scan-b",
+            "created_at": created.isoformat(),
+        }
+    )
+    third = _claim().model_copy(
+        update={
+            "org_id": "org_a",
+            "claim_id": "clm_scan_c",
+            "idempotency_key": "scan-c",
+            "created_at": (created + timedelta(seconds=1)).isoformat(),
+        }
+    )
+    for claim in (third, second, first):
+        await store.claim(claim=claim)
+
+    first_page = await store.list_incomplete_after(cursor=None, limit=2)
+    assert [claim.claim_id for claim in first_page] == ["clm_scan_a", "clm_scan_b"]
+    restarted = FileEffectClaimStore(root=tmp_path)
+    cursor = EffectClaimScanCursor(
+        after_created_at=created,
+        after_org_id="org_b",
+        after_claim_id="clm_scan_b",
+    )
+    second_page = await restarted.list_incomplete_after(cursor=cursor, limit=2)
+
+    assert [claim.claim_id for claim in second_page] == ["clm_scan_c"]

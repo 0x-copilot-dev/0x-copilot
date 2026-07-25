@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from pydantic import ValidationError
 
 from agent_runtime.effects.claims import (
     EffectClaim,
     EffectClaimConflict,
+    EffectClaimScanCursor,
     EffectClaimState,
     EffectClaimStorageError,
 )
@@ -149,3 +152,46 @@ async def test_claim_update_is_monotonic_and_incomplete_listing_is_scoped() -> N
     )
     assert await store.update(claim=completed) == completed
     assert await store.list_incomplete(org_id="org_test") == ()
+
+
+@pytest.mark.asyncio
+async def test_global_incomplete_keyset_scan_orders_across_tenants() -> None:
+    store = InMemoryEffectClaimStore()
+    created = datetime(2026, 7, 25, tzinfo=UTC)
+    first = _claim().model_copy(
+        update={
+            "org_id": "org_a",
+            "claim_id": "clm_scan_a",
+            "idempotency_key": "scan-a",
+            "created_at": created.isoformat(),
+        }
+    )
+    second = _claim().model_copy(
+        update={
+            "org_id": "org_b",
+            "claim_id": "clm_scan_b",
+            "idempotency_key": "scan-b",
+            "created_at": created.isoformat(),
+        }
+    )
+    third = _claim().model_copy(
+        update={
+            "org_id": "org_a",
+            "claim_id": "clm_scan_c",
+            "idempotency_key": "scan-c",
+            "created_at": (created + timedelta(seconds=1)).isoformat(),
+        }
+    )
+    for claim in (third, second, first):
+        await store.claim(claim=claim)
+
+    first_page = await store.list_incomplete_after(cursor=None, limit=2)
+    assert [claim.claim_id for claim in first_page] == ["clm_scan_a", "clm_scan_b"]
+    cursor = EffectClaimScanCursor(
+        after_created_at=created,
+        after_org_id="org_b",
+        after_claim_id="clm_scan_b",
+    )
+    second_page = await store.list_incomplete_after(cursor=cursor, limit=2)
+
+    assert [claim.claim_id for claim in second_page] == ["clm_scan_c"]

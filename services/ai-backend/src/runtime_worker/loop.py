@@ -22,6 +22,7 @@ from agent_runtime.capabilities.operations.context import (
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.effects.claims import EffectClaimStore
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
@@ -53,6 +54,7 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
+from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
 
 
 class EffectCommitHandlerPort(Protocol):
@@ -93,6 +95,7 @@ class RuntimeWorker:
         stage_commit_handler: RuntimeStageCommitHandler | None = None,
         effect_commit_handler: EffectCommitHandlerPort | None = None,
         effect_reconcile_handler: EffectReconcileHandlerPort | None = None,
+        effect_claim_store: EffectClaimStore | None = None,
         on_event_appended: Callable[[str], None] | None = None,
         draft_store: "DraftStorePort | None" = None,
         conversation_tool_ordinal_store: (
@@ -234,8 +237,18 @@ class RuntimeWorker:
         )
         self.effect_commit_handler = effect_commit_handler
         self.effect_reconcile_handler = effect_reconcile_handler
+        # D12's planning runner receives this exact instance from the worker
+        # entrypoint.  That matters for the in-memory adapter; file/Postgres
+        # would read the same durable data either way.  It has no queue or
+        # executor authority and is only surfaced as a read source.
+        self.effect_claim_store: EffectClaimStore | None = effect_claim_store
+        self.repair_reconcile_supported_executors: frozenset[EffectExecutorKind] = (
+            frozenset()
+        )
         if d1_ready and self.effect_commit_handler is None:
-            claims = self._effect_claim_store()
+            claims = self.effect_claim_store or self._effect_claim_store()
+            self.effect_claim_store = claims
+            browser_bridge = self._browser_effect_bridge()
             factory = RuntimeMcpEffectCoordinatorFactory(
                 event_producer=self.run_handler.event_producer,
                 claims=claims,
@@ -248,12 +261,21 @@ class RuntimeWorker:
                 timeout_seconds=self.settings.default_timeout_seconds,
                 workspace_sessions=workspace_host_sessions,  # type: ignore[arg-type]
                 workspace_overlay_store=self.workspace_overlay_store,  # type: ignore[arg-type]
-                browser_bridge=self._browser_effect_bridge(),
+                browser_bridge=browser_bridge,
             )
             self.effect_commit_handler = RuntimeEffectCommitHandler(
                 persistence=self.persistence,
                 coordinator_factory=factory,
             )
+            supported: set[EffectExecutorKind] = set()
+            if (
+                workspace_host_sessions is not None
+                and self.workspace_overlay_store is not None
+            ):
+                supported.add(EffectExecutorKind.WORKSPACE)
+            if browser_bridge is not None:
+                supported.add(EffectExecutorKind.BROWSER)
+            self.repair_reconcile_supported_executors = frozenset(supported)
             self.effect_reconcile_handler = RuntimeEffectReconcileHandler(
                 persistence=self.persistence,
                 claims=claims,

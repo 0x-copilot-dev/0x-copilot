@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from threading import RLock
 
 from agent_runtime.effects.claims import (
@@ -10,7 +11,9 @@ from agent_runtime.effects.claims import (
     EffectClaimAcquisition,
     EffectClaimConflict,
     EffectClaimNotFound,
+    EffectClaimScanCursor,
     EffectClaimState,
+    EffectClaimStorageError,
     require_persistable_effect_claim,
     validate_claim_transition,
 )
@@ -81,6 +84,41 @@ class InMemoryEffectClaimStore:
         return tuple(
             sorted(rows, key=lambda claim: (claim.created_at, claim.claim_id))[:limit]
         )
+
+    async def list_incomplete_after(
+        self,
+        *,
+        cursor: EffectClaimScanCursor | None,
+        limit: int = 100,
+    ) -> Sequence[EffectClaim]:
+        """Return one read-only global keyset page for D12 planning."""
+
+        if limit < 1:
+            return ()
+        unresolved = {EffectClaimState.CLAIMED, EffectClaimState.INDETERMINATE}
+        with self._lock:
+            rows = [
+                claim for claim in self._by_key.values() if claim.state in unresolved
+            ]
+        try:
+            ordered = sorted(rows, key=_scan_key)
+            if cursor is not None:
+                after = (
+                    cursor.after_created_at,
+                    cursor.after_org_id,
+                    cursor.after_claim_id,
+                )
+                ordered = [claim for claim in ordered if _scan_key(claim) > after]
+            return tuple(ordered[:limit])
+        except (TypeError, ValueError) as exc:
+            raise EffectClaimStorageError() from exc
+
+
+def _scan_key(claim: EffectClaim) -> tuple[datetime, str, str]:
+    created_at = datetime.fromisoformat(claim.created_at)
+    if created_at.tzinfo is None or created_at.utcoffset() is None:
+        raise ValueError("claim timestamp must be timezone-aware")
+    return (created_at.astimezone(UTC), claim.org_id, claim.claim_id)
 
 
 __all__ = ["InMemoryEffectClaimStore"]

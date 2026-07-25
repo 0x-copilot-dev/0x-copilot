@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timedelta
 
 from agent_runtime.api.user_policies_resolver import UserPoliciesResolverFactory
 from agent_runtime.capabilities.http_pool import BackendHttpPool
@@ -10,6 +11,11 @@ from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
+from runtime_adapters.repair_planning import (
+    build_effect_claim_store,
+    build_repair_legal_hold_lookup,
+    build_repair_planning_snapshot_store,
+)
 from agent_runtime.api.artifact_repository import ArtifactServiceComposition
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.loop import RuntimeWorker
@@ -24,6 +30,12 @@ from runtime_worker.jobs.retention_backfill import (
 from runtime_worker.jobs.retention_sweeper import (
     RetentionSweeperLoop,
     RetentionSweeperLoopEnv,
+)
+from runtime_worker.jobs.repair_planning import (
+    EffectClaimRepairSnapshotCollector,
+    RepairPlanningLoop,
+    RepairPlanningLoopEnv,
+    RepairPlanningRunner,
 )
 from runtime_worker.usage_rollup_loop import (
     UsageRollupLoop,
@@ -64,6 +76,7 @@ class RuntimeWorkerEntrypoint:
         await async_ports.lifecycle.migrate()
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
+        repair_planning_loop: RepairPlanningLoop | None = None
         statement_collector: DbStatementMetricsCollector | None = None
         try:
             # One MCP discovery cache per worker process — shared by every
@@ -79,6 +92,21 @@ class RuntimeWorkerEntrypoint:
             # backend lane env is not configured — runs then use env keys.
             user_policies_resolver = UserPoliciesResolverFactory.default(
                 http_client=BackendHttpPool.get()
+            )
+            # Compose the claim source once for this worker process.  D12 reads
+            # that exact instance when it is enabled; in-memory therefore has
+            # the same semantic view as the effect worker, while file/Postgres
+            # retain their restart-safe durable implementation.
+            effect_claim_store = (
+                build_effect_claim_store(
+                    settings=settings,
+                    persistence=async_ports.persistence,
+                )
+                if (
+                    settings.execution.surfaces_v2
+                    and settings.execution.artifact_effects_v2
+                )
+                else None
             )
             worker = RuntimeWorker(
                 persistence=async_ports.persistence,
@@ -96,6 +124,7 @@ class RuntimeWorkerEntrypoint:
                 artifact_service=ArtifactServiceComposition.build(async_ports),
                 artifact_blob_store=async_ports.artifact_blob_store,
                 artifact_reference_store=async_ports.artifact_reference_provider,
+                effect_claim_store=effect_claim_store,
             )
             logger.info(
                 "worker_started",
@@ -129,6 +158,71 @@ class RuntimeWorkerEntrypoint:
                     metadata={
                         "interval_seconds": retention_loop._interval,
                         "dry_run": retention_loop._dry_run,
+                    },
+                )
+            # D12 is intentionally an opt-in planning loop. It is not a
+            # scheduler for cleanup or effect reconciliation: it owns no queue
+            # and it passes no executor into the runner.
+            if RepairPlanningLoopEnv.env_bool(
+                RepairPlanningLoopEnv.ENABLED, default=False
+            ):
+                if effect_claim_store is None:
+                    raise RuntimeError(
+                        "REPAIR_PLANNING_ENABLED requires SURFACES_V2 and "
+                        "ARTIFACT_EFFECTS_V2."
+                    )
+                max_claims = RepairPlanningLoopEnv.env_int(
+                    RepairPlanningLoopEnv.MAX_CLAIMS,
+                    RepairPlanningLoopEnv.DEFAULT_MAX_CLAIMS,
+                    maximum=500,
+                )
+                page_size = RepairPlanningLoopEnv.env_int(
+                    RepairPlanningLoopEnv.PAGE_SIZE,
+                    RepairPlanningLoopEnv.DEFAULT_PAGE_SIZE,
+                    maximum=500,
+                )
+                max_events_per_run = RepairPlanningLoopEnv.env_int(
+                    RepairPlanningLoopEnv.MAX_EVENTS_PER_RUN,
+                    RepairPlanningLoopEnv.DEFAULT_MAX_EVENTS_PER_RUN,
+                    maximum=10_000,
+                )
+                quiet_seconds = RepairPlanningLoopEnv.env_int(
+                    RepairPlanningLoopEnv.QUIET_SECONDS,
+                    RepairPlanningLoopEnv.DEFAULT_QUIET_SECONDS,
+                    maximum=604_800,
+                )
+                repair_collector = EffectClaimRepairSnapshotCollector(
+                    persistence=async_ports.persistence,
+                    event_store=async_ports.event_store,
+                    claims=effect_claim_store,
+                    legal_holds=build_repair_legal_hold_lookup(
+                        settings=settings,
+                        persistence=async_ports.persistence,
+                    ),
+                    supported_reconcile_executors=(
+                        worker.repair_reconcile_supported_executors
+                    ),
+                    max_events_per_run=max_events_per_run,
+                    quiet_period=timedelta(seconds=quiet_seconds),
+                )
+                repair_planning_loop = RepairPlanningLoop(
+                    runner=RepairPlanningRunner(
+                        collector=repair_collector,
+                        snapshots=build_repair_planning_snapshot_store(
+                            settings=settings,
+                            persistence=async_ports.persistence,
+                        ),
+                        max_claims=max_claims,
+                        page_size=page_size,
+                    )
+                )
+                await repair_planning_loop.start()
+                logger.info(
+                    "repair_planning_loop_started",
+                    metadata={
+                        "interval_seconds": repair_planning_loop._interval,
+                        "max_claims": max_claims,
+                        "page_size": page_size,
                     },
                 )
             # Opt-in (default off). Requires ``pg_stat_statements`` installed;
@@ -180,6 +274,8 @@ class RuntimeWorkerEntrypoint:
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
             )
         finally:
+            if repair_planning_loop is not None:
+                await repair_planning_loop.stop()
             if statement_collector is not None:
                 await statement_collector.stop()
             if retention_loop is not None:

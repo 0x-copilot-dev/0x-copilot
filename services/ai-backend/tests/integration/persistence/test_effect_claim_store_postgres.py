@@ -20,6 +20,7 @@ import pytest
 from agent_runtime.effects.claims import (
     EffectClaim,
     EffectClaimConflict,
+    EffectClaimScanCursor,
     EffectClaimState,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -195,3 +196,55 @@ class TestPostgresEffectClaimStore:
             == completed_result
         )
         assert await claims.list_incomplete(org_id=org_id, limit=0) == ()
+
+    async def test_global_incomplete_keyset_scan_is_stable_across_tenants(
+        self, claims: PostgresEffectClaimStore
+    ) -> None:
+        tenant_a = f"org_effect_claim_a_{uuid4().hex}"
+        tenant_b = f"org_effect_claim_b_{uuid4().hex}"
+        scan_start = datetime(2099, 1, 1, tzinfo=timezone.utc)
+        first = _claim(org_id=tenant_a, idempotency_key="scan-a", offset=10).model_copy(
+            update={
+                "created_at": scan_start.isoformat(),
+                "updated_at": scan_start.isoformat(),
+            }
+        )
+        second = _claim(
+            org_id=tenant_b, idempotency_key="scan-b", offset=10
+        ).model_copy(
+            update={
+                "created_at": scan_start.isoformat(),
+                "updated_at": scan_start.isoformat(),
+            }
+        )
+        third = _claim(org_id=tenant_a, idempotency_key="scan-c", offset=11).model_copy(
+            update={
+                "created_at": (scan_start + timedelta(seconds=1)).isoformat(),
+                "updated_at": (scan_start + timedelta(seconds=1)).isoformat(),
+            }
+        )
+        for claim in (third, second, first):
+            await claims.claim(claim=claim)
+
+        start_cursor = EffectClaimScanCursor(
+            after_created_at=scan_start - timedelta(seconds=1),
+            after_org_id="0",
+            after_claim_id="clm_0",
+        )
+        first_page = await claims.list_incomplete_after(cursor=start_cursor, limit=2)
+        expected = sorted(
+            (first, second),
+            key=lambda claim: (claim.created_at, claim.org_id, claim.claim_id),
+        )
+        assert [claim.claim_id for claim in first_page] == [
+            claim.claim_id for claim in expected
+        ]
+        last = first_page[-1]
+        cursor = EffectClaimScanCursor(
+            after_created_at=datetime.fromisoformat(last.created_at),
+            after_org_id=last.org_id,
+            after_claim_id=last.claim_id,
+        )
+        second_page = await claims.list_incomplete_after(cursor=cursor, limit=2)
+
+        assert [claim.claim_id for claim in second_page] == [third.claim_id]
