@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "vectors": [
+    {
+      "id": "classification_match",
+      "kind": "classification",
+      "legacy": { "effect_class": "none" },
+      "canonical": { "effect_class": "none" },
+      "expected_outcome": "match"
+    },
+    {
+      "id": "classification_mismatch",
+      "kind": "classification",
+      "legacy": { "effect_class": "external_reversible" },
+      "canonical": { "effect_class": "external_destructive" },
+      "expected_outcome": "mismatch"
+    },
+    {
+      "id": "surface_tab_projection_match",
+      "kind": "surface_tab_projection",
+      "legacy": { "tabs": ["surface_a", "surface_b"] },
+      "canonical": { "tabs": ["surface_a", "surface_b"] },
+      "expected_outcome": "match"
+    },
+    {
+      "id": "receipt_pending_usage_artifact_match",
+      "kind": "receipt_fold",
+      "legacy": { "reads": 1, "proposed": 1, "approved": 0, "held": 1 },
+      "canonical": { "reads": 1, "proposed": 1, "approved": 0, "held": 1 },
+      "expected_outcome": "match"
+    },
+    {
+      "id": "proposal_canonicalization_match",
+      "kind": "proposal_canonicalization",
+      "legacy": { "args_digest": "same-protected-input" },
+      "canonical": { "args_digest": "same-protected-input" },
+      "expected_outcome": "match"
+    }
+  ]
+}

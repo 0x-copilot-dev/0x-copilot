@@ -84,6 +84,12 @@ from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.rollout import RolloutCapability, RolloutMode
+from agent_runtime.rollout_shadow import (
+    ShadowComparisonContext,
+    ShadowComparisonService,
+)
+from agent_runtime.rollout_shadow_adapters import ShadowRunProjectionObserver
 from runtime_worker.browser_operation_storage import (
     RuntimeBrowserActionPlanStore,
 )
@@ -407,6 +413,7 @@ class RuntimeRunHandler:
             else None
         )
         operation_context_token: object | None = None
+        shadow_comparison_token: object | None = None
         mcp_operation_gateway_token: object | None = None
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
@@ -446,6 +453,10 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         try:
+            if self._shadow_comparison_enabled():
+                shadow_comparison_token = ShadowComparisonContext.bind_for_run(
+                    resolution=self.settings.execution.rollout
+                )
             mcp_gateway_services = self._build_mcp_operation_gateway_services(run)
             if self._operation_context_required():
                 operation_context_token = OperationContext.bind_for_run(
@@ -631,6 +642,7 @@ class RuntimeRunHandler:
                 status=AgentRunStatus.TIMED_OUT.value,
                 budget_reservations=budget_reservations,
             )
+            await self._observe_e2_shadow_projections(failed)
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             return
@@ -669,10 +681,13 @@ class RuntimeRunHandler:
                 status=AgentRunStatus.FAILED.value,
                 budget_reservations=budget_reservations,
             )
+            await self._observe_e2_shadow_projections(failed)
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if shadow_comparison_token is not None:
+                ShadowComparisonContext.unbind(shadow_comparison_token)  # type: ignore[arg-type]
             if mcp_operation_gateway_token is not None:
                 McpOperationGatewayContext.unbind(mcp_operation_gateway_token)  # type: ignore[arg-type]
             if operation_context_token is not None:
@@ -727,6 +742,7 @@ class RuntimeRunHandler:
             status=AgentRunStatus.COMPLETED.value,
             budget_reservations=budget_reservations,
         )
+        await self._observe_e2_shadow_projections(completed)
 
     async def _emit_receipt_then_terminate(
         self, *, run: RunRecord, **terminate_kwargs: object
@@ -750,6 +766,38 @@ class RuntimeRunHandler:
             run=run,
         )
         await self.run_termination.terminate(run=run, **terminate_kwargs)
+
+    def _shadow_comparison_enabled(self) -> bool:
+        """D2 binds only when D1 resolved at least one exact shadow lane."""
+
+        return bool(self.settings.execution.rollout.modes.shadowed())
+
+    def _shadow_projection_observation_enabled(self) -> bool:
+        """Avoid an additional store read unless a projection lane is shadowing."""
+
+        modes = self.settings.execution.rollout.modes
+        return any(
+            modes.mode_for(capability) is RolloutMode.SHADOW
+            for capability in (
+                RolloutCapability.PRESENTATION_V2_1,
+                RolloutCapability.ARTIFACT_REPOSITORY,
+            )
+        )
+
+    async def _observe_e2_shadow_projections(self, run: RunRecord) -> None:
+        """Run D2's bounded terminal read-only observer after legacy completion."""
+
+        if not self._shadow_projection_observation_enabled():
+            return
+        observer = ShadowRunProjectionObserver(
+            ShadowComparisonService(resolution=self.settings.execution.rollout)
+        )
+        await observer.observe(
+            event_store=self.event_store,
+            org_id=run.org_id,
+            run_id=run.run_id,
+            run_status=run.status,
+        )
 
     async def _preflight_budgets(
         self,
