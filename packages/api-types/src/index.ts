@@ -1107,6 +1107,50 @@ export interface RetentionEffectiveResponse {
   effective: Record<RetentionKind, RetentionEffectivePolicyEntry>;
 }
 
+/** D11 — the closed ownership scopes accepted by legal-hold management. */
+export type LegalHoldScope = "org" | "user" | "conversation";
+
+/** D11 — closed, non-sensitive reasons; arbitrary legal text is never sent. */
+export type LegalHoldReasonCode =
+  | "legal_request"
+  | "investigation"
+  | "compliance"
+  | "security"
+  | "legacy";
+
+/** D11 — create input; target is typed by scope, never a generic resource ref. */
+export interface LegalHoldCreateRequest {
+  scope: LegalHoldScope;
+  reason_code: LegalHoldReasonCode;
+  target_user_id?: string;
+  target_conversation_id?: string;
+}
+
+/** D11 — optimistic-concurrency release input. */
+export interface LegalHoldReleaseRequest {
+  expected_revision: number;
+}
+
+/** D11 — tenant-scoped safe public projection of a legal hold. */
+export interface LegalHoldView {
+  id: string;
+  scope: LegalHoldScope;
+  target_user_id: string | null;
+  target_conversation_id: string | null;
+  reason_code: LegalHoldReasonCode;
+  created_by_user_id: string;
+  created_at: string;
+  released_by_user_id: string | null;
+  released_at: string | null;
+  revision: number;
+  replayed: boolean;
+}
+
+/** D11 — bounded list response; always identity-scoped by the facade. */
+export interface LegalHoldListResponse {
+  holds: LegalHoldView[];
+}
+
 /** PR 4.3 — request body for ``POST /v1/agent/workspace/export``. */
 export interface WorkspaceExportRequest {
   /** Only "workspace" is accepted in v1. */

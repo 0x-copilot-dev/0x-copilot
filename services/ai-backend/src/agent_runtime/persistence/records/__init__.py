@@ -52,6 +52,13 @@ from agent_runtime.persistence.records.retention import (
     RetentionScope,
     RetentionSweepOutcome,
 )
+from agent_runtime.persistence.records.legal_holds import (
+    LegalHoldConflict,
+    LegalHoldMutationResult,
+    LegalHoldReasonCode,
+    LegalHoldRecord,
+    LegalHoldScope,
+)
 from agent_runtime.persistence.records.shares import (
     ShareRecipientRecord,
     ShareRecord,
@@ -170,6 +177,11 @@ __all__ = [
     "RetentionPolicyRecord",
     "RetentionScope",
     "RetentionSweepOutcome",
+    "LegalHoldMutationResult",
+    "LegalHoldConflict",
+    "LegalHoldReasonCode",
+    "LegalHoldRecord",
+    "LegalHoldScope",
     "ShareRecipientRecord",
     "ShareRecord",
     "ShareViewAccess",
