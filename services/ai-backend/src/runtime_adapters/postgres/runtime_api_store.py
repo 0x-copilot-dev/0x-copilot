@@ -22,6 +22,9 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorEnvelope,
     StreamEventSource,
 )
+from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
+    LifecycleReferenceEventWindow,
+)
 from agent_runtime.persistence._reader import reader
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.ports import (
@@ -6462,6 +6465,38 @@ class PostgresRuntimeApiStore:
             )
             rows = await cur.fetchall()
         return tuple(self._event_envelope(row) for row in rows)
+
+    async def list_lifecycle_reference_events_window(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        after_sequence: int,
+        limit: int,
+    ) -> LifecycleReferenceEventWindow:
+        """Read at most one bounded lifecycle page under the tenant fence."""
+
+        if limit < 1:
+            raise ValueError("lifecycle event window limit must be positive")
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_events
+                WHERE org_id = %s AND run_id = %s AND sequence_no > %s
+                ORDER BY sequence_no ASC
+                LIMIT %s
+                """,
+                (org_id, run_id, after_sequence, limit + 1),
+            )
+            rows = await cur.fetchall()
+        envelopes = tuple(self._event_envelope(row) for row in rows)
+        page = envelopes[:limit]
+        has_more = len(envelopes) > limit
+        return LifecycleReferenceEventWindow(
+            events=page,
+            has_more=has_more,
+            next_after_sequence=page[-1].sequence_no if has_more and page else None,
+        )
 
     async def get_event_by_id(
         self,
