@@ -25,6 +25,26 @@ from runtime_api.rbac import (
 _SERVICE_TOKEN = "test-service-token"
 
 
+class _AuthorizationMetricSpy:
+    def __init__(self) -> None:
+        self.denials: list[dict[str, str]] = []
+
+    def record_authorization_denial(
+        self,
+        *,
+        boundary: str,
+        reason: str,
+        enforcement: str,
+    ) -> None:
+        self.denials.append(
+            {
+                "boundary": boundary,
+                "reason": reason,
+                "enforcement": enforcement,
+            }
+        )
+
+
 @pytest.fixture(autouse=True)
 def _reset_env(monkeypatch) -> Iterator[None]:
     monkeypatch.delenv("RBAC_MODE", raising=False)
@@ -78,6 +98,27 @@ class TestEnforceMode:
             headers=_service_headers(permission_scopes=("runtime:use",)),
         )
         assert r.status_code == 200
+
+    def test_denial_emits_closed_rbac_metric(self, monkeypatch) -> None:
+        import runtime_api.rbac as rbac
+
+        monkeypatch.setenv("RBAC_MODE", "enforce")
+        spy = _AuthorizationMetricSpy()
+        monkeypatch.setattr(rbac, "get_lifecycle_operational_metrics", lambda: spy)
+
+        response = TestClient(_app(scopes_required=("admin:users",))).get(
+            "/probe",
+            headers=_service_headers(permission_scopes=()),
+        )
+
+        assert response.status_code == 403
+        assert spy.denials == [
+            {
+                "boundary": "rbac",
+                "reason": "rbac_denied",
+                "enforcement": "enforce",
+            }
+        ]
 
 
 class TestAuditMode:

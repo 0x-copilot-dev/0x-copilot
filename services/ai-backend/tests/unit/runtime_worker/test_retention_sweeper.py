@@ -104,6 +104,16 @@ class _SpyMetrics(RetentionMetrics):
         self.duration_calls.append({"kind": kind, "elapsed_seconds": elapsed_seconds})
 
 
+class _SpyLifecycleMetrics:
+    """D13-only sink; deliberately stores no org or failure body."""
+
+    def __init__(self) -> None:
+        self.failure_kinds: list[str] = []
+
+    def record_retention_execution_failure(self, *, kind: str) -> None:
+        self.failure_kinds.append(kind)
+
+
 class TestRetentionSweeperLoop:
     @pytest.mark.asyncio
     async def test_iterates_orgs_and_kinds(self) -> None:
@@ -216,6 +226,22 @@ class TestRetentionSweeperLoop:
         kinds = {outcome.kind for outcome in outcomes}
         assert RetentionKind.EVENTS in kinds
         assert RetentionKind.CONTEXT_PAYLOADS in kinds
+
+    @pytest.mark.asyncio
+    async def test_sweep_kind_failure_emits_closed_d13_failure_kind(self) -> None:
+        class _BoomPersistence(_FakePersistence):
+            async def sweep_retention_kind(self, **kwargs):  # type: ignore[no-untyped-def]
+                if kwargs["kind"] is RetentionKind.MESSAGES:
+                    raise RuntimeError("do not label this message")
+                return await super().sweep_retention_kind(**kwargs)
+
+        lifecycle_metrics = _SpyLifecycleMetrics()
+        await RetentionSweeperLoop(
+            persistence=_BoomPersistence(orgs=("org_a",)),
+            lifecycle_metrics=lifecycle_metrics,  # type: ignore[arg-type]
+        ).sweep_once()
+
+        assert lifecycle_metrics.failure_kinds == [RetentionKind.MESSAGES.value]
 
 
 class TestRetentionSweeperPhase1Evidence:
@@ -389,6 +415,11 @@ class TestRetentionSweeperPhase1Evidence:
                 raise RuntimeError("DB unavailable")
 
         persistence = _BoomEvidence(orgs=("org_a",))
-        loop = RetentionSweeperLoop(persistence=persistence)
+        lifecycle_metrics = _SpyLifecycleMetrics()
+        loop = RetentionSweeperLoop(
+            persistence=persistence,
+            lifecycle_metrics=lifecycle_metrics,  # type: ignore[arg-type]
+        )
         outcomes = await loop.sweep_once()
         assert len(outcomes) > 0
+        assert lifecycle_metrics.failure_kinds

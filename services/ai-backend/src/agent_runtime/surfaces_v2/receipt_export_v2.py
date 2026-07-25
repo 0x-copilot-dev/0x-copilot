@@ -28,6 +28,11 @@ from copilot_audit_chain import (
 )
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.observability.lifecycle_metrics import (
+    AuditVerificationFormatLabel,
+    LifecycleOperationalMetrics,
+    get_lifecycle_operational_metrics,
+)
 from agent_runtime.surfaces_v2.ledger_ids import (
     ArtifactContentRefCodec,
     ProposalUriCodec,
@@ -746,20 +751,61 @@ class ReceiptExportV2Builder:
 class ReceiptExportV2Verifier:
     """Offline verifier for v2 bundles, with a permanent v1 compatibility path."""
 
-    def __init__(self, *, signer: AuditChainSigner) -> None:
+    def __init__(
+        self,
+        *,
+        signer: AuditChainSigner,
+        metrics: LifecycleOperationalMetrics | None = None,
+    ) -> None:
         self._signer = signer
+        self._metrics = (
+            metrics if metrics is not None else get_lifecycle_operational_metrics()
+        )
 
     def verify(self, bundle: Mapping[str, object] | object) -> ChainVerificationResult:
+        format_label = self._verification_format(bundle)
         if not isinstance(bundle, Mapping):
-            return self._failure("bundle malformed")
-        if bundle.get("export_version") == 1 or bundle.get(_Keys.BUNDLE_VERSION) == 1:
-            return self._verify_legacy(bundle)
-        if bundle.get(_Keys.BUNDLE_VERSION) != _Values.BUNDLE_VERSION:
-            return self._failure("unsupported bundle version")
+            result = self._failure("bundle malformed")
+        elif bundle.get("export_version") == 1 or bundle.get(_Keys.BUNDLE_VERSION) == 1:
+            result = self._verify_legacy(bundle)
+        elif bundle.get(_Keys.BUNDLE_VERSION) != _Values.BUNDLE_VERSION:
+            result = self._failure("unsupported bundle version")
+        else:
+            try:
+                result = self._verify_v2(bundle)
+            except Exception:  # noqa: BLE001 - untrusted offline bundles are total
+                result = self._failure("bundle malformed")
+        self._record_verification(format_label=format_label, result=result)
+        return result
+
+    def _record_verification(
+        self,
+        *,
+        format_label: str,
+        result: ChainVerificationResult,
+    ) -> None:
+        """Observe the result without allowing telemetry to affect verification."""
+
         try:
-            return self._verify_v2(bundle)
-        except Exception:  # noqa: BLE001 - untrusted offline bundles are total
-            return self._failure("bundle malformed")
+            self._metrics.record_audit_verification(
+                format=format_label,
+                succeeded=result.ok,
+            )
+        except Exception:  # pragma: no cover - injected metrics are non-authoritative
+            # This verifier is often used as an offline security primitive.  A
+            # broken telemetry exporter must never turn a verification result
+            # into a different result or exception.
+            return
+
+    @staticmethod
+    def _verification_format(bundle: Mapping[str, object] | object) -> str:
+        if not isinstance(bundle, Mapping):
+            return "unknown"
+        if bundle.get("export_version") == 1 or bundle.get(_Keys.BUNDLE_VERSION) == 1:
+            return AuditVerificationFormatLabel.RECEIPT_V1
+        if bundle.get(_Keys.BUNDLE_VERSION) == _Values.BUNDLE_VERSION:
+            return AuditVerificationFormatLabel.RECEIPT_V2
+        return "unknown"
 
     def _verify_v2(self, bundle: Mapping[str, object]) -> ChainVerificationResult:
         run_id = bundle.get(_Keys.RUN_ID)

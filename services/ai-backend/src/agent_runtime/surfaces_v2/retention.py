@@ -26,12 +26,22 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from enum import StrEnum
+import logging
 import re
+from time import perf_counter
 from typing import Final
 
 from pydantic import Field, field_validator, model_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.observability.lifecycle_metrics import (
+    LifecycleOperationalMetrics,
+    LifecyclePlanDecisionMetric,
+    LifecyclePlanOutcomeLabel,
+    LifecyclePlannerLabel,
+    RetentionLagStageLabel,
+    get_lifecycle_operational_metrics,
+)
 from agent_runtime.surfaces_v2.lifecycle_refs import LifecycleReferenceScheme
 
 
@@ -42,6 +52,7 @@ _SAFE_SCHEME: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _KNOWN_SCHEMES: Final[frozenset[str]] = frozenset(
     scheme.value for scheme in LifecycleReferenceScheme
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 def _opaque_identifier(value: str) -> str:
@@ -391,46 +402,145 @@ class RetentionPlan(RuntimeContract):
 
 
 class RetentionPlanner:
-    """Pure D10/D11 decision engine over a caller-provided immutable snapshot."""
+    """D10/D11 decision engine over a caller-provided immutable snapshot.
+
+    The returned plan remains pure and deterministic.  The optional D13
+    metrics façade observes only closed, redacted aggregate facts and is
+    strictly best-effort; it never changes a planning result or failure.
+    """
+
+    def __init__(self, *, metrics: LifecycleOperationalMetrics | None = None) -> None:
+        self._metrics = (
+            metrics if metrics is not None else get_lifecycle_operational_metrics()
+        )
 
     def plan(self, request: RetentionPlanningRequest) -> RetentionPlan:
         """Return a deterministic page without issuing, persisting, or deleting anything."""
 
-        self._validate_request_scope(request)
-        ordered = tuple(sorted(request.candidates, key=lambda row: row.candidate_id))
-        candidate_ids = tuple(row.candidate_id for row in ordered)
-        if len(candidate_ids) != len(set(candidate_ids)):
-            raise RetentionPlanningError(RetentionPlanningErrorCode.DUPLICATE_CANDIDATE)
+        started_at = perf_counter()
+        try:
+            self._validate_request_scope(request)
+            ordered = tuple(
+                sorted(request.candidates, key=lambda row: row.candidate_id)
+            )
+            candidate_ids = tuple(row.candidate_id for row in ordered)
+            if len(candidate_ids) != len(set(candidate_ids)):
+                raise RetentionPlanningError(
+                    RetentionPlanningErrorCode.DUPLICATE_CANDIDATE
+                )
 
-        after_candidate_id = (
-            request.cursor.after_candidate_id if request.cursor is not None else None
-        )
-        remaining = tuple(
-            candidate
-            for candidate in ordered
-            if after_candidate_id is None or candidate.candidate_id > after_candidate_id
-        )
-        page = remaining[: request.limit]
-        has_more = len(remaining) > len(page)
-        next_cursor = (
-            RetentionPlanCursor(
+            after_candidate_id = (
+                request.cursor.after_candidate_id
+                if request.cursor is not None
+                else None
+            )
+            remaining = tuple(
+                candidate
+                for candidate in ordered
+                if after_candidate_id is None
+                or candidate.candidate_id > after_candidate_id
+            )
+            page = remaining[: request.limit]
+            has_more = len(remaining) > len(page)
+            next_cursor = (
+                RetentionPlanCursor(
+                    tenant_id=request.tenant_id,
+                    snapshot_id=request.snapshot_id,
+                    after_candidate_id=page[-1].candidate_id,
+                )
+                if has_more and page
+                else None
+            )
+            decisions = tuple(
+                self._decide(candidate=candidate, request=request) for candidate in page
+            )
+            plan = RetentionPlan(
                 tenant_id=request.tenant_id,
                 snapshot_id=request.snapshot_id,
-                after_candidate_id=page[-1].candidate_id,
+                as_of=request.as_of,
+                decisions=decisions,
+                next_cursor=next_cursor,
+                has_more=has_more,
             )
-            if has_more and page
-            else None
+        except RetentionPlanningError:
+            self._record_planning_failure(
+                LifecyclePlanOutcomeLabel.REJECTED_INPUT,
+                elapsed_seconds=perf_counter() - started_at,
+            )
+            raise
+        except Exception:
+            self._record_planning_failure(
+                LifecyclePlanOutcomeLabel.FAILED,
+                elapsed_seconds=perf_counter() - started_at,
+            )
+            raise
+
+        self._record_plan_metrics(
+            request=request,
+            page=page,
+            plan=plan,
+            elapsed_seconds=perf_counter() - started_at,
         )
-        return RetentionPlan(
-            tenant_id=request.tenant_id,
-            snapshot_id=request.snapshot_id,
-            as_of=request.as_of,
-            decisions=tuple(
-                self._decide(candidate=candidate, request=request) for candidate in page
-            ),
-            next_cursor=next_cursor,
-            has_more=has_more,
-        )
+        return plan
+
+    def _record_planning_failure(self, outcome: str, *, elapsed_seconds: float) -> None:
+        try:
+            self._metrics.record_plan_failure(
+                planner=LifecyclePlannerLabel.RETENTION,
+                outcome=outcome,
+                elapsed_seconds=elapsed_seconds,
+            )
+        except Exception:  # pragma: no cover - injected metrics must not affect D10
+            _LOGGER.debug("retention_planner.metrics_failed", exc_info=True)
+
+    def _record_plan_metrics(
+        self,
+        *,
+        request: RetentionPlanningRequest,
+        page: Sequence[RetentionCandidate],
+        plan: RetentionPlan,
+        elapsed_seconds: float,
+    ) -> None:
+        """Publish aggregate D13 facts only after a complete plan is available."""
+
+        try:
+            self._metrics.record_plan_success(
+                planner=LifecyclePlannerLabel.RETENTION,
+                decisions=tuple(
+                    LifecyclePlanDecisionMetric(
+                        candidate_kind=candidate.kind.value,
+                        disposition=decision.state.value,
+                    )
+                    for candidate, decision in zip(page, plan.decisions, strict=True)
+                ),
+                elapsed_seconds=elapsed_seconds,
+            )
+            for candidate, decision in zip(page, plan.decisions, strict=True):
+                if (
+                    candidate.state is RetentionCandidateState.ACTIVE
+                    and decision.state is RetentionDecisionState.LOGICAL_TOMBSTONE_ONLY
+                ):
+                    self._metrics.record_retention_lag(
+                        candidate_kind=candidate.kind.value,
+                        stage=RetentionLagStageLabel.TOMBSTONE_DUE,
+                        elapsed_seconds=(
+                            request.as_of - candidate.retention_expires_at
+                        ).total_seconds(),
+                    )
+                elif (
+                    candidate.tombstoned_at is not None
+                    and decision.state is RetentionDecisionState.PHYSICALLY_ELIGIBLE
+                ):
+                    due_at = (
+                        candidate.tombstoned_at + request.policy.physical_grace_period
+                    )
+                    self._metrics.record_retention_lag(
+                        candidate_kind=candidate.kind.value,
+                        stage=RetentionLagStageLabel.PHYSICAL_GC_DUE,
+                        elapsed_seconds=(request.as_of - due_at).total_seconds(),
+                    )
+        except Exception:  # pragma: no cover - metrics never change a plan
+            _LOGGER.debug("retention_planner.metrics_failed", exc_info=True)
 
     @staticmethod
     def _validate_request_scope(request: RetentionPlanningRequest) -> None:
