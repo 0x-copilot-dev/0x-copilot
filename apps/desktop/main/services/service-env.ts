@@ -160,6 +160,16 @@ export interface ServiceEnvInputs {
    * other caller and the existing tests are unaffected.
    */
   readonly storeBackendOverride?: "file" | "postgres";
+  /**
+   * Electron-main browser broker authority for the supervised ai-backend only.
+   * Kept outside the global passthrough allowlist so its bearer can never enter
+   * backend or backend-facade child environments.
+   */
+  readonly browserBroker?: {
+    readonly enabled: boolean;
+    readonly baseUrl?: string;
+    readonly token?: string;
+  };
 }
 
 // Builds the FULL child environment for one supervised service: filtered
@@ -225,6 +235,20 @@ export function buildServiceEnv(
     }
     case "ai-backend": {
       env.RUNTIME_ENVIRONMENT = "production";
+      const browser = inputs.browserBroker;
+      if (
+        browser?.enabled === true &&
+        browser.baseUrl !== undefined &&
+        browser.baseUrl !== "" &&
+        browser.token !== undefined &&
+        browser.token !== ""
+      ) {
+        env.RUNTIME_ENABLE_DESKTOP_BROWSER = "true";
+        env.DESKTOP_BROWSER_BROKER_URL = browser.baseUrl;
+        env.DESKTOP_BROWSER_BROKER_TOKEN = browser.token;
+      } else {
+        env.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
+      }
       // The override wins when the supervisor has resolved the effective backend
       // for this boot (post-migration gate); otherwise fall back to the pure
       // env resolution so buildServiceEnv and the supervisor stay single-sourced.

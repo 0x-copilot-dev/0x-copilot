@@ -3,9 +3,8 @@
 This is the AI-backend edge of the AC8 agentic browser. It is the NARROW
 exception to backend-owned SaaS MCP transport: a device-local provider that
 talks to the Electron-main browser broker over an authenticated loopback
-channel, exposing a small typed READ-ONLY tool surface (navigate / snapshot /
-wait / screenshot / close) to the model through the normal MCP registry,
-permission, approval, budget, citation, payload, and audit middleware.
+channel. Reads use the normal MCP dispatch lane; the exact click/submit cohort
+is discovery-only here and is diverted into A4/A5 before a client can dispatch.
 
 Ownership boundaries honored here:
 
@@ -18,8 +17,7 @@ Ownership boundaries honored here:
   disabled / the broker is unhealthy (the ``build_browser_mcp`` seam returns
   ``None``), so the model never sees a browser tool it cannot use.
 
-DEFERRED (noted seams): the run/consent binding is composed by Electron main at
-approval time; downloads, uploads, and side-effecting tools are not exposed.
+Downloads and artifact-backed uploads remain deferred to the next D4 slice.
 """
 
 from __future__ import annotations
@@ -71,6 +69,7 @@ class BrowserMcpConfig:
     broker_url: str | None
     broker_token: str | None
     runtime_context: AgentRuntimeContext
+    effects_enabled: bool = False
     timeout_seconds: float = 10.0
     http_client: httpx.AsyncClient | None = None
 
@@ -93,6 +92,7 @@ def build_browser_mcp(config: BrowserMcpConfig) -> "DesktopBrowserMcpProvider | 
         broker_url=config.broker_url,
         broker_token=config.broker_token,
         runtime_context=config.runtime_context,
+        effects_enabled=config.effects_enabled,
         timeout_seconds=config.timeout_seconds,
         http_client=config.http_client or httpx.AsyncClient(),
     )
@@ -105,6 +105,7 @@ class DesktopBrowserMcpProvider:
     broker_url: str
     broker_token: str
     runtime_context: AgentRuntimeContext
+    effects_enabled: bool = False
     timeout_seconds: float = 10.0
     http_client: httpx.AsyncClient = field(
         default_factory=httpx.AsyncClient,
@@ -141,6 +142,8 @@ class DesktopBrowserMcpProvider:
             broker_url=self.broker_url,
             broker_token=self.broker_token,
             card=card,
+            runtime_context=self.runtime_context,
+            effects_enabled=self.effects_enabled,
             timeout_seconds=self.timeout_seconds,
             http_client=self.http_client,
         )
@@ -153,6 +156,8 @@ class DesktopBrowserMcpClient:
     broker_url: str
     broker_token: str
     card: McpServerCard
+    runtime_context: AgentRuntimeContext
+    effects_enabled: bool = False
     timeout_seconds: float = 10.0
     http_client: httpx.AsyncClient = field(
         default_factory=httpx.AsyncClient,
@@ -175,10 +180,11 @@ class DesktopBrowserMcpClient:
         )
 
     async def list_tools(self) -> tuple[McpToolDescriptor, ...]:
-        """Discover the read-only tool schemas via ``tools/list``.
+        """Discover read tools plus the gated exact-plan proposal cohort.
 
         The desktop worker is the source of truth for these schemas; they are
-        NOT hand-copied here. Side-effecting tools are absent by construction.
+        NOT hand-copied here. Exact actions remain hidden unless the operation
+        gateway and A5 composition are both enabled for this run.
         """
 
         payload = await self._post(
@@ -188,7 +194,13 @@ class DesktopBrowserMcpClient:
         if not isinstance(raw_tools, list):
             return ()
         return tuple(
-            self._tool_descriptor(tool) for tool in raw_tools if isinstance(tool, dict)
+            self._tool_descriptor(tool)
+            for tool in raw_tools
+            if isinstance(tool, dict)
+            and (
+                self.effects_enabled
+                or tool.get(BrowserKeys.NAME) not in BrowserServer.STAGED_ACTION_TOOLS
+            )
         )
 
     async def list_resources(self) -> tuple[Any, ...]:
@@ -202,20 +214,24 @@ class DesktopBrowserMcpClient:
         tool_name: str,
         arguments: Mapping[str, Any],
     ) -> dict[str, Any]:
-        """Dispatch a typed read-only action through the broker.
+        """Dispatch a typed read through the broker.
 
-        The AI side sends only ``{tool: {name, arguments}}``; Electron main
-        composes the full run/consent binding (profile, approved origin policy,
-        approval id) at dispatch time — that binding-injection is the deferred
-        consent seam and is deliberately NOT synthesised here.
+        The AI side sends only its server-owned run/workspace ids plus
+        ``{tool: {name, arguments}}``. Electron main composes the profile,
+        approved exact-origin policy, action class, deadline, and nonce. The
+        model cannot place any of those authority fields on this envelope.
         """
 
+        if tool_name in BrowserServer.STAGED_ACTION_TOOLS:
+            raise McpConnectionError(BrowserMessages.STAGED_ACTION_REQUIRED)
         envelope = self._envelope(
             {
+                BrowserKeys.RUN_ID: self.runtime_context.run_id,
+                BrowserKeys.WORKSPACE_ID: self.runtime_context.org_id,
                 BrowserKeys.TOOL: {
                     BrowserKeys.NAME: tool_name,
                     BrowserKeys.ARGUMENTS: dict(arguments),
-                }
+                },
             }
         )
         payload = await self._post(BrowserBroker.ROUTE_ACTION, envelope=envelope)
@@ -274,21 +290,10 @@ class DesktopBrowserMcpClient:
             raise McpConnectionError(BrowserMessages.INVALID_RESPONSE)
         return body
 
-    #: Side-effecting browser tools. When the desktop worker advertises the
-    #: action layer, these are marked HIGH risk so the existing MCP HITL
-    #: approval middleware interrupts on them before dispatch — the worker also
-    #: gates them defensively, but the model-facing approval rides the normal
-    #: interrupt path (no browser-specific approval engine).
-    _SIDE_EFFECTING_TOOLS = frozenset(
-        {
-            "browser_click",
-            "browser_type",
-            "browser_select",
-            "browser_submit",
-            "browser_download",
-            "browser_upload",
-        }
-    )
+    #: Side-effecting browser tools. They are marked HIGH risk for honest
+    #: discovery, but ``CallMcpTool`` diverts them into A4/A5 before this
+    #: client's dispatch method can run. ``call_tool`` rejects them again.
+    _SIDE_EFFECTING_TOOLS = BrowserServer.STAGED_ACTION_TOOLS
 
     @classmethod
     def _tool_descriptor(cls, tool: dict[str, Any]) -> McpToolDescriptor:

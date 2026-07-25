@@ -18,6 +18,8 @@ import json
 
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.browser.contracts import BrowserEffectBridge
+from agent_runtime.capabilities.browser.effect_adapter import BrowserEffectExecutor
 from agent_runtime.capabilities.mcp.operation_adapter import McpOperationStoredResult
 from agent_runtime.capabilities.mcp.operation_adapter import (
     McpOperationArgumentMaterialResolver,
@@ -40,6 +42,7 @@ from runtime_adapters.artifact_references import (
 )
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_worker.mcp_effect_executor import McpEffectExecutor
+from runtime_worker.browser_operation_storage import RuntimeBrowserActionPlanStore
 from runtime_worker.workspace_effect_storage import (
     RuntimeWorkspaceProposalStore,
     WorkspaceHostSessionRegistryPort,
@@ -219,6 +222,7 @@ class RuntimeMcpEffectCoordinatorFactory:
     timeout_seconds: float
     workspace_sessions: WorkspaceHostSessionRegistryPort | None = None
     workspace_overlay_store: WorkspaceOverlayStorePort | None = None
+    browser_bridge: BrowserEffectBridge | None = None
 
     def for_run(self, *, run: RunRecord) -> EffectCoordinator:
         owner_ref = f"principal://users/{run.user_id}"
@@ -239,6 +243,12 @@ class RuntimeMcpEffectCoordinatorFactory:
             blobs=self.blobs,
             references=self.references,
             scope=scope,
+        )
+        browser_plans = RuntimeBrowserActionPlanStore(
+            blobs=self.blobs,
+            references=self.references,
+            org_id=run.org_id,
+            user_id=run.user_id,
         )
         factories = {
             EffectExecutorKind.MCP: lambda active_scope: McpEffectExecutor(
@@ -266,6 +276,13 @@ class RuntimeMcpEffectCoordinatorFactory:
                     overlay_store=self.workspace_overlay_store,  # type: ignore[arg-type]
                 )
             )
+        if self.browser_bridge is not None:
+            factories[EffectExecutorKind.BROWSER] = lambda _active_scope: (
+                BrowserEffectExecutor(
+                    plans=browser_plans,
+                    bridge=self.browser_bridge,  # type: ignore[arg-type]
+                )
+            )
         return EffectCoordinator(
             ledger=RuntimeEffectLedger(
                 event_producer=self.event_producer,
@@ -274,7 +291,7 @@ class RuntimeMcpEffectCoordinatorFactory:
             ),
             claims=self.claims,  # type: ignore[arg-type]
             scopes=_StaticEffectScope(scope),
-            references=_McpImmutableReferences(
+            references=_EffectImmutableReferences(
                 scope=scope,
                 arguments=arguments,
                 workspace=(
@@ -283,6 +300,7 @@ class RuntimeMcpEffectCoordinatorFactory:
                     and self.workspace_overlay_store is not None
                     else None
                 ),
+                browser_plans=browser_plans,
             ),
             executors=EffectExecutorRegistry(factories),
         )
@@ -297,9 +315,10 @@ class _StaticEffectScope:
 
 
 @dataclass(frozen=True)
-class _McpImmutableReferences:
+class _EffectImmutableReferences:
     scope: EffectExecutionScope
     arguments: RuntimeMcpOperationArgumentStore
+    browser_plans: RuntimeBrowserActionPlanStore
     workspace: RuntimeWorkspaceProposalStore | None = None
 
     def open(
@@ -313,6 +332,11 @@ class _McpImmutableReferences:
                     scope=scope, reference=reference
                 ):
                     yield chunk
+                return
+            if reference.startswith(("browser-plan://", "browser-target://")):
+                body = await self.browser_plans.open_reference(ref=reference)
+                if body is not None:
+                    yield body
                 return
             if reference.startswith("operation://"):
                 body = await self.arguments.resolve_reference(ref=reference)

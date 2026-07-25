@@ -44,6 +44,8 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { stageBrowserRuntime } from "./browser-runtime.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
 const MANIFEST_PATH = path.join(HERE, "manifest.json");
@@ -515,6 +517,7 @@ function isMachO(file) {
 /** Executables + loadable libraries that are actually Mach-O. */
 function collectSignTargets(root) {
   const targets = [];
+  const appBundles = [];
   const walk = (dir) => {
     let entries;
     try {
@@ -526,6 +529,13 @@ function collectSignTargets(root) {
       const full = path.join(dir, e.name);
       if (e.isSymbolicLink()) continue; // sign the real file, not the symlink
       if (e.isDirectory()) {
+        // Playwright's Chrome for Testing is already a valid signed app bundle.
+        // Re-signing its individual Mach-O files would invalidate the bundle
+        // seal and strip browser entitlements. Preserve it as one nested unit.
+        if (e.name.endsWith(".app")) {
+          appBundles.push(full);
+          continue;
+        }
         walk(full);
         continue;
       }
@@ -542,7 +552,7 @@ function collectSignTargets(root) {
     }
   };
   walk(root);
-  return targets;
+  return { targets, appBundles };
 }
 
 /** Fresh size+mtime fingerprint; recomputed after signing so warm runs skip. */
@@ -633,8 +643,8 @@ function adhocSignTree(runtimeDir) {
   // a file we're about to remove).
   pruneRuntimeCruft(runtimeDir);
 
-  const targets = collectSignTargets(runtimeDir);
-  if (targets.length === 0) {
+  const { targets, appBundles } = collectSignTargets(runtimeDir);
+  if (targets.length === 0 && appBundles.length === 0) {
     log("ad-hoc signing: no Mach-O binaries found (nothing to sign)");
     return;
   }
@@ -642,11 +652,31 @@ function adhocSignTree(runtimeDir) {
   // One stamp covers the whole finalize (strip → sign): its fingerprint is the
   // FINAL signed state, so an unchanged tree skips strip+sign on warm re-stages.
   const stampPath = path.join(runtimeDir, ".sign-stamp.json");
-  if (readStamp(stampPath)?.fingerprint === signFingerprint(targets)) {
+  if (
+    readStamp(stampPath)?.fingerprint ===
+    signFingerprint([...targets, ...appBundles])
+  ) {
     log(
       `ad-hoc signing: ${targets.length} binaries already signed (stamp match)`,
     );
     return;
+  }
+
+  for (const bundle of appBundles) {
+    const verified = spawnSync(
+      "codesign",
+      ["--verify", "--deep", "--strict", bundle],
+      { stdio: "pipe", encoding: "utf8" },
+    );
+    if (verified.status !== 0) {
+      fail(
+        `nested browser app has an invalid upstream signature: ` +
+          `${(verified.stderr || "").trim()}`,
+      );
+    }
+  }
+  if (appBundles.length > 0) {
+    log(`preserved ${appBundles.length} valid nested browser app signature(s)`);
   }
 
   const strippedCount = stripSymbols(targets);
@@ -694,7 +724,7 @@ function adhocSignTree(runtimeDir) {
   // Fingerprint the POST-sign state so an unchanged tree skips next time
   // (codesign rewrites each file, changing its size+mtime).
   writeStamp(stampPath, {
-    fingerprint: signFingerprint(targets),
+    fingerprint: signFingerprint([...targets, ...appBundles]),
     signed,
     signed_at: new Date().toISOString(),
   });
@@ -767,6 +797,21 @@ async function main() {
     stageService(runtimeDir, svc, pythonExe, hostExec);
   }
 
+  let browser;
+  try {
+    browser = stageBrowserRuntime({
+      runtimeDir,
+      platform: args.platform,
+      arch: args.arch,
+      hostExec,
+      cacheDir: CACHE_DIR,
+      expected: manifest.browser,
+      log,
+    });
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+
   // Frontend web assets (SIWE wallet page) — arch-agnostic, staged at <dest>/web.
   stageWebAssets(args.dest);
 
@@ -798,6 +843,7 @@ async function main() {
       artifact_version: manifest.postgres.version,
       sha256: pgEntry.sha256,
     },
+    browser,
     services: SERVICES.map((s) => ({
       name: s.name,
       site_packages: hostExec,

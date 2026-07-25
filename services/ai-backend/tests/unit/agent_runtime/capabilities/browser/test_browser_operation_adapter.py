@@ -168,6 +168,8 @@ def _click_args() -> dict[str, object]:
         "element_ref": "e4_2",
         "element_fingerprint": "a" * 64,
         "page_generation": 4,
+        "form_fingerprint": "d" * 64,
+        "form_payload_digest": "e" * 64,
         "form_action_url": "https://example.com/send",
         "method": "POST",
     }
@@ -312,7 +314,34 @@ async def test_unknown_click_stages_exact_plan_with_zero_browser_dispatch() -> N
     assert plan.origin == "https://example.com"
     assert plan.fields_digest == request.args_digest
     assert plan.canonical_fields_ref == request.canonical_args_ref
+    assert plan.form_payload_digest == "e" * 64
     assert "POST" in plan.method
+
+
+async def test_submit_without_form_payload_digest_never_stages_or_dispatches() -> None:
+    args = _click_args()
+    args.pop("form_payload_digest")
+    token = BoundContextMixin.bind()
+    bridge = _Bridge()
+    stager = _Stager()
+    try:
+        request = OperationRequestFactory.create(
+            capability="desktop-browser",
+            op="browser_submit",
+            arguments=args,
+        )
+        with pytest.raises(ValueError, match="form identity"):
+            await BrowserOperationAdapter(
+                bridge=bridge,
+                stager=stager,
+            ).build_proposal(request)
+    finally:
+        OperationContext.unbind(token)
+
+    assert stager.plans == []
+    assert bridge.reads == []
+    assert bridge.prepare_calls == 0
+    assert bridge.apply_calls == 0
 
 
 async def test_upload_submit_requires_authorized_artifact_revisions() -> None:

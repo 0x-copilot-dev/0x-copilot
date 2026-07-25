@@ -613,6 +613,15 @@ class EffectCoordinator:
         claim: EffectClaim,
         safe_message: str | None = None,
     ) -> EffectCoordinatorResult:
+        # Reconciliation is observational.  If the claim is already durable
+        # indeterminate and the executor still cannot prove an outcome, there
+        # is no legal state transition to persist.  Re-publish the idempotent
+        # completion fact and retain the original claim byte-for-byte.
+        if claim.state is EffectClaimState.INDETERMINATE:
+            await self._recorder.record_completion(scope=scope, claim=claim)
+            return _result_from_claim(
+                claim, status=EffectCoordinatorStatus.INDETERMINATE
+            )
         indeterminate = _indeterminate_claim(
             claim=claim,
             safe_message=_safe_message(safe_message, _PUBLIC_UNKNOWN_OUTCOME),

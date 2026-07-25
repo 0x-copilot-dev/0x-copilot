@@ -73,6 +73,12 @@ import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
 import { applyBrandDockIcon, applyBrandIdentity } from "./branding";
+import {
+  createProductionDesktopBrowserSubsystem,
+  type ProductionDesktopBrowserSubsystem,
+} from "./browser/desktop-runtime";
+import { resolveBrowserExecutablePath } from "./browser/browser-runtime";
+import { isDesktopBrowserEnabled } from "./browser/feature-gate";
 import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
 import {
@@ -80,6 +86,7 @@ import {
   type BootSecretsFs,
 } from "./services/boot-secrets";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
+import { resolveRuntimePaths } from "./services/runtime-paths";
 import { applyBundledGoogleOAuth } from "./services/google-oauth-default";
 import { SECURE_STORAGE_CHANNELS } from "./services/secure-storage-channels";
 import { FIRST_RUN_CHANNELS } from "./services/first-run-channels";
@@ -133,6 +140,8 @@ const bootSecretsFs: BootSecretsFs = { readFile, writeFile, mkdir, chmod };
 let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
 let supervisor: ServiceSupervisor | null = null;
 let supervisorStopped = false;
+let browserSubsystem: ProductionDesktopBrowserSubsystem | null = null;
+let browserSubsystemStopped = false;
 let capabilityService: CapabilityService | null = null;
 // AC9 — desktop connector OAuth service. Constructed once the facade is
 // reachable (WebTransport mode). Held at module scope so the deep-link
@@ -408,7 +417,7 @@ function registerFirstRunIpc(): void {
 }
 
 if (hasSingleInstanceLock) {
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     startCrashReporter();
     secureStorageMode = loadSecureStorageMode(app.getPath("userData"));
     registerSecureStorageIpc();
@@ -474,12 +483,64 @@ if (hasSingleInstanceLock) {
         app.getAppPath(),
       );
       console.log(`[auth] google oauth client source: ${googleOAuth.applied}`);
+      const supervisedEnv: NodeJS.ProcessEnv = { ...process.env };
+      if (isDesktopBrowserEnabled(process.env)) {
+        try {
+          const runtimePaths = resolveRuntimePaths({
+            resourcesPath: process.resourcesPath,
+            runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
+          });
+          const browserExecutablePath = resolveBrowserExecutablePath({
+            runtimeRoot: runtimePaths.runtimeRoot,
+            executableOverride: process.env.BROWSER_EXECUTABLE_PATH,
+          });
+          browserSubsystem = createProductionDesktopBrowserSubsystem({
+            userDataDir: app.getPath("userData"),
+            workerEntryPath: join(
+              __dirname,
+              "..",
+              "browser-worker",
+              "index.js",
+            ),
+            electronExecutable: process.execPath,
+            browserExecutablePath,
+            processEnv: process.env,
+            log: (message) => console.log(message),
+            onStateChange: (state, reason) => {
+              console.log(
+                `[browser] ${state}${reason === undefined ? "" : ` (${reason})`}`,
+              );
+            },
+          });
+          const handle = await browserSubsystem.start();
+          supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "true";
+          supervisedEnv.DESKTOP_BROWSER_BROKER_URL = handle.baseUrl;
+          supervisedEnv.DESKTOP_BROWSER_BROKER_TOKEN =
+            browserSubsystem.broker.authToken();
+          // URL is loopback metadata; neither broker nor worker credential is
+          // logged or exposed through renderer IPC.
+          console.log("[browser] supervised broker is ready");
+        } catch (err) {
+          supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
+          delete supervisedEnv.DESKTOP_BROWSER_BROKER_URL;
+          delete supervisedEnv.DESKTOP_BROWSER_BROKER_TOKEN;
+          browserSubsystem = null;
+          browserSubsystemStopped = true;
+          console.error(
+            "[browser] startup failed; capability remains unavailable:",
+            err,
+          );
+        }
+      } else {
+        supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
+      }
       supervisor = createDesktopSupervisor({
         userDataDir: app.getPath("userData"),
         safeStorage,
         secureStorageMode,
         resourcesPath: process.resourcesPath,
         runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
+        processEnv: supervisedEnv,
       });
       supervisor.onStatus(sendBootStatus);
       supervisor
@@ -487,10 +548,15 @@ if (hasSingleInstanceLock) {
         .then(({ facadeUrl, hostToken }) => {
           wireTransportAndIpc(facadeUrl, hostToken);
         })
-        .catch((err: unknown) => {
+        .catch(async (err: unknown) => {
           // The supervisor already emitted a fatal BootStatus for the
           // renderer's fatal screen; keep the process alive so the user
           // can read it.
+          if (browserSubsystem !== null && !browserSubsystemStopped) {
+            await browserSubsystem.stop().catch(() => {});
+            browserSubsystemStopped = true;
+            browserSubsystem = null;
+          }
           console.error("[main] supervised boot failed:", err);
         });
     } else {
@@ -650,16 +716,29 @@ app.on("before-quit", (event) => {
     void capabilityService.stopBroker().catch(() => {});
     capabilityService = null;
   }
-  // Ordered shutdown: children (facade -> ai -> backend) then postgres.
+  // Ordered shutdown: children (facade -> ai -> backend), postgres, then the
+  // browser broker/worker. Stopping ai-backend first ensures no new browser
+  // request can race broker revocation.
   // preventDefault keeps the process alive until stop() resolves, then a
   // second quit passes straight through via the supervisorStopped flag.
-  if (supervisor !== null && !supervisorStopped) {
+  if (
+    (!supervisorStopped && supervisor !== null) ||
+    (!browserSubsystemStopped && browserSubsystem !== null)
+  ) {
     event.preventDefault();
-    const active = supervisor;
-    void active.stop().finally(() => {
-      supervisorStopped = true;
-      app.quit();
-    });
+    const activeSupervisor = supervisor;
+    const activeBrowser = browserSubsystem;
+    void (async () => {
+      if (activeSupervisor !== null && !supervisorStopped) {
+        await activeSupervisor.stop().catch(() => {});
+        supervisorStopped = true;
+      }
+      if (activeBrowser !== null && !browserSubsystemStopped) {
+        await activeBrowser.stop().catch(() => {});
+        browserSubsystemStopped = true;
+        browserSubsystem = null;
+      }
+    })().finally(() => app.quit());
   }
 });
 

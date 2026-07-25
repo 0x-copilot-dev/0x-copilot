@@ -38,7 +38,7 @@ function isMachO(file) {
   }
 }
 
-function walkFiles(dir, out) {
+function walkFiles(dir, out, appBundles) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -48,7 +48,12 @@ function walkFiles(dir, out) {
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) continue; // sign real files, not symlinks
-    if (entry.isDirectory()) walkFiles(full, out);
+    if (entry.isDirectory() && entry.name.endsWith(".app")) {
+      // Chrome for Testing arrives as a complete signed app. Signing its
+      // individual Mach-O files would invalidate its bundle seal and browser
+      // entitlements, so preserve and verify that nested signature instead.
+      appBundles.push(full);
+    } else if (entry.isDirectory()) walkFiles(full, out, appBundles);
     else if (entry.isFile()) out.push(full);
   }
 }
@@ -97,16 +102,37 @@ exports.default = async function signNested(context) {
   }
 
   const files = [];
-  walkFiles(runtimeDir, files);
+  const appBundles = [];
+  walkFiles(runtimeDir, files, appBundles);
   const machO = files.filter(isMachO);
-  if (machO.length === 0) {
+  if (machO.length === 0 && appBundles.length === 0) {
     console.log("[sign-nested] no Mach-O binaries found under runtime/.");
     return;
   }
 
-  console.log(
-    `[sign-nested] signing ${machO.length} nested Mach-O binaries with "${identity}"…`,
-  );
+  for (const bundle of appBundles) {
+    const verified = spawnSync(
+      "codesign",
+      ["--verify", "--deep", "--strict", bundle],
+      { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
+    );
+    if (verified.status !== 0) {
+      throw new Error(
+        `[sign-nested] invalid nested browser signature: ${verified.stderr}`,
+      );
+    }
+  }
+  if (appBundles.length > 0) {
+    console.log(
+      `[sign-nested] preserved ${appBundles.length} valid nested browser app signature(s).`,
+    );
+  }
+
+  if (machO.length > 0) {
+    console.log(
+      `[sign-nested] signing ${machO.length} nested Mach-O binaries with "${identity}"…`,
+    );
+  }
   const baseArgs = [
     "--force",
     "--options",

@@ -43,6 +43,7 @@ class BrowserProviderFixtures:
         return AgentRuntimeContext(
             user_id="user-1",
             org_id="org-1",
+            run_id="run-1",
             roles=frozenset({"employee"}),
             model_profile=ModelConfig(
                 provider="openai",
@@ -70,6 +71,22 @@ class BrowserProviderFixtures:
                     "description": "Capture a bounded accessibility snapshot.",
                     "inputSchema": {"type": "object", "properties": {}},
                 },
+                {
+                    "name": "browser_click",
+                    "description": "Propose an exact reviewed browser click.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"sessionRef": {"type": "string"}},
+                    },
+                },
+                {
+                    "name": "browser_submit",
+                    "description": "Propose an exact reviewed browser submission.",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"sessionRef": {"type": "string"}},
+                    },
+                },
             ]
         }
 
@@ -91,6 +108,12 @@ class BrowserProviderFixtures:
             if request.url.path == BrowserBroker.ROUTE_ACTION:
                 body = json.loads(request.content.decode())
                 assert body["tool"]["name"] == "browser_navigate"
+                assert body["runId"] == "run-1"
+                assert body["workspaceId"] == "org-1"
+                assert "action" not in body
+                assert "binding" not in body
+                assert "actionClass" not in body
+                assert "originPolicy" not in body
                 return httpx.Response(
                     200,
                     json={
@@ -201,6 +224,48 @@ class TestClientTransport(BrowserProviderFixtures):
             )
         )
         assert result["status"] == "succeeded"
+
+    def test_call_tool_cannot_dispatch_an_exact_plan_action_directly(self) -> None:
+        provider = DesktopBrowserMcpProvider(
+            broker_url=self.Values.BROKER_URL,
+            broker_token=self.Values.TOKEN,
+            runtime_context=self.context(),
+            effects_enabled=True,
+            http_client=self.fake_broker(),
+        )
+        card = asyncio.run(provider.list_server_cards())[0]
+
+        with pytest.raises(McpConnectionError, match="staged effect"):
+            asyncio.run(
+                provider.create_client(card).call_tool(
+                    tool_name="browser_click",
+                    arguments={"elementRef": "e1_0"},
+                )
+            )
+
+    def test_exact_plan_actions_are_visible_only_for_the_enforced_cohort(
+        self,
+    ) -> None:
+        provider = DesktopBrowserMcpProvider(
+            broker_url=self.Values.BROKER_URL,
+            broker_token=self.Values.TOKEN,
+            runtime_context=self.context(),
+            effects_enabled=True,
+            http_client=self.fake_broker(),
+        )
+        card = asyncio.run(provider.list_server_cards())[0]
+
+        tools = asyncio.run(provider.create_client(card).list_tools())
+
+        assert {tool.name for tool in tools} == {
+            "browser_navigate",
+            "browser_snapshot",
+            "browser_click",
+            "browser_submit",
+        }
+        assert {tool.name: tool.risk_level for tool in tools}[
+            "browser_click"
+        ].value == "high"
 
     def test_auth_failure_raises_typed_error(self) -> None:
         provider = self.build_provider(self.fake_broker(unauthorized=True))

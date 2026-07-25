@@ -238,6 +238,16 @@ def current_capability_registrations() -> tuple[CapabilityRegistration, ...]:
             "browser_close",
             "capabilities.browser.desktop_browser_provider",
         ),
+        (
+            "desktop_browser",
+            "browser_click",
+            "capabilities.browser.desktop_browser_provider",
+        ),
+        (
+            "desktop_browser",
+            "browser_submit",
+            "capabilities.browser.desktop_browser_provider",
+        ),
     )
     catalog = tuple(
         (connector, op, "capabilities.actions.catalog_data")

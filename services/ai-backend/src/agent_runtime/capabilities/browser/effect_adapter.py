@@ -15,7 +15,8 @@ from agent_runtime.capabilities.browser.contracts import (
     BrowserActionPlan,
     BrowserActionPlanStore,
     BrowserApplyOutcome,
-    BrowserPrivateBridge,
+    BrowserApplyReceipt,
+    BrowserEffectBridge,
     BrowserStagePort,
 )
 from agent_runtime.capabilities.operations.contracts import ProposedEffect
@@ -65,8 +66,8 @@ class BrowserEffectStageAdapter(BrowserStagePort):
         stored = await self.plans.store(plan=plan)
         if stored.digest != plan.digest:
             raise ValueError("browser plan store returned a mismatched digest")
-        target_ref = _target_ref(plan)
-        precondition_ref = _precondition_ref(plan)
+        target_ref = browser_target_ref(plan)
+        precondition_ref = browser_precondition_ref(plan)
         staged = await self.stager.stage(
             scope=self.scope,
             proposed_effect=StagedEffect(
@@ -114,7 +115,7 @@ class BrowserEffectExecutor:
     """Closed A5 browser executor with prepare/apply/reconcile separation."""
 
     plans: BrowserActionPlanStore
-    bridge: BrowserPrivateBridge
+    bridge: BrowserEffectBridge
     kind: EffectExecutorKind = EffectExecutorKind.BROWSER
     capabilities: EffectExecutorCapabilities = EffectExecutorCapabilities(
         supports_prepare=True,
@@ -128,7 +129,7 @@ class BrowserEffectExecutor:
         if plan is None or plan.digest != request.proposal_digest:
             raise ValueError("browser action plan is unavailable or changed")
         if (
-            _target_ref(plan) != request.target_ref
+            browser_target_ref(plan) != request.target_ref
             or plan.target_digest != request.target_digest
         ):
             raise ValueError("browser action target does not match approved plan")
@@ -148,7 +149,7 @@ class BrowserEffectExecutor:
                 safe_message="The browser page changed before the action was applied.",
             )
         receipt = await self.bridge.apply_prepared(prepared.prepared_ref)
-        return _effect_result(receipt.outcome)
+        return _effect_result(receipt)
 
     async def reconcile(self, claim: EffectClaim) -> EffectExecutionResult:
         """Observe a prior attempt only; reconciliation cannot call ``apply``."""
@@ -160,7 +161,7 @@ class BrowserEffectExecutor:
                 safe_message="The browser action outcome could not be confirmed.",
             )
         receipt = await self.bridge.reconcile_action(claim.prepared_ref)
-        return _effect_result(receipt.outcome)
+        return _effect_result(receipt)
 
     async def abort(self, prepared: PreparedEffect) -> None:
         """No mutation has occurred; Electron expires abandoned prepared handles."""
@@ -168,18 +169,33 @@ class BrowserEffectExecutor:
         del prepared
 
 
-def _effect_result(outcome: BrowserApplyOutcome) -> EffectExecutionResult:
+def _effect_result(receipt: BrowserApplyReceipt) -> EffectExecutionResult:
+    # Electron's browser receipt is executor-private evidence.  A5's public
+    # receipt namespace is deliberately claim-bound
+    # (receipt://effects/<stage>/<claim>), and apply() does not receive the
+    # coordinator's claim id.  Do not relabel or leak the broker reference as a
+    # canonical effect receipt.  The digest remains safe completion evidence;
+    # the prepared handle is retained on the claim for observational
+    # reconciliation.
+    outcome = receipt.outcome
     if outcome is BrowserApplyOutcome.APPLIED:
         return EffectExecutionResult(
             outcome=EffectOutcome.APPLIED,
             retryable=False,
-            safe_message="The reviewed browser action was applied.",
+            result_digest=receipt.result_digest,
+            safe_message=(
+                receipt.safe_message or "The reviewed browser action was applied."
+            ),
         )
     if outcome is BrowserApplyOutcome.PRECONDITION_DRIFT:
         return EffectExecutionResult(
             outcome=EffectOutcome.PRECONDITION_DRIFT,
             retryable=False,
-            safe_message="The browser page changed before the action was applied.",
+            result_digest=receipt.result_digest,
+            safe_message=(
+                receipt.safe_message
+                or "The browser page changed before the action was applied."
+            ),
         )
     if outcome is BrowserApplyOutcome.INDETERMINATE:
         # Browser post/submit outcomes are intentionally never retried. A5 may
@@ -187,16 +203,48 @@ def _effect_result(outcome: BrowserApplyOutcome) -> EffectExecutionResult:
         return EffectExecutionResult(
             outcome=EffectOutcome.INDETERMINATE,
             retryable=False,
-            safe_message="The browser action outcome could not be confirmed.",
+            result_digest=receipt.result_digest,
+            safe_message=(
+                receipt.safe_message
+                or "The browser action outcome could not be confirmed."
+            ),
         )
     return EffectExecutionResult(
         outcome=EffectOutcome.FAILED,
         retryable=False,
-        safe_message="The reviewed browser action failed before completion.",
+        result_digest=receipt.result_digest,
+        safe_message=(
+            receipt.safe_message
+            or "The reviewed browser action failed before completion."
+        ),
     )
 
 
-def _target_ref(plan: BrowserActionPlan) -> str:
+def browser_target_material(plan: BrowserActionPlan) -> bytes:
+    """Canonical immutable bytes A5 re-hashes before executor resolution."""
+
+    return canonical_json_bytes(
+        {
+            "session_ref": plan.session_ref,
+            "page_ref": plan.page_ref,
+            "origin": plan.origin,
+            "top_level_origin": plan.top_level_origin,
+            "action_kind": plan.action_kind.value,
+            "element_ref": plan.element_ref,
+            "element_fingerprint": plan.element_fingerprint,
+            "form_fingerprint": plan.form_fingerprint,
+            "form_payload_digest": plan.form_payload_digest,
+            "form_action_url": plan.form_action_url,
+            "method": plan.method,
+            "upload_artifact_refs": list(plan.upload_artifact_refs),
+            "upload_artifact_digests": [
+                upload.digest for upload in plan.upload_artifacts
+            ],
+        }
+    )
+
+
+def browser_target_ref(plan: BrowserActionPlan) -> str:
     digest = sha256_hex(
         canonical_json_bytes(
             {
@@ -210,8 +258,12 @@ def _target_ref(plan: BrowserActionPlan) -> str:
     return f"browser-target://{digest}"
 
 
-def _precondition_ref(plan: BrowserActionPlan) -> str:
+def browser_precondition_ref(plan: BrowserActionPlan) -> str:
     return f"browser-precondition://{plan.precondition_digest}"
+
+
+# Compatibility for the contract tests that predate the public helper name.
+_target_ref = browser_target_ref
 
 
 def _display_target(plan: BrowserActionPlan) -> str:
@@ -232,4 +284,10 @@ def _effect_class(plan: BrowserActionPlan) -> EffectClass:
     return EffectClass.EXTERNAL_REVERSIBLE
 
 
-__all__ = ("BrowserEffectExecutor", "BrowserEffectStageAdapter")
+__all__ = (
+    "BrowserEffectExecutor",
+    "BrowserEffectStageAdapter",
+    "browser_precondition_ref",
+    "browser_target_material",
+    "browser_target_ref",
+)

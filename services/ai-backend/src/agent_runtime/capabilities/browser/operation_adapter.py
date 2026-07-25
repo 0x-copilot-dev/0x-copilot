@@ -18,7 +18,7 @@ from agent_runtime.capabilities.browser.contracts import (
     BrowserActionPlan,
     BrowserOperationError,
     BrowserPrecondition,
-    BrowserPrivateBridge,
+    BrowserReadBridge,
     BrowserReadRequest,
     BrowserStagePort,
     BrowserUploadArtifact,
@@ -63,8 +63,8 @@ _STAGED_ACTIONS: Final[dict[str, BrowserActionKind]] = {
 class BrowserOperationAdapter:
     """A3 operation adapter with an intentionally one-way consequential path."""
 
-    bridge: BrowserPrivateBridge
     stager: BrowserStagePort
+    bridge: BrowserReadBridge | None = None
     upload_authorizer: BrowserUploadAuthorizer | None = None
     _artifact_payloads: dict[str, ArtifactPublicationSource] = field(
         default_factory=dict,
@@ -79,6 +79,8 @@ class BrowserOperationAdapter:
             raise BrowserOperationError(
                 "browser operation must be staged before dispatch"
             )
+        if self.bridge is None:
+            raise BrowserOperationError("browser read bridge is unavailable")
         arguments = self._arguments(request)
         if (
             request.op in {"browser_download", "browser_screenshot"}
@@ -153,17 +155,36 @@ class BrowserOperationAdapter:
         action_kind: BrowserActionKind,
     ) -> BrowserActionPlan:
         args = self._arguments(request)
-        session_ref = self._required_string(args, "session_ref")
-        page_ref = self._required_string(args, "page_ref")
+        session_ref = self._required_string(args, "sessionRef", "session_ref")
+        page_ref = self._required_string(args, "pageRef", "page_ref")
         origin = self._required_string(args, "origin")
-        top_level_origin = self._required_string(args, "top_level_origin")
-        element_ref = self._required_string(args, "element_ref")
-        element_fingerprint = self._required_string(args, "element_fingerprint")
-        generation = self._required_nonnegative_int(args, "page_generation")
-        form_fingerprint = self._optional_string(args, "form_fingerprint")
-        form_action_url = self._optional_string(args, "form_action_url")
+        top_level_origin = self._required_string(
+            args, "topLevelOrigin", "top_level_origin"
+        )
+        element_ref = self._required_string(args, "elementRef", "element_ref")
+        element_fingerprint = self._required_string(
+            args, "elementFingerprint", "element_fingerprint"
+        )
+        generation = self._required_nonnegative_int(
+            args, "pageGeneration", "page_generation"
+        )
+        form_fingerprint = self._optional_string(
+            args, "formFingerprint", "form_fingerprint"
+        )
+        form_payload_digest = self._optional_string(
+            args, "formPayloadDigest", "form_payload_digest"
+        )
+        form_action_url = self._optional_string(
+            args, "formActionUrl", "form_action_url"
+        )
         method = self._optional_string(args, "method")
-        upload_refs = self._artifact_refs(args.get("upload_artifact_refs"))
+        upload_refs = self._artifact_refs(
+            self._aliased_value(
+                args,
+                "uploadArtifactRefs",
+                "upload_artifact_refs",
+            )
+        )
         uploads = await self._authorize_uploads(
             request=request,
             action_kind=action_kind,
@@ -178,6 +199,8 @@ class BrowserOperationAdapter:
             action_kind=action_kind,
             element_ref=element_ref,
             element_fingerprint=element_fingerprint,
+            form_fingerprint=form_fingerprint,
+            form_payload_digest=form_payload_digest,
             form_action_url=form_action_url,
             method=method,
             # Exact field values remain behind the A3 durable canonical-args
@@ -192,6 +215,7 @@ class BrowserOperationAdapter:
                     origin=origin,
                     element_fingerprint=element_fingerprint,
                     form_fingerprint=form_fingerprint,
+                    form_payload_digest=form_payload_digest,
                 )
             ),
             precondition_digest=precondition.digest,
@@ -201,15 +225,25 @@ class BrowserOperationAdapter:
         )
 
     @staticmethod
-    def _required_string(args: Mapping[str, object], key: str) -> str:
-        value = args.get(key)
+    def _required_string(
+        args: Mapping[str, object],
+        key: str,
+        legacy_key: str | None = None,
+    ) -> str:
+        value = BrowserOperationAdapter._aliased_value(args, key, legacy_key)
         if not isinstance(value, str) or not value:
-            raise BrowserOperationError(f"browser action is missing {key}")
+            raise BrowserOperationError(
+                f"browser action is missing {legacy_key or key}"
+            )
         return value
 
     @staticmethod
-    def _optional_string(args: Mapping[str, object], key: str) -> str | None:
-        value = args.get(key)
+    def _optional_string(
+        args: Mapping[str, object],
+        key: str,
+        legacy_key: str | None = None,
+    ) -> str | None:
+        value = BrowserOperationAdapter._aliased_value(args, key, legacy_key)
         if value is None:
             return None
         if not isinstance(value, str) or not value:
@@ -217,11 +251,29 @@ class BrowserOperationAdapter:
         return value
 
     @staticmethod
-    def _required_nonnegative_int(args: Mapping[str, object], key: str) -> int:
-        value = args.get(key)
+    def _required_nonnegative_int(
+        args: Mapping[str, object],
+        key: str,
+        legacy_key: str | None = None,
+    ) -> int:
+        value = BrowserOperationAdapter._aliased_value(args, key, legacy_key)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise BrowserOperationError(f"browser action has invalid {key}")
         return value
+
+    @staticmethod
+    def _aliased_value(
+        args: Mapping[str, object],
+        key: str,
+        legacy_key: str | None,
+    ) -> object:
+        if legacy_key is None:
+            return args.get(key)
+        if key in args and legacy_key in args:
+            raise BrowserOperationError(
+                f"browser action cannot supply both {key} and {legacy_key}"
+            )
+        return args.get(key) if key in args else args.get(legacy_key)
 
     @staticmethod
     def _artifact_refs(value: object) -> tuple[str, ...]:
@@ -263,4 +315,16 @@ class BrowserOperationAdapter:
         return uploads
 
 
-__all__ = ("BrowserOperationAdapter",)
+def is_browser_read_operation(op: str) -> bool:
+    return op in _READ_OPS
+
+
+def is_staged_browser_action(op: str) -> bool:
+    return op in _STAGED_ACTIONS
+
+
+__all__ = (
+    "BrowserOperationAdapter",
+    "is_browser_read_operation",
+    "is_staged_browser_action",
+)

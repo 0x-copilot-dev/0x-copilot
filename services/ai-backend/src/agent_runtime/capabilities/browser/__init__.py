@@ -1,9 +1,8 @@
-"""Desktop-local agentic browser MCP capability (AC8, read-only foundation).
+"""Desktop-local agentic browser capability (AC8).
 
-Public surface: the ``build_browser_mcp`` seam (consumed by the runtime factory
-without editing it) plus the provider/client/config types. The card and tools
-appear ONLY under the single-user desktop profile with the feature enabled and a
-broker configured; otherwise the seam returns ``None`` and nothing is exposed.
+Reads use the MCP-provider seam; exact staged effects use the closed A5 bridge.
+Both fail closed unless the trusted desktop supervisor injects its loopback
+broker URL + credential.
 """
 
 from __future__ import annotations
@@ -13,6 +12,9 @@ from agent_runtime.capabilities.browser.desktop_browser_provider import (
     DesktopBrowserMcpClient,
     DesktopBrowserMcpProvider,
     build_browser_mcp,
+)
+from agent_runtime.capabilities.browser.desktop_effect_bridge import (
+    DesktopBrowserEffectBridge,
 )
 from agent_runtime.capabilities.browser.effect_adapter import (
     BrowserEffectExecutor,
@@ -27,5 +29,6 @@ __all__ = [
     "BrowserOperationAdapter",
     "DesktopBrowserMcpClient",
     "DesktopBrowserMcpProvider",
+    "DesktopBrowserEffectBridge",
     "build_browser_mcp",
 ]

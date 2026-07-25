@@ -232,6 +232,7 @@ class RuntimeWorker:
                 timeout_seconds=self.settings.default_timeout_seconds,
                 workspace_sessions=workspace_host_sessions,  # type: ignore[arg-type]
                 workspace_overlay_store=self.workspace_overlay_store,  # type: ignore[arg-type]
+                browser_bridge=self._browser_effect_bridge(),
             )
             self.effect_commit_handler = RuntimeEffectCommitHandler(
                 persistence=self.persistence,
@@ -290,6 +291,36 @@ class RuntimeWorker:
         )
 
         return InMemoryEffectClaimStore()
+
+    @staticmethod
+    def _browser_effect_bridge() -> object | None:
+        """Compose the closed Electron effect client only in desktop mode."""
+
+        import os
+
+        from agent_runtime.capabilities.browser.constants import (
+            BrowserEnv,
+            BrowserServer,
+        )
+        from agent_runtime.capabilities.browser.desktop_effect_bridge import (
+            DesktopBrowserEffectBridge,
+        )
+
+        env = os.environ
+        broker_url = env.get(BrowserEnv.BROKER_URL)
+        broker_token = env.get(BrowserEnv.BROKER_TOKEN)
+        if (
+            not BrowserEnv.is_enabled(env.get(BrowserEnv.FLAG))
+            or env.get("ENTERPRISE_DEPLOYMENT_PROFILE")
+            != BrowserServer.REQUIRED_DEPLOYMENT_PROFILE
+            or not broker_url
+            or not broker_token
+        ):
+            return None
+        return DesktopBrowserEffectBridge(
+            broker_url=broker_url,
+            broker_token=broker_token,
+        )
 
     async def run_once(self) -> bool:
         """Claim and process one command, returning whether work was found."""

@@ -1,11 +1,11 @@
 // AC8 agentic browser — subsystem barrel + composition root.
 //
-// Public surface of the desktop agentic-browser foundation. `main/index.ts`
-// builds the subsystem ONLY when `isDesktopBrowserEnabled(process.env)` is
-// true (gated off by default). This foundation ships the read-only core:
-// supervised worker lifecycle, loopback broker, egress policy proxy, profile
-// isolation, and the typed read-only session (navigate / snapshot / screenshot
-// / wait / close). Downloads, uploads, and side-effecting actions are DEFERRED.
+// Public surface of the desktop agentic-browser subsystem. `main/index.ts`
+// builds it ONLY when `isDesktopBrowserEnabled(process.env)` is true (gated
+// off by default). It ships supervised worker lifecycle, authenticated broker
+// and worker RPC, exact-origin read authority, and the first exact staged
+// effect cohort (click/submit). Downloads and artifact-backed uploads remain a
+// later D4 slice.
 
 export * from "./protocol";
 export * from "./feature-gate";
@@ -69,9 +69,22 @@ export {
   type BrowserPrivateEffectWorkerPort,
 } from "./private-effect-bridge";
 export {
+  MainBrowserReadAuthority,
+  BrowserReadAuthorityError,
+  type BrowserReadAuthority,
+} from "./read-authority";
+export {
   SessionWorkerPort,
   type SessionWorkerPortConfig,
 } from "./session-worker-port";
+export {
+  BrowserWorkerRpcClient,
+  BrowserWorkerRpcError,
+  BROWSER_WORKER_RPC_PROTOCOL,
+  BROWSER_WORKER_RPC_TOKEN_ENV,
+  installBrowserWorkerRpcServer,
+  type BrowserWorkerIpcChild,
+} from "./worker-rpc";
 export {
   BROWSER_TOOL_SCHEMAS,
   BROWSER_ACTION_TOOL_SCHEMAS,
@@ -87,50 +100,85 @@ export {
   type DownloadCapture,
   type RawAxNode,
 } from "./browser-engine";
+export {
+  createProductionDesktopBrowserSubsystem,
+  readOriginPolicy,
+  type ProductionDesktopBrowserConfig,
+  type ProductionDesktopBrowserSubsystem,
+  type SpawnBrowserWorker,
+} from "./desktop-runtime";
+export {
+  resolveBrowserExecutablePath,
+  BrowserRuntimeError,
+  BROWSER_RUNTIME_MANIFEST,
+  BROWSER_RUNTIME_SCHEMA_VERSION,
+  type BrowserRuntimeConfig,
+} from "./browser-runtime";
 
-import { BrowserBroker, type BrowserBrokerHandle } from "./browser-broker";
-import { SessionWorkerPort } from "./session-worker-port";
-import type { BrowserSession } from "./browser-session";
-import type { BrowserActionRequest } from "./protocol";
+import {
+  BrowserBroker,
+  type BrowserBrokerHandle,
+  type BrowserWorkerPort,
+} from "./browser-broker";
+import type { BrowserWorkerSupervisor } from "./browser-supervisor";
+import type { BrowserPrivateEffectWorkerPort } from "./private-effect-bridge";
+import type { BrowserReadAuthority } from "./read-authority";
 
 export interface DesktopBrowserSubsystem {
   readonly broker: BrowserBroker;
-  readonly workerPort: SessionWorkerPort;
+  readonly workerPort: BrowserWorkerPort & BrowserPrivateEffectWorkerPort;
+  readonly supervisor: BrowserWorkerSupervisor;
   start(): Promise<BrowserBrokerHandle>;
   stop(): Promise<void>;
 }
 
 /**
- * Compose the AI-facing edge of the browser subsystem: the loopback broker in
- * front of a `SessionWorkerPort`. `createSession` is injected by main (it owns
- * profile paths + the egress proxy + the browser engine), keeping this
- * composition free of OS specifics and unit-testable. The supervised worker
- * child is managed separately by `BrowserWorkerSupervisor`; wiring the broker's
- * port to the OS child's RPC transport is the next slice's seam.
+ * Compose the production browser topology from an authenticated worker RPC
+ * port, its lifecycle supervisor, and Electron-main read authority. There is
+ * intentionally no in-process SessionWorkerPort fallback: Playwright cannot
+ * enter Electron main by accident.
  */
 export function buildDesktopBrowserSubsystem(deps: {
-  readonly createSession: (
-    binding: BrowserActionRequest["binding"],
-  ) => Promise<BrowserSession>;
-  /**
-   * Advertise the side-effecting action layer. Only pass true when
-   * `createSession` composes sessions with an approval authority. Default false
-   * keeps the read-only surface.
-   */
-  readonly includeActionTools?: boolean;
+  readonly workerPort: BrowserWorkerPort &
+    BrowserPrivateEffectWorkerPort & {
+      closeAll(): Promise<void>;
+      dispose?(): void;
+    };
+  readonly supervisor: BrowserWorkerSupervisor;
+  readonly readAuthority: BrowserReadAuthority;
 }): DesktopBrowserSubsystem {
-  const workerPort = new SessionWorkerPort({
-    createSession: deps.createSession,
-    includeActionTools: deps.includeActionTools,
+  const broker = new BrowserBroker({
+    worker: deps.workerPort,
+    readAuthority: deps.readAuthority,
+    privateEffects: deps.workerPort,
   });
-  const broker = new BrowserBroker({ worker: workerPort });
   return {
     broker,
-    workerPort,
-    start: () => broker.start(),
+    workerPort: deps.workerPort,
+    supervisor: deps.supervisor,
+    async start() {
+      try {
+        await deps.supervisor.start();
+        if (!deps.supervisor.isHealthy()) {
+          throw new Error("browser worker did not become healthy");
+        }
+        return await broker.start();
+      } catch (err) {
+        if (broker.isRunning()) await broker.stop();
+        await deps.supervisor.stop();
+        deps.workerPort.dispose?.();
+        throw err;
+      }
+    },
     async stop() {
       await broker.stop();
-      await workerPort.closeAll();
+      try {
+        await deps.workerPort.closeAll();
+      } catch {
+        // A crashed worker has no remaining live authority.
+      }
+      await deps.supervisor.stop();
+      deps.workerPort.dispose?.();
     },
   };
 }

@@ -54,6 +54,7 @@ from agent_runtime.capabilities.mcp.registry import (
 from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.capabilities.operations.context import OperationContext
 from agent_runtime.capabilities.operations.contracts import (
+    GateResolution,
     OperationAdapter,
     OperationClassification,
     OperationGatewayMode,
@@ -83,7 +84,7 @@ from agent_runtime.surfaces_v2.canonical_json import (
     sha256_hex,
 )
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
-from agent_runtime.surfaces_v2.entities import EffectTarget
+from agent_runtime.surfaces_v2.entities import EffectTarget, OperationDescriptor
 from agent_runtime.surfaces_v2.ledger_ids import OperationArgsRefCodec
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectClass,
@@ -206,6 +207,7 @@ class McpOperationGatewayServices:
     stage_author: EffectActorIdentity
     result_store: McpOperationResultStorePort
     argument_store: McpOperationArgumentStorePort
+    browser_plans: object | None = None
     connector_overrides: ConnectorWritePolicyOverrides = field(
         default_factory=ConnectorWritePolicyOverrides
     )
@@ -215,6 +217,27 @@ class McpOperationGatewayServices:
             self.stage_author.actor.value == "user"
         ):
             raise ValueError("a user stage author must match the stage owner")
+
+
+class McpOperationGateResolver:
+    """Acknowledge gates already enforced at the MCP dispatch boundary.
+
+    ``CallMcpTool`` resolves the current card and permission before invoking the
+    gateway. Reads re-check authentication immediately before client creation;
+    effects never create a client and A4 resolves their immutable policy into a
+    held stage. This resolver therefore does not grant a new capability—it
+    prevents descriptor metadata from blocking the already-verified boundary.
+    """
+
+    async def resolve(
+        self,
+        *,
+        request: OperationRequest,
+        descriptor: OperationDescriptor,
+        classification: OperationClassification,
+    ) -> GateResolution:
+        del request, descriptor, classification
+        return GateResolution(allowed=True)
 
 
 _MCP_OPERATION_SERVICES: ContextVar[McpOperationGatewayServices | None] = ContextVar(
@@ -667,6 +690,7 @@ __all__ = [
     "McpOperationAdapter",
     "McpOperationArgumentMaterialResolver",
     "McpOperationGatewayContext",
+    "McpOperationGateResolver",
     "McpOperationGatewayServices",
     "McpOperationArgumentStorePort",
     "McpOperationResultStorePort",

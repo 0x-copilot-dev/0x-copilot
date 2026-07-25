@@ -6,9 +6,10 @@
 // `tools/list`; it does NOT hand-copy them.
 //
 // `BROWSER_TOOL_SCHEMAS` is the READ-ONLY surface (always advertised).
-// `BROWSER_ACTION_TOOL_SCHEMAS` adds the side-effecting action layer
-// (click/type/select/submit/download); it is advertised ONLY when the worker is
-// composed with an approval authority (`browserToolSchemas({ includeActions })`).
+// `BROWSER_ACTION_TOOL_SCHEMAS` adds only the exact-plan action cohort
+// (click/submit). It is advertised ONLY when the worker is composed with the
+// private prepare/apply/reconcile authority and the AI side can stage the
+// complete plan (`browserToolSchemas({ includeActions })`).
 
 import { BrowserToolName } from "./protocol";
 
@@ -90,81 +91,109 @@ export const BROWSER_TOOL_SCHEMAS: readonly BrowserToolSchema[] = [
   },
 ];
 
-const REF_PROPERTY = {
+const ELEMENT_REF_PROPERTY = {
   type: STRING,
   description:
     "Generation-bound element ref from the latest snapshot. Goes stale after " +
     "any navigation or DOM-mutating action.",
 } as const;
 
+const SHA256_PROPERTY = {
+  type: STRING,
+  pattern: "^[a-f0-9]{64}$",
+} as const;
+
+const EXACT_ACTION_PROPERTIES = {
+  sessionRef: {
+    type: STRING,
+    description: "Opaque session ref returned by the latest browser read.",
+  },
+  pageRef: {
+    type: STRING,
+    description: "Opaque page ref returned by the latest browser read.",
+  },
+  origin: {
+    type: STRING,
+    description:
+      "Exact current HTTPS origin returned by the latest browser read.",
+  },
+  topLevelOrigin: {
+    type: STRING,
+    description: "Exact top-level HTTPS origin shown during review.",
+  },
+  elementRef: ELEMENT_REF_PROPERTY,
+  elementFingerprint: {
+    ...SHA256_PROPERTY,
+    description: "Exact fingerprint returned with the reviewed snapshot node.",
+  },
+  pageGeneration: {
+    type: INTEGER,
+    minimum: 0,
+    description: "Generation returned by the latest browser snapshot.",
+  },
+  formFingerprint: {
+    ...SHA256_PROPERTY,
+    description: "Optional exact form fingerprint when one was observed.",
+  },
+  formPayloadDigest: {
+    ...SHA256_PROPERTY,
+    description:
+      "Optional worker-produced digest of the reviewed successful form controls.",
+  },
+  formActionUrl: {
+    type: STRING,
+    description: "Optional reviewed HTTPS form action URL.",
+  },
+  method: {
+    type: STRING,
+    enum: ["GET", "POST", "PUT", "PATCH", "DELETE"],
+  },
+} as const;
+
+const EXACT_ACTION_REQUIRED = [
+  "sessionRef",
+  "pageRef",
+  "origin",
+  "topLevelOrigin",
+  "elementRef",
+  "elementFingerprint",
+  "pageGeneration",
+] as const;
+
 /**
- * The side-effecting action layer. Every one of these requires clearing a
- * per-action approval before it dispatches (PRD §Action policy and approvals).
+ * The first production side-effect cohort. These schemas carry only opaque
+ * identity and review facts from a prior snapshot. They cannot dispatch via
+ * the read broker; the AI runtime turns them into a `browser_submission`
+ * proposal, and A5 later invokes the private exact-plan bridge.
  */
 export const BROWSER_ACTION_TOOL_SCHEMAS: readonly BrowserToolSchema[] = [
   {
     name: BrowserToolName.Click,
     description:
-      "Click an element by ref. Treated as a side effect (may submit, " +
-      "navigate, or download); requires approval before it runs.",
+      "Propose an exact click from the latest browser snapshot. A click may " +
+      "submit, purchase, delete, or navigate, so it is always held for review.",
     inputSchema: {
       type: OBJECT,
-      properties: { ref: REF_PROPERTY },
-      required: ["ref"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: BrowserToolName.Type,
-    description:
-      "Type non-secret text into a reviewed field by ref. Secret fields " +
-      "(password/MFA/etc.) force user takeover; requires approval.",
-    inputSchema: {
-      type: OBJECT,
-      properties: {
-        ref: REF_PROPERTY,
-        text: { type: STRING, description: "Non-secret text to enter." },
-      },
-      required: ["ref", "text"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: BrowserToolName.Select,
-    description:
-      "Select an option in a listbox/select by ref; requires approval.",
-    inputSchema: {
-      type: OBJECT,
-      properties: {
-        ref: REF_PROPERTY,
-        value: { type: STRING, description: "Option value or label." },
-      },
-      required: ["ref", "value"],
+      properties: EXACT_ACTION_PROPERTIES,
+      required: EXACT_ACTION_REQUIRED,
       additionalProperties: false,
     },
   },
   {
     name: BrowserToolName.Submit,
     description:
-      "Submit a form / activate a send control by ref. High risk; always " +
-      "requires approval and never auto-retries an unknown outcome.",
+      "Propose an exact form submission from the latest browser snapshot. It " +
+      "is always held for review and an uncertain outcome is never retried.",
     inputSchema: {
       type: OBJECT,
-      properties: { ref: REF_PROPERTY },
-      required: ["ref"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: BrowserToolName.Download,
-    description:
-      "Initiate a download by clicking an element ref. Bytes are captured to " +
-      "the run staging area by reference (never a host path); executable-shaped " +
-      "or oversized content is denied. Requires approval.",
-    inputSchema: {
-      type: OBJECT,
-      properties: { ref: REF_PROPERTY },
-      required: ["ref"],
+      properties: EXACT_ACTION_PROPERTIES,
+      required: [
+        ...EXACT_ACTION_REQUIRED,
+        "formFingerprint",
+        "formPayloadDigest",
+        "formActionUrl",
+        "method",
+      ],
       additionalProperties: false,
     },
   },
@@ -172,7 +201,8 @@ export const BROWSER_ACTION_TOOL_SCHEMAS: readonly BrowserToolSchema[] = [
 
 /**
  * The tool set to advertise. Read-only by default; the action layer is included
- * ONLY when the worker is composed with an approval authority.
+ * ONLY when the worker is composed with the private exact-plan effect
+ * authority; public read dispatch cannot execute them.
  */
 export function browserToolSchemas(opts?: {
   includeActions?: boolean;

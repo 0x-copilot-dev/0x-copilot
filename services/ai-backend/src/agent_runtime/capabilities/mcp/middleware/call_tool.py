@@ -50,13 +50,19 @@ from agent_runtime.capabilities.surfaces.generator import (
     SurfaceGenerationScheduler,
 )
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
+from agent_runtime.effects.contracts import EffectPolicySnapshot
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from agent_runtime.surfaces_v2.gate import ToolAccessGate
-from agent_runtime.surfaces_v2.ledger_models import GateAuthState, OperationOutcome
+from agent_runtime.surfaces_v2.ledger_models import (
+    EffectPolicy,
+    GateAuthState,
+    OperationOutcome,
+)
 
 _LOGGER = logging.getLogger(__name__)
+_DESKTOP_BROWSER_SERVER = "desktop_browser"
 
 
 @dataclass(frozen=True)
@@ -400,17 +406,72 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
-        adapter = McpOperationAdapter(
-            registry=self.registry,
-            runtime_context=self.runtime_context,
-            timeout_seconds=self.loader.timeout_seconds,
-            server_name=parsed_input.server_name,
-            tool_name=parsed_input.tool_name,
-            arguments=parsed_input.arguments,
-            gate=self.gate,
-            services=services,
-            tool_call_id=parsed_input.tool_call_id,
+        is_browser = (
+            parsed_input.server_name.strip().lower().replace("-", "_")
+            == _DESKTOP_BROWSER_SERVER
         )
+        mcp_adapter: McpOperationAdapter | None = None
+        if is_browser:
+            # Local imports avoid making the MCP package import the browser
+            # operation stack while the global capability catalog is booting.
+            from agent_runtime.capabilities.browser.contracts import (  # noqa: PLC0415
+                BrowserActionPlanStore,
+            )
+            from agent_runtime.capabilities.browser.effect_adapter import (  # noqa: PLC0415
+                BrowserEffectStageAdapter,
+            )
+            from agent_runtime.capabilities.browser.operation_adapter import (  # noqa: PLC0415
+                BrowserOperationAdapter,
+                is_browser_read_operation,
+            )
+        if is_browser and not is_browser_read_operation(parsed_input.tool_name):
+            plans = services.browser_plans
+            if not isinstance(plans, BrowserActionPlanStore):
+                return McpToolCallResult.fail(
+                    McpLoadErrorCode.CONNECTION_FAILED,
+                    Messages.Loader.LOAD_FAILED,
+                    retryable=True,
+                    server_name=parsed_input.server_name,
+                    tool_name=parsed_input.tool_name,
+                    correlation_id=self.runtime_context.trace_id,
+                ).model_dump(mode="json", exclude_none=True)
+            browser_policy = EffectPolicySnapshot(
+                snapshot_ref=(
+                    f"policy://runs/{self.runtime_context.run_id}/desktop-browser"
+                ),
+                descriptor_known=(
+                    services.descriptors.resolve(
+                        parsed_input.server_name,
+                        parsed_input.tool_name,
+                    )
+                    is not None
+                ),
+                capability_policy=EffectPolicy.REQUIRE,
+                user_policy=EffectPolicy.REQUIRE,
+                sensitive_target=True,
+            )
+            adapter = BrowserOperationAdapter(
+                stager=BrowserEffectStageAdapter(
+                    plans=plans,
+                    stager=services.stager,
+                    scope=services.stage_scope,
+                    actor=services.stage_author,
+                    policy_snapshot=browser_policy,
+                )
+            )
+        else:
+            mcp_adapter = McpOperationAdapter(
+                registry=self.registry,
+                runtime_context=self.runtime_context,
+                timeout_seconds=self.loader.timeout_seconds,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                arguments=parsed_input.arguments,
+                gate=self.gate,
+                services=services,
+                tool_call_id=parsed_input.tool_call_id,
+            )
+            adapter = mcp_adapter
         disposition = await services.gateway.invoke(request, adapter)
         output: dict[str, Any] = {
             "status": disposition.outcome.value,
@@ -418,7 +479,7 @@ class CallMcpTool:
             "summary": disposition.agent_summary,
         }
         if disposition.outcome is OperationOutcome.SUCCEEDED:
-            stored = adapter.stored_result
+            stored = mcp_adapter.stored_result if mcp_adapter is not None else None
             if stored is None:
                 # A successful disposition without a durable result is an
                 # adapter invariant violation.  Do not pretend the read

@@ -69,6 +69,7 @@ from agent_runtime.capabilities.operations.context import (
     VerifiedOperationIdentity,
 )
 from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationGateResolver,
     McpOperationGatewayContext,
     McpOperationGatewayServices,
 )
@@ -83,6 +84,9 @@ from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from runtime_worker.browser_operation_storage import (
+    RuntimeBrowserActionPlanStore,
+)
 from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     ArtifactContentPartPublisher,
     PublishArtifactTool,
@@ -1437,8 +1441,18 @@ class RuntimeRunHandler:
         )
         descriptors = DEFAULT_OPERATION_DESCRIPTORS
         classifier = OperationClassifier(descriptors=descriptors)
+        browser_plans = RuntimeBrowserActionPlanStore(
+            blobs=self._artifact_blob_store,  # type: ignore[arg-type]
+            references=self._artifact_reference_store,  # type: ignore[arg-type]
+            org_id=run.org_id,
+            user_id=run.user_id,
+        )
         return McpOperationGatewayServices(
-            gateway=OperationGateway(descriptors=descriptors, classifier=classifier),
+            gateway=OperationGateway(
+                descriptors=descriptors,
+                classifier=classifier,
+                gates=McpOperationGateResolver(),
+            ),
             descriptors=descriptors,
             classifier=classifier,
             stager=EffectStager(
@@ -1464,6 +1478,7 @@ class RuntimeRunHandler:
                 org_id=run.org_id,
                 user_id=run.user_id,
             ),
+            browser_plans=browser_plans,
         )
 
     def _publish_artifact_tool(self) -> PublishArtifactTool | None:

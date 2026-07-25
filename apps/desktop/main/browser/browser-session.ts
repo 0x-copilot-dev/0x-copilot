@@ -82,6 +82,8 @@ export interface BrowserSessionConfig {
   readonly approval?: BrowserApprovalPort;
   /** Open the context with downloads enabled (action layer). Default false. */
   readonly acceptDownloads?: boolean;
+  /** Worker-owned profile cleanup hook; receives no page/cookie material. */
+  readonly onClose?: () => Promise<void>;
   readonly randomId?: () => string;
 }
 
@@ -98,10 +100,21 @@ export class BrowserSession {
   /** ref -> redacted target identity for the CURRENT generation only. */
   readonly #refIndex = new Map<
     string,
-    { role: string; name: string; fingerprint: string }
+    {
+      role: string;
+      name: string;
+      targetId: string;
+      fingerprint: string;
+      formFingerprint?: string;
+      formPayloadDigest?: string;
+      formActionUrl?: string;
+      method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+    }
   >();
   /** Private one-use handles created only after an exact prepare check. */
   readonly #preparedActions = new Map<string, BrowserActionPlan>();
+  /** Observational receipts retained for reconciliation; never replay actions. */
+  readonly #effectReceipts = new Map<string, BrowserEffectReceipt>();
 
   constructor(cfg: BrowserSessionConfig) {
     this.#cfg = cfg;
@@ -420,7 +433,7 @@ export class BrowserSession {
    */
   async prepareAction(plan: BrowserActionPlan): Promise<BrowserPrepareResult> {
     if (this.#page === null) await this.open();
-    if (!this.#matchesPlan(plan)) return this.#drift(plan);
+    if (!(await this.#matchesPlan(plan))) return this.#drift(plan);
     const preparedRef = `browser-prepared://${this.#sessionId}/${this.#randomId()}`;
     this.#preparedActions.set(preparedRef, plan);
     return {
@@ -438,23 +451,30 @@ export class BrowserSession {
     const plan = this.#preparedActions.get(preparedRef);
     this.#preparedActions.delete(preparedRef);
     if (plan === undefined) {
+      // A duplicate apply is never treated as an idempotent success because
+      // the caller may not have observed the first receipt. Reconciliation is
+      // the separate observational method that may return the retained fact.
       return {
         outcome: BrowserEffectOutcome.Indeterminate,
         safeMessage: "The prepared browser action is no longer available.",
       };
     }
-    if (!this.#matchesPlan(plan)) {
-      return {
+    if (!(await this.#matchesPlan(plan))) {
+      const receipt = {
         outcome: BrowserEffectOutcome.PreconditionDrift,
         safeMessage: "The browser page changed before the action was applied.",
-      };
+      } as const;
+      this.#effectReceipts.set(preparedRef, receipt);
+      return receipt;
     }
     const target = this.#resolveRef(plan.elementRef!);
     if (target === null) {
-      return {
+      const receipt = {
         outcome: BrowserEffectOutcome.PreconditionDrift,
         safeMessage: "The reviewed browser element is no longer available.",
-      };
+      } as const;
+      this.#effectReceipts.set(preparedRef, receipt);
+      return receipt;
     }
     try {
       switch (plan.actionKind) {
@@ -471,33 +491,52 @@ export class BrowserSession {
         // path into a reviewed plan.
         case "input":
         case "select":
-        case "upload_submit":
-          return {
+        case "upload_submit": {
+          const receipt = {
             outcome: BrowserEffectOutcome.Failed,
             safeMessage:
               "This reviewed browser action is not enabled on this device.",
-          };
+          } as const;
+          this.#effectReceipts.set(preparedRef, receipt);
+          return receipt;
+        }
       }
     } catch {
       // A POST/click may have reached the origin before Playwright reports an
       // error. It is therefore indeterminate and never retried blindly.
-      return {
+      const receipt = {
         outcome: BrowserEffectOutcome.Indeterminate,
         safeMessage: "The browser action outcome could not be confirmed.",
-      };
+      } as const;
+      this.#effectReceipts.set(preparedRef, receipt);
+      return receipt;
     }
-    return {
+    const receiptSeed = JSON.stringify([
+      preparedRef,
+      plan.actionKind,
+      plan.origin,
+      plan.elementFingerprint,
+      plan.preconditionDigest,
+      BrowserEffectOutcome.Applied,
+    ]);
+    const receipt = {
       outcome: BrowserEffectOutcome.Applied,
+      receiptRef: `browser-receipt://${this.#sessionId}/${this.#randomId()}`,
+      resultDigest: sha256Hex(new TextEncoder().encode(receiptSeed)),
       safeMessage: "The reviewed browser action was applied.",
     };
+    this.#effectReceipts.set(preparedRef, receipt);
+    return receipt;
   }
 
   /** Observe a prior attempt only. It must never execute a page action. */
-  async reconcileAction(_preparedRef: string): Promise<BrowserEffectReceipt> {
-    return {
-      outcome: BrowserEffectOutcome.Indeterminate,
-      safeMessage: "The browser action outcome could not be confirmed.",
-    };
+  async reconcileAction(preparedRef: string): Promise<BrowserEffectReceipt> {
+    return (
+      this.#effectReceipts.get(preparedRef) ?? {
+        outcome: BrowserEffectOutcome.Indeterminate,
+        safeMessage: "The browser action outcome could not be confirmed.",
+      }
+    );
   }
 
   /**
@@ -545,7 +584,12 @@ export class BrowserSession {
   #resolveRef(ref: string): ElementTarget | null {
     const entry = this.#refIndex.get(ref);
     if (entry === undefined) return null;
-    return { ref, role: entry.role, name: entry.name };
+    return {
+      ref,
+      role: entry.role,
+      name: entry.name,
+      targetId: entry.targetId,
+    };
   }
 
   #bumpGeneration(): void {
@@ -554,19 +598,51 @@ export class BrowserSession {
     this.#preparedActions.clear();
   }
 
-  #matchesPlan(plan: BrowserActionPlan): boolean {
+  async #matchesPlan(plan: BrowserActionPlan): Promise<boolean> {
     if (
       plan.sessionRef !== this.sessionRef ||
       plan.pageRef !== this.pageRef ||
       plan.origin !== this.#currentOrigin ||
+      plan.topLevelOrigin !== this.#currentOrigin ||
       plan.precondition.origin !== this.#currentOrigin ||
       plan.precondition.pageGeneration !== this.#generation ||
+      plan.preconditionDigest !== browserPreconditionDigest(plan) ||
       plan.elementRef === undefined ||
       plan.elementFingerprint === undefined
     )
       return false;
     const entry = this.#refIndex.get(plan.elementRef);
-    return entry?.fingerprint === plan.elementFingerprint;
+    if (
+      entry === undefined ||
+      entry.fingerprint !== plan.elementFingerprint ||
+      entry.formFingerprint !== plan.formFingerprint ||
+      entry.formPayloadDigest !== plan.formPayloadDigest ||
+      entry.formActionUrl !== plan.formActionUrl ||
+      entry.method !== plan.method
+    ) {
+      return false;
+    }
+    if (
+      (plan.actionKind === "submit" || plan.actionKind === "upload_submit") &&
+      (plan.formFingerprint === undefined ||
+        plan.formPayloadDigest === undefined ||
+        plan.formActionUrl === undefined ||
+        plan.method === undefined)
+    ) {
+      return false;
+    }
+    const target = this.#resolveRef(plan.elementRef);
+    if (target === null) return false;
+    const observed = await this.#requirePage().observeRef(target);
+    return (
+      observed !== null &&
+      observed.unsupportedForm !== true &&
+      observed.elementFingerprint === plan.elementFingerprint &&
+      observed.formFingerprint === plan.formFingerprint &&
+      observed.formPayloadDigest === plan.formPayloadDigest &&
+      observed.formActionUrl === plan.formActionUrl &&
+      observed.formMethod === plan.method
+    );
   }
 
   #drift(plan: BrowserActionPlan): BrowserPrepareResult {
@@ -605,6 +681,8 @@ export class BrowserSession {
     const ctx = this.#context;
     this.#context = null;
     this.#page = null;
+    this.#preparedActions.clear();
+    this.#effectReceipts.clear();
     if (ctx !== null) {
       try {
         await ctx.close();
@@ -613,6 +691,11 @@ export class BrowserSession {
       }
     }
     await this.#cfg.staging.cleanup();
+    try {
+      await this.#cfg.onClose?.();
+    } catch {
+      // Best-effort profile cleanup; startup sweeps abandoned ephemeral roots.
+    }
   }
 
   /**
@@ -626,29 +709,34 @@ export class BrowserSession {
     const convert = (node: RawAxNode, depth: number): BrowserSnapshotNode => {
       const ref = `e${gen}_${count}`;
       const name = node.name ?? "";
-      const fingerprint = sha256Hex(
-        new TextEncoder().encode(
-          JSON.stringify([
-            this.#sessionId,
-            this.#pageId,
-            this.#generation,
-            ref,
-            node.role,
-            name,
-            this.#currentOrigin ?? "",
-          ]),
-        ),
-      );
       const out: BrowserSnapshotNode = {
         ref,
         role: node.role,
         // The accessible NAME (label), never `node.value` (input contents).
         name,
-        fingerprint,
       };
-      // Record the ref so the action layer can resolve it to a role/name
-      // locator for the CURRENT generation (redacted label only, no value).
-      this.#refIndex.set(ref, { role: node.role, name, fingerprint });
+      if (
+        node.targetId !== undefined &&
+        node.elementFingerprint !== undefined
+      ) {
+        out.fingerprint = node.elementFingerprint;
+        out.formFingerprint = node.formFingerprint;
+        out.formPayloadDigest = node.formPayloadDigest;
+        out.formActionUrl = node.formActionUrl;
+        out.method = node.formMethod;
+        // The target id remains worker-private. The model receives only the
+        // ref and digest; apply resolves this exact captured handle.
+        this.#refIndex.set(ref, {
+          role: node.role,
+          name,
+          targetId: node.targetId,
+          fingerprint: node.elementFingerprint,
+          formFingerprint: node.formFingerprint,
+          formPayloadDigest: node.formPayloadDigest,
+          formActionUrl: node.formActionUrl,
+          method: node.formMethod,
+        });
+      }
       count += 1;
       if (
         depth < maxDepth &&
@@ -697,6 +785,16 @@ export class BrowserSession {
       version: 1,
       requestId: request.requestId,
       sessionId: this.#sessionId,
+      ...(fields.status === BrowserActionStatus.Succeeded && this.#pageId !== ""
+        ? {
+            sessionRef: this.sessionRef,
+            pageRef: this.pageRef,
+            ...(fields.currentOrigin === undefined
+              ? {}
+              : { topLevelOrigin: fields.currentOrigin }),
+            pageGeneration: this.#generation,
+          }
+        : {}),
       actionId: `act_${this.#randomId()}`,
       status: fields.status,
       currentOrigin: fields.currentOrigin,
@@ -707,4 +805,21 @@ export class BrowserSession {
       snapshot: fields.snapshot,
     };
   }
+}
+
+function browserPreconditionDigest(plan: BrowserActionPlan): string {
+  // Python's canonical-json contract sorts these snake_case keys and retains
+  // explicit nulls. All values are bounded ASCII facts, so this byte sequence
+  // is cross-language stable.
+  return sha256Hex(
+    new TextEncoder().encode(
+      JSON.stringify({
+        element_fingerprint: plan.precondition.elementFingerprint ?? null,
+        form_fingerprint: plan.precondition.formFingerprint ?? null,
+        form_payload_digest: plan.precondition.formPayloadDigest ?? null,
+        origin: plan.precondition.origin,
+        page_generation: plan.precondition.pageGeneration,
+      }),
+    ),
+  );
 }
