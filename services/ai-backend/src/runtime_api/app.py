@@ -34,6 +34,7 @@ from agent_runtime.api.connector_access_modes_resolver import (
     NullConnectorAccessModesResolver,
 )
 from agent_runtime.api.run_coordinator import RunCoordinator
+from agent_runtime.api.source_open_service import SourceOpenService
 from agent_runtime.api.suggestible_connectors_resolver import (
     NullSuggestibleConnectorsResolver,
     SuggestibleConnectorsResolver,
@@ -279,6 +280,11 @@ class RuntimeApiAppFactory:
             # useful for isolated non-route test composition and has no public
             # effect because no artifact path is registered.
             app.state.artifact_service = artifact_service
+        # E1 D4/D5 — click-time source opening is deliberately composed as a
+        # separate service. It receives the canonical run/event stores plus the
+        # owner artifact service, but no raw reference resolver. The route is
+        # still dark while SURFACES_V2 is explicitly disabled.
+        app.state.source_open_service = cls.default_source_open_service(app)
         app.state.draft_service = cls.default_draft_service(app)
         # PRD-D1 — the single-artifact staged-write service (v2). Registered on
         # app state always (harmless when the flag is off — the stage routes are
@@ -665,6 +671,25 @@ class RuntimeApiAppFactory:
         if ports is None:
             return None
         return ArtifactServiceComposition.build(ports)
+
+    @classmethod
+    def default_source_open_service(cls, app: FastAPI) -> SourceOpenService | None:
+        """Compose the owner-routed Sources v2 opener from runtime-owned ports.
+
+        This intentionally does not create an artifact service itself. When the
+        artifact repository is dark or unavailable, the service still folds
+        provenance but returns the closed, non-disclosing ``unavailable``
+        outcome instead of attempting an unsafe dereference.
+        """
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return SourceOpenService(
+            persistence=ports.persistence,
+            event_store=ports.event_store,
+            artifact_service=getattr(app.state, "artifact_service", None),
+        )
 
     @classmethod
     def _httpx_membership_fetcher(cls):

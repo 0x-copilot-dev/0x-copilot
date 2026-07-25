@@ -32,6 +32,8 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/settings/provider-keys/{provider}",
         # Generative Surfaces v2 (PRD-A3) — the folded SurfaceStore for a run.
         "/v1/agent/runs/{run_id}/surfaces",
+        # E1 D4/D5 — owner-routed safe provenance open (not a raw-ref endpoint).
+        "/v1/agent/runs/{run_id}/sources/{source_id}/open",
         # Generative Surfaces v2 (PRD-B4) — user-invited "Suggest a shape".
         "/v1/agent/surfaces/{surface_id}/shape-request",
         # Generative Surfaces v2 (PRD-E3) — the tamper-evident receipt export.

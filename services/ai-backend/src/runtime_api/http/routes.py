@@ -1135,6 +1135,12 @@ class RuntimeApiRouter:
         from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 
         if SurfacesV2Flag.enabled():
+            # E1 D4/D5 — a source fact is not a capability. The POST route
+            # refolds the owned ledger then delegates artifact authorization to
+            # its owning service at click time. Off ⇒ route absent (404).
+            from runtime_api.http.source_open import register_source_open_routes
+
+            register_source_open_routes(router)
             from runtime_api.http.stages import register_stage_routes
 
             register_stage_routes(router)

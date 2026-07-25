@@ -260,6 +260,40 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     expect(surfaceTabs()).toHaveLength(0);
   });
 
+  it("E1 D4: a terminal zero-op run shows its receipt in Focus without opening a canvas tab", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+
+    stream(transport, [
+      {
+        event_id: "terminal-zero-op",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 1,
+        event_type: "run_completed",
+        activity_kind: "run",
+        payload: { status: "completed" },
+        created_at: new Date(1_700_000_001_000).toISOString(),
+      },
+    ]);
+
+    await waitFor(() =>
+      expect(screen.getByTestId("receipt-v2-surface")).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId("run-destination")).toHaveAttribute(
+      "data-mode",
+      "focus",
+    );
+    // The zero-op receipt is available but must never become a lifecycle tab.
+    expect(surfaceTabs()).toHaveLength(0);
+    expect(screen.queryByTestId("receipt-v2-launch")).toBeNull();
+    // Studio is product-dark; the Focus receipt remains readable but does not
+    // expose a route around the product-level Studio gate.
+    expect(screen.queryByTestId("receipt-v2-open-studio")).toBeNull();
+  });
+
   it("flag ON: a hostile title renders as text, not markup (no injection)", async () => {
     seq = 0;
     const transport = new FakeTransport();

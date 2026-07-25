@@ -26,6 +26,7 @@ export {
   LedgerSourcesTab,
   type LedgerSourcesTabProps,
 } from "./LedgerSourcesTab";
+export { SourcesV2Tab, type SourcesV2TabProps } from "./SourcesV2Tab";
 export { AgentsTab, type AgentsTabProps } from "./AgentsTab";
 export { DraftTab, type DraftTabProps } from "./DraftTab";
 export { ApprovalsTab, type ApprovalsTabProps } from "./ApprovalsTab";

@@ -56,16 +56,18 @@ import {
   type ReactNode,
 } from "react";
 
-import type {
-  AgentRunStatus,
-  ArtifactKind,
-  ConversationConnectorScopes,
-  ConversationId,
-  ModelSelectionRequest,
-  RunAttachmentRequest,
-  RunId,
-  SourceEntry,
-  SurfaceEdits,
+import {
+  isSourceOpenResultV2,
+  type AgentRunStatus,
+  type ArtifactKind,
+  type ConversationConnectorScopes,
+  type ConversationId,
+  type ModelSelectionRequest,
+  type RunAttachmentRequest,
+  type RunId,
+  type SourceEntry,
+  type SourcesProjectionV2,
+  type SurfaceEdits,
 } from "@0x-copilot/api-types";
 import { isArtifactTransport } from "@0x-copilot/chat-transport";
 
@@ -113,7 +115,7 @@ import {
 // pure presentational components + pure ledger folds + one Transport-fed fetch;
 // the cockpit composes them behind the `surfacesV2` flag (flag off ⇒ never
 // constructed, so the cockpit is byte-identical to today).
-import { ReceiptSurface } from "../../surfaces/receipt";
+import { ReceiptV2LaunchCard, ReceiptV2Surface } from "../../surfaces/receipt";
 import { PostureChip } from "./PostureChip";
 import { PendingCounterChip } from "./PendingCounterChip";
 import { usePendingWork } from "./usePendingWork";
@@ -123,11 +125,8 @@ import {
   type PendingCard,
 } from "./pendingCardsProjection";
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
-import { projectReceipt, type ReceiptProjection } from "./projectReceipt";
-import {
-  projectLedgerSources,
-  type LedgerSourcesProjection,
-} from "./projectLedgerSources";
+import { projectReceiptV2, type ReceiptV2Projection } from "./projectReceiptV2";
+import { projectSourcesV2 } from "../../projections/sourcesV2";
 import type { PendingAgentRow } from "@0x-copilot/api-types";
 // PRD-B1: Generative Surfaces v2 content hydration (SurfaceStore endpoint via
 // the Transport port). Called unconditionally (Rules of Hooks) but inert when
@@ -182,7 +181,7 @@ import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
-import { useRunMode, useRunPanelCollapsed } from "./useRunMode";
+import { STUDIO_ENABLED, useRunMode, useRunPanelCollapsed } from "./useRunMode";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -192,11 +191,18 @@ const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
 // Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
 // the memos/props never churn when the cockpit is byte-identical to today).
 const EMPTY_CARDS: readonly PendingCard[] = [];
-const EMPTY_RECEIPT: ReceiptProjection = { receipt: null, emittedSeq: null };
+const EMPTY_RECEIPT_V2: ReceiptV2Projection = {
+  receipt: null,
+  available: false,
+  chatOnly: false,
+  shouldAutoOpen: false,
+};
 const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
   new Map();
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
 const EFFECT_STAGE_URI_PREFIX = "effect-stage://";
+const RECEIPT_V2_URI_PREFIX = "receipt-v2://";
+const SOURCE_OPEN_UNAVAILABLE = "This source is no longer available.";
 
 function effectStageUri(stageId: string): string {
   return `${EFFECT_STAGE_URI_PREFIX}${encodeURIComponent(stageId)}`;
@@ -211,6 +217,22 @@ function effectStageIdForUri(uri: string): string | null {
     return stageId === "" ? null : stageId;
   } catch {
     return null;
+  }
+}
+
+function receiptV2Uri(runId: string): string {
+  return `${RECEIPT_V2_URI_PREFIX}${encodeURIComponent(runId)}`;
+}
+
+function isReceiptV2Uri(uri: string, runId?: string | null): boolean {
+  if (!uri.startsWith(RECEIPT_V2_URI_PREFIX)) return false;
+  if (runId === undefined) return true;
+  try {
+    return (
+      decodeURIComponent(uri.slice(RECEIPT_V2_URI_PREFIX.length)) === runId
+    );
+  } catch {
+    return false;
   }
 }
 
@@ -631,6 +653,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     // PRD-04: a new conversation starts from a clean surface strip.
     setPinnedUri(null);
     setClosedUris(EMPTY_CLOSED_URIS);
+    setReceiptV2Opened(false);
+    setOpeningSourceId(null);
+    setSourceOpenMessage(null);
+    sourceOpenTokenRef.current += 1;
     // PRD-09c: never carry an open edit overlay across conversations.
     setEditingDiffId(null);
     // Surfaces v2: a new conversation starts from a clean gate/toast state.
@@ -672,6 +698,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const [pinnedUri, setPinnedUri] = useState<string | null>(null);
   const [closedUris, setClosedUris] =
     useState<ReadonlySet<string>>(EMPTY_CLOSED_URIS);
+  // E1 D4: receipt-v2 is never a lifecycle-created canvas tab. It exists only
+  // after a deliberate user action, while the terminal/zero-op fold remains
+  // available in Focus chat as a non-opening accountability surface.
+  const [receiptV2Opened, setReceiptV2Opened] = useState(false);
+  // E1 D5: source-open replies are tied to a monotonic token so an in-flight
+  // request from a prior run cannot pin a target into the newly selected run.
+  const [openingSourceId, setOpeningSourceId] = useState<string | null>(null);
+  const [sourceOpenMessage, setSourceOpenMessage] = useState<string | null>(
+    null,
+  );
+  const sourceOpenTokenRef = useRef(0);
 
   // PRD-09c: which pending surface diff (by `diffId === approvalId`) currently
   // has the edit overlay open. `null` = no overlay. Opened by
@@ -719,6 +756,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   useEffect(() => {
     setWorkspaceStageBusyId(null);
     setWorkspaceStageMessages(new Map());
+    setReceiptV2Opened(false);
+    setOpeningSourceId(null);
+    setSourceOpenMessage(null);
+    sourceOpenTokenRef.current += 1;
   }, [session.runId]);
 
   const handleActivateTab = useCallback((uri: string): void => {
@@ -736,6 +777,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       return next;
     });
     setPinnedUri((prev) => (prev === uri ? null : prev));
+    if (isReceiptV2Uri(uri)) {
+      setReceiptV2Opened(false);
+    }
   }, []);
   const handleFollowLive = useCallback((): void => {
     setPinnedUri(null);
@@ -929,6 +973,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setScrubbedSeq(null);
       setPinnedUri(null);
       setClosedUris(EMPTY_CLOSED_URIS);
+      setReceiptV2Opened(false);
+      setOpeningSourceId(null);
+      setSourceOpenMessage(null);
+      sourceOpenTokenRef.current += 1;
       // PRD-09c: rebinding the cockpit to another run closes any open overlay.
       setEditingDiffId(null);
       // Surfaces v2: a run switch resets the gate/toast state too.
@@ -1391,6 +1439,24 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     return { tabs, uriBySubjectKey, preferredUri };
   }, [displayedCanvasLifecycle, ledger, stageById]);
 
+  // E1 D4/D5 canonical folds over the same append-only event list. Receipt v2
+  // is intentionally independent of lifecycle tabs: a terminal chat-only run
+  // produces an available receipt but never creates a canvas subject by itself.
+  const receiptV2Projection = useMemo(
+    () =>
+      surfacesV2 && session.runId !== null
+        ? projectReceiptV2(session.runId, session.events, session.runStatus)
+        : EMPTY_RECEIPT_V2,
+    [surfacesV2, session.runId, session.events, session.runStatus],
+  );
+  const sourcesV2Projection = useMemo<SourcesProjectionV2 | null>(
+    () =>
+      surfacesV2 && session.runId !== null
+        ? projectSourcesV2(session.runId, session.events)
+        : null,
+    [surfacesV2, session.runId, session.events],
+  );
+
   // E1 D6 Review is intentionally a local navigation operation. The aggregate
   // API names an authorised run + opaque subject only; it never sends a target
   // path or surface body. For an effect, the destination run's own lifecycle
@@ -1429,12 +1495,37 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setPendingWorkV2Review(null);
   }, [pendingWorkV2Review, session.runId, surfacesV2, v2CanvasTabs]);
 
-  // SDR §11 strictness: flag on ⇒ tabs come only from B3's lifecycle fold; flag
-  // off ⇒ the old v1 selector remains byte-identical. Never mix the two paths.
-  const surfaceTabList = useMemo(
-    () => (surfacesV2 ? v2CanvasTabs.tabs : projectSurfaceTabs(session.events)),
-    [surfacesV2, v2CanvasTabs, session.events],
-  );
+  const receiptV2Tab = useMemo(() => {
+    if (
+      !surfacesV2 ||
+      !receiptV2Opened ||
+      receiptV2Projection.receipt === null ||
+      session.runId === null
+    ) {
+      return null;
+    }
+    return {
+      uri: receiptV2Uri(session.runId),
+      title: "Run receipt",
+      lastSeq: ledger.lastLedgerSeq,
+    };
+  }, [
+    surfacesV2,
+    receiptV2Opened,
+    receiptV2Projection.receipt,
+    session.runId,
+    ledger.lastLedgerSeq,
+  ]);
+
+  // SDR §11 strictness: flag on ⇒ tabs come only from B3's lifecycle fold plus
+  // this explicit, user-opened canonical receipt; flag off ⇒ the old v1 selector
+  // remains byte-identical. A receipt never arrives here automatically.
+  const surfaceTabList = useMemo(() => {
+    if (!surfacesV2) return projectSurfaceTabs(session.events);
+    return receiptV2Tab === null
+      ? v2CanvasTabs.tabs
+      : [...v2CanvasTabs.tabs, receiptV2Tab];
+  }, [surfacesV2, v2CanvasTabs, receiptV2Tab, session.events]);
   // Content hydration for the v2 canvas (SurfaceStore endpoint via Transport).
   // Called unconditionally (Rules of Hooks); inert when `surfacesV2` is false
   // (`enabled: false` ⇒ no request, no state churn).
@@ -1456,13 +1547,24 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         : undefined,
     [surfacesV2, hydration],
   );
-  const visibleSurfaceTabs = useMemo(
-    () =>
-      surfaceTabList
-        .filter((tab) => !closedUris.has(tab.uri))
-        .slice(0, MAX_SURFACE_TABS),
-    [surfaceTabList, closedUris],
-  );
+  const visibleSurfaceTabs = useMemo(() => {
+    const eligible = surfaceTabList.filter((tab) => !closedUris.has(tab.uri));
+    const capped = eligible.slice(0, MAX_SURFACE_TABS);
+    // An explicitly opened receipt must stay visible even when a long run
+    // already reached the normal tab cap. It is still placed last so it does
+    // not become the auto-follow/newest surface.
+    if (
+      receiptV2Tab !== null &&
+      eligible.some((tab) => tab.uri === receiptV2Tab.uri) &&
+      !capped.some((tab) => tab.uri === receiptV2Tab.uri)
+    ) {
+      return [
+        ...capped.slice(0, Math.max(0, MAX_SURFACE_TABS - 1)),
+        receiptV2Tab,
+      ];
+    }
+    return capped;
+  }, [surfaceTabList, closedUris, receiptV2Tab]);
   const newestUri =
     visibleSurfaceTabs.length > 0 ? visibleSurfaceTabs[0].uri : "";
   const lifecyclePreferredUri = visibleSurfaceTabs.some(
@@ -1530,16 +1632,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // fetch. All are gated on `surfacesV2` — flag off ⇒ empties/inert, so the
   // cockpit is byte-identical to today (memos hold a stable empty reference; the
   // pending-work hook is `enabled: false`, issuing no request).
-
-  // E1: the run receipt (null until `receipt.emitted`) + the read-fold sources.
-  const receiptProjection = useMemo(
-    () => (surfacesV2 ? projectReceipt(session.events) : EMPTY_RECEIPT),
-    [surfacesV2, session.events],
-  );
-  const ledgerSourcesProjection = useMemo<LedgerSourcesProjection | null>(
-    () => (surfacesV2 ? projectLedgerSources(session.events) : null),
-    [surfacesV2, session.events],
-  );
 
   // E2: this run's live pending cards (open gates + held stages), a peer of
   // `projectApprovals`/`projectLedger`. `usePendingWork` merges these with the
@@ -1898,13 +1990,88 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [],
   );
 
-  // E1: the receipt's "Copy receipt" reuses the host clipboard port (B2's
-  // `onCopyText`); the package never touches the clipboard itself.
-  const copyReceiptText = useCallback(
-    (text: string): void => {
-      void onCopyText?.(text);
+  // E1 D4 selection rule: receipt v2 is never auto-opened. This is called
+  // only by an explicit Studio launcher or Focus receipt action. A chat-only,
+  // zero-operation terminal run therefore stays a readable Focus artifact
+  // without stealing the canvas.
+  const handleOpenReceiptV2 = useCallback((): void => {
+    if (
+      !surfacesV2 ||
+      receiptV2Projection.receipt === null ||
+      session.runId === null
+    ) {
+      return;
+    }
+    const uri = receiptV2Uri(session.runId);
+    setReceiptV2Opened(true);
+    setClosedUris((previous) => {
+      if (!previous.has(uri)) return previous;
+      const next = new Set(previous);
+      next.delete(uri);
+      return next;
+    });
+    setPinnedUri(uri);
+    setMode("studio");
+  }, [surfacesV2, receiptV2Projection.receipt, session.runId, setMode]);
+
+  // E1 D5: only the opaque source id crosses the UI boundary. The facade route
+  // rechecks the run owner, refolds canonical provenance, and asks the artifact
+  // owner to authorize the exact revision before a logical tab URI is formed.
+  const handleOpenSourceV2 = useCallback(
+    (sourceId: string): void => {
+      const runId = session.runId;
+      if (!surfacesV2 || runId === null || sourceId === "") return;
+      const token = sourceOpenTokenRef.current + 1;
+      sourceOpenTokenRef.current = token;
+      setOpeningSourceId(sourceId);
+      setSourceOpenMessage(null);
+      void transport
+        .request<unknown>({
+          method: "POST",
+          path: `/v1/agent/runs/${encodeURIComponent(
+            runId,
+          )}/sources/${encodeURIComponent(sourceId)}/open`,
+          body: {},
+        })
+        .then((response) => {
+          if (sourceOpenTokenRef.current !== token) return;
+          if (
+            !isSourceOpenResultV2(response) ||
+            response.source_id !== sourceId ||
+            response.disposition !== "artifact" ||
+            response.artifact_id === null ||
+            response.artifact_revision === null ||
+            response.artifact_kind === null
+          ) {
+            setSourceOpenMessage(SOURCE_OPEN_UNAVAILABLE);
+            return;
+          }
+          const uri = artifactUri(
+            response.artifact_kind,
+            response.artifact_id,
+            response.artifact_revision,
+          );
+          setClosedUris((previous) => {
+            if (!previous.has(uri)) return previous;
+            const next = new Set(previous);
+            next.delete(uri);
+            return next;
+          });
+          setPinnedUri(uri);
+          setMode("studio");
+        })
+        .catch(() => {
+          if (sourceOpenTokenRef.current === token) {
+            setSourceOpenMessage(SOURCE_OPEN_UNAVAILABLE);
+          }
+        })
+        .finally(() => {
+          if (sourceOpenTokenRef.current === token) {
+            setOpeningSourceId(null);
+          }
+        });
     },
-    [onCopyText],
+    [surfacesV2, session.runId, transport, setMode],
   );
 
   // The kind-specific v2 surface for the active tab, injected into ThreadCanvas
@@ -1922,6 +2089,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             onRetry={session.retry}
           />
         );
+      }
+      if (
+        isReceiptV2Uri(uri, session.runId) &&
+        receiptV2Projection.receipt !== null
+      ) {
+        return <ReceiptV2Surface receipt={receiptV2Projection.receipt} />;
       }
       if (parseArtifactSurfaceUri(uri) !== null) {
         return (
@@ -2006,32 +2179,21 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           />
         );
       }
-      const surface = ledger.surfaces.get(id);
-      if (surface?.kind === "receipt" && receiptProjection.receipt !== null) {
-        return (
-          <ReceiptSurface
-            receipt={receiptProjection.receipt}
-            emittedSeq={receiptProjection.emittedSeq}
-            onCopyText={copyReceiptText}
-          />
-        );
-      }
       return null;
     },
     [
       stageBySurfaceId,
-      ledger,
       hydration,
       displayedCanvasLifecycle,
       session.retry,
-      receiptProjection,
+      session.runId,
+      receiptV2Projection.receipt,
       handleRowDecision,
       handleStageApply,
       handleStageEdit,
       handleStageApprove,
       handleStageReject,
       handleStageRestore,
-      copyReceiptText,
       transport,
       artifactDownloadPort,
       workspaceStageReviews,
@@ -2061,6 +2223,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       <CanvasFocusCards
         projection={displayedCanvasLifecycle}
         onOpenSubject={handleOpenLifecycleSubject}
+        receiptSlot={
+          receiptV2Projection.receipt !== null ? (
+            <ReceiptV2Surface
+              receipt={receiptV2Projection.receipt}
+              onOpenInStudio={STUDIO_ENABLED ? handleOpenReceiptV2 : undefined}
+            />
+          ) : undefined
+        }
       />
     ) : undefined;
 
@@ -2124,6 +2294,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           hasMore: pendingWorkV21.hasMore,
           onReview: handleReviewPendingWorkV2,
           onLoadMore: pendingWorkV21.loadMore,
+        }
+      : undefined;
+
+  // E1 D5's canonical, redacted source projection. It is built from the same
+  // event array as the canvas and only delegates opaque source ids to the
+  // owner-routed facade open flow. Absent when v2 is off, preserving the legacy
+  // rail DOM and host wiring unchanged.
+  const railSourcesV2 =
+    surfacesV2 && sourcesV2Projection !== null
+      ? {
+          projection: sourcesV2Projection,
+          onOpenSource: handleOpenSourceV2,
+          openingSourceId,
+          openMessage: sourceOpenMessage,
         }
       : undefined;
 
@@ -2278,10 +2462,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       onApprove={handleApprove}
       onReject={handleReject}
       scrubbed={isScrubbed}
-      // Surfaces v2 (E1/E2): the read-fold Sources tab, the cross-run pending
+      // Surfaces v2 (E1/E2): canonical safe Sources provenance, the cross-run
       // queue + fleet, and the header chip's "jump to Approvals" signal. All
-      // null/undefined when the flag is off ⇒ the rail is byte-identical.
-      ledgerSources={ledgerSourcesProjection}
+      // undefined when the flag is off ⇒ the rail is byte-identical.
+      sourcesV2={railSourcesV2}
       pendingV2={railPendingV2}
       pendingWorkV21={railPendingWorkV21}
       focusApprovalsSignal={surfacesV2 ? approvalsFocusSignal : undefined}
@@ -2370,6 +2554,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // `canvasEl` bare below.
   const v2CanvasBody = (
     <div data-testid="run-v2-canvas-body" style={v2CanvasBodyStyle}>
+      {mode === "studio" &&
+      receiptV2Projection.receipt !== null &&
+      !receiptV2Opened ? (
+        <ReceiptV2LaunchCard
+          receipt={receiptV2Projection.receipt}
+          onOpen={handleOpenReceiptV2}
+        />
+      ) : null}
       {mode === "studio" && ledger.openGates.length > 0 ? (
         <div data-testid="run-v2-gate-region" style={gateRegionStyle}>
           {ledger.openGates.map((gate) => (

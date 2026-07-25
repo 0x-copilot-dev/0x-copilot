@@ -1,4 +1,4 @@
-import type { CSSProperties, ReactElement } from "react";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import type {
   CanvasLifecycleProjection,
@@ -9,13 +9,24 @@ import type {
 export function CanvasFocusCards(props: {
   readonly projection: CanvasLifecycleProjection;
   readonly onOpenSubject: (subjectKey: string) => void;
+  /**
+   * E1 D4: the canonical receipt-v2 fold replaces the legacy lifecycle
+   * receipt card when available. It is a caller-owned slot so this compact
+   * focus projection never creates a second receipt representation.
+   */
+  readonly receiptSlot?: ReactNode;
 }): ReactElement | null {
   const cards = props.projection.tabs;
   const receipt = props.projection.terminalReceipt;
+  const receiptContent =
+    props.receiptSlot ??
+    (receipt !== null ? (
+      <FocusCard subject={receipt} onOpenSubject={props.onOpenSubject} />
+    ) : null);
   const hasGate = props.projection.pendingSubjectKeys.some((key) =>
     key.startsWith("gate:"),
   );
-  if (cards.length === 0 && receipt === null && !hasGate) return null;
+  if (cards.length === 0 && receiptContent === null && !hasGate) return null;
   return (
     <section
       aria-label="Run review cards"
@@ -30,9 +41,7 @@ export function CanvasFocusCards(props: {
         />
       ))}
       {hasGate ? <GateFocusCard /> : null}
-      {receipt !== null ? (
-        <FocusCard subject={receipt} onOpenSubject={props.onOpenSubject} />
-      ) : null}
+      {receiptContent}
     </section>
   );
 }

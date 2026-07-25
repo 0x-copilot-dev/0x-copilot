@@ -783,6 +783,91 @@ export interface SourcesProjectionV2 {
   readonly facts: readonly SourceFactV2[];
 }
 
+// ---------------------------------------------------------------------------
+// Sources v2 owner-routed opening. A source fact is never itself a capability:
+// the caller selects only its opaque source id and the server re-folds the
+// caller-owned ledger, then reauthorizes the owner resource at click time.
+// ---------------------------------------------------------------------------
+
+export type SourceOpenDispositionV2 = "artifact" | "unavailable";
+
+/** Safe response from `POST /v1/agent/runs/{run_id}/sources/{source_id}/open`.
+ * It never contains a physical path, opaque source ref, raw args/body, cookie,
+ * secret, or provider token. Only a re-authorized logical artifact target may
+ * be returned; every other source kind is deliberately unavailable. */
+export interface SourceOpenResultV2 {
+  readonly v: 2;
+  readonly source_id: string;
+  readonly kind: SourceFactKindV2;
+  readonly disposition: SourceOpenDispositionV2;
+  readonly artifact_id: string | null;
+  readonly artifact_revision: number | null;
+  readonly artifact_kind: ArtifactKind | null;
+}
+
+const _SOURCE_OPEN_KINDS = new Set<SourceFactKindV2>([
+  "connector",
+  "artifact",
+  "workspace",
+  "browser",
+  "sandbox",
+  "subagent",
+  "external_receipt",
+]);
+const _SOURCE_OPEN_ARTIFACT_KINDS = new Set<ArtifactKind>([
+  "code",
+  "document",
+  "dataset",
+  "file",
+]);
+const _SOURCE_OPEN_SOURCE_ID =
+  /^source:v2:[0-9]{1,12}:(connector|artifact|workspace|browser|sandbox|subagent|external_receipt)$/;
+const _SOURCE_OPEN_ARTIFACT_ID =
+  /^(?!file:)[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/i;
+
+/** Strict client-boundary guard: an opener response with extra fields is
+ * rejected rather than accidentally rendering a newly leaked raw reference. */
+export function isSourceOpenResultV2(
+  value: unknown,
+): value is SourceOpenResultV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const result = value as Record<string, unknown>;
+  if (
+    !_hasOnlyKeys(result, [
+      "v",
+      "source_id",
+      "kind",
+      "disposition",
+      "artifact_id",
+      "artifact_revision",
+      "artifact_kind",
+    ]) ||
+    result.v !== 2 ||
+    typeof result.source_id !== "string" ||
+    !_SOURCE_OPEN_SOURCE_ID.test(result.source_id) ||
+    !_SOURCE_OPEN_KINDS.has(result.kind as SourceFactKindV2) ||
+    (result.disposition !== "artifact" && result.disposition !== "unavailable")
+  ) {
+    return false;
+  }
+  if (result.disposition === "unavailable") {
+    return (
+      result.artifact_id === null &&
+      result.artifact_revision === null &&
+      result.artifact_kind === null
+    );
+  }
+  return (
+    result.kind === "artifact" &&
+    typeof result.artifact_id === "string" &&
+    _SOURCE_OPEN_ARTIFACT_ID.test(result.artifact_id) &&
+    _isPositiveSafeInteger(result.artifact_revision) &&
+    _SOURCE_OPEN_ARTIFACT_KINDS.has(result.artifact_kind as ArtifactKind)
+  );
+}
+
 // Compile-time: the payload-map keys are a subset of the event-type union
 // (`SurfaceEventV2` already pins the other direction — every event type must
 // have a payload entry). Together they make the map exactly the event set.

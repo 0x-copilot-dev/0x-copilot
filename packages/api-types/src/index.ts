@@ -183,6 +183,8 @@ export type {
   SourceFactKindV2,
   SourceFactV2,
   SourcesProjectionV2,
+  SourceOpenDispositionV2,
+  SourceOpenResultV2,
   // PRD-E2 — cross-run pending-work queue read model.
   PendingItemKind,
   PendingWorkItem,
@@ -227,6 +229,8 @@ export {
   isPendingWorkResponse,
   // E1 D6 — strict canonical pending-work boundary guard.
   isPendingWorkV2Response,
+  // E1 D4/D5 — strict safe source-open boundary guard.
+  isSourceOpenResultV2,
 } from "./ledger";
 
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,
