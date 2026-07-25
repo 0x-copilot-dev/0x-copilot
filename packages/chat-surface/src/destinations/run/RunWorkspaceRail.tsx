@@ -51,6 +51,7 @@ import {
 import type {
   PendingAgentRow,
   SourceEntry,
+  SourcesProjectionV2,
   SubagentEntry,
 } from "@0x-copilot/api-types";
 
@@ -62,6 +63,7 @@ import {
   PendingCardList,
   PendingWorkV2List,
   SourcesTab,
+  SourcesV2Tab,
   WorkspaceTabs,
   type ApprovalsQueueProjection,
   type SourceEntryMap,
@@ -116,6 +118,17 @@ export interface RunWorkspaceRailProps {
    * existing behavior is byte-identical (all pre-existing assertions untouched).
    */
   readonly ledgerSources?: LedgerSourcesProjection | null;
+  /**
+   * E1 D4/D5 canonical provenance rail. This wins over the legacy E1
+   * `ledgerSources` read projection when supplied; facts remain presentation
+   * data and the supplied callback receives only an opaque source id.
+   */
+  readonly sourcesV2?: {
+    readonly projection: SourcesProjectionV2;
+    readonly onOpenSource: (sourceId: string) => void;
+    readonly openingSourceId: string | null;
+    readonly openMessage: string | null;
+  };
   readonly sources?: SourceEntryMap;
   readonly sourcesLoading?: boolean;
   readonly sourcesError?: string | null;
@@ -215,6 +228,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     chatSlot,
     defaultTab = "chat",
     ledgerSources = null,
+    sourcesV2,
     sources = EMPTY_SOURCES,
     sourcesLoading,
     sourcesError = null,
@@ -346,7 +360,14 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   // by BOTH the Studio tabset and the Focus Run-details panel (recomposition,
   // not a fork — FR-3.11). Each owns its own empty copy.
   const sourcesBody: ReactNode =
-    ledgerSources !== null ? (
+    sourcesV2 !== undefined ? (
+      <SourcesV2Tab
+        sources={sourcesV2.projection}
+        onOpenSource={sourcesV2.onOpenSource}
+        openingSourceId={sourcesV2.openingSourceId}
+        openMessage={sourcesV2.openMessage}
+      />
+    ) : ledgerSources !== null ? (
       <LedgerSourcesTab ledgerSources={ledgerSources} />
     ) : (
       <SourcesTab

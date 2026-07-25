@@ -30,24 +30,6 @@ class E1SensitiveRoute:
     foreign_status: int | None
 
 
-@dataclass(frozen=True)
-class E1DeferredRouteFixture:
-    """Security metadata reserved for an independently owned future route.
-
-    This is intentionally metadata only: it neither chooses a URL nor imports
-    an implementation.  The D4/D5 SourceOpenService owner promotes the row to
-    :data:`E1_SENSITIVE_ROUTES` when its artifact-only POST route is merged.
-    """
-
-    route_name: str
-    owner: str
-    method: str
-    family: str
-    identity_class: str
-    parent_scope: str
-    foreign_status: int
-
-
 def _route(
     route_id: str,
     method: str,
@@ -71,9 +53,7 @@ def _route(
 
 
 # Keep this tuple in API-registration order where that matters.  It covers the
-# compatibility Source feed that remains public today.  The canonical source
-# opener is separately owned by D4/D5; D8 deliberately does not register or
-# proxy an interim alternative.
+# compatibility Source feed and D4/D5's canonical artifact-only source opener.
 E1_SENSITIVE_ROUTES: tuple[E1SensitiveRoute, ...] = (
     _route(
         "artifact.promote",
@@ -283,6 +263,15 @@ E1_SENSITIVE_ROUTES: tuple[E1SensitiveRoute, ...] = (
         foreign_status=None,
     ),
     _route(
+        "source_open",
+        "POST",
+        "/v1/agent/runs/{run_id}/sources/{source_id}/open",
+        family="source",
+        identity_class="member",
+        parent_scope="artifact_revision",
+        foreign_status=404,
+    ),
+    _route(
         "sources.compatibility_list",
         "GET",
         "/v1/agent/conversations/{conversation_id}/sources",
@@ -338,23 +327,10 @@ E1_SENSITIVE_ROUTES: tuple[E1SensitiveRoute, ...] = (
     ),
 )
 
-
-# D4/D5 owns the one canonical, artifact-only, reauthorized source opener.
-# The endpoint's final public path is deliberately absent here; it is not safe
-# for D8 to guess a path or create a competing read/open surface.  Its owner
-# can promote this descriptor to ``E1_SENSITIVE_ROUTES`` by route name once the
-# service is merged, at which point the same matrix tests will cover it.
-E1_DEFERRED_ROUTE_FIXTURES: tuple[E1DeferredRouteFixture, ...] = (
-    E1DeferredRouteFixture(
-        route_name="source_open",
-        owner="D4/D5 SourceOpenService",
-        method="POST",
-        family="source",
-        identity_class="member",
-        parent_scope="artifact_revision",
-        foreign_status=404,
-    ),
-)
+# A deliberate review checkpoint: adding a sensitive public route must update
+# this canonical inventory and its independent runtime/facade registration
+# tests, rather than silently expanding one side of the boundary.
+E1_SENSITIVE_ROUTE_COUNT = 30
 
 E1_SENSITIVE_ROUTE_IDS = frozenset(route.route_id for route in E1_SENSITIVE_ROUTES)
 E1_SENSITIVE_ROUTE_KEYS = frozenset(
@@ -365,6 +341,8 @@ if len(E1_SENSITIVE_ROUTE_IDS) != len(E1_SENSITIVE_ROUTES):  # pragma: no cover
     raise RuntimeError("E1 authorization route ids must be unique")
 if len(E1_SENSITIVE_ROUTE_KEYS) != len(E1_SENSITIVE_ROUTES):  # pragma: no cover
     raise RuntimeError("E1 authorization method/path pairs must be unique")
+if len(E1_SENSITIVE_ROUTES) != E1_SENSITIVE_ROUTE_COUNT:  # pragma: no cover
+    raise RuntimeError("E1 authorization route count must match the reviewed inventory")
 
 
 def is_e1_sensitive_path(path: str) -> bool:
@@ -387,6 +365,8 @@ def is_e1_sensitive_path(path: str) -> bool:
         return True
     if path.startswith("/v1/agent/runs/{run_id}/receipt/"):
         return True
+    if path.startswith("/v1/agent/runs/{run_id}/sources/"):
+        return True
     if path == "/v1/agent/conversations/{conversation_id}/sources":
         return True
     if path in {"/v1/agent/pending-work", "/v1/agent/pending-work-v2"}:
@@ -400,9 +380,8 @@ def is_e1_sensitive_path(path: str) -> bool:
 
 __all__ = (
     "E1SensitiveRoute",
-    "E1DeferredRouteFixture",
+    "E1_SENSITIVE_ROUTE_COUNT",
     "E1_SENSITIVE_ROUTES",
-    "E1_DEFERRED_ROUTE_FIXTURES",
     "E1_SENSITIVE_ROUTE_IDS",
     "E1_SENSITIVE_ROUTE_KEYS",
     "is_e1_sensitive_path",

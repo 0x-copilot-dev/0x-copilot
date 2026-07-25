@@ -1334,7 +1334,13 @@ export {
   RECEIPT_ASSEMBLED_LINE,
   type ReceiptSurfaceProps,
 } from "./surfaces/receipt";
+export {
+  ReceiptV2LaunchCard,
+  ReceiptV2Surface,
+  type ReceiptV2SurfaceProps,
+} from "./surfaces/receipt";
 export { LedgerSourcesTab, type LedgerSourcesTabProps } from "./workspace";
+export { SourcesV2Tab, type SourcesV2TabProps } from "./workspace";
 // === end PRD-E1 ===
 
 // === Surfaces v2 — PRD-B2 provenance + honest states ===

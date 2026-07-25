@@ -139,6 +139,10 @@ class Keys:
         GET_EVENTS = "get_events"
         # Generative Surfaces v2 (PRD-A3) — the folded SurfaceStore for a run.
         GET_RUN_SURFACES = "get_run_surfaces"
+        # E1 D4/D5 — click-time, owner-routed resolution of a safe Sources v2 fact.
+        # Keep the FastAPI route name aligned with D8's deferred authorization
+        # inventory fixture: ``source_open`` / POST / artifact_revision.
+        SOURCE_OPEN = "source_open"
         # Generative Surfaces v2 (PRD-B3) — per-surface view-lifecycle mutations.
         REGENERATE_SURFACE_VIEW = "regenerate_surface_view"
         SET_SURFACE_VIEW_PREFERENCE = "set_surface_view_preference"
@@ -360,6 +364,11 @@ class Messages:
         INVALID_CONNECTOR_SCOPES = "Connector scope payload is invalid."
         INVALID_REQUEST = "Request payload is invalid."
         RUN_NOT_FOUND = "Run was not found for this scope."
+        # E1 D4/D5 — source facts are provenance records, not capabilities.
+        # These intentionally reveal neither whether a source existed nor why
+        # its owning authority declined to reopen it.
+        SOURCE_NOT_AVAILABLE = "Source is not available for this scope."
+        SOURCE_OPEN_UNAVAILABLE = "Source opening is not available right now."
         # PRD-E3 — the receipt export re-folds a terminal run's ledger; a run
         # still in flight has no sealed receipt yet (mirrors E1's emit-at-every-
         # terminal rule). Safe, leak-free copy.

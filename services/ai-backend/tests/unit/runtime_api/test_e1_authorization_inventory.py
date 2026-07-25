@@ -17,7 +17,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from copilot_service_contracts.e1_authorization import (
-    E1_DEFERRED_ROUTE_FIXTURES,
+    E1_SENSITIVE_ROUTE_COUNT,
     E1_SENSITIVE_ROUTE_KEYS,
     E1_SENSITIVE_ROUTES,
     E1SensitiveRoute,
@@ -30,6 +30,7 @@ from runtime_api.identity import get_identity
 
 _PATH_VALUES = {
     "{run_id}": "run_owner",
+    "{source_id}": "source_v2_owner",
     "{artifact_id}": "art_owner",
     "{revision}": "1",
     "{stage_id}": "stage_owner",
@@ -193,16 +194,21 @@ def test_inventory_records_the_expected_identity_and_opacity_classes() -> None:
     } == {404}
 
 
-def test_d4_d5_source_open_fixture_reserves_security_metadata_without_a_route() -> None:
-    """D8 does not create a competing source opener while preserving its seam."""
+def test_d4_d5_source_open_is_an_active_artifact_revision_boundary() -> None:
+    """The D8 reservation is promoted into the 29→30 active inventory."""
 
-    assert len(E1_DEFERRED_ROUTE_FIXTURES) == 1
-    fixture = E1_DEFERRED_ROUTE_FIXTURES[0]
-    assert fixture.route_name == "source_open"
-    assert fixture.owner == "D4/D5 SourceOpenService"
-    assert fixture.method == "POST"
-    assert fixture.family == "source"
-    assert fixture.identity_class == "member"
-    assert fixture.parent_scope == "artifact_revision"
-    assert fixture.foreign_status == 404
-    assert fixture.route_name not in {route.route_id for route in E1_SENSITIVE_ROUTES}
+    assert len(E1_SENSITIVE_ROUTES) == E1_SENSITIVE_ROUTE_COUNT
+    source_routes = [
+        route for route in E1_SENSITIVE_ROUTES if route.route_id == "source_open"
+    ]
+    assert len(source_routes) == 1
+    source_open = source_routes[0]
+    assert source_open.method == "POST"
+    assert source_open.runtime_path == (
+        "/v1/agent/runs/{run_id}/sources/{source_id}/open"
+    )
+    assert source_open.facade_path == source_open.runtime_path
+    assert source_open.family == "source"
+    assert source_open.identity_class == "member"
+    assert source_open.parent_scope == "artifact_revision"
+    assert source_open.foreign_status == 404

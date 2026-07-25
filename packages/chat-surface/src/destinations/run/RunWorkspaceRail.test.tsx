@@ -14,7 +14,11 @@
 
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import type { SourceEntry, SubagentEntry } from "@0x-copilot/api-types";
+import type {
+  SourceEntry,
+  SourcesProjectionV2,
+  SubagentEntry,
+} from "@0x-copilot/api-types";
 
 import type {
   ApprovalsQueueItem,
@@ -213,6 +217,54 @@ describe("RunWorkspaceRail — body reuse + omissions (FR-3.11)", () => {
     expect(screen.getByTestId("ledger-sources-tab")).toBeInTheDocument();
     expect(screen.queryByTestId("workspace-sources-tab")).toBeNull();
     expect(screen.queryByText("Renewal terms")).toBeNull();
+  });
+
+  it("gives canonical Sources v2 precedence and forwards only its opaque id", () => {
+    const onOpenSource = vi.fn();
+    const sourcesV2: SourcesProjectionV2 = {
+      v: 2,
+      run_id: "run_1",
+      latest_sequence_no: 4,
+      facts: [
+        {
+          source_id: "source:v2:004:artifact",
+          kind: "artifact",
+          sequence_no: 4,
+          ledger_id: "rrun0000·004",
+          connector: null,
+          tool: null,
+          origin: null,
+          artifact_id: "art_safe_target",
+          artifact_revision: 1,
+          artifact_source_ref: "artifact://art_safe_target/revisions/1",
+          workspace_grant_label: null,
+          workspace_virtual_path_key: null,
+          browser_origin: null,
+          sandbox_operation: null,
+          subagent_task: null,
+          external_receipt_ref: null,
+        },
+      ],
+    };
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        ledgerSources={{ total: 0, groups: [] }}
+        sourcesV2={{
+          projection: sourcesV2,
+          onOpenSource,
+          openingSourceId: null,
+          openMessage: null,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("tab", { name: "Sources" }));
+    expect(screen.getByTestId("sources-v2-tab")).toBeInTheDocument();
+    expect(screen.queryByTestId("ledger-sources-tab")).toBeNull();
+    fireEvent.click(screen.getByTestId("sources-v2-open-artifact"));
+    expect(onOpenSource).toHaveBeenCalledWith("source:v2:004:artifact");
   });
 
   it("keeps the legacy SourcesTab when ledgerSources is null (byte-identical)", () => {

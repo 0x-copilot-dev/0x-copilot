@@ -1288,6 +1288,30 @@ def create_app(
             identity=identity,
         )
 
+    @app.post("/v1/agent/runs/{run_id}/sources/{source_id}/open")
+    async def open_run_source_v2(
+        request: Request,
+        run_id: str,
+        source_id: str,
+    ) -> dict[str, object]:
+        """Forward an opaque Sources v2 selection, never a raw reference.
+
+        The authenticated facade identity is the only scope input forwarded to
+        ai-backend. The client supplies no artifact id, revision, path, cookie,
+        provider token, or source payload.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/runs/{run_id}/sources/{source_id}/open",
+            target="ai_backend",
+            params=identity.scoped_params({}),
+            json={},
+            identity=identity,
+        )
+
     @app.get("/v1/agent/runs/{run_id}/receipt/export")
     async def run_receipt_export(
         request: Request,

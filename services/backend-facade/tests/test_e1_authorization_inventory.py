@@ -16,6 +16,7 @@ import backend_facade.app as facade_app
 from backend_facade.app import create_app
 from backend_facade.settings import FacadeSettings
 from copilot_service_contracts.e1_authorization import (
+    E1_SENSITIVE_ROUTE_COUNT,
     E1_SENSITIVE_ROUTE_KEYS,
     E1_SENSITIVE_ROUTES,
     E1SensitiveRoute,
@@ -28,6 +29,7 @@ _USER = "user_e1_facade"
 _SECRET = "e1-facade-auth-secret"
 _PATH_VALUES = {
     "{run_id}": "run_owner",
+    "{source_id}": "source_v2_owner",
     "{artifact_id}": "art_owner",
     "{revision}": "1",
     "{stage_id}": "stage_owner",
@@ -109,12 +111,28 @@ def test_facade_inventory_exactly_covers_every_active_e1_route() -> None:
         for method in route.methods
     }
     assert actual == E1_SENSITIVE_ROUTE_KEYS
+    assert len(E1_SENSITIVE_ROUTES) == E1_SENSITIVE_ROUTE_COUNT
     assert all(
         route.facade_path == route.runtime_path
         and route.facade_path.startswith("/v1/")
         and not route.facade_path.startswith("/internal/")
         for route in E1_SENSITIVE_ROUTES
     )
+
+
+def test_source_open_is_one_active_artifact_revision_inventory_item() -> None:
+    """The facade must exercise the same single D4/D5 owner boundary."""
+
+    source_routes = [
+        route for route in E1_SENSITIVE_ROUTES if route.route_id == "source_open"
+    ]
+    assert len(source_routes) == 1
+    source_open = source_routes[0]
+    assert source_open.method == "POST"
+    assert source_open.facade_path == (
+        "/v1/agent/runs/{run_id}/sources/{source_id}/open"
+    )
+    assert source_open.parent_scope == "artifact_revision"
 
 
 @pytest.mark.parametrize("spec", E1_SENSITIVE_ROUTES, ids=lambda spec: spec.route_id)

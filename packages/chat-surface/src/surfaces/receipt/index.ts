@@ -7,3 +7,8 @@ export {
   RECEIPT_ASSEMBLED_LINE,
   type ReceiptSurfaceProps,
 } from "./ReceiptSurface";
+export {
+  ReceiptV2LaunchCard,
+  ReceiptV2Surface,
+  type ReceiptV2SurfaceProps,
+} from "./ReceiptV2Surface";
