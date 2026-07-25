@@ -19,14 +19,20 @@ from agent_runtime.api.ports import (
 from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
+from agent_runtime.capabilities.operations.conformance import OperationConformanceGate
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.effects.claims import EffectClaimStore
+from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.rollout import (
+    RolloutStartupReadiness,
+    RolloutStartupValidator,
+)
 from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeArtifactEventCommand,
@@ -55,6 +61,9 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
+
+
+_ROLLOUT_LOGGER = LoggingConfigurator.get_logger("runtime_worker.rollout")
 
 
 class EffectCommitHandlerPort(Protocol):
@@ -182,6 +191,11 @@ class RuntimeWorker:
             if workspace_overlay_store is not None
             else self._default_workspace_overlay_store()
         )
+        self._validate_e2_rollout_startup(
+            d1_ready=d1_ready,
+            artifact_blob_store=artifact_blob_store,
+            artifact_reference_store=artifact_reference_store,
+        )
         self.run_handler = run_handler or RuntimeRunHandler(
             persistence=self.persistence,
             event_store=self.event_store,
@@ -283,6 +297,80 @@ class RuntimeWorker:
             )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
+
+    def _validate_e2_rollout_startup(
+        self,
+        *,
+        d1_ready: bool,
+        artifact_blob_store: object | None,
+        artifact_reference_store: object | None,
+    ) -> None:
+        """Apply E2 D1/D8/D9 startup gates before worker handlers exist.
+
+        This is the only process that owns effect executors, so the API logs
+        the resolved configuration while the worker decides whether an explicit
+        new ``enforce`` request is admissible.  Current C3 only exposes an
+        opaque host-session broker, not a typed C2/native attestation contract;
+        therefore a *new* ``WORKSPACE_COMMIT_MODE=enforce`` correctly fails
+        closed until that contract is supplied by its later integration slice.
+        Existing C3 compatibility mode retains its established guard.
+        """
+
+        resolution = self.settings.execution.rollout
+        explicit_producer_enforce = any(
+            RolloutStartupValidator.is_producer(capability)
+            for capability in resolution.provenance.explicit_enforced
+        )
+        descriptor_catalog_ready = False
+        if explicit_producer_enforce:
+            try:
+                OperationConformanceGate.validate_current()
+            except Exception:
+                # The public startup error below intentionally names neither a
+                # descriptor's source path nor a provider-specific detail.
+                descriptor_catalog_ready = False
+            else:
+                descriptor_catalog_ready = True
+
+        readiness = RolloutStartupReadiness(
+            descriptor_catalog_ready=descriptor_catalog_ready,
+            executor_registry_ready=d1_ready,
+            artifact_repository_ready=bool(
+                self.settings.execution.artifact_effects_v2
+                and artifact_blob_store is not None
+                and artifact_reference_store is not None
+                and self.artifact_service is not None
+            ),
+            operation_gateway_ready=d1_ready,
+            effect_stager_ready=d1_ready,
+            effect_commit_ready=d1_ready,
+            # D1 intentionally adds no v2.1 presentation/adapter consumer.
+            # An explicit enforce request must wait for that consumer rather
+            # than being accepted as a no-op or silently widening a v2 flag.
+            presentation_v2_1_ready=False,
+            workspace_overlay_ready=bool(
+                d1_ready and self.workspace_overlay_store is not None
+            ),
+            workspace_commit_ready=bool(
+                d1_ready
+                and self.workspace_overlay_store is not None
+                and self.workspace_host_sessions is not None
+            ),
+            # No existing AI-backend interface can verify Electron's native C2
+            # attestation.  Do not convert a broker env value into a fake proof.
+            workspace_c2_native_attested=False,
+            mcp_gateway_ready=d1_ready,
+            sandbox_adapter_ready=False,
+            browser_adapter_ready=False,
+        )
+        RolloutStartupValidator.validate_startup(
+            resolution,
+            readiness=readiness,
+        )
+        _ROLLOUT_LOGGER.info(
+            "e2_rollout_resolved",
+            metadata=resolution.safe_diagnostics(process="worker"),
+        )
 
     def _default_workspace_overlay_store(self) -> object:
         """Select C1 metadata persistence without inventing a Postgres side-store."""

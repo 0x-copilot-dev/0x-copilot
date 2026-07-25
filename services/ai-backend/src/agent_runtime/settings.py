@@ -21,6 +21,12 @@ from agent_runtime.execution.contracts import (
     ModelThinkingMode,
     RuntimeContract,
 )
+from agent_runtime.rollout import (
+    E2RolloutResolution,
+    LegacyRolloutInputs,
+    RolloutConfigurationError,
+    RolloutMode,
+)
 
 
 class _EnvFields:
@@ -58,6 +64,26 @@ class _EnvFields:
     # C3 workspace migration lane. ``enforce`` routes every /workspace mutation
     # through A3 -> A4 -> A5; it never enables the retired direct broker path.
     WORKSPACE_EFFECT_MODE = "WORKSPACE_EFFECT_MODE"
+    # E2 D1 owns exactly these independent rollout lanes.  They deliberately
+    # have no global/master toggle: a deployment can pause one capability
+    # without widening another capability's authority.
+    ARTIFACT_REPOSITORY_MODE = "ARTIFACT_REPOSITORY_MODE"
+    EFFECT_STAGER_MODE = "EFFECT_STAGER_MODE"
+    EFFECT_COMMIT_MODE = "EFFECT_COMMIT_MODE"
+    PRESENTATION_V2_1_MODE = "PRESENTATION_V2_1_MODE"
+    WORKSPACE_OVERLAY_MODE = "WORKSPACE_OVERLAY_MODE"
+    WORKSPACE_COMMIT_MODE = "WORKSPACE_COMMIT_MODE"
+    MCP_GATEWAY_MODE = "MCP_GATEWAY_MODE"
+    SANDBOX_ADAPTER_MODE = "SANDBOX_ADAPTER_MODE"
+    BROWSER_ADAPTER_MODE = "BROWSER_ADAPTER_MODE"
+    # Trusted legacy desktop/sandbox controls are inputs to the E2 bridge.
+    # They are not a new coarse rollout switch and are never written back from
+    # E2 mode resolution.
+    DESKTOP_BROKER_URL = "DESKTOP_BROKER_URL"
+    DESKTOP_BROKER_TOKEN = "DESKTOP_BROKER_TOKEN"
+    RUNTIME_ENABLE_DESKTOP_WORKSPACE = "RUNTIME_ENABLE_DESKTOP_WORKSPACE"
+    DESKTOP_WORKSPACE_BROKER_URL = "DESKTOP_WORKSPACE_BROKER_URL"
+    DESKTOP_WORKSPACE_BROKER_TOKEN = "DESKTOP_WORKSPACE_BROKER_TOKEN"
     # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
     # executor accumulates chunks for the window and flushes via
     # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
@@ -181,6 +207,10 @@ class RuntimeExecutionSettings(RuntimeContract):
     # gateway flag so the workspace cohort can roll out and roll back without
     # widening enforcement to unrelated capabilities.
     workspace_effect_mode: OperationGatewayMode = OperationGatewayMode.OFF
+    # E2 D1: resolved exactly once by ``RuntimeSettings.load``.  Existing v2
+    # controls are compatibility inputs to this immutable snapshot; callers
+    # consume ``rollout.modes`` and never read a per-request environment flag.
+    rollout: E2RolloutResolution = Field(default_factory=E2RolloutResolution)
 
     @model_validator(mode="after")
     def _artifact_drafts_require_repository(self) -> "RuntimeExecutionSettings":
@@ -395,6 +425,62 @@ class RuntimeSettings(BaseSettings):
         _truthy = E._BOOL_TRUTHY
 
         timeout = float(_s(v, E.DEFAULT_TIMEOUT_SECONDS, "60"))
+        surfaces_v2 = _s(v, E.SURFACES_V2, "true").lower() in _truthy
+        artifact_effects_v2 = _s(v, E.ARTIFACT_EFFECTS_V2, "false").lower() in _truthy
+        artifact_drafts_v2 = _s(v, E.ARTIFACT_DRAFTS_V2, "false").lower() in _truthy
+        try:
+            operation_gateway_mode = OperationGatewayMode(
+                _s(
+                    v,
+                    E.OPERATION_GATEWAY_MODE,
+                    OperationGatewayMode.OFF.value,
+                ).lower()
+            )
+        except ValueError as exc:
+            raise RolloutConfigurationError(
+                "OPERATION_GATEWAY_MODE must be a valid OperationGatewayMode "
+                "(off, shadow, enforce)."
+            ) from exc
+        try:
+            workspace_effect_mode = OperationGatewayMode(
+                _s(
+                    v,
+                    E.WORKSPACE_EFFECT_MODE,
+                    OperationGatewayMode.OFF.value,
+                ).lower()
+            )
+        except ValueError as exc:
+            raise RolloutConfigurationError(
+                "WORKSPACE_EFFECT_MODE must be one of: off, shadow, enforce."
+            ) from exc
+        # Import only once settings has received its immutable environment
+        # mapping.  Both existing capabilities retain their own runtime gates;
+        # these booleans are only typed compatibility inputs to the E2 bridge.
+        from agent_runtime.capabilities.browser.constants import BrowserEnv
+        from agent_runtime.capabilities.sandbox.config import RemoteSandboxConfig
+
+        rollout = E2RolloutResolution.resolve(
+            environment=v,
+            legacy=LegacyRolloutInputs(
+                surfaces_v2=surfaces_v2,
+                artifact_effects_v2=artifact_effects_v2,
+                artifact_drafts_v2=artifact_drafts_v2,
+                operation_gateway_mode=RolloutMode(operation_gateway_mode.value),
+                workspace_effect_mode=RolloutMode(workspace_effect_mode.value),
+                sandbox_adapter_active=RemoteSandboxConfig.from_env(v).is_active,
+                browser_adapter_active=BrowserEnv.is_enabled(v.get(BrowserEnv.FLAG)),
+                legacy_workspace_write_path_configured=bool(
+                    _o(v, E.DESKTOP_BROKER_URL)
+                    and _o(v, E.DESKTOP_BROKER_TOKEN)
+                    or (
+                        _s(v, E.RUNTIME_ENABLE_DESKTOP_WORKSPACE, "false").lower()
+                        in _truthy
+                        and _o(v, E.DESKTOP_WORKSPACE_BROKER_URL)
+                        and _o(v, E.DESKTOP_WORKSPACE_BROKER_TOKEN)
+                    )
+                ),
+            ),
+        )
 
         return cls(
             environment=RuntimeEnvironment(
@@ -436,25 +522,12 @@ class RuntimeSettings(BaseSettings):
                     v, E.LOCAL_MODELS_MANAGE_RUNTIME, "false"
                 ).lower()
                 in _truthy,
-                surfaces_v2=_s(v, E.SURFACES_V2, "true").lower() in _truthy,
-                artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
-                in _truthy,
-                artifact_drafts_v2=_s(v, E.ARTIFACT_DRAFTS_V2, "false").lower()
-                in _truthy,
-                operation_gateway_mode=OperationGatewayMode(
-                    _s(
-                        v,
-                        E.OPERATION_GATEWAY_MODE,
-                        OperationGatewayMode.OFF.value,
-                    ).lower()
-                ),
-                workspace_effect_mode=OperationGatewayMode(
-                    _s(
-                        v,
-                        E.WORKSPACE_EFFECT_MODE,
-                        OperationGatewayMode.OFF.value,
-                    ).lower()
-                ),
+                surfaces_v2=surfaces_v2,
+                artifact_effects_v2=artifact_effects_v2,
+                artifact_drafts_v2=artifact_drafts_v2,
+                operation_gateway_mode=operation_gateway_mode,
+                workspace_effect_mode=workspace_effect_mode,
+                rollout=rollout,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
