@@ -862,7 +862,12 @@ class RuntimeApiRouter:
     """Build and configure the ``/v1/agent`` FastAPI router."""
 
     @classmethod
-    def create_router(cls, *, artifact_effects_v2: bool = False) -> APIRouter:
+    def create_router(
+        cls,
+        *,
+        artifact_effects_v2: bool = False,
+        workspace_approval_enabled: bool = False,
+    ) -> APIRouter:
         """Return a router with every agent-runtime route registered under ``/v1/agent``."""
         # Every /v1/agent/* route requires the runtime:use scope. The
         # router-level dependency covers all routes below; admins,
@@ -1114,6 +1119,14 @@ class RuntimeApiRouter:
             from runtime_api.http.pending_work import register_pending_work_routes
 
             register_pending_work_routes(router)
+        # C3 — this route is deliberately distinct from legacy staged-write
+        # routes and exists only for an enforced workspace-effect cohort.
+        if workspace_approval_enabled:
+            from runtime_api.http.effect_stages import (
+                register_workspace_effect_stage_routes,
+            )
+
+            register_workspace_effect_stage_routes(router)
         # PR 1.5 — Workspace-pane data feeds (subagents + sources).
         register_workspace_feed_routes(router)
         # PR 1.6 — Workspace defaults + conversation lifecycle

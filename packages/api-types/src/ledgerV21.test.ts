@@ -36,6 +36,8 @@ import {
   type OperationRequest,
   type ProposalRef,
   type SurfaceSubject,
+  type WorkspaceApprovalDecisionReceipt,
+  type WorkspaceApprovalDecisionRequest,
 } from "./ledger";
 
 type JsonObject = Record<string, any>;
@@ -196,6 +198,42 @@ function compileTimeImmutableEntityPin(
   result.retryable = true;
 }
 void compileTimeImmutableEntityPin;
+
+describe("C3 workspace approval receipt contract", () => {
+  it("pins the exact request and path-free receipt wire keys", () => {
+    const request = exactKeys<WorkspaceApprovalDecisionRequest>()(
+      "revision",
+      "decision",
+      "proposal_digest",
+      "target_digest",
+    );
+    const receipt = exactKeys<WorkspaceApprovalDecisionReceipt>()(
+      "stage_id",
+      "revision",
+      "decision_ledger_id",
+      "proposal_digest",
+      "target_digest",
+      "decision",
+      "status",
+    );
+
+    expect(request).toEqual([
+      "revision",
+      "decision",
+      "proposal_digest",
+      "target_digest",
+    ]);
+    expect(receipt).toEqual([
+      "stage_id",
+      "revision",
+      "decision_ledger_id",
+      "proposal_digest",
+      "target_digest",
+      "decision",
+      "status",
+    ]);
+  });
+});
 
 function allPayloadSamples(): Map<string, JsonObject> {
   const samples = new Map<string, JsonObject>();
