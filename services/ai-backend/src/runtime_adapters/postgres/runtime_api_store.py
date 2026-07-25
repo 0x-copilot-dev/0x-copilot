@@ -387,6 +387,9 @@ async def _read_runtime_audit_chain_head_async(
 class PostgresRuntimeApiStore:
     """Async Postgres implementation of persistence, event store, and queue ports."""
 
+    # D7 exports are supported only by durable adapters with persisted audit state.
+    receipt_export_v2_available = True
+
     def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
         """Attach artifact jobs to existing deletion and retention entrypoints."""
 
