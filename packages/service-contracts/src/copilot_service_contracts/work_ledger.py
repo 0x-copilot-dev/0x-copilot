@@ -42,6 +42,9 @@ class _ContractResource:
     GOLDEN_JOURNEYS_FILENAME: str = "work_ledger_v2_1_golden_journeys.json"
     # Cross-language canonical-JSON, digest, identifier, and reference vectors.
     CONTRACT_VECTORS_FILENAME: str = "work_ledger_v2_1_vectors.json"
+    # E2 D3: exhaustive historic replay inventory plus sanitized run-shaped
+    # sequences. It is a read-side corpus, never a source of writable state.
+    LEGACY_V2_REPLAY_CORPUS_FILENAME: str = "legacy_v2_replay_corpus.json"
 
 
 # Traversable handle to the contract file, resolvable whether the package is
@@ -70,6 +73,10 @@ LEDGER_GOLDEN_JOURNEYS_PATH: Traversable = files(_ContractResource.PACKAGE).join
 
 LEDGER_CONTRACT_VECTORS_PATH: Traversable = files(_ContractResource.PACKAGE).joinpath(
     _ContractResource.CONTRACT_VECTORS_FILENAME
+)
+
+LEGACY_V2_REPLAY_CORPUS_PATH: Traversable = files(_ContractResource.PACKAGE).joinpath(
+    _ContractResource.LEGACY_V2_REPLAY_CORPUS_FILENAME
 )
 
 
@@ -103,6 +110,12 @@ def load_ledger_contract_vectors() -> dict[str, object]:
     return json.loads(raw)
 
 
+def load_legacy_v2_replay_corpus() -> dict[str, object]:
+    """Return the cross-language historic surface replay corpus (E2 D3)."""
+    raw = LEGACY_V2_REPLAY_CORPUS_PATH.read_text(encoding="utf-8")
+    return json.loads(raw)
+
+
 # Read the JSON once at import, then expose stable immutable values. This keeps
 # the contract file as the sole source of event values while avoiding dynamic
 # JSON parsing on request paths.
@@ -121,9 +134,11 @@ __all__ = [
     "LEDGER_EXPECTED_RECEIPT_PATH",
     "LEDGER_GOLDEN_JOURNEYS_PATH",
     "LEDGER_CONTRACT_VECTORS_PATH",
+    "LEGACY_V2_REPLAY_CORPUS_PATH",
     "load_work_ledger_contract",
     "load_ledger_golden_events",
     "load_ledger_expected_receipt",
     "load_ledger_golden_journeys",
     "load_ledger_contract_vectors",
+    "load_legacy_v2_replay_corpus",
 ]

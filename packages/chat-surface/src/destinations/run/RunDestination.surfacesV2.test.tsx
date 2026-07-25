@@ -233,12 +233,15 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     },
   );
 
-  it("flag ON, zero v2 events: empty canvas, no v1 tabs leak (strictness)", async () => {
+  it("flag ON: a historic envelope replays through read-only renderer state", async () => {
     seq = 0;
     const transport = new FakeTransport();
     renderRun(transport, makeStore(), true);
     await screen.findByTestId("thread-canvas");
-    // A v1 surface envelope in the stream must NOT leak into the v2 strip.
+    // The compatibility reader is selective: only an explicit historic surface
+    // envelope becomes fixed-renderer state, preserving its old URI/state
+    // rather than upgrading it into a v2 stage or writable surface. The
+    // harness defaults to Focus mode, which deliberately hides the tab strip.
     stream(transport, [
       {
         event_id: "v1-1",
@@ -257,7 +260,60 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
         created_at: new Date().toISOString(),
       },
     ]);
-    expect(surfaceTabs()).toHaveLength(0);
+    await waitFor(() => {
+      expect(screen.getByTestId("surface-placeholder")).toHaveTextContent(
+        "sheet-row",
+      );
+    });
+    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+    expect(
+      transport.requests.some(
+        (request) =>
+          request.method === "POST" && request.path.includes("/stages/"),
+      ),
+    ).toBe(false);
+  });
+
+  it("flag ON: a historic staged write never becomes an actionable effect", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    const subject = "connector:gmail:draft:legacy-1";
+    stream(transport, [
+      created(subject, "message", "Historic launch draft"),
+      {
+        event_id: "legacy-stage-1",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 2,
+        event_type: "write.staged",
+        activity_kind: "tool",
+        payload: {
+          v: 1,
+          stage_id: "legacy-stage-1",
+          surface_id: subject,
+          target: { connector: "gmail", op: "send" },
+          proposal_ref: "draft://legacy-1/v1",
+        },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    await waitFor(() => {
+      expect(screen.getByTestId("tc-surface-mount").dataset.tier).not.toBe(
+        "empty",
+      );
+    });
+    expect(screen.queryByTestId("effect-stage-card")).toBeNull();
+    expect(screen.queryByTestId("tc-surface-mount-controls")).toBeNull();
+    expect(
+      transport.requests.some(
+        (request) =>
+          request.method === "POST" &&
+          (request.path.includes("/stages/") ||
+            request.path.includes("/effect-stages/")),
+      ),
+    ).toBe(false);
   });
 
   it("E1 D4: a terminal zero-op run shows its receipt in Focus without opening a canvas tab", async () => {

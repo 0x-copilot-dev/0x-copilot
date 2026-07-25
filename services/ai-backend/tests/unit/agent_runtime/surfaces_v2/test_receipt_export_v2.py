@@ -17,7 +17,10 @@ from copilot_service_contracts.work_ledger import (
 from agent_runtime.surfaces_v2.ledger_ids import ProposalUriCodec
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 from agent_runtime.surfaces_v2.receipt import ReceiptFold, ReceiptFoldV2
-from agent_runtime.surfaces_v2.receipt_export import ReceiptExportBuilder
+from agent_runtime.surfaces_v2.receipt_export import (
+    ReceiptExportBuilder,
+    ReceiptExportVerifier,
+)
 from agent_runtime.surfaces_v2.receipt_export_v2 import (
     ReceiptExportV2Builder,
     ReceiptExportV2Verifier,
@@ -37,7 +40,7 @@ class _Event:
     event_type: LedgerEventType | str
     sequence_no: int
     payload: dict[str, object]
-    created_at: datetime = datetime(2026, 7, 25, tzinfo=timezone.utc)
+    created_at: datetime | str = datetime(2026, 7, 25, tzinfo=timezone.utc)
 
 
 def _signer(*, version: int = 1, key: bytes = _KEY_V1) -> AuditChainSigner:
@@ -160,6 +163,36 @@ def _events() -> list[_Event]:
             },
         ),
     ]
+
+
+def _legacy_golden_events() -> tuple[str, list[_Event]]:
+    """Adapt the checked-in old wire fixture without modifying its rows."""
+
+    fixture = load_ledger_golden_events()
+    run_id = fixture.get("run_id")
+    raw_events = fixture.get("events")
+    assert isinstance(run_id, str)
+    assert isinstance(raw_events, list)
+    events: list[_Event] = []
+    for raw in raw_events:
+        assert isinstance(raw, dict)
+        event_type = raw.get("event_type")
+        sequence_no = raw.get("sequence_no")
+        payload = raw.get("payload")
+        created_at = raw.get("created_at")
+        assert isinstance(event_type, str)
+        assert isinstance(sequence_no, int)
+        assert isinstance(payload, dict)
+        assert isinstance(created_at, str)
+        events.append(
+            _Event(
+                event_type=event_type,
+                sequence_no=sequence_no,
+                payload=copy.deepcopy(payload),
+                created_at=created_at,
+            )
+        )
+    return run_id, events
 
 
 def _build(
@@ -298,6 +331,36 @@ class TestReceiptExportV2:
             .verify(legacy.model_dump(mode="json"))
             .ok
             is True
+        )
+
+    def test_checked_in_legacy_run_and_v21_bundle_verify_by_their_versions(
+        self,
+    ) -> None:
+        """D3 keeps old exports readable without re-emitting old run events."""
+
+        legacy_run_id, legacy_events = _legacy_golden_events()
+        legacy_receipt = ReceiptFold.fold(
+            run_id=legacy_run_id,
+            events=legacy_events,
+        )
+        legacy_signer = _signer()
+        legacy_bundle = ReceiptExportBuilder(signer=legacy_signer).build(
+            run_id=legacy_run_id,
+            events=legacy_events,
+            receipt=legacy_receipt,
+        )
+        legacy_wire = legacy_bundle.model_dump(mode="json")
+
+        # The v1 verifier remains the authority for its original wire shape;
+        # the v2 verifier delegates to it as a permanent compatibility reader.
+        assert ReceiptExportVerifier(signer=legacy_signer).verify(legacy_wire).ok
+        assert ReceiptExportV2Verifier(signer=legacy_signer).verify(legacy_wire).ok
+
+        v21_bundle, v21_signer = _build()
+        assert (
+            ReceiptExportV2Verifier(signer=v21_signer)
+            .verify(v21_bundle.model_dump(mode="json"))
+            .ok
         )
 
     def test_private_body_paths_tokens_and_refs_never_leave_safe_projection(

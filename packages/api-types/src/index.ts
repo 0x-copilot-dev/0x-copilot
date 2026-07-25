@@ -197,6 +197,14 @@ export type {
   PendingWorkV2RunWarning,
   PendingWorkV2Response,
 } from "./ledger";
+export type {
+  LegacyV2ReplayMode,
+  LegacyV2QuarantineCode,
+  LegacyV2ReplayQuarantine,
+  LegacyV2SurfaceProjection,
+  LegacyV2ReplayProjection,
+  LegacyV2ReplayEvent,
+} from "./legacyV2Replay";
 export {
   LEDGER_EVENT_TYPES,
   ARTIFACT_EVENT_TYPES,
@@ -232,6 +240,7 @@ export {
   // E1 D4/D5 — strict safe source-open boundary guard.
   isSourceOpenResultV2,
 } from "./ledger";
+export { projectLegacyV2Replay } from "./legacyV2Replay";
 
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,
 // cross-audit §2.1). Imported here so they are in scope for the approval
