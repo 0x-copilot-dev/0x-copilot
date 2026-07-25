@@ -140,6 +140,40 @@ export {
 } from "./TcBulkApplyBar";
 // === end PRD-D3 ===
 
+// === Surfaces v2.1 — PRD-C3 shared workspace-stage review surface ===
+// Export only: C3's host adapter/mount follows separately. This stays a pure
+// package-level review card with no Electron/browser/Transport dependency.
+export {
+  TcWorkspaceStageSurface,
+  type TcWorkspaceStageSurfaceProps,
+} from "./TcWorkspaceStageSurface";
+export {
+  WORKSPACE_STAGE_PLEDGE,
+  isDestructiveWorkspaceOperation,
+  projectWorkspaceStage,
+  safeWorkspaceDigest,
+  safeWorkspaceDisplayText,
+  safeWorkspaceVirtualPath,
+  workspaceStageOperationLabel,
+  type ProjectedWorkspaceStage,
+  type ProjectedWorkspaceStageRevision,
+  type WorkspaceStage,
+  type WorkspaceStageBaseline,
+  type WorkspaceStageBinaryMetadata,
+  type WorkspaceStageDiff,
+  type WorkspaceStageMode,
+  type WorkspaceStageOperation,
+  type WorkspaceStageOperationKind,
+  type WorkspaceStagePrecondition,
+  type WorkspaceStagePreview,
+  type WorkspaceStageResolution,
+  type WorkspaceStageResolutionState,
+  type WorkspaceStageRevision,
+  type WorkspaceStageStatus,
+  type WorkspaceStageTarget,
+} from "./workspaceStageProjection";
+// === end PRD-C3 ===
+
 // === Surfaces v2 — PRD-B2 provenance + honest states ===
 // Pure PEERS of `projectLedger` over the SAME `session.events` array, plus the
 // footer / skeleton / raw-fallback / status-strip chrome they feed. All mount

@@ -1223,6 +1223,39 @@ export {
 } from "./thread-canvas";
 // === end PRD-D3 ===
 
+// === Surfaces v2.1 — PRD-C3 shared workspace-stage review surface ===
+// Deliberately exported but not mounted: the later C3 host adapter owns the
+// authority path and native confirmation. This card only renders safe display
+// data and delegates its actions through host callbacks.
+export {
+  TcWorkspaceStageSurface,
+  WORKSPACE_STAGE_PLEDGE,
+  isDestructiveWorkspaceOperation,
+  projectWorkspaceStage,
+  safeWorkspaceDigest,
+  safeWorkspaceDisplayText,
+  safeWorkspaceVirtualPath,
+  workspaceStageOperationLabel,
+  type TcWorkspaceStageSurfaceProps,
+  type ProjectedWorkspaceStage,
+  type ProjectedWorkspaceStageRevision,
+  type WorkspaceStage,
+  type WorkspaceStageBaseline,
+  type WorkspaceStageBinaryMetadata,
+  type WorkspaceStageDiff,
+  type WorkspaceStageMode,
+  type WorkspaceStageOperation,
+  type WorkspaceStageOperationKind,
+  type WorkspaceStagePrecondition,
+  type WorkspaceStagePreview,
+  type WorkspaceStageResolution,
+  type WorkspaceStageResolutionState,
+  type WorkspaceStageRevision,
+  type WorkspaceStageStatus,
+  type WorkspaceStageTarget,
+} from "./thread-canvas";
+// === end PRD-C3 ===
+
 // === Surfaces v2 — PRD-E2 (cross-run Approvals queue + Agents fleet) ===
 // Read-side only: a pure selector over the SAME `session.events` array
 // (`projectPendingCards`, a peer of `projectApprovals`/`projectLedger`), one new
