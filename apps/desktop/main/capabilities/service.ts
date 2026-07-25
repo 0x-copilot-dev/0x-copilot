@@ -147,4 +147,9 @@ export class CapabilityService {
   workspaceWriteAttestation(): WorkspaceWriteAttestation {
     return this.#workspaceAuthority.startupAttestation();
   }
+
+  /** Main-only launch gate for the C3 approval host. */
+  workspaceWritesAvailable(): boolean {
+    return this.#workspaceAuthority.writableAvailable();
+  }
 }

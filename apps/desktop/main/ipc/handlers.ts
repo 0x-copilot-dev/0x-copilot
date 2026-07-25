@@ -16,9 +16,12 @@ import {
   RendererGrantSchema,
   RequestFolderGrantParamsSchema,
   RevokeGrantParamsSchema,
+  WorkspaceApprovalHostDecisionRequestSchema,
+  WorkspaceApprovalHostDecisionResultSchema,
   type RequestFolderGrantParams,
 } from "../capabilities/schemas";
 import type { RendererGrant } from "../capabilities/types";
+import type { WorkspaceApprovalHostPort } from "../capabilities/workspace-approval";
 import { CONNECTOR_CHANNELS } from "../connectors/channels";
 import {
   ConnectorCatalogResponseSchema,
@@ -133,6 +136,8 @@ export interface RegisterHandlersDeps {
   readonly auth?: AuthHandlers;
   readonly tier2?: Tier2InboundDispatcher;
   readonly capability?: CapabilityHandlers;
+  /** C3-only, path-free host port. No broker or filesystem command crosses it. */
+  readonly workspaceApproval?: WorkspaceApprovalHostPort;
   readonly connectors?: ConnectorHandlers;
   readonly logger?: IpcLogger;
 }
@@ -441,6 +446,25 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     );
   }
 
+  const workspaceApproval = deps.workspaceApproval;
+  if (workspaceApproval) {
+    ipcMain.handle(
+      CAPABILITY_CHANNELS.decideWorkspaceApproval,
+      async (_event, raw: unknown) => {
+        const request = parseOrThrow(
+          CAPABILITY_CHANNELS.decideWorkspaceApproval,
+          WorkspaceApprovalHostDecisionRequestSchema,
+          raw,
+        );
+        // Strict-parse this narrow, path-free result before it reaches the
+        // renderer. A receipt/permit/prepared-ref is retained in main only.
+        return WorkspaceApprovalHostDecisionResultSchema.parse(
+          await workspaceApproval.decide(request),
+        );
+      },
+    );
+  }
+
   const connectors = deps.connectors;
   if (connectors) {
     ipcMain.handle(
@@ -504,6 +528,9 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         CAPABILITY_CHANNELS.listGrants,
         CAPABILITY_CHANNELS.revokeGrant,
       );
+    }
+    if (workspaceApproval) {
+      channels.push(CAPABILITY_CHANNELS.decideWorkspaceApproval);
     }
     if (connectors) {
       channels.push(CONNECTOR_CHANNELS.listCatalog, CONNECTOR_CHANNELS.connect);

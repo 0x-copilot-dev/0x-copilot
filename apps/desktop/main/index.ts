@@ -68,6 +68,12 @@ import {
   isDesktopFilesystemEnabled,
   type CapabilityService,
 } from "./capabilities";
+import {
+  FacadeWorkspaceApprovalClient,
+  WorkspaceApprovalHost,
+  WorkspaceApprovalPermitSource,
+  type WorkspaceApprovalNativeConfirmation,
+} from "./capabilities/workspace-approval";
 import { ConnectorService } from "./connectors/connector-service";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
@@ -143,6 +149,10 @@ let supervisorStopped = false;
 let browserSubsystem: ProductionDesktopBrowserSubsystem | null = null;
 let browserSubsystemStopped = false;
 let capabilityService: CapabilityService | null = null;
+// C3 decision reservations are main-only. A future private host-session
+// binding gives this typed source to A5; it is never installed in preload,
+// renderer globals, or the loopback broker.
+let workspaceApprovalPermitSource: WorkspaceApprovalPermitSource | null = null;
 // AC9 — desktop connector OAuth service. Constructed once the facade is
 // reachable (WebTransport mode). Held at module scope so the deep-link
 // dispatcher (registered eagerly at boot) can route connector OAuth callbacks
@@ -202,6 +212,38 @@ function buildTier2ReviewGate(userDataDir: string): InstallReviewGate {
     return result.response === 1;
   };
   return createInstallReviewGate({ store, prompt });
+}
+
+/**
+ * C3's native confirmation deliberately contains no renderer-supplied path,
+ * title, target, or operation text. The host uses it for every approval until
+ * a trusted destructive classification is available main-side.
+ */
+function buildWorkspaceApprovalConfirmation(): WorkspaceApprovalNativeConfirmation {
+  return {
+    async confirmApproval(): Promise<boolean> {
+      const parent =
+        mainWindow !== null && !mainWindow.isDestroyed()
+          ? mainWindow
+          : undefined;
+      const options: Electron.MessageBoxOptions = {
+        type: "warning",
+        buttons: ["Cancel", "Approve"],
+        defaultId: 1,
+        cancelId: 0,
+        title: "Confirm workspace change?",
+        message: "Apply the reviewed workspace change?",
+        detail:
+          "Only the reviewed stage revision and target can be applied. " +
+          "A separate workspace permission is required.",
+        noLink: true,
+      };
+      const result = parent
+        ? await dialog.showMessageBox(parent, options)
+        : await dialog.showMessageBox(options);
+      return result.response === 1;
+    },
+  };
 }
 
 class WindowDispatcher implements RendererDispatcher {
@@ -283,6 +325,12 @@ function startCapabilitySubsystem(): void {
       },
       allowPlaintextFallback: allowPlaintext,
     });
+    // A disabled native/C2 authority does not even register an approval host:
+    // recording an approval without a possible main-only permit path would
+    // strand a stage and weaken the fail-closed launch gate.
+    workspaceApprovalPermitSource = capabilityService.workspaceWritesAvailable()
+      ? new WorkspaceApprovalPermitSource(capabilityService)
+      : null;
     capabilityService
       .startBroker()
       .then((handle) => {
@@ -604,6 +652,30 @@ function wireTransportAndIpc(
           },
         });
 
+  // C3 does not use the generic transport bridge for local workspace
+  // authority. This host is registered only when a real facade and an enabled
+  // C2 main authority exist; MockTransport and unavailable native primitives
+  // expose no approval channel.
+  const workspaceApproval =
+    facadeUrl === undefined ||
+    capabilityService === null ||
+    workspaceApprovalPermitSource === null ||
+    !capabilityService.workspaceWritesAvailable()
+      ? undefined
+      : new WorkspaceApprovalHost({
+          facade: new FacadeWorkspaceApprovalClient({
+            facadeBaseUrl: facadeUrl,
+            getBearer: async () => {
+              const workspaceId = authService.activeWorkspace();
+              return workspaceId === null
+                ? null
+                : authService.getBearer(workspaceId);
+            },
+          }),
+          confirmation: buildWorkspaceApprovalConfirmation(),
+          permits: workspaceApprovalPermitSource,
+        });
+
   // PRD-10 — the real tier-2 lifecycle source. It observes `adapter_generated`
   // events off the same run-feed SSE stream the UI consumes (the TransportBridge
   // tap below) and live render failures off the renderer's boundary-error IPC.
@@ -686,6 +758,7 @@ function wireTransportAndIpc(
             listGrants: () => capabilityService!.listGrants(),
             revokeGrant: (grantId) => capabilityService!.revokeGrant(grantId),
           },
+    workspaceApproval,
     // AC9 connector channels. Wired only against a real facade; returns only
     // the renderer-safe catalog + connection metadata (no provider token).
     connectors:
@@ -716,6 +789,7 @@ app.on("before-quit", (event) => {
     void capabilityService.stopBroker().catch(() => {});
     capabilityService = null;
   }
+  workspaceApprovalPermitSource = null;
   // Ordered shutdown: children (facade -> ai -> backend), postgres, then the
   // browser broker/worker. Stopping ai-backend first ensures no new browser
   // request can race broker revocation.

@@ -139,16 +139,44 @@ describe("preload bridge capability-channel allowlist", () => {
     await bridge.ipc.invoke(CAPABILITY_CHANNELS.revokeGrant, {
       grantId: "x",
     });
+    await bridge.ipc.invoke(CAPABILITY_CHANNELS.decideWorkspaceApproval, {
+      snapshot: {
+        runId: "run_c3_001",
+        stageId: "stage_c3_001",
+        revision: 7,
+        proposalDigest: "a".repeat(64),
+        targetDigest: "b".repeat(64),
+      },
+      decision: "approve",
+    });
     expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(
       CAPABILITY_CHANNELS.requestFolderGrant,
       { mode: "read_only" },
     );
-    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(3);
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledWith(
+      CAPABILITY_CHANNELS.decideWorkspaceApproval,
+      {
+        snapshot: {
+          runId: "run_c3_001",
+          stageId: "stage_c3_001",
+          revision: 7,
+          proposalDigest: "a".repeat(64),
+          targetDigest: "b".repeat(64),
+        },
+        decision: "approve",
+      },
+    );
+    expect(electron.ipcRenderer.invoke).toHaveBeenCalledTimes(4);
   });
 
   it("still rejects a channel that is in neither allowlist", async () => {
     await expect(
       bridge.ipc.invoke("capability.read-file", { grantId: "x" }),
+    ).rejects.toThrow(/not in allowlist/u);
+    await expect(
+      bridge.ipc.invoke("capability.workspace-commit", {
+        permit: "wcp_not_renderer_visible",
+      }),
     ).rejects.toThrow(/not in allowlist/u);
     expect(electron.ipcRenderer.invoke).not.toHaveBeenCalled();
   });
