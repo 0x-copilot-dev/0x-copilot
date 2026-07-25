@@ -39,6 +39,8 @@ from agent_runtime.capabilities.operations.disposition import (
 from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     iter_artifact_content_parts,
 )
+from agent_runtime.rollout_shadow import ShadowComparisonContext
+from agent_runtime.rollout_shadow_adapters import ShadowProjectionComparators
 from agent_runtime.surfaces_v2.ledger_models import (
     LedgerEventType,
     OperationClassifiedPayload,
@@ -95,6 +97,12 @@ class OperationShadowProbe:
                 request=request,
                 classification=classification,
                 legacy_class=legacy_class,
+            )
+            cls._compare_e2_shadow_inputs(
+                request=request,
+                classification=classification,
+                legacy_class=legacy_class,
+                arguments=arguments,
             )
 
         try:
@@ -353,6 +361,35 @@ class OperationShadowProbe:
             _LOGGER.debug("operation_gateway.shadow_classification_metric_failed")
 
     @staticmethod
+    def _compare_e2_shadow_inputs(
+        *,
+        request: OperationRequest,
+        classification: OperationClassification,
+        legacy_class: str | None,
+        arguments: Mapping[str, object],
+    ) -> None:
+        """Feed D2's typed, read-only comparator without changing legacy flow.
+
+        The comparator accepts concrete values only.  It never receives the
+        ``legacy`` callback, result object, an event emitter, or a gateway, so
+        it cannot invoke a second operation or mutate the caller's return.
+        """
+
+        comparator = OperationShadowProbe._e2_comparator()
+        if comparator is None:
+            return
+        comparator.compare_classification(
+            legacy_class=legacy_class,
+            canonical_effect_class=classification.effect_class.value,
+            sample_key=request.operation_id,
+        )
+        comparator.compare_proposal_canonicalization(
+            legacy_arguments=arguments,
+            canonical_args_digest=request.args_digest,
+            sample_key=request.operation_id,
+        )
+
+    @staticmethod
     def _observe_disposition_safely(
         *,
         request: OperationRequest,
@@ -388,8 +425,24 @@ class OperationShadowProbe:
                     legacy_disposition=legacy_disposition.value,
                     gateway_disposition=predicted.value,
                 )
+            comparator = OperationShadowProbe._e2_comparator()
+            if comparator is not None:
+                comparator.compare_disposition(
+                    legacy_disposition=(
+                        legacy_disposition.value
+                        if legacy_disposition is not None
+                        else None
+                    ),
+                    canonical_disposition=predicted.value,
+                    sample_key=request.operation_id,
+                )
         except Exception:
             _LOGGER.debug("operation_gateway.shadow_disposition_failed")
+
+    @staticmethod
+    def _e2_comparator() -> ShadowProjectionComparators | None:
+        service = ShadowComparisonContext.active()
+        return ShadowProjectionComparators(service) if service is not None else None
 
     @staticmethod
     def _artifact_parts(result: object) -> tuple[ModelArtifactContentPart, ...]:

@@ -31,6 +31,12 @@ from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.rollout import RolloutCapability, RolloutMode
+from agent_runtime.rollout_shadow import (
+    ShadowComparisonContext,
+    ShadowComparisonService,
+)
+from agent_runtime.rollout_shadow_adapters import ShadowRunProjectionObserver
 from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     ArtifactContentPartPublisher,
     PublishArtifactTool,
@@ -334,6 +340,7 @@ class RuntimeApprovalHandler:
         # fresh async task, so the original RuntimeRunHandler bindings are gone.
         workspace_backend = await self._workspace_backend_for_resume(running)
         operation_context_token: object | None = None
+        shadow_comparison_token: object | None = None
         dependencies = self._dependencies_for_resume(
             running, workspace_backend=workspace_backend
         )
@@ -343,6 +350,10 @@ class RuntimeApprovalHandler:
             RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
         )
         try:
+            if self._shadow_comparison_enabled():
+                shadow_comparison_token = ShadowComparisonContext.bind_for_run(
+                    resolution=self.settings.execution.rollout
+                )
             if self._operation_context_required():
 
                 async def _emit_operation(
@@ -411,6 +422,9 @@ class RuntimeApprovalHandler:
                 return
             final_text = RuntimeRunHandler._extract_final_text(result)
             await self._complete_run_with_result(running, final_text, metrics)
+            await self._observe_e2_shadow_projections(
+                running.model_copy(update={"status": AgentRunStatus.COMPLETED})
+            )
         except Exception as exc:
             failed = await with_optimistic_retry(
                 lambda: self.persistence.update_run_status(
@@ -425,8 +439,11 @@ class RuntimeApprovalHandler:
                 summary="Run failed",
                 cause=exc,
             )
+            await self._observe_e2_shadow_projections(failed)
             raise
         finally:
+            if shadow_comparison_token is not None:
+                ShadowComparisonContext.unbind(shadow_comparison_token)  # type: ignore[arg-type]
             if operation_context_token is not None:
                 OperationContext.unbind(operation_context_token)  # type: ignore[arg-type]
             CitationResolver.unbind(resolver_token)
@@ -651,6 +668,36 @@ class RuntimeApprovalHandler:
             self._artifact_publication_enabled()
             or self.settings.execution.operation_gateway_mode
             is not OperationGatewayMode.OFF
+        )
+
+    def _shadow_comparison_enabled(self) -> bool:
+        """D2 has no independent switch; only D1's typed shadow lanes bind it."""
+
+        return bool(self.settings.execution.rollout.modes.shadowed())
+
+    def _shadow_projection_observation_enabled(self) -> bool:
+        modes = self.settings.execution.rollout.modes
+        return any(
+            modes.mode_for(capability) is RolloutMode.SHADOW
+            for capability in (
+                RolloutCapability.PRESENTATION_V2_1,
+                RolloutCapability.ARTIFACT_REPOSITORY,
+            )
+        )
+
+    async def _observe_e2_shadow_projections(self, run: RunRecord) -> None:
+        """Observe terminal replay state after legacy handling, never before it."""
+
+        if not self._shadow_projection_observation_enabled():
+            return
+        observer = ShadowRunProjectionObserver(
+            ShadowComparisonService(resolution=self.settings.execution.rollout)
+        )
+        await observer.observe(
+            event_store=self.event_store,
+            org_id=run.org_id,
+            run_id=run.run_id,
+            run_status=run.status,
         )
 
     def _publish_artifact_tool(self) -> PublishArtifactTool | None:
