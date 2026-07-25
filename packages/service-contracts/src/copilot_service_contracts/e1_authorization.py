@@ -327,6 +327,10 @@ E1_SENSITIVE_ROUTES: tuple[E1SensitiveRoute, ...] = (
     ),
 )
 
+# A deliberate review checkpoint: adding a sensitive public route must update
+# this canonical inventory and its independent runtime/facade registration
+# tests, rather than silently expanding one side of the boundary.
+E1_SENSITIVE_ROUTE_COUNT = 30
 
 E1_SENSITIVE_ROUTE_IDS = frozenset(route.route_id for route in E1_SENSITIVE_ROUTES)
 E1_SENSITIVE_ROUTE_KEYS = frozenset(
@@ -337,6 +341,8 @@ if len(E1_SENSITIVE_ROUTE_IDS) != len(E1_SENSITIVE_ROUTES):  # pragma: no cover
     raise RuntimeError("E1 authorization route ids must be unique")
 if len(E1_SENSITIVE_ROUTE_KEYS) != len(E1_SENSITIVE_ROUTES):  # pragma: no cover
     raise RuntimeError("E1 authorization method/path pairs must be unique")
+if len(E1_SENSITIVE_ROUTES) != E1_SENSITIVE_ROUTE_COUNT:  # pragma: no cover
+    raise RuntimeError("E1 authorization route count must match the reviewed inventory")
 
 
 def is_e1_sensitive_path(path: str) -> bool:
@@ -374,6 +380,7 @@ def is_e1_sensitive_path(path: str) -> bool:
 
 __all__ = (
     "E1SensitiveRoute",
+    "E1_SENSITIVE_ROUTE_COUNT",
     "E1_SENSITIVE_ROUTES",
     "E1_SENSITIVE_ROUTE_IDS",
     "E1_SENSITIVE_ROUTE_KEYS",

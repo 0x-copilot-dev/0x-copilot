@@ -17,6 +17,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from copilot_service_contracts.e1_authorization import (
+    E1_SENSITIVE_ROUTE_COUNT,
     E1_SENSITIVE_ROUTE_KEYS,
     E1_SENSITIVE_ROUTES,
     E1SensitiveRoute,
@@ -196,10 +197,12 @@ def test_inventory_records_the_expected_identity_and_opacity_classes() -> None:
 def test_d4_d5_source_open_is_an_active_artifact_revision_boundary() -> None:
     """The D8 reservation is promoted into the 29→30 active inventory."""
 
-    assert len(E1_SENSITIVE_ROUTES) == 30
-    source_open = next(
+    assert len(E1_SENSITIVE_ROUTES) == E1_SENSITIVE_ROUTE_COUNT
+    source_routes = [
         route for route in E1_SENSITIVE_ROUTES if route.route_id == "source_open"
-    )
+    ]
+    assert len(source_routes) == 1
+    source_open = source_routes[0]
     assert source_open.method == "POST"
     assert source_open.runtime_path == (
         "/v1/agent/runs/{run_id}/sources/{source_id}/open"
