@@ -5,6 +5,7 @@ import {
   type ConversationId,
   type RunId,
   type ShellDestinationSlug,
+  type WorkspaceStageHost,
 } from "@0x-copilot/chat-surface";
 
 import {
@@ -127,6 +128,8 @@ export interface DestinationOutletProps {
   readonly onOpenConnectors?: () => void;
   /** Navigate to the Skills surface (Run composer's skills settings link). */
   readonly onOpenSkills?: () => void;
+  /** C3's path-free desktop workspace approval bridge. */
+  readonly workspaceStageHost?: WorkspaceStageHost;
 }
 
 export function DestinationOutlet({
@@ -142,6 +145,7 @@ export function DestinationOutlet({
   onOpenLocalModelSettings,
   onOpenConnectors,
   onOpenSkills,
+  workspaceStageHost,
 }: DestinationOutletProps): ReactElement {
   // Fold deprecated slugs onto their recast surface BEFORE resolving content,
   // so `agents`/`inbox` render Activity (FR-2.23) rather than a dead pane.
@@ -165,6 +169,7 @@ export function DestinationOutlet({
         onOpenLocalModelSettings,
         onOpenConnectors,
         onOpenSkills,
+        workspaceStageHost,
       })}
     </div>
   );
@@ -185,6 +190,7 @@ interface SurfaceContext {
   readonly onOpenLocalModelSettings?: () => void;
   readonly onOpenConnectors?: () => void;
   readonly onOpenSkills?: () => void;
+  readonly workspaceStageHost?: WorkspaceStageHost;
 }
 
 function renderSurface(
@@ -209,6 +215,7 @@ function renderSurface(
           onOpenLocalModelSettings={ctx.onOpenLocalModelSettings}
           onOpenConnectors={ctx.onOpenConnectors}
           onOpenSkills={ctx.onOpenSkills}
+          workspaceStageHost={ctx.workspaceStageHost}
         />
       );
     case "chats":

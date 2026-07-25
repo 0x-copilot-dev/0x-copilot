@@ -15,6 +15,12 @@ export {
   type RunEmptyComposerCtx,
 } from "./RunDestination";
 export { RunHeader, type RunHeaderProps } from "./RunHeader";
+export {
+  projectWorkspaceStageLifecycle,
+  type WorkspaceStageArtifactFallback,
+  type WorkspaceStageReview,
+  type WorkspaceStageReviewProjection,
+} from "./workspaceStageLifecycle";
 
 // === PR-3.6 — tabbed right rail (Chat · Sources · Agents · Approvals) ===
 export {

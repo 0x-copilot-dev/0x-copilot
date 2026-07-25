@@ -51,6 +51,7 @@ import type { RequestIdentity } from "../../api/config";
 import { installMcpServer, skipMcpAuth, startMcpAuth } from "../../api/mcpApi";
 import type { CompletedMcpAuthAction } from "../chat/mcpAuthAction";
 import { createWebMcpAuthPort } from "./webMcpAuthPort";
+import { WEB_WORKSPACE_STAGE_HOST } from "./webWorkspaceStageHost";
 import { RunComposer } from "./RunComposer";
 import { RunEmptyComposer } from "./RunEmptyComposer";
 // WC-P6a: the web citation chip renderer, threaded into the cockpit so in-chat
@@ -412,6 +413,7 @@ export function RunRoute({
         onCopyText={onCopyText}
         onSaveFile={onSaveFile}
         artifactDownloadPort={artifactDownloadPort}
+        workspaceStageHost={WEB_WORKSPACE_STAGE_HOST}
       />
     </section>
   );

@@ -52,6 +52,7 @@ import {
   type SettingsSectionSlug,
   type ShellDestinationSlug,
   type ShellShortcutCallbacks,
+  type WorkspaceStageHost,
 } from "@0x-copilot/chat-surface";
 import { IpcTransport, type RendererSession } from "@0x-copilot/chat-transport";
 import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-renderers";
@@ -66,6 +67,7 @@ import { PaletteHost } from "./PaletteHost";
 import { SettingsMount } from "./SettingsMount";
 import { DEFAULT_WORKSPACE_ID, SignInGate } from "./SignInGate";
 import { Tier2Bridge } from "./Tier2Bridge";
+import { createDesktopWorkspaceApprovalHostPort } from "./workspaceApprovalPort";
 
 import "../preload/window-bridge-types";
 
@@ -199,6 +201,17 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
     // is attached in main on every outbound HTTP request (PRD §6.7 / D24).
     // The renderer holds an opaque "session for workspace X" handle only.
     [props.session.workspaceId],
+  );
+  // C3: renderer gets only a narrow decision port. The existing preload
+  // allowlist forwards this to Electron main, which keeps native confirmation,
+  // receipt verification, and the private permit handoff out of this process.
+  const workspaceStageHost = useMemo<WorkspaceStageHost>(
+    () =>
+      Object.freeze({
+        kind: "desktop",
+        approvalPort: createDesktopWorkspaceApprovalHostPort(window.bridge),
+      }),
+    [],
   );
   // The shell never derives the destination itself — the host owns the
   // slug ↔ route mapping (see ChatShellProps). The web host (App.tsx)
@@ -391,6 +404,7 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
         ) : (
           <DestinationOutlet
             destination={activeDestination}
+            workspaceStageHost={workspaceStageHost}
             // The active conversation the cockpit binds to (durable identity
             // from the Router URL). `null` → a brand-new chat's empty composer.
             conversationId={activeConversationId}

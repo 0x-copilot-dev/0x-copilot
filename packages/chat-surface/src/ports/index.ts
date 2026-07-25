@@ -18,6 +18,13 @@ export {
 } from "./ArtifactPromotionPort";
 export type { KeyValueStore } from "./KeyValueStore";
 export type { PresenceSignal, PresenceState } from "./PresenceSignal";
+export type {
+  WorkspaceApprovalDecision,
+  WorkspaceApprovalHostDecisionResult,
+  WorkspaceApprovalHostPort,
+  WorkspaceApprovalSnapshot,
+  WorkspaceStageHost,
+} from "./WorkspaceStageHostPort";
 export type { SurfaceEvent, SurfaceHandle, SurfaceHost } from "./SurfaceHost";
 
 // === Phase 0.5 shared primitives — additional substrate ports ===

@@ -14,7 +14,9 @@ export type WorkspaceStageOperationKind =
   | "replace"
   | "delete"
   | "move"
-  | "mkdir";
+  | "mkdir"
+  /** Canonical data was incomplete; render a held review, never guess a write. */
+  | "unknown";
 
 /** Matches ThreadCanvas' presentation slots without coupling this card to it. */
 export type WorkspaceStageMode = "focus" | "studio";
@@ -36,7 +38,9 @@ export type WorkspaceStageResolutionState =
   | "recovery_proposed"
   | "recovery_conflict"
   | "unsupported"
-  | "upload_mismatch";
+  | "upload_mismatch"
+  /** Required safe stage metadata was absent, stale, or inconsistent. */
+  | "details_unavailable";
 
 export interface WorkspaceStageOperation {
   readonly kind: WorkspaceStageOperationKind;
@@ -136,6 +140,15 @@ export interface WorkspaceStage {
   readonly precondition?: WorkspaceStagePrecondition | null;
   readonly revisionHistory?: readonly WorkspaceStageRevision[] | null;
   readonly resolution?: WorkspaceStageResolution | null;
+  /** Optional host/policy capability gate; omitted preserves the original UI. */
+  readonly decisionAvailable?: boolean;
+  /**
+   * Set to `false` when the host has no canonical restore flow. Omitted keeps
+   * the original reusable card behavior for legacy stages with `onRestore`.
+   */
+  readonly restoreAvailable?: boolean;
+  /** A host may expose a safe artifact-edit fallback, never direct stage bytes. */
+  readonly editAvailable?: boolean;
 }
 
 export interface ProjectedWorkspaceStageRevision {
@@ -222,6 +235,11 @@ const RESOLUTION_COPY: Record<
     label: "Content verification failed",
     summary: "Content verification failed before any workspace effect.",
   },
+  details_unavailable: {
+    label: "Review details unavailable",
+    summary:
+      "Required staged details are unavailable or no longer match. No workspace change can be approved.",
+  },
 };
 
 /** `delete` and overwrite-move are the destructive C3 operation classes. */
@@ -240,7 +258,7 @@ export function workspaceStageOperationLabel(
   if (operation.kind === "move" && operation.overwrite === true) {
     return "move · overwrite";
   }
-  return operation.kind;
+  return operation.kind === "unknown" ? "workspace change" : operation.kind;
 }
 
 /**
@@ -336,14 +354,17 @@ export function projectWorkspaceStage(
     canDecide:
       !decisionBlocked &&
       hasReviewableTarget &&
+      stage.decisionAvailable !== false &&
       revision !== null &&
       typeof stage.stageId === "string" &&
       stage.stageId.length > 0,
     canRestore:
+      stage.restoreAvailable !== false &&
       stage.status === "rejected" &&
       typeof stage.stageId === "string" &&
       stage.stageId.length > 0,
     canEdit:
+      stage.editAvailable !== false &&
       ((resolution === null &&
         (stage.status === "staged" ||
           stage.status === "held" ||
@@ -467,5 +488,7 @@ function defaultBaselineSummary(
       return "The captured target identity and content must still match.";
     case "move":
       return "The source must still match and the destination must remain available.";
+    case "unknown":
+      return "Required workspace details are unavailable.";
   }
 }

@@ -32,6 +32,13 @@ export {
   type ArtifactSurfaceTab,
 } from "./artifacts";
 export type { ArtifactDownloadPort } from "./ports/ArtifactDownloadPort";
+export type {
+  WorkspaceApprovalDecision,
+  WorkspaceApprovalHostDecisionResult,
+  WorkspaceApprovalHostPort,
+  WorkspaceApprovalSnapshot,
+  WorkspaceStageHost,
+} from "./ports/WorkspaceStageHostPort";
 export { RouterProvider, useRouter } from "./providers/RouterProvider";
 export {
   KeyValueStoreProvider,
@@ -1464,9 +1471,13 @@ export {
 export {
   RunDestination,
   buildRunCreateBody,
+  projectWorkspaceStageLifecycle,
   type RunDestinationProps,
   type RunStartRequest,
   type RunEmptyComposerCtx,
+  type WorkspaceStageArtifactFallback,
+  type WorkspaceStageReview,
+  type WorkspaceStageReviewProjection,
   RunHeader,
   type RunHeaderProps,
 } from "./destinations/run";
