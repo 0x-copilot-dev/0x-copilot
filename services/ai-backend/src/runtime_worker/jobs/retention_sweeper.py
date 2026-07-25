@@ -8,6 +8,10 @@ import os
 import time
 
 from agent_runtime.api.ports import PersistencePort
+from agent_runtime.observability.lifecycle_metrics import (
+    LifecycleOperationalMetrics,
+    get_lifecycle_operational_metrics,
+)
 from agent_runtime.observability.retention_metrics import RetentionMetrics
 from agent_runtime.persistence.records.retention import (
     RetentionDeletionEvidenceRecord,
@@ -96,6 +100,7 @@ class RetentionSweeperLoop:
         interval_seconds: float | None = None,
         dry_run: bool | None = None,
         metrics: RetentionMetrics | None = None,
+        lifecycle_metrics: LifecycleOperationalMetrics | None = None,
         use_retention_until: bool | None = None,
         chunk_size: int | None = None,
         grace_days_messages: int | None = None,
@@ -158,6 +163,11 @@ class RetentionSweeperLoop:
             ),
         }
         self._metrics = metrics if metrics is not None else RetentionMetrics()
+        self._lifecycle_metrics = (
+            lifecycle_metrics
+            if lifecycle_metrics is not None
+            else get_lifecycle_operational_metrics()
+        )
         self._sweep_kinds = (
             (*self._SWEEP_KINDS, RetentionKind.ARTIFACTS_TOMBSTONED)
             if artifact_effects_v2
@@ -194,6 +204,7 @@ class RetentionSweeperLoop:
             try:
                 await self.sweep_once()
             except Exception:
+                self._record_lifecycle_failure(kind="sweep_cycle")
                 _LOGGER.warning("retention_sweep_failed", exc_info=True)
 
     async def sweep_once(self) -> tuple[RetentionSweepOutcome, ...]:
@@ -265,6 +276,7 @@ class RetentionSweeperLoop:
                     chunk_size=self._chunk_size,
                 )
             except Exception:
+                self._record_lifecycle_failure(kind=kind.value)
                 _LOGGER.warning(
                     "retention_sweep_kind_failed",
                     extra={"metadata": {"org_id": org_id, "kind": kind.value}},
@@ -336,6 +348,7 @@ class RetentionSweeperLoop:
                 chunk_size=0,
             )
         except Exception:
+            self._record_lifecycle_failure(kind=kind.value)
             _LOGGER.warning(
                 "retention_sweep_kind_failed",
                 extra={"metadata": {"org_id": org_id, "kind": kind.value}},
@@ -397,8 +410,17 @@ class RetentionSweeperLoop:
             try:
                 await self._persistence.insert_retention_deletion_evidence(evidence)
             except Exception:
+                self._record_lifecycle_failure(kind=kind_str)
                 _LOGGER.warning(
                     "retention_evidence_insert_failed",
                     extra={"metadata": {"org_id": outcome.org_id, "kind": kind_str}},
                     exc_info=True,
                 )
+
+    def _record_lifecycle_failure(self, *, kind: str) -> None:
+        """Publish D13 failure evidence without org, path, or exception labels."""
+
+        try:
+            self._lifecycle_metrics.record_retention_execution_failure(kind=kind)
+        except Exception:  # pragma: no cover - metrics must not stop a sweep
+            _LOGGER.debug("retention_lifecycle_metrics_failed", exc_info=True)

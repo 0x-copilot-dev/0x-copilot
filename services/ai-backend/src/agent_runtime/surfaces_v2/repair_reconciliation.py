@@ -23,12 +23,21 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
+import logging
 import re
+from time import perf_counter
 from typing import Final
 
 from pydantic import Field, field_validator, model_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.observability.lifecycle_metrics import (
+    LifecycleOperationalMetrics,
+    LifecyclePlanDecisionMetric,
+    LifecyclePlanOutcomeLabel,
+    LifecyclePlannerLabel,
+    get_lifecycle_operational_metrics,
+)
 from agent_runtime.surfaces_v2.lifecycle_refs import LifecycleReferenceScheme
 
 
@@ -39,6 +48,7 @@ _SAFE_SCHEME: Final[re.Pattern[str]] = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _KNOWN_REFERENCE_SCHEMES: Final[frozenset[str]] = frozenset(
     scheme.value for scheme in LifecycleReferenceScheme
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 def _opaque_identifier(value: str) -> str:
@@ -301,42 +311,121 @@ class RepairPlanner:
     step before any candidate can have an effect outside the snapshot.
     """
 
+    def __init__(self, *, metrics: LifecycleOperationalMetrics | None = None) -> None:
+        self._metrics = (
+            metrics if metrics is not None else get_lifecycle_operational_metrics()
+        )
+
     def plan(self, request: RepairPlanningRequest) -> RepairPlan:
         """Return one stable page without resolving or mutating any resource."""
 
-        self._validate_request_scope(request)
-        ordered = tuple(sorted(request.records, key=lambda row: row.candidate_id))
-        candidate_ids = tuple(row.candidate_id for row in ordered)
-        if len(candidate_ids) != len(set(candidate_ids)):
-            raise RepairPlanningError(RepairPlanningErrorCode.DUPLICATE_CANDIDATE)
+        started_at = perf_counter()
+        try:
+            self._validate_request_scope(request)
+            ordered = tuple(sorted(request.records, key=lambda row: row.candidate_id))
+            candidate_ids = tuple(row.candidate_id for row in ordered)
+            if len(candidate_ids) != len(set(candidate_ids)):
+                raise RepairPlanningError(RepairPlanningErrorCode.DUPLICATE_CANDIDATE)
 
-        after_candidate_id = (
-            request.cursor.after_candidate_id if request.cursor is not None else None
-        )
-        remaining = tuple(
-            record
-            for record in ordered
-            if after_candidate_id is None or record.candidate_id > after_candidate_id
-        )
-        page = remaining[: request.limit]
-        has_more = len(remaining) > len(page)
-        next_cursor = (
-            RepairPlanCursor(
+            after_candidate_id = (
+                request.cursor.after_candidate_id
+                if request.cursor is not None
+                else None
+            )
+            remaining = tuple(
+                record
+                for record in ordered
+                if after_candidate_id is None
+                or record.candidate_id > after_candidate_id
+            )
+            page = remaining[: request.limit]
+            has_more = len(remaining) > len(page)
+            next_cursor = (
+                RepairPlanCursor(
+                    tenant_id=request.tenant_id,
+                    snapshot_id=request.snapshot_id,
+                    after_candidate_id=page[-1].candidate_id,
+                )
+                if has_more and page
+                else None
+            )
+            decisions = tuple(self._decide(record) for record in page)
+            plan = RepairPlan(
                 tenant_id=request.tenant_id,
                 snapshot_id=request.snapshot_id,
-                after_candidate_id=page[-1].candidate_id,
+                as_of=request.as_of,
+                decisions=decisions,
+                next_cursor=next_cursor,
+                has_more=has_more,
             )
-            if has_more and page
-            else None
+        except RepairPlanningError:
+            self._record_planning_failure(
+                LifecyclePlanOutcomeLabel.REJECTED_INPUT,
+                elapsed_seconds=perf_counter() - started_at,
+            )
+            raise
+        except Exception:
+            self._record_planning_failure(
+                LifecyclePlanOutcomeLabel.FAILED,
+                elapsed_seconds=perf_counter() - started_at,
+            )
+            raise
+
+        self._record_plan_metrics(
+            page=page,
+            plan=plan,
+            elapsed_seconds=perf_counter() - started_at,
         )
-        return RepairPlan(
-            tenant_id=request.tenant_id,
-            snapshot_id=request.snapshot_id,
-            as_of=request.as_of,
-            decisions=tuple(self._decide(record) for record in page),
-            next_cursor=next_cursor,
-            has_more=has_more,
-        )
+        return plan
+
+    def _record_planning_failure(self, outcome: str, *, elapsed_seconds: float) -> None:
+        try:
+            self._metrics.record_plan_failure(
+                planner=LifecyclePlannerLabel.REPAIR,
+                outcome=outcome,
+                elapsed_seconds=elapsed_seconds,
+            )
+        except Exception:  # pragma: no cover - injected metrics must not affect D12
+            _LOGGER.debug("repair_planner.metrics_failed", exc_info=True)
+
+    def _record_plan_metrics(
+        self,
+        *,
+        page: tuple[RepairSnapshotRecord, ...],
+        plan: RepairPlan,
+        elapsed_seconds: float,
+    ) -> None:
+        """Publish closed aggregate D12 facts after producing a full plan."""
+
+        try:
+            self._metrics.record_plan_success(
+                planner=LifecyclePlannerLabel.REPAIR,
+                decisions=tuple(
+                    LifecyclePlanDecisionMetric(
+                        candidate_kind=record.kind.value,
+                        disposition=decision.state.value,
+                    )
+                    for record, decision in zip(page, plan.decisions, strict=True)
+                ),
+                elapsed_seconds=elapsed_seconds,
+            )
+            effect_decisions = tuple(
+                decision
+                for record, decision in zip(page, plan.decisions, strict=True)
+                if record.kind is RepairCandidateKind.EFFECT_RECONCILIATION
+            )
+            self._metrics.record_reconcile_backlog_snapshot(
+                candidate_count=sum(
+                    decision.state is RepairDecisionState.CANDIDATE
+                    for decision in effect_decisions
+                ),
+                withheld_count=sum(
+                    decision.state is RepairDecisionState.WITHHELD
+                    for decision in effect_decisions
+                ),
+            )
+        except Exception:  # pragma: no cover - metrics never change a plan
+            _LOGGER.debug("repair_planner.metrics_failed", exc_info=True)
 
     @staticmethod
     def _validate_request_scope(request: RepairPlanningRequest) -> None:

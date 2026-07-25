@@ -13,6 +13,26 @@ from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 
 
+class _AuthorizationMetricSpy:
+    def __init__(self) -> None:
+        self.denials: list[dict[str, str]] = []
+
+    def record_authorization_denial(
+        self,
+        *,
+        boundary: str,
+        reason: str,
+        enforcement: str,
+    ) -> None:
+        self.denials.append(
+            {
+                "boundary": boundary,
+                "reason": reason,
+                "enforcement": enforcement,
+            }
+        )
+
+
 @pytest.fixture(autouse=True)
 def _audit_hmac_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AUDIT_HMAC_KEY", "0123456789abcdef0123456789abcdef")
@@ -139,6 +159,38 @@ class TestAuditListRoute:
             },
         )
         assert response.status_code == 403
+
+    def test_identity_mismatch_emits_closed_authorization_metric(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import runtime_api.http.audit_list_routes as audit_list_routes
+
+        spy = _AuthorizationMetricSpy()
+        monkeypatch.setattr(
+            audit_list_routes,
+            "get_lifecycle_operational_metrics",
+            lambda: spy,
+        )
+        client, _ = _client()
+
+        response = client.get(
+            "/internal/v1/audit/list",
+            params={"org_id": "org_other", "user_id": "user_1"},
+            headers={
+                "x-enterprise-org-id": "org_a",
+                "x-enterprise-user-id": "user_1",
+                "x-enterprise-permission-scopes": "admin:audit_export",
+            },
+        )
+
+        assert response.status_code == 403
+        assert spy.denials == [
+            {
+                "boundary": "audit_list_identity",
+                "reason": "identity_mismatch",
+                "enforcement": "enforce",
+            }
+        ]
 
     def test_invalid_cursor_400(self) -> None:
         client, _ = _client()
