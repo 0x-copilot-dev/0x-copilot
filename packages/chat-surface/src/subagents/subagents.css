@@ -466,6 +466,11 @@
   white-space: nowrap;
 }
 
+/* A terminal fleet only reads as successful when every child completed. */
+.aui-fleet-card[data-status="error"] .aui-fleet-card__count {
+  color: var(--color-danger);
+}
+
 .aui-fleet-card__sub {
   color: var(--color-text-muted);
   font-size: var(--font-size-sm);

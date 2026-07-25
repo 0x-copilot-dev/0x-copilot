@@ -2654,6 +2654,13 @@ export interface SubagentFleetStartedPayload {
   title: string;
   sub?: string | null;
   agent_ids: readonly string[];
+  /**
+   * Supervisor `task` call ids declared in this dispatch. Lifecycle frames can
+   * arrive before the fleet bookend and, on the desktop file store, live in
+   * their own per-subagent stream. Consumers use this stable mapping to group
+   * those already-received frames without inventing a relationship.
+   */
+  task_ids?: readonly string[];
 }
 
 export interface SubagentFleetFinishedPayload {

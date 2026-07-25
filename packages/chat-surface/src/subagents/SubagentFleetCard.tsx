@@ -24,6 +24,8 @@ export interface SubagentFleetCardProps {
   running: number;
   /** Children currently completed. */
   done: number;
+  /** Terminal children that did not complete successfully. */
+  failed?: number;
   /** Wall-clock elapsed once the fleet finishes; null while still running. */
   elapsed?: string | null;
   /** Renders the host's existing per-subagent rows for the fleet's children. */
@@ -39,15 +41,20 @@ export function SubagentFleetCard({
   total,
   running,
   done,
+  failed = 0,
   elapsed,
   children,
   onOpenWorkspace,
 }: SubagentFleetCardProps): ReactElement {
   const solo = total === 1;
-  const headStatus =
-    running > 0
-      ? `${running} running · ${done}/${total} done`
-      : `${done}/${total} done`;
+  const headStatus = [
+    running > 0 ? `${running} running` : null,
+    failed > 0 ? `${failed} failed` : null,
+    `${done}/${total} done`,
+  ]
+    .filter((part): part is string => part !== null)
+    .join(" · ");
+  const fleetStatus = running > 0 ? "running" : failed > 0 ? "error" : "done";
   const displayTitle =
     total > 0
       ? solo
@@ -64,7 +71,7 @@ export function SubagentFleetCard({
     <section
       className="aui-fleet-card"
       data-fleet-id={fleetId}
-      data-status={running > 0 ? "running" : "done"}
+      data-status={fleetStatus}
     >
       <header className="aui-fleet-card__head">
         <span className="aui-fleet-card__icon" aria-hidden="true">

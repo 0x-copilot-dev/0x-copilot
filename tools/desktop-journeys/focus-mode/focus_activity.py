@@ -175,10 +175,12 @@ def journey_tool_card(s: DriverSession) -> None:
     log("PASS  inline tool card present and names web_search")
 
     # wait for it to resolve to done
-    done = card["status"] == "done"
+    # The renderer's durable status token is ``complete``; older staged
+    # payloads used ``done``. The visible label remains “done” in both cases.
+    done = card["status"] in {"complete", "done"}
     for _ in range(120):
         card = tool_card_state(s)
-        if card and card["status"] == "done":
+        if card and card["status"] in {"complete", "done"}:
             done = True
             break
         time.sleep(0.25)

@@ -56,6 +56,8 @@ export interface FleetProjection {
   readonly running: number;
   /** Terminal children. */
   readonly done: number;
+  /** Terminal children that did not complete successfully. */
+  readonly failed: number;
   /** Wall-clock elapsed, from `subagent_fleet_finished`; null while running. */
   readonly elapsed: string | null;
   /** True once `subagent_fleet_finished` has arrived for this fleet. */
@@ -93,6 +95,8 @@ interface MutableFleet {
   title: string;
   sub: string | null;
   agentIds: readonly string[];
+  /** Supervisor task call ids declared with the fleet bookend. */
+  taskIds: readonly string[];
   elapsed: string | null;
   finished: boolean;
   sequenceNo: number;
@@ -128,7 +132,7 @@ export function projectSubagents(
 
     switch (event.event_type) {
       case SUBAGENT_FLEET_STARTED:
-        reduceFleetStarted(event, fleetHeads, fleetOrder);
+        reduceFleetStarted(event, fleetHeads, fleetOrder, parentFleetByTask);
         break;
       case SUBAGENT_FLEET_FINISHED:
         reduceFleetFinished(event, fleetHeads);
@@ -158,6 +162,7 @@ function reduceFleetStarted(
   event: RuntimeEventEnvelope,
   heads: Map<string, MutableFleet>,
   order: string[],
+  parentFleetByTask: Map<string, string>,
 ): void {
   const fleetId = stringValue(event.payload.fleet_id);
   if (fleetId === null) {
@@ -166,6 +171,17 @@ function reduceFleetStarted(
   const existing = heads.get(fleetId);
   if (existing === undefined) {
     order.push(fleetId);
+  }
+  const taskIds =
+    readStringArray(event.payload.task_ids) ?? existing?.taskIds ?? [];
+  // The message-stream child lifecycle frames can precede this updates-stream
+  // bookend. Link them from the supervisor-declared task ids so the fleet
+  // renders its real, already-received child cards. An explicit child
+  // `parent_fleet_id` is retained if one was supplied by a newer runtime.
+  for (const taskId of taskIds) {
+    if (!parentFleetByTask.has(taskId)) {
+      parentFleetByTask.set(taskId, fleetId);
+    }
   }
   heads.set(fleetId, {
     fleetId,
@@ -177,6 +193,7 @@ function reduceFleetStarted(
     sub: stringValue(event.payload.sub) ?? existing?.sub ?? null,
     agentIds:
       readStringArray(event.payload.agent_ids) ?? existing?.agentIds ?? [],
+    taskIds,
     elapsed: existing?.elapsed ?? null,
     finished: existing?.finished ?? false,
     sequenceNo: existing?.sequenceNo ?? event.sequence_no,
@@ -222,18 +239,33 @@ function buildFleet(
 
   let running = 0;
   let done = 0;
+  let failed = 0;
   for (const child of children) {
     if (isTerminalStatus(child.status)) {
       done += 1;
+      if (child.status !== "completed") {
+        failed += 1;
+      }
     } else {
       running += 1;
     }
   }
-  // Live child state is authoritative (mirrors SubagentFleetTool AC-7); the
-  // declared `agent_ids.length` is only the fallback before children arrive.
-  const total = children.length > 0 ? children.length : head.agentIds.length;
-  if (children.length === 0 && head.finished) {
-    done = total;
+  // The supervisor-declared child set is authoritative. Lifecycle frames can
+  // land a little later (or in a separately persisted subagent stream), so
+  // using the observed child count here would incorrectly show a two-agent
+  // dispatch as `1/1` while its second child is still arriving.
+  const declaredTotal =
+    head.taskIds.length > 0 ? head.taskIds.length : head.agentIds.length;
+  const total = Math.max(declaredTotal, children.length);
+  const missing = Math.max(0, total - children.length);
+  if (head.finished) {
+    // A fleet bookend is emitted only after every declared child closed. We
+    // have no reason to fabricate an error for a terminal child whose verbose
+    // lifecycle frame was pruned from replay, so count that known-closed slot
+    // as done while preserving any observed child status.
+    done += missing;
+  } else {
+    running += missing;
   }
 
   return {
@@ -244,6 +276,7 @@ function buildFleet(
     total,
     running,
     done,
+    failed,
     elapsed: head.elapsed,
     finished: head.finished,
     sequenceNo: head.sequenceNo,
