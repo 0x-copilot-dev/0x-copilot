@@ -1291,6 +1291,13 @@ export {
   type ReceiptProjection,
 } from "./destinations/run/projectReceipt";
 export {
+  foldReceiptV2,
+  isChatOnlyReceiptV2,
+  projectReceiptV2,
+  type ReceiptV2EventLike,
+  type ReceiptV2Projection,
+} from "./destinations/run/projectReceiptV2";
+export {
   projectLedgerSources,
   type LedgerSourcesProjection,
   type LedgerSourceGroup,
