@@ -21,6 +21,7 @@ from agent_runtime.effects.claims import (
     EffectClaimConflict,
     EffectClaimInvalidTransition,
     EffectClaimNotFound,
+    EffectClaimScanCursor,
     EffectClaimStorageError,
     normalize_persisted_effect_claim_payload,
     require_persistable_effect_claim,
@@ -240,6 +241,47 @@ class PostgresEffectClaimStore:
                     params,
                 )
                 rows = await cursor.fetchall()
+            return tuple(_claim_from_row(row) for row in rows)
+        except EffectClaimStorageError:
+            raise
+        except Exception as exc:  # pragma: no cover - requires a broken driver
+            raise EffectClaimStorageError() from exc
+
+    async def list_incomplete_after(
+        self,
+        *,
+        cursor: EffectClaimScanCursor | None,
+        limit: int = 100,
+    ) -> Sequence[EffectClaim]:
+        """Read one global keyset page without changing an effect claim."""
+
+        if limit < 1:
+            return ()
+        try:
+            where = "state IN ('claimed', 'indeterminate')"
+            params: tuple[Any, ...]
+            if cursor is None:
+                params = (limit,)
+            else:
+                where += " AND (created_at, org_id, claim_id) > (%s, %s, %s)"
+                params = (
+                    cursor.after_created_at,
+                    cursor.after_org_id,
+                    cursor.after_claim_id,
+                    limit,
+                )
+            async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
+                query = await conn.execute(
+                    f"""
+                    SELECT {_CLAIM_COLUMNS}
+                      FROM {_TABLE}
+                     WHERE {where}
+                     ORDER BY created_at ASC, org_id ASC, claim_id ASC
+                     LIMIT %s
+                    """,
+                    params,
+                )
+                rows = await query.fetchall()
             return tuple(_claim_from_row(row) for row in rows)
         except EffectClaimStorageError:
             raise

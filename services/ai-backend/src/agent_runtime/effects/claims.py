@@ -210,6 +210,32 @@ class EffectClaim(RuntimeContract):
         )
 
 
+class EffectClaimScanCursor(RuntimeContract):
+    """Opaque keyset position for a bounded unresolved-claim scan.
+
+    This cursor carries no effect target, proposal body, URI, or receipt. It
+    lets a planning worker traverse a large durable claim set without
+    repeatedly treating its oldest bounded page as the whole enumeration.
+    """
+
+    after_created_at: datetime
+    after_org_id: str = Field(
+        min_length=1,
+        max_length=_IDENTIFIER_MAX_LENGTH,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    after_claim_id: ClaimIdText
+
+    @field_validator("after_created_at")
+    @classmethod
+    def _cursor_timestamp_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(
+                "effect claim scan cursor timestamp must be timezone-aware"
+            )
+        return value.astimezone(UTC)
+
+
 class EffectClaimAcquisition(RuntimeContract):
     """Result of atomically creating or reading an idempotency claim."""
 
@@ -249,6 +275,18 @@ class EffectClaimStore(Protocol):
         self, *, org_id: str | None = None, limit: int = 100
     ) -> Sequence[EffectClaim]:
         """List unresolved claimed/indeterminate attempts for recovery sweeps."""
+
+    async def list_incomplete_after(
+        self,
+        *,
+        cursor: EffectClaimScanCursor | None,
+        limit: int = 100,
+    ) -> Sequence[EffectClaim]:
+        """Return one global page after an opaque durable keyset cursor.
+
+        Rows are ordered by ``(created_at, org_id, claim_id)`` ascending. This
+        read-only method never updates, reconciles, or executes an effect.
+        """
 
 
 class EffectClaimError(Exception):
@@ -484,6 +522,7 @@ def validate_claim_transition(
 __all__ = [
     "EffectClaim",
     "EffectClaimAcquisition",
+    "EffectClaimScanCursor",
     "EffectClaimConflict",
     "EffectClaimError",
     "EffectClaimInvalidTransition",
