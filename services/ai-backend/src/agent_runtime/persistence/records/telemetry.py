@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from enum import StrEnum
 from uuid import uuid4
 
-from pydantic import Field, NonNegativeInt
+from pydantic import Field, NonNegativeInt, model_validator
 
 from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 
@@ -117,6 +118,77 @@ class RuntimeModelCallUsageRecord(RuntimeContract):
     pricing_id: str | None = None
     pricing_version: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class UsageAttributionRelationship(StrEnum):
+    """The immutable way one metered call relates to an operation output."""
+
+    PRODUCED = "produced"
+    REVISED = "revised"
+    PROPOSED = "proposed"
+    SHAPED = "shaped"
+
+
+class UsageAttributionEdge(RuntimeContract):
+    """An immutable attribution link kept separate from a historical usage row.
+
+    The persistence scope (organization) intentionally lives in the store API,
+    not on this portable edge contract.  That makes the edge safe to project to
+    clients while keeping tenancy derived from the authenticated persistence
+    operation.  An edge is append-only: it never alters token or cost columns
+    on :class:`RuntimeModelCallUsageRecord`.
+    """
+
+    edge_id: str = Field(
+        default_factory=lambda: uuid4().hex, min_length=1, max_length=128
+    )
+    usage_record_id: str = Field(min_length=1, max_length=128)
+    operation_id: str = Field(min_length=1, max_length=128)
+    artifact_id: str | None = Field(default=None, min_length=1, max_length=128)
+    stage_id: str | None = Field(default=None, min_length=1, max_length=128)
+    surface_id: str | None = Field(default=None, min_length=1, max_length=512)
+    relationship: UsageAttributionRelationship
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def _relationship_target_is_present(self) -> "UsageAttributionEdge":
+        if self.relationship is UsageAttributionRelationship.PROPOSED:
+            if self.stage_id is None:
+                raise ValueError("proposed usage attribution requires stage_id")
+            return self
+        if self.relationship is UsageAttributionRelationship.SHAPED:
+            if self.artifact_id is None and self.surface_id is None:
+                raise ValueError(
+                    "shaped usage attribution requires artifact_id or surface_id"
+                )
+            return self
+        if self.artifact_id is None:
+            raise ValueError(
+                f"{self.relationship.value} usage attribution requires artifact_id"
+            )
+        return self
+
+    @property
+    def idempotency_key(
+        self,
+    ) -> tuple[
+        str,
+        str,
+        str | None,
+        str | None,
+        str | None,
+        str,
+    ]:
+        """Stable natural identity for retry-safe append-only persistence."""
+
+        return (
+            self.usage_record_id,
+            self.operation_id,
+            self.artifact_id,
+            self.stage_id,
+            self.surface_id,
+            self.relationship.value,
+        )
 
 
 class ModelPricingRecord(RuntimeContract):

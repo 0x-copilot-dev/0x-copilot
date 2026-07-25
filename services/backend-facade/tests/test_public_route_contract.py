@@ -35,6 +35,7 @@ def test_openapi_includes_core_product_paths() -> None:
         # Usage family (B4 + E3) — the UI-less rollup endpoints stay registered.
         "/v1/usage/me",
         "/v1/usage/runs/{run_id}",
+        "/v1/usage/runs/{run_id}/calls",
         "/v1/usage/conversations/{conversation_id}",
         "/v1/usage/org/purpose",
     )

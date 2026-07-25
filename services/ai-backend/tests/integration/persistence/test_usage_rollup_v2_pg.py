@@ -21,7 +21,11 @@ import pytest
 
 from agent_runtime.api.usage_service import UsageQueryService
 from agent_runtime.execution.contracts import AgentRuntimeContext
-from agent_runtime.persistence.records import RuntimeModelCallUsageRecord
+from agent_runtime.persistence.records import (
+    RuntimeModelCallUsageRecord,
+    UsageAttributionEdge,
+    UsageAttributionRelationship,
+)
 from runtime_adapters.postgres import PostgresRuntimeApiStore
 from runtime_api.schemas import (
     CreateConversationRequest,
@@ -173,3 +177,62 @@ class TestUsageRollupV2Postgres:
         assert sum(r.output_tokens for r in purpose_rows) == sum(
             o for _, _, o in _CALL_FIXTURE
         )
+
+    async def test_immutable_edges_round_trip_without_altering_usage(
+        self, store: PostgresRuntimeApiStore
+    ) -> None:
+        conversation_id, run_id, trace_id = await _seed_run(store)
+        now = datetime.now(timezone.utc)
+        usage = RuntimeModelCallUsageRecord(
+            id="usage-attribution-pg",
+            org_id=_ORG,
+            run_id=run_id,
+            conversation_id=conversation_id,
+            trace_id=trace_id,
+            user_id=_USER,
+            model_provider="openai",
+            model_name="gpt-5.4-mini",
+            purpose="main",
+            input_tokens=71,
+            output_tokens=29,
+            total_tokens=100,
+            created_at=now,
+        )
+        await store.record_model_call_usage(usage)
+        produced = UsageAttributionEdge(
+            edge_id="edge-attribution-pg",
+            usage_record_id=usage.id,
+            operation_id="operation-attribution-pg",
+            artifact_id="artifact-attribution-pg",
+            relationship=UsageAttributionRelationship.PRODUCED,
+            created_at=now,
+        )
+        proposed = UsageAttributionEdge(
+            edge_id="edge-stage-attribution-pg",
+            usage_record_id=usage.id,
+            operation_id="operation-attribution-pg",
+            stage_id="stage-attribution-pg",
+            relationship=UsageAttributionRelationship.PROPOSED,
+            created_at=now,
+        )
+
+        assert await store.append_usage_attribution_edge(org_id=_ORG, edge=produced)
+        assert not await store.append_usage_attribution_edge(
+            org_id=_ORG,
+            edge=produced.model_copy(update={"edge_id": "edge-attribution-retry-pg"}),
+        )
+        assert await store.append_usage_attribution_edge(org_id=_ORG, edge=proposed)
+
+        edges = await store.list_usage_attribution_edges_for_usage_records(
+            org_id=_ORG,
+            usage_record_ids=(usage.id,),
+        )
+        assert {edge.edge_id for edge in edges} == {
+            "edge-attribution-pg",
+            "edge-stage-attribution-pg",
+        }
+        rows = await store.query_model_call_usage_for_run(org_id=_ORG, run_id=run_id)
+        assert [
+            (row.id, row.input_tokens, row.output_tokens, row.total_tokens)
+            for row in rows
+        ] == [(usage.id, 71, 29, 100)]

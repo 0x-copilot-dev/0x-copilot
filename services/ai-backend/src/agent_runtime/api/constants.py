@@ -171,6 +171,7 @@ class Keys:
         USAGE_ME = "usage_me"
         USAGE_ME_CONVERSATIONS = "usage_me_conversations"
         USAGE_RUN = "usage_run"
+        USAGE_RUN_CALLS = "usage_run_calls"
         USAGE_CONVERSATION = "usage_conversation"
         USAGE_ORG = "usage_org"
         USAGE_ORG_SUBAGENTS = "usage_org_subagents"

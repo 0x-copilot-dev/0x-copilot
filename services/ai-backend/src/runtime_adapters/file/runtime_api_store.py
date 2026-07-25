@@ -81,6 +81,7 @@ from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
+    UsageAttributionEdge,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -161,6 +162,7 @@ class _Tables:
     APPROVAL_BATCH_ITEMS = "approval_batch_items"
     RUN_USAGE = "run_usage"
     MODEL_CALL_USAGE = "model_call_usage"
+    USAGE_ATTRIBUTION_EDGES = "usage_attribution_edges"
     PRICING = "pricing"
     USER_DAILY = "usage_daily_user"
     ORG_DAILY = "usage_daily_org"
@@ -300,6 +302,8 @@ class FileRuntimeApiStore:
         self.tool_invocations: dict[str, ToolInvocationRecord] = {}
         self.run_usage: dict[str, RuntimeRunUsageRecord] = {}
         self.model_call_usage: list[RuntimeModelCallUsageRecord] = []
+        self.usage_attribution_edges: dict[str, tuple[str, UsageAttributionEdge]] = {}
+        self._usage_attribution_edge_ids_by_key: dict[tuple[object, ...], str] = {}
         self.pricing_rows: list[ModelPricingRecord] = []
         self.user_daily_usage: dict[
             tuple[str, str, str, str, str], UsageDailyUserRow
@@ -757,6 +761,20 @@ class FileRuntimeApiStore:
                 order.append(r.id)
             model_calls[r.id] = r
         self.model_call_usage = [model_calls[i] for i in order]
+        for rec in self._ledger(_Tables.USAGE_ATTRIBUTION_EDGES).load_puts():
+            org_id = rec.get("org_id")
+            edge_payload = rec.get("edge")
+            if not isinstance(org_id, str) or not isinstance(edge_payload, dict):
+                continue
+            edge = UsageAttributionEdge.model_validate(edge_payload)
+            natural_key = (org_id, *edge.idempotency_key)
+            if (
+                edge.edge_id in self.usage_attribution_edges
+                or natural_key in self._usage_attribution_edge_ids_by_key
+            ):
+                continue
+            self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
+            self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
         pricing: dict[str, ModelPricingRecord] = {}
         pricing_order: list[str] = []
         for rec in self._ledger(_Tables.PRICING).load_puts():
@@ -2791,6 +2809,67 @@ class FileRuntimeApiStore:
             self.model_call_usage.append(record)
             self._ledger(_Tables.MODEL_CALL_USAGE).append_put(
                 record.model_dump(mode="json")
+            )
+
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append a retry-safe immutable relation without rewriting usage."""
+
+        async with self._state_lock:
+            if not any(
+                record.id == edge.usage_record_id and record.org_id == org_id
+                for record in self.model_call_usage
+            ):
+                raise LookupError(
+                    "usage attribution requires an in-tenant usage record"
+                )
+
+            natural_key = (org_id, *edge.idempotency_key)
+            if natural_key in self._usage_attribution_edge_ids_by_key:
+                return False
+
+            existing = self.usage_attribution_edges.get(edge.edge_id)
+            if existing is not None:
+                if existing == (org_id, edge):
+                    return False
+                raise ValueError("usage attribution edge_id already exists")
+
+            self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
+            self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
+            self._ledger(_Tables.USAGE_ATTRIBUTION_EDGES).append_put(
+                {
+                    "org_id": org_id,
+                    "edge": edge.model_dump(mode="json"),
+                }
+            )
+            return True
+
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Read immutable edges for a known organization-scoped call set."""
+
+        requested_ids = set(usage_record_ids)
+        if not requested_ids:
+            return ()
+        async with self._state_lock:
+            return tuple(
+                sorted(
+                    (
+                        edge
+                        for stored_org_id, edge in self.usage_attribution_edges.values()
+                        if stored_org_id == org_id
+                        and edge.usage_record_id in requested_ids
+                    ),
+                    key=lambda edge: (edge.created_at, edge.edge_id),
+                )
             )
 
     async def update_run_usage_cost(

@@ -31,6 +31,7 @@ from agent_runtime.persistence.records import (
     RetentionSweepOutcome,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
+    UsageAttributionEdge,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
     ToolBudgetRecord,
@@ -88,7 +89,38 @@ class RuntimeStoreLifecyclePort(Protocol):
 
 
 @runtime_checkable
-class PersistencePort(Protocol):
+class UsageAttributionEdgeStorePort(Protocol):
+    """Durable immutable links between canonical usage rows and outputs.
+
+    ``org_id`` is supplied by trusted runtime identity at the persistence
+    boundary.  Implementations must verify that ``usage_record_id`` belongs to
+    that organization and must never mutate a persisted edge.
+    """
+
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append an edge; return ``True`` only when it is newly persisted.
+
+        A retry with the same natural edge identity returns ``False``.  A
+        missing or foreign usage record must fail closed rather than creating a
+        dangling cross-tenant link.
+        """
+
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Return immutable edges for the supplied canonical usage IDs."""
+
+
+@runtime_checkable
+class PersistencePort(UsageAttributionEdgeStorePort, Protocol):
     """Conversation, message, run, approval, and audit persistence boundary."""
 
     async def create_conversation(

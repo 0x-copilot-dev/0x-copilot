@@ -1534,6 +1534,23 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/usage/runs/{run_id}/calls")
+    async def usage_run_calls(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        """Proxy owned-run invocation detail with facade-derived identity only."""
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/usage/runs/{run_id}/calls",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     @app.get("/v1/usage/conversations/{conversation_id}")
     async def usage_conversation(
         request: Request,

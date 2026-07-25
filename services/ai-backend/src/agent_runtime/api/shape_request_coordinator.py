@@ -204,6 +204,7 @@ class ShapeRequestCoordinator:
                 recorder=self._usage_recorder,
                 emit_event=self._make_usage_emitter(run),
                 surfaces_v2=SurfacesV2Flag.enabled(self._environ),
+                attribution_edge_store=self._persistence,
             ),
             run=run,
             purpose=Purpose.SHAPE_REQUEST,

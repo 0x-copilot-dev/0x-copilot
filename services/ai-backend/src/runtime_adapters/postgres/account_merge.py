@@ -85,6 +85,9 @@ class PostgresAccountMergeRekeyer:
         ),
         ("runtime_deletion_evidence", ("user_id",)),
         ("runtime_run_usage", ("user_id",)),
+        # runtime_usage_attribution_edges follows this parent through its
+        # composite foreign key's ON UPDATE CASCADE.  Do not re-key an edge
+        # directly: its immutable link fields remain byte-for-byte intact.
         ("runtime_model_call_usage", ()),
         ("conversation_shares", ("created_by_user_id",)),
         ("agent_conversation_tool_ordinals", ()),

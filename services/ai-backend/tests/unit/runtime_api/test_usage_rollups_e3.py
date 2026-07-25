@@ -17,11 +17,14 @@ from fastapi.testclient import TestClient
 from agent_runtime.persistence.records import (
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
+    UsageAttributionEdge,
+    UsageAttributionRelationship,
 )
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
+from runtime_api.schemas import ConversationRecord
 
 _ORG = "org_e3u"
 _USER_1 = "user_1"
@@ -122,7 +125,7 @@ _RUN_META = {
 }
 
 
-def _seeded_client() -> TestClient:
+def _seeded_client_and_store() -> tuple[TestClient, InMemoryRuntimeApiStore]:
     store = InMemoryRuntimeApiStore()
     settings = RuntimeSettings.load(
         environ={
@@ -131,6 +134,17 @@ def _seeded_client() -> TestClient:
             "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
         }
     )
+    for conversation_id, user_id in {
+        conversation_id: user_id for conversation_id, user_id in _RUN_META.values()
+    }.items():
+        store.conversations[conversation_id] = ConversationRecord(
+            conversation_id=conversation_id,
+            org_id=_ORG,
+            user_id=user_id,
+            assistant_id="assistant-1",
+            created_at=_NOW - timedelta(hours=1),
+            updated_at=_NOW,
+        )
     # Per-call rows.
     for index, call in enumerate(_CALLS):
         store.model_call_usage.append(
@@ -175,7 +189,13 @@ def _seeded_client() -> TestClient:
             status="completed",
         )
     ports = RuntimeAdapterFactory.from_store(store)
-    return TestClient(RuntimeApiAppFactory.create_app(ports=ports, settings=settings))
+    return TestClient(
+        RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
+    ), store
+
+
+def _seeded_client() -> TestClient:
+    return _seeded_client_and_store()[0]
 
 
 def _sum(calls, field: str) -> int:
@@ -210,6 +230,95 @@ class TestPerRunRollup:
         assert by_purpose["main"]["surface_id"] is None
         assert by_purpose["view_shaping"]["surface_id"] == "record://s1"
         assert by_purpose["shape_request"]["surface_id"] == "record://s2"
+
+    async def test_call_edges_and_operation_totals_dedupe_canonical_usage(self) -> None:
+        client, store = _seeded_client_and_store()
+        # Give every r1 call an independent canonical price. Multiple edges
+        # must not multiply call-0's 500 micro-USD cost in either projection.
+        costs = {"call-0": 500, "call-1": 50, "call-2": 20}
+        store.model_call_usage = [
+            row.model_copy(update={"cost_micro_usd": costs.get(row.id)})
+            for row in store.model_call_usage
+        ]
+        store.run_usage["r1"] = store.run_usage["r1"].model_copy(
+            update={"cost_micro_usd": sum(costs.values())}
+        )
+        # Two target links for the same canonical provider invocation.  The
+        # operation total must count call-0 once, and the run total must remain
+        # the independently seeded run-usage total.
+        assert await store.append_usage_attribution_edge(
+            org_id=_ORG,
+            edge=UsageAttributionEdge(
+                edge_id="edge-artifact",
+                usage_record_id="call-0",
+                operation_id="operation-1",
+                artifact_id="artifact-1",
+                relationship=UsageAttributionRelationship.PRODUCED,
+                created_at=_NOW,
+            ),
+        )
+        assert await store.append_usage_attribution_edge(
+            org_id=_ORG,
+            edge=UsageAttributionEdge(
+                edge_id="edge-stage",
+                usage_record_id="call-0",
+                operation_id="operation-1",
+                stage_id="stage-1",
+                relationship=UsageAttributionRelationship.PROPOSED,
+                created_at=_NOW,
+            ),
+        )
+        # A no-edge historical row (call-1) remains visible and contributes to
+        # the canonical run total exactly as it did before attribution existed.
+        run_response = client.get(
+            "/v1/usage/runs/r1", params={"org_id": _ORG, "user_id": _USER_1}
+        )
+        assert run_response.status_code == 200
+        body = run_response.json()
+        assert body["total"]["input"] == 130
+        assert body["total"]["output"] == 63
+        assert body["total"]["cost_micro_usd"] == 570
+        assert len(body["by_call"]) == 3
+        call_0 = next(row for row in body["by_call"] if row["id"] == "call-0")
+        assert {edge["edge_id"] for edge in call_0["attribution_edges"]} == {
+            "edge-artifact",
+            "edge-stage",
+        }
+        operation = body["by_operation"]
+        assert len(operation) == 1
+        assert operation[0]["operation_id"] == "operation-1"
+        assert operation[0]["total"] == {
+            "input": 100,
+            "output": 50,
+            "cached_input": 0,
+            "total": 150,
+            "runs_count": 1,
+            "cost_micro_usd": 500,
+        }
+
+        calls_response = client.get(
+            "/v1/usage/runs/r1/calls",
+            params={"org_id": _ORG, "user_id": _USER_1},
+        )
+        assert calls_response.status_code == 200
+        assert calls_response.json()["run_id"] == "r1"
+        assert [row["id"] for row in calls_response.json()["calls"]] == [
+            "call-0",
+            "call-1",
+            "call-2",
+        ]
+
+    def test_foreign_user_gets_404_for_run_and_conversation_usage(self) -> None:
+        client = _seeded_client()
+        run_response = client.get(
+            "/v1/usage/runs/r1", params={"org_id": _ORG, "user_id": _USER_2}
+        )
+        conversation_response = client.get(
+            "/v1/usage/conversations/conv-1",
+            params={"org_id": _ORG, "user_id": _USER_2, "period": "30d"},
+        )
+        assert run_response.status_code == 404
+        assert conversation_response.status_code == 404
 
 
 class TestPerUserRollup:

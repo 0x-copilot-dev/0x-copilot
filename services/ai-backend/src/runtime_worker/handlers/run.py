@@ -2105,6 +2105,7 @@ class RuntimeRunHandler:
             recorder=self.usage_recorder,
             emit_event=_emit_usage,
             surfaces_v2=self.settings.execution.surfaces_v2,
+            attribution_edge_store=self.persistence,
         )
         invocation = MeteredModelInvocation(
             meter=meter, run=run, purpose=Purpose.VIEW_SHAPING

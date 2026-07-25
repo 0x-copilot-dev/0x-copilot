@@ -13,11 +13,20 @@ from agent_runtime.execution.contracts import AgentRuntimeContext, JsonObject
 from agent_runtime.observability.attribution import Purpose
 from agent_runtime.observability.usage_meter import (
     MeteredModelInvocation,
+    UsageAttribution,
     UsageMeter,
 )
-from agent_runtime.observability.usage_recorder import InMemoryUsageRecorder
-from agent_runtime.persistence.records import RuntimeModelCallUsageRecord
+from agent_runtime.observability.usage_recorder import (
+    InMemoryUsageRecorder,
+    UsageRecordingResult,
+)
+from agent_runtime.persistence.records import (
+    RuntimeModelCallUsageRecord,
+    RuntimeRunUsageRecord,
+    UsageAttributionRelationship,
+)
 from agent_runtime.surfaces_v2.ledger_models import UsagePurpose
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import RunRecord
 
 
@@ -40,6 +49,32 @@ class _RaisingEmitter:
     async def __call__(self, payload: JsonObject) -> None:
         self.called += 1
         raise RuntimeError("simulated event-store failure")
+
+
+class _PersistingUsageRecorder:
+    """Recorder fake that makes the meter exercise the durable edge boundary."""
+
+    def __init__(self, store: InMemoryRuntimeApiStore) -> None:
+        self._store = store
+
+    async def record_call(
+        self,
+        record: RuntimeModelCallUsageRecord,
+        *,
+        pricing_at: datetime,
+    ) -> UsageRecordingResult:
+        del pricing_at
+        await self._store.record_model_call_usage(record)
+        return UsageRecordingResult()
+
+    async def record_run(
+        self,
+        record: RuntimeRunUsageRecord,
+        *,
+        pricing_at: datetime,
+    ) -> UsageRecordingResult:
+        del record, pricing_at
+        return UsageRecordingResult()
 
 
 class UsageMeterFixtureMixin:
@@ -251,6 +286,51 @@ class TestRecordCall(UsageMeterFixtureMixin):
         assert emitter.called == 1
         # The row still landed despite the emit failure.
         assert len(recorder.calls) == 1
+
+    async def test_retries_create_distinct_edges_without_changing_usage_rows(
+        self,
+    ) -> None:
+        store = InMemoryRuntimeApiStore()
+        meter = UsageMeter(
+            recorder=_PersistingUsageRecorder(store),
+            emit_event=None,
+            surfaces_v2=False,
+            attribution_edge_store=store,
+        )
+        attribution = UsageAttribution(
+            operation_id="operation-1",
+            artifact_id="artifact-1",
+            relationship=UsageAttributionRelationship.PRODUCED,
+        )
+        first = self._call_record(input_tokens=100, output_tokens=40).model_copy(
+            update={"id": "provider-attempt-1"}
+        )
+        retry = self._call_record(input_tokens=30, output_tokens=12).model_copy(
+            update={"id": "provider-attempt-2"}
+        )
+
+        await meter.record_call(
+            first,
+            pricing_at=self._pricing_at(),
+            attribution=attribution,
+        )
+        await meter.record_call(
+            retry,
+            pricing_at=self._pricing_at(),
+            attribution=attribution,
+        )
+
+        assert [row.id for row in store.model_call_usage] == [
+            "provider-attempt-1",
+            "provider-attempt-2",
+        ]
+        assert sum(row.total_tokens for row in store.model_call_usage) == 182
+        edges = await store.list_usage_attribution_edges_for_usage_records(
+            org_id="org_a",
+            usage_record_ids=(first.id, retry.id),
+        )
+        assert [edge.usage_record_id for edge in edges] == [first.id, retry.id]
+        assert {edge.operation_id for edge in edges} == {"operation-1"}
 
 
 class TestMeteredModelInvocation(UsageMeterFixtureMixin):
