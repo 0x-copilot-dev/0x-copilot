@@ -24,6 +24,7 @@ tools/desktop-journeys/
   runs/                  ← per-journey screenshots + logs (git-ignored)
   provider-key-byok/     ← a SET of journeys → one JOURNEYS.md + runnable scripts
   focus-mode/
+  chat-rich-cards/       ← required live tool + subagent card matrix
   chat-nav-model/
 ```
 
@@ -90,6 +91,10 @@ git-ignored.
 ```bash
 # from the repo root
 python3 tools/desktop-journeys/chat-nav-model/new_chat.py
+
+# The required desktop rich-chat matrix: direct web search, one subagent,
+# two parallel subagents, and web search + two subagents in ONE message.
+python3 tools/desktop-journeys/chat-rich-cards/rich_chat.py
 ```
 
 Each script spawns its own driver on `CTL_PORT` (default 8790), runs hermetically in
@@ -147,3 +152,24 @@ Service logs for the supervised stack: `~/Library/Application Support/0xCopilot/
    shared, so a renamed testId is fixed in one place.
 3. Never hardcode a key; never print a key. Prefer asserting through `transport()`
    for backend truth and DOM reads for what the user actually sees.
+
+## Rich chat is a required matrix, not a single happy path
+
+[`chat-rich-cards/JOURNEYS.md`](./chat-rich-cards/JOURNEYS.md) is the canonical
+desktop proof for chat cards. It performs four real, keyed runs in one fresh
+desktop session:
+
+| Case               | What must appear in the desktop transcript                                                 |
+| ------------------ | ------------------------------------------------------------------------------------------ |
+| Direct web search  | exactly one built-in `web_search` card with accumulated args/result and no invented source |
+| One subagent       | exactly one singular fleet card with one successfully completed child                      |
+| Parallel subagents | exactly one two-agent fleet, successful child rows, and a real nested `web_search` trace   |
+| Mixed run          | a direct `web_search` tool card **and** a two-agent fleet in the same message              |
+
+It then verifies the actual desktop controls: tool-card disclosure by pointer,
+Space, and Enter; a **live** fleet-child expansion by pointer, Space, and Enter;
+and the same keyboard contract for that exact task in the Agents-side-panel row.
+Both subagent disclosures must render the real nested tool timeline. A missing
+required card, wrong cardinality, failure status, stale arguments, missing nested
+activity, or missing payload is a test failure. It is not reported as a benign
+“blocked” run.

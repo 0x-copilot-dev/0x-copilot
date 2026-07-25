@@ -644,6 +644,47 @@ function subagentStarted(
   });
 }
 
+function subagentToolStarted(
+  taskId: string,
+  subagentId: string,
+  callId: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "tool_call_started",
+    source: "tool",
+    activity_kind: "tool",
+    parent_task_id: taskId,
+    subagent_id: subagentId,
+    payload: {
+      call_id: callId,
+      tool_name: "web_search",
+      args: { query: "enterprise search market" },
+    },
+  });
+}
+
+function subagentToolResult(
+  taskId: string,
+  subagentId: string,
+  callId: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "tool_result",
+    source: "tool",
+    activity_kind: "tool",
+    parent_task_id: taskId,
+    subagent_id: subagentId,
+    status: "completed",
+    summary: "Found 3 primary sources",
+    payload: {
+      call_id: callId,
+      tool_name: "web_search",
+      status: "completed",
+      output: { hits: 3 },
+    },
+  });
+}
+
 // Gated to Studio: the per-subagent timeline swimlanes (`transport.swimlaneSub`
 // + the lane nodes) and the Agents-tab "N live" badge are Studio-only chrome —
 // Focus mounts neither the swimlanes nor the tabbed rail. Runs again unchanged
@@ -736,6 +777,55 @@ function subagentStarted(
       expect(screen.getByTestId("tc-swimlanes-lane-subagent:press_scout")).toBe(
         survivingLane,
       );
+    });
+
+    it("renders a real subagent tool result in both fleet and Agents expansions from the one run stream", async () => {
+      seqCounter = 0;
+      const transport = new FakeTransport();
+      transport.requestHandler = async (req) =>
+        req.path.includes("/messages")
+          ? { messages: [] }
+          : runningRun("Fan out the research");
+      renderRun(transport, makeStore());
+
+      await waitFor(() => expect(transport.sessionSub).toBeDefined());
+      act(() => {
+        transport.emit(fleetStarted());
+        transport.emit(subagentStarted("task_alpha", "doc_reader"));
+        transport.emit(
+          subagentToolStarted("task_alpha", "doc_reader", "call-search"),
+        );
+        transport.emit(
+          subagentToolResult("task_alpha", "doc_reader", "call-search"),
+        );
+      });
+
+      const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+      const fleetRow = card.querySelector('[data-task-id="task_alpha"]');
+      expect(fleetRow).not.toBeNull();
+      fireEvent.click(fleetRow!);
+      expect(
+        screen.getByRole("region", { name: "Doc reader activity timeline" }),
+      ).toHaveTextContent("Found 3 primary sources");
+
+      fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
+      const details = await screen.findByTestId(
+        "agent-activity-row-details-task_alpha",
+      );
+      fireEvent.click(details.querySelector("summary")!);
+      expect(
+        screen.getByRole("region", {
+          name: "Doc reader activity details",
+        }),
+      ).toHaveTextContent("Found 3 primary sources");
+
+      // One session stream plus the pre-existing Swimlanes stream only. The
+      // activity selector reads the session array and opens no subscription.
+      expect(
+        transport.subs.filter(
+          (sub) => !sub.closed && sub.path === "/v1/agent/runs/run-1/stream",
+        ),
+      ).toHaveLength(2);
     });
   },
 );

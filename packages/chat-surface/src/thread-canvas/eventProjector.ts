@@ -141,7 +141,8 @@ export interface ChatEntry {
 /**
  * One MAIN-AGENT tool call, projected off the SINGLE run event stream for the
  * inline tool-call card in `TcChat`. Collapsed per `call_id`: the
- * `tool_call_started` frame seeds it (`running` + args), and the matching
+ * `tool_call_started` frame seeds it (`running` + initial args); later
+ * `tool_call_delta` frames update the streamed arguments. The matching
  * `tool_result` / `tool_call_completed` frame flips it to `complete` / `error`
  * and attaches the output. Subagent tool calls are excluded — they belong to
  * the subagent views (FR-3.17), not the main transcript.
@@ -155,7 +156,7 @@ export interface ToolCallEntry {
   readonly title: string;
   /** Lifecycle: `running` until a result frame lands, then `complete`/`error`. */
   readonly status: "running" | "complete" | "error";
-  /** Call arguments from the `tool_call_started` payload, when present. */
+  /** Latest streamed call arguments, when present. */
   readonly args?: Record<string, unknown>;
   /** Result output from the `tool_result` payload, when present. */
   readonly result?: Record<string, unknown>;
@@ -352,11 +353,12 @@ export function projectSurfaceTabs(
  * transcript at the point its tool ran.
  *
  * Collapsed per `call_id`: `tool_call_started` seeds a `running` card carrying
- * the args; the matching `tool_result` / `tool_call_completed` flips it to
- * `complete` / `error` and attaches the output. Subagent tool calls
- * (`subagent_id` set) are skipped — they render inside the subagent views, not
- * the main transcript. Idempotent on replay (deduplicates by `event_id`);
- * ordered by the anchor (started) `sequence_no` ascending.
+ * the initial args, then `tool_call_delta` frames keep its streamed args fresh.
+ * The matching `tool_result` / `tool_call_completed` flips it to `complete` /
+ * `error` and attaches the output. Subagent tool calls (`subagent_id` set) are
+ * skipped — they render inside the subagent views, not the main transcript.
+ * Idempotent on replay (deduplicates by `event_id`); ordered by the anchor
+ * (started) `sequence_no` ascending.
  */
 export function projectToolCalls(
   events: readonly RuntimeEventEnvelope[],
@@ -379,6 +381,8 @@ export function projectToolCalls(
     }
     if (event.event_type === "tool_call_started") {
       reduceToolStarted(event, byCall, order);
+    } else if (event.event_type === "tool_call_delta") {
+      reduceToolDelta(event, byCall, order);
     } else if (
       event.event_type === "tool_result" ||
       event.event_type === "tool_call_completed"
@@ -922,6 +926,43 @@ function reduceToolStarted(
   });
 }
 
+function reduceToolDelta(
+  event: RuntimeEventEnvelope,
+  byCall: Map<string, MutableToolCall>,
+  order: string[],
+): void {
+  const key = toolCallKey(event);
+  const prior = byCall.get(key);
+  if (prior === undefined) {
+    order.push(key);
+  }
+  byCall.set(key, {
+    key,
+    toolName:
+      pickString(event.payload, "tool_name") ?? prior?.toolName ?? "tool",
+    title: event.display_title ?? prior?.title ?? null,
+    // Deltas can race with terminal frames on reconnect; argument updates must
+    // never turn a completed/failed card back into a running one.
+    status: prior?.status ?? "running",
+    args: updatedToolArgs(event, prior?.args),
+    result: prior?.result,
+    summary:
+      pickString(event.payload, "summary") ?? prior?.summary ?? undefined,
+    errorMessage: prior?.errorMessage,
+    provenance:
+      readToolProvenance(event.payload?.["provenance"]) ?? prior?.provenance,
+    accessMode:
+      readToolAccessMode(event.payload?.["access_mode"]) ?? prior?.accessMode,
+    durationMs:
+      readToolDuration(event.payload?.["duration_ms"]) ?? prior?.durationMs,
+    subagentTaskIds:
+      readToolTaskIds(event.payload?.["subagent_task_ids"]) ??
+      prior?.subagentTaskIds,
+    sequenceNo: prior?.sequenceNo ?? event.sequence_no,
+    createdAtMs: prior?.createdAtMs ?? parseMs(event.created_at),
+  });
+}
+
 function reduceToolResult(
   event: RuntimeEventEnvelope,
   byCall: Map<string, MutableToolCall>,
@@ -937,7 +978,7 @@ function reduceToolResult(
     toolName:
       pickString(event.payload, "tool_name") ?? prior?.toolName ?? "tool",
     title: event.display_title ?? prior?.title ?? null,
-    status: mapResultStatus(event),
+    status: mapResultStatus(event, prior?.status),
     args: prior?.args,
     result: readRecord(event.payload?.["output"]) ?? prior?.result,
     summary:
@@ -984,9 +1025,17 @@ function buildToolCall(m: MutableToolCall): ToolCallEntry {
 /** A completed result frame flips the card to `complete`; anything else (failed,
  *  timed_out, abandoned, cancelled, …) reads as `error`. The mere presence of a
  *  result frame with no status means the tool returned — treat as complete. */
-function mapResultStatus(event: RuntimeEventEnvelope): "complete" | "error" {
+function mapResultStatus(
+  event: RuntimeEventEnvelope,
+  priorStatus: MutableToolCall["status"] | undefined,
+): "complete" | "error" {
   const raw = pickString(event.payload, "status") ?? event.status ?? null;
   if (raw === null) {
+    // A follow-up `tool_call_completed` can be a bare lifecycle receipt. It
+    // must not hide the explicit error on the preceding `tool_result`.
+    if (priorStatus === "error") {
+      return "error";
+    }
     return "complete";
   }
   if (
@@ -1003,6 +1052,27 @@ function mapResultStatus(event: RuntimeEventEnvelope): "complete" | "error" {
 
 function toolCallKey(event: RuntimeEventEnvelope): string {
   return pickString(event.payload, "call_id") ?? event.event_id;
+}
+
+/**
+ * Runtime tool-call deltas currently carry the latest accumulated `args`
+ * snapshot. Accept `args_delta` too for forward-compatible partial updates.
+ * A full snapshot intentionally replaces a stale placeholder such as `{}` or
+ * `{ delta: "…" }` emitted before the streaming JSON became parseable.
+ */
+function updatedToolArgs(
+  event: RuntimeEventEnvelope,
+  prior: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  const snapshot = readRecord(event.payload?.["args"]);
+  if (snapshot !== undefined) {
+    return snapshot;
+  }
+  const delta = readRecord(event.payload?.["args_delta"]);
+  if (delta === undefined) {
+    return prior;
+  }
+  return { ...(prior ?? {}), ...delta };
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {

@@ -191,6 +191,14 @@ class DriverSession:
     def fill(self, selector: str, value: str) -> None:
         self.rpc("fill", selector=selector, value=value)
 
+    def press(self, selector: str, key: str) -> None:
+        """Focus ``selector`` and send a real keyboard key through Playwright.
+
+        Rich-card journeys use this alongside pointer clicks so the desktop
+        accessibility contract is exercised, not merely the visual state.
+        """
+        self.rpc("press", selector=selector, key=key)
+
     def present(self, selector: str) -> bool:
         return bool(self.evaluate(f"!!document.querySelector({json.dumps(selector)})"))
 

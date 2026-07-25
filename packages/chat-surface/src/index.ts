@@ -1570,6 +1570,11 @@ export {
   type FleetProjection,
   type SubagentProjection,
 } from "./subagents";
+export {
+  projectSubagentActivities,
+  type ProjectedSubagentActivitiesByTask,
+  type SubagentActivityProjection,
+} from "./subagents";
 // === end Phase 3 (PR-3.8) ===
 
 // === Phase 3 (PR-3.10) approvals ===

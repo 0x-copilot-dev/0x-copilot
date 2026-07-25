@@ -25,6 +25,13 @@ export {
   type FleetProjection,
   type SubagentProjection,
 } from "./subagentProjection";
+// Detailed per-task tool/reasoning timelines, projected from the same canonical
+// run event array as `projectSubagents`; no subscription is opened here.
+export {
+  projectSubagentActivities,
+  type ProjectedSubagentActivitiesByTask,
+  type SubagentActivityProjection,
+} from "./subagentActivityProjection";
 export {
   subagentCardFromArgs,
   subagentCardFromEntry,

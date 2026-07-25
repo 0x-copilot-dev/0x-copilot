@@ -135,6 +135,31 @@ describe("projectSubagents", () => {
     expect(fleet.done).toBe(1);
   });
 
+  it("retains a failed terminal child so the fleet chrome cannot report success", () => {
+    nextSeq = 0;
+    const out = projectSubagents([
+      evt("subagent_fleet_started", {
+        source: "main_agent",
+        payload: { fleet_id: "f", agent_ids: ["a"] },
+      }),
+      child("subagent_started", "t1", { payload: { parent_fleet_id: "f" } }),
+      child("subagent_completed", "t1", {
+        status: "failed",
+        payload: { parent_fleet_id: "f", error_message: "Timed out" },
+      }),
+      evt("subagent_fleet_finished", {
+        source: "main_agent",
+        payload: { fleet_id: "f" },
+      }),
+    ]);
+
+    expect(out.fleets[0]).toMatchObject({
+      running: 0,
+      done: 1,
+      failed: 1,
+    });
+  });
+
   it("projects a standalone (non-fleet) subagent into the map but no fleet", () => {
     nextSeq = 0;
     const out = projectSubagents([
@@ -210,6 +235,69 @@ describe("projectSubagents", () => {
     expect(child0.task_id).toBe("t_solo");
     expect(child0.status).toBe("completed");
     expect(child0.result_summary).toBe("Launch looks on track");
+  });
+
+  it("back-stamps earlier child lifecycle frames from the fleet's declared task ids", () => {
+    nextSeq = 0;
+    // This is the desktop file-store ordering: the task lifecycle frame comes
+    // from the messages stream, then the grouped dispatch bookend comes from
+    // the updates stream. The lifecycle payload has no parent_fleet_id.
+    const out = projectSubagents([
+      child("subagent_started", "call_prime", {
+        subagent_id: "general-purpose",
+        summary: "Check whether 97 is prime.",
+      }),
+      evt("subagent_fleet_started", {
+        source: "subagent",
+        payload: {
+          fleet_id: "fleet-prime",
+          agent_ids: ["general-purpose"],
+          task_ids: ["call_prime"],
+        },
+      }),
+      child("subagent_completed", "call_prime", {
+        status: "completed",
+        summary: "97 is prime.",
+      }),
+      evt("subagent_fleet_finished", {
+        source: "subagent",
+        payload: { fleet_id: "fleet-prime", elapsed: "0:01" },
+      }),
+    ]);
+
+    const fleet = out.fleets[0];
+    expect(fleet.children).toHaveLength(1);
+    expect(fleet.children[0]).toMatchObject({
+      task_id: "call_prime",
+      status: "completed",
+      result_summary: "97 is prime.",
+    });
+    expect(fleet.done).toBe(1);
+    expect(fleet.total).toBe(1);
+  });
+
+  it("keeps declared parallel capacity while lifecycle frames are still arriving", () => {
+    nextSeq = 0;
+    const out = projectSubagents([
+      evt("subagent_fleet_started", {
+        source: "subagent",
+        payload: {
+          fleet_id: "fleet-partial",
+          agent_ids: ["general-purpose", "general-purpose"],
+          task_ids: ["call_one", "call_two"],
+        },
+      }),
+      child("subagent_started", "call_one", {
+        subagent_id: "general-purpose",
+        payload: { parent_fleet_id: "fleet-partial" },
+      }),
+    ]);
+
+    expect(out.fleets[0]).toMatchObject({
+      total: 2,
+      running: 2,
+      done: 0,
+    });
   });
 
   it("marks a paused child not-running and clears it on resume", () => {

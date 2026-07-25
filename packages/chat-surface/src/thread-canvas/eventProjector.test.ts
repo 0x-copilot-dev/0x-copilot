@@ -546,6 +546,65 @@ describe("eventProjector.projectToolCalls", () => {
     expect(entries[0].result).toBeUndefined();
   });
 
+  it("updates a started card with the latest streamed tool-call args", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: {
+          call_id: "call-streamed-args",
+          tool_name: "web_search",
+          // This is emitted before the streaming JSON can be parsed.
+          args: {},
+        },
+      }),
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-streamed-args",
+          tool_name: "web_search",
+          // Runtime deltas carry the current accumulated args snapshot.
+          args: { query: "0xcopilot launch", page: 2 },
+        },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "call-streamed-args",
+          tool_name: "web_search",
+          status: "completed",
+        },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      status: "complete",
+      args: { query: "0xcopilot launch", page: 2 },
+    });
+  });
+
+  it("merges a partial args_delta without losing prior streamed args", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: {
+          call_id: "call-partial-args",
+          tool_name: "web_search",
+          args: { query: "0xcopilot launch" },
+        },
+      }),
+      makeEnvelope("tool_call_delta", {
+        payload: {
+          call_id: "call-partial-args",
+          args_delta: { page: 2 },
+        },
+      }),
+    ]);
+
+    expect(entries[0]).toMatchObject({
+      status: "running",
+      args: { query: "0xcopilot launch", page: 2 },
+    });
+  });
+
   it("carries only safe supplied provenance, authority, duration, and delegated task ids", () => {
     nextSeq = 0;
     const entries = projectToolCalls([
@@ -599,6 +658,33 @@ describe("eventProjector.projectToolCalls", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].status).toBe("error");
     expect(entries[0].errorMessage).toBe("connector timed out");
+  });
+
+  it("keeps an earlier terminal failure when its completion receipt has no status", () => {
+    nextSeq = 0;
+    const entries = projectToolCalls([
+      makeEnvelope("tool_call_started", {
+        payload: { call_id: "c10", tool_name: "send_email" },
+      }),
+      makeEnvelope("tool_result", {
+        payload: {
+          call_id: "c10",
+          tool_name: "send_email",
+          status: "timed_out",
+          safe_message: "The email connector timed out.",
+        },
+      }),
+      // Older/replayed completion receipts may not repeat the result status.
+      makeEnvelope("tool_call_completed", {
+        payload: { call_id: "c10", tool_name: "send_email" },
+      }),
+    ]);
+
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      status: "error",
+      errorMessage: "The email connector timed out.",
+    });
   });
 
   it("excludes subagent tool calls (they belong to the subagent views)", () => {

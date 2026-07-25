@@ -8,6 +8,11 @@ Run-details focus panel. These drive the **real** supervised desktop app (Electr
   provider key in the FTUE and then sending three probe prompts, asserting on the
   **shipped** `tc-chat-*` / `tc-focus-*` testIds and screenshotting each state.
 
+> This is the lightweight streaming/focus smoke. The required exhaustive rich
+> chat matrix (direct tool, one agent, parallel agents, mixed tool+agents, and
+> pointer/keyboard card disclosures) lives in
+> [`../chat-rich-cards/JOURNEYS.md`](../chat-rich-cards/JOURNEYS.md).
+
 Shipped in PRs **#258 / #259**. The cockpit renders an active run as a transcript
 (`tc-chat` → `tc-chat-messages` → one `tc-chat-message-<id>` per turn), with tool
 cards and fleet cards **interleaved inline** at the point they ran.

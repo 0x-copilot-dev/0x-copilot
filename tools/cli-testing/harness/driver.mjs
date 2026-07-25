@@ -265,6 +265,10 @@ async function rpc(cmd, args) {
       return { opened: args.url };
     }
     case "quit": {
+      // Closing only this Node control process leaves its Electron child and
+      // supervised desktop services orphaned. Close the real app first so its
+      // normal shutdown path tears down the per-journey Postgres/services.
+      await app?.close().catch(() => undefined);
       setTimeout(() => process.exit(0), 200);
       return { quitting: true };
     }

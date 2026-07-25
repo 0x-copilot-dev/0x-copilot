@@ -88,7 +88,7 @@ import { EditOverlay } from "../../surfaces/edit/EditOverlay";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
-import { projectSubagents } from "../../subagents";
+import { projectSubagentActivities, projectSubagents } from "../../subagents";
 import {
   ThreadCanvas,
   TcChat,
@@ -994,6 +994,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // same `runId`, so all three views stay in parity.
   const subagentProjection = useMemo(
     () => projectSubagents(session.events),
+    [session.events],
+  );
+
+  // The detailed tool/reasoning timeline is another pure view of the same
+  // canonical event array. It is injected into both places a user can expand a
+  // child (the inline fleet row and the Agents tab); it opens no stream and
+  // keeps those two renderings in lockstep.
+  const subagentActivityProjection = useMemo(
+    () => projectSubagentActivities(session.events),
     [session.events],
   );
 
@@ -2227,6 +2236,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // `[[N]]` / `[c<id>]` anchors against the provider above.
         markdownComponents={markdownComponents}
         fleets={subagentProjection.fleets}
+        subagentActivitiesByTask={subagentActivityProjection.activitiesByTask}
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).
         toolCalls={toolCalls}
@@ -2255,6 +2265,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       mode={mode}
       chatSlot={chatSlot}
       subagents={subagentProjection.subagents}
+      subagentActivitiesByTask={subagentActivityProjection.activitiesByTask}
       sources={sources}
       sourcesLoading={sourcesLoading}
       sourcesError={sourcesError}

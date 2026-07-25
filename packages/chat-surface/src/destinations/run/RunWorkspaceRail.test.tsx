@@ -22,6 +22,7 @@ import type {
   SourceEntryMap,
   SubagentSnapshotMap,
 } from "../../workspace";
+import type { SubagentActivityRecord } from "../../subagents";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 
 // ============================================================
@@ -238,6 +239,46 @@ describe("RunWorkspaceRail — body reuse + omissions (FR-3.11)", () => {
     );
     fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
     expect(screen.getByTestId("workspace-agents-tab")).toBeInTheDocument();
+  });
+
+  it("passes canonical per-task activity into the Agents disclosure", () => {
+    const activitiesByTask: ReadonlyMap<
+      string,
+      readonly SubagentActivityRecord[]
+    > = new Map([
+      [
+        "task_a",
+        [
+          {
+            id: "call-search",
+            kind: "tool",
+            title: "web_search",
+            status: "completed",
+            summary: "Found 3 primary sources",
+            inputSummary: null,
+            result: "Found 3 primary sources",
+            isError: false,
+          },
+        ],
+      ],
+    ]);
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        defaultTab="agents"
+        subagents={subagentMap([subagent({ task_id: "task_a" })])}
+        subagentActivitiesByTask={activitiesByTask}
+      />,
+    );
+
+    const details = screen.getByTestId(
+      "agent-activity-row-details-task_a",
+    ) as HTMLDetailsElement;
+    fireEvent.click(details.querySelector("summary")!);
+    expect(
+      screen.getByRole("region", { name: "Doc reader activity details" }),
+    ).toHaveTextContent("Found 3 primary sources");
   });
 
   it("renders the hoisted ApprovalsTab body when Approvals is selected", () => {

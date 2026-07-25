@@ -18,7 +18,7 @@ import type {
   TypedRequest,
 } from "@0x-copilot/chat-transport";
 
-import type { FleetProjection } from "../subagents";
+import type { FleetProjection, SubagentActivityRecord } from "../subagents";
 import type { ToolCallEntry } from "./eventProjector";
 import type { McpAuthPort } from "../destinations/run/mcpAuthPort";
 import { TransportProvider } from "../providers/TransportProvider";
@@ -131,6 +131,7 @@ function fleet(overrides: Partial<FleetProjection> = {}): FleetProjection {
     total: 2,
     running: 2,
     done: 0,
+    failed: 0,
     elapsed: null,
     finished: false,
     sequenceNo: 4,
@@ -473,6 +474,87 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
     expect(card).not.toHaveTextContent("1 subagents");
     // The lone child renders exactly one row.
     expect(within(card).getByText("Research")).toBeInTheDocument();
+  });
+
+  it("marks a terminal fleet with a failed child as error rather than done", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ messages: [] }),
+    );
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          fleets={[
+            fleet({
+              running: 0,
+              done: 2,
+              failed: 1,
+              children: [
+                subagentEntry({ status: "completed" }),
+                subagentEntry({ task_id: "task_b", status: "failed" }),
+              ],
+            }),
+          ]}
+        />,
+      ),
+    );
+    const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+    expect(card.querySelector("[data-fleet-id]")).toHaveAttribute(
+      "data-status",
+      "error",
+    );
+    expect(card).toHaveTextContent("1 failed · 2/2 done");
+  });
+
+  it("shows canonical subagent tool activity when an inline fleet row is expanded", async () => {
+    const { transport } = makeTransport(() =>
+      Promise.resolve({ messages: [] }),
+    );
+    const activitiesByTask: ReadonlyMap<
+      string,
+      readonly SubagentActivityRecord[]
+    > = new Map([
+      [
+        "task_a",
+        [
+          {
+            id: "call-search",
+            kind: "tool",
+            title: "web_search",
+            status: "completed",
+            summary: "Found 3 primary sources",
+            inputSummary: null,
+            result: "Found 3 primary sources",
+            isError: false,
+          },
+        ],
+      ],
+    ]);
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          fleets={[fleet()]}
+          subagentActivitiesByTask={activitiesByTask}
+        />,
+      ),
+    );
+
+    const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+    const row = card.querySelector('[data-task-id="task_a"]');
+    expect(row).not.toBeNull();
+    fireEvent.click(row!);
+
+    const timeline = screen.getByRole("region", {
+      name: "Doc reader activity timeline",
+    });
+    expect(timeline).toHaveTextContent("Search web");
+    expect(timeline).toHaveTextContent("Found 3 primary sources");
+    expect(timeline).not.toHaveTextContent("No activity yet.");
   });
 
   it("renders no fleet card when no fleet is projected (linear run)", async () => {

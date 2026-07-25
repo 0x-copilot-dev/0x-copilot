@@ -21,6 +21,7 @@ import {
   SubagentFleetCard,
   subagentCardFromEntry,
   type FleetProjection,
+  type SubagentActivityRecord,
 } from "../subagents";
 // PR-3.10 — in-chat approvals. Reuses the hoisted Phase-1E consent family: the
 // 4-zone `ApprovalCard` (pending, Studio) and the collapsed `ApprovalReceipt`
@@ -215,6 +216,15 @@ export interface TcChatProps {
    */
   readonly fleets?: readonly FleetProjection[];
   /**
+   * Detailed inner work for each fleet child, projected from the same canonical
+   * run event array as `fleets`. The chat only renders this injected map; it
+   * does not subscribe to or re-project the stream.
+   */
+  readonly subagentActivitiesByTask?: ReadonlyMap<
+    string,
+    readonly SubagentActivityRecord[]
+  >;
+  /**
    * Workstream D — main-agent tool-call cards projected off the run stream
    * (`projectToolCalls(session.events)`). Each entry interleaves into the
    * transcript at the point its tool ran (running spinner → done/error), in
@@ -265,6 +275,10 @@ export interface TcChatProps {
 }
 
 const EMPTY_FLEETS: readonly FleetProjection[] = [];
+const EMPTY_SUBAGENT_ACTIVITIES: ReadonlyMap<
+  string,
+  readonly SubagentActivityRecord[]
+> = new Map();
 const EMPTY_TOOL_CALLS: readonly ToolCallEntry[] = [];
 const EMPTY_APPROVALS: readonly TcChatApproval[] = [];
 const APPROVAL_REASSURANCE =
@@ -293,6 +307,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     portalTarget,
     markdownComponents,
     fleets = EMPTY_FLEETS,
+    subagentActivitiesByTask = EMPTY_SUBAGENT_ACTIVITIES,
     toolCalls = EMPTY_TOOL_CALLS,
     approvals = EMPTY_APPROVALS,
     onApprove,
@@ -378,6 +393,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         state={state}
         messages={filteredMessages}
         fleets={filteredFleets}
+        subagentActivitiesByTask={subagentActivitiesByTask}
         toolCalls={filteredToolCalls}
         markdownComponents={markdownComponents}
       />
@@ -631,12 +647,23 @@ interface MessageListBodyProps {
   readonly state: LoadState;
   readonly messages: ReadonlyArray<TcChatMessage>;
   readonly fleets: readonly FleetProjection[];
+  readonly subagentActivitiesByTask: ReadonlyMap<
+    string,
+    readonly SubagentActivityRecord[]
+  >;
   readonly toolCalls: readonly ToolCallEntry[];
   readonly markdownComponents?: MarkdownTextProps["components"];
 }
 
 function MessageListBody(props: MessageListBodyProps): ReactNode {
-  const { state, messages, fleets, toolCalls, markdownComponents } = props;
+  const {
+    state,
+    messages,
+    fleets,
+    subagentActivitiesByTask,
+    toolCalls,
+    markdownComponents,
+  } = props;
   if (state.status === "loading" || state.status === "idle") {
     return (
       <div role="status" style={statusStyle} data-testid="tc-chat-loading">
@@ -666,7 +693,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     <ul style={ulStyle}>
       {items.map((item) => {
         if (item.kind === "fleet") {
-          return renderFleetCard(item.fleet);
+          return renderFleetCard(item.fleet, subagentActivitiesByTask);
         }
         if (item.kind === "tool") {
           return renderToolCard(item.toolCall);
@@ -729,7 +756,10 @@ function renderMessage(
 // PR-3.8 — reuse the hoisted `SubagentFleetCard` (Phase 1D) with the projected
 // fleet head + one `FleetSubagentRow` per child. The card + rows are pure
 // presentation; the projection is the single source of truth (FR-3.17a).
-function renderFleetCard(fleet: FleetProjection): ReactNode {
+function renderFleetCard(
+  fleet: FleetProjection,
+  activitiesByTask: ReadonlyMap<string, readonly SubagentActivityRecord[]>,
+): ReactNode {
   return (
     <li
       key={`fleet-${fleet.fleetId}`}
@@ -743,12 +773,14 @@ function renderFleetCard(fleet: FleetProjection): ReactNode {
         total={fleet.total}
         running={fleet.running}
         done={fleet.done}
+        failed={fleet.failed}
         elapsed={fleet.elapsed}
       >
         {fleet.children.map((child) => (
           <FleetSubagentRow
             key={child.task_id}
             view={subagentCardFromEntry(child)}
+            activities={activitiesByTask.get(child.task_id)}
           />
         ))}
       </SubagentFleetCard>
