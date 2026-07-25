@@ -736,6 +736,53 @@ export type SurfaceEventV2 = {
   };
 }[LedgerEventType];
 
+// ---------------------------------------------------------------------------
+// Sources v2 — safe provenance read model.  These are projection outputs, not
+// dereference capabilities: hosts must re-check authorization before opening a
+// ref or virtual workspace target.
+// ---------------------------------------------------------------------------
+
+export type SourceFactKindV2 =
+  | "connector"
+  | "artifact"
+  | "workspace"
+  | "browser"
+  | "sandbox"
+  | "subagent"
+  | "external_receipt";
+
+/** One allowlisted provenance edge from a canonical/compatible ledger row.
+ * Raw arguments, bodies, physical paths, cookies, and provider credentials are
+ * deliberately absent. Untrusted labels remain plain text for the renderer. */
+export interface SourceFactV2 {
+  readonly source_id: string;
+  readonly kind: SourceFactKindV2;
+  readonly sequence_no: number;
+  readonly ledger_id: string | null;
+  readonly connector: string | null;
+  readonly tool: string | null;
+  readonly origin: string | null;
+  readonly artifact_id: string | null;
+  readonly artifact_revision: number | null;
+  /** Opaque logical source identifier, never authorization. */
+  readonly artifact_source_ref: string | null;
+  readonly workspace_grant_label: string | null;
+  /** Keyed virtual-path token; never a host filesystem path. */
+  readonly workspace_virtual_path_key: string | null;
+  readonly browser_origin: string | null;
+  readonly sandbox_operation: string | null;
+  readonly subagent_task: string | null;
+  /** Opaque receipt identifier, never a bearer credential. */
+  readonly external_receipt_ref: string | null;
+}
+
+export interface SourcesProjectionV2 {
+  readonly v: 2;
+  readonly run_id: string;
+  readonly latest_sequence_no: number;
+  readonly facts: readonly SourceFactV2[];
+}
+
 // Compile-time: the payload-map keys are a subset of the event-type union
 // (`SurfaceEventV2` already pins the other direction — every event type must
 // have a payload entry). Together they make the map exactly the event set.
