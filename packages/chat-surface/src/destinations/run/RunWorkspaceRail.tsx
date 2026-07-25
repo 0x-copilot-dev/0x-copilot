@@ -60,6 +60,7 @@ import {
   ApprovalsTab,
   LedgerSourcesTab,
   PendingCardList,
+  PendingWorkV2List,
   SourcesTab,
   WorkspaceTabs,
   type ApprovalsQueueProjection,
@@ -72,6 +73,7 @@ import {
 } from "../../workspace";
 import { isRunningStatus } from "../../workspace/workspaceHelpers";
 import type { PendingCard } from "./pendingCardsProjection";
+import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
 import type { RunMode } from "./useRunMode";
 
@@ -154,6 +156,24 @@ export interface RunWorkspaceRailProps {
   };
 
   /**
+   * E1 D6's authorised canonical pending-work endpoint. This is deliberately
+   * separate from `pendingV2` while legacy queue migration is incomplete: it
+   * exposes only opaque run/subject identities, so the rail renders controlled
+   * labels and delegates Review to the cockpit. Present only in Studio after a
+   * verified non-empty response or an explicit partial-result marker; absent
+   * keeps the current rail byte-identical.
+   */
+  readonly pendingWorkV21?: {
+    readonly cards: readonly PendingWorkCardV2[];
+    readonly loading: boolean;
+    readonly partial: boolean;
+    readonly stale: boolean;
+    readonly hasMore: boolean;
+    readonly onReview: (card: PendingWorkCardV2) => void;
+    readonly onLoadMore: () => void;
+  };
+
+  /**
    * Generative Surfaces v2 (PRD-E2 / FR-F3): a monotonically-increasing nonce the
    * host bumps to command the rail onto the Approvals tab (the `PendingCounterChip`
    * "N waiting" chip lives in the cockpit header, outside this rail, so it drives
@@ -212,6 +232,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     onJumpToApproval,
     scrubbed = false,
     pendingV2,
+    pendingWorkV21,
     focusApprovalsSignal,
     panelCollapsed,
     onPanelCollapsedChange,
@@ -360,9 +381,23 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   );
   const approvalsBody: ReactNode = (
     <>
+      {/* E1 D6: canonical runtime work is Studio-only. Focus stays compact and
+          never expands a cross-run detail list. */}
+      {isStudio && pendingWorkV21 !== undefined ? (
+        <PendingWorkV2List
+          cards={pendingWorkV21.cards}
+          loading={pendingWorkV21.loading}
+          partial={pendingWorkV21.partial}
+          stale={pendingWorkV21.stale}
+          hasMore={pendingWorkV21.hasMore}
+          onReview={pendingWorkV21.onReview}
+          onLoadMore={pendingWorkV21.onLoadMore}
+        />
+      ) : null}
       {/* PRD-E2 — the cross-run queue leads; the v1 in-chat approvals
           (this conversation's) stay below. */}
-      {pendingV2 !== undefined ? (
+      {pendingV2 !== undefined &&
+      (pendingWorkV21 === undefined || pendingV2.cards.length > 0) ? (
         <PendingCardList
           cards={pendingV2.cards}
           onReview={pendingV2.onReview}

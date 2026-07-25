@@ -12,6 +12,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { PendingAgentRow } from "@0x-copilot/api-types";
 
 import type { PendingCard } from "./pendingCardsProjection";
+import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 
 function chatSlot() {
@@ -58,11 +59,39 @@ function pendingV2(over: Record<string, unknown> = {}) {
   };
 }
 
+function canonicalCard(
+  over: Partial<PendingWorkCardV2> = {},
+): PendingWorkCardV2 {
+  return {
+    runId: "run_other",
+    subjectKind: "effect",
+    subjectId: "stage_other",
+    status: "held",
+    openedSeq: 1,
+    latestSeq: 1,
+    ...over,
+  };
+}
+
+function pendingWorkV21(over: Record<string, unknown> = {}) {
+  return {
+    cards: [canonicalCard()],
+    loading: false,
+    partial: false,
+    stale: false,
+    hasMore: false,
+    onReview: vi.fn(),
+    onLoadMore: vi.fn(),
+    ...over,
+  };
+}
+
 describe("RunWorkspaceRail pendingV2 (PRD-E2)", () => {
   it("absent: neither the pending queue nor the fleet list render", () => {
     render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
     fireEvent.click(screen.getByRole("tab", { name: /Approvals/ }));
     expect(screen.queryByTestId("pending-card-list")).toBeNull();
+    expect(screen.queryByTestId("pending-work-v2-list")).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
     expect(screen.queryByTestId("agent-fleet-list")).toBeNull();
   });
@@ -78,6 +107,32 @@ describe("RunWorkspaceRail pendingV2 (PRD-E2)", () => {
     fireEvent.click(screen.getByRole("tab", { name: /Approvals/ }));
     expect(screen.getByTestId("pending-card-list")).toBeInTheDocument();
     expect(screen.getByTestId("pending-card-review")).toBeInTheDocument();
+  });
+
+  it("Studio mounts canonical v2.1 cards above the legacy queue", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        pendingV2={pendingV2()}
+        pendingWorkV21={pendingWorkV21()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /Approvals/ }));
+    expect(screen.getByTestId("pending-work-v2-list")).toBeInTheDocument();
+    expect(screen.getByTestId("pending-card-list")).toBeInTheDocument();
+  });
+
+  it("Focus stays compact: canonical cards never mount in its Run-details rail", () => {
+    render(
+      <RunWorkspaceRail
+        mode="focus"
+        chatSlot={chatSlot()}
+        pendingWorkV21={pendingWorkV21()}
+      />,
+    );
+    expect(screen.queryByTestId("pending-work-v2-list")).toBeNull();
+    expect(screen.getByTestId("tc-focus-panel")).toBeInTheDocument();
   });
 
   it("present: the Agents panel leads with the AgentFleetList", () => {

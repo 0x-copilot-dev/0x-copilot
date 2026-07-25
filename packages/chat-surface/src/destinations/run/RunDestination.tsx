@@ -115,10 +115,12 @@ import { ReceiptSurface } from "../../surfaces/receipt";
 import { PostureChip } from "./PostureChip";
 import { PendingCounterChip } from "./PendingCounterChip";
 import { usePendingWork } from "./usePendingWork";
+import { usePendingWorkV2 } from "./usePendingWorkV2";
 import {
   projectPendingCards,
   type PendingCard,
 } from "./pendingCardsProjection";
+import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import { projectReceipt, type ReceiptProjection } from "./projectReceipt";
 import {
   projectLedgerSources,
@@ -609,6 +611,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // E2/F3: a monotonic nonce the "N waiting" counter chip bumps to command the
   // rail onto the Approvals tab (one-directional; the rail reacts to increases).
   const [approvalsFocusSignal, setApprovalsFocusSignal] = useState(0);
+  // E1 D6: a Review action from the canonical cross-run list carries an opaque
+  // run/subject target. Effects resolve onto the destination run's existing
+  // lifecycle URI after its stream binds; gates intentionally have no canvas
+  // payload and land in Studio's existing gate region instead.
+  const [pendingWorkV2Review, setPendingWorkV2Review] =
+    useState<PendingWorkCardV2 | null>(null);
   // B3: the surface whose effective tier just upgraded generic → shaped (drives
   // the non-modal ViewUpgradeToast). `null` = no pending upgrade toast.
   const [upgradedSurface, setUpgradedSurface] = useState<{
@@ -831,6 +839,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setEditingDiffId(null);
       // Surfaces v2: a run switch resets the gate/toast state too.
       setGatePolicies(EMPTY_GATE_POLICIES);
+      setPendingWorkV2Review(null);
       setUpgradedSurface(null);
       prevTierRef.current = new Map();
       selectRun(nextRunId);
@@ -1260,6 +1269,45 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       "";
     return { tabs, uriBySubjectKey, preferredUri };
   }, [displayedCanvasLifecycle, ledger, stageById]);
+
+  // E1 D6 Review is intentionally a local navigation operation. The aggregate
+  // API names an authorised run + opaque subject only; it never sends a target
+  // path or surface body. For an effect, the destination run's own lifecycle
+  // fold supplies the stable canvas URI. For a gate, Studio's existing gate
+  // region is the honest review surface.
+  const handleReviewPendingWorkV2 = useCallback(
+    (card: PendingWorkCardV2): void => {
+      if (card.runId !== session.runId) {
+        handleSelectRun(card.runId);
+      }
+      if (card.subjectKind === "effect") {
+        setPendingWorkV2Review(card);
+      }
+      setMode("studio");
+    },
+    [handleSelectRun, session.runId, setMode],
+  );
+
+  useEffect(() => {
+    if (
+      !surfacesV2 ||
+      pendingWorkV2Review === null ||
+      pendingWorkV2Review.runId !== session.runId
+    ) {
+      return;
+    }
+    const uri = v2CanvasTabs.uriBySubjectKey.get(
+      `effect:${pendingWorkV2Review.subjectId}`,
+    );
+    if (uri === undefined) {
+      // The destination run may still be binding/replaying. Keep the intent
+      // until its canonical lifecycle fold exposes the local URI.
+      return;
+    }
+    setPinnedUri(uri);
+    setPendingWorkV2Review(null);
+  }, [pendingWorkV2Review, session.runId, surfacesV2, v2CanvasTabs]);
+
   // SDR §11 strictness: flag on ⇒ tabs come only from B3's lifecycle fold; flag
   // off ⇒ the old v1 selector remains byte-identical. Never mix the two paths.
   const surfaceTabList = useMemo(
@@ -1387,6 +1435,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     surfacesV2 && enabled,
     session.runId,
     liveCards,
+    ledger.lastLedgerSeq,
+  );
+  // Canonical v2.1 queue: Studio-only and independently identity-authorised by
+  // the endpoint. Focus deliberately does not fetch or mount its expanded
+  // cross-run list; the compact Focus layout remains unchanged.
+  const pendingWorkV21 = usePendingWorkV2(
+    transport,
+    surfacesV2 && enabled && mode === "studio" && session.runId !== null,
+    session.runId,
     ledger.lastLedgerSeq,
   );
 
@@ -1694,6 +1751,24 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         currentRunId: stageRunId,
       }
     : undefined;
+  // E1 D6's canonical list is additive during migration. Only pass it after a
+  // verified non-empty response or an explicit partial-result marker:
+  // absent/404/cohort-off paths preserve the legacy rail DOM exactly and never
+  // claim that an unavailable queue is empty.
+  const railPendingWorkV21 =
+    surfacesV2 &&
+    mode === "studio" &&
+    (pendingWorkV21.cards.length > 0 || pendingWorkV21.hasOmittedRuns)
+      ? {
+          cards: pendingWorkV21.cards,
+          loading: pendingWorkV21.status === "loading",
+          partial: pendingWorkV21.hasOmittedRuns,
+          stale: pendingWorkV21.status === "error",
+          hasMore: pendingWorkV21.hasMore,
+          onReview: handleReviewPendingWorkV2,
+          onLoadMore: pendingWorkV21.loadMore,
+        }
+      : undefined;
 
   // The pending diff handed to the center pane — ONLY for the active surface,
   // and never while scrubbed off-now (FR-3.15). It clears prop-driven: once the
@@ -1849,6 +1924,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // null/undefined when the flag is off ⇒ the rail is byte-identical.
       ledgerSources={ledgerSourcesProjection}
       pendingV2={railPendingV2}
+      pendingWorkV21={railPendingWorkV21}
       focusApprovalsSignal={surfacesV2 ? approvalsFocusSignal : undefined}
       // WS-F: Focus Run-details panel collapse — persisted per conversation.
       panelCollapsed={focusPanelCollapsed}
