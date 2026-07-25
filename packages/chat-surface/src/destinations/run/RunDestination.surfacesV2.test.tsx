@@ -189,43 +189,49 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     expect(transport.surfacesRequests).toHaveLength(0);
   });
 
-  it("flag ON: seeded v2 events render named tabs, newest first", async () => {
-    seq = 0;
-    const transport = new FakeTransport();
-    renderRun(transport, makeStore(), true);
-    await screen.findByTestId("thread-canvas");
-    stream(transport, [
-      created("s_issue", "record", "ENG-142 Fix reconnect"),
-      created("s_list", "table", "Sprint backlog"),
-    ]);
+  studioIt(
+    "flag ON: seeded v2 events render named tabs, newest first",
+    async () => {
+      seq = 0;
+      const transport = new FakeTransport();
+      renderRun(transport, makeStore(), true);
+      await screen.findByTestId("thread-canvas");
+      stream(transport, [
+        created("s_issue", "record", "ENG-142 Fix reconnect"),
+        created("s_list", "table", "Sprint backlog"),
+      ]);
 
-    await waitFor(() => {
-      // Tab textContent is `<title>×` (title span + close button) — strip the ×.
-      expect(
-        surfaceTabs().map((t) => t.textContent?.replace(/×$/, "")),
-      ).toEqual(["Sprint backlog", "ENG-142 Fix reconnect"]);
-    });
-  });
+      await waitFor(() => {
+        // Tab textContent is `<title>×` (title span + close button) — strip the ×.
+        expect(
+          surfaceTabs().map((t) => t.textContent?.replace(/×$/, "")),
+        ).toEqual(["Sprint backlog", "ENG-142 Fix reconnect"]);
+      });
+    },
+  );
 
-  it("flag ON: activating a tab switches the active surface", async () => {
-    seq = 0;
-    const transport = new FakeTransport();
-    renderRun(transport, makeStore(), true);
-    await screen.findByTestId("thread-canvas");
-    stream(transport, [
-      created("s_issue", "record", "ENG-142"),
-      created("s_list", "table", "Backlog"),
-    ]);
+  studioIt(
+    "flag ON: activating a tab switches the active surface",
+    async () => {
+      seq = 0;
+      const transport = new FakeTransport();
+      renderRun(transport, makeStore(), true);
+      await screen.findByTestId("thread-canvas");
+      stream(transport, [
+        created("s_issue", "record", "ENG-142"),
+        created("s_list", "table", "Backlog"),
+      ]);
 
-    const strip = await screen.findByTestId("tc-tabs");
-    const issueTab = within(strip).getByText("ENG-142");
-    // Newest ("Backlog") is active by default; click the issue tab to pin it.
-    fireEvent.click(issueTab);
-    await waitFor(() => {
-      const tab = issueTab.closest('[role="tab"]');
-      expect(tab?.getAttribute("aria-selected")).toBe("true");
-    });
-  });
+      const strip = await screen.findByTestId("tc-tabs");
+      const issueTab = within(strip).getByText("ENG-142");
+      // Newest ("Backlog") is active by default; click the issue tab to pin it.
+      fireEvent.click(issueTab);
+      await waitFor(() => {
+        const tab = issueTab.closest('[role="tab"]');
+        expect(tab?.getAttribute("aria-selected")).toBe("true");
+      });
+    },
+  );
 
   it("flag ON, zero v2 events: empty canvas, no v1 tabs leak (strictness)", async () => {
     seq = 0;

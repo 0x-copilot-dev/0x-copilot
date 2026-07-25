@@ -68,6 +68,17 @@ export {
 } from "./pendingCardsProjection";
 export { usePendingWork, type UsePendingWorkResult } from "./usePendingWork";
 export {
+  projectPendingWorkV2,
+  pendingWorkCardV2Key,
+  pendingWorkStatusLabelV2,
+  pendingWorkSubjectLabelV2,
+  type PendingWorkCardV2,
+} from "./pendingWorkV2Projection";
+export {
+  usePendingWorkV2,
+  type UsePendingWorkV2Result,
+} from "./usePendingWorkV2";
+export {
   PendingCounterChip,
   type PendingCounterChipProps,
 } from "./PendingCounterChip";

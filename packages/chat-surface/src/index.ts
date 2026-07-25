@@ -1268,12 +1268,21 @@ export {
   type PendingCard,
   usePendingWork,
   type UsePendingWorkResult,
+  projectPendingWorkV2,
+  pendingWorkCardV2Key,
+  pendingWorkStatusLabelV2,
+  pendingWorkSubjectLabelV2,
+  type PendingWorkCardV2,
+  usePendingWorkV2,
+  type UsePendingWorkV2Result,
   PendingCounterChip, // orphan-destination-waiver: owner=surfaces-v2-PRD-E2 — exported ahead of its host mount (see block comment above); a follow-up surfaces-v2 PR wires it into the Approvals queue. Remove when mounted.
   type PendingCounterChipProps,
 } from "./destinations/run";
 export {
   PendingCardList,
   type PendingCardListProps,
+  PendingWorkV2List,
+  type PendingWorkV2ListProps,
   AgentFleetList,
   type AgentFleetListProps,
 } from "./workspace";
