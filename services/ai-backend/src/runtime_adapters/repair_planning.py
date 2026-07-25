@@ -16,6 +16,9 @@ from agent_runtime.surfaces_v2.repair_planning import (
     RepairPlanningSnapshotStore,
 )
 from agent_runtime.surfaces_v2.repair_reconciliation import RepairLegalHoldState
+from agent_runtime.surfaces_v2.audit_export_verification import (
+    AuditExportVerificationStore,
+)
 
 
 class UnknownRepairLegalHoldLookup:
@@ -179,11 +182,54 @@ def build_repair_legal_hold_lookup(
     return UnknownRepairLegalHoldLookup()
 
 
+def build_audit_export_verification_store(
+    *, settings: RuntimeSettings, persistence: object
+) -> AuditExportVerificationStore:
+    """Select the backend-correct safe D7/D12 sampling state adapter.
+
+    The resulting store owns only signed safe manifest metadata, cursors,
+    leases, and verification outcomes.  It has no queue or executor handle.
+    """
+
+    backend = settings.store.backend
+    if backend == "file":
+        root = settings.store.file_store_root
+        if not root:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "RUNTIME_FILE_STORE_ROOT is required for audit export verification.",
+                retryable=False,
+            )
+        from runtime_adapters.file.audit_export_verification_store import (
+            FileAuditExportVerificationStore,
+        )
+
+        return FileAuditExportVerificationStore(root=root)
+    if backend == "postgres":
+        if not hasattr(persistence, "_role_connection"):
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "Postgres audit export verification requires the runtime worker store.",
+                retryable=False,
+            )
+        from runtime_adapters.postgres.audit_export_verification_store import (
+            PostgresAuditExportVerificationStore,
+        )
+
+        return PostgresAuditExportVerificationStore(store=persistence)
+    from runtime_adapters.in_memory.audit_export_verification_store import (
+        InMemoryAuditExportVerificationStore,
+    )
+
+    return InMemoryAuditExportVerificationStore()
+
+
 __all__ = (
     "FileRepairLegalHoldLookup",
     "PostgresRepairLegalHoldLookup",
     "UnknownRepairLegalHoldLookup",
     "build_effect_claim_store",
+    "build_audit_export_verification_store",
     "build_repair_legal_hold_lookup",
     "build_repair_planning_snapshot_store",
 )

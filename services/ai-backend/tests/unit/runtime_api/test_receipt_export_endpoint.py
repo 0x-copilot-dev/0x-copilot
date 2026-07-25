@@ -24,8 +24,15 @@ from agent_runtime.surfaces_v2.receipt_export import (
     ReceiptExportUnavailable,
     ReceiptExportVerifier,
 )
+from agent_runtime.surfaces_v2.audit_export_verification import (
+    AuditExportFormat,
+    AuditExportVerificationStore,
+)
 from agent_runtime.surfaces_v2.receipt_export_v2 import ReceiptExportV2Verifier
 from runtime_adapters.factory import RuntimeAdapterFactory
+from runtime_adapters.in_memory.audit_export_verification_store import (
+    InMemoryAuditExportVerificationStore,
+)
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.http.errors import RuntimeApiError
@@ -54,6 +61,7 @@ class ReceiptExportEndpointMixin:
         self,
         *,
         store_type: type[InMemoryRuntimeApiStore] = InMemoryRuntimeApiStore,
+        audit_export_catalog: AuditExportVerificationStore | None = None,
     ):
         store = store_type()
         settings = RuntimeSettings.load(
@@ -94,6 +102,7 @@ class ReceiptExportEndpointMixin:
             event_store=store,
             settings=settings,
             model_resolver=model_resolver,
+            audit_export_catalog=audit_export_catalog,
         )
         return store, producer, cqs, store.runs[run_response.run_id]
 
@@ -202,6 +211,31 @@ class TestExportRunReceiptService(ReceiptExportEndpointMixin):
         # 2 ledger rows folded + 1 synthetic receipt row.
         assert len(bundle.rows) == 3
         assert bundle.rows[-1].event_type == "receipt.export"
+
+    async def test_issued_v1_export_is_safely_cataloged_for_sampling(self) -> None:
+        catalog = InMemoryAuditExportVerificationStore()
+        store, producer, cqs, run = await self._setup(audit_export_catalog=catalog)
+        await self._append_ledger(producer, run)
+        self._mark_terminal(store, run, AgentRunStatus.COMPLETED)
+
+        await cqs.export_run_receipt(
+            org_id=self.ORG,
+            user_id=self.USER,
+            run_id=run.run_id,
+        )
+
+        manifests = await catalog.list_manifests_after(cursor=None, limit=10)
+        assert len(manifests) == 1
+        manifest = manifests[0]
+        assert manifest.org_id == self.ORG
+        assert manifest.run_id == run.run_id
+        assert manifest.format is AuditExportFormat.RECEIPT_V1
+        # Legacy raw event payloads are transient export data only.  The
+        # durable catalog has just the signed envelope and payload digest.
+        persisted = repr(manifest.model_dump(mode="json"))
+        assert "ENG-1 Fix" not in persisted
+        assert "call:call_1" not in persisted
+        assert "'payload':" not in persisted
 
     @pytest.mark.parametrize(
         "terminal",
@@ -315,6 +349,29 @@ class _AuditExportCapableTestStore(InMemoryRuntimeApiStore):
 
 
 class TestExportRunReceiptV2Http(ReceiptExportEndpointMixin):
+    async def test_issued_v2_export_is_safely_cataloged_for_sampling(self) -> None:
+        catalog = InMemoryAuditExportVerificationStore()
+        store, producer, cqs, run = await self._setup(
+            store_type=_AuditExportCapableTestStore,
+            audit_export_catalog=catalog,
+        )
+        await self._append_ledger(producer, run)
+        self._mark_terminal(store, run, AgentRunStatus.COMPLETED)
+
+        await cqs.export_run_receipt_v2(
+            org_id=self.ORG,
+            user_id=self.USER,
+            run_id=run.run_id,
+        )
+
+        manifests = await catalog.list_manifests_after(cursor=None, limit=10)
+        assert len(manifests) == 1
+        manifest = manifests[0]
+        assert manifest.format is AuditExportFormat.RECEIPT_V2
+        persisted = repr(manifest.model_dump(mode="json"))
+        assert "ENG-1 Fix" not in persisted
+        assert "call:call_1" not in persisted
+
     async def test_http_foreign_run_is_404_before_capability_disclosure(self) -> None:
         app, run = await self._app_and_run(AgentRunStatus.COMPLETED)
         transport = httpx.ASGITransport(app=app)

@@ -12,6 +12,7 @@ from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.repair_planning import (
+    build_audit_export_verification_store,
     build_effect_claim_store,
     build_repair_legal_hold_lookup,
     build_repair_planning_snapshot_store,
@@ -36,6 +37,12 @@ from runtime_worker.jobs.repair_planning import (
     RepairPlanningLoop,
     RepairPlanningLoopEnv,
     RepairPlanningRunner,
+)
+from runtime_worker.jobs.audit_export_verification import (
+    AuditExportVerificationSampler,
+    AuditExportVerificationSamplingEnv,
+    AuditExportVerificationSamplingLoop,
+    AuditExportVerificationSamplingRunner,
 )
 from runtime_worker.usage_rollup_loop import (
     UsageRollupLoop,
@@ -77,6 +84,9 @@ class RuntimeWorkerEntrypoint:
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
         repair_planning_loop: RepairPlanningLoop | None = None
+        audit_export_verification_loop: AuditExportVerificationSamplingLoop | None = (
+            None
+        )
         statement_collector: DbStatementMetricsCollector | None = None
         try:
             # One MCP discovery cache per worker process — shared by every
@@ -225,6 +235,48 @@ class RuntimeWorkerEntrypoint:
                         "page_size": page_size,
                     },
                 )
+            # D7/D12 audit-export verification is a bounded, read-only sampler.
+            # It has no effect/repair executor, queue, approval, or artifact
+            # dependency. A missing production signing key becomes an honest
+            # persisted unavailable outcome rather than a fake success.
+            if AuditExportVerificationSamplingEnv.env_bool(
+                AuditExportVerificationSamplingEnv.ENABLED,
+                default=False,
+            ):
+                max_samples = AuditExportVerificationSamplingEnv.env_int(
+                    AuditExportVerificationSamplingEnv.MAX_SAMPLES,
+                    AuditExportVerificationSamplingEnv.DEFAULT_MAX_SAMPLES,
+                    maximum=500,
+                )
+                lease_seconds = AuditExportVerificationSamplingEnv.env_int(
+                    AuditExportVerificationSamplingEnv.LEASE_SECONDS,
+                    AuditExportVerificationSamplingEnv.DEFAULT_LEASE_SECONDS,
+                    maximum=3600,
+                )
+                audit_export_verification_loop = AuditExportVerificationSamplingLoop(
+                    runner=AuditExportVerificationSamplingRunner(
+                        store=build_audit_export_verification_store(
+                            settings=settings,
+                            persistence=async_ports.persistence,
+                        ),
+                        sampler=AuditExportVerificationSampler(
+                            event_store=async_ports.event_store,
+                        ),
+                        persistence=async_ports.persistence,
+                        worker_id=f"{worker.worker_id}-audit-export-verification",
+                        max_samples=max_samples,
+                        lease_seconds=lease_seconds,
+                    )
+                )
+                await audit_export_verification_loop.start()
+                logger.info(
+                    "audit_export_verification_sampling_loop_started",
+                    metadata={
+                        "interval_seconds": audit_export_verification_loop._interval,
+                        "max_samples": max_samples,
+                        "lease_seconds": lease_seconds,
+                    },
+                )
             # Opt-in (default off). Requires ``pg_stat_statements`` installed;
             # the scraper logs once and exits if not.
             if DbStatementMetricsCollectorEnv.env_bool(
@@ -274,6 +326,8 @@ class RuntimeWorkerEntrypoint:
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
             )
         finally:
+            if audit_export_verification_loop is not None:
+                await audit_export_verification_loop.stop()
             if repair_planning_loop is not None:
                 await repair_planning_loop.stop()
             if statement_collector is not None:

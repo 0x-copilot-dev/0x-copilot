@@ -69,6 +69,7 @@ from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
     LifecycleReferenceSnapshotCollector,
 )
 from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
+from runtime_adapters.repair_planning import build_audit_export_verification_store
 from runtime_api.http.account_merge_routes import AccountMergeApiRouter
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.retention_routes import (
@@ -617,6 +618,10 @@ class RuntimeApiAppFactory:
             event_store=_ports.event_store,
             settings=_settings,
             model_resolver=_model_resolver,
+            audit_export_catalog=build_audit_export_verification_store(
+                settings=_settings,
+                persistence=_ports.persistence,
+            ),
         )
         _ws = WorkspaceCoordinator(
             persistence=_ports.persistence,

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import base64
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 
 from agent_runtime.api.constants import Messages, Values
 from agent_runtime.api.model_catalog import ModelCatalog
@@ -22,6 +22,10 @@ from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.settings import RuntimeSettings
 from agent_runtime.surfaces_v2.content import SurfaceContentProjection
+from agent_runtime.surfaces_v2.audit_export_verification import (
+    AuditExportBundleManifest,
+    AuditExportVerificationStore,
+)
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from agent_runtime.surfaces_v2.receipt import ReceiptFold
 from agent_runtime.surfaces_v2.receipt_export import (
@@ -129,11 +133,13 @@ class ConversationQueryService:
         event_store: EventStorePort,
         settings: RuntimeSettings,
         model_resolver: ModelConfigResolver,
+        audit_export_catalog: AuditExportVerificationStore | None = None,
     ) -> None:
         self._persistence = persistence
         self._event_store = event_store
         self._settings = settings
         self._model_resolver = model_resolver
+        self._audit_export_catalog = audit_export_catalog
         self._pricing_catalog = ModelPricingCatalog.from_litellm()
 
     async def list_models(
@@ -765,9 +771,15 @@ class ConversationQueryService:
         except RuntimeError as exc:
             # Never leak AUDIT_HMAC_KEY state / paths — a safe domain error only.
             raise ReceiptExportUnavailable() from exc
-        return ReceiptExportBuilder(signer=signer).build(
+        bundle = ReceiptExportBuilder(signer=signer).build(
             run_id=run_id, events=events, receipt=receipt
         )
+        await self._record_audit_export_manifest(
+            org_id=org_id,
+            bundle=bundle.model_dump(mode="json"),
+            v2=False,
+        )
+        return bundle
 
     async def export_run_receipt_v2(
         self,
@@ -805,11 +817,52 @@ class ConversationQueryService:
             )
         except RuntimeError as exc:
             raise ReceiptExportUnavailable() from exc
-        return ReceiptExportV2Builder(signer=signer).build(
+        bundle = ReceiptExportV2Builder(signer=signer).build(
             run_id=run_id,
             events=events,
             run_status=run.status,
         )
+        await self._record_audit_export_manifest(
+            org_id=org_id,
+            bundle=bundle.model_dump(mode="json"),
+            v2=True,
+        )
+        return bundle
+
+    async def _record_audit_export_manifest(
+        self,
+        *,
+        org_id: str,
+        bundle: dict[str, object],
+        v2: bool,
+    ) -> None:
+        """Durably catalog an issued export without retaining a v1 body.
+
+        The catalog is deliberately a sibling safety control, not an export
+        best-effort side channel.  Once configured, a write failure yields the
+        same safe availability result as unavailable signing material; callers
+        never receive an export the periodic verifier cannot account for.
+        Direct unit construction can omit the catalog to preserve historical
+        pure-export tests and does not claim sampled coverage.
+        """
+
+        catalog = self._audit_export_catalog
+        if catalog is None:
+            return
+        try:
+            factory = (
+                AuditExportBundleManifest.from_v2_bundle
+                if v2
+                else AuditExportBundleManifest.from_v1_bundle
+            )
+            manifest = factory(
+                org_id=org_id,
+                bundle=bundle,
+                captured_at=datetime.now(UTC),
+            )
+            await catalog.record_manifest(manifest=manifest)
+        except Exception as exc:
+            raise ReceiptExportUnavailable() from exc
 
     # ------------------------------------------------------------------
     # Private helpers
