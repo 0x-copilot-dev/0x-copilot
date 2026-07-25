@@ -1153,8 +1153,13 @@ class RuntimeApiRouter:
             from runtime_api.http.effect_stages import (
                 register_workspace_effect_stage_routes,
             )
+            from runtime_api.http.pending_work_v2 import register_pending_work_v2_routes
 
             register_workspace_effect_stage_routes(router)
+            # E1 D6 — canonical pending work is a v2.1 workspace-cohort read.
+            # Keep it under the same enforce gate as the canonical approval
+            # receipt rather than broadening it to every default-on v2 surface.
+            register_pending_work_v2_routes(router)
         # PR 1.5 — Workspace-pane data feeds (subagents + sources).
         register_workspace_feed_routes(router)
         # PR 1.6 — Workspace defaults + conversation lifecycle

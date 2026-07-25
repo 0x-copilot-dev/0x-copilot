@@ -2748,3 +2748,143 @@ export function isPendingWorkResponse(x: unknown): x is PendingWorkResponse {
   const r = x as Record<string, unknown>;
   return r.v === 1 && Array.isArray(r.items) && Array.isArray(r.agents);
 }
+
+// ---------------------------------------------------------------------------
+// Pending work v2.1 (E1 D6) — canonical effects/gates only.  This remains a
+// separate additive endpoint during migration: unlike the legacy queue above,
+// it exposes no title, conversation, target, path, reason, ref, or body.
+// ---------------------------------------------------------------------------
+
+/** Canonical subject kinds the v2.1 ledger can leave pending. */
+export type PendingWorkSubjectKindV2 = "effect" | "gate";
+
+/** Safe state of an unresolved canonical subject. */
+export type PendingWorkStatusV2 =
+  | "open"
+  | "held"
+  | "queued"
+  | "approved"
+  | "claimed"
+  | "indeterminate"
+  | "recovery";
+
+/** One safe, run-addressable pending subject. */
+export interface PendingWorkItemV2 {
+  run_id: string;
+  subject_kind: PendingWorkSubjectKindV2;
+  subject_id: string;
+  status: PendingWorkStatusV2;
+  opened_sequence_no: number;
+  latest_sequence_no: number;
+}
+
+/** An authorised candidate run that was omitted rather than partially folded. */
+export interface PendingWorkV2RunWarning {
+  run_id: string;
+  status: "omitted";
+}
+
+/**
+ * `GET /v1/agent/pending-work-v2` — a run-keyset page of canonical pending
+ * work. `next_cursor` is opaque and never an authorisation grant; the server
+ * re-applies the verified identity to every page.
+ */
+export interface PendingWorkV2Response {
+  v: 2;
+  items: readonly PendingWorkItemV2[];
+  warnings: readonly PendingWorkV2RunWarning[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+const _PENDING_WORK_V2_SUBJECT_KINDS = new Set<PendingWorkSubjectKindV2>([
+  "effect",
+  "gate",
+]);
+const _PENDING_WORK_V2_STATUSES = new Set<PendingWorkStatusV2>([
+  "open",
+  "held",
+  "queued",
+  "approved",
+  "claimed",
+  "indeterminate",
+  "recovery",
+]);
+const _PENDING_WORK_V2_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
+const _PENDING_WORK_V2_SUBJECT_ID =
+  /^(?!file:)[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/i;
+
+function _hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function _isPendingWorkItemV2(value: unknown): value is PendingWorkItemV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const item = value as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(item, [
+      "run_id",
+      "subject_kind",
+      "subject_id",
+      "status",
+      "opened_sequence_no",
+      "latest_sequence_no",
+    ]) &&
+    typeof item.run_id === "string" &&
+    _PENDING_WORK_V2_RUN_ID.test(item.run_id) &&
+    typeof item.subject_id === "string" &&
+    _PENDING_WORK_V2_SUBJECT_ID.test(item.subject_id) &&
+    _PENDING_WORK_V2_SUBJECT_KINDS.has(
+      item.subject_kind as PendingWorkSubjectKindV2,
+    ) &&
+    _PENDING_WORK_V2_STATUSES.has(item.status as PendingWorkStatusV2) &&
+    _isPositiveSafeInteger(item.opened_sequence_no) &&
+    _isPositiveSafeInteger(item.latest_sequence_no)
+  );
+}
+
+function _isPendingWorkV2RunWarning(
+  value: unknown,
+): value is PendingWorkV2RunWarning {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const warning = value as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(warning, ["run_id", "status"]) &&
+    typeof warning.run_id === "string" &&
+    _PENDING_WORK_V2_RUN_ID.test(warning.run_id) &&
+    warning.status === "omitted"
+  );
+}
+
+/** Strict boundary guard: reject extra user-facing data, not merely a bad v. */
+export function isPendingWorkV2Response(
+  value: unknown,
+): value is PendingWorkV2Response {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const response = value as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(response, [
+      "v",
+      "items",
+      "warnings",
+      "next_cursor",
+      "has_more",
+    ]) &&
+    response.v === 2 &&
+    Array.isArray(response.items) &&
+    response.items.every(_isPendingWorkItemV2) &&
+    Array.isArray(response.warnings) &&
+    response.warnings.every(_isPendingWorkV2RunWarning) &&
+    (response.next_cursor === null ||
+      (typeof response.next_cursor === "string" &&
+        response.next_cursor.length <= 512)) &&
+    typeof response.has_more === "boolean"
+  );
+}

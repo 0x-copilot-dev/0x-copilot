@@ -188,6 +188,12 @@ export type {
   PendingWorkItem,
   PendingAgentRow,
   PendingWorkResponse,
+  // E1 D6 — safe canonical v2.1 pending-work page.
+  PendingWorkSubjectKindV2,
+  PendingWorkStatusV2,
+  PendingWorkItemV2,
+  PendingWorkV2RunWarning,
+  PendingWorkV2Response,
 } from "./ledger";
 export {
   LEDGER_EVENT_TYPES,
@@ -219,6 +225,8 @@ export {
   sha256Hex,
   // PRD-E2 — pending-work envelope guard.
   isPendingWorkResponse,
+  // E1 D6 — strict canonical pending-work boundary guard.
+  isPendingWorkV2Response,
 } from "./ledger";
 
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,
