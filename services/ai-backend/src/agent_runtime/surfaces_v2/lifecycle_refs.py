@@ -35,6 +35,7 @@ from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.ledger_ids import (
     ArtifactContentRefCodec,
     ArtifactEffectFormatError,
+    ArtifactIdCodec,
     EffectReceiptRefCodec,
     OperationArgsRefCodec,
     OperationIdCodec,
@@ -70,6 +71,11 @@ class LifecycleReferenceScheme(StrEnum):
     ACTIVITY = "activity"
     ARTIFACT = "artifact"
     ARTIFACT_BLOB = "artifact-blob"
+    ARTIFACT_CODE_SURFACE = "artifact-code"
+    ARTIFACT_DATASET_SURFACE = "artifact-dataset"
+    ARTIFACT_DOCUMENT_SURFACE = "artifact-document"
+    ARTIFACT_FILE_SURFACE = "artifact-file"
+    BARE_SURFACE = "bare_surface"
     BROWSER_PAGE = "browser-page"
     BROWSER_PLAN = "browser-plan"
     BROWSER_PRECONDITION = "browser-precondition"
@@ -270,6 +276,12 @@ class _Patterns:
     LEDGER_FOLD: ClassVar[re.Pattern[str]] = re.compile(
         r"^([A-Za-z0-9][A-Za-z0-9._:-]{0,255})@([1-9][0-9]*)$"
     )
+    BARE_SURFACE_ID: ClassVar[re.Pattern[str]] = re.compile(
+        r"^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$"
+    )
+    ARTIFACT_SURFACE: ClassVar[re.Pattern[str]] = re.compile(
+        r"^(art_[^@/]+)@([1-9][0-9]*)$"
+    )
 
 
 class _Messages:
@@ -292,11 +304,18 @@ class LifecycleReferenceRegistry:
     _MAX_REFERENCE_LENGTH: ClassVar[int] = int(
         dict(_CONTRACT["references"])["max_length"]
     )
+    _MAX_SAFE_INTEGER: ClassVar[int] = int(
+        dict(_CONTRACT["digests"])["max_safe_integer"]
+    )
     _FORBIDDEN_SCHEMES: ClassVar[frozenset[str]] = frozenset(
         {"data", "file", "filesystem", "http", "https"}
     )
     _SURFACE_SCHEMES: ClassVar[frozenset[LifecycleReferenceScheme]] = frozenset(
         {
+            LifecycleReferenceScheme.ARTIFACT_CODE_SURFACE,
+            LifecycleReferenceScheme.ARTIFACT_DATASET_SURFACE,
+            LifecycleReferenceScheme.ARTIFACT_DOCUMENT_SURFACE,
+            LifecycleReferenceScheme.ARTIFACT_FILE_SURFACE,
             LifecycleReferenceScheme.BOARD_SURFACE,
             LifecycleReferenceScheme.DASHBOARD_SURFACE,
             LifecycleReferenceScheme.DOC_SURFACE,
@@ -308,6 +327,16 @@ class LifecycleReferenceRegistry:
             LifecycleReferenceScheme.TABLE_SURFACE,
             LifecycleReferenceScheme.TIMELINE_SURFACE,
         }
+    )
+    _ARTIFACT_SURFACE_SCHEMES: ClassVar[frozenset[LifecycleReferenceScheme]] = (
+        frozenset(
+            {
+                LifecycleReferenceScheme.ARTIFACT_CODE_SURFACE,
+                LifecycleReferenceScheme.ARTIFACT_DATASET_SURFACE,
+                LifecycleReferenceScheme.ARTIFACT_DOCUMENT_SURFACE,
+                LifecycleReferenceScheme.ARTIFACT_FILE_SURFACE,
+            }
+        )
     )
 
     def __init__(
@@ -335,6 +364,14 @@ class LifecycleReferenceRegistry:
 
         registrations = (
             cls._registration(
+                LifecycleReferenceScheme.BARE_SURFACE,
+                LifecycleReferenceOwner.SURFACE_PRESENTATION,
+                LifecycleNodeKind.SURFACE,
+                "surface_01",
+                surface_id_only=True,
+                wire_scheme="bare-surface-id",
+            ),
+            cls._registration(
                 LifecycleReferenceScheme.ACTIVITY,
                 LifecycleReferenceOwner.RUNTIME_EVENT_STORE,
                 LifecycleNodeKind.REFERENCE,
@@ -351,6 +388,18 @@ class LifecycleReferenceRegistry:
                 LifecycleReferenceOwner.WORKSPACE_AUTHORITY,
                 LifecycleNodeKind.REFERENCE,
                 "artifact-blob://sha256/" + "a" * 64,
+            ),
+            cls._artifact_surface_registration(
+                LifecycleReferenceScheme.ARTIFACT_CODE_SURFACE
+            ),
+            cls._artifact_surface_registration(
+                LifecycleReferenceScheme.ARTIFACT_DOCUMENT_SURFACE
+            ),
+            cls._artifact_surface_registration(
+                LifecycleReferenceScheme.ARTIFACT_DATASET_SURFACE
+            ),
+            cls._artifact_surface_registration(
+                LifecycleReferenceScheme.ARTIFACT_FILE_SURFACE
             ),
             cls._registration(
                 LifecycleReferenceScheme.BROWSER_PAGE,
@@ -588,6 +637,18 @@ class LifecycleReferenceRegistry:
             wire_scheme=wire_scheme,
         )
 
+    @classmethod
+    def _artifact_surface_registration(
+        cls, scheme: LifecycleReferenceScheme
+    ) -> LifecycleReferenceRegistration:
+        return cls._registration(
+            scheme,
+            LifecycleReferenceOwner.ARTIFACT_REPOSITORY,
+            LifecycleNodeKind.SURFACE,
+            f"{scheme.value}://art_018f47a6-7b2c-7b10-8f21-12345678b002@1",
+            surface_id_only=True,
+        )
+
     @property
     def registrations(self) -> tuple[LifecycleReferenceRegistration, ...]:
         """Stable registrations in declaration order for audit/test consumers."""
@@ -604,12 +665,13 @@ class LifecycleReferenceRegistry:
 
         return self._parse(reference, allow_surface_id_schemes=False)
 
-    def parse_surface_id(self, surface_id: object) -> LifecycleReference | None:
-        """Parse a URI-shaped surface id, or return ``None`` for opaque ids."""
+    def parse_surface_id(self, surface_id: object) -> LifecycleReference:
+        """Parse every surface id through an explicit URI or bare-id registry."""
 
-        if not isinstance(surface_id, str) or "://" not in surface_id:
-            self._validate_opaque_identifier(surface_id)
-            return None
+        if not isinstance(surface_id, str):
+            self._raise(LifecycleDiagnosticCode.MALFORMED_REFERENCE)
+        if "://" not in surface_id:
+            return self._parse_bare_surface_id(surface_id)
         return self._parse(surface_id, allow_surface_id_schemes=True)
 
     def assert_contract_coverage(self) -> None:
@@ -654,9 +716,13 @@ class LifecycleReferenceRegistry:
         """Verify every declared scheme is parseable and has exactly one owner."""
 
         for registration in self._registrations:
-            parsed = self._parse(
-                registration.example,
-                allow_surface_id_schemes=registration.surface_id_only,
+            parsed = (
+                self.parse_surface_id(registration.example)
+                if registration.scheme is LifecycleReferenceScheme.BARE_SURFACE
+                else self._parse(
+                    registration.example,
+                    allow_surface_id_schemes=registration.surface_id_only,
+                )
             )
             if (
                 parsed.owner is not registration.owner
@@ -723,7 +789,11 @@ class LifecycleReferenceRegistry:
             or parsed.query
             or parsed.fragment
             or (
-                scheme_text != LifecycleReferenceScheme.LEDGER.value
+                scheme_text
+                not in {
+                    LifecycleReferenceScheme.LEDGER.value,
+                    *(scheme.value for scheme in self._ARTIFACT_SURFACE_SCHEMES),
+                }
                 and "@" in parsed.netloc
             )
         ):
@@ -739,6 +809,9 @@ class LifecycleReferenceRegistry:
         parts = (
             self._ledger_parts(value)
             if scheme_text == LifecycleReferenceScheme.LEDGER.value
+            else self._artifact_surface_parts(value, scheme_text)
+            if scheme_text
+            in {scheme.value for scheme in self._ARTIFACT_SURFACE_SCHEMES}
             else self._uri_parts(parsed.netloc, parsed.path)
         )
         registration = self._registration_for(
@@ -788,6 +861,8 @@ class LifecycleReferenceRegistry:
         try:
             if scheme is LifecycleReferenceScheme.ARTIFACT:
                 ArtifactContentRefCodec.parse(value)
+            elif scheme in self._ARTIFACT_SURFACE_SCHEMES:
+                self._validate_artifact_surface(parts, scheme)
             elif scheme is LifecycleReferenceScheme.OPERATION:
                 self._validate_operation_reference(value, parts)
             elif scheme is LifecycleReferenceScheme.PROPOSAL:
@@ -901,10 +976,36 @@ class LifecycleReferenceRegistry:
             decoded = next_decoded
         return decoded
 
+    def _parse_bare_surface_id(self, value: str) -> LifecycleReference:
+        """Parse the registered, deliberately colon-free opaque surface form."""
+
+        if ":" in value:
+            candidate_scheme = value.split(":", 1)[0].lower()
+            if candidate_scheme in self._FORBIDDEN_SCHEMES:
+                self._raise(LifecycleDiagnosticCode.FORBIDDEN_REFERENCE)
+            self._raise(LifecycleDiagnosticCode.UNKNOWN_SCHEME)
+        if _Patterns.BARE_SURFACE_ID.fullmatch(value) is None:
+            self._raise(LifecycleDiagnosticCode.MALFORMED_REFERENCE)
+        registration = self._by_scheme[LifecycleReferenceScheme.BARE_SURFACE]
+        return LifecycleReference(
+            reference=value,
+            scheme=registration.scheme,
+            owner=registration.owner,
+            node_kind=registration.node_kind,
+            parts=(value,),
+        )
+
     @staticmethod
     def _uri_parts(netloc: str, path: str) -> tuple[str, ...]:
         path_parts = tuple(part for part in path.split("/") if part)
         return (netloc, *path_parts)
+
+    def _artifact_surface_parts(self, value: str, scheme_text: str) -> tuple[str, ...]:
+        body = value.removeprefix(f"{scheme_text}://")
+        match = _Patterns.ARTIFACT_SURFACE.fullmatch(body)
+        if match is None:
+            self._raise(LifecycleDiagnosticCode.MALFORMED_REFERENCE)
+        return (match.group(1), match.group(2))
 
     def _ledger_parts(self, value: str) -> tuple[str, ...]:
         body = value.removeprefix("ledger://")
@@ -956,6 +1057,17 @@ class LifecycleReferenceRegistry:
             OperationArgsRefCodec.parse(value)
         else:
             OperationIdCodec.parse(parts[0])
+
+    def _validate_artifact_surface(
+        self, parts: tuple[str, ...], scheme: LifecycleReferenceScheme
+    ) -> None:
+        self._validate_exact_parts(parts, 2)
+        ArtifactIdCodec.parse(parts[0])
+        if (
+            _Patterns.POSITIVE_INT.fullmatch(parts[1]) is None
+            or int(parts[1]) > self._MAX_SAFE_INTEGER
+        ):
+            self._raise(LifecycleDiagnosticCode.MALFORMED_REFERENCE, scheme=scheme)
 
     def _validate_receipt_reference(self, value: str, parts: tuple[str, ...]) -> None:
         if len(parts) == 3 and parts[0] == "effects":
@@ -1351,18 +1463,18 @@ class LifecycleReferenceEnumerator:
             value = payload.get(field_name)
             if value is None:
                 continue
+            if field_name == "surface_id":
+                self._add_surface_node(
+                    value,
+                    event_type,
+                    sequence_no,
+                    event_node,
+                    nodes,
+                    edges,
+                    diagnostics,
+                )
+                continue
             if not isinstance(value, str) or not self._safe_identifier(value):
-                if field_name == "surface_id":
-                    self._add_surface_node(
-                        value,
-                        event_type,
-                        sequence_no,
-                        event_node,
-                        nodes,
-                        edges,
-                        diagnostics,
-                    )
-                    continue
                 diagnostics.append(
                     LifecycleReferenceDiagnostic(
                         code=LifecycleDiagnosticCode.INVALID_LEDGER_EVENT,
@@ -1398,8 +1510,6 @@ class LifecycleReferenceEnumerator:
                     field=None,
                 )
             )
-            return
-        if parsed is None:
             return
         surface_node = self._node(
             nodes,

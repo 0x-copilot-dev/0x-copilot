@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 import json
+from pathlib import Path
+import re
 
 import pytest
 
@@ -41,6 +43,22 @@ def _v2_1_events() -> list[dict[str, object]]:
 
 def _event(event_type: str) -> dict[str, object]:
     return next(event for event in _v2_1_events() if event["event_type"] == event_type)
+
+
+_ARTIFACT_URI_SOURCE = (
+    Path(__file__).resolve().parents[6] / "packages/chat-surface/src/artifacts/uri.ts"
+)
+_ARTIFACT_ID = "art_018f47a6-7b2c-7b10-8f21-12345678b002"
+
+
+def _ui_artifact_surface_schemes() -> dict[str, str]:
+    source = _ARTIFACT_URI_SOURCE.read_text(encoding="utf-8")
+    pairs = re.findall(
+        r'^\s*(code|document|dataset|file):\s*"(artifact-[a-z]+)",$',
+        source,
+        re.MULTILINE,
+    )
+    return dict(pairs)
 
 
 def test_registry_owns_every_advertised_contract_reference_and_example() -> None:
@@ -135,6 +153,106 @@ def test_surface_file_uri_is_only_valid_in_a_surface_id_context() -> None:
         registry.parse("file://linear/get_issue/ENG_1")
     with pytest.raises(LifecycleReferenceParseError):
         registry.parse_surface_id("file:///private/path")
+
+
+def test_bare_surface_ids_are_explicitly_owned_and_graph_enumerated() -> None:
+    registry = LifecycleReferenceRegistry.default()
+    parsed = registry.parse_surface_id("surface_issue")
+
+    assert parsed.scheme is LifecycleReferenceScheme.BARE_SURFACE
+    assert parsed.owner is LifecycleReferenceOwner.SURFACE_PRESENTATION
+
+    event = deepcopy(_event("surface.created"))
+    payload = event["payload"]
+    assert isinstance(payload, dict)
+    payload["surface_id"] = "surface_issue"
+    graph = LifecycleReferenceEnumerator().enumerate(
+        run_id="bare_surface", events=[event]
+    )
+    surface = next(node for node in graph.nodes if node.identifier == "surface_issue")
+    assert surface.kind is LifecycleNodeKind.SURFACE
+    assert surface.owner is LifecycleReferenceOwner.SURFACE_PRESENTATION
+
+
+@pytest.mark.parametrize(
+    ("surface_id", "diagnostic_code"),
+    (
+        ("file:private-token", LifecycleDiagnosticCode.FORBIDDEN_REFERENCE),
+        ("data:secret", LifecycleDiagnosticCode.FORBIDDEN_REFERENCE),
+        ("https:private-token", LifecycleDiagnosticCode.FORBIDDEN_REFERENCE),
+        ("unknown-owner:secret", LifecycleDiagnosticCode.UNKNOWN_SCHEME),
+    ),
+)
+def test_uri_like_surface_ids_fail_closed_without_leaking_raw_values(
+    surface_id: str,
+    diagnostic_code: LifecycleDiagnosticCode,
+) -> None:
+    event = deepcopy(_event("surface.created"))
+    payload = event["payload"]
+    assert isinstance(payload, dict)
+    payload["surface_id"] = surface_id
+
+    with pytest.raises(LifecycleReferenceGraphError) as raised:
+        LifecycleReferenceEnumerator().enumerate(
+            run_id="surface_failure", events=[event]
+        )
+
+    diagnostic = raised.value.diagnostics[0]
+    assert diagnostic.code is diagnostic_code
+    assert diagnostic.event_type is not None
+    diagnostic_json = json.dumps(
+        [row.model_dump(mode="json") for row in raised.value.diagnostics]
+    )
+    assert surface_id not in diagnostic_json
+    assert "secret" not in diagnostic_json
+    assert "private" not in diagnostic_json
+
+
+def test_ui_artifact_surface_schemes_have_exact_registry_parity() -> None:
+    registry = LifecycleReferenceRegistry.default()
+    ui_schemes = _ui_artifact_surface_schemes()
+    registered = {
+        registration.wire_scheme: registration
+        for registration in registry.registrations
+        if registration.owner is LifecycleReferenceOwner.ARTIFACT_REPOSITORY
+        and registration.node_kind is LifecycleNodeKind.SURFACE
+    }
+
+    assert ui_schemes == {
+        "code": "artifact-code",
+        "document": "artifact-document",
+        "dataset": "artifact-dataset",
+        "file": "artifact-file",
+    }
+    assert set(registered) == set(ui_schemes.values())
+    assert "artifact-doc" not in registered
+    for scheme in ui_schemes.values():
+        parsed = registry.parse_surface_id(f"{scheme}://{_ARTIFACT_ID}@2")
+        assert parsed.owner is LifecycleReferenceOwner.ARTIFACT_REPOSITORY
+        assert parsed.node_kind is LifecycleNodeKind.SURFACE
+
+
+@pytest.mark.parametrize(
+    "surface_id",
+    (
+        "artifact-document://not_an_artifact@1",
+        f"artifact-dataset://{_ARTIFACT_ID}@0",
+        f"artifact-file://{_ARTIFACT_ID}@9007199254740992",
+        f"artifact-doc://{_ARTIFACT_ID}@1",
+    ),
+)
+def test_artifact_surface_ids_require_canonical_artifact_and_safe_revision(
+    surface_id: str,
+) -> None:
+    registry = LifecycleReferenceRegistry.default()
+
+    with pytest.raises(LifecycleReferenceParseError) as raised:
+        registry.parse_surface_id(surface_id)
+
+    diagnostic_json = json.dumps(
+        [row.model_dump(mode="json") for row in raised.value.diagnostics]
+    )
+    assert surface_id not in diagnostic_json
 
 
 @pytest.mark.parametrize(
