@@ -31,15 +31,24 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timezone
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-from agent_runtime.execution.contracts import JsonObject
+from pydantic import Field, model_validator
+
+from agent_runtime.execution.contracts import JsonObject, RuntimeContract
 from agent_runtime.observability.attribution import Purpose
 from agent_runtime.observability.usage_recorder import UsageRecorder
-from agent_runtime.persistence.records import RuntimeModelCallUsageRecord
+from agent_runtime.persistence.records import (
+    RuntimeModelCallUsageRecord,
+    UsageAttributionEdge,
+    UsageAttributionRelationship,
+)
 from agent_runtime.surfaces_v2.ledger_models import UsagePurpose
 from copilot_service_contracts.work_ledger import LEDGER_PAYLOAD_VERSION
 from runtime_api.schemas import RunRecord
+
+if TYPE_CHECKING:
+    from agent_runtime.api.ports import UsageAttributionEdgeStorePort
 
 
 class _PayloadKeys:
@@ -66,8 +75,53 @@ class _MeterLogger:
 
     EVENT_EMIT_FAILED = "usage_recorded_emit_failed"
     EVENT_RECORD_BUILD_FAILED = "usage_meter_record_build_failed"
+    EVENT_EDGE_APPEND_FAILED = "usage_attribution_edge_append_failed"
     SAFE_EMIT = "usage.recorded ledger emit failed"
     SAFE_BUILD = "usage meter could not build a call record"
+    SAFE_EDGE_APPEND = "usage attribution edge append failed"
+
+
+class UsageAttribution(RuntimeContract):
+    """Known-later operation/output context for one metered invocation.
+
+    The command intentionally carries no token or cost field.  It becomes a
+    separate immutable edge only after the recorder has attempted the canonical
+    usage write, so no target association can alter the historical usage row.
+    """
+
+    operation_id: str = Field(min_length=1, max_length=128)
+    artifact_id: str | None = Field(default=None, min_length=1, max_length=128)
+    stage_id: str | None = Field(default=None, min_length=1, max_length=128)
+    surface_id: str | None = Field(default=None, min_length=1, max_length=512)
+    relationship: UsageAttributionRelationship
+
+    @model_validator(mode="after")
+    def _relationship_target_is_present(self) -> "UsageAttribution":
+        # Constructing a temporary edge keeps this command and the durable
+        # record under exactly the same target invariants.
+        UsageAttributionEdge(
+            usage_record_id="usage-attribution-validation",
+            operation_id=self.operation_id,
+            artifact_id=self.artifact_id,
+            stage_id=self.stage_id,
+            surface_id=self.surface_id,
+            relationship=self.relationship,
+        )
+        return self
+
+    def to_edge(self, record: RuntimeModelCallUsageRecord) -> UsageAttributionEdge:
+        """Bind this known operation context to a just-recorded usage row."""
+
+        return UsageAttributionEdge(
+            usage_record_id=record.id,
+            operation_id=self.operation_id,
+            artifact_id=self.artifact_id,
+            stage_id=self.stage_id,
+            surface_id=(
+                self.surface_id if self.surface_id is not None else record.surface_id
+            ),
+            relationship=self.relationship,
+        )
 
 
 class UsageMeter:
@@ -109,11 +163,13 @@ class UsageMeter:
         recorder: UsageRecorder,
         emit_event: Callable[[JsonObject], Awaitable[None]] | None,
         surfaces_v2: bool,
+        attribution_edge_store: "UsageAttributionEdgeStorePort | None" = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._recorder = recorder
         self._emit_event = emit_event
         self._surfaces_v2 = surfaces_v2
+        self._attribution_edge_store = attribution_edge_store
         self._logger = logger or logging.getLogger("agent_runtime.usage_meter")
 
     @classmethod
@@ -136,6 +192,7 @@ class UsageMeter:
         record: RuntimeModelCallUsageRecord,
         *,
         pricing_at: datetime,
+        attribution: UsageAttribution | None = None,
     ) -> None:
         """Write the usage row, then emit ``usage.recorded`` when in-contract.
 
@@ -145,6 +202,8 @@ class UsageMeter:
         """
 
         await self._recorder.record_call(record, pricing_at=pricing_at)
+        if attribution is not None and self._attribution_edge_store is not None:
+            await self._append_attribution_edge(record=record, attribution=attribution)
         if not self._surfaces_v2 or self._emit_event is None:
             return
         ledger_purpose = self.ledger_purpose_for(record.purpose)
@@ -161,6 +220,39 @@ class UsageMeter:
                     "metadata": {
                         "run_id": record.run_id,
                         "purpose": record.purpose,
+                    },
+                },
+                exc_info=True,
+            )
+
+    async def _append_attribution_edge(
+        self,
+        *,
+        record: RuntimeModelCallUsageRecord,
+        attribution: UsageAttribution,
+    ) -> None:
+        """Best-effort durable edge publication after canonical usage write.
+
+        The edge store independently verifies usage-row ownership.  A failure
+        is deliberately fail-soft, matching existing usage metering semantics:
+        spending must remain observable even if a later attribution target
+        cannot be persisted.
+        """
+
+        try:
+            await self._attribution_edge_store.append_usage_attribution_edge(
+                org_id=record.org_id,
+                edge=attribution.to_edge(record),
+            )
+        except Exception:
+            self._logger.warning(
+                _MeterLogger.EVENT_EDGE_APPEND_FAILED,
+                extra={
+                    "safe_message": _MeterLogger.SAFE_EDGE_APPEND,
+                    "metadata": {
+                        "usage_record_id": record.id,
+                        "operation_id": attribution.operation_id,
+                        "run_id": record.run_id,
                     },
                 },
                 exc_info=True,
@@ -234,11 +326,13 @@ class MeteredModelInvocation:
         meter: UsageMeter,
         run: RunRecord,
         purpose: Purpose,
+        attribution: UsageAttribution | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self._meter = meter
         self._run = run
         self._purpose = purpose
+        self._attribution = attribution
         self._logger = logger or logging.getLogger("agent_runtime.usage_meter")
 
     async def record_attempt(
@@ -249,6 +343,7 @@ class MeteredModelInvocation:
         output_tokens: int | None,
         duration_ms: int,
         surface_id: str | None = None,
+        attribution: UsageAttribution | None = None,
     ) -> None:
         """Record one model completion attempt. Never raises into the caller."""
 
@@ -275,7 +370,11 @@ class MeteredModelInvocation:
                 exc_info=True,
             )
             return
-        await self._meter.record_call(record, pricing_at=record.created_at)
+        await self._meter.record_call(
+            record,
+            pricing_at=record.created_at,
+            attribution=attribution or self._attribution,
+        )
 
     def _build_record(
         self,
@@ -321,5 +420,6 @@ class MeteredModelInvocation:
 
 __all__ = [
     "MeteredModelInvocation",
+    "UsageAttribution",
     "UsageMeter",
 ]

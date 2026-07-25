@@ -68,6 +68,7 @@ from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
+    UsageAttributionEdge,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -3062,6 +3063,137 @@ class PostgresRuntimeApiStore:
                 ),
             )
 
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append one immutable edge after verifying its canonical usage row.
+
+        The ``INSERT ... SELECT`` keeps the usage-record ownership check and
+        edge write in one tenant-scoped transaction.  ``ON CONFLICT`` handles
+        at-least-once delivery without ever rewriting a historical usage row.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            inserted = await conn.execute(
+                """
+                INSERT INTO runtime_usage_attribution_edges (
+                    edge_id, org_id, usage_record_id, operation_id,
+                    artifact_id, stage_id, surface_id, relationship, created_at
+                )
+                SELECT
+                    %s, usage.org_id, %s, %s,
+                    %s, %s, %s, %s, %s
+                  FROM runtime_model_call_usage AS usage
+                 WHERE usage.org_id = %s AND usage.id = %s
+                ON CONFLICT DO NOTHING
+                RETURNING edge_id
+                """,
+                (
+                    edge.edge_id,
+                    edge.usage_record_id,
+                    edge.operation_id,
+                    edge.artifact_id,
+                    edge.stage_id,
+                    edge.surface_id,
+                    edge.relationship.value,
+                    edge.created_at,
+                    org_id,
+                    edge.usage_record_id,
+                ),
+            )
+            if await inserted.fetchone() is not None:
+                return True
+
+            by_edge_id = await conn.execute(
+                """
+                SELECT usage_record_id, operation_id, artifact_id, stage_id,
+                       surface_id, relationship
+                  FROM runtime_usage_attribution_edges
+                 WHERE org_id = %s AND edge_id = %s
+                """,
+                (org_id, edge.edge_id),
+            )
+            existing_by_edge_id = await by_edge_id.fetchone()
+            if existing_by_edge_id is not None:
+                if (
+                    str(existing_by_edge_id["usage_record_id"]) == edge.usage_record_id
+                    and str(existing_by_edge_id["operation_id"]) == edge.operation_id
+                    and existing_by_edge_id["artifact_id"] == edge.artifact_id
+                    and existing_by_edge_id["stage_id"] == edge.stage_id
+                    and existing_by_edge_id["surface_id"] == edge.surface_id
+                    and str(existing_by_edge_id["relationship"])
+                    == edge.relationship.value
+                ):
+                    return False
+                raise ValueError("usage attribution edge_id already exists")
+
+            by_natural_key = await conn.execute(
+                """
+                SELECT edge_id
+                  FROM runtime_usage_attribution_edges
+                 WHERE org_id = %s
+                   AND usage_record_id = %s
+                   AND operation_id = %s
+                   AND artifact_id IS NOT DISTINCT FROM %s
+                   AND stage_id IS NOT DISTINCT FROM %s
+                   AND surface_id IS NOT DISTINCT FROM %s
+                   AND relationship = %s
+                """,
+                (
+                    org_id,
+                    edge.usage_record_id,
+                    edge.operation_id,
+                    edge.artifact_id,
+                    edge.stage_id,
+                    edge.surface_id,
+                    edge.relationship.value,
+                ),
+            )
+            if await by_natural_key.fetchone() is not None:
+                return False
+
+            usage_record = await conn.execute(
+                """
+                SELECT 1
+                  FROM runtime_model_call_usage
+                 WHERE org_id = %s AND id = %s
+                """,
+                (org_id, edge.usage_record_id),
+            )
+            if await usage_record.fetchone() is None:
+                raise LookupError(
+                    "usage attribution requires an in-tenant usage record"
+                )
+            raise RuntimeError("unable to append usage attribution edge")
+
+    @reader
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Read edge projections without joining them into usage aggregation."""
+
+        if not usage_record_ids:
+            return ()
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT edge_id, usage_record_id, operation_id, artifact_id,
+                       stage_id, surface_id, relationship, created_at
+                  FROM runtime_usage_attribution_edges
+                 WHERE org_id = %s AND usage_record_id = ANY(%s)
+                 ORDER BY created_at ASC, edge_id ASC
+                """,
+                (org_id, list(usage_record_ids)),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._usage_attribution_edge(row) for row in rows)
+
     async def update_run_usage_cost(
         self,
         *,
@@ -5238,6 +5370,25 @@ class PostgresRuntimeApiStore:
                 if row.get("pricing_version") is not None
                 else None
             ),
+            created_at=cls._coerce_datetime(row["created_at"]),
+        )
+
+    @classmethod
+    def _usage_attribution_edge(cls, row: dict[str, object]) -> UsageAttributionEdge:
+        return UsageAttributionEdge(
+            edge_id=str(row["edge_id"]),
+            usage_record_id=str(row["usage_record_id"]),
+            operation_id=str(row["operation_id"]),
+            artifact_id=(
+                str(row["artifact_id"]) if row.get("artifact_id") is not None else None
+            ),
+            stage_id=(
+                str(row["stage_id"]) if row.get("stage_id") is not None else None
+            ),
+            surface_id=(
+                str(row["surface_id"]) if row.get("surface_id") is not None else None
+            ),
+            relationship=str(row["relationship"]),
             created_at=cls._coerce_datetime(row["created_at"]),
         )
 

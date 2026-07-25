@@ -40,6 +40,7 @@ from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
+    UsageAttributionEdge,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -160,6 +161,11 @@ class InMemoryRuntimeApiStore:
         # Usage tracking — tests assert against these dicts directly.
         self.run_usage: dict[str, RuntimeRunUsageRecord] = {}
         self.model_call_usage: list[RuntimeModelCallUsageRecord] = []
+        # Attribution is a separate immutable relation.  Keeping it outside
+        # ``model_call_usage`` ensures that adding several edges can never
+        # inflate canonical usage totals.
+        self.usage_attribution_edges: dict[str, tuple[str, UsageAttributionEdge]] = {}
+        self._usage_attribution_edge_ids_by_key: dict[tuple[object, ...], str] = {}
         self.pricing_rows: list[ModelPricingRecord] = []
         self.user_daily_usage: dict[
             tuple[str, str, str, str, str], UsageDailyUserRow
@@ -1628,6 +1634,60 @@ class InMemoryRuntimeApiStore:
     ) -> None:
         """Append a per-call usage record."""
         self.model_call_usage.append(record)
+
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append one immutable usage-to-operation edge.
+
+        The natural identity makes retry delivery idempotent while a distinct
+        usage-record ID (for example, a model retry) remains a distinct edge.
+        """
+
+        if not any(
+            record.id == edge.usage_record_id and record.org_id == org_id
+            for record in self.model_call_usage
+        ):
+            raise LookupError("usage attribution requires an in-tenant usage record")
+
+        natural_key = (org_id, *edge.idempotency_key)
+        if natural_key in self._usage_attribution_edge_ids_by_key:
+            return False
+
+        existing = self.usage_attribution_edges.get(edge.edge_id)
+        if existing is not None:
+            if existing == (org_id, edge):
+                return False
+            raise ValueError("usage attribution edge_id already exists")
+
+        self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
+        self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
+        return True
+
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Return only edges belonging to the trusted organization scope."""
+
+        requested_ids = set(usage_record_ids)
+        if not requested_ids:
+            return ()
+        return tuple(
+            sorted(
+                (
+                    edge
+                    for stored_org_id, edge in self.usage_attribution_edges.values()
+                    if stored_org_id == org_id and edge.usage_record_id in requested_ids
+                ),
+                key=lambda edge: (edge.created_at, edge.edge_id),
+            )
+        )
 
     async def update_run_usage_cost(
         self,

@@ -14,7 +14,12 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.models import ModelConfigResolver
-from agent_runtime.persistence.records import UsageDailyUserRow
+from agent_runtime.persistence.records import (
+    RuntimeModelCallUsageRecord,
+    UsageAttributionEdge,
+    UsageAttributionRelationship,
+    UsageDailyUserRow,
+)
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_adapters.in_memory.account_merge import InMemoryAccountMergeRekeyer
@@ -186,6 +191,56 @@ class TestInMemoryAccountMergeRekey(_MergeSeedMixin):
         second.rekey_store(store)
         assert second.tables == {}
         assert second.warnings == []
+
+    async def test_usage_attribution_edges_follow_usage_rekey_immutably(self) -> None:
+        store = InMemoryRuntimeApiStore()
+        usage = RuntimeModelCallUsageRecord(
+            id="usage-absorbed",
+            org_id=self._ABSORBED_ORG,
+            run_id="run-absorbed",
+            conversation_id="conversation-absorbed",
+            trace_id="trace-absorbed",
+            model_provider="openai",
+            model_name="gpt-5.4-mini",
+            input_tokens=10,
+            output_tokens=4,
+            total_tokens=14,
+            duration_ms=20,
+        )
+        edge = UsageAttributionEdge(
+            edge_id="edge-absorbed",
+            usage_record_id=usage.id,
+            operation_id="operation-absorbed",
+            artifact_id="artifact-absorbed",
+            relationship=UsageAttributionRelationship.PRODUCED,
+        )
+        await store.record_model_call_usage(usage)
+        assert await store.append_usage_attribution_edge(
+            org_id=self._ABSORBED_ORG, edge=edge
+        )
+
+        rekeyer = self._rekeyer()
+        rekeyer.rekey_store(store)
+
+        assert store.model_call_usage[0].org_id == self._SURVIVOR_ORG
+        stored_org_id, stored_edge = store.usage_attribution_edges[edge.edge_id]
+        assert stored_org_id == self._SURVIVOR_ORG
+        assert stored_edge is edge
+        assert (
+            await store.list_usage_attribution_edges_for_usage_records(
+                org_id=self._ABSORBED_ORG,
+                usage_record_ids=(usage.id,),
+            )
+            == ()
+        )
+        assert await store.list_usage_attribution_edges_for_usage_records(
+            org_id=self._SURVIVOR_ORG,
+            usage_record_ids=(usage.id,),
+        ) == (edge,)
+        assert not await store.append_usage_attribution_edge(
+            org_id=self._SURVIVOR_ORG, edge=edge
+        )
+        assert rekeyer.tables["runtime_usage_attribution_edges"] == 1
 
     async def test_idempotency_key_collision_drops_absorbed_entry(self) -> None:
         """Same idempotency key on both accounts → survivor entry wins."""

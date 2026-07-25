@@ -220,6 +220,7 @@ import type {
   ArtifactRuntimeEventPayloadMap,
   ArtifactRuntimeEventType,
   LedgerEventPayloadMap,
+  UsageAttributionRelationship,
   UsageRecordedPayload,
   ActionClassifiedPayload,
   ReadExecutedPayload,
@@ -1558,6 +1559,30 @@ export interface RunUsageCallRow {
   duration_ms: number;
   cost_micro_usd: number | null;
   created_at: string;
+  /** Immutable operation/output links. Multiple links never duplicate this
+   * call's tokens or cost in canonical totals. */
+  attribution_edges: UsageAttributionEdgeRow[];
+}
+
+/** Public read-model form of one immutable usage attribution edge. */
+export interface UsageAttributionEdgeRow {
+  edge_id: string;
+  usage_record_id: string;
+  operation_id: string;
+  artifact_id: string | null;
+  stage_id: string | null;
+  surface_id: string | null;
+  relationship: UsageAttributionRelationship;
+  created_at: string;
+}
+
+/** Per-operation canonical usage total, deduped by usage record ID. */
+export interface UsageOperationRow {
+  operation_id: string;
+  artifact_ids: string[];
+  stage_ids: string[];
+  surface_ids: string[];
+  total: UsageTotals;
 }
 
 export interface RunUsageBreakdown {
@@ -1574,6 +1599,13 @@ export interface RunUsageBreakdown {
   status: string;
   total: UsageTotals;
   by_call: RunUsageCallRow[];
+  by_operation: UsageOperationRow[];
+}
+
+/** Response from `GET /v1/usage/runs/{run_id}/calls`. */
+export interface RunUsageCallsResponse {
+  run_id: string;
+  calls: RunUsageCallRow[];
 }
 
 export interface UsageRunRow {

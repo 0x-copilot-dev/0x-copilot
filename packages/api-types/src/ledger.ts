@@ -841,11 +841,14 @@ export type UsageAttributionRelationship =
   | "shaped";
 
 export interface UsageAttributionEdge {
+  readonly edge_id: string;
   readonly usage_record_id: string;
   readonly operation_id: string;
   readonly artifact_id?: string;
   readonly stage_id?: string;
+  readonly surface_id?: string;
   readonly relationship: UsageAttributionRelationship;
+  readonly created_at: string;
 }
 
 export interface OperationUsageTotals {

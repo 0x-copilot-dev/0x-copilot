@@ -160,6 +160,7 @@ class InMemoryAccountMergeRekeyer:
         self._rekey_mapping("runtime_approval_batches", store.approval_batches)
         self._rekey_mapping("runtime_run_usage", store.run_usage)
         self._rekey_list("runtime_model_call_usage", store.model_call_usage)
+        self._rekey_usage_attribution_edges(store)
         self._rekey_list("runtime_compression_events", store.compression_events)
         self._rekey_list("runtime_deletion_evidence", store.deletion_evidence)
         self._rekey_queue(store)
@@ -184,6 +185,33 @@ class InMemoryAccountMergeRekeyer:
         self._rekey_tool_budgets(store)
         self._rekey_retention_policies(store)
         self._rekey_workspace_defaults(store)
+
+    def _rekey_usage_attribution_edges(self, store: InMemoryRuntimeApiStore) -> None:
+        """Move edge tenancy without changing any immutable link field.
+
+        The PostgreSQL adapter gets this behavior from the edge table's
+        composite foreign key ``ON UPDATE CASCADE`` when its canonical usage
+        parent moves.  The in-memory adapter keeps organization scope outside
+        the edge record, so it must mirror that cascade explicitly.
+        """
+
+        moved = 0
+        for edge_id, (org_id, edge) in list(store.usage_attribution_edges.items()):
+            if org_id != self._absorbed_org:
+                continue
+            old_key = (org_id, *edge.idempotency_key)
+            new_key = (self._survivor_org, *edge.idempotency_key)
+            existing_edge_id = store._usage_attribution_edge_ids_by_key.get(new_key)
+            if existing_edge_id is not None and existing_edge_id != edge_id:
+                # This cannot occur with globally unique canonical usage IDs,
+                # but fail closed if an inconsistent test fixture or legacy
+                # import attempts to collapse two immutable links.
+                raise ValueError("usage attribution edge natural-key collision")
+            store.usage_attribution_edges[edge_id] = (self._survivor_org, edge)
+            store._usage_attribution_edge_ids_by_key.pop(old_key, None)
+            store._usage_attribution_edge_ids_by_key[new_key] = edge_id
+            moved += 1
+        self._count("runtime_usage_attribution_edges", moved)
 
     def _rekey_queue(self, store: InMemoryRuntimeApiStore) -> None:
         """Rewrite tenancy on queued commands and their outbox payloads.

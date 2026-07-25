@@ -203,7 +203,7 @@ class OperationTreeProjection:
         edges: Iterable[UsageAttributionEdge],
         records: Mapping[str, OperationUsageRecord],
     ) -> None:
-        seen: set[tuple[str, str, str | None, str | None, str]] = set()
+        seen: set[tuple[str, str, str | None, str | None, str | None, str]] = set()
         for edge in edges:
             if edge.idempotency_key in seen:
                 continue
