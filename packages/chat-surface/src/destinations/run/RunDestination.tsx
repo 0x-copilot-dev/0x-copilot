@@ -188,6 +188,7 @@ import { useRunSession } from "./useRunSession";
 
 const EMPTY_DECISIONS: ReadonlyMap<string, RunApprovalDecision> = new Map();
 const EMPTY_CLOSED_URIS: ReadonlySet<string> = new Set();
+const EMPTY_EXPLICIT_ARTIFACT_TABS: readonly ExplicitArtifactTab[] = [];
 // Generative Surfaces v2 mount-pass empties (flag-off = referentially stable so
 // the memos/props never churn when the cockpit is byte-identical to today).
 const EMPTY_CARDS: readonly PendingCard[] = [];
@@ -248,6 +249,35 @@ function artifactKindForRendererHint(hint: string | null): ArtifactKind | null {
       return "file";
     default:
       return null;
+  }
+}
+
+/**
+ * A deliberately opened source artifact is navigation state, not provenance
+ * payload. It keeps only the already re-authorized logical identity needed to
+ * form an artifact URI; opaque source refs, physical paths, bodies, and raw
+ * tool arguments never enter the canvas state.
+ */
+interface ExplicitArtifactTab {
+  readonly kind: ArtifactKind;
+  readonly artifactId: string;
+  readonly revision: number;
+}
+
+function explicitArtifactTabUri(tab: ExplicitArtifactTab): string {
+  return artifactUri(tab.kind, tab.artifactId, tab.revision);
+}
+
+function explicitArtifactTabTitle(tab: ExplicitArtifactTab): string {
+  switch (tab.kind) {
+    case "code":
+      return `Code artifact · r${tab.revision}`;
+    case "document":
+      return `Document artifact · r${tab.revision}`;
+    case "dataset":
+      return `Dataset artifact · r${tab.revision}`;
+    case "file":
+      return `File artifact · r${tab.revision}`;
   }
 }
 
@@ -347,6 +377,8 @@ const CANCELLABLE_RUN_STATUSES: ReadonlySet<AgentRunStatus> = new Set([
 ]);
 /** Surface-tab strip cap (PRD-04 — "+N more" overflow lands later). */
 const MAX_SURFACE_TABS = 8;
+/** Re-authorized source opens are bounded, ephemeral navigation entries. */
+const MAX_EXPLICIT_ARTIFACT_TABS = 4;
 
 /**
  * The full payload the empty-state composer starts a run with. `goal` is the
@@ -654,6 +686,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setPinnedUri(null);
     setClosedUris(EMPTY_CLOSED_URIS);
     setReceiptV2Opened(false);
+    setExplicitArtifactTabs(EMPTY_EXPLICIT_ARTIFACT_TABS);
     setOpeningSourceId(null);
     setSourceOpenMessage(null);
     sourceOpenTokenRef.current += 1;
@@ -702,6 +735,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // after a deliberate user action, while the terminal/zero-op fold remains
   // available in Focus chat as a non-opening accountability surface.
   const [receiptV2Opened, setReceiptV2Opened] = useState(false);
+  // E1 D5: a successful source-open becomes a bounded, ephemeral tab even
+  // when lifecycle has no canvas subject for that artifact. This stores only
+  // re-authorized logical identity — never provenance references or content.
+  const [explicitArtifactTabs, setExplicitArtifactTabs] = useState<
+    readonly ExplicitArtifactTab[]
+  >(EMPTY_EXPLICIT_ARTIFACT_TABS);
   // E1 D5: source-open replies are tied to a monotonic token so an in-flight
   // request from a prior run cannot pin a target into the newly selected run.
   const [openingSourceId, setOpeningSourceId] = useState<string | null>(null);
@@ -757,6 +796,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setWorkspaceStageBusyId(null);
     setWorkspaceStageMessages(new Map());
     setReceiptV2Opened(false);
+    setExplicitArtifactTabs(EMPTY_EXPLICIT_ARTIFACT_TABS);
     setOpeningSourceId(null);
     setSourceOpenMessage(null);
     sourceOpenTokenRef.current += 1;
@@ -779,6 +819,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setPinnedUri((prev) => (prev === uri ? null : prev));
     if (isReceiptV2Uri(uri)) {
       setReceiptV2Opened(false);
+    }
+    if (parseArtifactSurfaceUri(uri) !== null) {
+      setExplicitArtifactTabs((previous) => {
+        const next = previous.filter(
+          (tab) => explicitArtifactTabUri(tab) !== uri,
+        );
+        return next.length === previous.length ? previous : next;
+      });
     }
   }, []);
   const handleFollowLive = useCallback((): void => {
@@ -974,6 +1022,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setPinnedUri(null);
       setClosedUris(EMPTY_CLOSED_URIS);
       setReceiptV2Opened(false);
+      setExplicitArtifactTabs(EMPTY_EXPLICIT_ARTIFACT_TABS);
       setOpeningSourceId(null);
       setSourceOpenMessage(null);
       sourceOpenTokenRef.current += 1;
@@ -1517,15 +1566,59 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     ledger.lastLedgerSeq,
   ]);
 
-  // SDR §11 strictness: flag on ⇒ tabs come only from B3's lifecycle fold plus
-  // this explicit, user-opened canonical receipt; flag off ⇒ the old v1 selector
-  // remains byte-identical. A receipt never arrives here automatically.
+  // A provenance artifact has no requirement to have been presented as a
+  // lifecycle canvas subject. Keep deliberate, re-authorized opens visible in
+  // Studio in that case, while lifecycle remains canonical whenever it does
+  // already carry the same artifact URI.
+  const explicitArtifactCanvasTabs = useMemo(() => {
+    if (!surfacesV2)
+      return [] as Array<{ uri: string; title: string; lastSeq: number }>;
+    const lifecycleUris = new Set(v2CanvasTabs.tabs.map((tab) => tab.uri));
+    return explicitArtifactTabs.flatMap((tab) => {
+      const uri = explicitArtifactTabUri(tab);
+      return lifecycleUris.has(uri)
+        ? []
+        : [
+            {
+              uri,
+              title: explicitArtifactTabTitle(tab),
+              lastSeq: ledger.lastLedgerSeq,
+            },
+          ];
+    });
+  }, [
+    surfacesV2,
+    v2CanvasTabs.tabs,
+    explicitArtifactTabs,
+    ledger.lastLedgerSeq,
+  ]);
+
+  const explicitV2TabUris = useMemo(() => {
+    const uris = new Set<string>();
+    if (!surfacesV2) return uris;
+    for (const tab of explicitArtifactTabs)
+      uris.add(explicitArtifactTabUri(tab));
+    if (receiptV2Tab !== null) uris.add(receiptV2Tab.uri);
+    return uris;
+  }, [surfacesV2, explicitArtifactTabs, receiptV2Tab]);
+
+  // SDR §11 strictness: flag on ⇒ tabs come from B3's lifecycle fold plus
+  // bounded, explicit receipt/source navigation state; flag off ⇒ the old v1
+  // selector remains byte-identical. Neither source nor receipt opens itself.
   const surfaceTabList = useMemo(() => {
     if (!surfacesV2) return projectSurfaceTabs(session.events);
-    return receiptV2Tab === null
-      ? v2CanvasTabs.tabs
-      : [...v2CanvasTabs.tabs, receiptV2Tab];
-  }, [surfacesV2, v2CanvasTabs, receiptV2Tab, session.events]);
+    return [
+      ...v2CanvasTabs.tabs,
+      ...explicitArtifactCanvasTabs,
+      ...(receiptV2Tab === null ? [] : [receiptV2Tab]),
+    ];
+  }, [
+    surfacesV2,
+    v2CanvasTabs.tabs,
+    explicitArtifactCanvasTabs,
+    receiptV2Tab,
+    session.events,
+  ]);
   // Content hydration for the v2 canvas (SurfaceStore endpoint via Transport).
   // Called unconditionally (Rules of Hooks); inert when `surfacesV2` is false
   // (`enabled: false` ⇒ no request, no state churn).
@@ -1549,22 +1642,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   );
   const visibleSurfaceTabs = useMemo(() => {
     const eligible = surfaceTabList.filter((tab) => !closedUris.has(tab.uri));
-    const capped = eligible.slice(0, MAX_SURFACE_TABS);
-    // An explicitly opened receipt must stay visible even when a long run
-    // already reached the normal tab cap. It is still placed last so it does
-    // not become the auto-follow/newest surface.
-    if (
-      receiptV2Tab !== null &&
-      eligible.some((tab) => tab.uri === receiptV2Tab.uri) &&
-      !capped.some((tab) => tab.uri === receiptV2Tab.uri)
-    ) {
-      return [
-        ...capped.slice(0, Math.max(0, MAX_SURFACE_TABS - 1)),
-        receiptV2Tab,
-      ];
-    }
-    return capped;
-  }, [surfaceTabList, closedUris, receiptV2Tab]);
+    // Explicit receipt/source navigation must remain visible above the normal
+    // lifecycle cap. Their state is bounded (four artifact opens + one
+    // receipt), so this cannot create an unbounded Studio strip.
+    const explicit = eligible.filter((tab) => explicitV2TabUris.has(tab.uri));
+    const lifecycle = eligible.filter((tab) => !explicitV2TabUris.has(tab.uri));
+    return [
+      ...lifecycle.slice(0, Math.max(0, MAX_SURFACE_TABS - explicit.length)),
+      ...explicit,
+    ];
+  }, [surfaceTabList, closedUris, explicitV2TabUris]);
   const newestUri =
     visibleSurfaceTabs.length > 0 ? visibleSurfaceTabs[0].uri : "";
   const lifecyclePreferredUri = visibleSurfaceTabs.some(
@@ -2050,6 +2137,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             response.artifact_kind,
             response.artifact_id,
             response.artifact_revision,
+          );
+          const openedArtifact: ExplicitArtifactTab = {
+            kind: response.artifact_kind,
+            artifactId: response.artifact_id,
+            revision: response.artifact_revision,
+          };
+          setExplicitArtifactTabs((previous) =>
+            [
+              openedArtifact,
+              ...previous.filter((tab) => explicitArtifactTabUri(tab) !== uri),
+            ].slice(0, MAX_EXPLICIT_ARTIFACT_TABS),
           );
           setClosedUris((previous) => {
             if (!previous.has(uri)) return previous;
