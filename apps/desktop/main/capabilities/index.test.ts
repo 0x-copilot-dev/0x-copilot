@@ -39,6 +39,7 @@ describe("createCapabilityService workspace composition", () => {
         workspaceWriteIsolation: "unavailable",
         nativeWorkspacePrimitives: "unavailable",
       });
+      expect(service.workspaceWritesAvailable()).toBe(false);
       const headers = {
         authorization: `Bearer ${service.brokerAuthToken()}`,
         "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,

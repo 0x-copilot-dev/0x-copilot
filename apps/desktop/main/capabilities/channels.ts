@@ -19,6 +19,8 @@ export const CAPABILITY_CHANNELS = {
   listGrants: "capability.list-grants",
   /** Renderer → main: revoke a grant by id. */
   revokeGrant: "capability.revoke-grant",
+  /** Renderer → main: decide one digest-pinned workspace stage revision. */
+  decideWorkspaceApproval: "capability.decide-workspace-approval",
 } as const;
 
 export type CapabilityChannelName =
