@@ -75,6 +75,55 @@ def active_hold_predicate(
     """
 
 
+def active_hold_for_conversation_predicate(
+    *,
+    org_id_expression: str,
+    user_id_expression: str,
+    conversation_id_expression: str,
+) -> str:
+    """SQL expression proving no active hold covers a conversation-owned row.
+
+    The arguments are fixed adapter SQL expressions, never user input.  This
+    lifts the same authoritative scope mapping used by artifact fencing to
+    messages, events, and run-owned context payloads.
+    """
+
+    return f"""
+        NOT EXISTS (
+            SELECT 1
+              FROM runtime_legal_holds h
+             WHERE h.org_id = {org_id_expression}
+               AND h.released_at IS NULL
+               AND (
+                    (h.scope = 'org' AND h.resource_id = {org_id_expression})
+                    OR (h.scope = 'user' AND h.user_id = {user_id_expression})
+                    OR (
+                        h.scope = 'conversation'
+                        AND h.resource_id = {conversation_id_expression}
+                    )
+               )
+        )
+    """
+
+
+def active_hold_for_org_predicate(*, org_id_expression: str) -> str:
+    """Fail-closed expression for data without a safe ownership edge.
+
+    Checkpoint and legacy memory rows cannot reliably be mapped to a concrete
+    conversation in the current schema.  If any active hold exists in their
+    tenant, retention conservatively leaves those rows intact rather than
+    guessing at an owner and risking an irreversible deletion.
+    """
+
+    return f"""
+        NOT EXISTS (
+            SELECT 1 FROM runtime_legal_holds h
+             WHERE h.org_id = {org_id_expression}
+               AND h.released_at IS NULL
+        )
+    """
+
+
 async def has_active_hold_for_scope(
     conn,
     *,
@@ -176,6 +225,8 @@ def hold_fence_tokens_for_rows(
 __all__ = (
     "acquire_artifact_hold_fences",
     "active_hold_predicate",
+    "active_hold_for_conversation_predicate",
+    "active_hold_for_org_predicate",
     "has_active_hold_for_scope",
     "hold_fence_tokens",
     "hold_fence_tokens_for_rows",

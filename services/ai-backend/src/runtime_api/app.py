@@ -70,6 +70,7 @@ from runtime_api.http.retention_routes import (
     RetentionAdminRouter,
     RetentionMemberRouter,
 )
+from runtime_api.http.legal_hold_routes import LegalHoldRouter
 from runtime_api.http.agent_usage import AgentUsageApiRouter
 from runtime_api.http.llm_embed_routes import LlmEmbedApiRouter
 from runtime_api.http.local_models_routes import LocalModelsApiRouter
@@ -327,6 +328,7 @@ class RuntimeApiAppFactory:
         # P3-A2 — todo extraction proposals (list/accept/reject).
         app.include_router(TodoExtractionsApiRouter.create_router())
         app.include_router(RetentionAdminRouter.create_router())
+        app.include_router(LegalHoldRouter.create_router())
         app.include_router(RetentionMemberRouter.create_router())
         app.include_router(InternalRuntimeApiRouter.create_router())
         # Account-linking PRD §6.4 — the backend merge saga's re-key call.

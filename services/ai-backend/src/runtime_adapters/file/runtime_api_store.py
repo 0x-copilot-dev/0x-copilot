@@ -74,6 +74,9 @@ from agent_runtime.persistence.records import (
     RetentionKind,
     RetentionPolicyRecord,
     RetentionSweepOutcome,
+    LegalHoldConflict,
+    LegalHoldMutationResult,
+    LegalHoldRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -173,6 +176,7 @@ class _Tables:
     BUDGET_STATES = "budget_states"
     BUDGET_RESERVATIONS = "budget_reservations"
     RETENTION_POLICIES = "retention_policies"
+    LEGAL_HOLDS = "legal_holds"
     DELETION_EVIDENCE = "deletion_evidence"
     WORKSPACE_DEFAULTS = "workspace_defaults"
     AUDIT_LOG = "audit_log"
@@ -236,22 +240,26 @@ class FileRuntimeApiStore:
         org_id: str,
         deleted_at: datetime,
     ) -> object | None:
-        jobs = self._artifact_lifecycle_jobs
-        if jobs is None:
-            return None
-        protected = tuple(
-            sorted(
-                conversation.conversation_id
-                for conversation in self.conversations.values()
-                if conversation.org_id == org_id
-                and LegalHoldPolicy.is_on_hold(conversation)
+        # State-ledger legal-hold mutations use this same lock.  Holding it
+        # through the artifact call gives the desktop adapter the same
+        # linearization guarantee that Postgres gets from advisory fences.
+        async with self._state_lock:
+            jobs = self._artifact_lifecycle_jobs
+            if jobs is None:
+                return None
+            protected = tuple(
+                sorted(
+                    conversation.conversation_id
+                    for conversation in self.conversations.values()
+                    if conversation.org_id == org_id
+                    and self._conversation_is_held(conversation)
+                )
             )
-        )
-        return await jobs.on_org_deleted(
-            org_id=org_id,
-            deleted_at=deleted_at,
-            protected_conversation_ids=protected,
-        )
+            return await jobs.on_org_deleted(
+                org_id=org_id,
+                deleted_at=deleted_at,
+                protected_conversation_ids=protected,
+            )
 
     def __init__(
         self,
@@ -326,6 +334,7 @@ class FileRuntimeApiStore:
         self.budget_states: dict[tuple[str, str], BudgetStateRecord] = {}
         self.budget_reservations: dict[str, BudgetReservationRecord] = {}
         self.retention_policies: dict[str, tuple[RetentionPolicyRecord, ...]] = {}
+        self.legal_holds: dict[str, LegalHoldRecord] = {}
         self.deletion_evidence: list = []
         self.workspace_defaults: dict[str, WorkspaceDefaultsRecord] = {}
         self.tool_budgets: dict[str, ToolBudgetRecord] = {
@@ -819,6 +828,9 @@ class FileRuntimeApiStore:
             r = RetentionPolicyRecord.model_validate(rec)
             retention.setdefault(r.org_id, []).append(r)
         self.retention_policies = {k: tuple(v) for k, v in retention.items()}
+        for rec in self._ledger(_Tables.LEGAL_HOLDS).load_puts():
+            hold = LegalHoldRecord.model_validate(rec)
+            self.legal_holds[hold.id] = hold
         for rec in self._ledger(_Tables.WORKSPACE_DEFAULTS).load_puts():
             r = WorkspaceDefaultsRecord.model_validate(rec)
             self.workspace_defaults[r.org_id] = r
@@ -916,6 +928,7 @@ class FileRuntimeApiStore:
             (_Tables.SUBAGENT_DAILY, list(self.subagent_daily_usage.values())),
             (_Tables.PURPOSE_DAILY, list(self.purpose_daily_usage.values())),
             (_Tables.BUDGETS, list(self.budgets.values())),
+            (_Tables.LEGAL_HOLDS, list(self.legal_holds.values())),
             (_Tables.WORKSPACE_DEFAULTS, list(self.workspace_defaults.values())),
         ]
 
@@ -1145,6 +1158,127 @@ class FileRuntimeApiStore:
             return None
         return conversation
 
+    async def has_legal_hold_subject(self, *, org_id: str, user_id: str) -> bool:
+        return any(
+            conversation.org_id == org_id and conversation.user_id == user_id
+            for conversation in self.conversations.values()
+        )
+
+    async def create_legal_hold(
+        self,
+        *,
+        record: LegalHoldRecord,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult:
+        async with self._state_lock:
+            existing = next(
+                (
+                    hold
+                    for hold in self.legal_holds.values()
+                    if hold.org_id == record.org_id
+                    and hold.created_by_user_id == record.created_by_user_id
+                    and hold.create_idempotency_key == record.create_idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing.create_request_digest != record.create_request_digest:
+                    raise LegalHoldConflict("idempotency key conflicts")
+                return LegalHoldMutationResult(hold=existing, replayed=True)
+            self.legal_holds[record.id] = record
+            self._ledger(_Tables.LEGAL_HOLDS).append_put(record.model_dump(mode="json"))
+            self._append_audit_log_locked(
+                event_type="legal_hold.created", record=audit_event
+            )
+            return LegalHoldMutationResult(hold=record)
+
+    async def list_legal_holds(
+        self,
+        *,
+        org_id: str,
+        include_released: bool,
+        limit: int,
+    ) -> Sequence[LegalHoldRecord]:
+        rows = [
+            hold
+            for hold in self.legal_holds.values()
+            if hold.org_id == org_id and (include_released or hold.released_at is None)
+        ]
+        rows.sort(key=lambda hold: (hold.created_at, hold.id), reverse=True)
+        return tuple(rows[:limit])
+
+    async def release_legal_hold(
+        self,
+        *,
+        org_id: str,
+        hold_id: str,
+        expected_revision: int,
+        released_by_user_id: str,
+        idempotency_key: str,
+        request_digest: str,
+        released_at: datetime,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult | None:
+        async with self._state_lock:
+            hold = self.legal_holds.get(hold_id)
+            if hold is None or hold.org_id != org_id:
+                return None
+            if hold.released_at is not None:
+                if (
+                    hold.released_by_user_id == released_by_user_id
+                    and hold.release_idempotency_key == idempotency_key
+                    and hold.release_request_digest == request_digest
+                ):
+                    return LegalHoldMutationResult(hold=hold, replayed=True)
+                raise LegalHoldConflict("legal hold is already released")
+            if hold.revision != expected_revision:
+                raise LegalHoldConflict("legal hold revision conflicts")
+            updated = hold.model_copy(
+                update={
+                    "released_by_user_id": released_by_user_id,
+                    "released_at": released_at,
+                    "revision": hold.revision + 1,
+                    "release_idempotency_key": idempotency_key,
+                    "release_request_digest": request_digest,
+                }
+            )
+            self.legal_holds[hold_id] = updated
+            self._ledger(_Tables.LEGAL_HOLDS).append_put(
+                updated.model_dump(mode="json")
+            )
+            self._append_audit_log_locked(
+                event_type="legal_hold.released",
+                record={
+                    **audit_event,
+                    "metadata": {
+                        "scope": updated.scope.value,
+                        "reason_code": updated.reason_code.value,
+                        "revision": updated.revision,
+                    },
+                },
+            )
+            return LegalHoldMutationResult(hold=updated)
+
+    def _conversation_is_held(self, conversation: ConversationRecord) -> bool:
+        if LegalHoldPolicy.is_on_hold(conversation):
+            return True
+        return any(
+            hold.org_id == conversation.org_id
+            and hold.released_at is None
+            and (
+                (hold.scope.value == "org" and hold.resource_id == conversation.org_id)
+                or (
+                    hold.scope.value == "user"
+                    and hold.subject_user_id == conversation.user_id
+                )
+                or (
+                    hold.scope.value == "conversation"
+                    and hold.resource_id == conversation.conversation_id
+                )
+            )
+            for hold in self.legal_holds.values()
+        )
+
     # PRD-09 D3 — the desktop catalog is single-user and bounded; the bucket +
     # keyset path fetches a generous slice from the index and scopes/pages in
     # Python (via the shared ``matches_conversation_bucket`` predicate) rather
@@ -1355,7 +1489,7 @@ class FileRuntimeApiStore:
         )
         if conversation is None:
             return None
-        if LegalHoldPolicy.is_on_hold(conversation):
+        if self._conversation_is_held(conversation):
             # The file profile stores the authoritative hold fact directly on
             # the conversation.  Returning it unchanged keeps a held artifact
             # out of the lifecycle tombstone path as well.
@@ -1436,32 +1570,29 @@ class FileRuntimeApiStore:
     async def soft_delete_conversation(
         self, *, org_id: str, user_id: str, conversation_id: str, now: datetime
     ) -> ConversationRecord | None:
-        conversation = await self.get_conversation(
-            org_id=org_id, user_id=user_id, conversation_id=conversation_id
-        )
-        if conversation is None:
-            return None
-        if conversation.deleted_at is not None:
+        async with self._state_lock:
+            conversation = await self.get_conversation(
+                org_id=org_id, user_id=user_id, conversation_id=conversation_id
+            )
+            if conversation is None or self._conversation_is_held(conversation):
+                return conversation
+            if conversation.deleted_at is not None:
+                updated = conversation
+            else:
+                updated = conversation.model_copy(
+                    update={"deleted_at": now, "updated_at": now}
+                )
+                async with self._conversation_lock(conversation_id):
+                    self.conversations[conversation_id] = updated
+                    self._persist_conversation(updated)
             if self._artifact_lifecycle_jobs is not None:
                 await self._artifact_lifecycle_jobs.on_conversation_deleted(
                     org_id=org_id,
                     user_id=user_id,
                     conversation_id=conversation_id,
-                    deleted_at=conversation.deleted_at,
+                    deleted_at=updated.deleted_at or now,
                 )
-            return conversation
-        updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
-        async with self._conversation_lock(conversation_id):
-            self.conversations[conversation_id] = updated
-            self._persist_conversation(updated)
-        if self._artifact_lifecycle_jobs is not None:
-            await self._artifact_lifecycle_jobs.on_conversation_deleted(
-                org_id=org_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                deleted_at=now,
-            )
-        return updated
+            return updated
 
     async def restore_conversation(
         self, *, org_id: str, user_id: str, conversation_id: str, now: datetime
@@ -2315,11 +2446,16 @@ class FileRuntimeApiStore:
         self, *, event_type: str, record: dict[str, object]
     ) -> None:
         async with self._state_lock:
-            signed = self._sign_audit_record(event_type=event_type, record=record)
-            self.audit_log.append((event_type, signed))
-            self._ledger(_Tables.AUDIT_LOG).append_put(
-                {"event_type": event_type, "record": signed}
-            )
+            self._append_audit_log_locked(event_type=event_type, record=record)
+
+    def _append_audit_log_locked(
+        self, *, event_type: str, record: dict[str, object]
+    ) -> None:
+        signed = self._sign_audit_record(event_type=event_type, record=record)
+        self.audit_log.append((event_type, signed))
+        self._ledger(_Tables.AUDIT_LOG).append_put(
+            {"event_type": event_type, "record": signed}
+        )
 
     def _sign_audit_record(
         self, *, event_type: str, record: dict[str, object]
@@ -2480,7 +2616,7 @@ class FileRuntimeApiStore:
                     sorted(
                         conversation.conversation_id
                         for conversation in targets
-                        if LegalHoldPolicy.is_on_hold(conversation)
+                        if self._conversation_is_held(conversation)
                     )
                 ),
             )
@@ -2590,7 +2726,7 @@ class FileRuntimeApiStore:
         async with self._state_lock:
             deletable: list[ConversationRecord] = []
             for conversation in conversations:
-                if LegalHoldPolicy.is_on_hold(conversation):
+                if self._conversation_is_held(conversation):
                     outcome.skipped_legal_hold += 1
                     outcome.retained_events += self._conversation_event_count(
                         conversation.conversation_id
@@ -3490,21 +3626,22 @@ class FileRuntimeApiStore:
         """
 
         if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
-            if self._artifact_lifecycle_jobs is None or dry_run:
-                return RetentionSweepOutcome(org_id=org_id, kind=kind)
-            result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
-                org_id=org_id,
-                now=datetime.now(timezone.utc),
-                limit=chunk_size or None,
-                protected_conversation_ids=tuple(
-                    sorted(
-                        conversation.conversation_id
-                        for conversation in self.conversations.values()
-                        if conversation.org_id == org_id
-                        and LegalHoldPolicy.is_on_hold(conversation)
-                    )
-                ),
-            )
+            async with self._state_lock:
+                if self._artifact_lifecycle_jobs is None or dry_run:
+                    return RetentionSweepOutcome(org_id=org_id, kind=kind)
+                result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
+                    org_id=org_id,
+                    now=datetime.now(timezone.utc),
+                    limit=chunk_size or None,
+                    protected_conversation_ids=tuple(
+                        sorted(
+                            conversation.conversation_id
+                            for conversation in self.conversations.values()
+                            if conversation.org_id == org_id
+                            and self._conversation_is_held(conversation)
+                        )
+                    ),
+                )
             return RetentionSweepOutcome(
                 org_id=org_id,
                 kind=kind,

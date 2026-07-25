@@ -44,6 +44,9 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/usage/runs/{run_id}/calls",
         "/v1/usage/conversations/{conversation_id}",
         "/v1/usage/org/purpose",
+        # D11 — facade is the only app-facing legal-hold control plane.
+        "/v1/retention/legal-holds",
+        "/v1/retention/legal-holds/{hold_id}/release",
     )
     for route in required:
         assert route in paths, f"missing route {route}"

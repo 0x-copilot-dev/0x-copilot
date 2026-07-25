@@ -61,6 +61,11 @@ from agent_runtime.persistence.records import (
     RetentionPolicyRecord,
     RetentionScope,
     RetentionSweepOutcome,
+    LegalHoldConflict,
+    LegalHoldMutationResult,
+    LegalHoldReasonCode,
+    LegalHoldRecord,
+    LegalHoldScope,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -89,6 +94,8 @@ from runtime_adapters.base import (
 from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
 from runtime_adapters.postgres.artifact_hold_fence import (
     acquire_artifact_hold_fences,
+    active_hold_for_conversation_predicate,
+    active_hold_for_org_predicate,
     has_active_hold_for_scope,
 )
 from runtime_api.http.errors import RuntimeApiError
@@ -783,6 +790,246 @@ class PostgresRuntimeApiStore:
             row = await cur.fetchone()
         return self._conversation_record(row) if row is not None else None
 
+    async def has_legal_hold_subject(self, *, org_id: str, user_id: str) -> bool:
+        """Resolve user-scoped holds only through an existing tenant record."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cursor = await conn.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                      FROM agent_conversations
+                     WHERE org_id = %s AND user_id = %s
+                ) AS exists
+                """,
+                (org_id, user_id),
+            )
+            row = await cursor.fetchone()
+        return bool(row and row["exists"])
+
+    async def create_legal_hold(
+        self,
+        *,
+        record: LegalHoldRecord,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult:
+        """Insert the hold plus its audit-chain row in one tenant transaction."""
+
+        conversation_id = (
+            record.resource_id if record.scope is LegalHoldScope.CONVERSATION else None
+        )
+        async with self._tenant_connection(org_id=record.org_id) as conn:
+            async with conn.transaction():
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=record.org_id,
+                    user_id=record.subject_user_id,
+                    conversation_id=conversation_id,
+                )
+                existing_cur = await conn.execute(
+                    """
+                    SELECT *
+                      FROM runtime_legal_holds
+                     WHERE org_id = %s
+                       AND created_by_user_id = %s
+                       AND create_idempotency_key = %s
+                     FOR UPDATE
+                    """,
+                    (
+                        record.org_id,
+                        record.created_by_user_id,
+                        record.create_idempotency_key,
+                    ),
+                )
+                existing_row = await existing_cur.fetchone()
+                if existing_row is not None:
+                    existing = self._legal_hold_record(existing_row)
+                    if existing.create_request_digest != record.create_request_digest:
+                        raise LegalHoldConflict("idempotency key conflicts")
+                    return LegalHoldMutationResult(hold=existing, replayed=True)
+                cursor = await conn.execute(
+                    """
+                        INSERT INTO runtime_legal_holds (
+                            id, org_id, user_id, scope, resource_id, reason,
+                            reason_code, created_by_user_id, created_at, revision,
+                            create_idempotency_key, create_request_digest
+                        ) VALUES (
+                            %(id)s, %(org_id)s, %(user_id)s, %(scope)s, %(resource_id)s,
+                            %(reason)s, %(reason_code)s, %(created_by_user_id)s,
+                            %(created_at)s, %(revision)s, %(create_idempotency_key)s,
+                            %(create_request_digest)s
+                        )
+                        ON CONFLICT (
+                            org_id, created_by_user_id, create_idempotency_key
+                        ) WHERE create_idempotency_key IS NOT NULL
+                        DO NOTHING
+                        RETURNING *
+                        """,
+                    {
+                        "id": record.id,
+                        "org_id": record.org_id,
+                        "user_id": record.subject_user_id,
+                        "scope": record.scope.value,
+                        "resource_id": record.resource_id,
+                        # The legacy required column remains a closed code;
+                        # no caller-supplied free text is persisted.
+                        "reason": record.reason_code.value,
+                        "reason_code": record.reason_code.value,
+                        "created_by_user_id": record.created_by_user_id,
+                        "created_at": record.created_at,
+                        "revision": record.revision,
+                        "create_idempotency_key": record.create_idempotency_key,
+                        "create_request_digest": record.create_request_digest,
+                    },
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    # A competing request with the same opaque key may target
+                    # a different scope and thus not share the hold fence.
+                    # Re-read inside the transaction and only replay exact data.
+                    cursor = await conn.execute(
+                        """
+                        SELECT * FROM runtime_legal_holds
+                         WHERE org_id = %s
+                           AND created_by_user_id = %s
+                           AND create_idempotency_key = %s
+                        """,
+                        (
+                            record.org_id,
+                            record.created_by_user_id,
+                            record.create_idempotency_key,
+                        ),
+                    )
+                    row = await cursor.fetchone()
+                    if row is None:
+                        raise LegalHoldConflict("idempotency key conflicts")
+                    existing = self._legal_hold_record(row)
+                    if existing.create_request_digest != record.create_request_digest:
+                        raise LegalHoldConflict("idempotency key conflicts")
+                    return LegalHoldMutationResult(hold=existing, replayed=True)
+                assert row is not None
+                persisted = self._legal_hold_record(row)
+                await self._write_audit_log_with_conn(
+                    conn,
+                    event_type="legal_hold.created",
+                    record=audit_event,
+                    org_id=record.org_id,
+                )
+                return LegalHoldMutationResult(hold=persisted)
+
+    async def list_legal_holds(
+        self,
+        *,
+        org_id: str,
+        include_released: bool,
+        limit: int,
+    ) -> Sequence[LegalHoldRecord]:
+        visibility = "" if include_released else "AND released_at IS NULL"
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cursor = await conn.execute(
+                f"""
+                SELECT *
+                  FROM runtime_legal_holds
+                 WHERE org_id = %s {visibility}
+                 ORDER BY created_at DESC, id DESC
+                 LIMIT %s
+                """,
+                (org_id, limit),
+            )
+            rows = await cursor.fetchall()
+        return tuple(self._legal_hold_record(row) for row in rows)
+
+    async def release_legal_hold(
+        self,
+        *,
+        org_id: str,
+        hold_id: str,
+        expected_revision: int,
+        released_by_user_id: str,
+        idempotency_key: str,
+        request_digest: str,
+        released_at: datetime,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult | None:
+        async with self._tenant_connection(org_id=org_id) as conn:
+            async with conn.transaction():
+                # Take the org fence before the row lock.  Create takes the
+                # same first fence before its idempotency-row lookup, so a
+                # create/release retry cannot invert row/advisory lock order.
+                await acquire_artifact_hold_fences(conn, org_id=org_id)
+                cursor = await conn.execute(
+                    """
+                    SELECT * FROM runtime_legal_holds
+                     WHERE org_id = %s AND id = %s
+                     FOR UPDATE
+                    """,
+                    (org_id, hold_id),
+                )
+                row = await cursor.fetchone()
+                if row is None:
+                    return None
+                hold = self._legal_hold_record(row)
+                if hold.released_at is not None:
+                    if (
+                        hold.released_by_user_id == released_by_user_id
+                        and hold.release_idempotency_key == idempotency_key
+                        and hold.release_request_digest == request_digest
+                    ):
+                        return LegalHoldMutationResult(hold=hold, replayed=True)
+                    raise LegalHoldConflict("legal hold is already released")
+                if hold.revision != expected_revision:
+                    raise LegalHoldConflict("legal hold revision conflicts")
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=hold.org_id,
+                    user_id=hold.subject_user_id,
+                    conversation_id=(
+                        hold.resource_id
+                        if hold.scope is LegalHoldScope.CONVERSATION
+                        else None
+                    ),
+                )
+                cursor = await conn.execute(
+                    """
+                    UPDATE runtime_legal_holds
+                       SET released_by_user_id = %s,
+                           released_at = %s,
+                           release_idempotency_key = %s,
+                           release_request_digest = %s,
+                           revision = revision + 1
+                     WHERE org_id = %s AND id = %s
+                       AND released_at IS NULL AND revision = %s
+                    RETURNING *
+                    """,
+                    (
+                        released_by_user_id,
+                        released_at,
+                        idempotency_key,
+                        request_digest,
+                        org_id,
+                        hold_id,
+                        expected_revision,
+                    ),
+                )
+                updated_row = await cursor.fetchone()
+                if updated_row is None:
+                    raise LegalHoldConflict("legal hold revision conflicts")
+                updated = self._legal_hold_record(updated_row)
+                await self._write_audit_log_with_conn(
+                    conn,
+                    event_type="legal_hold.released",
+                    record={
+                        **audit_event,
+                        "metadata": {
+                            "scope": updated.scope.value,
+                            "reason_code": updated.reason_code.value,
+                            "revision": updated.revision,
+                        },
+                    },
+                    org_id=org_id,
+                )
+                return LegalHoldMutationResult(hold=updated)
+
     async def list_conversations(
         self,
         *,
@@ -1187,34 +1434,53 @@ class PostgresRuntimeApiStore:
     ) -> ConversationRecord | None:
         """Stamp ``deleted_at`` (idempotent on already-deleted rows)."""
 
-        if conversation_id in await self._held_conversation_ids(
-            org_id=org_id,
-            user_id=user_id,
-        ):
-            # Retain the conversation and its artifact records unchanged. The
-            # caller observes the existing row, matching other idempotent
-            # lifecycle operations without allowing a hold bypass.
-            return await self.get_conversation(
-                org_id=org_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-            )
+        blocked_by_hold = False
         async with self._tenant_connection(org_id=org_id) as conn:
-            cur = await conn.execute(
-                """
-                UPDATE agent_conversations
-                   SET deleted_at = COALESCE(deleted_at, %s),
-                       updated_at = %s
-                 WHERE id      = %s
-                   AND org_id  = %s
-                   AND user_id = %s
-                 RETURNING *
-                """,
-                (now, now, conversation_id, org_id, user_id),
-            )
-            row = await cur.fetchone()
+            async with conn.transaction():
+                # The matching legal-hold trigger takes this exact ordered
+                # fence.  This closes the otherwise unavoidable check/update
+                # race between a lifecycle delete and a newly-created hold.
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                )
+                if await has_active_hold_for_scope(
+                    conn,
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                ):
+                    blocked_by_hold = True
+                    cur = await conn.execute(
+                        """
+                        SELECT * FROM agent_conversations
+                         WHERE id = %s AND org_id = %s AND user_id = %s
+                        """,
+                        (conversation_id, org_id, user_id),
+                    )
+                    row = await cur.fetchone()
+                else:
+                    cur = await conn.execute(
+                        """
+                        UPDATE agent_conversations
+                           SET deleted_at = COALESCE(deleted_at, %s),
+                               updated_at = %s
+                         WHERE id      = %s
+                           AND org_id  = %s
+                           AND user_id = %s
+                         RETURNING *
+                        """,
+                        (now, now, conversation_id, org_id, user_id),
+                    )
+                    row = await cur.fetchone()
         record = self._conversation_record(row) if row is not None else None
-        if record is not None and self._artifact_lifecycle_jobs is not None:
+        if (
+            record is not None
+            and not blocked_by_hold
+            and self._artifact_lifecycle_jobs is not None
+        ):
             await self._artifact_lifecycle_jobs.on_conversation_deleted(
                 org_id=org_id,
                 user_id=user_id,
@@ -2592,83 +2858,88 @@ class PostgresRuntimeApiStore:
         """
 
         data = record if isinstance(record, dict) else {_Fields.RECORD: str(record)}
-        now = datetime.now(timezone.utc)
-        raw_meta = data.get(_Fields.METADATA)
-        metadata = raw_meta if isinstance(raw_meta, dict) else {}
-        ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
-        audit_id = str(data.get(_Fields.AUDIT_EVENT_ID) or f"audit_{ts_ns}")
         org_id = str(data.get(_Fields.ORG_ID, "unknown"))
-        signer = AuditChainSigner.from_env(environment_env_var="RUNTIME_ENVIRONMENT")
-        # `record` is a dict (the audit-write contract across all adapters), so the
-        # tenant connection must use the normalized local `org_id` computed above —
-        # `record.org_id` is an attribute access on a dict and raises AttributeError,
-        # which 500s every conversation/run create on the Postgres store.
         async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.transaction():
-                await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
-                seq, prev_hash = await _read_runtime_audit_chain_head_async(
-                    conn, org_id=org_id
+                await self._write_audit_log_with_conn(
+                    conn, event_type=event_type, record=data, org_id=org_id
                 )
-                payload = {
-                    "audit_id": audit_id,
-                    "org_id": org_id,
-                    "user_id": data.get(_Fields.USER_ID),
-                    "actor_type": str(data.get(_Fields.ACTOR_TYPE, "system")),
-                    "action": event_type,
-                    "resource_type": str(data.get(_Fields.RESOURCE_TYPE, "runtime")),
-                    "resource_id": str(data.get(_Fields.RESOURCE_ID, "unknown")),
-                    "run_id": data.get(_Fields.RUN_ID),
-                    "trace_id": data.get(_Fields.TRACE_ID),
-                    "outcome": str(data.get(_Fields.OUTCOME, "success")),
-                    "metadata": metadata,
-                    "created_at": now,
-                    "__event_type__": event_type,
-                }
-                sig = signer.sign(prev_hash=prev_hash, payload=payload)
-                # Encrypt the redacted metadata blob; the
-                # rest of the row is HMAC-chain-signed clear (the chain
-                # is the load-bearing tamper guard, not the metadata).
-                metadata_encrypted = self._codec.encrypt_jsonb(
-                    metadata,
-                    table=_Tables.RUNTIME_AUDIT_LOG,
-                    column=_Columns.METADATA_JSON_REDACTED,
-                    org_id=org_id,
-                )
-                await conn.execute(
-                    """
-                    INSERT INTO runtime_audit_log (
-                        id, org_id, user_id, actor_type, action, resource_type, resource_id,
-                        run_id, trace_id, outcome, metadata_json_redacted, created_at,
-                        seq, prev_hash, signature, key_version, encryption_version
-                    )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """,
-                    (
-                        audit_id,
-                        org_id,
-                        data.get(_Fields.USER_ID)
-                        if isinstance(data.get(_Fields.USER_ID), str)
-                        else None,
-                        str(data.get(_Fields.ACTOR_TYPE, "system")),
-                        event_type,
-                        str(data.get(_Fields.RESOURCE_TYPE, "runtime")),
-                        str(data.get(_Fields.RESOURCE_ID, "unknown")),
-                        data.get(_Fields.RUN_ID)
-                        if isinstance(data.get(_Fields.RUN_ID), str)
-                        else None,
-                        data.get(_Fields.TRACE_ID)
-                        if isinstance(data.get(_Fields.TRACE_ID), str)
-                        else None,
-                        str(data.get(_Fields.OUTCOME, "success")),
-                        Jsonb(metadata_encrypted),
-                        now,
-                        seq + 1,
-                        sig.prev_hash,
-                        sig.signature,
-                        sig.key_version,
-                        self._codec.write_version,
-                    ),
-                )
+
+    async def _write_audit_log_with_conn(
+        self,
+        conn,
+        *,
+        event_type: str,
+        record: dict[str, object],
+        org_id: str,
+    ) -> None:
+        """Append a signed audit row using the caller's active transaction."""
+
+        now = datetime.now(timezone.utc)
+        raw_meta = record.get(_Fields.METADATA)
+        metadata = raw_meta if isinstance(raw_meta, dict) else {}
+        ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
+        audit_id = str(record.get(_Fields.AUDIT_EVENT_ID) or f"audit_{ts_ns}")
+        signer = AuditChainSigner.from_env(environment_env_var="RUNTIME_ENVIRONMENT")
+        await _take_runtime_audit_chain_lock_async(conn, org_id=org_id)
+        seq, prev_hash = await _read_runtime_audit_chain_head_async(conn, org_id=org_id)
+        payload = {
+            "audit_id": audit_id,
+            "org_id": org_id,
+            "user_id": record.get(_Fields.USER_ID),
+            "actor_type": str(record.get(_Fields.ACTOR_TYPE, "system")),
+            "action": event_type,
+            "resource_type": str(record.get(_Fields.RESOURCE_TYPE, "runtime")),
+            "resource_id": str(record.get(_Fields.RESOURCE_ID, "unknown")),
+            "run_id": record.get(_Fields.RUN_ID),
+            "trace_id": record.get(_Fields.TRACE_ID),
+            "outcome": str(record.get(_Fields.OUTCOME, "success")),
+            "metadata": metadata,
+            "created_at": now,
+            "__event_type__": event_type,
+        }
+        sig = signer.sign(prev_hash=prev_hash, payload=payload)
+        metadata_encrypted = self._codec.encrypt_jsonb(
+            metadata,
+            table=_Tables.RUNTIME_AUDIT_LOG,
+            column=_Columns.METADATA_JSON_REDACTED,
+            org_id=org_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO runtime_audit_log (
+                id, org_id, user_id, actor_type, action, resource_type, resource_id,
+                run_id, trace_id, outcome, metadata_json_redacted, created_at,
+                seq, prev_hash, signature, key_version, encryption_version
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                audit_id,
+                org_id,
+                record.get(_Fields.USER_ID)
+                if isinstance(record.get(_Fields.USER_ID), str)
+                else None,
+                str(record.get(_Fields.ACTOR_TYPE, "system")),
+                event_type,
+                str(record.get(_Fields.RESOURCE_TYPE, "runtime")),
+                str(record.get(_Fields.RESOURCE_ID, "unknown")),
+                record.get(_Fields.RUN_ID)
+                if isinstance(record.get(_Fields.RUN_ID), str)
+                else None,
+                record.get(_Fields.TRACE_ID)
+                if isinstance(record.get(_Fields.TRACE_ID), str)
+                else None,
+                str(record.get(_Fields.OUTCOME, "success")),
+                Jsonb(metadata_encrypted),
+                now,
+                seq + 1,
+                sig.prev_hash,
+                sig.signature,
+                sig.key_version,
+                self._codec.write_version,
+            ),
+        )
 
     async def list_audit_log_for_export(
         self,
@@ -4545,23 +4816,26 @@ class PostgresRuntimeApiStore:
     ) -> RetentionSweepOutcome:
         # Tombstone messages older than ttl whose conversation isn't on
         # legal hold. Audit rows referencing the message id stay intact.
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="agent_messages.org_id",
+            user_id_expression=(
+                "(SELECT c.user_id FROM agent_conversations c "
+                "WHERE c.org_id = agent_messages.org_id "
+                "AND c.id = agent_messages.conversation_id)"
+            ),
+            conversation_id_expression="agent_messages.conversation_id",
+        )
+        sql = f"""
             UPDATE agent_messages
                SET status = 'deleted',
                    content_text = '[deleted by retention policy]',
                    content_json = '[]'::jsonb,
-                   metadata_json = '{}'::jsonb,
+                   metadata_json = '{{}}'::jsonb,
                    deleted_at = NOW()
              WHERE org_id = %(org_id)s
                AND status <> 'deleted'
                AND created_at < NOW() - make_interval(secs => %(ttl)s)
-               AND conversation_id NOT IN (
-                   SELECT resource_id
-                     FROM runtime_legal_holds
-                    WHERE org_id = %(org_id)s
-                      AND scope IN ('conversation','user','org')
-                      AND released_at IS NULL
-               )
+               AND {hold_predicate}
         """
         return await self._execute_sweep(
             sql=sql,
@@ -4575,18 +4849,22 @@ class PostgresRuntimeApiStore:
     async def _sweep_events(
         self, *, org_id: str, ttl_seconds: int, dry_run: bool
     ) -> RetentionSweepOutcome:
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="runtime_events.org_id",
+            user_id_expression=(
+                "(SELECT r.user_id FROM agent_runs r "
+                "WHERE r.org_id = runtime_events.org_id "
+                "AND r.id = runtime_events.run_id)"
+            ),
+            conversation_id_expression="runtime_events.conversation_id",
+        )
+        sql = f"""
             UPDATE runtime_events
-               SET payload_json_redacted = '{}'::jsonb,
+               SET payload_json_redacted = '{{}}'::jsonb,
                    metadata_json_redacted = jsonb_build_object('retention_purged', true)
              WHERE org_id = %(org_id)s
                AND created_at < NOW() - make_interval(secs => %(ttl)s)
-               AND run_id NOT IN (
-                   SELECT resource_id
-                     FROM runtime_legal_holds
-                    WHERE org_id = %(org_id)s
-                      AND released_at IS NULL
-               )
+               AND {hold_predicate}
         """
         return await self._execute_sweep(
             sql=sql,
@@ -4602,11 +4880,25 @@ class PostgresRuntimeApiStore:
     ) -> RetentionSweepOutcome:
         # The schema's retention_until column is authoritative for context
         # payloads; the resolver's TTL is unused on this path.
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="runtime_context_payloads.org_id",
+            user_id_expression=(
+                "(SELECT r.user_id FROM agent_runs r "
+                "WHERE r.org_id = runtime_context_payloads.org_id "
+                "AND r.id = runtime_context_payloads.run_id)"
+            ),
+            conversation_id_expression=(
+                "(SELECT r.conversation_id FROM agent_runs r "
+                "WHERE r.org_id = runtime_context_payloads.org_id "
+                "AND r.id = runtime_context_payloads.run_id)"
+            ),
+        )
+        sql = f"""
             DELETE FROM runtime_context_payloads
              WHERE org_id = %(org_id)s
                AND retention_until IS NOT NULL
                AND retention_until < NOW()
+               AND {hold_predicate}
         """
         return await self._execute_sweep(
             sql=sql,
@@ -4624,9 +4916,13 @@ class PostgresRuntimeApiStore:
         # the policy window. Older versions outside the window are
         # hard-deleted (no audit need; checkpoint blobs are reproducible
         # state, not user-visible PII).
-        sql = """
+        hold_predicate = active_hold_for_org_predicate(
+            org_id_expression="runtime_checkpoints.org_id"
+        )
+        sql = f"""
             DELETE FROM runtime_checkpoints
              WHERE org_id = %(org_id)s
+               AND {hold_predicate}
                AND id IN (
                    SELECT id FROM (
                        SELECT id,
@@ -4654,13 +4950,17 @@ class PostgresRuntimeApiStore:
     async def _sweep_memory_items(
         self, *, org_id: str, ttl_seconds: int, dry_run: bool
     ) -> RetentionSweepOutcome:
-        sql = """
+        hold_predicate = active_hold_for_org_predicate(
+            org_id_expression="runtime_memory_items.org_id"
+        )
+        sql = f"""
             UPDATE runtime_memory_items
                SET deleted_at = NOW(),
                    content_summary = '[deleted by retention policy]'
              WHERE org_id = %(org_id)s
                AND deleted_at IS NULL
                AND created_at < NOW() - make_interval(secs => %(ttl)s)
+               AND {hold_predicate}
         """
         return await self._execute_sweep(
             sql=sql,
@@ -4681,17 +4981,11 @@ class PostgresRuntimeApiStore:
         dry_run: bool,
         tally_field: str,
     ) -> RetentionSweepOutcome:
-        # Dry-run runs the sweep inside a transaction we explicitly roll
-        # back — the rowcount reflects exactly what would change without
-        # leaving state behind. Live mode runs in autocommit per the
-        # connection helper's default.
+        # The org advisory fence is shared with the legal-hold trigger, so a
+        # hold can never commit between candidate evaluation and mutation.
         async with self._tenant_connection(org_id=org_id) as conn:
-            if dry_run:
-                async with conn.transaction(force_rollback=True):
-                    async with conn.cursor() as cur:
-                        await cur.execute(sql, {"org_id": org_id, "ttl": ttl_seconds})
-                        affected = cur.rowcount
-            else:
+            async with conn.transaction(force_rollback=dry_run):
+                await acquire_artifact_hold_fences(conn, org_id=org_id)
                 async with conn.cursor() as cur:
                     await cur.execute(sql, {"org_id": org_id, "ttl": ttl_seconds})
                     affected = cur.rowcount
@@ -4725,12 +5019,8 @@ class PostgresRuntimeApiStore:
         if extra_params:
             params.update(extra_params)
         async with self._tenant_connection(org_id=org_id) as conn:
-            if dry_run:
-                async with conn.transaction(force_rollback=True):
-                    async with conn.cursor() as cur:
-                        await cur.execute(sql, params)
-                        affected = cur.rowcount
-            else:
+            async with conn.transaction(force_rollback=dry_run):
+                await acquire_artifact_hold_fences(conn, org_id=org_id)
                 async with conn.cursor() as cur:
                     await cur.execute(sql, params)
                     affected = cur.rowcount
@@ -4742,20 +5032,23 @@ class PostgresRuntimeApiStore:
     async def _sweep_messages_chunked(
         self, *, org_id: str, chunk_size: int, dry_run: bool
     ) -> RetentionSweepOutcome:
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="agent_messages.org_id",
+            user_id_expression=(
+                "(SELECT c.user_id FROM agent_conversations c "
+                "WHERE c.org_id = agent_messages.org_id "
+                "AND c.id = agent_messages.conversation_id)"
+            ),
+            conversation_id_expression="agent_messages.conversation_id",
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM agent_messages
                  WHERE org_id = %(org_id)s
                    AND status <> 'deleted'
                    AND retention_until IS NOT NULL
                    AND retention_until < NOW()
-                   AND conversation_id NOT IN (
-                       SELECT resource_id
-                         FROM runtime_legal_holds
-                        WHERE org_id = %(org_id)s
-                          AND scope IN ('conversation','user','org')
-                          AND released_at IS NULL
-                   )
+                   AND {hold_predicate}
                  ORDER BY retention_until
                  LIMIT %(chunk_size)s
                  FOR UPDATE SKIP LOCKED
@@ -4764,7 +5057,7 @@ class PostgresRuntimeApiStore:
                SET status = 'deleted',
                    content_text = '[deleted by retention policy]',
                    content_json = '[]'::jsonb,
-                   metadata_json = '{}'::jsonb,
+                   metadata_json = '{{}}'::jsonb,
                    deleted_at = NOW()
               FROM due
              WHERE agent_messages.id = due.id
@@ -4781,24 +5074,28 @@ class PostgresRuntimeApiStore:
     async def _sweep_events_chunked(
         self, *, org_id: str, chunk_size: int, dry_run: bool
     ) -> RetentionSweepOutcome:
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="runtime_events.org_id",
+            user_id_expression=(
+                "(SELECT r.user_id FROM agent_runs r "
+                "WHERE r.org_id = runtime_events.org_id "
+                "AND r.id = runtime_events.run_id)"
+            ),
+            conversation_id_expression="runtime_events.conversation_id",
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM runtime_events
                  WHERE org_id = %(org_id)s
                    AND retention_until IS NOT NULL
                    AND retention_until < NOW()
-                   AND run_id NOT IN (
-                       SELECT resource_id
-                         FROM runtime_legal_holds
-                        WHERE org_id = %(org_id)s
-                          AND released_at IS NULL
-                   )
+                   AND {hold_predicate}
                  ORDER BY retention_until
                  LIMIT %(chunk_size)s
                  FOR UPDATE SKIP LOCKED
             )
             UPDATE runtime_events
-               SET payload_json_redacted = '{}'::jsonb,
+               SET payload_json_redacted = '{{}}'::jsonb,
                    metadata_json_redacted = jsonb_build_object('retention_purged', true)
               FROM due
              WHERE runtime_events.id = due.id
@@ -4815,12 +5112,26 @@ class PostgresRuntimeApiStore:
     async def _sweep_context_payloads_chunked(
         self, *, org_id: str, chunk_size: int, dry_run: bool
     ) -> RetentionSweepOutcome:
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="runtime_context_payloads.org_id",
+            user_id_expression=(
+                "(SELECT r.user_id FROM agent_runs r "
+                "WHERE r.org_id = runtime_context_payloads.org_id "
+                "AND r.id = runtime_context_payloads.run_id)"
+            ),
+            conversation_id_expression=(
+                "(SELECT r.conversation_id FROM agent_runs r "
+                "WHERE r.org_id = runtime_context_payloads.org_id "
+                "AND r.id = runtime_context_payloads.run_id)"
+            ),
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM runtime_context_payloads
                  WHERE org_id = %(org_id)s
                    AND retention_until IS NOT NULL
                    AND retention_until < NOW()
+                   AND {hold_predicate}
                  ORDER BY retention_until
                  LIMIT %(chunk_size)s
                  FOR UPDATE SKIP LOCKED
@@ -4842,7 +5153,10 @@ class PostgresRuntimeApiStore:
         self, *, org_id: str, ttl_seconds: int, chunk_size: int, dry_run: bool
     ) -> RetentionSweepOutcome:
         # CHECKPOINTS keeps its bespoke keep-N logic; gains chunking via LIMIT.
-        sql = """
+        hold_predicate = active_hold_for_org_predicate(
+            org_id_expression="runtime_checkpoints.org_id"
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM (
                     SELECT id,
@@ -4853,6 +5167,7 @@ class PostgresRuntimeApiStore:
                            created_at
                       FROM runtime_checkpoints
                      WHERE org_id = %(org_id)s
+                       AND {hold_predicate}
                 ) ranked
                 WHERE rn > 10
                   AND created_at < NOW() - make_interval(secs => %(ttl)s)
@@ -4874,13 +5189,17 @@ class PostgresRuntimeApiStore:
     async def _sweep_memory_items_chunked(
         self, *, org_id: str, chunk_size: int, dry_run: bool
     ) -> RetentionSweepOutcome:
-        sql = """
+        hold_predicate = active_hold_for_org_predicate(
+            org_id_expression="runtime_memory_items.org_id"
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM runtime_memory_items
                  WHERE org_id = %(org_id)s
                    AND deleted_at IS NULL
                    AND retention_until IS NOT NULL
                    AND retention_until < NOW()
+                   AND {hold_predicate}
                  ORDER BY retention_until
                  LIMIT %(chunk_size)s
                  FOR UPDATE SKIP LOCKED
@@ -4906,19 +5225,23 @@ class PostgresRuntimeApiStore:
         # Hard-delete messages that were tombstoned (status='deleted') and
         # whose deleted_at exceeds the grace period. Legal hold exclusion
         # still applies so a hold placed after tombstone blocks hard-delete.
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="agent_messages.org_id",
+            user_id_expression=(
+                "(SELECT c.user_id FROM agent_conversations c "
+                "WHERE c.org_id = agent_messages.org_id "
+                "AND c.id = agent_messages.conversation_id)"
+            ),
+            conversation_id_expression="agent_messages.conversation_id",
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM agent_messages
                  WHERE org_id = %(org_id)s
                    AND status = 'deleted'
                    AND deleted_at IS NOT NULL
                    AND deleted_at < NOW() - make_interval(secs => %(ttl)s)
-                   AND conversation_id NOT IN (
-                       SELECT resource_id
-                         FROM runtime_legal_holds
-                        WHERE org_id = %(org_id)s
-                          AND released_at IS NULL
-                   )
+                   AND {hold_predicate}
                  ORDER BY deleted_at
                  LIMIT %(chunk_size)s
                  FOR UPDATE SKIP LOCKED
@@ -4943,19 +5266,23 @@ class PostgresRuntimeApiStore:
         # Hard-delete event rows whose payload was already redacted by the
         # first-pass sweep (retention_purged flag set). Grace window is
         # measured from retention_until (when the row became due for tombstone).
-        sql = """
+        hold_predicate = active_hold_for_conversation_predicate(
+            org_id_expression="runtime_events.org_id",
+            user_id_expression=(
+                "(SELECT r.user_id FROM agent_runs r "
+                "WHERE r.org_id = runtime_events.org_id "
+                "AND r.id = runtime_events.run_id)"
+            ),
+            conversation_id_expression="runtime_events.conversation_id",
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM runtime_events
                  WHERE org_id = %(org_id)s
                    AND (metadata_json_redacted->>'retention_purged')::boolean IS TRUE
                    AND retention_until IS NOT NULL
                    AND retention_until < NOW() - make_interval(secs => %(ttl)s)
-                   AND run_id NOT IN (
-                       SELECT resource_id
-                         FROM runtime_legal_holds
-                        WHERE org_id = %(org_id)s
-                          AND released_at IS NULL
-                   )
+                   AND {hold_predicate}
                  ORDER BY retention_until
                  LIMIT %(chunk_size)s
                  FOR UPDATE SKIP LOCKED
@@ -4979,12 +5306,16 @@ class PostgresRuntimeApiStore:
     ) -> RetentionSweepOutcome:
         # Hard-delete memory items soft-deleted by the first pass. Grace
         # window measured from deleted_at.
-        sql = """
+        hold_predicate = active_hold_for_org_predicate(
+            org_id_expression="runtime_memory_items.org_id"
+        )
+        sql = f"""
             WITH due AS (
                 SELECT id FROM runtime_memory_items
                  WHERE org_id = %(org_id)s
                    AND deleted_at IS NOT NULL
                    AND deleted_at < NOW() - make_interval(secs => %(ttl)s)
+                   AND {hold_predicate}
                  ORDER BY deleted_at
                  LIMIT %(chunk_size)s
                  FOR UPDATE SKIP LOCKED
@@ -5181,6 +5512,49 @@ class PostgresRuntimeApiStore:
             ),
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @classmethod
+    def _legal_hold_record(cls, row: Mapping[str, object]) -> LegalHoldRecord:
+        """Map a persisted hold while tolerating pre-D11 legacy rows."""
+
+        released_at = row.get("released_at")
+        release_key = row.get("release_idempotency_key")
+        release_digest = row.get("release_request_digest")
+        # Legacy released rows predate D11 idempotency columns. They remain
+        # readable but cannot be replayed; the management route will reject a
+        # new release as already terminal.
+        if released_at is not None and (release_key is None or release_digest is None):
+            release_key = "legacy-release-key"
+            release_digest = "0" * 64
+        create_key = row.get("create_idempotency_key") or "legacy-create-key"
+        create_digest = row.get("create_request_digest") or ("0" * 64)
+        return LegalHoldRecord(
+            id=str(row["id"]),
+            org_id=str(row["org_id"]),
+            scope=LegalHoldScope(str(row["scope"])),
+            resource_id=str(row["resource_id"]),
+            subject_user_id=(
+                str(row["user_id"]) if row.get("user_id") is not None else None
+            ),
+            reason_code=LegalHoldReasonCode(str(row.get("reason_code") or "legacy")),
+            created_by_user_id=str(row["created_by_user_id"]),
+            created_at=row["created_at"],
+            released_by_user_id=(
+                str(row["released_by_user_id"])
+                if row.get("released_by_user_id") is not None
+                else None
+            ),
+            released_at=released_at,
+            revision=int(row.get("revision") or 1),
+            create_idempotency_key=str(create_key),
+            create_request_digest=str(create_digest),
+            release_idempotency_key=(
+                str(release_key) if release_key is not None else None
+            ),
+            release_request_digest=(
+                str(release_digest) if release_digest is not None else None
+            ),
         )
 
     @classmethod

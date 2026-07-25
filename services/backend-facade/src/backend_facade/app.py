@@ -727,6 +727,63 @@ def create_app(
             identity=identity,
         )
 
+    # D11 — legal holds remain owned by ai-backend's retention subsystem.
+    # The facade forwards the verified identity and only the standard
+    # idempotency header; it never interprets or invents hold targets.
+    @app.get("/v1/retention/legal-holds")
+    async def list_legal_holds(request: Request) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        params = dict(identity.scoped_params())
+        include_released = request.query_params.get("include_released")
+        limit = request.query_params.get("limit")
+        if include_released is not None:
+            params["include_released"] = include_released
+        if limit is not None:
+            params["limit"] = limit
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/retention/legal-holds",
+            target="ai_backend",
+            params=params,
+            identity=identity,
+        )
+
+    @app.post("/v1/retention/legal-holds", status_code=status.HTTP_201_CREATED)
+    async def create_legal_hold(
+        request: Request,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            "/v1/retention/legal-holds",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+            identity=identity,
+        )
+
+    @app.post("/v1/retention/legal-holds/{hold_id}/release")
+    async def release_legal_hold(
+        request: Request,
+        hold_id: str,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/retention/legal-holds/{hold_id}/release",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            json=payload,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+            identity=identity,
+        )
+
     # PR 4.3 — workspace data lifecycle stubs. Both routes proxy 1:1.
     # The export endpoint queues + audits (returns 202); the delete-all
     # endpoint always returns 501 and audits the typed-confirmation
@@ -1769,6 +1826,7 @@ async def forward_json(
     json: dict[str, object] | None = None,
     expect_json: bool = True,
     expect_object: bool = True,
+    idempotency_key: str | None = None,
     identity: AuthenticatedIdentity,
 ) -> object:
     """Forward an authenticated request to the named upstream service.
@@ -1787,6 +1845,9 @@ async def forward_json(
         if target == "backend"
         else settings_for(app).ai_backend_url
     )
+    headers = _outbound_headers(identity)
+    if idempotency_key is not None:
+        headers["Idempotency-Key"] = idempotency_key
     return await _forward_json(
         client=http_client(app),
         base_url=base_url,
@@ -1796,7 +1857,7 @@ async def forward_json(
         json=json,
         expect_json=expect_json,
         expect_object=expect_object,
-        headers=_outbound_headers(identity),
+        headers=headers,
     )
 
 

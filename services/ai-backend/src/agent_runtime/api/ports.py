@@ -25,6 +25,8 @@ from agent_runtime.persistence.records import (
     CompressionEventRecord,
     ModelPricingRecord,
     RetentionDeletionEvidenceRecord,
+    LegalHoldMutationResult,
+    LegalHoldRecord,
     RetentionKind,
     RetentionPolicyRecord,
     RetentionScope,
@@ -148,6 +150,53 @@ class PersistencePort(UsageAttributionEdgeStorePort, Protocol):
         Admin-override path; authorization is enforced by the service layer.
         This port enforces only tenant isolation and returns ``None`` for
         cross-tenant access.
+        """
+
+    async def has_legal_hold_subject(self, *, org_id: str, user_id: str) -> bool:
+        """Whether this tenant has an existing runtime subject for ``user_id``.
+
+        Legal-hold management intentionally does not accept arbitrary opaque
+        resource IDs.  A user-scoped hold is therefore permitted only when a
+        concrete runtime record in that tenant proves the target exists.
+        """
+
+    async def create_legal_hold(
+        self,
+        *,
+        record: LegalHoldRecord,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult:
+        """Create a hold and append its audit-chain event atomically.
+
+        Exact idempotent retries return ``replayed=True``; a reused key with a
+        different canonical request must fail closed with a conflict.
+        """
+
+    async def list_legal_holds(
+        self,
+        *,
+        org_id: str,
+        include_released: bool,
+        limit: int,
+    ) -> Sequence[LegalHoldRecord]:
+        """List only holds owned by ``org_id`` (never a global lookup)."""
+
+    async def release_legal_hold(
+        self,
+        *,
+        org_id: str,
+        hold_id: str,
+        expected_revision: int,
+        released_by_user_id: str,
+        idempotency_key: str,
+        request_digest: str,
+        released_at: datetime,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult | None:
+        """CAS-release an active hold and append an audit event atomically.
+
+        ``None`` deliberately represents a not-found or foreign hold; callers
+        map both to the same 404 to avoid tenant/resource enumeration.
         """
 
     async def list_conversations(

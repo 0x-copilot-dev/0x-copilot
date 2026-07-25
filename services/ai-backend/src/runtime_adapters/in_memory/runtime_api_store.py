@@ -33,6 +33,9 @@ from agent_runtime.persistence.records import (
     ModelPricingRecord,
     OutboxStatus,
     RetentionKind,
+    LegalHoldConflict,
+    LegalHoldMutationResult,
+    LegalHoldRecord,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -105,10 +108,24 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         deleted_at: datetime,
     ) -> object | None:
-        jobs = self._artifact_lifecycle_jobs
-        if jobs is None:
-            return None
-        return await jobs.on_org_deleted(org_id=org_id, deleted_at=deleted_at)
+        # Keep the protection snapshot and destructive artifact call in the
+        # same in-process fence as legal-hold creation/release.  This adapter
+        # has no database advisory lock, so the lock is its linearization
+        # point for the legal-hold/delete race.
+        async with self._legal_hold_lock:
+            jobs = self._artifact_lifecycle_jobs
+            if jobs is None:
+                return None
+            return await jobs.on_org_deleted(
+                org_id=org_id,
+                deleted_at=deleted_at,
+                protected_conversation_ids=tuple(
+                    conversation.conversation_id
+                    for conversation in self.conversations.values()
+                    if conversation.org_id == org_id
+                    and self._conversation_is_held(conversation)
+                ),
+            )
 
     async def open(self) -> None:
         """Lifecycle parity with the Postgres adapter — no pool to open."""
@@ -152,6 +169,10 @@ class InMemoryRuntimeApiStore:
         self._queue_available_at: dict[str, datetime] = {}
         self._queue_claims: dict[str, RuntimeWorkerClaim] = {}
         self.audit_log: list[tuple[str, dict[str, object]]] = []
+        # One lock serializes hold state and the audit chain. A create/release
+        # therefore becomes visible together with its immutable audit record.
+        self._legal_hold_lock = asyncio.Lock()
+        self.legal_holds: dict[str, LegalHoldRecord] = {}
         self._audit_chain_signer = AuditChainSigner.from_env(
             environment_env_var="RUNTIME_ENVIRONMENT"
         )
@@ -278,6 +299,121 @@ class InMemoryRuntimeApiStore:
         if conversation is None or conversation.org_id != org_id:
             return None
         return conversation
+
+    async def has_legal_hold_subject(self, *, org_id: str, user_id: str) -> bool:
+        return any(
+            conversation.org_id == org_id and conversation.user_id == user_id
+            for conversation in self.conversations.values()
+        )
+
+    async def create_legal_hold(
+        self,
+        *,
+        record: LegalHoldRecord,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult:
+        async with self._legal_hold_lock:
+            existing = next(
+                (
+                    hold
+                    for hold in self.legal_holds.values()
+                    if hold.org_id == record.org_id
+                    and hold.created_by_user_id == record.created_by_user_id
+                    and hold.create_idempotency_key == record.create_idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                if existing.create_request_digest != record.create_request_digest:
+                    raise LegalHoldConflict("idempotency key conflicts")
+                return LegalHoldMutationResult(hold=existing, replayed=True)
+            self.legal_holds[record.id] = record
+            self._append_audit_log(event_type="legal_hold.created", record=audit_event)
+            return LegalHoldMutationResult(hold=record)
+
+    async def list_legal_holds(
+        self,
+        *,
+        org_id: str,
+        include_released: bool,
+        limit: int,
+    ) -> Sequence[LegalHoldRecord]:
+        rows = [
+            hold
+            for hold in self.legal_holds.values()
+            if hold.org_id == org_id and (include_released or hold.released_at is None)
+        ]
+        rows.sort(key=lambda hold: (hold.created_at, hold.id), reverse=True)
+        return tuple(rows[:limit])
+
+    async def release_legal_hold(
+        self,
+        *,
+        org_id: str,
+        hold_id: str,
+        expected_revision: int,
+        released_by_user_id: str,
+        idempotency_key: str,
+        request_digest: str,
+        released_at: datetime,
+        audit_event: dict[str, object],
+    ) -> LegalHoldMutationResult | None:
+        async with self._legal_hold_lock:
+            hold = self.legal_holds.get(hold_id)
+            if hold is None or hold.org_id != org_id:
+                return None
+            if hold.released_at is not None:
+                if (
+                    hold.released_by_user_id == released_by_user_id
+                    and hold.release_idempotency_key == idempotency_key
+                    and hold.release_request_digest == request_digest
+                ):
+                    return LegalHoldMutationResult(hold=hold, replayed=True)
+                raise LegalHoldConflict("legal hold is already released")
+            if hold.revision != expected_revision:
+                raise LegalHoldConflict("legal hold revision conflicts")
+            updated = hold.model_copy(
+                update={
+                    "released_by_user_id": released_by_user_id,
+                    "released_at": released_at,
+                    "revision": hold.revision + 1,
+                    "release_idempotency_key": idempotency_key,
+                    "release_request_digest": request_digest,
+                }
+            )
+            self.legal_holds[hold_id] = updated
+            audit_event = {
+                **audit_event,
+                "metadata": {
+                    "scope": updated.scope.value,
+                    "reason_code": updated.reason_code.value,
+                    "revision": updated.revision,
+                },
+            }
+            self._append_audit_log(event_type="legal_hold.released", record=audit_event)
+            return LegalHoldMutationResult(hold=updated)
+
+    def _conversation_is_held(self, conversation: ConversationRecord) -> bool:
+        """Combine legacy file-style flags with authoritative hold records."""
+
+        if bool(conversation.metadata.get("legal_hold")):
+            return True
+        return any(
+            hold.org_id == conversation.org_id
+            and hold.released_at is None
+            and (
+                (hold.scope.value == "org" and hold.resource_id == conversation.org_id)
+                or (
+                    hold.scope.value == "user"
+                    and hold.subject_user_id == conversation.user_id
+                )
+                or (
+                    hold.scope.value == "conversation"
+                    and hold.resource_id == conversation.conversation_id
+                )
+            )
+            for hold in self.legal_holds.values()
+        )
 
     async def list_conversations(
         self,
@@ -568,30 +704,27 @@ class InMemoryRuntimeApiStore:
         before invoking this method.
         """
 
-        conversation = await self.get_conversation(
-            org_id=org_id, user_id=user_id, conversation_id=conversation_id
-        )
-        if conversation is None:
-            return None
-        if conversation.deleted_at is not None:
+        async with self._legal_hold_lock:
+            conversation = await self.get_conversation(
+                org_id=org_id, user_id=user_id, conversation_id=conversation_id
+            )
+            if conversation is None or self._conversation_is_held(conversation):
+                return conversation
+            if conversation.deleted_at is not None:
+                updated = conversation
+            else:
+                updated = conversation.model_copy(
+                    update={"deleted_at": now, "updated_at": now}
+                )
+                self.conversations[conversation_id] = updated
             if self._artifact_lifecycle_jobs is not None:
                 await self._artifact_lifecycle_jobs.on_conversation_deleted(
                     org_id=org_id,
                     user_id=user_id,
                     conversation_id=conversation_id,
-                    deleted_at=conversation.deleted_at,
+                    deleted_at=updated.deleted_at or now,
                 )
-            return conversation
-        updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
-        self.conversations[conversation_id] = updated
-        if self._artifact_lifecycle_jobs is not None:
-            await self._artifact_lifecycle_jobs.on_conversation_deleted(
-                org_id=org_id,
-                user_id=user_id,
-                conversation_id=conversation_id,
-                deleted_at=now,
-            )
-        return updated
+            return updated
 
     async def restore_conversation(
         self,
@@ -1418,13 +1551,20 @@ class InMemoryRuntimeApiStore:
         from agent_runtime.persistence.records import RetentionSweepOutcome
 
         if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
-            if self._artifact_lifecycle_jobs is None or dry_run:
-                return RetentionSweepOutcome(org_id=org_id, kind=kind)
-            result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
-                org_id=org_id,
-                now=datetime.now(timezone.utc),
-                limit=chunk_size or None,
-            )
+            async with self._legal_hold_lock:
+                if self._artifact_lifecycle_jobs is None or dry_run:
+                    return RetentionSweepOutcome(org_id=org_id, kind=kind)
+                result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
+                    org_id=org_id,
+                    now=datetime.now(timezone.utc),
+                    limit=chunk_size or None,
+                    protected_conversation_ids=tuple(
+                        conversation.conversation_id
+                        for conversation in self.conversations.values()
+                        if conversation.org_id == org_id
+                        and self._conversation_is_held(conversation)
+                    ),
+                )
             return RetentionSweepOutcome(
                 org_id=org_id,
                 kind=kind,
@@ -1480,6 +1620,10 @@ class InMemoryRuntimeApiStore:
         chain internals.
         """
 
+        async with self._legal_hold_lock:
+            self._append_audit_log(event_type=event_type, record=record)
+
+    def _append_audit_log(self, *, event_type: str, record: dict[str, object]) -> None:
         signed = self._sign_audit_record(event_type=event_type, record=record)
         self.audit_log.append((event_type, signed))
 
@@ -1536,91 +1680,103 @@ class InMemoryRuntimeApiStore:
         """Tombstone user-visible history while preserving audit evidence."""
 
         now = datetime.now(timezone.utc)
-        conversation_ids = {
-            conversation.conversation_id
-            for conversation in self.conversations.values()
-            if conversation.org_id == org_id and conversation.user_id == user_id
-        }
-        conversations_archived = 0
-        for conversation_id in conversation_ids:
-            conversation = self.conversations[conversation_id]
-            if conversation.status != ConversationStatus.ARCHIVED:
-                conversations_archived += 1
-            self.conversations[conversation_id] = conversation.model_copy(
-                update={
-                    "status": ConversationStatus.ARCHIVED,
-                    "archived_at": now,
-                    # PRD-05 — stamp ``deleted_at`` too so the run-history feed
-                    # (``list_runs_for_org``, which filters on the joined
-                    # conversation's ``deleted_at``) is actually cleared, and the
-                    # C8 tombstone sweeper can reap the rows. COALESCE-style: keep
-                    # an earlier deletion instant if one already exists.
-                    "deleted_at": conversation.deleted_at or now,
-                    "updated_at": now,
-                }
-            )
-
-        messages_tombstoned = 0
-        for message_id, message in tuple(self.messages.items()):
-            if (
-                message.org_id != org_id
-                or message.conversation_id not in conversation_ids
-            ):
-                continue
-            if message.deleted_at is None:
-                messages_tombstoned += 1
-            self.messages[message_id] = message.model_copy(
-                update={
-                    "status": MessageStatus.DELETED,
-                    "content_text": "[deleted by user request]",
-                    "deleted_at": now,
-                }
-            )
-
-        runs_cancelled = 0
-        for run_id, run in tuple(self.runs.items()):
-            if run.org_id != org_id or run.user_id != user_id:
-                continue
-            if run.status not in StatusTransition.TERMINAL_STATUSES:
-                runs_cancelled += 1
-                self.runs[run_id] = run.model_copy(
-                    update={"status": AgentRunStatus.CANCELLED, "cancelled_at": now}
+        # See ``create_legal_hold``: this is the shared in-memory equivalent
+        # of Postgres's ordered advisory fence.  A hold creation either wins
+        # before this snapshot or begins only after no destructive work remains.
+        async with self._legal_hold_lock:
+            conversation_ids = {
+                conversation.conversation_id
+                for conversation in self.conversations.values()
+                if conversation.org_id == org_id
+                and conversation.user_id == user_id
+                and not self._conversation_is_held(conversation)
+            }
+            conversations_archived = 0
+            for conversation_id in conversation_ids:
+                conversation = self.conversations[conversation_id]
+                if conversation.status != ConversationStatus.ARCHIVED:
+                    conversations_archived += 1
+                self.conversations[conversation_id] = conversation.model_copy(
+                    update={
+                        "status": ConversationStatus.ARCHIVED,
+                        "archived_at": now,
+                        "deleted_at": conversation.deleted_at or now,
+                        "updated_at": now,
+                    }
                 )
 
-        events_retained = sum(
-            len(events)
-            for run_id, events in self.events_by_run.items()
-            if self.runs.get(run_id) is not None
-            and self.runs[run_id].org_id == org_id
-            and self.runs[run_id].user_id == user_id
-        )
-        audit_event_id = f"history_delete_{org_id}_{user_id}_{int(now.timestamp())}"
-        await self.write_audit_log(
-            event_type="user_history_deleted",
-            record={
-                _Fields.AUDIT_EVENT_ID: audit_event_id,
-                _Fields.ORG_ID: org_id,
-                _Fields.USER_ID: user_id,
-                _Fields.REASON: reason,
-                _Fields.DELETED_AT: now.isoformat(),
-            },
-        )
-        result = HistoryDeletionResponse(
-            org_id=org_id,
-            user_id=user_id,
-            conversations_archived=conversations_archived,
-            messages_tombstoned=messages_tombstoned,
-            runs_cancelled=runs_cancelled,
-            events_retained=events_retained,
-            audit_event_id=audit_event_id,
-        )
-        if self._artifact_lifecycle_jobs is not None:
-            await self._artifact_lifecycle_jobs.on_user_deleted(
+            messages_tombstoned = 0
+            for message_id, message in tuple(self.messages.items()):
+                if (
+                    message.org_id != org_id
+                    or message.conversation_id not in conversation_ids
+                ):
+                    continue
+                if message.deleted_at is None:
+                    messages_tombstoned += 1
+                self.messages[message_id] = message.model_copy(
+                    update={
+                        "status": MessageStatus.DELETED,
+                        "content_text": "[deleted by user request]",
+                        "deleted_at": now,
+                    }
+                )
+
+            runs_cancelled = 0
+            for run_id, run in tuple(self.runs.items()):
+                if (
+                    run.org_id != org_id
+                    or run.user_id != user_id
+                    or run.conversation_id not in conversation_ids
+                ):
+                    continue
+                if run.status not in StatusTransition.TERMINAL_STATUSES:
+                    runs_cancelled += 1
+                    self.runs[run_id] = run.model_copy(
+                        update={"status": AgentRunStatus.CANCELLED, "cancelled_at": now}
+                    )
+
+            events_retained = sum(
+                len(events)
+                for run_id, events in self.events_by_run.items()
+                if self.runs.get(run_id) is not None
+                and self.runs[run_id].org_id == org_id
+                and self.runs[run_id].user_id == user_id
+            )
+            audit_event_id = f"history_delete_{org_id}_{user_id}_{int(now.timestamp())}"
+            self._append_audit_log(
+                event_type="user_history_deleted",
+                record={
+                    _Fields.AUDIT_EVENT_ID: audit_event_id,
+                    _Fields.ORG_ID: org_id,
+                    _Fields.USER_ID: user_id,
+                    _Fields.REASON: reason,
+                    _Fields.DELETED_AT: now.isoformat(),
+                },
+            )
+            result = HistoryDeletionResponse(
                 org_id=org_id,
                 user_id=user_id,
-                deleted_at=now,
+                conversations_archived=conversations_archived,
+                messages_tombstoned=messages_tombstoned,
+                runs_cancelled=runs_cancelled,
+                events_retained=events_retained,
+                audit_event_id=audit_event_id,
             )
-        return result
+            if self._artifact_lifecycle_jobs is not None:
+                await self._artifact_lifecycle_jobs.on_user_deleted(
+                    org_id=org_id,
+                    user_id=user_id,
+                    deleted_at=now,
+                    protected_conversation_ids=tuple(
+                        conversation.conversation_id
+                        for conversation in self.conversations.values()
+                        if conversation.org_id == org_id
+                        and conversation.user_id == user_id
+                        and self._conversation_is_held(conversation)
+                    ),
+                )
+            return result
 
     # ------------------------------------------------------------------
     # Usage + pricing
