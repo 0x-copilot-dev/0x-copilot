@@ -15,6 +15,9 @@
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  signAndVerifyMacAppBundle,
+} = require("../../../tools/desktop-runtime/macos-signing.cjs");
 
 // Mach-O + fat-binary magic numbers (first 4 bytes, either endianness).
 const MACH_O_MAGIC = new Set([
@@ -49,9 +52,9 @@ function walkFiles(dir, out, appBundles) {
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) continue; // sign real files, not symlinks
     if (entry.isDirectory() && entry.name.endsWith(".app")) {
-      // Chrome for Testing arrives as a complete signed app. Signing its
-      // individual Mach-O files would invalidate its bundle seal and browser
-      // entitlements, so preserve and verify that nested signature instead.
+      // Sign Chromium as one nested code-sealed unit. The shared helper
+      // recursively signs helpers/frameworks, preserves their metadata, and
+      // requires a successful strict/deep verification before returning.
       appBundles.push(full);
     } else if (entry.isDirectory()) walkFiles(full, out, appBundles);
     else if (entry.isFile()) out.push(full);
@@ -111,20 +114,15 @@ exports.default = async function signNested(context) {
   }
 
   for (const bundle of appBundles) {
-    const verified = spawnSync(
-      "codesign",
-      ["--verify", "--deep", "--strict", bundle],
-      { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
-    );
-    if (verified.status !== 0) {
-      throw new Error(
-        `[sign-nested] invalid nested browser signature: ${verified.stderr}`,
-      );
-    }
+    signAndVerifyMacAppBundle(bundle, {
+      hardenedRuntime: true,
+      identity,
+      timestamp: true,
+    });
   }
   if (appBundles.length > 0) {
     console.log(
-      `[sign-nested] preserved ${appBundles.length} valid nested browser app signature(s).`,
+      `[sign-nested] re-signed and strictly verified ${appBundles.length} nested browser app bundle(s).`,
     );
   }
 

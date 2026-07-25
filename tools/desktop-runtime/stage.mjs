@@ -45,6 +45,9 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import { stageBrowserRuntime } from "./browser-runtime.mjs";
+import macosSigning from "./macos-signing.cjs";
+
+const { signAndVerifyMacAppBundle } = macosSigning;
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
@@ -529,9 +532,9 @@ function collectSignTargets(root) {
       const full = path.join(dir, e.name);
       if (e.isSymbolicLink()) continue; // sign the real file, not the symlink
       if (e.isDirectory()) {
-        // Playwright's Chrome for Testing is already a valid signed app bundle.
-        // Re-signing its individual Mach-O files would invalidate the bundle
-        // seal and strip browser entitlements. Preserve it as one nested unit.
+        // Treat Chromium as one nested code-sealed unit. Its downloaded outer
+        // signature is not guaranteed to be valid after archive extraction;
+        // adhocSignTree verifies or repairs the complete app inside-out.
         if (e.name.endsWith(".app")) {
           appBundles.push(full);
           continue;
@@ -649,8 +652,34 @@ function adhocSignTree(runtimeDir) {
     return;
   }
 
+  let repairedAppBundles = 0;
+  let preservedAppBundles = 0;
+  for (const bundle of appBundles) {
+    try {
+      const result = signAndVerifyMacAppBundle(bundle, {
+        identity: "-",
+        preserveValid: true,
+      });
+      if (result.action === "signed") repairedAppBundles++;
+      else preservedAppBundles++;
+    } catch (error) {
+      fail(
+        `nested browser app signing failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  if (appBundles.length > 0) {
+    log(
+      `nested browser signatures: ${repairedAppBundles} repaired, ` +
+        `${preservedAppBundles} preserved after strict verification`,
+    );
+  }
+
   // One stamp covers the whole finalize (strip → sign): its fingerprint is the
   // FINAL signed state, so an unchanged tree skips strip+sign on warm re-stages.
+  // Nested app verification intentionally precedes this check: a warm stamp
+  // never bypasses strict verification of Chromium's recursive code seal.
   const stampPath = path.join(runtimeDir, ".sign-stamp.json");
   if (
     readStamp(stampPath)?.fingerprint ===
@@ -662,27 +691,12 @@ function adhocSignTree(runtimeDir) {
     return;
   }
 
-  for (const bundle of appBundles) {
-    const verified = spawnSync(
-      "codesign",
-      ["--verify", "--deep", "--strict", bundle],
-      { stdio: "pipe", encoding: "utf8" },
-    );
-    if (verified.status !== 0) {
-      fail(
-        `nested browser app has an invalid upstream signature: ` +
-          `${(verified.stderr || "").trim()}`,
-      );
-    }
-  }
-  if (appBundles.length > 0) {
-    log(`preserved ${appBundles.length} valid nested browser app signature(s)`);
-  }
-
   const strippedCount = stripSymbols(targets);
   if (strippedCount) log(`stripped symbols from ${strippedCount} binaries`);
 
-  log(`ad-hoc signing ${targets.length} Mach-O binaries`);
+  if (targets.length > 0) {
+    log(`ad-hoc signing ${targets.length} Mach-O binaries`);
+  }
   let signed = 0;
   const failures = [];
   const BATCH = 100;
@@ -725,6 +739,8 @@ function adhocSignTree(runtimeDir) {
   // (codesign rewrites each file, changing its size+mtime).
   writeStamp(stampPath, {
     fingerprint: signFingerprint([...targets, ...appBundles]),
+    nested_app_bundles_repaired: repairedAppBundles,
+    nested_app_bundles_verified: appBundles.length,
     signed,
     signed_at: new Date().toISOString(),
   });

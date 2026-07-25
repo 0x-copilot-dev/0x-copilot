@@ -16,9 +16,15 @@ function fixture() {
   const executable = path.join(sourceRoot, "chrome", "chrome");
   fs.mkdirSync(path.dirname(executable), { recursive: true });
   fs.writeFileSync(executable, "browser", { mode: 0o700 });
+  const framework = path.join(sourceRoot, "chrome", "Browser.framework");
+  const frameworkVersion = path.join(framework, "Versions", "1");
+  fs.mkdirSync(frameworkVersion, { recursive: true });
+  fs.writeFileSync(path.join(frameworkVersion, "Browser"), "framework");
+  fs.symlinkSync("Versions/Current/Browser", path.join(framework, "Browser"));
+  fs.symlinkSync("1", path.join(framework, "Versions", "Current"));
   const runtimeDir = path.join(root, "runtime");
   fs.mkdirSync(runtimeDir, { recursive: true });
-  return { root, executable, runtimeDir };
+  return { framework, root, executable, runtimeDir };
 }
 
 const metadata = {
@@ -53,6 +59,19 @@ test("stageBrowserTree atomically copies the exact revision and manifest", () =>
       ),
       "browser",
     );
+    const stagedFrameworkLink = path.join(
+      f.runtimeDir,
+      "browser",
+      "chromium",
+      "chrome",
+      "Browser.framework",
+      "Browser",
+    );
+    assert.equal(
+      fs.readlinkSync(stagedFrameworkLink),
+      "Versions/Current/Browser",
+    );
+    assert.equal(path.isAbsolute(fs.readlinkSync(stagedFrameworkLink)), false);
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
   }
@@ -78,6 +97,51 @@ test("stageBrowserTree reuses only an exact manifest with an executable", () => 
       log: (line) => logs.push(line),
     });
     assert.ok(logs.some((line) => line.includes("manifest match")));
+  } finally {
+    fs.rmSync(f.root, { recursive: true, force: true });
+  }
+});
+
+test("stageBrowserTree replaces a manifest match with escaped symlinks", () => {
+  const f = fixture();
+  const logs = [];
+  try {
+    stageBrowserTree({
+      runtimeDir: f.runtimeDir,
+      platform: "darwin",
+      arch: "arm64",
+      executable: f.executable,
+      metadata,
+    });
+    const stagedFrameworkLink = path.join(
+      f.runtimeDir,
+      "browser",
+      "chromium",
+      "chrome",
+      "Browser.framework",
+      "Browser",
+    );
+    fs.unlinkSync(stagedFrameworkLink);
+    fs.symlinkSync(
+      path.join(f.framework, "Versions", "Current", "Browser"),
+      stagedFrameworkLink,
+    );
+
+    stageBrowserTree({
+      runtimeDir: f.runtimeDir,
+      platform: "darwin",
+      arch: "arm64",
+      executable: f.executable,
+      metadata,
+      log: (line) => logs.push(line),
+    });
+
+    assert.equal(
+      fs.readlinkSync(stagedFrameworkLink),
+      "Versions/Current/Browser",
+    );
+    assert.ok(logs.some((line) => line.includes("staged Chromium")));
+    assert.ok(!logs.some((line) => line.includes("manifest match")));
   } finally {
     fs.rmSync(f.root, { recursive: true, force: true });
   }

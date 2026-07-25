@@ -30,6 +30,44 @@ function normalizedRelativePath(value) {
   return value.split(path.sep).join("/");
 }
 
+function portableSymlinks(root) {
+  const stack = [root];
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return false;
+    }
+    for (const entry of entries) {
+      const full = path.join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        let target;
+        try {
+          target = fs.readlinkSync(full);
+        } catch {
+          return false;
+        }
+        if (path.isAbsolute(target)) return false;
+        const resolved = path.resolve(dir, target);
+        const relative = path.relative(root, resolved);
+        if (
+          relative === ".." ||
+          relative.startsWith(`..${path.sep}`) ||
+          path.isAbsolute(relative) ||
+          !fs.existsSync(resolved)
+        ) {
+          return false;
+        }
+      } else if (entry.isDirectory()) {
+        stack.push(full);
+      }
+    }
+  }
+  return true;
+}
+
 function findRevisionRoot(executable, revision) {
   const expected = `chromium-${revision}`;
   let cursor = path.dirname(fs.realpathSync(executable));
@@ -126,7 +164,8 @@ export function stageBrowserTree({
     const existing = readJson(existingManifestPath);
     if (
       JSON.stringify(existing) === JSON.stringify(wantedManifest) &&
-      fs.existsSync(path.join(browserRoot, ...stagedExecutable.split("/")))
+      fs.existsSync(path.join(browserRoot, ...stagedExecutable.split("/"))) &&
+      portableSymlinks(path.join(browserRoot, "chromium"))
     ) {
       log("browser: Chromium runtime already staged (manifest match)");
       return wantedManifest;
@@ -145,7 +184,14 @@ export function stageBrowserTree({
     fs.cpSync(sourceRoot, path.join(tempRoot, "chromium"), {
       recursive: true,
       preserveTimestamps: true,
+      // Node otherwise rewrites relative framework links as absolute links
+      // back into the download cache. That makes the packaged Chromium bundle
+      // non-self-contained and invalidates its nested framework code seal.
+      verbatimSymlinks: true,
     });
+    if (!portableSymlinks(path.join(tempRoot, "chromium"))) {
+      fail("copied Chromium tree contained an escaped or broken symlink");
+    }
     const copiedExecutable = path.join(
       tempRoot,
       ...stagedExecutable.split("/"),
