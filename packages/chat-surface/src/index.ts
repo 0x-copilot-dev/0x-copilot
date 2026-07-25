@@ -93,6 +93,10 @@ export type {
 } from "./contract";
 export { PROJECTS_BINDING_FIELDS, SHELL_BINDING_FIELDS } from "./contract";
 export { toChatArchiveRow } from "./projections/chats";
+export {
+  projectSourcesV2,
+  type SourcesProjectionEventLike,
+} from "./projections/sourcesV2";
 // === end PRD-03 ===
 export { CopyIcon } from "./icons/CopyIcon";
 export { RetryIcon } from "./icons/RetryIcon";

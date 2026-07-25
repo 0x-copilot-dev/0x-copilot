@@ -163,6 +163,10 @@ export type {
   LegacyPresentationProjection,
   LegacyGateProjection,
   LegacyCompatibilityProjection,
+  // Sources v2 — safe provenance projection.
+  SourceFactKindV2,
+  SourceFactV2,
+  SourcesProjectionV2,
   // PRD-E2 — cross-run pending-work queue read model.
   PendingItemKind,
   PendingWorkItem,
