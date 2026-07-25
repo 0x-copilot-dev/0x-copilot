@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+import pytest
+
 from agent_runtime.capabilities.browser.contracts import (
     BrowserActionKind,
     BrowserActionPlan,
@@ -56,14 +58,19 @@ def _plan() -> BrowserActionPlan:
         action_kind=BrowserActionKind.CLICK,
         element_ref="e7_1",
         element_fingerprint="a" * 64,
-        form_action_url="https://example.com/send",
-        method="POST",
         canonical_fields_ref=f"operation://{_OPERATION_ID}/args",
         fields_digest="b" * 64,
         precondition=precondition,
         precondition_digest=precondition.digest,
         user_visible_summary="Review browser click on https://example.com.",
     )
+
+
+def test_plan_rejects_partial_form_identity() -> None:
+    payload = _plan().model_dump(mode="json")
+    payload["form_action_url"] = "https://example.com/send"
+    with pytest.raises(ValueError, match="form identity"):
+        BrowserActionPlan.model_validate(payload)
 
 
 def _request() -> OperationRequest:

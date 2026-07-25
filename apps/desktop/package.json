@@ -30,6 +30,7 @@
     "@0x-copilot/design-system": "0.1.0",
     "@0x-copilot/surface-renderers": "0.1.0",
     "electron-updater": "^6.6.2",
+    "playwright": "1.61.1",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "viem": "^2.21.55",

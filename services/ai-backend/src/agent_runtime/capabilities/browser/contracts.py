@@ -104,6 +104,7 @@ class BrowserPrecondition(RuntimeContract):
     origin: str = Field(min_length=1, max_length=512)
     element_fingerprint: Sha256Hex | None = None
     form_fingerprint: Sha256Hex | None = None
+    form_payload_digest: Sha256Hex | None = None
 
     @field_validator("origin")
     @classmethod
@@ -161,6 +162,8 @@ class BrowserActionPlan(RuntimeContract):
     action_kind: BrowserActionKind
     element_ref: str | None = Field(default=None, min_length=1, max_length=255)
     element_fingerprint: Sha256Hex | None = None
+    form_fingerprint: Sha256Hex | None = None
+    form_payload_digest: Sha256Hex | None = None
     form_action_url: str | None = Field(default=None, min_length=1, max_length=2048)
     method: str | None = Field(default=None, min_length=1, max_length=16)
     canonical_fields_ref: str = Field(min_length=1, max_length=_REF_MAX)
@@ -195,10 +198,13 @@ class BrowserActionPlan(RuntimeContract):
             or not parsed.netloc
             or parsed.username
             or parsed.password
+            or parsed.query
             or parsed.fragment
             or "\x00" in value
         ):
-            raise ValueError("form_action_url must be an https URL without credentials")
+            raise ValueError(
+                "form_action_url must be an https URL without credentials or query"
+            )
         return value
 
     @field_validator("method")
@@ -247,6 +253,29 @@ class BrowserActionPlan(RuntimeContract):
             raise ValueError("browser precondition origin must match action origin")
         if self.element_fingerprint != self.precondition.element_fingerprint:
             raise ValueError("browser plan fingerprint must match its precondition")
+        if self.form_fingerprint != self.precondition.form_fingerprint:
+            raise ValueError("browser form fingerprint must match its precondition")
+        if self.form_payload_digest != self.precondition.form_payload_digest:
+            raise ValueError("browser form payload digest must match its precondition")
+        form_identity = (
+            self.form_fingerprint,
+            self.form_payload_digest,
+            self.form_action_url,
+            self.method,
+        )
+        present_form_fields = sum(value is not None for value in form_identity)
+        if present_form_fields not in {0, len(form_identity)}:
+            raise ValueError("browser form identity must be complete or absent")
+        if self.action_kind in {
+            BrowserActionKind.SUBMIT,
+            BrowserActionKind.UPLOAD_SUBMIT,
+        } and (
+            self.form_fingerprint is None
+            or self.form_payload_digest is None
+            or self.form_action_url is None
+            or self.method is None
+        ):
+            raise ValueError("browser submission requires exact form identity")
         if self.precondition_digest != self.precondition.digest:
             raise ValueError(
                 "browser precondition digest must bind the exact precondition"
@@ -269,6 +298,8 @@ class BrowserActionPlan(RuntimeContract):
                     "action_kind": self.action_kind.value,
                     "element_ref": self.element_ref,
                     "element_fingerprint": self.element_fingerprint,
+                    "form_fingerprint": self.form_fingerprint,
+                    "form_payload_digest": self.form_payload_digest,
                     "form_action_url": self.form_action_url,
                     "method": self.method,
                     "upload_artifact_refs": list(self.upload_artifact_refs),
@@ -390,12 +421,12 @@ class BrowserStoredPlan(RuntimeContract):
 
 
 @runtime_checkable
-class BrowserPrivateBridge(Protocol):
-    """Electron-main-only authority port.
+class BrowserReadBridge(Protocol):
+    """Electron-main-owned bounded browser-read port.
 
-    Its implementation owns the authenticated desktop channel, browser profile,
-    cookies, and OS prompts.  Python receives no transport credential and never
-    receives an arbitrary selector or host path.
+    The implementation owns the authenticated desktop channel and returns only
+    safe summaries, opaque refs, or exact artifact bytes. It never returns
+    cookies, selectors, profile paths, or arbitrary host paths.
     """
 
     async def execute_read(self, request: BrowserReadRequest) -> BrowserReadResult:
@@ -406,6 +437,15 @@ class BrowserPrivateBridge(Protocol):
     ) -> BrowserArtifactPayload | None:
         """Consume exact private bytes captured by a read/download operation."""
 
+
+@runtime_checkable
+class BrowserEffectBridge(Protocol):
+    """Electron-main-only staged-effect authority port.
+
+    It exposes no generic click/form method: A5 can only prepare an immutable
+    approved plan, consume its one-use prepared ref, or observe that same ref.
+    """
+
     async def prepare_action(self, plan: BrowserActionPlan) -> BrowserPrepareResult:
         """Revalidate session/page/origin/element without a side effect."""
 
@@ -414,6 +454,11 @@ class BrowserPrivateBridge(Protocol):
 
     async def reconcile_action(self, prepared_ref: str) -> BrowserApplyReceipt:
         """Observe one prior attempt; it must never re-send a browser action."""
+
+
+@runtime_checkable
+class BrowserPrivateBridge(BrowserReadBridge, BrowserEffectBridge, Protocol):
+    """Combined private bridge implemented by the desktop production adapter."""
 
 
 @runtime_checkable
@@ -490,10 +535,12 @@ __all__ = (
     "BrowserApplyOutcome",
     "BrowserApplyReceipt",
     "BrowserArtifactPayload",
+    "BrowserEffectBridge",
     "BrowserOperationError",
     "BrowserPrecondition",
     "BrowserPrepareResult",
     "BrowserPrivateBridge",
+    "BrowserReadBridge",
     "BrowserReadRequest",
     "BrowserReadResult",
     "BrowserStagePort",

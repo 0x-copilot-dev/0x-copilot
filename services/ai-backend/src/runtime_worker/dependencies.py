@@ -27,6 +27,7 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
 
 
@@ -356,6 +357,11 @@ class DefaultRuntimeDependenciesFactory:
                 broker_url=env.get(BrowserEnv.BROKER_URL) or None,
                 broker_token=env.get(BrowserEnv.BROKER_TOKEN) or None,
                 runtime_context=context,
+                effects_enabled=bool(
+                    self.settings.execution.surfaces_v2
+                    and self.settings.execution.operation_gateway_mode
+                    is OperationGatewayMode.ENFORCE
+                ),
             )
         )
 

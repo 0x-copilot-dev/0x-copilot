@@ -32,9 +32,9 @@ export interface SessionWorkerPortConfig {
     binding: BrowserActionRequest["binding"],
   ) => Promise<BrowserSession>;
   /**
-   * Advertise the side-effecting action tools. Only set true when the injected
-   * sessions are composed with an approval authority; otherwise the action
-   * tools are hidden and the read-only surface is advertised. Default false.
+   * Advertise exact-plan action proposals. Only set true when Electron main's
+   * private prepare/apply/reconcile bridge and A5 executor are composed.
+   * Public dispatch still rejects these tools. Default false.
    */
   readonly includeActionTools?: boolean;
 }
@@ -51,18 +51,20 @@ export class SessionWorkerPort
   }
 
   listTools(): Promise<readonly BrowserToolSchema[]> {
-    // Generic side-effect schemas remain unadvertised. Passing a legacy
-    // includeActionTools flag cannot reopen browser_click outside the staged
-    // BrowserPrivateEffectBridge protocol.
-    return Promise.resolve(browserToolSchemas({ includeActions: false }));
+    return Promise.resolve(
+      browserToolSchemas({
+        includeActions: this.#cfg.includeActionTools === true,
+      }),
+    );
   }
 
   async dispatch(request: BrowserActionRequest): Promise<BrowserActionResult> {
     // The broker performs this check too, but the worker is an authority
     // boundary in its own right. An internal caller cannot sidestep the staged
     // protocol by calling `dispatch(browser_click)` directly.
-    const advertised = await this.listTools();
-    if (!advertised.some((tool) => tool.name === request.toolName)) {
+    // Discovery may include exact-plan actions, but this RPC method is the
+    // read dispatcher. Only the immutable read cohort is callable here.
+    if (!browserToolSchemas().some((tool) => tool.name === request.toolName)) {
       return {
         version: 1,
         requestId: request.requestId,
@@ -99,7 +101,6 @@ export class SessionWorkerPort
 
   async applyPrepared(preparedRef: string): Promise<BrowserEffectReceipt> {
     const owner = this.#preparedOwners.get(preparedRef);
-    this.#preparedOwners.delete(preparedRef);
     return owner === undefined
       ? {
           outcome: "indeterminate",

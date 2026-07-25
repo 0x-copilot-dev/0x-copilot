@@ -1,6 +1,13 @@
 {
   "$comment": "Pinned, sha256-verified binary inputs for the self-contained desktop runtime. Edit only by re-pinning: download the new artifact, compute sha256 locally, update url+sha256+version together. stage.mjs refuses any artifact whose sha256 does not match.",
   "schema_version": 1,
+  "browser": {
+    "$comment": "Playwright's npm integrity pins the driver; stage.mjs installs this exact Chromium revision into the runtime and Electron main independently verifies this manifest plus the launched browser version before exposing the broker.",
+    "distribution": "playwright-chromium",
+    "playwright_version": "1.61.1",
+    "chromium_revision": "1228",
+    "chromium_version": "149.0.7827.55"
+  },
   "python": {
     "$comment": "astral-sh/python-build-standalone 'install_only' builds. Archive is a .tar.gz with a single top-level 'python/' directory (bin/python3.13 on mac; python.exe at the tree root on windows). pip is bundled.",
     "distribution": "python-build-standalone",

@@ -13,6 +13,7 @@ import {
   type BrowserActionRequest,
   type BrowserActionResult,
 } from "./protocol";
+import { MainBrowserReadAuthority } from "./read-authority";
 import { BROWSER_TOOL_SCHEMAS, type BrowserToolSchema } from "./tool-schemas";
 
 class FakeWorker implements BrowserWorkerPort {
@@ -36,33 +37,13 @@ class FakeWorker implements BrowserWorkerPort {
 
 const NOW = 1000;
 
-function actionRequest(): BrowserActionRequest {
-  return {
-    version: 1,
-    requestId: "rq",
-    binding: {
-      version: 1,
-      runId: "run-1",
-      workspaceId: "ws",
-      profileId: "prf",
-      profileMode: BrowserProfileMode.Ephemeral,
-      approvalId: "ap",
-      originPolicy: {
-        version: 1,
-        topLevelOrigins: ["https://example.com"],
-        subresourceOrigins: [],
-        denyPrivateNetworks: true,
-        serviceWorkers: "block",
-      },
-      expiresAt: "2099-01-01T00:00:00Z",
-      nonce: "n",
-    },
-    actionClass: BrowserActionClass.Navigate,
-    toolName: "browser_navigate",
-    arguments: { url: "https://example.com" },
-    deadlineMs: 5000,
-  };
-}
+const ORIGIN_POLICY = {
+  version: 1 as const,
+  topLevelOrigins: ["https://example.com"],
+  subresourceOrigins: [],
+  denyPrivateNetworks: true as const,
+  serviceWorkers: "block" as const,
+};
 
 describe("BrowserBroker", () => {
   let broker: BrowserBroker;
@@ -88,7 +69,15 @@ describe("BrowserBroker", () => {
 
   beforeEach(async () => {
     worker = new FakeWorker();
-    broker = new BrowserBroker({ worker, now: () => NOW });
+    broker = new BrowserBroker({
+      worker,
+      now: () => NOW,
+      readAuthority: new MainBrowserReadAuthority({
+        originPolicy: ORIGIN_POLICY,
+        now: () => NOW,
+        randomBytes: () => Buffer.alloc(24, 7),
+      }),
+    });
     const handle = await broker.start();
     baseUrl = handle.baseUrl;
     token = broker.authToken();
@@ -190,28 +179,70 @@ describe("BrowserBroker", () => {
     const res = await fetch(`${baseUrl}/v1/browser/action`, {
       method: "POST",
       headers: H(),
-      body: envelope({ action: actionRequest() }),
+      body: envelope({
+        runId: "run-1",
+        workspaceId: "ws",
+        tool: {
+          name: "browser_navigate",
+          arguments: { url: "https://example.com" },
+        },
+        // Forged authority fields are ignored; main derives the real values.
+        actionClass: BrowserActionClass.ExternalEffect,
+        originPolicy: { topLevelOrigins: ["https://evil.example"] },
+      }),
     });
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.result.status).toBe("succeeded");
     expect(worker.lastRequest?.toolName).toBe("browser_navigate");
+    expect(worker.lastRequest?.actionClass).toBe(BrowserActionClass.Navigate);
+    expect(worker.lastRequest?.binding.profileMode).toBe(
+      BrowserProfileMode.Ephemeral,
+    );
+    expect(worker.lastRequest?.binding.profileId).toBe("ephemeral");
+    expect(worker.lastRequest?.binding.originPolicy).toEqual(ORIGIN_POLICY);
   });
 
   it("refuses an unadvertised generic click even with a valid broker credential", async () => {
-    const action = {
-      ...actionRequest(),
-      actionClass: BrowserActionClass.ExternalEffect,
-      toolName: "browser_click",
-      arguments: { ref: "e1_0" },
-    };
     const res = await fetch(`${baseUrl}/v1/browser/action`, {
       method: "POST",
       headers: H(),
-      body: envelope({ action }),
+      body: envelope({
+        runId: "run-1",
+        workspaceId: "ws",
+        tool: { name: "browser_click", arguments: { ref: "e1_0" } },
+      }),
     });
     expect(res.status).toBe(403);
-    expect((await res.json()).error).toBe("tool_not_advertised");
+    expect((await res.json()).error).toBe("read_operation_required");
     expect(worker.lastRequest).toBeNull();
+  });
+
+  it("pins a run to one workspace and rejects scope switching", async () => {
+    const call = (workspaceId: string) =>
+      fetch(`${baseUrl}/v1/browser/action`, {
+        method: "POST",
+        headers: H(),
+        body: envelope({
+          runId: "run-pinned",
+          workspaceId,
+          tool: { name: "browser_snapshot", arguments: {} },
+        }),
+      });
+
+    expect((await call("ws-a")).status).toBe(200);
+    const switched = await call("ws-b");
+    expect(switched.status).toBe(403);
+    expect((await switched.json()).error).toBe("scope_mismatch");
+  });
+
+  it("rejects an envelope whose validity exceeds the replay-cache TTL", async () => {
+    const res = await fetch(`${baseUrl}/v1/browser/tools/list`, {
+      method: "POST",
+      headers: H(),
+      body: envelope({ expiresAt: NOW + 5 * 60 * 1000 + 1 }),
+    });
+    expect(res.status).toBe(401);
+    expect((await res.json()).error).toBe("expiry_too_far");
   });
 });

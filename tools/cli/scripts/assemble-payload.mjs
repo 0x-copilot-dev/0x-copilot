@@ -129,13 +129,16 @@ fs.mkdirSync(PAYLOAD, { recursive: true });
 // --- 3. staging tool -----------------------------------------------------
 const stageDest = path.join(PAYLOAD, "tools", "desktop-runtime");
 fs.mkdirSync(stageDest, { recursive: true });
-for (const f of ["stage.mjs", "manifest.json"]) {
+for (const f of ["stage.mjs", "browser-runtime.mjs", "manifest.json"]) {
   fs.copyFileSync(
     path.join(REPO_ROOT, "tools", "desktop-runtime", f),
     path.join(stageDest, f),
   );
 }
-log("copied tools/desktop-runtime (stage.mjs + manifest.json)");
+log(
+  "copied tools/desktop-runtime " +
+    "(stage.mjs + browser-runtime.mjs + manifest.json)",
+);
 
 // --- 4. service source + requirements ------------------------------------
 for (const svc of SERVICES) {
@@ -179,8 +182,9 @@ const desktopVersion = JSON.parse(
     "utf8",
   ),
 ).version;
-// Minimal app manifest: everything the main/renderer need is bundled into
-// out/ by esbuild (electron is the only external), so no dependencies here.
+// Minimal app manifest: main/renderer are bundled into out/. The browser
+// worker's Playwright import resolves from the CLI package dependency one
+// directory tree above this payload.
 fs.writeFileSync(
   path.join(appDest, "package.json"),
   JSON.stringify(

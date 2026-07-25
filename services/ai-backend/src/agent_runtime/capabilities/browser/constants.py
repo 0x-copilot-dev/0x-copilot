@@ -18,6 +18,9 @@ class BrowserBroker:
     ROUTE_HANDSHAKE = "/v1/browser/handshake"
     ROUTE_TOOLS_LIST = "/v1/browser/tools/list"
     ROUTE_ACTION = "/v1/browser/action"
+    ROUTE_PRIVATE_PREPARE = "/v1/browser/private/prepare"
+    ROUTE_PRIVATE_APPLY = "/v1/browser/private/apply"
+    ROUTE_PRIVATE_RECONCILE = "/v1/browser/private/reconcile"
 
     #: Action credentials are short-lived; the AI client stamps this TTL onto
     #: every envelope's ``expiresAt`` (ms). The broker re-checks freshness.
@@ -62,6 +65,7 @@ class BrowserServer:
     )
     #: Single-user desktop is the ONLY profile where the card may appear.
     REQUIRED_DEPLOYMENT_PROFILE = "single_user_desktop"
+    STAGED_ACTION_TOOLS = frozenset({"browser_click", "browser_submit"})
 
 
 class BrowserKeys:
@@ -71,6 +75,8 @@ class BrowserKeys:
     NONCE = "nonce"
     REQUEST_ID = "requestId"
     EXPIRES_AT = "expiresAt"
+    RUN_ID = "runId"
+    WORKSPACE_ID = "workspaceId"
     TOOL = "tool"
     NAME = "name"
     ARGUMENTS = "arguments"
@@ -89,3 +95,6 @@ class BrowserMessages:
     BROKER_UNAUTHENTICATED = "The desktop browser rejected the local credential."
     HANDSHAKE_AUDIENCE_MISMATCH = "The desktop browser broker audience did not match."
     INVALID_RESPONSE = "The desktop browser returned an invalid response."
+    STAGED_ACTION_REQUIRED = (
+        "This browser action must be reviewed through the staged effect path."
+    )

@@ -134,6 +134,13 @@ export function createDesktopSupervisor(
     // When set, forces the ai-backend store backend for this boot (post-migration
     // gate); undefined preserves the pure env resolution.
     storeBackendOverride,
+    browserBroker: {
+      enabled:
+        processEnv.RUNTIME_ENABLE_DESKTOP_BROWSER?.trim().toLowerCase() ===
+        "true",
+      baseUrl: processEnv.DESKTOP_BROWSER_BROKER_URL,
+      token: processEnv.DESKTOP_BROWSER_BROKER_TOKEN,
+    },
   });
 
   // The store backend to serve THIS boot, resolved lazily during the migrations

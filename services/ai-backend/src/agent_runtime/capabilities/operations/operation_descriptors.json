@@ -568,5 +568,39 @@
     "descriptor_version": "2026-07-24.1",
     "display_name": "close browser",
     "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "desktop-browser",
+      "op": "browser_click",
+      "executor": "browser",
+      "effect_class": "unknown",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 0
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "reviewed browser click",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "desktop-browser",
+      "op": "browser_submit",
+      "executor": "browser",
+      "effect_class": "external_destructive",
+      "result_kind": "activity",
+      "supports_prepare": true,
+      "supports_reconcile": true,
+      "required_gate_kinds": ["capability", "policy"],
+      "max_inline_result_bytes": 0
+    },
+    "descriptor_version": "2026-07-25.1",
+    "display_name": "reviewed browser submission",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
   }
 ]
