@@ -283,6 +283,32 @@ class RuntimeApiEventType(StrEnum):
     # (the receipt is a fold of the ledger, not a timeline card). Wire value comes
     # from the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
     RECEIPT_EMITTED = LedgerEventType.RECEIPT_EMITTED.value
+    # Generative Surfaces v2.1 (PRD-A2). Canonical artifact mutations publish
+    # through the existing run-event transport after their metadata + outbox
+    # transaction commits. These are reference-only ledger rows; artifact bytes
+    # never ride SSE/replay.
+    ARTIFACT_CREATED = LedgerEventType.ARTIFACT_CREATED.value
+    ARTIFACT_REVISED = LedgerEventType.ARTIFACT_REVISED.value
+    ARTIFACT_PROMOTED = LedgerEventType.ARTIFACT_PROMOTED.value
+    ARTIFACT_PRESENTATION_DECIDED = LedgerEventType.ARTIFACT_PRESENTATION_DECIDED.value
+    # Generative Surfaces v2.1 (PRD-A3). Reference-only operation lifecycle
+    # events emitted by the Universal Operation Gateway and its shadow probes.
+    # Canonical arguments and provider/tool result bytes never ride transport.
+    OPERATION_REQUESTED = LedgerEventType.OPERATION_REQUESTED.value
+    OPERATION_CLASSIFIED = LedgerEventType.OPERATION_CLASSIFIED.value
+    OPERATION_COMPLETED = LedgerEventType.OPERATION_COMPLETED.value
+    OPERATION_FAILED = LedgerEventType.OPERATION_FAILED.value
+    # Generative Surfaces v2.1 (PRD-A5). Universal-effect stage facts share
+    # the ordinary durable run-event stream. The worker coordinator is the
+    # sole execution path; these rows describe only staged intent, claims, and
+    # observed outcomes. Values come from the A1 ledger vocabulary.
+    EFFECT_STAGED = LedgerEventType.EFFECT_STAGED.value
+    EFFECT_REVISED = LedgerEventType.EFFECT_REVISED.value
+    EFFECT_DECISION_RECORDED = LedgerEventType.EFFECT_DECISION_RECORDED.value
+    EFFECT_CLAIMED = LedgerEventType.EFFECT_CLAIMED.value
+    EFFECT_APPLIED = LedgerEventType.EFFECT_APPLIED.value
+    EFFECT_INDETERMINATE = LedgerEventType.EFFECT_INDETERMINATE.value
+    EFFECT_RECONCILED = LedgerEventType.EFFECT_RECONCILED.value
 
     @classmethod
     def from_stream_event_type(

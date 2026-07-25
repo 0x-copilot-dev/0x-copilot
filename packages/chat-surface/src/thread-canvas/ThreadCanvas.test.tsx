@@ -101,6 +101,7 @@ interface RenderArgs {
   readonly scrubbedSeq?: number | null;
   readonly onScrub?: (sequenceNo: number) => void;
   readonly onSnapToNow?: () => void;
+  readonly focusCards?: ReactNode;
 }
 
 function renderCanvas(args: RenderArgs = {}) {
@@ -123,6 +124,7 @@ function renderCanvas(args: RenderArgs = {}) {
         scrubbedSeq={args.scrubbedSeq ?? null}
         onScrub={args.onScrub}
         onSnapToNow={args.onSnapToNow}
+        focusCards={args.focusCards}
       />,
     ),
   );
@@ -256,6 +258,23 @@ describe("ThreadCanvas", () => {
     it("renders the tabs strip in Studio and Focus modes", () => {
       renderCanvas({ mode: "studio" });
       expect(screen.getByTestId("tc-tabs")).toBeInTheDocument();
+    });
+  });
+
+  describe("B3 Focus lifecycle cards", () => {
+    it("renders compact focus cards without the full surface tab strip", () => {
+      renderCanvas({
+        mode: "focus",
+        focusCards: <div data-testid="b3-focus-card">Proposed change</div>,
+      });
+      expect(screen.getByTestId("b3-focus-card")).toHaveTextContent(
+        "Proposed change",
+      );
+      expect(screen.queryByTestId("tc-tabs")).toBeNull();
+      expect(screen.getByTestId("tc-surface-slot")).toHaveAttribute(
+        "data-visible",
+        "false",
+      );
     });
   });
 

@@ -21,9 +21,10 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import StrEnum
+import ipaddress
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
 
@@ -64,6 +65,11 @@ class SandboxErrorCode(StrEnum):
     SANDBOX_CLEANUP_PENDING = "sandbox_cleanup_pending"
     SANDBOX_COMMAND_BUDGET_EXCEEDED = "sandbox_command_budget_exceeded"
     SANDBOX_PATH_NOT_ALLOWED = "sandbox_path_not_allowed"
+    SANDBOX_ISOLATION_UNVERIFIED = "sandbox_isolation_unverified"
+    SANDBOX_SNAPSHOT_REQUIRED = "sandbox_snapshot_required"
+    SANDBOX_MANIFEST_MISMATCH = "sandbox_manifest_mismatch"
+    SANDBOX_EXECUTION_INDETERMINATE = "sandbox_execution_indeterminate"
+    SANDBOX_LIFECYCLE_CONFLICT = "sandbox_lifecycle_conflict"
 
 
 class SandboxError(Exception):
@@ -91,7 +97,7 @@ class ArtifactRef(RuntimeContract):
     """
 
     artifact_id: str = Field(min_length=1)
-    sha256: str = Field(min_length=64, max_length=64)
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     size_bytes: int = Field(ge=0)
 
 
@@ -107,6 +113,55 @@ class SandboxEgressPolicy(RuntimeContract):
 
     mode: Literal["deny_all", "allowlist"] = "deny_all"
     destinations: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _exact_policy(self) -> "SandboxEgressPolicy":
+        """Reject policy shapes a provider could accidentally broaden.
+
+        The launch posture is deny-all.  Allowlists are retained for a future
+        provider that can prove enforcement, but are intentionally limited to
+        exact host names: no wildcards, schemes, ports, paths, or raw IPs.
+        """
+
+        if self.mode == "deny_all":
+            if self.destinations:
+                raise ValueError("deny_all egress may not include destinations")
+            return self
+        if not self.destinations:
+            raise ValueError("allowlist egress requires at least one destination")
+        for destination in self.destinations:
+            try:
+                ipaddress.ip_address(destination)
+            except ValueError:
+                is_ip_address = False
+            else:
+                is_ip_address = True
+            if (
+                not destination
+                or len(destination) > 253
+                or destination != destination.lower()
+                or destination.startswith(("http://", "https://", "."))
+                or any(character in destination for character in "/*:@?#[]\\")
+                or "." not in destination
+                or any(
+                    not (label.isalnum() or "-" in label)
+                    for label in destination.split(".")
+                )
+                or any(
+                    label.startswith("-") or label.endswith("-")
+                    for label in destination.split(".")
+                )
+                or is_ip_address
+            ):
+                raise ValueError("egress destinations must be exact DNS host names")
+        if len(set(self.destinations)) != len(self.destinations):
+            raise ValueError("egress destinations must be unique")
+        return self
+
+    def is_deny_all(self) -> bool:
+        """Whether this is the launch-safe no-egress policy."""
+
+        return self.mode == "deny_all" and not self.destinations
 
 
 class SandboxSecretLeaseRef(RuntimeContract):
@@ -133,9 +188,43 @@ class WorkspaceTransferEntry(RuntimeContract):
     executable: bool = False
     payload_ref: ArtifactRef
 
+    @model_validator(mode="after")
+    def _content_ref_matches_declared_bytes(self) -> "WorkspaceTransferEntry":
+        if (
+            self.payload_ref.sha256 != self.sha256
+            or self.payload_ref.size_bytes != self.size_bytes
+        ):
+            raise ValueError("snapshot content reference must match declared bytes")
+        return self
+
+
+class SandboxSnapshot(RuntimeContract):
+    """Provider-safe immutable snapshot envelope.
+
+    This is deliberately distinct from C3's private workspace materialisation
+    record.  It contains virtual sandbox paths plus content-addressed artifact
+    references only; it must never contain a host path, grant, broker handle,
+    root identity, or credential.
+    """
+
+    format_version: Literal[1] = 1
+    snapshot_id: str = Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,254}$")
+    entries: tuple[WorkspaceTransferEntry, ...] = ()
+    total_bytes: int = Field(ge=0)
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @model_validator(mode="after")
+    def _entries_are_immutable_and_bounded(self) -> "SandboxSnapshot":
+        if sum(entry.size_bytes for entry in self.entries) != self.total_bytes:
+            raise ValueError("sandbox snapshot byte total does not match entries")
+        paths = [entry.path for entry in self.entries]
+        if len(paths) != len(set(paths)):
+            raise ValueError("sandbox snapshot paths must be unique")
+        return self
+
 
 class WorkspaceTransferManifest(RuntimeContract):
-    """Deterministic description of the bytes uploaded to ``/workspace``.
+    """C3-private materialisation record, never passed to a sandbox provider.
 
     The manifest hash is order-independent (see ``workspace_transfer``) so two
     hosts enumerating the same tree in different orders produce the same hash.
@@ -151,14 +240,69 @@ class WorkspaceTransferManifest(RuntimeContract):
 
 
 class WorkspacePatchEntry(RuntimeContract):
-    """One host-relative change produced by comparing ``/workspace`` to baseline."""
+    """One canonical, reviewable change from an immutable sandbox snapshot.
 
-    operation: Literal["add", "modify", "delete"]
+    A patch is not a sequence of imperative filesystem commands.  Each entry
+    describes one exact before/after fact, so C1 can import it into an overlay
+    and C3 can later stage it without ever granting the sandbox host authority.
+    """
+
+    operation: Literal["create", "replace", "delete", "move", "mkdir"]
     path: str = Field(min_length=1)
-    baseline_sha256: str | None = None
-    result_sha256: str | None = None
-    result_size_bytes: int | None = None
-    payload_ref: ArtifactRef | None = None
+    source_path: str | None = None
+    baseline_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    baseline_identity: str | None = Field(default=None, min_length=1, max_length=512)
+    result_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    result_size_bytes: int | None = Field(default=None, ge=0)
+    result_ref: ArtifactRef | None = None
+
+    @model_validator(mode="after")
+    def _operation_has_complete_evidence(self) -> "WorkspacePatchEntry":
+        has_any_result = any(
+            value is not None
+            for value in (self.result_digest, self.result_size_bytes, self.result_ref)
+        )
+        has_result = (
+            self.result_digest is not None
+            and self.result_size_bytes is not None
+            and self.result_ref is not None
+        )
+        if self.operation in {"create", "replace"}:
+            if not has_result:
+                raise ValueError(
+                    "create and replace entries require verified result bytes"
+                )
+            if (
+                self.result_ref is None
+                or self.result_ref.sha256 != self.result_digest
+                or self.result_ref.size_bytes != self.result_size_bytes
+            ):
+                raise ValueError("patch result reference must match declared bytes")
+            if self.operation == "replace" and self.baseline_digest is None:
+                raise ValueError("replace entries require a baseline digest")
+        elif self.operation == "delete":
+            if (
+                self.baseline_digest is None
+                or has_any_result
+                or self.source_path is not None
+            ):
+                raise ValueError("delete entries require only a baseline digest")
+        elif self.operation == "move":
+            if (
+                self.source_path is None
+                or self.baseline_digest is None
+                or has_any_result
+            ):
+                raise ValueError(
+                    "move entries require a source path and baseline digest"
+                )
+        elif self.operation == "mkdir" and (
+            self.source_path is not None
+            or self.baseline_digest is not None
+            or has_any_result
+        ):
+            raise ValueError("mkdir entries may not carry file evidence")
+        return self
 
 
 class WorkspacePatchManifest(RuntimeContract):
@@ -177,18 +321,174 @@ class WorkspacePatchManifest(RuntimeContract):
     manifest_sha256: str = Field(min_length=64, max_length=64)
 
 
+# D3's public name.  Keep the original class name during the migration so
+# existing AC7 callers do not mistake a schema rename for a different patch.
+SandboxPatchManifest = WorkspacePatchManifest
+
+
+class SandboxPatchImportRequest(RuntimeContract):
+    """Typed handoff from D3 to C3's overlay-only patch import port.
+
+    This is deliberately not a workspace-commit request.  A complete patch is
+    imported into C1's overlay and later goes through A4/A5 review and C3's
+    native executor; the sandbox never receives any broker or Electron handle.
+    """
+
+    run_id: str = Field(min_length=1, max_length=255)
+    operation_id: str = Field(min_length=1, max_length=255)
+    patch: WorkspacePatchManifest
+
+    @model_validator(mode="after")
+    def _only_complete_patch_can_cross_boundary(self) -> "SandboxPatchImportRequest":
+        if not self.patch.complete:
+            raise ValueError("an incomplete sandbox patch cannot be imported")
+        return self
+
+
 class SandboxCreateRequest(RuntimeContract):
     """Immutable execution envelope the user approves. The model cannot mutate
     provider/region/egress/secret/limits after approval."""
 
     run_id: str = Field(min_length=1)
-    workspace_snapshot: WorkspaceTransferManifest
+    operation_id: str = Field(min_length=1, max_length=255)
+    snapshot: SandboxSnapshot
     egress: SandboxEgressPolicy = SandboxEgressPolicy()
     secret_refs: tuple[SandboxSecretLeaseRef, ...] = ()
     limit_profile: str = Field(min_length=1)
     approval_id: str = Field(min_length=1)
     owner_tag: str = Field(min_length=1)
     idempotency_key: str = Field(min_length=1)
+
+
+class SandboxIsolationAttestation(RuntimeContract):
+    """Provider proof required before an untrusted command may launch.
+
+    A request describes desired egress; this object describes controls the
+    provider has actually verified.  Any missing control makes the provider
+    unavailable rather than a best-effort isolation boundary.
+    """
+
+    provider: SandboxProviderId
+    isolation: Literal["container", "microvm", "process"]
+    process_isolated: bool
+    filesystem_fresh: bool
+    teardown_guaranteed: bool
+    host_credentials_absent: bool
+    cpu_quota_enforced: bool
+    memory_quota_enforced: bool
+    wall_clock_quota_enforced: bool
+    process_quota_enforced: bool
+    file_quota_enforced: bool
+    egress_mode: Literal["deny_all", "allowlist"]
+    attestation_ref: str = Field(min_length=1, max_length=2048)
+
+    def satisfies(self, policy: SandboxEgressPolicy) -> bool:
+        """Return whether every D3 launch invariant is proven effective."""
+
+        return (
+            self.isolation in {"container", "microvm"}
+            and self.process_isolated
+            and self.filesystem_fresh
+            and self.teardown_guaranteed
+            and self.host_credentials_absent
+            and self.cpu_quota_enforced
+            and self.memory_quota_enforced
+            and self.wall_clock_quota_enforced
+            and self.process_quota_enforced
+            and self.file_quota_enforced
+            and self.egress_mode == policy.mode
+        )
+
+
+class SandboxLifecycleState(StrEnum):
+    """Durable, replay-safe states of one sandbox operation."""
+
+    REQUESTED = "requested"
+    PROVISIONED = "provisioned"
+    UPLOADING = "uploading"
+    RUNNING = "running"
+    COLLECTING = "collecting"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    INDETERMINATE = "indeterminate"
+    CLEANUP_PENDING = "cleanup_pending"
+    CLEANED = "cleaned"
+
+
+class SandboxLifecycleRecord(RuntimeContract):
+    """Credential-free durable fact record for one idempotent operation.
+
+    The record deliberately stores no command, provider client, token, host
+    path, grant, or output bytes.  ``execution_started`` is the no-blind-retry
+    boundary: after it becomes true a worker may reconcile or clean up, but it
+    must not issue another execution call based on the same request.
+    """
+
+    operation_id: str = Field(min_length=1, max_length=255)
+    run_id: str = Field(min_length=1, max_length=255)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    request_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    state: SandboxLifecycleState = SandboxLifecycleState.REQUESTED
+    execution_started: bool = False
+    provider_session_ref: str | None = Field(
+        default=None,
+        max_length=2048,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    cleanup_attempts: int = Field(default=0, ge=0)
+    created_at: datetime = Field(default_factory=_utcnow)
+    updated_at: datetime = Field(default_factory=_utcnow)
+
+    @model_validator(mode="after")
+    def _state_has_no_impossible_execution_fact(self) -> "SandboxLifecycleRecord":
+        if self.execution_started and self.state is SandboxLifecycleState.REQUESTED:
+            raise ValueError("started sandbox execution cannot remain requested")
+        if (
+            self.state
+            in {
+                SandboxLifecycleState.RUNNING,
+                SandboxLifecycleState.COLLECTING,
+                SandboxLifecycleState.INDETERMINATE,
+            }
+            and not self.execution_started
+        ):
+            raise ValueError(
+                "active or indeterminate sandbox execution must be marked started"
+            )
+        return self
+
+    def transition(
+        self,
+        *,
+        state: SandboxLifecycleState,
+        execution_started: bool | None = None,
+        provider_session_ref: str | None = None,
+        cleanup_attempts: int | None = None,
+    ) -> "SandboxLifecycleRecord":
+        """Return an immutable record after a monotonic transition."""
+
+        return self.model_copy(
+            update={
+                "state": state,
+                "execution_started": (
+                    self.execution_started
+                    if execution_started is None
+                    else execution_started
+                ),
+                "provider_session_ref": (
+                    self.provider_session_ref
+                    if provider_session_ref is None
+                    else provider_session_ref
+                ),
+                "cleanup_attempts": (
+                    self.cleanup_attempts
+                    if cleanup_attempts is None
+                    else cleanup_attempts
+                ),
+                "updated_at": _utcnow(),
+            }
+        )
 
 
 CleanupState = Literal["active", "terminating", "deleted", "cleanup_pending"]
@@ -227,3 +527,92 @@ class SandboxCommandResult(RuntimeContract):
     exit_code: int | None
     truncated: bool = False
     duration_ms: int = Field(ge=0)
+
+
+class SandboxDeliverable(RuntimeContract):
+    """An explicit sandbox file requested as an exact-byte artifact.
+
+    The model never receives an unrestricted ``download everything`` primitive.
+    Deliverables are part of the approved sandbox operation and are only read
+    from the virtual ``/workspace`` root by the runtime adapter.
+    """
+
+    path: str = Field(min_length=1, max_length=1024)
+    media_type: str = Field(min_length=1, max_length=255)
+    suggested_filename: str = Field(min_length=1, max_length=255)
+    title: str = Field(min_length=1, max_length=240)
+
+
+class SandboxArtifactPublication(RuntimeContract):
+    """Trusted metadata for one exact-byte artifact published by D3."""
+
+    run_id: str = Field(min_length=1, max_length=255)
+    operation_id: str = Field(min_length=1, max_length=255)
+    source_path: str = Field(min_length=1, max_length=1024)
+    media_type: str = Field(min_length=1, max_length=255)
+    suggested_filename: str = Field(min_length=1, max_length=255)
+    title: str = Field(min_length=1, max_length=240)
+    # The stream adapter calculates these values while the publisher consumes
+    # the bytes. They are optional at call start and verified against the
+    # returned artifact ref before a result becomes observable.
+    content_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    byte_size: int | None = Field(default=None, ge=0)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+
+
+class SandboxPublishedArtifact(RuntimeContract):
+    """A completed artifact result retaining sandbox operation provenance."""
+
+    source_path: str = Field(min_length=1, max_length=1024)
+    media_type: str = Field(min_length=1, max_length=255)
+    suggested_filename: str = Field(min_length=1, max_length=255)
+    artifact_ref: ArtifactRef
+
+
+class SandboxUsageAttribution(RuntimeContract):
+    """Provider execution usage attributed exactly once to an operation."""
+
+    operation_id: str = Field(min_length=1, max_length=255)
+    run_id: str = Field(min_length=1, max_length=255)
+    duration_ms: int = Field(ge=0)
+    commands: int = Field(ge=0)
+    uploaded_bytes: int = Field(ge=0)
+    downloaded_bytes: int = Field(ge=0)
+    provider_cost_microunits: int | None = Field(default=None, ge=0)
+
+
+class SandboxRunRequest(RuntimeContract):
+    """Approved, immutable input to D3's lifecycle coordinator."""
+
+    create_request: SandboxCreateRequest
+    command: str = Field(min_length=1, max_length=64 * 1024)
+    deliverables: tuple[SandboxDeliverable, ...] = ()
+    collect_patch: bool = False
+    # The trusted policy layer supplies concrete secret values that must be
+    # scrubbed from bounded output. They are transient and never written into
+    # the lifecycle store or emitted events.
+    redaction_terms: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _run_has_unique_workspace_paths(self) -> "SandboxRunRequest":
+        paths = [item.path for item in self.deliverables]
+        if len(paths) != len(set(paths)):
+            raise ValueError("sandbox deliverable paths must be unique")
+        if any(not term for term in self.redaction_terms):
+            raise ValueError("sandbox redaction terms must be non-empty")
+        return self
+
+
+class SandboxRunResult(RuntimeContract):
+    """Redaction-safe terminal projection returned from the coordinator."""
+
+    run_id: str = Field(min_length=1, max_length=255)
+    operation_id: str = Field(min_length=1, max_length=255)
+    state: SandboxLifecycleState
+    stdout: str = ""
+    stderr: str = ""
+    output_truncated: bool = False
+    exit_code: int | None = None
+    duration_ms: int = Field(default=0, ge=0)
+    artifacts: tuple[SandboxPublishedArtifact, ...] = ()
+    patch: WorkspacePatchManifest | None = None

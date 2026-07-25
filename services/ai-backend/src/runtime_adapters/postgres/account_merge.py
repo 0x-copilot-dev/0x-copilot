@@ -41,6 +41,11 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING, Any
 
+from runtime_adapters.postgres.artifact_publication import (
+    acquire_artifact_advisory_lock,
+    artifact_scope_advisory_lock_key,
+)
+
 if TYPE_CHECKING:  # pragma: no cover - typing only
     import psycopg
 
@@ -80,6 +85,9 @@ class PostgresAccountMergeRekeyer:
         ),
         ("runtime_deletion_evidence", ("user_id",)),
         ("runtime_run_usage", ("user_id",)),
+        # runtime_usage_attribution_edges follows this parent through its
+        # composite foreign key's ON UPDATE CASCADE.  Do not re-key an edge
+        # directly: its immutable link fields remain byte-for-byte intact.
         ("runtime_model_call_usage", ()),
         ("conversation_shares", ("created_by_user_id",)),
         ("agent_conversation_tool_ordinals", ()),
@@ -186,6 +194,7 @@ class PostgresAccountMergeRekeyer:
                 await self._warn_if_outbox_pending(conn)
                 await self._rekey_conversations(conn)
                 await self._rekey_runs(conn)
+                await self._rekey_artifacts(conn)
                 for table, user_columns in self._SIMPLE_TABLES:
                     await self._rekey_simple(conn, table, user_columns)
                 await self._rekey_encrypted_messages(conn)
@@ -356,6 +365,346 @@ class PostgresAccountMergeRekeyer:
             (self._survivor_org, self._absorbed_org),
         )
         self._count("agent_runs", moved)
+
+    # ----- artifact repository (quiesced, collision-checked, serialized) ---
+
+    async def _rekey_artifacts(self, conn: psycopg.AsyncConnection) -> None:
+        """Move artifact state through one dedicated fail-closed routine.
+
+        Stable artifact and event ids are preserved. Pending artifact commands
+        are row-locked so queue claimers using ``SKIP LOCKED`` cannot observe a
+        partially rewritten scope. A currently claimed artifact command means
+        work is executing outside this transaction and therefore aborts the
+        merge until that worker reaches a terminal/retry state.
+        """
+
+        await conn.execute(
+            """
+            SELECT
+                set_config('app.artifact_merge_absorbed_org', %s, true),
+                set_config('app.artifact_merge_survivor_org', %s, true)
+            """,
+            (self._absorbed_org, self._survivor_org),
+        )
+        await conn.execute(
+            "SELECT pg_advisory_xact_lock(%s)",
+            (artifact_scope_advisory_lock_key(self._absorbed_org),),
+        )
+        cursor = await conn.execute(
+            """
+            SELECT id, status
+              FROM runtime_outbox_events
+             WHERE org_id = %s
+               AND event_type = 'artifact_event_publish_requested'
+               AND status IN ('pending', 'retry', 'claimed')
+             ORDER BY id
+             FOR UPDATE
+            """,
+            (self._absorbed_org,),
+        )
+        artifact_commands = await cursor.fetchall()
+        if any(row["status"] == "claimed" for row in artifact_commands):
+            raise RuntimeError(
+                "artifact account merge requires claimed publication work to quiesce"
+            )
+        cursor = await conn.execute(
+            """
+            SELECT DISTINCT blob_key
+              FROM (
+                    SELECT blob_key
+                      FROM runtime_artifact_revisions
+                     WHERE org_id = %s
+                    UNION
+                    SELECT blob_key
+                      FROM runtime_artifact_reference_edges
+                     WHERE org_id = %s
+                    UNION
+                    SELECT blob_key
+                      FROM runtime_artifact_gc_candidates
+                     WHERE provenance_org_id = %s
+                    UNION
+                    SELECT blob_key
+                      FROM runtime_artifact_gc_quarantine
+                     WHERE provenance_org_id = %s
+              ) AS artifact_digests
+             ORDER BY blob_key
+            """,
+            (
+                self._absorbed_org,
+                self._absorbed_org,
+                self._absorbed_org,
+                self._absorbed_org,
+            ),
+        )
+        for row in await cursor.fetchall():
+            await acquire_artifact_advisory_lock(conn, blob_key=row["blob_key"])
+
+        collision_checks = (
+            """
+            SELECT EXISTS (
+                SELECT 1
+                  FROM runtime_artifacts a
+                  JOIN runtime_artifacts s
+                    ON s.org_id = %s AND s.artifact_id = a.artifact_id
+                 WHERE a.org_id = %s
+            ) AS collision
+            """,
+            """
+            SELECT EXISTS (
+                SELECT 1
+                  FROM runtime_artifact_reference_edges a
+                  JOIN runtime_artifact_reference_edges s
+                    ON s.org_id = %s
+                   AND (
+                       s.edge_id = a.edge_id
+                       OR (
+                           s.reference_kind = a.reference_kind
+                           AND s.reference_id = a.reference_id
+                           AND s.blob_key = a.blob_key
+                       )
+                   )
+                 WHERE a.org_id = %s
+            ) AS collision
+            """,
+            """
+            SELECT EXISTS (
+                SELECT 1
+                  FROM runtime_artifact_idempotency a
+                  JOIN runtime_artifact_idempotency s
+                    ON s.org_id = %s
+                   AND s.user_id = CASE
+                       WHEN a.user_id = %s THEN %s ELSE a.user_id
+                   END
+                   AND s.route = a.route
+                   AND s.idempotency_key = a.idempotency_key
+                 WHERE a.org_id = %s
+            ) OR EXISTS (
+                SELECT 1
+                  FROM runtime_artifact_idempotency a
+                 WHERE a.org_id = %s
+                 GROUP BY
+                    CASE WHEN a.user_id = %s THEN %s ELSE a.user_id END,
+                    a.route,
+                    a.idempotency_key
+                HAVING count(*) > 1
+            ) AS collision
+            """,
+        )
+        check_params = (
+            (self._survivor_org, self._absorbed_org),
+            (self._survivor_org, self._absorbed_org),
+            (
+                self._survivor_org,
+                self._absorbed_user,
+                self._survivor_user,
+                self._absorbed_org,
+                self._absorbed_org,
+                self._absorbed_user,
+                self._survivor_user,
+            ),
+        )
+        for sql, params in zip(collision_checks, check_params, strict=True):
+            cursor = await conn.execute(sql, params)
+            row = await cursor.fetchone()
+            if row and bool(row.get("collision")):
+                raise RuntimeError(
+                    "artifact account merge collision requires operator resolution"
+                )
+
+        await conn.execute(
+            """
+            UPDATE runtime_outbox_events
+               SET payload_json = jsonb_set(
+                       jsonb_set(
+                           payload_json,
+                           '{org_id}',
+                           to_jsonb(%s::text),
+                           false
+                       ),
+                       '{user_id}',
+                       CASE
+                           WHEN payload_json->>'user_id' = %s
+                           THEN to_jsonb(%s::text)
+                           ELSE payload_json->'user_id'
+                       END,
+                       false
+                   ),
+                   updated_at = now()
+             WHERE org_id = %s
+               AND event_type = 'artifact_event_publish_requested'
+               AND status IN ('pending', 'retry')
+            """,
+            (
+                self._survivor_org,
+                self._absorbed_user,
+                self._survivor_user,
+                self._absorbed_org,
+            ),
+        )
+        moved_evidence = await self._execute(
+            conn,
+            """
+            UPDATE runtime_deletion_evidence
+               SET reason = jsonb_set(
+                       jsonb_set(
+                           reason::jsonb,
+                           '{scope,org_id}',
+                           to_jsonb(%s::text),
+                           false
+                       ),
+                       '{scope,user_id}',
+                       CASE
+                           WHEN reason::jsonb#>>'{scope,user_id}' = %s
+                           THEN to_jsonb(%s::text)
+                           ELSE reason::jsonb#>'{scope,user_id}'
+                       END,
+                       false
+                   )::text,
+                   user_id = CASE
+                       WHEN user_id = %s THEN %s ELSE user_id
+                   END,
+                   org_id = %s
+             WHERE org_id = %s
+               AND request_type = 'artifact_lifecycle'
+            """,
+            (
+                self._survivor_org,
+                self._absorbed_user,
+                self._survivor_user,
+                self._absorbed_user,
+                self._survivor_user,
+                self._survivor_org,
+                self._absorbed_org,
+            ),
+        )
+        self._count("runtime_deletion_evidence", moved_evidence)
+        moved_idempotency = await self._execute(
+            conn,
+            """
+            UPDATE runtime_artifact_idempotency
+               SET response_json = CASE
+                       WHEN response_json IS NULL THEN NULL
+                       ELSE jsonb_set(
+                           jsonb_set(
+                               response_json,
+                               '{record,artifact,org_id}',
+                               to_jsonb(%s::text),
+                               false
+                           ),
+                           '{record,artifact,user_id}',
+                           CASE
+                               WHEN response_json#>>'{record,artifact,user_id}' = %s
+                               THEN to_jsonb(%s::text)
+                               ELSE response_json#>'{record,artifact,user_id}'
+                           END,
+                           false
+                       )
+                   END,
+                   user_id = CASE
+                       WHEN user_id = %s THEN %s ELSE user_id
+                   END,
+                   org_id = %s,
+                   updated_at = now()
+             WHERE org_id = %s
+            """,
+            (
+                self._survivor_org,
+                self._absorbed_user,
+                self._survivor_user,
+                self._absorbed_user,
+                self._survivor_user,
+                self._survivor_org,
+                self._absorbed_org,
+            ),
+        )
+        self._count("runtime_artifact_idempotency", moved_idempotency)
+        moved = await self._execute(
+            conn,
+            """
+            UPDATE runtime_artifacts
+               SET user_id = CASE
+                       WHEN user_id = %s THEN %s ELSE user_id
+                   END,
+                   org_id = %s
+             WHERE org_id = %s
+            """,
+            (
+                self._absorbed_user,
+                self._survivor_user,
+                self._survivor_org,
+                self._absorbed_org,
+            ),
+        )
+        self._count("runtime_artifacts", moved)
+        for table in (
+            "runtime_artifact_revisions",
+            "runtime_artifact_reference_edges",
+        ):
+            moved = await self._execute(
+                conn,
+                f"""
+                UPDATE {table}
+                   SET user_id = CASE
+                           WHEN user_id = %s THEN %s ELSE user_id
+                       END,
+                       org_id = %s
+                 WHERE org_id = %s
+                """,
+                (
+                    self._absorbed_user,
+                    self._survivor_user,
+                    self._survivor_org,
+                    self._absorbed_org,
+                ),
+            )
+            self._count(table, moved)
+        await conn.execute(
+            """
+            UPDATE runtime_artifact_gc_candidates AS survivor
+               SET candidate_since = LEAST(
+                       survivor.candidate_since,
+                       absorbed.candidate_since
+                   )
+              FROM runtime_artifact_gc_candidates AS absorbed
+             WHERE survivor.provenance_org_id = %s
+               AND absorbed.provenance_org_id = %s
+               AND survivor.blob_key = absorbed.blob_key
+            """,
+            (self._survivor_org, self._absorbed_org),
+        )
+        await conn.execute(
+            """
+            DELETE FROM runtime_artifact_gc_candidates AS absorbed
+             WHERE absorbed.provenance_org_id = %s
+               AND EXISTS (
+                   SELECT 1
+                     FROM runtime_artifact_gc_candidates AS survivor
+                    WHERE survivor.provenance_org_id = %s
+                      AND survivor.blob_key = absorbed.blob_key
+               )
+            """,
+            (self._absorbed_org, self._survivor_org),
+        )
+        moved_candidates = await self._execute(
+            conn,
+            """
+            UPDATE runtime_artifact_gc_candidates
+               SET provenance_org_id = %s
+             WHERE provenance_org_id = %s
+            """,
+            (self._survivor_org, self._absorbed_org),
+        )
+        self._count("runtime_artifact_gc_candidates", moved_candidates)
+        moved_quarantine = await self._execute(
+            conn,
+            """
+            UPDATE runtime_artifact_gc_quarantine
+               SET provenance_org_id = %s
+             WHERE provenance_org_id = %s
+            """,
+            (self._survivor_org, self._absorbed_org),
+        )
+        self._count("runtime_artifact_gc_quarantine", moved_quarantine)
 
     # ----- encrypted-column tables ----------------------------------------
 

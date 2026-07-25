@@ -162,17 +162,21 @@ export class BrowserWorkerSupervisor {
       health = await this.#cfg.probeHealth(child);
     } catch {
       this.#log("health probe failed");
-      this.#onChildGone("health probe failed");
+      child.kill("SIGTERM");
+      this.#onChildGone(child, "health probe failed");
       return;
     }
     if (!health.healthy) {
-      this.#onChildGone("worker reported unhealthy");
+      child.kill("SIGTERM");
+      this.#onChildGone(child, "worker reported unhealthy");
       return;
     }
     if (health.version !== this.#cfg.expectedVersion) {
       // Never run a browser binary that is not the pinned build.
       this.#version = health.version;
       this.#markUnavailable("version_mismatch");
+      child.kill("SIGTERM");
+      this.#onChildGone(child, "version mismatch");
       throw new FatalBrowserWorker(0, 0);
     }
     this.#version = health.version;
@@ -187,18 +191,20 @@ export class BrowserWorkerSupervisor {
       if (handled) return;
       handled = true;
       this.#onChildGone(
+        child,
         `exited (code=${String(code)}, signal=${String(signal)})`,
       );
     });
     child.on("error", (err) => {
       if (handled) return;
       handled = true;
-      this.#onChildGone(`spawn error: ${err.message}`);
+      this.#onChildGone(child, `spawn error: ${err.message}`);
     });
   }
 
-  #onChildGone(reason: string): void {
-    const pid = this.#child?.pid;
+  #onChildGone(child: WorkerChildLike, reason: string): void {
+    if (this.#child !== child) return;
+    const pid = child.pid;
     this.#child = null;
     const waiters = this.#exitWaiters;
     this.#exitWaiters = [];
@@ -208,6 +214,7 @@ export class BrowserWorkerSupervisor {
       this.#setState("stopped", reason);
       return;
     }
+    if (this.#state === "unavailable") return;
     const now = this.#now();
     const windowMs = this.#cfg.crashWindowMs ?? DEFAULT_CRASH_WINDOW_MS;
     const limit = this.#cfg.crashLimit ?? DEFAULT_CRASH_LIMIT;

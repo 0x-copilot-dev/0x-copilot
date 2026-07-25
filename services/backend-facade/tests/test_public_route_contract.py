@@ -21,6 +21,10 @@ def test_openapi_includes_core_product_paths() -> None:
         # PRD-12 — the rail Run-badge count; must be registered above
         # ``/v1/agent/runs/{run_id}`` so the literal is not shadowed.
         "/v1/agent/runs/active_count",
+        # E1 D6 — canonical v2.1 pending work (the ai-backend may return 404
+        # until its workspace-enforcement cohort is active; facade registration
+        # and identity forwarding remain a public contract).
+        "/v1/agent/pending-work-v2",
         "/v1/agent/models",
         "/v1/skills",
         "/v1/agent/history",
@@ -32,9 +36,12 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/agent/surfaces/{surface_id}/shape-request",
         # Generative Surfaces v2 (PRD-E3) — the tamper-evident receipt export.
         "/v1/agent/runs/{run_id}/receipt/export",
+        # PRD-E1 D7 — safe, signed, versioned receipt export.
+        "/v1/agent/runs/{run_id}/receipt/export-v2",
         # Usage family (B4 + E3) — the UI-less rollup endpoints stay registered.
         "/v1/usage/me",
         "/v1/usage/runs/{run_id}",
+        "/v1/usage/runs/{run_id}/calls",
         "/v1/usage/conversations/{conversation_id}",
         "/v1/usage/org/purpose",
     )

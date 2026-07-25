@@ -145,7 +145,11 @@ class ShapeRequestCoordinator:
                 status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
-        sample_output = self._stored_payload(events, surface_id=surface_id)
+        sample_output = self._stored_payload(
+            events,
+            surface_id=surface_id,
+            payload_ref=snapshot.payload_ref,
+        )
         if sample_output is None:
             raise self._surface_not_found()
 
@@ -200,6 +204,7 @@ class ShapeRequestCoordinator:
                 recorder=self._usage_recorder,
                 emit_event=self._make_usage_emitter(run),
                 surfaces_v2=SurfacesV2Flag.enabled(self._environ),
+                attribution_edge_store=self._persistence,
             ),
             run=run,
             purpose=Purpose.SHAPE_REQUEST,
@@ -372,10 +377,19 @@ class ShapeRequestCoordinator:
                 return list(events), snapshot
         raise self._surface_not_found()
 
-    def _stored_payload(self, events, *, surface_id: str) -> object:
+    def _stored_payload(
+        self,
+        events,
+        *,
+        surface_id: str,
+        payload_ref: str,
+    ) -> object:
         """The stored tool-output payload for a surface (B2 content fold)."""
 
-        content = SurfaceContentProjection.fold(events)
+        content = SurfaceContentProjection.fold(
+            events,
+            surface_payload_refs={surface_id: payload_ref},
+        )
         state = content.get(surface_id)
         if not isinstance(state, Mapping):
             return None

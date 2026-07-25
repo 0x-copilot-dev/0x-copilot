@@ -63,8 +63,14 @@ class SandboxProviderRegistry:
             )
         provider_id = config.provider
         if overrides is not None and provider_id in overrides:
-            return cls(overrides[provider_id], provider_id)
-        provider = cls._construct(provider_id, config)
+            provider = overrides[provider_id]
+        else:
+            provider = cls._construct(provider_id, config)
+        if not provider.isolation_ready:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "The configured sandbox provider cannot verify required isolation.",
+            )
         return cls(provider, provider_id)
 
     @staticmethod

@@ -44,6 +44,11 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 
+import { stageBrowserRuntime } from "./browser-runtime.mjs";
+import macosSigning from "./macos-signing.cjs";
+
+const { signAndVerifyMacAppBundle } = macosSigning;
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..");
 const MANIFEST_PATH = path.join(HERE, "manifest.json");
@@ -515,6 +520,7 @@ function isMachO(file) {
 /** Executables + loadable libraries that are actually Mach-O. */
 function collectSignTargets(root) {
   const targets = [];
+  const appBundles = [];
   const walk = (dir) => {
     let entries;
     try {
@@ -526,6 +532,13 @@ function collectSignTargets(root) {
       const full = path.join(dir, e.name);
       if (e.isSymbolicLink()) continue; // sign the real file, not the symlink
       if (e.isDirectory()) {
+        // Treat Chromium as one nested code-sealed unit. Its downloaded outer
+        // signature is not guaranteed to be valid after archive extraction;
+        // adhocSignTree verifies or repairs the complete app inside-out.
+        if (e.name.endsWith(".app")) {
+          appBundles.push(full);
+          continue;
+        }
         walk(full);
         continue;
       }
@@ -542,7 +555,7 @@ function collectSignTargets(root) {
     }
   };
   walk(root);
-  return targets;
+  return { targets, appBundles };
 }
 
 /** Fresh size+mtime fingerprint; recomputed after signing so warm runs skip. */
@@ -633,16 +646,45 @@ function adhocSignTree(runtimeDir) {
   // a file we're about to remove).
   pruneRuntimeCruft(runtimeDir);
 
-  const targets = collectSignTargets(runtimeDir);
-  if (targets.length === 0) {
+  const { targets, appBundles } = collectSignTargets(runtimeDir);
+  if (targets.length === 0 && appBundles.length === 0) {
     log("ad-hoc signing: no Mach-O binaries found (nothing to sign)");
     return;
   }
 
+  let repairedAppBundles = 0;
+  let preservedAppBundles = 0;
+  for (const bundle of appBundles) {
+    try {
+      const result = signAndVerifyMacAppBundle(bundle, {
+        identity: "-",
+        preserveValid: true,
+      });
+      if (result.action === "signed") repairedAppBundles++;
+      else preservedAppBundles++;
+    } catch (error) {
+      fail(
+        `nested browser app signing failed: ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  if (appBundles.length > 0) {
+    log(
+      `nested browser signatures: ${repairedAppBundles} repaired, ` +
+        `${preservedAppBundles} preserved after strict verification`,
+    );
+  }
+
   // One stamp covers the whole finalize (strip → sign): its fingerprint is the
   // FINAL signed state, so an unchanged tree skips strip+sign on warm re-stages.
+  // Nested app verification intentionally precedes this check: a warm stamp
+  // never bypasses strict verification of Chromium's recursive code seal.
   const stampPath = path.join(runtimeDir, ".sign-stamp.json");
-  if (readStamp(stampPath)?.fingerprint === signFingerprint(targets)) {
+  if (
+    readStamp(stampPath)?.fingerprint ===
+    signFingerprint([...targets, ...appBundles])
+  ) {
     log(
       `ad-hoc signing: ${targets.length} binaries already signed (stamp match)`,
     );
@@ -652,7 +694,9 @@ function adhocSignTree(runtimeDir) {
   const strippedCount = stripSymbols(targets);
   if (strippedCount) log(`stripped symbols from ${strippedCount} binaries`);
 
-  log(`ad-hoc signing ${targets.length} Mach-O binaries`);
+  if (targets.length > 0) {
+    log(`ad-hoc signing ${targets.length} Mach-O binaries`);
+  }
   let signed = 0;
   const failures = [];
   const BATCH = 100;
@@ -694,7 +738,9 @@ function adhocSignTree(runtimeDir) {
   // Fingerprint the POST-sign state so an unchanged tree skips next time
   // (codesign rewrites each file, changing its size+mtime).
   writeStamp(stampPath, {
-    fingerprint: signFingerprint(targets),
+    fingerprint: signFingerprint([...targets, ...appBundles]),
+    nested_app_bundles_repaired: repairedAppBundles,
+    nested_app_bundles_verified: appBundles.length,
     signed,
     signed_at: new Date().toISOString(),
   });
@@ -767,6 +813,21 @@ async function main() {
     stageService(runtimeDir, svc, pythonExe, hostExec);
   }
 
+  let browser;
+  try {
+    browser = stageBrowserRuntime({
+      runtimeDir,
+      platform: args.platform,
+      arch: args.arch,
+      hostExec,
+      cacheDir: CACHE_DIR,
+      expected: manifest.browser,
+      log,
+    });
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+
   // Frontend web assets (SIWE wallet page) — arch-agnostic, staged at <dest>/web.
   stageWebAssets(args.dest);
 
@@ -798,6 +859,7 @@ async function main() {
       artifact_version: manifest.postgres.version,
       sha256: pgEntry.sha256,
     },
+    browser,
     services: SERVICES.map((s) => ({
       name: s.name,
       site_packages: hostExec,

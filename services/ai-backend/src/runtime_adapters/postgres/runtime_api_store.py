@@ -24,7 +24,10 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.persistence._reader import reader
 from agent_runtime.persistence.constants import Values as PersistenceValues
-from agent_runtime.persistence.ports import RuntimeEventSequenceConflict
+from agent_runtime.persistence.ports import (
+    RuntimeEventIdempotencyConflict,
+    RuntimeEventSequenceConflict,
+)
 from agent_runtime.persistence.encryption import (
     FieldCodec,
     FieldEncryption,
@@ -65,6 +68,7 @@ from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
+    UsageAttributionEdge,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -81,6 +85,11 @@ from runtime_adapters.base import (
     RuntimeAdapterHelpers,
     StatusTransition,
     _Fields,
+)
+from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
+from runtime_adapters.postgres.artifact_hold_fence import (
+    acquire_artifact_hold_fences,
+    has_active_hold_for_scope,
 )
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
@@ -101,6 +110,8 @@ from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
@@ -140,6 +151,7 @@ class _AppendEventRetry:
     """
 
     SEQUENCE_INDEX = "idx_runtime_events_run_sequence"
+    EVENT_ID_CONSTRAINT = "runtime_events_pkey"
     MAX_ATTEMPTS = 3
     BASE_DELAY_SECONDS = 0.005
     MAX_DELAY_SECONDS = 0.050
@@ -375,6 +387,72 @@ async def _read_runtime_audit_chain_head_async(
 class PostgresRuntimeApiStore:
     """Async Postgres implementation of persistence, event store, and queue ports."""
 
+    # D7 exports are supported only by durable adapters with persisted audit state.
+    receipt_export_v2_available = True
+
+    def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
+        """Attach artifact jobs to existing deletion and retention entrypoints."""
+
+        self._artifact_lifecycle_jobs = jobs
+
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        jobs = self._artifact_lifecycle_jobs
+        if jobs is None:
+            return None
+        return await jobs.on_org_deleted(
+            org_id=org_id,
+            deleted_at=deleted_at,
+            protected_conversation_ids=await self._held_conversation_ids(org_id=org_id),
+        )
+
+    async def _held_conversation_ids(
+        self,
+        *,
+        org_id: str,
+        user_id: str | None = None,
+    ) -> tuple[str, ...]:
+        """Resolve active hold ownership before destructive artifact work.
+
+        Holds are owned by the runtime retention subsystem, not the artifact
+        repository.  Mapping them to conversation ids here keeps the artifact
+        protocol scoped and protects a held conversation when a user- or
+        org-wide lifecycle operation is otherwise allowed to proceed.
+        """
+
+        params: list[object] = [org_id, org_id]
+        user_clause = ""
+        if user_id is not None:
+            user_clause = "AND c.user_id = %s"
+            params.append(user_id)
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cursor = await conn.execute(
+                f"""
+                SELECT c.id
+                  FROM agent_conversations c
+                 WHERE c.org_id = %s {user_clause}
+                   AND EXISTS (
+                        SELECT 1
+                          FROM runtime_legal_holds h
+                         WHERE h.org_id = %s
+                           AND h.released_at IS NULL
+                           AND (
+                                (h.scope = 'org' AND h.resource_id = c.org_id)
+                                OR (h.scope = 'user' AND h.user_id = c.user_id)
+                                OR (h.scope = 'conversation' AND h.resource_id = c.id)
+                           )
+                   )
+                 ORDER BY c.id
+                """,
+                tuple(params),
+            )
+            rows = await cursor.fetchall()
+        return tuple(str(row["id"]) for row in rows)
+
     def __init__(
         self,
         database_url: str | None = None,
@@ -392,6 +470,7 @@ class PostgresRuntimeApiStore:
     ) -> None:
         if pool is None and database_url is None:
             raise ValueError("Either database_url or pool must be provided.")
+        self._artifact_lifecycle_jobs: ArtifactLifecycleJobs | None = None
         self.database_url = database_url
         self._role = role
         # When True, every successful ``append_event`` / ``append_events_batch``
@@ -1108,6 +1187,18 @@ class PostgresRuntimeApiStore:
     ) -> ConversationRecord | None:
         """Stamp ``deleted_at`` (idempotent on already-deleted rows)."""
 
+        if conversation_id in await self._held_conversation_ids(
+            org_id=org_id,
+            user_id=user_id,
+        ):
+            # Retain the conversation and its artifact records unchanged. The
+            # caller observes the existing row, matching other idempotent
+            # lifecycle operations without allowing a hold bypass.
+            return await self.get_conversation(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+            )
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
@@ -1122,7 +1213,15 @@ class PostgresRuntimeApiStore:
                 (now, now, conversation_id, org_id, user_id),
             )
             row = await cur.fetchone()
-        return self._conversation_record(row) if row is not None else None
+        record = self._conversation_record(row) if row is not None else None
+        if record is not None and self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                deleted_at=record.deleted_at or now,
+            )
+        return record
 
     async def restore_conversation(
         self,
@@ -1222,6 +1321,32 @@ class PostgresRuntimeApiStore:
             )
             rows = await cur.fetchall()
         return tuple(self._message_record(row) for row in reversed(rows))
+
+    async def get_message_by_id(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str,
+        message_id: str,
+    ) -> MessageRecord | None:
+        """Return one live message through the ``agent_messages`` primary key."""
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT *
+                FROM agent_messages
+                WHERE id = %s
+                  AND org_id = %s
+                  AND conversation_id = %s
+                  AND run_id = %s
+                  AND deleted_at IS NULL
+                """,
+                (message_id, org_id, conversation_id, run_id),
+            )
+            row = await cur.fetchone()
+        return self._message_record(row) if row is not None else None
 
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""
@@ -2611,36 +2736,27 @@ class PostgresRuntimeApiStore:
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while preserving audit/event evidence."""
 
-        # TODO(legal-hold-race): the legal-hold check below is TOCTOU; another
-        # writer can insert a hold between this SELECT and the UPDATEs that
-        # follow. Pre-existing hazard, tracked separately from the async
-        # migration.
         now = datetime.now(timezone.utc)
         ts_ns = RuntimeAdapterHelpers.timestamp_ns(now)
         audit_event_id = f"history_delete_{ts_ns}"
         async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.transaction():
-                cur = await conn.execute(
-                    """
-                    SELECT id FROM runtime_legal_holds
-                    WHERE org_id = %s
-                      AND released_at IS NULL
-                      AND (
-                        (scope = 'org' AND resource_id = %s)
-                        OR (scope = 'user' AND user_id = %s)
-                        OR (
-                            scope = 'conversation'
-                            AND resource_id IN (
-                                SELECT id FROM agent_conversations WHERE org_id = %s AND user_id = %s
-                            )
-                        )
-                      )
-                    LIMIT 1
-                    """,
-                    (org_id, org_id, user_id, org_id, user_id),
+                # Acquire the very same advisory fences as the direct
+                # runtime_legal_holds trigger, then recheck inside this
+                # transaction before *any* history update.  A hold now either
+                # commits first and blocks this erasure, or waits until this
+                # complete erasure transaction commits; it cannot interleave
+                # between the policy check and its destructive statements.
+                await acquire_artifact_hold_fences(
+                    conn,
+                    org_id=org_id,
+                    user_id=user_id,
                 )
-                hold = await cur.fetchone()
-                if hold is not None:
+                if await has_active_hold_for_scope(
+                    conn,
+                    org_id=org_id,
+                    user_id=user_id,
+                ):
                     raise RuntimeApiError(
                         RuntimeErrorCode.VALIDATION_ERROR,
                         "Deletion is blocked by an active legal hold.",
@@ -2792,7 +2908,7 @@ class PostgresRuntimeApiStore:
                         now,
                     ),
                 )
-        return HistoryDeletionResponse(
+        result = HistoryDeletionResponse(
             org_id=org_id,
             user_id=user_id,
             conversations_archived=conversations_archived,
@@ -2801,6 +2917,13 @@ class PostgresRuntimeApiStore:
             events_retained=events_retained,
             audit_event_id=audit_event_id,
         )
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_user_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                deleted_at=now,
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Usage + pricing
@@ -2942,6 +3065,137 @@ class PostgresRuntimeApiStore:
                     record.created_at,
                 ),
             )
+
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append one immutable edge after verifying its canonical usage row.
+
+        The ``INSERT ... SELECT`` keeps the usage-record ownership check and
+        edge write in one tenant-scoped transaction.  ``ON CONFLICT`` handles
+        at-least-once delivery without ever rewriting a historical usage row.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            inserted = await conn.execute(
+                """
+                INSERT INTO runtime_usage_attribution_edges (
+                    edge_id, org_id, usage_record_id, operation_id,
+                    artifact_id, stage_id, surface_id, relationship, created_at
+                )
+                SELECT
+                    %s, usage.org_id, %s, %s,
+                    %s, %s, %s, %s, %s
+                  FROM runtime_model_call_usage AS usage
+                 WHERE usage.org_id = %s AND usage.id = %s
+                ON CONFLICT DO NOTHING
+                RETURNING edge_id
+                """,
+                (
+                    edge.edge_id,
+                    edge.usage_record_id,
+                    edge.operation_id,
+                    edge.artifact_id,
+                    edge.stage_id,
+                    edge.surface_id,
+                    edge.relationship.value,
+                    edge.created_at,
+                    org_id,
+                    edge.usage_record_id,
+                ),
+            )
+            if await inserted.fetchone() is not None:
+                return True
+
+            by_edge_id = await conn.execute(
+                """
+                SELECT usage_record_id, operation_id, artifact_id, stage_id,
+                       surface_id, relationship
+                  FROM runtime_usage_attribution_edges
+                 WHERE org_id = %s AND edge_id = %s
+                """,
+                (org_id, edge.edge_id),
+            )
+            existing_by_edge_id = await by_edge_id.fetchone()
+            if existing_by_edge_id is not None:
+                if (
+                    str(existing_by_edge_id["usage_record_id"]) == edge.usage_record_id
+                    and str(existing_by_edge_id["operation_id"]) == edge.operation_id
+                    and existing_by_edge_id["artifact_id"] == edge.artifact_id
+                    and existing_by_edge_id["stage_id"] == edge.stage_id
+                    and existing_by_edge_id["surface_id"] == edge.surface_id
+                    and str(existing_by_edge_id["relationship"])
+                    == edge.relationship.value
+                ):
+                    return False
+                raise ValueError("usage attribution edge_id already exists")
+
+            by_natural_key = await conn.execute(
+                """
+                SELECT edge_id
+                  FROM runtime_usage_attribution_edges
+                 WHERE org_id = %s
+                   AND usage_record_id = %s
+                   AND operation_id = %s
+                   AND artifact_id IS NOT DISTINCT FROM %s
+                   AND stage_id IS NOT DISTINCT FROM %s
+                   AND surface_id IS NOT DISTINCT FROM %s
+                   AND relationship = %s
+                """,
+                (
+                    org_id,
+                    edge.usage_record_id,
+                    edge.operation_id,
+                    edge.artifact_id,
+                    edge.stage_id,
+                    edge.surface_id,
+                    edge.relationship.value,
+                ),
+            )
+            if await by_natural_key.fetchone() is not None:
+                return False
+
+            usage_record = await conn.execute(
+                """
+                SELECT 1
+                  FROM runtime_model_call_usage
+                 WHERE org_id = %s AND id = %s
+                """,
+                (org_id, edge.usage_record_id),
+            )
+            if await usage_record.fetchone() is None:
+                raise LookupError(
+                    "usage attribution requires an in-tenant usage record"
+                )
+            raise RuntimeError("unable to append usage attribution edge")
+
+    @reader
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Read edge projections without joining them into usage aggregation."""
+
+        if not usage_record_ids:
+            return ()
+        async with self._read_only_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT edge_id, usage_record_id, operation_id, artifact_id,
+                       stage_id, surface_id, relationship, created_at
+                  FROM runtime_usage_attribution_edges
+                 WHERE org_id = %s AND usage_record_id = ANY(%s)
+                 ORDER BY created_at ASC, edge_id ASC
+                """,
+                (org_id, list(usage_record_ids)),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._usage_attribution_edge(row) for row in rows)
 
     async def update_run_usage_cost(
         self,
@@ -4122,7 +4376,10 @@ class PostgresRuntimeApiStore:
                     """
                 )
                 rows = await cur.fetchall()
-        return tuple(str(row["org_id"]) for row in rows)
+        org_ids = {str(row["org_id"]) for row in rows}
+        if self._artifact_lifecycle_jobs is not None:
+            org_ids.update(await self._artifact_lifecycle_jobs.list_org_ids())
+        return tuple(sorted(org_ids))
 
     async def list_retention_policies(
         self, *, org_id: str
@@ -4196,6 +4453,23 @@ class PostgresRuntimeApiStore:
         chunk_size: int = 0,
     ) -> RetentionSweepOutcome:
         """Expire or tombstone rows matching the retention kind; ``chunk_size>0`` uses keyset chunking."""
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            jobs = self._artifact_lifecycle_jobs
+            if jobs is None or dry_run:
+                return RetentionSweepOutcome(org_id=org_id, kind=kind)
+            result = await jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=datetime.now(timezone.utc),
+                limit=chunk_size or None,
+                protected_conversation_ids=await self._held_conversation_ids(
+                    org_id=org_id
+                ),
+            )
+            return RetentionSweepOutcome(
+                org_id=org_id,
+                kind=kind,
+                deleted=len(result.purge.purged_artifact_ids),
+            )
         # chunk_size > 0 → retention_until-based chunked CTE (avoids full-table scan on large orgs).
         # chunk_size == 0 → legacy created_at+ttl unbounded SQL (flag=false).
         if chunk_size > 0:
@@ -5103,6 +5377,25 @@ class PostgresRuntimeApiStore:
         )
 
     @classmethod
+    def _usage_attribution_edge(cls, row: dict[str, object]) -> UsageAttributionEdge:
+        return UsageAttributionEdge(
+            edge_id=str(row["edge_id"]),
+            usage_record_id=str(row["usage_record_id"]),
+            operation_id=str(row["operation_id"]),
+            artifact_id=(
+                str(row["artifact_id"]) if row.get("artifact_id") is not None else None
+            ),
+            stage_id=(
+                str(row["stage_id"]) if row.get("stage_id") is not None else None
+            ),
+            surface_id=(
+                str(row["surface_id"]) if row.get("surface_id") is not None else None
+            ),
+            relationship=str(row["relationship"]),
+            created_at=cls._coerce_datetime(row["created_at"]),
+        )
+
+    @classmethod
     def _compression_event_record(
         cls, row: dict[str, object]
     ) -> CompressionEventRecord:
@@ -5304,18 +5597,29 @@ class PostgresRuntimeApiStore:
         """
 
         last_exc: psycopg_errors.UniqueViolation | None = None
+        last_conflict_was_stable_id = False
         for attempt in range(_AppendEventRetry.MAX_ATTEMPTS):
             try:
                 return await self._append_event_once(event)
             except psycopg_errors.UniqueViolation as exc:
-                if not self._is_event_sequence_conflict(exc):
+                stable_id_conflict = self._is_stable_event_id_conflict(
+                    exc,
+                    event=event,
+                )
+                if not (self._is_event_sequence_conflict(exc) or stable_id_conflict):
                     raise
                 last_exc = exc
+                last_conflict_was_stable_id = stable_id_conflict
                 # Don't sleep after the final attempt — caller is about
                 # to see :class:`RuntimeEventSequenceConflict` anyway.
                 if attempt + 1 < _AppendEventRetry.MAX_ATTEMPTS:
                     await asyncio.sleep(self._retry_backoff(attempt))
         assert last_exc is not None  # loop only exits via return or exception
+        if last_conflict_was_stable_id and event.event_id is not None:
+            raise RuntimeEventIdempotencyConflict(
+                run_id=event.run_id,
+                event_id=event.event_id,
+            ) from last_exc
         raise RuntimeEventSequenceConflict(
             run_id=event.run_id,
             attempts=_AppendEventRetry.MAX_ATTEMPTS,
@@ -5334,6 +5638,20 @@ class PostgresRuntimeApiStore:
                     (event.run_id,),
                 )
                 run = await cur.fetchone()
+                if event.event_id is not None:
+                    cur = await conn.execute(
+                        "SELECT * FROM runtime_events WHERE id = %s",
+                        (event.event_id,),
+                    )
+                    existing_row = await cur.fetchone()
+                    if existing_row is not None:
+                        existing = self._event_envelope(existing_row)
+                        if event.matches_envelope(existing):
+                            return existing
+                        raise RuntimeEventIdempotencyConflict(
+                            run_id=event.run_id,
+                            event_id=event.event_id,
+                        )
                 cur = await conn.execute(
                     """
                     SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_sequence
@@ -5350,6 +5668,11 @@ class PostgresRuntimeApiStore:
                         source=event.source,
                     )
                 )
+                envelope_kwargs: dict[str, object] = {}
+                if event.event_id is not None:
+                    envelope_kwargs["event_id"] = event.event_id
+                if event.created_at is not None:
+                    envelope_kwargs["created_at"] = event.created_at
                 envelope = RuntimeEventEnvelope(
                     run_id=event.run_id,
                     conversation_id=event.conversation_id,
@@ -5372,6 +5695,7 @@ class PostgresRuntimeApiStore:
                     presentation=event.presentation,
                     payload=event.payload,
                     metadata=event.metadata,
+                    **envelope_kwargs,
                 )
                 # Encrypt payload_json_redacted +
                 # metadata_json_redacted with AAD bound to (table,
@@ -5500,6 +5824,20 @@ class PostgresRuntimeApiStore:
         return constraint == _AppendEventRetry.SEQUENCE_INDEX
 
     @staticmethod
+    def _is_stable_event_id_conflict(
+        exc: psycopg_errors.UniqueViolation,
+        *,
+        event: RuntimeEventDraft,
+    ) -> bool:
+        """Return whether a concurrent publisher won the same stable event id."""
+
+        constraint = getattr(exc.diag, "constraint_name", None)
+        return (
+            event.event_id is not None
+            and constraint == _AppendEventRetry.EVENT_ID_CONSTRAINT
+        )
+
+    @staticmethod
     def _retry_backoff(attempt: int) -> float:
         """Jittered exponential backoff for the lock-free append retry loop.
 
@@ -5544,6 +5882,11 @@ class PostgresRuntimeApiStore:
 
         if not events:
             return ()
+        if any(event.event_id is not None for event in events):
+            raise ValueError(
+                "stable event ids require append_event; batch append is reserved "
+                "for newly allocated stream events"
+            )
         run_ids = {event.run_id for event in events}
         if len(run_ids) > 1:
             raise ValueError(
@@ -5746,6 +6089,31 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._event_envelope(row) for row in rows)
 
+    async def get_event_by_id(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        event_id: str,
+    ) -> RuntimeEventEnvelope | None:
+        """Return an immutable event by its primary key in one tenant/run scope.
+
+        Artifact promotion uses this as an exact source-record lookup.  The
+        ``runtime_events.id`` primary key is the index; payload text, call ids,
+        and result references are never searched.
+        """
+
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM runtime_events
+                WHERE id = %s AND org_id = %s AND run_id = %s
+                """,
+                (event_id, org_id, run_id),
+            )
+            row = await cur.fetchone()
+        return self._event_envelope(row) if row is not None else None
+
     async def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
 
@@ -5798,6 +6166,30 @@ class PostgresRuntimeApiStore:
         await self._enqueue_command(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.STAGE_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            aggregate_id=command.run_id,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        """Enqueue a digest-pinned A5 effect commit command for workers."""
+
+        await self._enqueue_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            aggregate_id=command.run_id,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        """Enqueue reconciliation of an existing A5 effect claim for workers."""
+
+        await self._enqueue_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
             org_id=command.org_id,
             aggregate_id=command.run_id,
             payload=command.model_dump(mode="json"),

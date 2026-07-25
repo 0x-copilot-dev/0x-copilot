@@ -22,6 +22,22 @@ from agent_runtime.api.user_policies_resolver import (
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
 )
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationEventEmitterAdapter,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    ArtifactContentPartPublisher,
+    PublishArtifactTool,
+)
+from agent_runtime.capabilities.tools.tool_use_enforcement import (
+    ToolUsePolicyResolver,
+)
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
@@ -122,10 +138,12 @@ class RuntimeApprovalHandler:
         ) = None,
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
+        artifact_service: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
+        self.artifact_service = artifact_service
         # BYOK re-hydration on resume: the persisted run record's context was
         # serialized without ``provider_keys`` (excluded field), so the resumed
         # harness re-fetches them in memory only — same seam as the run handler.
@@ -315,6 +333,7 @@ class RuntimeApprovalHandler:
         # the resumed graph starts emitting tool events. The resumed run runs in a
         # fresh async task, so the original RuntimeRunHandler bindings are gone.
         workspace_backend = await self._workspace_backend_for_resume(running)
+        operation_context_token: object | None = None
         dependencies = self._dependencies_for_resume(
             running, workspace_backend=workspace_backend
         )
@@ -324,6 +343,42 @@ class RuntimeApprovalHandler:
             RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
         )
         try:
+            if self._operation_context_required():
+
+                async def _emit_operation(
+                    event_type_value: str,
+                    payload: Mapping[str, object],
+                    summary: str | None,
+                ) -> None:
+                    await self.event_producer.append_api_event(
+                        run=running,
+                        source=StreamEventSource.SYSTEM,
+                        event_type=RuntimeApiEventType(event_type_value),
+                        summary=summary,
+                        payload=dict(payload),
+                    )
+
+                operation_context_token = OperationContext.bind_for_run(
+                    identity=VerifiedOperationIdentity(
+                        org_id=running.org_id,
+                        user_id=running.user_id,
+                        conversation_id=running.conversation_id,
+                        run_id=running.run_id,
+                    ),
+                    policy_snapshot=ToolUsePolicyResolver.resolve(
+                        running.runtime_context
+                    ),
+                    ledger_emitter=OperationEventEmitterAdapter(
+                        emit_fn=_emit_operation
+                    ),
+                    artifact_service=(
+                        self.artifact_service
+                        if self._artifact_publication_enabled()
+                        else None
+                    ),
+                    mode=self.settings.execution.operation_gateway_mode,
+                    canonical_arguments_durable=False,
+                )
             resume_context = running.runtime_context
             if self._provider_keys_hydrator is not None:
                 resume_context = await self._provider_keys_hydrator.hydrate(
@@ -345,6 +400,7 @@ class RuntimeApprovalHandler:
                 resume=resume,
                 metrics=metrics,
             )
+            await self._process_model_artifact_content(result)
             if RuntimeRunHandler._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -371,6 +427,8 @@ class RuntimeApprovalHandler:
             )
             raise
         finally:
+            if operation_context_token is not None:
+                OperationContext.unbind(operation_context_token)  # type: ignore[arg-type]
             CitationResolver.unbind(resolver_token)
             ConversationOrdinalAllocator.unbind(allocator_token)
             ToolDisplayLookupContext.unbind(display_token)
@@ -465,6 +523,19 @@ class RuntimeApprovalHandler:
         approval-gated exactly as on the initial run path. Both are ``None`` off
         the file backend, so the write path stays inert.
         """
+        if (
+            self.settings.execution.workspace_effect_mode
+            is OperationGatewayMode.ENFORCE
+        ):
+            # Enforce never resumes the retired filesystem interrupt into a
+            # broker mutation. A stale pre-cutover approval receives a mounted
+            # tombstone, so CompositeBackend cannot fall through to StateBackend.
+            from agent_runtime.capabilities.workspace.deep_backend import (  # noqa: PLC0415
+                WorkspaceTombstoneBackend,
+            )
+
+            return WorkspaceTombstoneBackend()
+
         file_store = self._file_store_wiring.file_store()
         snapshot_store = (
             getattr(file_store, "object_store", None)
@@ -530,22 +601,70 @@ class RuntimeApprovalHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
-        if self._draft_store is not None:
-            # Tenant identity is bound at construction so the model cannot inject
-            # org_id via path strings when writing to /drafts/<uuid>.md.
-            from agent_runtime.capabilities.backends import (  # noqa: PLC0415 — break import cycle
-                DraftBackend,
-            )
+        drafts_backend = self._drafts_backend(run)
+        if drafts_backend is not None:
+            update["drafts_backend"] = drafts_backend
+        publish_artifact_tool = self._publish_artifact_tool()
+        if publish_artifact_tool is not None:
+            update["publish_artifact_tool"] = publish_artifact_tool
+        return dependencies.model_copy(update=update)
 
-            update["drafts_backend"] = DraftBackend(
-                store=self._draft_store,
+    def _artifact_publication_enabled(self) -> bool:
+        return bool(
+            self.settings.execution.artifact_effects_v2
+            and self.artifact_service is not None
+        )
+
+    def _drafts_backend(self, run: RunRecord) -> object | None:
+        """Resume against the same single draft authority as the run path."""
+
+        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
+            ArtifactDraftBackend,
+            DraftBackend,
+        )
+
+        if (
+            self._artifact_publication_enabled()
+            and self.settings.execution.artifact_drafts_v2
+        ):
+            return ArtifactDraftBackend(
+                artifacts=self.artifact_service,
                 org_id=run.org_id,
                 conversation_id=run.conversation_id,
                 run_id=run.run_id,
                 user_id=run.runtime_context.user_id,
-                emit_event=self._draft_backend_event_emitter(run),
+                legacy_store=self._draft_store,
             )
-        return dependencies.model_copy(update=update)
+        if self._draft_store is None:
+            return None
+        return DraftBackend(
+            store=self._draft_store,
+            org_id=run.org_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            user_id=run.runtime_context.user_id,
+            emit_event=self._draft_backend_event_emitter(run),
+        )
+
+    def _operation_context_required(self) -> bool:
+        return bool(
+            self._artifact_publication_enabled()
+            or self.settings.execution.operation_gateway_mode
+            is not OperationGatewayMode.OFF
+        )
+
+    def _publish_artifact_tool(self) -> PublishArtifactTool | None:
+        if not self._artifact_publication_enabled():
+            return None
+        return PublishArtifactTool(
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+        )
+
+    async def _process_model_artifact_content(self, result: object) -> None:
+        if self._artifact_publication_enabled():
+            await ArtifactContentPartPublisher().publish(result)
+            return
+        await OperationShadowProbe.observe_model_result(result)
 
     def _draft_backend_event_emitter(
         self, run: RunRecord

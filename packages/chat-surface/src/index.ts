@@ -20,6 +20,18 @@ export {
   type TcInlineDiffProps,
 } from "./thread-canvas";
 export { TransportProvider, useTransport } from "./providers/TransportProvider";
+export {
+  ArtifactDownloadAction,
+  ArtifactEditor,
+  ArtifactFrame,
+  ArtifactRevisionHistory,
+  ArtifactSurface,
+  artifactUri,
+  parseArtifactSurfaceUri,
+  projectArtifactTabs,
+  type ArtifactSurfaceTab,
+} from "./artifacts";
+export type { ArtifactDownloadPort } from "./ports/ArtifactDownloadPort";
 export { RouterProvider, useRouter } from "./providers/RouterProvider";
 export {
   KeyValueStoreProvider,
@@ -81,6 +93,10 @@ export type {
 } from "./contract";
 export { PROJECTS_BINDING_FIELDS, SHELL_BINDING_FIELDS } from "./contract";
 export { toChatArchiveRow } from "./projections/chats";
+export {
+  projectSourcesV2,
+  type SourcesProjectionEventLike,
+} from "./projections/sourcesV2";
 // === end PRD-03 ===
 export { CopyIcon } from "./icons/CopyIcon";
 export { RetryIcon } from "./icons/RetryIcon";
@@ -1215,6 +1231,39 @@ export {
 } from "./thread-canvas";
 // === end PRD-D3 ===
 
+// === Surfaces v2.1 — PRD-C3 shared workspace-stage review surface ===
+// Deliberately exported but not mounted: the later C3 host adapter owns the
+// authority path and native confirmation. This card only renders safe display
+// data and delegates its actions through host callbacks.
+export {
+  TcWorkspaceStageSurface,
+  WORKSPACE_STAGE_PLEDGE,
+  isDestructiveWorkspaceOperation,
+  projectWorkspaceStage,
+  safeWorkspaceDigest,
+  safeWorkspaceDisplayText,
+  safeWorkspaceVirtualPath,
+  workspaceStageOperationLabel,
+  type TcWorkspaceStageSurfaceProps,
+  type ProjectedWorkspaceStage,
+  type ProjectedWorkspaceStageRevision,
+  type WorkspaceStage,
+  type WorkspaceStageBaseline,
+  type WorkspaceStageBinaryMetadata,
+  type WorkspaceStageDiff,
+  type WorkspaceStageMode,
+  type WorkspaceStageOperation,
+  type WorkspaceStageOperationKind,
+  type WorkspaceStagePrecondition,
+  type WorkspaceStagePreview,
+  type WorkspaceStageResolution,
+  type WorkspaceStageResolutionState,
+  type WorkspaceStageRevision,
+  type WorkspaceStageStatus,
+  type WorkspaceStageTarget,
+} from "./thread-canvas";
+// === end PRD-C3 ===
+
 // === Surfaces v2 — PRD-E2 (cross-run Approvals queue + Agents fleet) ===
 // Read-side only: a pure selector over the SAME `session.events` array
 // (`projectPendingCards`, a peer of `projectApprovals`/`projectLedger`), one new
@@ -1227,12 +1276,21 @@ export {
   type PendingCard,
   usePendingWork,
   type UsePendingWorkResult,
+  projectPendingWorkV2,
+  pendingWorkCardV2Key,
+  pendingWorkStatusLabelV2,
+  pendingWorkSubjectLabelV2,
+  type PendingWorkCardV2,
+  usePendingWorkV2,
+  type UsePendingWorkV2Result,
   PendingCounterChip, // orphan-destination-waiver: owner=surfaces-v2-PRD-E2 — exported ahead of its host mount (see block comment above); a follow-up surfaces-v2 PR wires it into the Approvals queue. Remove when mounted.
   type PendingCounterChipProps,
 } from "./destinations/run";
 export {
   PendingCardList,
   type PendingCardListProps,
+  PendingWorkV2List,
+  type PendingWorkV2ListProps,
   AgentFleetList,
   type AgentFleetListProps,
 } from "./workspace";
@@ -1249,6 +1307,13 @@ export {
   foldReceipt,
   type ReceiptProjection,
 } from "./destinations/run/projectReceipt";
+export {
+  foldReceiptV2,
+  isChatOnlyReceiptV2,
+  projectReceiptV2,
+  type ReceiptV2EventLike,
+  type ReceiptV2Projection,
+} from "./destinations/run/projectReceiptV2";
 export {
   projectLedgerSources,
   type LedgerSourcesProjection,

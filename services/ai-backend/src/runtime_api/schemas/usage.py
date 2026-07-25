@@ -256,6 +256,20 @@ class RunUsageBreakdown(RuntimeContract):
     status: str
     total: UsageTotals
     by_call: tuple["RunUsageCallRow", ...] = ()
+    by_operation: tuple["UsageOperationRow", ...] = ()
+
+
+class UsageAttributionEdgeRow(RuntimeContract):
+    """Immutable operation/output association for one canonical usage call."""
+
+    edge_id: str
+    usage_record_id: str
+    operation_id: str
+    artifact_id: str | None = None
+    stage_id: str | None = None
+    surface_id: str | None = None
+    relationship: str
+    created_at: datetime
 
 
 class RunUsageCallRow(RuntimeContract):
@@ -286,6 +300,24 @@ class RunUsageCallRow(RuntimeContract):
     duration_ms: NonNegativeInt = 0
     cost_micro_usd: int | None = None
     created_at: datetime
+    attribution_edges: tuple[UsageAttributionEdgeRow, ...] = ()
+
+
+class UsageOperationRow(RuntimeContract):
+    """A per-operation total deduped by canonical ``usage_record_id``."""
+
+    operation_id: str
+    artifact_ids: tuple[str, ...] = ()
+    stage_ids: tuple[str, ...] = ()
+    surface_ids: tuple[str, ...] = ()
+    total: UsageTotals
+
+
+class RunUsageCallsResponse(RuntimeContract):
+    """Response shape for ``GET /v1/usage/runs/{run_id}/calls``."""
+
+    run_id: str
+    calls: tuple[RunUsageCallRow, ...] = ()
 
 
 class ConversationUsageResponse(RuntimeContract):

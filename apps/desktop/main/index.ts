@@ -68,11 +68,23 @@ import {
   isDesktopFilesystemEnabled,
   type CapabilityService,
 } from "./capabilities";
+import {
+  FacadeWorkspaceApprovalClient,
+  WorkspaceApprovalHost,
+  WorkspaceApprovalPermitSource,
+  type WorkspaceApprovalNativeConfirmation,
+} from "./capabilities/workspace-approval";
 import { ConnectorService } from "./connectors/connector-service";
 import { startCrashReporter } from "./crash-reporter";
 import { registerDeepLinks } from "./deep-links";
 import { registerIpcHandlers } from "./ipc/handlers";
 import { applyBrandDockIcon, applyBrandIdentity } from "./branding";
+import {
+  createProductionDesktopBrowserSubsystem,
+  type ProductionDesktopBrowserSubsystem,
+} from "./browser/desktop-runtime";
+import { resolveBrowserExecutablePath } from "./browser/browser-runtime";
+import { isDesktopBrowserEnabled } from "./browser/feature-gate";
 import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
 import {
@@ -80,6 +92,7 @@ import {
   type BootSecretsFs,
 } from "./services/boot-secrets";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
+import { resolveRuntimePaths } from "./services/runtime-paths";
 import { applyBundledGoogleOAuth } from "./services/google-oauth-default";
 import { SECURE_STORAGE_CHANNELS } from "./services/secure-storage-channels";
 import { FIRST_RUN_CHANNELS } from "./services/first-run-channels";
@@ -133,7 +146,13 @@ const bootSecretsFs: BootSecretsFs = { readFile, writeFile, mkdir, chmod };
 let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
 let supervisor: ServiceSupervisor | null = null;
 let supervisorStopped = false;
+let browserSubsystem: ProductionDesktopBrowserSubsystem | null = null;
+let browserSubsystemStopped = false;
 let capabilityService: CapabilityService | null = null;
+// C3 decision reservations are main-only. The private broker handoff consumes
+// this typed source after C2 prepare; it is never installed in preload or
+// renderer globals.
+let workspaceApprovalPermitSource: WorkspaceApprovalPermitSource | null = null;
 // AC9 — desktop connector OAuth service. Constructed once the facade is
 // reachable (WebTransport mode). Held at module scope so the deep-link
 // dispatcher (registered eagerly at boot) can route connector OAuth callbacks
@@ -195,6 +214,38 @@ function buildTier2ReviewGate(userDataDir: string): InstallReviewGate {
   return createInstallReviewGate({ store, prompt });
 }
 
+/**
+ * C3's native confirmation deliberately contains no renderer-supplied path,
+ * title, target, or operation text. The host uses it for every approval until
+ * a trusted destructive classification is available main-side.
+ */
+function buildWorkspaceApprovalConfirmation(): WorkspaceApprovalNativeConfirmation {
+  return {
+    async confirmApproval(): Promise<boolean> {
+      const parent =
+        mainWindow !== null && !mainWindow.isDestroyed()
+          ? mainWindow
+          : undefined;
+      const options: Electron.MessageBoxOptions = {
+        type: "warning",
+        buttons: ["Cancel", "Approve"],
+        defaultId: 1,
+        cancelId: 0,
+        title: "Confirm workspace change?",
+        message: "Apply the reviewed workspace change?",
+        detail:
+          "Only the reviewed stage revision and target can be applied. " +
+          "A separate workspace permission is required.",
+        noLink: true,
+      };
+      const result = parent
+        ? await dialog.showMessageBox(parent, options)
+        : await dialog.showMessageBox(options);
+      return result.response === 1;
+    },
+  };
+}
+
 class WindowDispatcher implements RendererDispatcher {
   send(channel: string, payload: unknown): void {
     if (mainWindow === null) return;
@@ -245,7 +296,10 @@ function startAutoUpdate(): void {
 // delivered OUT OF BAND to intended children (slice 2 wiring); it is never
 // logged and never crosses renderer IPC. A broker failure must never block
 // boot — the app is fully usable without host-folder grants.
-function startCapabilitySubsystem(): void {
+async function startCapabilitySubsystem(): Promise<{
+  readonly baseUrl: string;
+  readonly token: string;
+} | null> {
   try {
     // Plaintext is legitimate in dev AND whenever the user's secure-storage
     // policy is "file" (the default) — the gated safeStorage reports
@@ -274,17 +328,35 @@ function startCapabilitySubsystem(): void {
       },
       allowPlaintextFallback: allowPlaintext,
     });
-    capabilityService
-      .startBroker()
-      .then((handle) => {
-        // baseUrl (host+port) is non-secret; the token is NOT logged.
-        console.log("[capability-broker] listening on", handle.baseUrl);
-      })
-      .catch((err: unknown) => {
-        console.error("[capability-broker] failed to start:", err);
-      });
+    // A disabled native/C2 authority does not even register an approval host:
+    // recording an approval without a possible main-only permit path would
+    // strand a stage and weaken the fail-closed launch gate.
+    workspaceApprovalPermitSource = capabilityService.workspaceWritesAvailable()
+      ? new WorkspaceApprovalPermitSource(capabilityService)
+      : null;
+    if (workspaceApprovalPermitSource !== null) {
+      // D6/D7 private handoff: only Electron main retains the verified
+      // approval reservation. The broker exposes no renderer-visible permit
+      // or prepared reference and consumes the reservation after C2 prepare.
+      capabilityService.installWorkspaceApprovalPermitHandoff(
+        workspaceApprovalPermitSource,
+      );
+    }
+    const handle = await capabilityService.startBroker();
+    // baseUrl (host+port) is non-secret; the token is NOT logged.  The
+    // supervised ai-backend receives the credential only when C2's writable
+    // host authority is available, so an unavailable workspace fails closed.
+    console.log("[capability-broker] listening on", handle.baseUrl);
+    if (workspaceApprovalPermitSource === null) return null;
+    return {
+      baseUrl: handle.baseUrl,
+      token: capabilityService.brokerAuthToken(),
+    };
   } catch (err) {
+    workspaceApprovalPermitSource = null;
+    capabilityService = null;
     console.error("[capabilities] init failed (continuing without):", err);
+    return null;
   }
 }
 
@@ -408,7 +480,7 @@ function registerFirstRunIpc(): void {
 }
 
 if (hasSingleInstanceLock) {
-  void app.whenReady().then(() => {
+  void app.whenReady().then(async () => {
     startCrashReporter();
     secureStorageMode = loadSecureStorageMode(app.getPath("userData"));
     registerSecureStorageIpc();
@@ -454,9 +526,10 @@ if (hasSingleInstanceLock) {
     // RUNTIME_ENABLE_DESKTOP_FILESYSTEM, read ONCE at boot — when unset/false
     // the broker never binds and (because capabilityService stays null) the
     // capability IPC channels are never registered, so calls fail closed.
-    if (isDesktopFilesystemEnabled(process.env)) {
-      startCapabilitySubsystem();
-    } else {
+    const workspaceBroker = isDesktopFilesystemEnabled(process.env)
+      ? await startCapabilitySubsystem()
+      : null;
+    if (!isDesktopFilesystemEnabled(process.env)) {
       console.log(
         "[capabilities] desktop filesystem disabled " +
           "(set RUNTIME_ENABLE_DESKTOP_FILESYSTEM=1 to enable)",
@@ -474,12 +547,73 @@ if (hasSingleInstanceLock) {
         app.getAppPath(),
       );
       console.log(`[auth] google oauth client source: ${googleOAuth.applied}`);
+      const supervisedEnv: NodeJS.ProcessEnv = { ...process.env };
+      if (workspaceBroker !== null) {
+        supervisedEnv.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "true";
+        supervisedEnv.DESKTOP_WORKSPACE_BROKER_URL = workspaceBroker.baseUrl;
+        supervisedEnv.DESKTOP_WORKSPACE_BROKER_TOKEN = workspaceBroker.token;
+      } else {
+        supervisedEnv.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "false";
+        delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_URL;
+        delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_TOKEN;
+      }
+      if (isDesktopBrowserEnabled(process.env)) {
+        try {
+          const runtimePaths = resolveRuntimePaths({
+            resourcesPath: process.resourcesPath,
+            runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
+          });
+          const browserExecutablePath = resolveBrowserExecutablePath({
+            runtimeRoot: runtimePaths.runtimeRoot,
+            executableOverride: process.env.BROWSER_EXECUTABLE_PATH,
+          });
+          browserSubsystem = createProductionDesktopBrowserSubsystem({
+            userDataDir: app.getPath("userData"),
+            workerEntryPath: join(
+              __dirname,
+              "..",
+              "browser-worker",
+              "index.js",
+            ),
+            electronExecutable: process.execPath,
+            browserExecutablePath,
+            processEnv: process.env,
+            log: (message) => console.log(message),
+            onStateChange: (state, reason) => {
+              console.log(
+                `[browser] ${state}${reason === undefined ? "" : ` (${reason})`}`,
+              );
+            },
+          });
+          const handle = await browserSubsystem.start();
+          supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "true";
+          supervisedEnv.DESKTOP_BROWSER_BROKER_URL = handle.baseUrl;
+          supervisedEnv.DESKTOP_BROWSER_BROKER_TOKEN =
+            browserSubsystem.broker.authToken();
+          // URL is loopback metadata; neither broker nor worker credential is
+          // logged or exposed through renderer IPC.
+          console.log("[browser] supervised broker is ready");
+        } catch (err) {
+          supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
+          delete supervisedEnv.DESKTOP_BROWSER_BROKER_URL;
+          delete supervisedEnv.DESKTOP_BROWSER_BROKER_TOKEN;
+          browserSubsystem = null;
+          browserSubsystemStopped = true;
+          console.error(
+            "[browser] startup failed; capability remains unavailable:",
+            err,
+          );
+        }
+      } else {
+        supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
+      }
       supervisor = createDesktopSupervisor({
         userDataDir: app.getPath("userData"),
         safeStorage,
         secureStorageMode,
         resourcesPath: process.resourcesPath,
         runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
+        processEnv: supervisedEnv,
       });
       supervisor.onStatus(sendBootStatus);
       supervisor
@@ -487,10 +621,15 @@ if (hasSingleInstanceLock) {
         .then(({ facadeUrl, hostToken }) => {
           wireTransportAndIpc(facadeUrl, hostToken);
         })
-        .catch((err: unknown) => {
+        .catch(async (err: unknown) => {
           // The supervisor already emitted a fatal BootStatus for the
           // renderer's fatal screen; keep the process alive so the user
           // can read it.
+          if (browserSubsystem !== null && !browserSubsystemStopped) {
+            await browserSubsystem.stop().catch(() => {});
+            browserSubsystemStopped = true;
+            browserSubsystem = null;
+          }
           console.error("[main] supervised boot failed:", err);
         });
     } else {
@@ -536,6 +675,30 @@ function wireTransportAndIpc(
             const ws = authService.activeWorkspace();
             return ws === null ? null : authService.getBearer(ws);
           },
+        });
+
+  // C3 does not use the generic transport bridge for local workspace
+  // authority. This host is registered only when a real facade and an enabled
+  // C2 main authority exist; MockTransport and unavailable native primitives
+  // expose no approval channel.
+  const workspaceApproval =
+    facadeUrl === undefined ||
+    capabilityService === null ||
+    workspaceApprovalPermitSource === null ||
+    !capabilityService.workspaceWritesAvailable()
+      ? undefined
+      : new WorkspaceApprovalHost({
+          facade: new FacadeWorkspaceApprovalClient({
+            facadeBaseUrl: facadeUrl,
+            getBearer: async () => {
+              const workspaceId = authService.activeWorkspace();
+              return workspaceId === null
+                ? null
+                : authService.getBearer(workspaceId);
+            },
+          }),
+          confirmation: buildWorkspaceApprovalConfirmation(),
+          permits: workspaceApprovalPermitSource,
         });
 
   // PRD-10 — the real tier-2 lifecycle source. It observes `adapter_generated`
@@ -620,6 +783,7 @@ function wireTransportAndIpc(
             listGrants: () => capabilityService!.listGrants(),
             revokeGrant: (grantId) => capabilityService!.revokeGrant(grantId),
           },
+    workspaceApproval,
     // AC9 connector channels. Wired only against a real facade; returns only
     // the renderer-safe catalog + connection metadata (no provider token).
     connectors:
@@ -650,16 +814,30 @@ app.on("before-quit", (event) => {
     void capabilityService.stopBroker().catch(() => {});
     capabilityService = null;
   }
-  // Ordered shutdown: children (facade -> ai -> backend) then postgres.
+  workspaceApprovalPermitSource = null;
+  // Ordered shutdown: children (facade -> ai -> backend), postgres, then the
+  // browser broker/worker. Stopping ai-backend first ensures no new browser
+  // request can race broker revocation.
   // preventDefault keeps the process alive until stop() resolves, then a
   // second quit passes straight through via the supervisorStopped flag.
-  if (supervisor !== null && !supervisorStopped) {
+  if (
+    (!supervisorStopped && supervisor !== null) ||
+    (!browserSubsystemStopped && browserSubsystem !== null)
+  ) {
     event.preventDefault();
-    const active = supervisor;
-    void active.stop().finally(() => {
-      supervisorStopped = true;
-      app.quit();
-    });
+    const activeSupervisor = supervisor;
+    const activeBrowser = browserSubsystem;
+    void (async () => {
+      if (activeSupervisor !== null && !supervisorStopped) {
+        await activeSupervisor.stop().catch(() => {});
+        supervisorStopped = true;
+      }
+      if (activeBrowser !== null && !browserSubsystemStopped) {
+        await activeBrowser.stop().catch(() => {});
+        browserSubsystemStopped = true;
+        browserSubsystem = null;
+      }
+    })().finally(() => app.quit());
   }
 });
 

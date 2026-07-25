@@ -33,20 +33,36 @@ from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
     CitationProjectingMcpMiddleware,
 )
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationAdapter,
+    McpOperationGatewayContext,
+    McpOperationGatewayServices,
+)
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationRequestFactory,
+)
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.surfaces.generator import (
     GenToolDescriptor,
     SurfaceGenerationScheduler,
 )
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
+from agent_runtime.effects.contracts import EffectPolicySnapshot
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from agent_runtime.surfaces_v2.gate import ToolAccessGate
-from agent_runtime.surfaces_v2.ledger_models import GateAuthState
+from agent_runtime.surfaces_v2.ledger_models import (
+    EffectPolicy,
+    GateAuthState,
+    OperationOutcome,
+)
 
 _LOGGER = logging.getLogger(__name__)
+_DESKTOP_BROWSER_SERVER = "desktop_browser"
 
 
 @dataclass(frozen=True)
@@ -76,6 +92,19 @@ class CallMcpTool:
         )
         if isinstance(parsed_input, McpToolCallResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
+
+        # D1 authoritative MCP convergence.  The binding is intentionally
+        # stricter than the feature flag: an enforce-mode OperationContext with
+        # durable canonical arguments AND trusted staging/result dependencies is
+        # required.  Until the worker composition root supplies all three, the
+        # established v2 path below is byte-identical.  On this path the generic
+        # tool is classified before any connector client can be created; writes,
+        # destructive calls, and unknown operations become effects, never MCP
+        # dispatches.  In particular, do not call ``_emit_ledger`` here: the
+        # OperationGateway is the sole authoritative event producer.
+        services = McpOperationGatewayContext.enforced()
+        if services is not None:
+            return await self._ainvoke_operation_gateway(parsed_input, services)
 
         resolution = await self.registry.resolve_server(parsed_input.server_name)
         if isinstance(resolution, McpLoadError):
@@ -136,12 +165,25 @@ class CallMcpTool:
         try:
             client = resolution.provider.create_client(resolution.card)
             dispatch_started = time.perf_counter()
-            output = await asyncio.wait_for(
-                client.call_tool(
-                    tool_name=parsed_input.tool_name,
-                    arguments=parsed_input.arguments,
+
+            async def _dispatch() -> object:
+                return await asyncio.wait_for(
+                    client.call_tool(
+                        tool_name=parsed_input.tool_name,
+                        arguments=parsed_input.arguments,
+                    ),
+                    timeout=self.loader.timeout_seconds,
+                )
+
+            output = await OperationShadowProbe.invoke_legacy(
+                capability=parsed_input.server_name,
+                op=parsed_input.tool_name,
+                arguments=parsed_input.arguments,
+                legacy=_dispatch,
+                legacy_class=OperationShadowProbe.legacy_mcp_effect_class(
+                    parsed_input.server_name,
+                    parsed_input.tool_name,
                 ),
-                timeout=self.loader.timeout_seconds,
             )
             dispatch_latency_ms = int((time.perf_counter() - dispatch_started) * 1000)
         except (McpTimeoutError, TimeoutError):
@@ -298,6 +340,190 @@ class CallMcpTool:
             latency_ms=dispatch_latency_ms,
         )
         return result
+
+    async def _ainvoke_operation_gateway(
+        self,
+        parsed_input: McpToolCallRequest,
+        services: McpOperationGatewayServices,
+    ) -> dict[str, Any]:
+        """Run one classified MCP operation without touching the legacy path."""
+
+        resolution = await self.registry.resolve_server(parsed_input.server_name)
+        if isinstance(resolution, McpLoadError):
+            return McpToolCallResult.fail(
+                resolution.code,
+                resolution.safe_message,
+                retryable=resolution.retryable,
+                server_name=resolution.server_name or parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        if not McpPermissionPolicy.is_server_card_authorized(
+            self.runtime_context, resolution.card
+        ):
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.PERMISSION_DENIED,
+                Messages.Loader.UNAUTHORIZED_SERVER,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+
+        request = OperationRequestFactory.create(
+            capability=parsed_input.server_name,
+            op=parsed_input.tool_name,
+            arguments=parsed_input.arguments,
+        )
+        operation_context = OperationContext.require()
+        stored_arguments = operation_context.arguments.get(request.canonical_args_ref)
+        if stored_arguments is None:
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        digest, canonical_bytes = stored_arguments
+        try:
+            await services.argument_store.persist(
+                ref=request.canonical_args_ref,
+                digest=digest,
+                canonical_bytes=canonical_bytes,
+            )
+        except Exception:  # noqa: BLE001 - never dispatch without durable material.
+            _LOGGER.warning(
+                "mcp_operation_arguments_unavailable",
+                extra={"operation_id": request.operation_id},
+                exc_info=True,
+            )
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+        is_browser = (
+            parsed_input.server_name.strip().lower().replace("-", "_")
+            == _DESKTOP_BROWSER_SERVER
+        )
+        mcp_adapter: McpOperationAdapter | None = None
+        if is_browser:
+            # Local imports avoid making the MCP package import the browser
+            # operation stack while the global capability catalog is booting.
+            from agent_runtime.capabilities.browser.contracts import (  # noqa: PLC0415
+                BrowserActionPlanStore,
+            )
+            from agent_runtime.capabilities.browser.effect_adapter import (  # noqa: PLC0415
+                BrowserEffectStageAdapter,
+            )
+            from agent_runtime.capabilities.browser.operation_adapter import (  # noqa: PLC0415
+                BrowserOperationAdapter,
+                is_browser_read_operation,
+            )
+        if is_browser and not is_browser_read_operation(parsed_input.tool_name):
+            plans = services.browser_plans
+            if not isinstance(plans, BrowserActionPlanStore):
+                return McpToolCallResult.fail(
+                    McpLoadErrorCode.CONNECTION_FAILED,
+                    Messages.Loader.LOAD_FAILED,
+                    retryable=True,
+                    server_name=parsed_input.server_name,
+                    tool_name=parsed_input.tool_name,
+                    correlation_id=self.runtime_context.trace_id,
+                ).model_dump(mode="json", exclude_none=True)
+            browser_policy = EffectPolicySnapshot(
+                snapshot_ref=(
+                    f"policy://runs/{self.runtime_context.run_id}/desktop-browser"
+                ),
+                descriptor_known=(
+                    services.descriptors.resolve(
+                        parsed_input.server_name,
+                        parsed_input.tool_name,
+                    )
+                    is not None
+                ),
+                capability_policy=EffectPolicy.REQUIRE,
+                user_policy=EffectPolicy.REQUIRE,
+                sensitive_target=True,
+            )
+            adapter = BrowserOperationAdapter(
+                stager=BrowserEffectStageAdapter(
+                    plans=plans,
+                    stager=services.stager,
+                    scope=services.stage_scope,
+                    actor=services.stage_author,
+                    policy_snapshot=browser_policy,
+                )
+            )
+        else:
+            mcp_adapter = McpOperationAdapter(
+                registry=self.registry,
+                runtime_context=self.runtime_context,
+                timeout_seconds=self.loader.timeout_seconds,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                arguments=parsed_input.arguments,
+                gate=self.gate,
+                services=services,
+                tool_call_id=parsed_input.tool_call_id,
+            )
+            adapter = mcp_adapter
+        disposition = await services.gateway.invoke(request, adapter)
+        output: dict[str, Any] = {
+            "status": disposition.outcome.value,
+            "operation_id": disposition.operation_id,
+            "summary": disposition.agent_summary,
+        }
+        if disposition.outcome is OperationOutcome.SUCCEEDED:
+            stored = mcp_adapter.stored_result if mcp_adapter is not None else None
+            if stored is None:
+                # A successful disposition without a durable result is an
+                # adapter invariant violation.  Do not pretend the read
+                # completed to the model.
+                return McpToolCallResult.fail(
+                    McpLoadErrorCode.CONNECTION_FAILED,
+                    Messages.Loader.LOAD_FAILED,
+                    retryable=True,
+                    server_name=parsed_input.server_name,
+                    tool_name=parsed_input.tool_name,
+                    correlation_id=self.runtime_context.trace_id,
+                ).model_dump(mode="json", exclude_none=True)
+            output.update(
+                {
+                    "status": "completed",
+                    "summary": (
+                        f"Fetched {parsed_input.tool_name} from "
+                        f"{parsed_input.server_name}."
+                    ),
+                    "result_ref": stored.result_ref,
+                    "result": stored.model_output,
+                }
+            )
+        elif disposition.outcome is OperationOutcome.STAGED:
+            output.update(
+                {
+                    "status": "staged",
+                    "stage_id": disposition.stage_ids[0],
+                    "summary": (
+                        f"Proposed {parsed_input.tool_name} on "
+                        f"{parsed_input.server_name}; no external change has "
+                        "been made."
+                    ),
+                }
+            )
+        elif disposition.outcome is OperationOutcome.BLOCKED:
+            output["status"] = "blocked"
+        else:
+            output["status"] = "failed"
+        return McpToolCallResult.ok(
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            output=output,
+        ).model_dump(mode="json", exclude_none=True)
 
     @staticmethod
     async def _emit_ledger(

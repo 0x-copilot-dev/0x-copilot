@@ -22,6 +22,10 @@ from collections.abc import Callable
 from copilot_service_contracts.scopes import MFA_PENDING
 from fastapi import HTTPException, Request, status
 
+from agent_runtime.observability.lifecycle_metrics import (
+    AuthorizationBoundaryLabel,
+    get_lifecycle_operational_metrics,
+)
 from runtime_api.auth import (
     RuntimeServiceAuthenticator,
     TrustedRequestIdentity,
@@ -201,6 +205,14 @@ def _record_deny(
     missing_scopes: frozenset[str] = frozenset(),
 ) -> None:
     """Emit a structured warning log and best-effort audit row for a denied request."""
+    try:
+        get_lifecycle_operational_metrics().record_authorization_denial(
+            boundary=AuthorizationBoundaryLabel.RBAC,
+            reason=reason,
+            enforcement=RbacMode.current(),
+        )
+    except Exception:  # pragma: no cover - observability must not affect RBAC
+        _LOGGER.debug("rbac.lifecycle_metric_failed", exc_info=True)
     metadata = {
         "reason": reason,
         "required_scopes": sorted(required_scopes),

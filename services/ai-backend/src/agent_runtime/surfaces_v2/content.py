@@ -1,148 +1,137 @@
-"""Surface content hydration — resolve a v2 surface's materialized payload (B2).
+"""Declared-reference hydration for v2 surfaces (PRD-B3 D8).
 
-The SurfaceStore fold (``projection.py``) produces **metadata-only** snapshots:
-it folds ``surface.created`` / ``view.derived`` into ``payload_ref`` + view
-bookkeeping, never the surface's actual content. The v2 canvas needs the content
-too — the record/table/message body, or the raw blob for the honest fallback.
+The metadata fold owns a surface's identity and ``payload_ref``.  This module
+only resolves that declared reference against a production ``tool_result``
+event.  It deliberately does not inspect historical presentation envelopes or
+invent a surface-shaped body from arbitrary event fields.
 
-That content is not stored separately: it already rides the run's existing event
-stream. The v1 surface projector attaches a ``surface`` envelope
-(``{surface_uri, archetype, state:{spec?, data}}``) to ``tool_result`` /
-``draft_updated`` / ``presentation_updated`` events, and a late spec arrives via
-``surface_spec_generated``. ``surface.created.surface_id`` is exactly that
-``surface_uri`` (SDR §5 note: ``payload_ref = call:<call_id>`` resolves to the
-tool_result carrying the same call). So content hydration is a **pure fold** over
-the same events, keyed by ``surface_uri`` — the Python twin of chat-surface's
-``applySurfaceEvent`` (``eventProjector.ts``).
-
-Kept a clean sibling of the metadata fold: this module reads events
-**structurally** (``event_type`` / ``payload``), never imports ``runtime_api``,
-and never mutates the parity-pinned ``SurfaceStoreState`` — the endpoint merges
-this content onto the HTTP snapshot only (``HydratedSurfaceSnapshot``), so the
-cross-language parity snapshot stays byte-identical.
+That makes hydration replayable, scope-preserving, and independent of the old
+v1 renderer path: a missing or malformed reference simply leaves the surface
+unhydrated for the client to show its honest raw/loading state.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 from agent_runtime.surfaces_v2.projection import _LedgerEventLike
 
 
 class _EventType:
-    """v1 event types that carry a surface envelope (mirror of ``isSurfaceMutation``)."""
-
+    SURFACE_CREATED = LedgerEventType.SURFACE_CREATED.value
     TOOL_RESULT = "tool_result"
-    DRAFT_UPDATED = "draft_updated"
-    PRESENTATION_UPDATED = "presentation_updated"
     SURFACE_SPEC_GENERATED = "surface_spec_generated"
-
-    MUTATIONS = frozenset({TOOL_RESULT, DRAFT_UPDATED, PRESENTATION_UPDATED})
 
 
 class _Key:
-    """Keys read out of the v1 ``payload.surface`` envelope / legacy flat form."""
-
-    SURFACE = "surface"
-    SURFACE_URI = "surface_uri"
-    STATE = "state"
+    CALL_ID = "call_id"
+    OUTPUT = "output"
+    PAYLOAD_REF = "payload_ref"
     SPEC = "spec"
+    SURFACE_ID = "surface_id"
+    # ``surface_spec_generated`` predates v2 ledger events and publishes the
+    # stable surface identity as ``surface_uri``.  The v2 alias stays accepted
+    # for replay compatibility, but production generation always uses this
+    # canonical field.
+    SURFACE_URI = "surface_uri"
 
 
 class SurfaceContentProjection:
-    """Pure fold from a run's events to each surface's materialized ``{spec?, data}``.
+    """Resolve declared surface references into ``{data, spec?}`` state.
 
-    Deterministic + total, and a faithful twin of the client ``applySurfaceEvent``:
-    surface-mutation events shallow-merge their ``state`` into the surface's
-    content (later events win per key); ``surface_spec_generated`` merges **only**
-    the ``spec`` key so a late spec never clobbers newer ``data``. Malformed or
-    unrelated events are skipped without error. The result is keyed by
-    ``surface_uri`` (== ``surface.created.surface_id``); a surface with no content
-    event yet is simply absent (honest "not hydrated", never a fabricated body).
+    ``surface_payload_refs`` is normally supplied from ``SurfaceStoreState`` so
+    the HTTP endpoint explicitly declares which subjects it is authorized to
+    hydrate.  The optional structural fallback only reads the same durable
+    ``surface.created`` records; it exists for coordinators that already have a
+    replay batch but not the folded state.  Neither path falls back to retired
+    presentation envelopes.
     """
 
     @staticmethod
     def fold(
         events: Iterable[_LedgerEventLike],
+        *,
+        surface_payload_refs: Mapping[str, str] | None = None,
     ) -> dict[str, dict[str, object]]:
+        ordered = list(events)
+        refs = (
+            {
+                surface_id: payload_ref
+                for surface_id, payload_ref in surface_payload_refs.items()
+                if isinstance(surface_id, str)
+                and surface_id
+                and isinstance(payload_ref, str)
+                and payload_ref
+            }
+            if surface_payload_refs is not None
+            else SurfaceContentProjection._declared_refs(ordered)
+        )
+        if not refs:
+            return {}
+
+        output_by_call: dict[str, object] = {}
+        spec_by_surface: dict[str, Mapping[str, object]] = {}
+        for event in ordered:
+            event_type, payload = SurfaceContentProjection._fields(event)
+            if event_type == _EventType.TOOL_RESULT:
+                call_id = SurfaceContentProjection._text(payload.get(_Key.CALL_ID))
+                if call_id is not None and _Key.OUTPUT in payload:
+                    # ``output`` is persisted tool data. It may be scalar,
+                    # list, or object; no shape is inferred here.
+                    output_by_call[call_id] = payload[_Key.OUTPUT]
+            elif event_type == _EventType.SURFACE_SPEC_GENERATED:
+                surface_id = SurfaceContentProjection._text(
+                    payload.get(_Key.SURFACE_URI)
+                ) or SurfaceContentProjection._text(payload.get(_Key.SURFACE_ID))
+                spec = payload.get(_Key.SPEC)
+                if surface_id in refs and isinstance(spec, Mapping):
+                    spec_by_surface[surface_id] = dict(spec)
+
         content: dict[str, dict[str, object]] = {}
-        for event in events:
-            event_type = SurfaceContentProjection._event_type_value(event)
-            payload = getattr(event, "payload", None)
-            if not isinstance(payload, Mapping):
-                continue
-            if event_type == _EventType.SURFACE_SPEC_GENERATED:
-                SurfaceContentProjection._apply_spec_generated(content, payload)
-            elif event_type in _EventType.MUTATIONS:
-                SurfaceContentProjection._apply_mutation(content, payload)
+        for surface_id, payload_ref in refs.items():
+            call_id = SurfaceContentProjection._call_id_from_ref(payload_ref)
+            state: dict[str, object] = {}
+            if call_id is not None and call_id in output_by_call:
+                state["data"] = output_by_call[call_id]
+            spec = spec_by_surface.get(surface_id)
+            if spec is not None:
+                state["spec"] = dict(spec)
+            if state:
+                content[surface_id] = state
         return content
 
-    # -- reducers -----------------------------------------------------------
+    @staticmethod
+    def _declared_refs(events: Iterable[_LedgerEventLike]) -> dict[str, str]:
+        refs: dict[str, str] = {}
+        for event in events:
+            event_type, payload = SurfaceContentProjection._fields(event)
+            if event_type != _EventType.SURFACE_CREATED:
+                continue
+            surface_id = SurfaceContentProjection._text(payload.get(_Key.SURFACE_ID))
+            payload_ref = SurfaceContentProjection._text(payload.get(_Key.PAYLOAD_REF))
+            if surface_id is not None and payload_ref is not None:
+                refs[surface_id] = payload_ref
+        return refs
 
     @staticmethod
-    def _apply_mutation(
-        content: dict[str, dict[str, object]],
-        payload: Mapping[str, object],
-    ) -> None:
-        uri, state = SurfaceContentProjection._envelope(payload)
-        if uri is None:
-            return
-        merged = content.setdefault(uri, {})
-        if isinstance(state, Mapping):
-            merged.update(state)
+    def _call_id_from_ref(payload_ref: str) -> str | None:
+        prefix, separator, call_id = payload_ref.partition(":")
+        if prefix != "call" or not separator:
+            return None
+        return SurfaceContentProjection._text(call_id)
 
     @staticmethod
-    def _apply_spec_generated(
-        content: dict[str, dict[str, object]],
-        payload: Mapping[str, object],
-    ) -> None:
-        uri = SurfaceContentProjection._uri_of(payload)
-        if uri is None:
-            return
-        spec = payload.get(_Key.SPEC)
-        if not isinstance(spec, Mapping):
-            return
-        # Spec merge only — ``data`` (if any) is preserved untouched (D4 twin).
-        content.setdefault(uri, {})[_Key.SPEC] = dict(spec)
-
-    # -- helpers ------------------------------------------------------------
-
-    @staticmethod
-    def _envelope(
-        payload: Mapping[str, object],
-    ) -> tuple[str | None, Mapping[str, object] | None]:
-        """Return ``(surface_uri, state)`` from the PRD-01 envelope or legacy flat."""
-
-        surface = payload.get(_Key.SURFACE)
-        if isinstance(surface, Mapping):
-            uri = surface.get(_Key.SURFACE_URI)
-            state = surface.get(_Key.STATE)
-            if isinstance(uri, str) and uri:
-                return uri, state if isinstance(state, Mapping) else None
-        # Legacy flat: ``payload.surface_uri`` + ``payload.state``.
-        flat_uri = payload.get(_Key.SURFACE_URI)
-        if isinstance(flat_uri, str) and flat_uri:
-            flat_state = payload.get(_Key.STATE)
-            return flat_uri, flat_state if isinstance(flat_state, Mapping) else None
-        return None, None
-
-    @staticmethod
-    def _uri_of(payload: Mapping[str, object]) -> str | None:
-        surface = payload.get(_Key.SURFACE)
-        if isinstance(surface, Mapping):
-            uri = surface.get(_Key.SURFACE_URI)
-            if isinstance(uri, str) and uri:
-                return uri
-        flat = payload.get(_Key.SURFACE_URI)
-        return flat if isinstance(flat, str) and flat else None
-
-    @staticmethod
-    def _event_type_value(event: _LedgerEventLike) -> str:
+    def _fields(event: _LedgerEventLike) -> tuple[str, Mapping[str, object]]:
         event_type = getattr(event, "event_type", "")
         value = getattr(event_type, "value", None)
-        if isinstance(value, str):
-            return value
-        return str(event_type)
+        event_type_text = value if isinstance(value, str) else str(event_type)
+        payload = getattr(event, "payload", None)
+        return event_type_text, payload if isinstance(payload, Mapping) else {}
+
+    @staticmethod
+    def _text(value: object) -> str | None:
+        return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 __all__ = ["SurfaceContentProjection"]

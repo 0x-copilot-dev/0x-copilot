@@ -26,6 +26,7 @@ when the capability is off this module is never imported at runtime.
 from __future__ import annotations
 
 import json
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from uuid import uuid4
@@ -38,7 +39,7 @@ from agent_runtime.capabilities.sandbox.contracts import (
     SandboxCreateRequest,
     SandboxEgressPolicy,
     SandboxError,
-    WorkspaceTransferManifest,
+    SandboxSnapshot,
 )
 from agent_runtime.capabilities.sandbox.remote_execution_service import (
     RemoteExecutionService,
@@ -54,9 +55,9 @@ TOOL_DESCRIPTION = (
     "for reading or writing the user's files use the filesystem tools instead."
 )
 
-#: Empty-manifest sentinel: an execute-only run transfers no workspace bytes, so
-#: the snapshot manifest is empty and its content hash is the all-zero digest.
-_EMPTY_MANIFEST_SHA256 = "0" * 64
+#: A real immutable empty snapshot: unlike the removed sentinel it contains no
+#: workspace/grant/broker facts and its digest is the SHA-256 of zero entries.
+_EMPTY_MANIFEST_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 @dataclass(frozen=True)
@@ -137,16 +138,16 @@ class SandboxExecuteToolFactory:
         model-influenced.
         """
 
-        manifest = WorkspaceTransferManifest(
-            workspace_id=f"sbx-{run_id}",
-            root_grant_id=f"sbx-{run_id}",
+        snapshot = SandboxSnapshot(
+            snapshot_id=f"sandbox:{run_id}",
             entries=(),
             total_bytes=0,
             manifest_sha256=_EMPTY_MANIFEST_SHA256,
         )
         return SandboxCreateRequest(
             run_id=run_id,
-            workspace_snapshot=manifest,
+            operation_id=f"sandbox:{run_id}",
+            snapshot=snapshot,
             egress=SandboxEgressPolicy(),
             secret_refs=(),
             limit_profile=limit_profile,

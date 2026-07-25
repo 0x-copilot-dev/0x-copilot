@@ -47,11 +47,14 @@ from agent_runtime.api.user_policies_resolver import (
     UserPoliciesResolver,
 )
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
+from agent_runtime.artifacts import ArtifactService
 from agent_runtime.deployment import (
     DeploymentProfile,
     log_profile,
     resolve_or_exit,
 )
+from agent_runtime.execution.contracts import RuntimeErrorCode
+from agent_runtime.execution.errors import AgentRuntimeError
 from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.observability.http_logging import (
@@ -119,6 +122,7 @@ class RuntimeApiAppFactory:
         user_policies_resolver: UserPoliciesResolver | None = None,
         suggestible_connectors_resolver: SuggestibleConnectorsResolver | None = None,
         project_resolver: ProjectResolverPort | None = None,
+        artifact_service: ArtifactService | None = None,
         configure_logging_on_create: bool = True,
         configure_telemetry_on_create: bool = True,
         deployment: DeploymentProfile | None = None,
@@ -129,6 +133,11 @@ class RuntimeApiAppFactory:
         ``app.state`` so handlers can retrieve it via ``request.app.state``
         without module-level singletons or circular imports.
         """
+        settings = settings or RuntimeSettings.load()
+        # The API process does not own MCP execution dependencies.  The worker
+        # validates D1's complete stage/executor/material cohort after the
+        # runtime ports exist; validating here would reject a correctly wired
+        # in-process worker before those ports are available.
         if configure_logging_on_create:
             LoggingConfigurator.configure()
         if configure_telemetry_on_create:
@@ -198,7 +207,6 @@ class RuntimeApiAppFactory:
             project_resolver=project_resolver,
             app=app,
         )
-
         # Expose ports and coordinators on app.state so route handlers and
         # lifespan helpers can access them via request.app.state.
         # Expose the resolved settings on state for both the production
@@ -214,16 +222,65 @@ class RuntimeApiAppFactory:
         app.state.conversation_query_service = _cqs
         app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
+        # A2 — explicit composition seam for the canonical Artifact Repository.
+        # A true flag must have the complete storage-owned bundle *before* the
+        # route table is mounted. Serving enabled artifact routes with a None
+        # service would turn a deployment mistake into a deferred 503.
+        if _settings.execution.artifact_effects_v2:
+            if _ports.require_artifact_service_storage() is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "ARTIFACT_EFFECTS_V2 requires a complete artifact repository "
+                    + "during API composition.",
+                    retryable=False,
+                )
+            resolved_artifact_service = (
+                artifact_service
+                if artifact_service is not None
+                else cls.default_artifact_service(app)
+            )
+            if resolved_artifact_service is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "ARTIFACT_EFFECTS_V2 could not compose ArtifactService.",
+                    retryable=False,
+                )
+            app.state.artifact_service = resolved_artifact_service
+        else:
+            # The router is absent while dark. Retaining an injected fake is
+            # useful for isolated non-route test composition and has no public
+            # effect because no artifact path is registered.
+            app.state.artifact_service = artifact_service
         app.state.draft_service = cls.default_draft_service(app)
         # PRD-D1 — the single-artifact staged-write service (v2). Registered on
         # app state always (harmless when the flag is off — the stage routes are
         # not mounted, so nothing reaches it); the same ``WriteStager`` is shared
         # with the DraftService propose seam.
         app.state.stage_service = cls.default_stage_service(app)
+        # C3 — the workspace-only A4 decision receipt is composed separately
+        # from legacy staged writes.  It receives no executor or host path;
+        # approval still enqueues a body-free A5 command only.
+        workspace_approval_enabled = (
+            _settings.execution.surfaces_v2
+            and _settings.execution.workspace_effect_mode.value == "enforce"
+        )
+        app.state.workspace_approval_decision_service = (
+            cls.default_workspace_approval_decision_service(app)
+            if workspace_approval_enabled
+            else None
+        )
         # PRD-E2 — the cross-run pending-work read service. Registered on app
         # state always (harmless when the flag is off — the route is not mounted,
         # so nothing reaches it); folds the caller's runs on read (no new table).
         app.state.pending_work_service = cls.default_pending_work_service(app)
+        # E1 D6 — canonical v2.1 pending work is stricter than the legacy
+        # v2 queue.  Compose it only for the existing enforced workspace cohort;
+        # the router receives the exact same boolean below.
+        app.state.pending_work_v2_service = (
+            cls.default_pending_work_v2_service(app)
+            if workspace_approval_enabled
+            else None
+        )
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
         # PR 6.1 — share_service composes ShareStore + persistence + event
         # store + workspace_feed (sources tab) + draft_service (drafts).
@@ -256,7 +313,12 @@ class RuntimeApiAppFactory:
                 "run_executor": cls.classify_run_executor(app),
             }
 
-        app.include_router(RuntimeApiRouter.create_router())
+        app.include_router(
+            RuntimeApiRouter.create_router(
+                artifact_effects_v2=_settings.execution.artifact_effects_v2,
+                workspace_approval_enabled=workspace_approval_enabled,
+            )
+        )
         app.include_router(UsageApiRouter.create_router())
         # P8-A4 — per-agent usage aggregation (read-only over the canonical
         # ``runtime_model_call_usage`` tracker; cross-audit §5.5 invariant).
@@ -565,6 +627,17 @@ class RuntimeApiAppFactory:
         )
 
     @classmethod
+    def default_artifact_service(cls, app: FastAPI) -> ArtifactService | None:
+        """Compose ArtifactService from a validated storage-owned port bundle."""
+
+        from agent_runtime.api.artifact_repository import ArtifactServiceComposition
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return ArtifactServiceComposition.build(ports)
+
+    @classmethod
     def _httpx_membership_fetcher(cls):
         """Return a small ``HttpFetcher`` callable backed by httpx.
 
@@ -683,6 +756,29 @@ class RuntimeApiAppFactory:
         return StageService(stager=stager, persistence=ports.persistence)
 
     @classmethod
+    def default_workspace_approval_decision_service(cls, app):  # type: ignore[no-untyped-def]
+        """Compose C3's canonical workspace decision route without A5 access."""
+
+        from agent_runtime.api.events import RuntimeEventProducer
+        from agent_runtime.api.workspace_approval_service import (
+            WorkspaceApprovalDecisionService,
+        )
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return WorkspaceApprovalDecisionService(
+            persistence=ports.persistence,
+            event_producer=RuntimeEventProducer(
+                persistence=ports.persistence,
+                event_store=ports.event_store,
+            ),
+            queue=ports.queue,
+            blobs=getattr(ports, "artifact_blob_store", None),
+            references=getattr(ports, "artifact_reference_provider", None),
+        )
+
+    @classmethod
     def default_pending_work_service(cls, app):  # type: ignore[no-untyped-def]
         """Wire the PRD-E2 ``PendingWorkService`` (cross-run queue read model).
 
@@ -698,6 +794,28 @@ class RuntimeApiAppFactory:
             return None
         return PendingWorkService(
             persistence=ports.persistence, event_store=ports.event_store
+        )
+
+    @classmethod
+    def default_pending_work_v2_service(cls, app):  # type: ignore[no-untyped-def]
+        """Wire E1 D6's canonical, identity-scoped pending-work aggregate.
+
+        The service reads only the runtime persistence/event ports; no facade,
+        backend, host, or workspace-path dependency can enter this read model.
+        It is only reachable while the workspace-effect enforcement cohort is
+        active (the matching route is mounted under that same condition).
+        """
+
+        from agent_runtime.api.pending_work_v2_service import (
+            PendingWorkV2QueryService,
+        )
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return PendingWorkV2QueryService(
+            persistence=ports.persistence,
+            event_store=ports.event_store,
         )
 
     @classmethod
@@ -1138,6 +1256,11 @@ class RuntimeApiAppFactory:
             mcp_discovery_cache=getattr(app.state, "mcp_discovery_cache", None),
             user_policies_resolver=getattr(
                 app.state, "runtime_user_policies_resolver", None
+            ),
+            artifact_service=getattr(app.state, "artifact_service", None),
+            artifact_blob_store=getattr(ports, "artifact_blob_store", None),
+            artifact_reference_store=getattr(
+                ports, "artifact_reference_provider", None
             ),
         )
         app.state.runtime_in_process_worker = worker

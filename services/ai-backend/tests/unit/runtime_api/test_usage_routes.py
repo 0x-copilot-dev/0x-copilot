@@ -14,6 +14,7 @@ from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
+from runtime_api.schemas import ConversationRecord
 
 
 def _client_with_seed_runs(
@@ -31,6 +32,15 @@ def _client_with_seed_runs(
     )
     ports = RuntimeAdapterFactory.from_store(store)
     completed = datetime.now(timezone.utc) - timedelta(hours=1)
+    for conversation_id in ("conv-1", "conv-2"):
+        store.conversations[conversation_id] = ConversationRecord(
+            conversation_id=conversation_id,
+            org_id=org_id,
+            user_id=user_id,
+            assistant_id="assistant-1",
+            created_at=completed - timedelta(hours=2),
+            updated_at=completed - timedelta(hours=1),
+        )
     store.run_usage["r1"] = RuntimeRunUsageRecord(
         id="r1",
         org_id=org_id,

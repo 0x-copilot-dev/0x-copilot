@@ -32,6 +32,9 @@ from agent_runtime.capabilities.interpreter.code_mode_tool import (
     RunIdentityProvider,
 )
 from agent_runtime.capabilities.interpreter.monty_adapter import MontyInterpreterPort
+from agent_runtime.capabilities.interpreter.policy_invoker import (
+    GatewayPolicyToolInvoker,
+)
 from agent_runtime.capabilities.interpreter.ports import (
     InterpreterEventSink,
     InterpreterPort,
@@ -138,7 +141,10 @@ def build_code_mode_tool(
 
     service = InterpreterService(
         port=port,
-        policy_invoker=policy_invoker,
+        # The wrapper is inert outside gateway enforce mode.  In enforcement it
+        # gives every interpreter callback its own child operation and forbids
+        # an external callback from reaching a direct dispatcher.
+        policy_invoker=GatewayPolicyToolInvoker(legacy=policy_invoker),
         resolver=resolver,
         config=InterpreterServiceConfig(limit_profile_name=config.limit_profile_name),
         event_sink=event_sink,

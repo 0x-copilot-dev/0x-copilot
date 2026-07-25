@@ -26,6 +26,7 @@ _ORG_ID = "org_receipt_facade"
 _USER_ID = "user_receipt_facade"
 _RUN_ID = "run_abc123"
 _EXPECTED_PATH = f"/v1/agent/runs/{_RUN_ID}/receipt/export"
+_EXPECTED_PATH_V2 = f"/v1/agent/runs/{_RUN_ID}/receipt/export-v2"
 
 
 def _bearer(
@@ -68,17 +69,20 @@ def _env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _install_capturing_forwarder(
     monkeypatch: pytest.MonkeyPatch,
+    *,
+    expected_path: str = _EXPECTED_PATH,
+    response_body: dict[str, object] | None = None,
 ) -> list[dict[str, Any]]:
     """Intercept ``forward_json`` and capture the outbound request shape."""
 
     captured: list[dict[str, Any]] = []
 
     async def _forward(_app, method, path, *, target, **kwargs):  # noqa: ARG001
-        if target == "ai_backend" and method == "GET" and path == _EXPECTED_PATH:
+        if target == "ai_backend" and method == "GET" and path == expected_path:
             captured.append(
                 {"method": method, "path": path, "params": kwargs.get("params")}
             )
-            return {
+            return response_body or {
                 "export_version": 1,
                 "run_id": _RUN_ID,
                 "generated_at": "2026-01-01T00:00:00+00:00",
@@ -103,9 +107,14 @@ def _install_upstream_error(monkeypatch: pytest.MonkeyPatch, status_code: int) -
     monkeypatch.setattr(facade_app, "forward_json", _forward)
 
 
-def _get(client: TestClient, *, with_bearer: bool = True):
+def _get(
+    client: TestClient,
+    *,
+    path: str = _EXPECTED_PATH,
+    with_bearer: bool = True,
+):
     headers = {"authorization": _bearer()} if with_bearer else {}
-    return client.get(_EXPECTED_PATH, headers=headers)
+    return client.get(path, headers=headers)
 
 
 def test_facade_proxies_receipt_export_with_scoped_params(
@@ -125,6 +134,38 @@ def test_facade_proxies_receipt_export_with_scoped_params(
     # Scoped identity is stamped onto the outbound params.
     assert call["params"]["org_id"] == _ORG_ID
     assert call["params"]["user_id"] == _USER_ID
+
+
+def test_facade_proxies_receipt_export_v2_with_scoped_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _install_capturing_forwarder(
+        monkeypatch,
+        expected_path=_EXPECTED_PATH_V2,
+        response_body={
+            "bundle_version": 2,
+            "run_id": _RUN_ID,
+            "generated_at": "2026-01-01T00:00:00+00:00",
+            "key_id": "audit-hmac:v1",
+            "rows": [],
+            "row_count": 0,
+            "receipt_digest": "deadbeef",
+            "head_hash": "deadbeef",
+        },
+    )
+    client = TestClient(create_app(FacadeSettings()))
+
+    response = _get(client, path=_EXPECTED_PATH_V2)
+
+    assert response.status_code == 200
+    assert response.json()["bundle_version"] == 2
+    assert captured == [
+        {
+            "method": "GET",
+            "path": _EXPECTED_PATH_V2,
+            "params": {"org_id": _ORG_ID, "user_id": _USER_ID},
+        }
+    ]
 
 
 def test_missing_bearer_is_401_and_never_forwards(

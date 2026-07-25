@@ -17,6 +17,7 @@ Command grammar understood by :class:`FakeSandboxBackend.execute`:
 from __future__ import annotations
 
 from datetime import timedelta
+import hashlib
 
 from deepagents.backends.protocol import (
     ExecuteResponse,
@@ -30,6 +31,7 @@ from agent_runtime.capabilities.sandbox.contracts import (
     SandboxCreateRequest,
     SandboxError,
     SandboxErrorCode,
+    SandboxIsolationAttestation,
     SandboxProviderId,
     _utcnow,
 )
@@ -96,9 +98,34 @@ class FakeSandboxProvider:
         self._by_ref: dict[str, ManagedSandboxSession] = {}
         self.terminated_refs: list[str] = []
         self.create_calls = 0
+        self.create_requests: list[SandboxCreateRequest] = []
+
+    @property
+    def isolation_ready(self) -> bool:
+        return True
+
+    async def attest(
+        self, request: SandboxCreateRequest
+    ) -> SandboxIsolationAttestation:
+        return SandboxIsolationAttestation(
+            provider=SandboxProviderId.LANGSMITH,
+            isolation="microvm",
+            process_isolated=True,
+            filesystem_fresh=True,
+            teardown_guaranteed=True,
+            host_credentials_absent=True,
+            cpu_quota_enforced=True,
+            memory_quota_enforced=True,
+            wall_clock_quota_enforced=True,
+            process_quota_enforced=True,
+            file_quota_enforced=True,
+            egress_mode=request.egress.mode,
+            attestation_ref="attestation://fake/verified",
+        )
 
     async def create(self, request: SandboxCreateRequest) -> SandboxHandle:
         self.create_calls += 1
+        self.create_requests.append(request)
         existing = self._by_idempotency.get(request.idempotency_key)
         if existing is not None:
             return existing
@@ -173,19 +200,28 @@ def make_request(
         SandboxEgressPolicy,
         WorkspaceTransferManifest,
     )
+    from agent_runtime.capabilities.sandbox.workspace_transfer import (
+        WorkspaceManifestBuilder,
+    )
 
-    zero_sha = "0" * 64
+    empty_sha = hashlib.sha256(b"").hexdigest()
     manifest = WorkspaceTransferManifest(
         workspace_id="ws-1",
         root_grant_id="grant-1",
         entries=(),
         total_bytes=0,
-        manifest_sha256=zero_sha,
+        manifest_sha256=empty_sha,
     )
     return SandboxCreateRequest(
         run_id=run_id,
-        workspace_snapshot=manifest,
-        egress=SandboxEgressPolicy(mode=egress_mode),  # type: ignore[arg-type]
+        operation_id=f"sandbox:{run_id}",
+        snapshot=WorkspaceManifestBuilder.to_sandbox_snapshot(
+            manifest, snapshot_id=f"snapshot:{run_id}"
+        ),
+        egress=SandboxEgressPolicy(
+            mode=egress_mode,  # type: ignore[arg-type]
+            destinations=("api.example.test",) if egress_mode == "allowlist" else (),
+        ),
         secret_refs=(),
         limit_profile="desktop_v1",
         approval_id="approval-1",

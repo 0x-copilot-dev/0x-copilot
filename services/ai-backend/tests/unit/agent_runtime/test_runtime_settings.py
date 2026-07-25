@@ -82,6 +82,22 @@ def test_runtime_settings_loads_default_reasoning_config() -> None:
     assert reasoning.include_encrypted_content is True
 
 
+def test_artifact_drafts_flag_requires_the_canonical_repository() -> None:
+    with pytest.raises(
+        ValueError, match="ARTIFACT_DRAFTS_V2 requires ARTIFACT_EFFECTS_V2"
+    ):
+        RuntimeSettings.load(environ={"ARTIFACT_DRAFTS_V2": "true"})
+
+    enabled = RuntimeSettings.load(
+        environ={
+            "ARTIFACT_EFFECTS_V2": "true",
+            "ARTIFACT_DRAFTS_V2": "true",
+        }
+    )
+
+    assert enabled.execution.artifact_drafts_v2 is True
+
+
 def test_model_resolver_validates_provider_keys_and_applies_defaults() -> None:
     settings = RuntimeSettings.load(
         environ={

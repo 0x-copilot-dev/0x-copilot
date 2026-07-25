@@ -31,6 +31,24 @@ const preloadTask = build({
   logLevel: "info",
 });
 
+// Browser automation is a separate Node child. It is bundled independently so
+// Electron main never imports Playwright and the packaged app has a concrete
+// `out/browser-worker/index.js` spawn target.
+const browserWorkerTask = build({
+  entryPoints: [join(__dirname, "main/browser/worker/index.ts")],
+  outfile: join(outDir, "browser-worker/index.js"),
+  bundle: true,
+  platform: "node",
+  format: "cjs",
+  target: "node20",
+  // Kept as a packaged production dependency: Playwright performs runtime
+  // module/data discovery that cannot be safely flattened into one esbuild
+  // file. Only the isolated worker imports it.
+  external: ["playwright"],
+  sourcemap: false,
+  logLevel: "info",
+});
+
 const rendererTask = build({
   entryPoints: [join(__dirname, "renderer/bootstrap.tsx")],
   outfile: join(outDir, "renderer/bootstrap.js"),
@@ -68,4 +86,10 @@ const copyAssetsTask = (async () => {
   }
 })();
 
-await Promise.all([mainTask, preloadTask, rendererTask, copyAssetsTask]);
+await Promise.all([
+  mainTask,
+  preloadTask,
+  browserWorkerTask,
+  rendererTask,
+  copyAssetsTask,
+]);

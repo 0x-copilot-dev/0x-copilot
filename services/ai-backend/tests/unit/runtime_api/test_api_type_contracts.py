@@ -3,7 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 import re
 
+from copilot_service_contracts.work_ledger import LEDGER_EVENT_TYPES
+
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.api.pending_work_v2_service import (
+    PendingWorkV2Response,
+    PendingWorkV2RunWarning,
+)
+from agent_runtime.surfaces_v2.pending_work_v2 import PendingWorkItemV2
 from runtime_api.schemas import (
     AgentRunStatus,
     RunHistoryEntry,
@@ -35,14 +42,66 @@ def test_run_history_entry_fields_match_api_types() -> None:
     }
 
 
+def test_pending_work_v2_fields_match_api_types() -> None:
+    """E1 D6 — the intentionally tiny public queue cannot drift or grow leaks."""
+
+    repo_root = Path(__file__).resolve().parents[5]
+    ledger_types = (repo_root / "packages/api-types/src/ledger.ts").read_text()
+
+    assert set(PendingWorkV2Response.model_fields) == {
+        "v",
+        "items",
+        "warnings",
+        "next_cursor",
+        "has_more",
+    }
+    assert set(PendingWorkV2RunWarning.model_fields) == {"run_id", "status"}
+    assert set(PendingWorkItemV2.model_fields) == {
+        "run_id",
+        "subject_kind",
+        "subject_id",
+        "status",
+        "opened_sequence_no",
+        "latest_sequence_no",
+    }
+    assert _typescript_interface_fields(ledger_types, "PendingWorkV2Response") == set(
+        PendingWorkV2Response.model_fields
+    )
+    assert _typescript_interface_fields(ledger_types, "PendingWorkV2RunWarning") == set(
+        PendingWorkV2RunWarning.model_fields
+    )
+    assert _typescript_interface_fields(ledger_types, "PendingWorkItemV2") == set(
+        PendingWorkItemV2.model_fields
+    )
+
+
+def _typescript_interface_fields(source: str, name: str) -> set[str]:
+    match = re.search(
+        rf"export interface {name}\s*\{{(?P<body>.*?)^\}}",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"missing TypeScript interface {name}"
+    return set(
+        re.findall(
+            r"^\s*(?:readonly\s+)?([a-z_]+)\??\s*:",
+            match.group("body"),
+            re.MULTILINE,
+        )
+    )
+
+
 class TestApiTypeContracts:
     def test_typescript_runtime_event_constants_match_backend_enums(self) -> None:
         repo_root = Path(__file__).resolve().parents[5]
         api_types = (repo_root / "packages/api-types/src/index.ts").read_text()
+        ledger_types = (repo_root / "packages/api-types/src/ledger.ts").read_text()
 
-        assert self._string_array(api_types, "RUNTIME_API_EVENT_TYPES") == {
-            event_type.value for event_type in RuntimeApiEventType
-        }
+        runtime_types = self._string_array(api_types, "RUNTIME_API_EVENT_TYPES")
+        runtime_types.update(
+            self._string_array(ledger_types, "ARTIFACT_RUNTIME_EVENT_TYPES")
+        )
+        assert runtime_types == {event_type.value for event_type in RuntimeApiEventType}
         assert self._string_array(api_types, "RUNTIME_EVENT_SOURCES") == {
             source.value for source in StreamEventSource
         }
@@ -60,6 +119,21 @@ class TestApiTypeContracts:
 
     @classmethod
     def _string_array(cls, source: str, name: str) -> set[str]:
-        match = re.search(rf"export const {name} = \[(.*?)\] as const", source, re.S)
+        match = re.search(
+            rf"(?:export )?const {name} = \[(.*?)\] as const",
+            source,
+            re.S,
+        )
         assert match is not None
-        return set(re.findall(r'"([^"]+)"', match.group(1)))
+        body = match.group(1)
+        values = set(re.findall(r'"([^"]+)"', body))
+        values.update(
+            LEDGER_EVENT_TYPES[int(index)]
+            for index in re.findall(
+                r"WORK_LEDGER_EVENT_TYPES\[(\d+)\]",
+                body,
+            )
+        )
+        for spread in re.findall(r"\.\.\.([A-Z][A-Z0-9_]*)", body):
+            values.update(cls._string_array(source, spread))
+        return values

@@ -29,6 +29,7 @@ dependencies = [
   "anthropic==0.117.0",
   "pydantic==2.13.4",
   "python-dotenv==1.2.2",
+  "python-multipart==0.0.32",
   "uvicorn==0.51.0",
   "gunicorn==26.0.0",
   "httpx==0.28.1",

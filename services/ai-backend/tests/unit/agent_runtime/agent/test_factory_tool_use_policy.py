@@ -8,9 +8,23 @@ unconfigured run stays byte-identical to today (write=ask → approval).
 
 from __future__ import annotations
 
+from typing import cast
+
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationGatewayContext,
+    McpOperationGatewayServices,
+)
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
-from agent_runtime.capabilities.tools.tool_use_enforcement import PolicyBlockedTool
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.tools.tool_use_enforcement import (
+    PolicyBlockedTool,
+    ToolUsePolicyResolver,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDependencies
 from agent_runtime.execution.factory import acreate_agent_runtime
 from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
@@ -66,6 +80,44 @@ async def test_unconfigured_run_gates_call_mcp_tool_by_default(
         _CALL_MCP_TOOL: {"allowed_decisions": ["approve", "edit", "reject"]}
     }
     assert not any(isinstance(tool, PolicyBlockedTool) for tool in request.tools)
+
+
+async def test_enforced_mcp_gateway_defers_policy_until_per_operation_classification(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    """D1 must not hold catalog reads at the generic MCP umbrella tool."""
+
+    builder = CapturingAgentBuilder()
+    operation_token = OperationContext.bind_for_run(
+        identity=VerifiedOperationIdentity(
+            org_id=runtime_context_admin.org_id,
+            user_id=runtime_context_admin.user_id,
+            conversation_id="conv_d1_factory",
+            run_id=runtime_context_admin.run_id,
+        ),
+        policy_snapshot=ToolUsePolicyResolver.resolve(runtime_context_admin),
+        ledger_emitter=None,
+        artifact_service=None,
+        mode=OperationGatewayMode.ENFORCE,
+        canonical_arguments_durable=True,
+    )
+    # Factory only tests whether authoritative services are bound.  The actual
+    # service graph is exercised by test_operation_gateway_adapter.py.
+    gateway_token = McpOperationGatewayContext.bind_for_run(
+        cast(McpOperationGatewayServices, object())
+    )
+    try:
+        await acreate_agent_runtime(
+            context=runtime_context_admin,
+            dependencies=_dependencies_with_mcp(fake_dependencies),
+            agent_builder=builder,
+        )
+    finally:
+        McpOperationGatewayContext.unbind(gateway_token)
+        OperationContext.unbind(operation_token)
+
+    assert builder.calls[0].interrupt_on == {}
 
 
 async def test_write_auto_removes_the_interrupt(

@@ -16,6 +16,7 @@ from backend_facade.adapter_registry_routes import (
     register_adapter_registry_routes,
 )
 from backend_facade.adapter_review_routes import register_adapter_review_routes
+from backend_facade.artifact_routes import register_artifact_proxy_routes
 from backend_facade.agents_routes import register_agents_routes
 from backend_facade.audit_routes import register_audit_routes
 from backend_facade.auth_routes import register_auth_routes
@@ -154,6 +155,8 @@ def create_app(
 
     register_adapter_registry_routes(app)
     register_adapter_review_routes(app)
+    if app.state.settings.artifact_effects_v2:
+        register_artifact_proxy_routes(app)
     register_agents_routes(app)
     register_audit_routes(app)
     register_auth_routes(app)
@@ -1077,6 +1080,29 @@ def create_app(
             identity=identity,
         )
 
+    # E1 D6 — the canonical v2.1 queue is deliberately additive while legacy
+    # pending work remains readable during migration.  The ai-backend owns its
+    # stricter workspace-enforcement route gate; this facade preserves that 404
+    # verbatim and only stamps the verified identity and paging inputs.
+    @app.get("/v1/agent/pending-work-v2")
+    async def pending_work_v2(
+        request: Request,
+        limit: int = Query(20, ge=1, le=50),
+        cursor: str | None = Query(None, max_length=512),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        params: dict[str, object] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/agent/pending-work-v2",
+            target="ai_backend",
+            params=identity.scoped_params(params),
+            identity=identity,
+        )
+
     @app.post("/v1/skills")
     async def create_skill(
         request: Request, payload: dict[str, object]
@@ -1225,6 +1251,23 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/runs/{run_id}/receipt/export-v2")
+    async def run_receipt_export_v2(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        # D7 is deliberately additive: the v1 export stays stable while the
+        # facade stamps verified identity onto the safe, versioned v2 contract.
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/runs/{run_id}/receipt/export-v2",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
     # ``surface_id`` is a v1 surface_uri (``<archetype>://<server>/<tool>/<id>``)
     # — it carries slashes, so both routes use the ``:path`` converter (Starlette
     # captures the whole tail before the literal ``/regenerate`` suffix). The
@@ -1342,6 +1385,26 @@ def create_app(
             app,
             "POST",
             f"/v1/agent/stages/{stage_id}/decisions",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/effect-stages/{stage_id}/decisions")
+    async def record_workspace_effect_stage_decision(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        """Pure proxy for C3's digest-pinned workspace receipt route."""
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/effect-stages/{stage_id}/decisions",
             target="ai_backend",
             params=identity.scoped_params({"run_id": run_id}),
             json=payload,
@@ -1526,6 +1589,23 @@ def create_app(
             app,
             "GET",
             f"/v1/usage/runs/{run_id}",
+            target="ai_backend",
+            params=identity.scoped_params(),
+            identity=identity,
+        )
+
+    @app.get("/v1/usage/runs/{run_id}/calls")
+    async def usage_run_calls(
+        request: Request,
+        run_id: str,
+    ) -> dict[str, object]:
+        """Proxy owned-run invocation detail with facade-derived identity only."""
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/usage/runs/{run_id}/calls",
             target="ai_backend",
             params=identity.scoped_params(),
             identity=identity,

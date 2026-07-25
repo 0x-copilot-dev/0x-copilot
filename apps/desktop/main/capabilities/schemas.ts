@@ -1,5 +1,8 @@
 import { z } from "zod";
 
+const OPAQUE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u;
+const SHA256_HEX = /^[a-f0-9]{64}$/u;
+
 // Zod contracts for the capability IPC channels (AC5 slice 1). Main validates
 // every inbound renderer payload against these; the outbound renderer view is
 // validated against `RendererGrantSchema` so an accidental extra field (a host
@@ -48,3 +51,45 @@ export const RendererGrantSchema = z
   })
   .strict();
 export type RendererGrantOut = z.infer<typeof RendererGrantSchema>;
+
+// capability.decide-workspace-approval — C3's entire renderer-controlled
+// input. It intentionally has no target ref, physical root, prepared ref,
+// permit, content reference, file handle, or generic operation field. Main
+// forwards only the exact snapshot values that A4 verifies against its ledger.
+export const WorkspaceApprovalStageSnapshotSchema = z
+  .object({
+    runId: z.string().regex(OPAQUE_ID),
+    stageId: z.string().regex(OPAQUE_ID),
+    revision: z.number().int().positive(),
+    proposalDigest: z.string().regex(SHA256_HEX),
+    targetDigest: z.string().regex(SHA256_HEX),
+  })
+  .strict();
+export type WorkspaceApprovalStageSnapshot = z.infer<
+  typeof WorkspaceApprovalStageSnapshotSchema
+>;
+
+export const WorkspaceApprovalHostDecisionRequestSchema = z
+  .object({
+    snapshot: WorkspaceApprovalStageSnapshotSchema,
+    decision: z.enum(["approve", "reject"]),
+  })
+  .strict();
+export type WorkspaceApprovalHostDecisionRequest = z.infer<
+  typeof WorkspaceApprovalHostDecisionRequestSchema
+>;
+
+// Renderer result remains deliberately smaller than the trusted receipt. The
+// decision ledger id is retained main-side for C2 authorization, and neither a
+// permit nor any host-local reference can cross this boundary.
+export const WorkspaceApprovalHostDecisionResultSchema = z
+  .object({
+    stageId: z.string().regex(OPAQUE_ID),
+    revision: z.number().int().positive(),
+    decision: z.enum(["approve", "reject"]),
+    status: z.enum(["approved", "rejected", "cancelled"]),
+  })
+  .strict();
+export type WorkspaceApprovalHostDecisionResult = z.infer<
+  typeof WorkspaceApprovalHostDecisionResultSchema
+>;

@@ -45,6 +45,9 @@ from agent_runtime.capabilities.sandbox.ports import (
 from agent_runtime.capabilities.sandbox.provider_registry import (
     SandboxProviderRegistry,
 )
+from agent_runtime.capabilities.sandbox.workspace_transfer import (
+    WorkspaceManifestBuilder,
+)
 
 
 class SandboxEventName:
@@ -107,6 +110,13 @@ class RemoteExecutionService:
         """Provision a session, record its projection, and wrap it in policy."""
 
         limits = self._config.resolve_limits()
+        WorkspaceManifestBuilder.verify_manifest(request.snapshot)
+        attestation = await self._registry.provider.attest(request)
+        if not attestation.satisfies(request.egress):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_ISOLATION_UNVERIFIED,
+                "The sandbox provider could not verify required isolation controls.",
+            )
         self._emit(SandboxEventName.PROVISION_STARTED, request.run_id)
         try:
             handle: SandboxHandle = await self._registry.provider.create(request)
@@ -162,6 +172,26 @@ class RemoteExecutionService:
             SandboxEventName.CLEANUP_CONFIRMED, session.session_id, session=deleted
         )
         return deleted
+
+    async def cleanup_provider_ref(
+        self, *, run_id: str, provider_session_ref: str
+    ) -> bool:
+        """Best-effort recovery cleanup when only durable lifecycle state remains.
+
+        After a worker crash the in-process session projection may be gone, but
+        the lifecycle store still has the opaque provider reference.  Recovery
+        is allowed to terminate that resource; it must never replay execution.
+        ``False`` is an honest cleanup-pending result rather than a success.
+        """
+
+        self._emit(SandboxEventName.CLEANUP_STARTED, run_id)
+        try:
+            await self._registry.provider.terminate(provider_session_ref)
+        except Exception:  # noqa: BLE001 - janitor will retry a failed cleanup
+            self._emit(SandboxEventName.CLEANUP_PENDING, run_id)
+            return False
+        self._emit(SandboxEventName.CLEANUP_CONFIRMED, run_id)
+        return True
 
     @asynccontextmanager
     async def session_scope(

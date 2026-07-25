@@ -104,6 +104,16 @@ class _SpyMetrics(RetentionMetrics):
         self.duration_calls.append({"kind": kind, "elapsed_seconds": elapsed_seconds})
 
 
+class _SpyLifecycleMetrics:
+    """D13-only sink; deliberately stores no org or failure body."""
+
+    def __init__(self) -> None:
+        self.failure_kinds: list[str] = []
+
+    def record_retention_execution_failure(self, *, kind: str) -> None:
+        self.failure_kinds.append(kind)
+
+
 class TestRetentionSweeperLoop:
     @pytest.mark.asyncio
     async def test_iterates_orgs_and_kinds(self) -> None:
@@ -124,6 +134,48 @@ class TestRetentionSweeperLoop:
         assert ("org_a", RetentionKind.CHECKPOINTS) not in org_kinds
         assert ("org_a", RetentionKind.MEMORY_ITEMS) in org_kinds
         assert len(outcomes) >= 8  # 2 orgs × 4 column-driven kinds
+
+    @pytest.mark.asyncio
+    async def test_artifact_pass_is_absent_when_rollout_is_off(self) -> None:
+        persistence = _FakePersistence(orgs=("org_a", "org_b"))
+
+        outcomes = await RetentionSweeperLoop(
+            persistence=persistence,
+            artifact_effects_v2=False,
+        ).sweep_once()
+
+        assert all(
+            call["kind"] is not RetentionKind.ARTIFACTS_TOMBSTONED
+            for call in persistence.sweep_calls
+        )
+        assert all(
+            outcome.kind is not RetentionKind.ARTIFACTS_TOMBSTONED
+            for outcome in outcomes
+        )
+
+    @pytest.mark.asyncio
+    async def test_enabled_artifact_pass_runs_exactly_once_per_org(self) -> None:
+        persistence = _FakePersistence(orgs=("org_a", "org_b"))
+
+        outcomes = await RetentionSweeperLoop(
+            persistence=persistence,
+            artifact_effects_v2=True,
+        ).sweep_once()
+
+        artifact_calls = [
+            call
+            for call in persistence.sweep_calls
+            if call["kind"] is RetentionKind.ARTIFACTS_TOMBSTONED
+        ]
+        assert [(call["org_id"], call["ttl_seconds"]) for call in artifact_calls] == [
+            ("org_a", 0),
+            ("org_b", 0),
+        ]
+        assert [
+            outcome.org_id
+            for outcome in outcomes
+            if outcome.kind is RetentionKind.ARTIFACTS_TOMBSTONED
+        ] == ["org_a", "org_b"]
 
     @pytest.mark.asyncio
     async def test_per_org_policy_overrides_default(self) -> None:
@@ -174,6 +226,22 @@ class TestRetentionSweeperLoop:
         kinds = {outcome.kind for outcome in outcomes}
         assert RetentionKind.EVENTS in kinds
         assert RetentionKind.CONTEXT_PAYLOADS in kinds
+
+    @pytest.mark.asyncio
+    async def test_sweep_kind_failure_emits_closed_d13_failure_kind(self) -> None:
+        class _BoomPersistence(_FakePersistence):
+            async def sweep_retention_kind(self, **kwargs):  # type: ignore[no-untyped-def]
+                if kwargs["kind"] is RetentionKind.MESSAGES:
+                    raise RuntimeError("do not label this message")
+                return await super().sweep_retention_kind(**kwargs)
+
+        lifecycle_metrics = _SpyLifecycleMetrics()
+        await RetentionSweeperLoop(
+            persistence=_BoomPersistence(orgs=("org_a",)),
+            lifecycle_metrics=lifecycle_metrics,  # type: ignore[arg-type]
+        ).sweep_once()
+
+        assert lifecycle_metrics.failure_kinds == [RetentionKind.MESSAGES.value]
 
 
 class TestRetentionSweeperPhase1Evidence:
@@ -347,6 +415,11 @@ class TestRetentionSweeperPhase1Evidence:
                 raise RuntimeError("DB unavailable")
 
         persistence = _BoomEvidence(orgs=("org_a",))
-        loop = RetentionSweeperLoop(persistence=persistence)
+        lifecycle_metrics = _SpyLifecycleMetrics()
+        loop = RetentionSweeperLoop(
+            persistence=persistence,
+            lifecycle_metrics=lifecycle_metrics,  # type: ignore[arg-type]
+        )
         outcomes = await loop.sweep_once()
         assert len(outcomes) > 0
+        assert lifecycle_metrics.failure_kinds

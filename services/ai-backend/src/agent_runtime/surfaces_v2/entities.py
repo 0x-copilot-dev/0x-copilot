@@ -64,6 +64,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     ViewBasis,
     ViewKeep,
     ViewTier,
+    validate_immutable_content_ref,
 )
 
 _REFERENCE_MAX_LENGTH = int(
@@ -345,16 +346,25 @@ class EffectExecutionRequest(RuntimeContract):
     idempotency_key: str
     target_ref: str
     target_digest: Sha256Hex
+    # Canonical audit identity and immutable content location are intentionally
+    # separate: the former binds an approval to a stage revision; the latter is
+    # the only reference an executor may dereference.
     proposal_ref: str
+    proposal_content_ref: str
     proposal_digest: Sha256Hex
     actor: EffectActor
     decision_ledger_id: str
 
     @field_validator("proposal_ref")
     @classmethod
-    def _valid_proposal_ref(cls, value: str) -> str:
+    def _proposal_ref_is_canonical(cls, value: str) -> str:
         ProposalUriCodec.parse(value)
         return value
+
+    @field_validator("proposal_content_ref")
+    @classmethod
+    def _proposal_content_ref_is_immutable(cls, value: str) -> str:
+        return validate_immutable_content_ref(value)
 
     @field_validator("target_ref")
     @classmethod
@@ -363,7 +373,7 @@ class EffectExecutionRequest(RuntimeContract):
         return value
 
     @model_validator(mode="after")
-    def _proposal_matches_stage(self) -> EffectExecutionRequest:
+    def _proposal_identity_matches_request(self) -> EffectExecutionRequest:
         parsed = ProposalUriCodec.parse(self.proposal_ref)
         if parsed.stage_id != self.stage_id or parsed.revision != self.revision:
             raise ValueError("proposal_ref must reference stage_id and revision")

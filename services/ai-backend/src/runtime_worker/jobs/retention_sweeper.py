@@ -8,6 +8,10 @@ import os
 import time
 
 from agent_runtime.api.ports import PersistencePort
+from agent_runtime.observability.lifecycle_metrics import (
+    LifecycleOperationalMetrics,
+    get_lifecycle_operational_metrics,
+)
 from agent_runtime.observability.retention_metrics import RetentionMetrics
 from agent_runtime.persistence.records.retention import (
     RetentionDeletionEvidenceRecord,
@@ -96,11 +100,13 @@ class RetentionSweeperLoop:
         interval_seconds: float | None = None,
         dry_run: bool | None = None,
         metrics: RetentionMetrics | None = None,
+        lifecycle_metrics: LifecycleOperationalMetrics | None = None,
         use_retention_until: bool | None = None,
         chunk_size: int | None = None,
         grace_days_messages: int | None = None,
         grace_days_events: int | None = None,
         grace_days_memory_items: int | None = None,
+        artifact_effects_v2: bool = False,
     ) -> None:
         self._persistence = persistence
         self._interval = (
@@ -157,6 +163,16 @@ class RetentionSweeperLoop:
             ),
         }
         self._metrics = metrics if metrics is not None else RetentionMetrics()
+        self._lifecycle_metrics = (
+            lifecycle_metrics
+            if lifecycle_metrics is not None
+            else get_lifecycle_operational_metrics()
+        )
+        self._sweep_kinds = (
+            (*self._SWEEP_KINDS, RetentionKind.ARTIFACTS_TOMBSTONED)
+            if artifact_effects_v2
+            else self._SWEEP_KINDS
+        )
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
 
@@ -188,6 +204,7 @@ class RetentionSweeperLoop:
             try:
                 await self.sweep_once()
             except Exception:
+                self._record_lifecycle_failure(kind="sweep_cycle")
                 _LOGGER.warning("retention_sweep_failed", exc_info=True)
 
     async def sweep_once(self) -> tuple[RetentionSweepOutcome, ...]:
@@ -202,7 +219,7 @@ class RetentionSweeperLoop:
                 policies=policies,
                 deployment_defaults=DEPLOYMENT_DEFAULT_TTL_SECONDS,
             )
-            for kind in self._SWEEP_KINDS:
+            for kind in self._sweep_kinds:
                 if self._use_retention_until:
                     outcome = await self._sweep_kind_chunked(
                         org_id=org_id, kind=kind, resolver=resolver
@@ -259,6 +276,7 @@ class RetentionSweeperLoop:
                     chunk_size=self._chunk_size,
                 )
             except Exception:
+                self._record_lifecycle_failure(kind=kind.value)
                 _LOGGER.warning(
                     "retention_sweep_kind_failed",
                     extra={"metadata": {"org_id": org_id, "kind": kind.value}},
@@ -276,7 +294,11 @@ class RetentionSweeperLoop:
             )
             # Dry-run stops after one chunk: force-rollback means rows never disappear,
             # so looping would never converge.
-            if self._dry_run or chunk.tombstoned + chunk.deleted == 0:
+            if (
+                self._dry_run
+                or kind is RetentionKind.ARTIFACTS_TOMBSTONED
+                or chunk.tombstoned + chunk.deleted == 0
+            ):
                 break
 
         elapsed = time.monotonic() - t0
@@ -306,19 +328,27 @@ class RetentionSweeperLoop:
     ) -> RetentionSweepOutcome | None:
         """Single-pass ``created_at+ttl`` sweep used when ``use_retention_until`` is disabled."""
 
-        resolved = resolver.resolve(kind=kind)
-        if resolved.ttl_seconds is None and kind is not RetentionKind.CONTEXT_PAYLOADS:
-            return None
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            ttl_seconds = 0
+        else:
+            resolved = resolver.resolve(kind=kind)
+            if (
+                resolved.ttl_seconds is None
+                and kind is not RetentionKind.CONTEXT_PAYLOADS
+            ):
+                return None
+            ttl_seconds = resolved.ttl_seconds or 0
         t0 = time.monotonic()
         try:
             outcome = await self._persistence.sweep_retention_kind(
                 org_id=org_id,
                 kind=kind,
-                ttl_seconds=resolved.ttl_seconds or 0,
+                ttl_seconds=ttl_seconds,
                 dry_run=self._dry_run,
                 chunk_size=0,
             )
         except Exception:
+            self._record_lifecycle_failure(kind=kind.value)
             _LOGGER.warning(
                 "retention_sweep_kind_failed",
                 extra={"metadata": {"org_id": org_id, "kind": kind.value}},
@@ -380,8 +410,17 @@ class RetentionSweeperLoop:
             try:
                 await self._persistence.insert_retention_deletion_evidence(evidence)
             except Exception:
+                self._record_lifecycle_failure(kind=kind_str)
                 _LOGGER.warning(
                     "retention_evidence_insert_failed",
                     extra={"metadata": {"org_id": outcome.org_id, "kind": kind_str}},
                     exc_info=True,
                 )
+
+    def _record_lifecycle_failure(self, *, kind: str) -> None:
+        """Publish D13 failure evidence without org, path, or exception labels."""
+
+        try:
+            self._lifecycle_metrics.record_retention_execution_failure(kind=kind)
+        except Exception:  # pragma: no cover - metrics must not stop a sweep
+            _LOGGER.debug("retention_lifecycle_metrics_failed", exc_info=True)

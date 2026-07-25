@@ -29,6 +29,10 @@ from agent_runtime.surfaces_v2.receipt_export import (
     ReceiptExportBundle,
     ReceiptExportUnavailable,
 )
+from agent_runtime.surfaces_v2.receipt_export_v2 import (
+    ReceiptExportV2,
+    ReceiptExportV2Builder,
+)
 from copilot_audit_chain import AuditChainSigner
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
@@ -679,12 +683,11 @@ class ConversationQueryService:
         and honest. Scope check mirrors ``replay_events`` (404 on wrong-tenant or
         unknown run).
 
-        PRD-B2 — content hydration: each metadata snapshot is enriched with its
-        materialized ``state`` (``{spec?, data}``), resolved from the same events
-        by ``SurfaceContentProjection`` (the v1 surface envelope keyed by
-        ``surface_uri == surface_id``). The content fold runs only when the
-        metadata fold produced surfaces — with the flag off there are none, so the
-        response is byte-identical to before (empty ``surfaces``, no wasted scan).
+        PRD-B3 — content hydration: each metadata snapshot is enriched only by
+        resolving its declared ``payload_ref`` against the matching persisted
+        tool result. The content fold runs only when the metadata fold produced
+        surfaces — with the flag off there are none, so the response stays empty
+        and no presentation envelope is consulted.
         """
 
         await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
@@ -694,7 +697,17 @@ class ConversationQueryService:
             after_sequence=0,
         )
         state = SurfaceStoreProjection.fold(run_id, events)
-        content = SurfaceContentProjection.fold(events) if state.surfaces else {}
+        content = (
+            SurfaceContentProjection.fold(
+                events,
+                surface_payload_refs={
+                    snapshot.surface_id: snapshot.payload_ref
+                    for snapshot in state.surfaces
+                },
+            )
+            if state.surfaces
+            else {}
+        )
         surfaces = tuple(
             HydratedSurfaceSnapshot(
                 **snapshot.model_dump(),
@@ -754,6 +767,48 @@ class ConversationQueryService:
             raise ReceiptExportUnavailable() from exc
         return ReceiptExportBuilder(signer=signer).build(
             run_id=run_id, events=events, receipt=receipt
+        )
+
+    async def export_run_receipt_v2(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+    ) -> ReceiptExportV2:
+        """Build the D7 safe receipt export for an authorized terminal run.
+
+        The run/membership check comes first so foreign and absent resources are
+        indistinguishable (404).  A non-durable adapter deliberately does not
+        expose an audit-grade export, even when its test implementation can
+        construct an in-memory hash chain.
+        """
+
+        run = await self._run_for_scope(org_id=org_id, user_id=user_id, run_id=run_id)
+        if run.status not in self.TERMINAL_RUN_STATUSES:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                Messages.Error.RECEIPT_RUN_NOT_TERMINAL,
+                http_status=status.HTTP_409_CONFLICT,
+                retryable=False,
+            )
+        if not bool(getattr(self._persistence, "receipt_export_v2_available", False)):
+            raise ReceiptExportUnavailable()
+        events = await self._event_store.list_events_after(
+            org_id=org_id,
+            run_id=run_id,
+            after_sequence=0,
+        )
+        try:
+            signer = AuditChainSigner.from_env(
+                environment_env_var=Values.RUNTIME_ENVIRONMENT_ENV_VAR
+            )
+        except RuntimeError as exc:
+            raise ReceiptExportUnavailable() from exc
+        return ReceiptExportV2Builder(signer=signer).build(
+            run_id=run_id,
+            events=events,
+            run_status=run.status,
         )
 
     # ------------------------------------------------------------------

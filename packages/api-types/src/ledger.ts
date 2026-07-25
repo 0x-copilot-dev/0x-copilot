@@ -89,6 +89,49 @@ export const LEDGER_EVENT_TYPES = [
   "gate.resolved.v2",
 ] as const satisfies readonly LedgerEventType[];
 
+/** Canonical artifact ledger events. Consumers import this tuple instead of
+ * redeclaring event values outside the contract mirror. */
+export const ARTIFACT_EVENT_TYPES = [
+  "artifact.created",
+  "artifact.revised",
+  "artifact.promoted",
+  "artifact.presentation_decided",
+] as const satisfies readonly LedgerEventType[];
+
+/** Canonical operation lifecycle events.  Client projections import this
+ * tuple rather than retyping v2.1 wire values. */
+export const OPERATION_EVENT_TYPES = [
+  "operation.requested",
+  "operation.classified",
+  "operation.completed",
+  "operation.failed",
+] as const satisfies readonly LedgerEventType[];
+
+/** Canonical universal-effect lifecycle events. */
+export const EFFECT_EVENT_TYPES = [
+  "effect.staged",
+  "effect.revised",
+  "effect.decision_recorded",
+  "effect.claimed",
+  "effect.applied",
+  "effect.indeterminate",
+  "effect.reconciled",
+] as const satisfies readonly LedgerEventType[];
+
+/** Canonical v2 gate lifecycle events. */
+export const GATE_V2_EVENT_TYPES = [
+  "gate.opened.v2",
+  "gate.resolved.v2",
+] as const satisfies readonly LedgerEventType[];
+
+/** Canonical artifact events that also travel on the Runtime API event stream.
+ * Runtime API contracts import this subset instead of redeclaring SSOT values. */
+export const ARTIFACT_RUNTIME_EVENT_TYPES = [
+  ...ARTIFACT_EVENT_TYPES,
+] as const satisfies readonly LedgerEventType[];
+export type ArtifactRuntimeEventType =
+  (typeof ARTIFACT_RUNTIME_EVENT_TYPES)[number];
+
 // ---------------------------------------------------------------------------
 // Value unions (one per `enums` key in the JSON, values verbatim)
 // ---------------------------------------------------------------------------
@@ -184,6 +227,14 @@ export type EffectExecutorKind =
   | "browser"
   | "sandbox"
   | "builtin";
+export type EffectProposalKind =
+  | "canonical_arguments"
+  | "artifact_revision"
+  | "workspace_change_set"
+  | "row_set"
+  | "browser_submission"
+  | "sandbox_patch"
+  | "builtin_payload";
 export type EffectStageStatus =
   | "staged"
   | "approved"
@@ -527,6 +578,23 @@ export interface EffectStagedPayload {
   proposal_ref: string;
   proposal_digest: string;
   policy: EffectPolicy;
+  capability?: string;
+  op?: string;
+  display_target?: string;
+  proposal_kind?: EffectProposalKind;
+  /** Immutable server-held bytes; never the `proposal://` audit identity. */
+  proposal_content_ref?: string;
+  proposal_media_type?: string;
+  precondition_ref?: string;
+  precondition_digest?: string;
+  effect_class?: EffectClass;
+  policy_snapshot_ref?: string;
+  agent_hold?: boolean;
+  safe_summary_ref?: string;
+  owner_ref?: string;
+  author_actor?: EffectActor;
+  author_ref?: string;
+  created_at?: string;
 }
 
 export interface EffectRevisedPayload {
@@ -535,7 +603,20 @@ export interface EffectRevisedPayload {
   revision: number;
   proposal_ref: string;
   proposal_digest: string;
-  author: ArtifactAuthor;
+  /** Legacy v:1 author field. New writers use `author_actor` and `author_ref`. */
+  author?: ArtifactAuthor;
+  proposal_kind?: EffectProposalKind;
+  proposal_content_ref?: string;
+  proposal_media_type?: string;
+  target_ref?: string;
+  target_digest?: string;
+  display_target?: string;
+  precondition_ref?: string;
+  precondition_digest?: string;
+  safe_diff_ref?: string;
+  author_actor?: EffectActor;
+  author_ref?: string;
+  created_at?: string;
 }
 
 export interface EffectDecisionRecordedPayload {
@@ -546,6 +627,8 @@ export interface EffectDecisionRecordedPayload {
   actor: EffectActor;
   proposal_digest: string;
   target_digest: string;
+  actor_ref?: string;
+  decided_at?: string;
 }
 
 export interface EffectClaimedPayload {
@@ -602,7 +685,14 @@ export interface GateResolvedV2Payload {
 /** Event-type → payload map. The `SurfaceEventV2` definition below references
  * `LedgerEventPayloadMap[K]` for every `K in LedgerEventType`, so a missing key
  * is a compile error — that is the exhaustiveness pin. */
-export interface LedgerEventPayloadMap {
+export interface ArtifactRuntimeEventPayloadMap {
+  "artifact.created": ArtifactCreatedPayload;
+  "artifact.revised": ArtifactRevisedPayload;
+  "artifact.promoted": ArtifactPromotedPayload;
+  "artifact.presentation_decided": ArtifactPresentationDecidedPayload;
+}
+
+export interface LedgerEventPayloadMap extends ArtifactRuntimeEventPayloadMap {
   "gate.opened": GateOpenedPayload;
   "gate.resolved": GateResolvedPayload;
   "action.classified": ActionClassifiedPayload;
@@ -622,9 +712,6 @@ export interface LedgerEventPayloadMap {
   "operation.classified": OperationClassifiedPayload;
   "operation.completed": OperationCompletedPayload;
   "operation.failed": OperationFailedPayload;
-  "artifact.created": ArtifactCreatedPayload;
-  "artifact.revised": ArtifactRevisedPayload;
-  "artifact.promoted": ArtifactPromotedPayload;
   "artifact.presentation_decided": ArtifactPresentationDecidedPayload;
   "effect.staged": EffectStagedPayload;
   "effect.revised": EffectRevisedPayload;
@@ -648,6 +735,53 @@ export type SurfaceEventV2 = {
     payload: LedgerEventPayloadMap[K];
   };
 }[LedgerEventType];
+
+// ---------------------------------------------------------------------------
+// Sources v2 — safe provenance read model.  These are projection outputs, not
+// dereference capabilities: hosts must re-check authorization before opening a
+// ref or virtual workspace target.
+// ---------------------------------------------------------------------------
+
+export type SourceFactKindV2 =
+  | "connector"
+  | "artifact"
+  | "workspace"
+  | "browser"
+  | "sandbox"
+  | "subagent"
+  | "external_receipt";
+
+/** One allowlisted provenance edge from a canonical/compatible ledger row.
+ * Raw arguments, bodies, physical paths, cookies, and provider credentials are
+ * deliberately absent. Untrusted labels remain plain text for the renderer. */
+export interface SourceFactV2 {
+  readonly source_id: string;
+  readonly kind: SourceFactKindV2;
+  readonly sequence_no: number;
+  readonly ledger_id: string | null;
+  readonly connector: string | null;
+  readonly tool: string | null;
+  readonly origin: string | null;
+  readonly artifact_id: string | null;
+  readonly artifact_revision: number | null;
+  /** Opaque logical source identifier, never authorization. */
+  readonly artifact_source_ref: string | null;
+  readonly workspace_grant_label: string | null;
+  /** Keyed virtual-path token; never a host filesystem path. */
+  readonly workspace_virtual_path_key: string | null;
+  readonly browser_origin: string | null;
+  readonly sandbox_operation: string | null;
+  readonly subagent_task: string | null;
+  /** Opaque receipt identifier, never a bearer credential. */
+  readonly external_receipt_ref: string | null;
+}
+
+export interface SourcesProjectionV2 {
+  readonly v: 2;
+  readonly run_id: string;
+  readonly latest_sequence_no: number;
+  readonly facts: readonly SourceFactV2[];
+}
 
 // Compile-time: the payload-map keys are a subset of the event-type union
 // (`SurfaceEventV2` already pins the other direction — every event type must
@@ -746,6 +880,59 @@ export interface OperationDescriptor {
   readonly max_inline_result_bytes: number;
 }
 
+/** Immutable, append-only link from one metered call to an operation output. */
+export type UsageAttributionRelationship =
+  | "produced"
+  | "revised"
+  | "proposed"
+  | "shaped";
+
+export interface UsageAttributionEdge {
+  readonly edge_id: string;
+  readonly usage_record_id: string;
+  readonly operation_id: string;
+  readonly artifact_id?: string;
+  readonly stage_id?: string;
+  readonly surface_id?: string;
+  readonly relationship: UsageAttributionRelationship;
+  readonly created_at: string;
+}
+
+export interface OperationUsageTotals {
+  readonly input_tokens: number;
+  readonly output_tokens: number;
+  readonly total_tokens: number;
+  readonly cost_micro_usd?: number;
+}
+
+export type OperationNodeStatus =
+  | "requested"
+  | "classified"
+  | "succeeded"
+  | "staged"
+  | "blocked"
+  | "cancelled"
+  | "failed";
+
+/** Pure replay projection; clients may rebuild it from ledger events + edges. */
+export interface OperationNode {
+  readonly operation_id: string;
+  readonly parent_operation_id?: string;
+  readonly producer: Producer;
+  readonly capability: string;
+  readonly op: string;
+  readonly status: OperationNodeStatus;
+  readonly started_at: string;
+  readonly completed_at?: string;
+  readonly artifact_ids: readonly string[];
+  readonly stage_ids: readonly string[];
+  readonly usage_totals: OperationUsageTotals;
+}
+
+export interface OperationTree {
+  readonly nodes: readonly OperationNode[];
+}
+
 export interface OperationDisposition {
   readonly operation_id: string;
   readonly outcome: OperationOutcome;
@@ -830,6 +1017,31 @@ export interface EffectDecision {
   readonly ledger_id: string;
 }
 
+/** Request body for the C3 workspace-only canonical effect decision route. */
+export interface WorkspaceApprovalDecisionRequest {
+  readonly revision: number;
+  readonly decision: "approve" | "reject";
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+}
+
+/**
+ * Canonical approval evidence returned by ``/effect-stages/{id}/decisions``.
+ * It is intentionally path-, content-, prepared-ref-, and permit-free so a
+ * desktop host can verify it before minting a local one-use permit.
+ */
+export interface WorkspaceApprovalDecisionReceipt {
+  readonly stage_id: string;
+  readonly revision: number;
+  readonly decision_ledger_id: string;
+  /** Digest of the exact C2 change set, projected from immutable server material. */
+  readonly change_set_digest: string;
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+  readonly decision: "approve" | "reject";
+  readonly status: "approved" | "rejected";
+}
+
 export interface EffectExecutionRequest {
   readonly stage_id: string;
   readonly revision: number;
@@ -837,6 +1049,8 @@ export interface EffectExecutionRequest {
   readonly target_ref: string;
   readonly target_digest: string;
   readonly proposal_ref: string;
+  /** Immutable server-held content; executors must never dereference proposal_ref. */
+  readonly proposal_content_ref: string;
   readonly proposal_digest: string;
   readonly actor: EffectActor;
   readonly decision_ledger_id: string;
@@ -1012,6 +1226,114 @@ export interface RunReceipt {
 }
 
 // ---------------------------------------------------------------------------
+// Receipt v2 — pure accountability projection (PRD-E1 D4).
+//
+// This is deliberately separate from `RunReceipt`, which is the existing
+// receipt surface/export shape. Receipt v2 is an additive read model over the
+// canonical ledger plus its explicitly read-side compatibility events; it does
+// not introduce a route, emit a ledger row, or authorize/ref-dereference data.
+// ---------------------------------------------------------------------------
+
+/** A known run lifecycle status, or `unknown` when a pure ledger fold was not
+ * given the enclosing run's status. */
+export type ReceiptRunStatusV2 =
+  | "unknown"
+  | "queued"
+  | "running"
+  | "waiting_for_approval"
+  | "cancelling"
+  | "cancelled"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "blocked"
+  | "indeterminate";
+
+export interface ReceiptOperationsV2 {
+  readonly requested: number;
+  /** Lifecycle completion rows, including a completed row whose outcome is
+   * failed or blocked; those outcome counters remain visible below. */
+  readonly completed: number;
+  readonly failed: number;
+  readonly blocked: number;
+}
+
+export interface ReceiptArtifactsV2 {
+  readonly created: number;
+  readonly revised: number;
+  readonly promoted: number;
+}
+
+export interface ReceiptReadsV2 {
+  readonly completed: number;
+}
+
+export interface ReceiptEffectsV2 {
+  readonly proposed: number;
+  readonly approved: number;
+  readonly rejected: number;
+  readonly applied: number;
+  readonly partial: number;
+  /** Effects still waiting to settle after the complete prefix. */
+  readonly held: number;
+  /** Observed indeterminate effect outcomes. */
+  readonly indeterminate: number;
+  /** Proposed effects with an explicitly external effect class. */
+  readonly external: number;
+  /** Proposed effects with an explicitly internal effect class. */
+  readonly internal: number;
+  /** Proposed canonical effects without a truthful class. */
+  readonly unclassified: number;
+}
+
+export interface ReceiptGatesV2 {
+  readonly opened: number;
+  readonly resolved: number;
+  readonly pending: number;
+}
+
+/** One ledger-backed usage total. No attribution edge is synthesized here. */
+export interface ReceiptUsageTotalV2 {
+  readonly purpose: UsagePurpose;
+  readonly records: number;
+  readonly tokens_in: number;
+  readonly tokens_out: number;
+}
+
+/** A usage row's ledger identity only; opaque body/edge refs are intentionally
+ * absent until a durable usage-attribution contract supplies them. */
+export interface ReceiptUsageReferenceV2 {
+  readonly ledger_id: string;
+  readonly purpose: UsagePurpose;
+}
+
+export interface ReceiptUsageV2 {
+  readonly totals_by_purpose: readonly ReceiptUsageTotalV2[];
+  readonly references: readonly ReceiptUsageReferenceV2[];
+}
+
+/** A fixed, non-content-bearing warning code with a deterministic count. */
+export interface ReceiptWarningV2 {
+  readonly code: string;
+  readonly count: number;
+}
+
+/** Additive D4 receipt projection. It is safe to fold at any ledger prefix. */
+export interface RunReceiptV2 {
+  readonly run_id: string;
+  readonly status: ReceiptRunStatusV2;
+  readonly generated_at: string;
+  readonly fold_ref: string;
+  readonly operations: ReceiptOperationsV2;
+  readonly artifacts: ReceiptArtifactsV2;
+  readonly reads: ReceiptReadsV2;
+  readonly effects: ReceiptEffectsV2;
+  readonly gates: ReceiptGatesV2;
+  readonly usage: ReceiptUsageV2;
+  readonly unresolved_warnings: readonly ReceiptWarningV2[];
+}
+
+// ---------------------------------------------------------------------------
 // Receipt export (PRD-E3). Served by `GET /v1/agent/runs/{run_id}/receipt/export`
 // — the receipt's first + only wire surface, re-folded from the ledger and
 // HMAC-chained with the shared `packages/audit-chain` signer so flipping one
@@ -1052,6 +1374,46 @@ export interface ReceiptExportBundle {
   rows: readonly ReceiptExportRow[];
   /** Hex of the last (synthetic) row's signature. */
   head_hash: string;
+}
+
+// ---------------------------------------------------------------------------
+// Receipt export v2 (PRD-E1 D7). Served by
+// `GET /v1/agent/runs/{run_id}/receipt/export-v2`. Unlike the legacy export,
+// these rows carry only a payload digest plus a narrow safe projection; raw
+// bodies, physical paths, opaque refs, cookies, tokens, and arguments are not
+// part of the public bundle.
+// ---------------------------------------------------------------------------
+
+export type ReceiptExportRefClassV2 =
+  | "none"
+  | "opaque_reference"
+  | "private_body_omitted";
+
+export interface ReceiptExportV2Row {
+  readonly sequence_no: number;
+  readonly event_type: LedgerEventType | "receipt.v2";
+  readonly created_at: string;
+  /** SHA-256 over the original canonical payload; the payload itself is absent. */
+  readonly payload_digest: string;
+  /** Narrow fold facts, or the terminal `RunReceiptV2` for `receipt.v2`. */
+  readonly safe_payload: RunReceiptV2 | Readonly<Record<string, unknown>>;
+  readonly ref_class: ReceiptExportRefClassV2;
+  readonly prev_hash: string | null;
+  readonly signature: string;
+  readonly key_id: string;
+  readonly key_version: number;
+}
+
+export interface ReceiptExportV2 {
+  readonly bundle_version: 2;
+  readonly run_id: string;
+  readonly generated_at: string;
+  readonly key_id: string;
+  readonly rows: readonly ReceiptExportV2Row[];
+  readonly row_count: number;
+  /** SHA-256 of the terminal `RunReceiptV2` safe payload. */
+  readonly receipt_digest: string;
+  readonly head_hash: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1309,7 +1671,8 @@ function _isV21PayloadForWrite(
       return (
         parsed !== null &&
         parsed.stage_id === value.stage_id &&
-        parsed.revision === 1
+        parsed.revision === 1 &&
+        _validEffectStageMetadata(value)
       );
     }
     case "effect.revised": {
@@ -1319,7 +1682,8 @@ function _isV21PayloadForWrite(
       return (
         parsed !== null &&
         parsed.stage_id === value.stage_id &&
-        parsed.revision === value.revision
+        parsed.revision === value.revision &&
+        _validEffectRevisionMetadata(value)
       );
     }
     case "effect.decision_recorded":
@@ -1327,7 +1691,9 @@ function _isV21PayloadForWrite(
         stageId() &&
         revision() &&
         _isSha256(value.proposal_digest) &&
-        _isSha256(value.target_digest)
+        _isSha256(value.target_digest) &&
+        _optionalSafeOpaqueUriReference(value, "actor_ref") &&
+        _optionalBoundedString(value, "decided_at", 1, 128)
       );
     case "effect.claimed":
       return (
@@ -1413,6 +1779,15 @@ function _optionalNonEmptyString(
   return !(key in value) || _isNonEmptyString(value[key]);
 }
 
+function _optionalBoundedString(
+  value: Record<string, unknown>,
+  key: string,
+  minLength: number,
+  maxLength: number,
+): boolean {
+  return !(key in value) || _isBoundedString(value[key], minLength, maxLength);
+}
+
 function _isBoundedString(
   value: unknown,
   minLength: number,
@@ -1481,6 +1856,137 @@ function _isTargetReference(value: unknown): value is string {
     _isNonPhysicalReference(value) &&
     value.includes("://") &&
     !value.split("/").some((part) => part === "." || part === "..")
+  );
+}
+
+function _isSafeOpaqueUriReference(
+  value: unknown,
+  options: { forbidProposalScheme?: boolean; forbidWebScheme?: boolean } = {},
+): value is string {
+  if (!_isNonPhysicalReference(value) || !value.includes("://")) return false;
+  let decoded = value;
+  try {
+    while (true) {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+    }
+  } catch {
+    return false;
+  }
+  const normalised = decoded.replaceAll("\\", "/");
+  const lower = normalised.toLowerCase();
+  const scheme = normalised.slice(0, normalised.indexOf("://")).toLowerCase();
+  if (
+    !scheme ||
+    lower.startsWith("file://") ||
+    lower.startsWith("filesystem://") ||
+    lower.startsWith("data:") ||
+    (options.forbidProposalScheme === true && scheme === "proposal") ||
+    (options.forbidWebScheme === true &&
+      (scheme === "http" || scheme === "https")) ||
+    normalised.includes("\u0000") ||
+    normalised.includes("?") ||
+    normalised.includes("#") ||
+    normalised.split("/").some((part) => part === "." || part === "..")
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function _optionalSafeOpaqueUriReference(
+  value: Record<string, unknown>,
+  key: string,
+  options?: { forbidProposalScheme?: boolean; forbidWebScheme?: boolean },
+): boolean {
+  return !(key in value) || _isSafeOpaqueUriReference(value[key], options);
+}
+
+function _optionalSha256WithRef(
+  value: Record<string, unknown>,
+  refKey: string,
+  digestKey: string,
+): boolean {
+  return (
+    (!(refKey in value) && !(digestKey in value)) ||
+    (typeof value[refKey] === "string" && _isSha256(value[digestKey]))
+  );
+}
+
+const _EFFECT_PROPOSAL_KINDS = new Set<EffectProposalKind>([
+  "canonical_arguments",
+  "artifact_revision",
+  "workspace_change_set",
+  "row_set",
+  "browser_submission",
+  "sandbox_patch",
+  "builtin_payload",
+]);
+const _EFFECT_CLASSES = new Set<EffectClass>([
+  "none",
+  "internal_reversible",
+  "external_reversible",
+  "external_destructive",
+  "unknown",
+]);
+const _EFFECT_ACTORS = new Set<EffectActor>(["user", "policy", "system"]);
+const _ARTIFACT_AUTHORS = new Set<ArtifactAuthor>([
+  "model",
+  "subagent",
+  "user",
+  "system",
+  "import",
+]);
+
+function _validEffectStageMetadata(value: Record<string, unknown>): boolean {
+  return (
+    _optionalBoundedString(value, "capability", 1, 128) &&
+    _optionalBoundedString(value, "op", 1, 128) &&
+    _optionalBoundedString(value, "display_target", 1, 512) &&
+    (!("proposal_kind" in value) ||
+      _EFFECT_PROPOSAL_KINDS.has(value.proposal_kind as EffectProposalKind)) &&
+    _optionalSafeOpaqueUriReference(value, "proposal_content_ref", {
+      forbidProposalScheme: true,
+      forbidWebScheme: true,
+    }) &&
+    _optionalBoundedString(value, "proposal_media_type", 3, 255) &&
+    _optionalSafeOpaqueUriReference(value, "precondition_ref") &&
+    _optionalSha256WithRef(value, "precondition_ref", "precondition_digest") &&
+    (!("effect_class" in value) ||
+      _EFFECT_CLASSES.has(value.effect_class as EffectClass)) &&
+    _optionalSafeOpaqueUriReference(value, "policy_snapshot_ref") &&
+    (!("agent_hold" in value) || typeof value.agent_hold === "boolean") &&
+    _optionalSafeOpaqueUriReference(value, "safe_summary_ref") &&
+    _optionalSafeOpaqueUriReference(value, "owner_ref") &&
+    (!("author_actor" in value) ||
+      _EFFECT_ACTORS.has(value.author_actor as EffectActor)) &&
+    _optionalSafeOpaqueUriReference(value, "author_ref") &&
+    _optionalBoundedString(value, "created_at", 1, 128)
+  );
+}
+
+function _validEffectRevisionMetadata(value: Record<string, unknown>): boolean {
+  return (
+    (!("author" in value) ||
+      _ARTIFACT_AUTHORS.has(value.author as ArtifactAuthor)) &&
+    (!("proposal_kind" in value) ||
+      _EFFECT_PROPOSAL_KINDS.has(value.proposal_kind as EffectProposalKind)) &&
+    _optionalSafeOpaqueUriReference(value, "proposal_content_ref", {
+      forbidProposalScheme: true,
+      forbidWebScheme: true,
+    }) &&
+    _optionalBoundedString(value, "proposal_media_type", 3, 255) &&
+    _optionalSafeOpaqueUriReference(value, "target_ref") &&
+    _optionalSha256WithRef(value, "target_ref", "target_digest") &&
+    _optionalBoundedString(value, "display_target", 1, 512) &&
+    _optionalSafeOpaqueUriReference(value, "precondition_ref") &&
+    _optionalSha256WithRef(value, "precondition_ref", "precondition_digest") &&
+    _optionalSafeOpaqueUriReference(value, "safe_diff_ref") &&
+    (!("author_actor" in value) ||
+      _EFFECT_ACTORS.has(value.author_actor as EffectActor)) &&
+    _optionalSafeOpaqueUriReference(value, "author_ref") &&
+    _optionalBoundedString(value, "created_at", 1, 128)
   );
 }
 
@@ -2243,4 +2749,144 @@ export function isPendingWorkResponse(x: unknown): x is PendingWorkResponse {
   if (typeof x !== "object" || x === null) return false;
   const r = x as Record<string, unknown>;
   return r.v === 1 && Array.isArray(r.items) && Array.isArray(r.agents);
+}
+
+// ---------------------------------------------------------------------------
+// Pending work v2.1 (E1 D6) — canonical effects/gates only.  This remains a
+// separate additive endpoint during migration: unlike the legacy queue above,
+// it exposes no title, conversation, target, path, reason, ref, or body.
+// ---------------------------------------------------------------------------
+
+/** Canonical subject kinds the v2.1 ledger can leave pending. */
+export type PendingWorkSubjectKindV2 = "effect" | "gate";
+
+/** Safe state of an unresolved canonical subject. */
+export type PendingWorkStatusV2 =
+  | "open"
+  | "held"
+  | "queued"
+  | "approved"
+  | "claimed"
+  | "indeterminate"
+  | "recovery";
+
+/** One safe, run-addressable pending subject. */
+export interface PendingWorkItemV2 {
+  run_id: string;
+  subject_kind: PendingWorkSubjectKindV2;
+  subject_id: string;
+  status: PendingWorkStatusV2;
+  opened_sequence_no: number;
+  latest_sequence_no: number;
+}
+
+/** An authorised candidate run that was omitted rather than partially folded. */
+export interface PendingWorkV2RunWarning {
+  run_id: string;
+  status: "omitted";
+}
+
+/**
+ * `GET /v1/agent/pending-work-v2` — a run-keyset page of canonical pending
+ * work. `next_cursor` is opaque and never an authorisation grant; the server
+ * re-applies the verified identity to every page.
+ */
+export interface PendingWorkV2Response {
+  v: 2;
+  items: readonly PendingWorkItemV2[];
+  warnings: readonly PendingWorkV2RunWarning[];
+  next_cursor: string | null;
+  has_more: boolean;
+}
+
+const _PENDING_WORK_V2_SUBJECT_KINDS = new Set<PendingWorkSubjectKindV2>([
+  "effect",
+  "gate",
+]);
+const _PENDING_WORK_V2_STATUSES = new Set<PendingWorkStatusV2>([
+  "open",
+  "held",
+  "queued",
+  "approved",
+  "claimed",
+  "indeterminate",
+  "recovery",
+]);
+const _PENDING_WORK_V2_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,255}$/;
+const _PENDING_WORK_V2_SUBJECT_ID =
+  /^(?!file:)[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/i;
+
+function _hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+): boolean {
+  const allowed = new Set(keys);
+  return Object.keys(value).every((key) => allowed.has(key));
+}
+
+function _isPendingWorkItemV2(value: unknown): value is PendingWorkItemV2 {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const item = value as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(item, [
+      "run_id",
+      "subject_kind",
+      "subject_id",
+      "status",
+      "opened_sequence_no",
+      "latest_sequence_no",
+    ]) &&
+    typeof item.run_id === "string" &&
+    _PENDING_WORK_V2_RUN_ID.test(item.run_id) &&
+    typeof item.subject_id === "string" &&
+    _PENDING_WORK_V2_SUBJECT_ID.test(item.subject_id) &&
+    _PENDING_WORK_V2_SUBJECT_KINDS.has(
+      item.subject_kind as PendingWorkSubjectKindV2,
+    ) &&
+    _PENDING_WORK_V2_STATUSES.has(item.status as PendingWorkStatusV2) &&
+    _isPositiveSafeInteger(item.opened_sequence_no) &&
+    _isPositiveSafeInteger(item.latest_sequence_no)
+  );
+}
+
+function _isPendingWorkV2RunWarning(
+  value: unknown,
+): value is PendingWorkV2RunWarning {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const warning = value as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(warning, ["run_id", "status"]) &&
+    typeof warning.run_id === "string" &&
+    _PENDING_WORK_V2_RUN_ID.test(warning.run_id) &&
+    warning.status === "omitted"
+  );
+}
+
+/** Strict boundary guard: reject extra user-facing data, not merely a bad v. */
+export function isPendingWorkV2Response(
+  value: unknown,
+): value is PendingWorkV2Response {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const response = value as Record<string, unknown>;
+  return (
+    _hasOnlyKeys(response, [
+      "v",
+      "items",
+      "warnings",
+      "next_cursor",
+      "has_more",
+    ]) &&
+    response.v === 2 &&
+    Array.isArray(response.items) &&
+    response.items.every(_isPendingWorkItemV2) &&
+    Array.isArray(response.warnings) &&
+    response.warnings.every(_isPendingWorkV2RunWarning) &&
+    (response.next_cursor === null ||
+      (typeof response.next_cursor === "string" &&
+        response.next_cursor.length <= 512)) &&
+    typeof response.has_more === "boolean"
+  );
 }

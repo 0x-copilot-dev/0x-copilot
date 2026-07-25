@@ -15,6 +15,9 @@
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
+const {
+  signAndVerifyMacAppBundle,
+} = require("../../../tools/desktop-runtime/macos-signing.cjs");
 
 // Mach-O + fat-binary magic numbers (first 4 bytes, either endianness).
 const MACH_O_MAGIC = new Set([
@@ -38,7 +41,7 @@ function isMachO(file) {
   }
 }
 
-function walkFiles(dir, out) {
+function walkFiles(dir, out, appBundles) {
   let entries;
   try {
     entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -48,7 +51,12 @@ function walkFiles(dir, out) {
   for (const entry of entries) {
     const full = path.join(dir, entry.name);
     if (entry.isSymbolicLink()) continue; // sign real files, not symlinks
-    if (entry.isDirectory()) walkFiles(full, out);
+    if (entry.isDirectory() && entry.name.endsWith(".app")) {
+      // Sign Chromium as one nested code-sealed unit. The shared helper
+      // recursively signs helpers/frameworks, preserves their metadata, and
+      // requires a successful strict/deep verification before returning.
+      appBundles.push(full);
+    } else if (entry.isDirectory()) walkFiles(full, out, appBundles);
     else if (entry.isFile()) out.push(full);
   }
 }
@@ -97,16 +105,32 @@ exports.default = async function signNested(context) {
   }
 
   const files = [];
-  walkFiles(runtimeDir, files);
+  const appBundles = [];
+  walkFiles(runtimeDir, files, appBundles);
   const machO = files.filter(isMachO);
-  if (machO.length === 0) {
+  if (machO.length === 0 && appBundles.length === 0) {
     console.log("[sign-nested] no Mach-O binaries found under runtime/.");
     return;
   }
 
-  console.log(
-    `[sign-nested] signing ${machO.length} nested Mach-O binaries with "${identity}"…`,
-  );
+  for (const bundle of appBundles) {
+    signAndVerifyMacAppBundle(bundle, {
+      hardenedRuntime: true,
+      identity,
+      timestamp: true,
+    });
+  }
+  if (appBundles.length > 0) {
+    console.log(
+      `[sign-nested] re-signed and strictly verified ${appBundles.length} nested browser app bundle(s).`,
+    );
+  }
+
+  if (machO.length > 0) {
+    console.log(
+      `[sign-nested] signing ${machO.length} nested Mach-O binaries with "${identity}"…`,
+    );
+  }
   const baseArgs = [
     "--force",
     "--options",

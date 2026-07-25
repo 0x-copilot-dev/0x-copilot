@@ -10,6 +10,7 @@ from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
+from agent_runtime.api.artifact_repository import ArtifactServiceComposition
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.loop import RuntimeWorker
 from agent_runtime.observability.db_statement_metrics import (
@@ -92,6 +93,9 @@ class RuntimeWorkerEntrypoint:
                 citation_store=async_ports.citation_store,
                 mcp_discovery_cache=mcp_discovery_cache,
                 user_policies_resolver=user_policies_resolver,
+                artifact_service=ArtifactServiceComposition.build(async_ports),
+                artifact_blob_store=async_ports.artifact_blob_store,
+                artifact_reference_store=async_ports.artifact_reference_provider,
             )
             logger.info(
                 "worker_started",
@@ -116,7 +120,8 @@ class RuntimeWorkerEntrypoint:
                 RetentionSweeperLoopEnv.ENABLED, default=False
             ):
                 retention_loop = RetentionSweeperLoop(
-                    persistence=async_ports.persistence
+                    persistence=async_ports.persistence,
+                    artifact_effects_v2=async_ports.artifact_effects_v2,
                 )
                 await retention_loop.start()
                 logger.info(

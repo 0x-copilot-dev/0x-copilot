@@ -11,6 +11,11 @@ export type {
 export { UnauthorizedError } from "./Transport";
 
 export type { ArtifactRoute, NavigateOptions, Router } from "./Router";
+export {
+  createArtifactPromotionPort,
+  type ArtifactPromotionPort,
+  type PromoteArtifactInput,
+} from "./ArtifactPromotionPort";
 export type { KeyValueStore } from "./KeyValueStore";
 export type { PresenceSignal, PresenceState } from "./PresenceSignal";
 export type { SurfaceEvent, SurfaceHandle, SurfaceHost } from "./SurfaceHost";

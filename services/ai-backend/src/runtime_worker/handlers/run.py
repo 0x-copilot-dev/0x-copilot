@@ -63,8 +63,39 @@ from agent_runtime.capabilities.mcp.annotations import (
     McpToolAnnotations,
     McpToolAnnotationsRegistry,
 )
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    OperationEventEmitterAdapter,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationGateResolver,
+    McpOperationGatewayContext,
+    McpOperationGatewayServices,
+)
+from agent_runtime.capabilities.operations.classifier import OperationClassifier
+from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
+from agent_runtime.effects.executor import EffectExecutionScope
+from agent_runtime.effects.staging import EffectStager
+from agent_runtime.api.effect_commit_queue import RuntimeEffectCommitOutbox
+from agent_runtime.api.effect_ledger import RuntimeEffectLedger
+from agent_runtime.surfaces_v2.ledger_models import EffectActor
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from runtime_worker.browser_operation_storage import (
+    RuntimeBrowserActionPlanStore,
+)
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    ArtifactContentPartPublisher,
+    PublishArtifactTool,
+)
 from agent_runtime.capabilities.mcp.descriptor_registry import (
     McpDisplayRegistryContext,
+)
+from agent_runtime.capabilities.tools.tool_use_enforcement import (
+    ToolUsePolicyResolver,
 )
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.persistence.ports import (
@@ -114,6 +145,10 @@ from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
+from runtime_worker.mcp_operation_storage import (
+    RuntimeMcpOperationArgumentStore,
+    RuntimeMcpOperationResultStore,
+)
 from agent_runtime.context.memory.subagent_trace import SubagentArtifactsBackend
 from runtime_worker.tool_observations import (
     PriorToolResultLoader,
@@ -191,6 +226,11 @@ class RuntimeRunHandler:
         user_policies_resolver: UserPoliciesResolver | None = None,
         token_counter: TokenCounterPort | None = None,
         queue: object | None = None,
+        artifact_service: object | None = None,
+        artifact_blob_store: object | None = None,
+        artifact_reference_store: object | None = None,
+        workspace_host_sessions: object | None = None,
+        workspace_overlay_store: object | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -199,6 +239,13 @@ class RuntimeRunHandler:
         # (FR-C8). ``None`` (unwired / minimal test handler) ⇒ the stager's
         # ``commit_queue`` is ``None`` and nothing auto-applies.
         self._queue = queue
+        # B1 publication uses the A2-composed service directly through the
+        # OperationContext. ``None`` on the dark path keeps the tool absent.
+        self.artifact_service = artifact_service
+        self._artifact_blob_store = artifact_blob_store
+        self._artifact_reference_store = artifact_reference_store
+        self._workspace_host_sessions = workspace_host_sessions
+        self._workspace_overlay_store = workspace_overlay_store
         self.settings = settings or RuntimeSettings.load()
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
@@ -359,6 +406,8 @@ class RuntimeRunHandler:
             if work_ledger_emitter is not None
             else None
         )
+        operation_context_token: object | None = None
+        mcp_operation_gateway_token: object | None = None
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -397,13 +446,43 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         try:
+            mcp_gateway_services = self._build_mcp_operation_gateway_services(run)
+            if self._operation_context_required():
+                operation_context_token = OperationContext.bind_for_run(
+                    identity=VerifiedOperationIdentity(
+                        org_id=run.org_id,
+                        user_id=run.user_id,
+                        conversation_id=run.conversation_id,
+                        run_id=run.run_id,
+                    ),
+                    policy_snapshot=ToolUsePolicyResolver.resolve(
+                        command.runtime_context
+                    ),
+                    ledger_emitter=self._build_operation_ledger_emitter(run),
+                    artifact_service=(
+                        self.artifact_service
+                        if self._artifact_publication_enabled()
+                        else None
+                    ),
+                    mode=self._effective_operation_gateway_mode(mcp_gateway_services),
+                    canonical_arguments_durable=mcp_gateway_services is not None,
+                )
+            if mcp_gateway_services is not None:
+                mcp_operation_gateway_token = McpOperationGatewayContext.bind_for_run(
+                    mcp_gateway_services
+                )
             tool_observation_index = await self._tool_observation_index(command, run)
-            workspace_backend = await self._workspace_backend_for_run(command)
+            workspace_backend = await self._workspace_backend_for_run(
+                command,
+                run=run,
+                mcp_gateway_services=mcp_gateway_services,
+            )
             dependencies = self._dependencies_for_run(
                 command,
                 tool_observation_index,
                 workspace_backend=workspace_backend,
                 run=run,
+                mcp_gateway_services=mcp_gateway_services,
             )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry
@@ -460,6 +539,7 @@ class RuntimeRunHandler:
                     value=result,
                 ):
                     result = {self._Fields.ACTION_REQUIRED: True}
+            await self._process_model_artifact_content(result)
             if self._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -593,6 +673,10 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if mcp_operation_gateway_token is not None:
+                McpOperationGatewayContext.unbind(mcp_operation_gateway_token)  # type: ignore[arg-type]
+            if operation_context_token is not None:
+                OperationContext.unbind(operation_context_token)  # type: ignore[arg-type]
             if work_ledger_emitter_token is not None:
                 WorkLedgerEmitter.unbind(work_ledger_emitter_token)
             if surface_scheduler_token is not None:
@@ -1025,7 +1109,11 @@ class RuntimeRunHandler:
         )
 
     async def _workspace_backend_for_run(
-        self, command: RuntimeRunCommand
+        self,
+        command: RuntimeRunCommand,
+        *,
+        run: RunRecord,
+        mcp_gateway_services: McpOperationGatewayServices | None,
     ) -> object | None:
         """Construct the per-run ``/workspace/`` backend, or ``None``.
 
@@ -1042,6 +1130,15 @@ class RuntimeRunHandler:
         are ``None`` off the file backend, so the write path stays inert.
         """
 
+        if (
+            self.settings.execution.workspace_effect_mode
+            is OperationGatewayMode.ENFORCE
+        ):
+            return await self._workspace_effect_backend_for_run(
+                run=run,
+                mcp_gateway_services=mcp_gateway_services,
+            )
+
         file_store = self._file_store_wiring().file_store()
         snapshot_store = (
             getattr(file_store, "object_store", None)
@@ -1057,6 +1154,100 @@ class RuntimeRunHandler:
             snapshot_store=snapshot_store,
             snapshot_emitter=snapshot_emitter,
         ).workspace_backend()
+
+    async def _workspace_effect_backend_for_run(
+        self,
+        *,
+        run: RunRecord,
+        mcp_gateway_services: McpOperationGatewayServices | None,
+    ) -> object:
+        """Build C3's only enforced workspace path or a fail-closed tombstone."""
+
+        from agent_runtime.capabilities.operations.gateway import (  # noqa: PLC0415
+            OperationGateway,
+        )
+        from agent_runtime.capabilities.workspace.deep_backend import (  # noqa: PLC0415
+            WorkspaceGatewayBackend,
+            WorkspaceTombstoneBackend,
+        )
+        from agent_runtime.capabilities.workspace.effects import (  # noqa: PLC0415
+            WorkspaceGatewayServices,
+            WorkspaceGrantGate,
+            WorkspaceOperationAdapter,
+        )
+        from agent_runtime.capabilities.workspace.merged_backend import (  # noqa: PLC0415
+            MergedWorkspaceBackend,
+        )
+        from agent_runtime.capabilities.workspace.overlay import (  # noqa: PLC0415
+            WorkspaceOverlayService,
+        )
+        from runtime_worker.workspace_effect_storage import (  # noqa: PLC0415
+            RuntimeWorkspaceProposalStore,
+        )
+
+        if (
+            mcp_gateway_services is None
+            or self._workspace_host_sessions is None
+            or self._workspace_overlay_store is None
+            or self._artifact_blob_store is None
+            or self._artifact_reference_store is None
+        ):
+            return WorkspaceTombstoneBackend()
+        scope = EffectExecutionScope(
+            org_id=run.org_id,
+            user_id=run.user_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            owner_ref=f"principal://users/{run.user_id}",
+        )
+        from runtime_worker.workspace_effect_storage import (  # noqa: PLC0415
+            resolve_workspace_host_session,
+        )
+
+        session = await resolve_workspace_host_session(
+            self._workspace_host_sessions,
+            scope,
+        )
+        if session is None or session.base_read is None:
+            return WorkspaceTombstoneBackend()
+        overlay = WorkspaceOverlayService(
+            run_id=run.run_id,
+            base_read=session.base_read,
+            overlay_store=self._workspace_overlay_store,
+            blob_store=self._artifact_blob_store,
+        )
+        merged = MergedWorkspaceBackend(
+            run_id=run.run_id,
+            base_read=session.base_read,
+            overlay_store=self._workspace_overlay_store,
+            blob_store=self._artifact_blob_store,
+            overlay_service=overlay,
+        )
+        gate = WorkspaceGrantGate(grants=session.grants)
+        gateway = OperationGateway(
+            descriptors=DEFAULT_OPERATION_DESCRIPTORS,
+            classifier=mcp_gateway_services.classifier,
+            gates=gate,
+        )
+        services = WorkspaceGatewayServices(
+            merged=merged,
+            overlay=overlay,
+            stager=mcp_gateway_services.stager,
+            scope=mcp_gateway_services.stage_scope,
+            actor=mcp_gateway_services.stage_author,
+            proposals=RuntimeWorkspaceProposalStore(
+                blobs=self._artifact_blob_store,
+                references=self._artifact_reference_store,
+                scope=scope,
+            ),
+            grants=session.grants,
+        )
+        return WorkspaceGatewayBackend(
+            merged=merged,
+            gateway=gateway,
+            adapter=WorkspaceOperationAdapter(services=services),
+            grants=session.grants,
+        )
 
     def _workspace_snapshot_emitter(self, command: RuntimeRunCommand) -> object:
         """Build the emitter the workspace backend records pre-image references through."""
@@ -1078,6 +1269,7 @@ class RuntimeRunHandler:
         *,
         workspace_backend: object | None = None,
         run: object | None = None,
+        mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts, workspace)."""
         dependencies = self.dependencies_factory(command.runtime_context)
@@ -1098,21 +1290,15 @@ class RuntimeRunHandler:
         )
         if large_tool_results_backend is not None:
             update["large_tool_results_backend"] = large_tool_results_backend
-        if self.draft_store is not None:
-            # Tenant identity is bound at construction so the model cannot inject
-            # org_id via path strings when writing to /drafts/<uuid>.md.
-            from agent_runtime.capabilities.backends import (  # noqa: PLC0415 — break import cycle
-                DraftBackend,
-            )
-
-            update["drafts_backend"] = DraftBackend(
-                store=self.draft_store,
-                org_id=command.org_id,
-                conversation_id=command.conversation_id,
-                run_id=command.run_id,
-                user_id=command.runtime_context.user_id,
-                emit_event=self._draft_event_emitter(command),
-            )
+        drafts_backend = self._drafts_backend(
+            org_id=command.org_id,
+            conversation_id=command.conversation_id,
+            run_id=command.run_id,
+            user_id=command.runtime_context.user_id,
+            emit_event=self._draft_event_emitter(command),
+        )
+        if drafts_backend is not None:
+            update["drafts_backend"] = drafts_backend
         if tool_observation_index.has_observations:
             update["prior_tool_result_loader"] = PriorToolResultLoader(
                 tool_observation_index
@@ -1138,13 +1324,191 @@ class RuntimeRunHandler:
         # PRD-D3 — the gated bulk row-set staging tool. Built only when SURFACES_V2
         # is on (mirroring the A3 emitter gate); `None` otherwise, so the model's
         # tool surface is byte-identical with the flag off.
-        stage_rowset_tool = self._stage_rowset_write_tool(command, run)
+        stage_rowset_tool = self._stage_rowset_write_tool(
+            command,
+            run,
+            mcp_gateway_services=mcp_gateway_services,
+        )
         if stage_rowset_tool is not None:
             update["stage_rowset_write_tool"] = stage_rowset_tool
+        publish_artifact_tool = self._publish_artifact_tool()
+        if publish_artifact_tool is not None:
+            update["publish_artifact_tool"] = publish_artifact_tool
         return dependencies.model_copy(update=update)
 
+    def _artifact_publication_enabled(self) -> bool:
+        return bool(
+            self.settings.execution.artifact_effects_v2
+            and self.artifact_service is not None
+        )
+
+    def _artifact_drafts_enabled(self) -> bool:
+        return bool(
+            self._artifact_publication_enabled()
+            and self.settings.execution.artifact_drafts_v2
+        )
+
+    def _drafts_backend(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str,
+        user_id: str,
+        emit_event: Callable[[object], Awaitable[None]],
+    ) -> object | None:
+        """Select one writable draft authority for this run.
+
+        The artifact path deliberately wins only behind the explicit B1 flag.
+        Its legacy store parameter is read-through migration only; it never
+        writes a ``runtime_drafts`` row.  The old backend remains byte-for-byte
+        available while the flag is off.
+        """
+
+        from agent_runtime.capabilities.backends import (  # noqa: PLC0415
+            ArtifactDraftBackend,
+            DraftBackend,
+        )
+
+        if self._artifact_drafts_enabled():
+            return ArtifactDraftBackend(
+                artifacts=self.artifact_service,
+                org_id=org_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                user_id=user_id,
+                legacy_store=self.draft_store,
+            )
+        if self.draft_store is None:
+            return None
+        return DraftBackend(
+            store=self.draft_store,
+            org_id=org_id,
+            conversation_id=conversation_id,
+            run_id=run_id,
+            user_id=user_id,
+            emit_event=emit_event,
+        )
+
+    def _operation_context_required(self) -> bool:
+        return bool(
+            self._artifact_publication_enabled()
+            or self.settings.execution.operation_gateway_mode
+            is not OperationGatewayMode.OFF
+        )
+
+    def _effective_operation_gateway_mode(
+        self, services: McpOperationGatewayServices | None
+    ) -> OperationGatewayMode:
+        """Keep an incomplete rollout on the established path, never half-enforced."""
+
+        configured = self.settings.execution.operation_gateway_mode
+        if configured is OperationGatewayMode.ENFORCE and services is None:
+            logging.getLogger(__name__).warning(
+                "mcp_operation_gateway_unavailable_falling_back",
+                extra={"reason": "durable D1 dependencies are incomplete"},
+            )
+            return OperationGatewayMode.OFF
+        return configured
+
+    def _build_mcp_operation_gateway_services(
+        self, run: RunRecord
+    ) -> McpOperationGatewayServices | None:
+        """Compose D1's only model-facing MCP authority for an enforced run.
+
+        All dependencies are deliberately required together.  In particular a
+        missing blob/reference store never degrades to an in-memory argument
+        cache: the legacy path remains selected until the cohort is complete.
+        """
+
+        if (
+            not self.settings.execution.surfaces_v2
+            or self.settings.execution.operation_gateway_mode
+            is not OperationGatewayMode.ENFORCE
+            or self._queue is None
+            or self._artifact_blob_store is None
+            or self._artifact_reference_store is None
+        ):
+            return None
+        enqueue = getattr(self._queue, "enqueue_effect_commit", None)
+        put_stream = getattr(self._artifact_blob_store, "put_stream", None)
+        acquire = getattr(self._artifact_reference_store, "acquire", None)
+        list_edges = getattr(self._artifact_reference_store, "list_edges", None)
+        if not all(
+            callable(value) for value in (enqueue, put_stream, acquire, list_edges)
+        ):
+            return None
+        owner_ref = f"principal://users/{run.user_id}"
+        scope = EffectExecutionScope(
+            org_id=run.org_id,
+            user_id=run.user_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            owner_ref=owner_ref,
+        )
+        descriptors = DEFAULT_OPERATION_DESCRIPTORS
+        classifier = OperationClassifier(descriptors=descriptors)
+        browser_plans = RuntimeBrowserActionPlanStore(
+            blobs=self._artifact_blob_store,  # type: ignore[arg-type]
+            references=self._artifact_reference_store,  # type: ignore[arg-type]
+            org_id=run.org_id,
+            user_id=run.user_id,
+        )
+        return McpOperationGatewayServices(
+            gateway=OperationGateway(
+                descriptors=descriptors,
+                classifier=classifier,
+                gates=McpOperationGateResolver(),
+            ),
+            descriptors=descriptors,
+            classifier=classifier,
+            stager=EffectStager(
+                ledger=RuntimeEffectLedger(
+                    event_producer=self.event_producer,
+                    run=run,
+                    owner_ref=owner_ref,
+                ),
+                outbox=RuntimeEffectCommitOutbox(queue=self._queue, scope=scope),  # type: ignore[arg-type]
+            ),
+            stage_scope=EffectStageScope(run_id=run.run_id, owner_ref=owner_ref),
+            stage_author=EffectActorIdentity(
+                actor=EffectActor.SYSTEM,
+                principal_ref="principal://system/mcp-operation-gateway",
+            ),
+            result_store=RuntimeMcpOperationResultStore(
+                event_producer=self.event_producer,
+                run=run,
+            ),
+            argument_store=RuntimeMcpOperationArgumentStore(
+                blobs=self._artifact_blob_store,  # type: ignore[arg-type]
+                references=self._artifact_reference_store,  # type: ignore[arg-type]
+                org_id=run.org_id,
+                user_id=run.user_id,
+            ),
+            browser_plans=browser_plans,
+        )
+
+    def _publish_artifact_tool(self) -> PublishArtifactTool | None:
+        if not self._artifact_publication_enabled():
+            return None
+        return PublishArtifactTool(
+            gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+        )
+
+    async def _process_model_artifact_content(self, result: object) -> None:
+        """Use B1's normalized publication path, or preserve A3 observation."""
+
+        if self._artifact_publication_enabled():
+            await ArtifactContentPartPublisher().publish(result)
+            return
+        await OperationShadowProbe.observe_model_result(result)
+
     def _stage_rowset_write_tool(
-        self, command: RuntimeRunCommand, run: object | None
+        self,
+        command: RuntimeRunCommand,
+        run: object | None,
+        *,
+        mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> object | None:
         """Build the per-run ``stage_rowset_write`` tool, or ``None`` (flag off).
 
@@ -1164,9 +1528,6 @@ class RuntimeRunHandler:
             ConnectorWritePolicyOverrides,
             EffectiveActionPolicyResolver,
         )
-        from agent_runtime.capabilities.tools.tool_use_enforcement import (  # noqa: PLC0415
-            ToolUsePolicyResolver,
-        )
         from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (  # noqa: PLC0415
             StageRowsetWriteTool,
         )
@@ -1174,13 +1535,30 @@ class RuntimeRunHandler:
             RowsetPolicyResolver,
         )
         from agent_runtime.surfaces_v2.staging import WriteStager  # noqa: PLC0415
+        from runtime_worker.rowset_effect_staging import (  # noqa: PLC0415
+            RuntimeRowSetEffectProposalPort,
+        )
 
         rc = command.runtime_context
+        overrides = ConnectorWritePolicyOverrides.from_user_policies(
+            rc.user_policies_json
+        )
+        if mcp_gateway_services is not None:
+            return StageRowsetWriteTool(
+                proposal_stager=RuntimeRowSetEffectProposalPort(
+                    stager=mcp_gateway_services.stager,
+                    scope=mcp_gateway_services.stage_scope,
+                    actor=mcp_gateway_services.stage_author,
+                    argument_store=mcp_gateway_services.argument_store,
+                    connector_overrides=overrides,
+                ),
+                run=run,
+                org_id=command.org_id,
+                run_id=command.run_id,
+            )
         resolver = EffectiveActionPolicyResolver(
             snapshot=ToolUsePolicyResolver.resolve(rc),
-            overrides=ConnectorWritePolicyOverrides.from_user_policies(
-                rc.user_policies_json
-            ),
+            overrides=overrides,
         )
         stager = WriteStager(
             draft_store=self.draft_store,  # type: ignore[arg-type] — rowsets never touch drafts
@@ -1749,6 +2127,7 @@ class RuntimeRunHandler:
             recorder=self.usage_recorder,
             emit_event=_emit_usage,
             surfaces_v2=self.settings.execution.surfaces_v2,
+            attribution_edge_store=self.persistence,
         )
         invocation = MeteredModelInvocation(
             meter=meter, run=run, purpose=Purpose.VIEW_SHAPING
@@ -1805,6 +2184,26 @@ class RuntimeRunHandler:
             )
 
         return WorkLedgerEmitter(emit=_emit)
+
+    def _build_operation_ledger_emitter(
+        self, run: RunRecord
+    ) -> OperationEventEmitterAdapter:
+        """Bind v2.1 operation rows to the existing append-only run transport."""
+
+        async def _emit(
+            event_type_value: str,
+            payload: Mapping[str, object],
+            summary: str | None,
+        ) -> None:
+            await self.event_producer.append_api_event(
+                run=run,
+                source=StreamEventSource.SYSTEM,
+                event_type=RuntimeApiEventType(event_type_value),
+                summary=summary,
+                payload=dict(payload),
+            )
+
+        return OperationEventEmitterAdapter(emit_fn=_emit)
 
     async def _bind_conversation_ordinal_allocator(
         self,

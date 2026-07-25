@@ -5,10 +5,18 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from pydantic import Field, PositiveInt
+from pydantic import Field, PositiveInt, model_validator
 
 from agent_runtime.capabilities.surfaces.commit import SurfaceEdits
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    JsonObject,
+    RuntimeContract,
+)
+from agent_runtime.surfaces_v2.ledger_models import (
+    LedgerEventType,
+    WorkLedgerVocabulary,
+)
 from runtime_api.schemas.common import ApprovalDecision
 
 
@@ -74,6 +82,92 @@ class RuntimeStageCommitCommand(RuntimeContract):
     row_keys: tuple[str, ...] | None = None
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class RuntimeEffectCommitCommand(RuntimeContract):
+    """Durable transport envelope for one digest-pinned A4 effect approval.
+
+    This command intentionally carries references, digests, and the decision ledger
+    identifier only.  Proposal bytes, target bodies, credentials, and executor
+    arguments are resolved by the A5 worker coordinator after it has revalidated
+    the approved stage.  Enqueueing this command therefore cannot execute an
+    effect inline.
+    """
+
+    command_id: str = Field(default_factory=lambda: uuid4().hex)
+    org_id: str = Field(min_length=1, max_length=128)
+    user_id: str = Field(min_length=1, max_length=128)
+    conversation_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    stage_id: str = Field(min_length=1, max_length=128)
+    revision: PositiveInt
+    decision_ledger_id: str = Field(min_length=1, max_length=128)
+    proposal_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    target_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    idempotency_key: str = Field(min_length=1, max_length=256)
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class RuntimeEffectReconcileCommand(RuntimeContract):
+    """Durable request to reconcile an existing uncertain A5 effect claim.
+
+    The command has no proposal or target body and cannot create a new effect. It
+    names only the durable tenant/run/claim scope. The worker must rehydrate the
+    stage and principal from the claim and run records before asking an executor
+    to reconcile that already-claimed attempt.
+    """
+
+    command_id: str = Field(default_factory=lambda: uuid4().hex)
+    org_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=128)
+    claim_id: str = Field(min_length=1, max_length=128)
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class RuntimeArtifactEventCommand(RuntimeContract):
+    """Durable publication of one canonical artifact ledger event.
+
+    The artifact metadata adapter writes this command to the existing runtime
+    outbox in the same transaction as the artifact mutation. The worker
+    appends it to the existing run event store with ``event_id`` as the stable
+    idempotency key; no second event transport exists.
+    """
+
+    command_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^artevt_[0-9a-f]{32,64}$",
+    )
+    event_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^artevt_[0-9a-f]{32,64}$",
+    )
+    org_id: str
+    user_id: str
+    run_id: str
+    conversation_id: str
+    trace_id: str
+    event_type: LedgerEventType
+    payload: JsonObject
+    trace_propagation: dict[str, str] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def _validate_publication(self) -> "RuntimeArtifactEventCommand":
+        if self.command_id != self.event_id:
+            raise ValueError("artifact event command_id must equal event_id")
+        if self.event_type not in {
+            LedgerEventType.ARTIFACT_CREATED,
+            LedgerEventType.ARTIFACT_REVISED,
+            LedgerEventType.ARTIFACT_PROMOTED,
+            LedgerEventType.ARTIFACT_PRESENTATION_DECIDED,
+        }:
+            raise ValueError("artifact event command accepts artifact events only")
+        WorkLedgerVocabulary.validate_payload(self.event_type, self.payload)
+        return self
 
 
 class RuntimeApprovalResolvedCommand(RuntimeContract):

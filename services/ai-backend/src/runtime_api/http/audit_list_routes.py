@@ -16,6 +16,12 @@ from copilot_service_contracts.scopes import ADMIN_AUDIT_EXPORT
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_runtime.observability.lifecycle_metrics import (
+    AuthorizationBoundaryLabel,
+    AuthorizationDenyReasonLabel,
+    AuthorizationEnforcementLabel,
+    get_lifecycle_operational_metrics,
+)
 from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.rbac import RequireScopes
 
@@ -190,6 +196,14 @@ def register_audit_list_routes(router: APIRouter) -> None:
             # Caller's header-derived identity must match the URL's
             # query-supplied org/user — defence in depth on top of the
             # service-token check.
+            try:
+                get_lifecycle_operational_metrics().record_authorization_denial(
+                    boundary=AuthorizationBoundaryLabel.AUDIT_LIST_IDENTITY,
+                    reason=AuthorizationDenyReasonLabel.IDENTITY_MISMATCH,
+                    enforcement=AuthorizationEnforcementLabel.ENFORCE,
+                )
+            except Exception:  # pragma: no cover - metrics cannot change a 403
+                pass
             raise HTTPException(status.HTTP_403_FORBIDDEN, "identity_mismatch")
         if since is not None and until is not None and since >= until:
             raise HTTPException(

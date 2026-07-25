@@ -31,6 +31,7 @@ from agent_runtime.persistence.records import (
     RetentionSweepOutcome,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
+    UsageAttributionEdge,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
     ToolBudgetRecord,
@@ -55,6 +56,8 @@ from runtime_api.schemas import (
     MessageRecord,
     RuntimeApprovalResolvedCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeRunCommand,
@@ -86,7 +89,38 @@ class RuntimeStoreLifecyclePort(Protocol):
 
 
 @runtime_checkable
-class PersistencePort(Protocol):
+class UsageAttributionEdgeStorePort(Protocol):
+    """Durable immutable links between canonical usage rows and outputs.
+
+    ``org_id`` is supplied by trusted runtime identity at the persistence
+    boundary.  Implementations must verify that ``usage_record_id`` belongs to
+    that organization and must never mutate a persisted edge.
+    """
+
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append an edge; return ``True`` only when it is newly persisted.
+
+        A retry with the same natural edge identity returns ``False``.  A
+        missing or foreign usage record must fail closed rather than creating a
+        dangling cross-tenant link.
+        """
+
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Return immutable edges for the supplied canonical usage IDs."""
+
+
+@runtime_checkable
+class PersistencePort(UsageAttributionEdgeStorePort, Protocol):
     """Conversation, message, run, approval, and audit persistence boundary."""
 
     async def create_conversation(
@@ -462,6 +496,14 @@ class PersistencePort(Protocol):
         reason: str | None = None,
     ) -> HistoryDeletionResponse:
         """Tombstone user-visible history while retaining audit-safe evidence."""
+
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        """Trusted org-erasure hook; a no-op when artifact effects are disabled."""
 
     # ----- Workspace defaults + conversation lifecycle ----- #
 
@@ -1151,6 +1193,9 @@ class EventStorePort(Protocol):
 
         Implementations MUST serialize concurrent appends per ``run_id`` so the
         returned ``sequence_no`` is monotonically increasing without gaps.
+        When ``event.event_id`` is set, an identical retry MUST return the
+        existing envelope and a different body MUST raise
+        ``RuntimeEventIdempotencyConflict``.
         """
 
     async def append_events_batch(
@@ -1175,6 +1220,9 @@ class EventStorePort(Protocol):
             ``append_event`` cursor consolidation).
 
         An empty input list returns ``()`` without touching the store.
+        Stable producer-assigned event ids are intentionally unsupported here;
+        durable outbox publishers use :meth:`append_event` one command at a
+        time so retry equivalence is unambiguous.
         """
 
     async def list_events_after(
@@ -1212,6 +1260,14 @@ class RuntimeQueuePort(Protocol):
         worker-side CommitEngine handler is its sole consumer. The command is a
         durable record — the commit never runs inline in the API request path.
         """
+
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        """Enqueue a digest-pinned A5 effect commit for worker-only handling."""
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        """Enqueue reconciliation of an existing A5 effect claim only."""
 
     async def claim_next(
         self,

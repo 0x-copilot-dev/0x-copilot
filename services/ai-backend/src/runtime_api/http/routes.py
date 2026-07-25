@@ -66,6 +66,7 @@ from agent_runtime.surfaces_v2.receipt_export import (
     ReceiptExportBundle,
     ReceiptExportUnavailable,
 )
+from agent_runtime.surfaces_v2.receipt_export_v2 import ReceiptExportV2
 from runtime_api.schemas.budgets import (
     BudgetCreateRequest,
     BudgetListResponse,
@@ -76,8 +77,10 @@ from runtime_api.schemas.budgets import (
 )
 from runtime_api.schemas.usage import (
     ConversationUsageResponse,
+    RunUsageCallsResponse,
     RunUsageBreakdown,
     RunUsageCallRow,
+    UsageAttributionEdgeRow,
     UsageConnectorRow,
     UsageConversationRow,
     UsageDailyRow,
@@ -86,6 +89,7 @@ from runtime_api.schemas.usage import (
     UsageOrgPurposeResponse,
     UsageOrgResponse,
     UsageOrgSubagentsResponse,
+    UsageOperationRow,
     UsagePeriodWindow,
     UsagePurposeRow,
     UsageRunRow,
@@ -526,6 +530,26 @@ class RuntimeApiRoutes:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
     @classmethod
+    async def export_run_receipt_v2(
+        cls,
+        request: Request,
+        run_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> ReceiptExportV2:
+        """Return the authorized run's redacted, signed D7 receipt bundle."""
+
+        org_id, user_id = cls.scoped_identity(request, org_id=org_id, user_id=user_id)
+        try:
+            return await cls.cqs(request).export_run_receipt_v2(
+                org_id=org_id,
+                user_id=user_id,
+                run_id=run_id,
+            )
+        except ReceiptExportUnavailable as exc:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+    @classmethod
     async def regenerate_surface_view(
         cls,
         request: Request,
@@ -859,7 +883,12 @@ class RuntimeApiRouter:
     """Build and configure the ``/v1/agent`` FastAPI router."""
 
     @classmethod
-    def create_router(cls) -> APIRouter:
+    def create_router(
+        cls,
+        *,
+        artifact_effects_v2: bool = False,
+        workspace_approval_enabled: bool = False,
+    ) -> APIRouter:
         """Return a router with every agent-runtime route registered under ``/v1/agent``."""
         # Every /v1/agent/* route requires the runtime:use scope. The
         # router-level dependency covers all routes below; admins,
@@ -1010,6 +1039,13 @@ class RuntimeApiRouter:
             response_model=ReceiptExportBundle,
             name=Keys.RouteName.EXPORT_RUN_RECEIPT,
         )
+        router.add_api_route(
+            "/runs/{run_id}/receipt/export-v2",
+            RuntimeApiRoutes.export_run_receipt_v2,
+            methods=["GET"],
+            response_model=ReceiptExportV2,
+            name=Keys.RouteName.EXPORT_RUN_RECEIPT_V2,
+        )
         # ``surface_id`` (a v1 surface_uri) carries slashes → the ``:path``
         # converter captures the whole tail before the literal action suffix.
         router.add_api_route(
@@ -1084,6 +1120,13 @@ class RuntimeApiRouter:
             response_model=HistoryDeletionResponse,
             name=Keys.RouteName.DELETE_USER_HISTORY,
         )
+        # PRD-A2 — canonical Artifact Repository. The literal
+        # ``/artifacts:promote`` route is registered by this helper before its
+        # broad artifact-id siblings.
+        if artifact_effects_v2:
+            from runtime_api.http.artifacts import register_artifact_routes
+
+            register_artifact_routes(router)
         # PR 1.3 — Workspace-pane draft artifacts.
         from runtime_api.http.drafts import register_draft_routes
 
@@ -1104,6 +1147,19 @@ class RuntimeApiRouter:
             from runtime_api.http.pending_work import register_pending_work_routes
 
             register_pending_work_routes(router)
+        # C3 — this route is deliberately distinct from legacy staged-write
+        # routes and exists only for an enforced workspace-effect cohort.
+        if workspace_approval_enabled:
+            from runtime_api.http.effect_stages import (
+                register_workspace_effect_stage_routes,
+            )
+            from runtime_api.http.pending_work_v2 import register_pending_work_v2_routes
+
+            register_workspace_effect_stage_routes(router)
+            # E1 D6 — canonical pending work is a v2.1 workspace-cohort read.
+            # Keep it under the same enforce gate as the canonical approval
+            # receipt rather than broadening it to every default-on v2 surface.
+            register_pending_work_v2_routes(router)
         # PR 1.5 — Workspace-pane data feeds (subagents + sources).
         register_workspace_feed_routes(router)
         # PR 1.6 — Workspace defaults + conversation lifecycle
@@ -1252,15 +1308,20 @@ class UsageApiRoutes:
         user_id: str | None = Query(None, min_length=1),
     ) -> RunUsageBreakdown:
         """Return per-run token usage joined with per-call breakdown."""
-        org_id, _ = RuntimeApiRoutes.scoped_identity(
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
         persistence = cls._persistence(request)
         run_row = await persistence.query_run_usage(org_id=org_id, run_id=run_id)
-        if run_row is None:
+        if run_row is None or run_row.user_id != user_id:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
         call_rows = await persistence.query_model_call_usage_for_run(
             org_id=org_id, run_id=run_id
+        )
+        call_details, operation_totals = await cls._run_call_details(
+            persistence,
+            org_id=org_id,
+            call_rows=call_rows,
         )
         return RunUsageBreakdown(
             run_id=run_row.run_id,
@@ -1282,28 +1343,41 @@ class UsageApiRoutes:
                 runs_count=1,
                 cost_micro_usd=run_row.cost_micro_usd,
             ),
-            by_call=tuple(
-                RunUsageCallRow(
-                    id=row.id,
-                    parent_event_id=row.parent_event_id,
-                    task_id=row.task_id,
-                    subagent_id=row.subagent_id,
-                    model_provider=row.model_provider,
-                    model_name=row.model_name,
-                    # PRD-E3 (FR-G) — carry the attribution axes verbatim.
-                    purpose=row.purpose,
-                    surface_id=row.surface_id,
-                    input=row.input_tokens,
-                    output=row.output_tokens,
-                    cached_input=row.cached_input_tokens,
-                    total=row.total_tokens,
-                    duration_ms=row.duration_ms,
-                    cost_micro_usd=row.cost_micro_usd,
-                    created_at=row.created_at,
-                )
-                for row in call_rows
-            ),
+            by_call=call_details,
+            by_operation=operation_totals,
         )
+
+    @classmethod
+    async def usage_run_calls(
+        cls,
+        request: Request,
+        run_id: str,
+        org_id: str | None = Query(None, min_length=1),
+        user_id: str | None = Query(None, min_length=1),
+    ) -> RunUsageCallsResponse:
+        """Return real per-invocation usage rows for one owned run.
+
+        This intentionally shares the exact authorization and edge projection
+        path with ``/runs/{run_id}``, while avoiding a duplicate aggregate
+        payload for call-detail consumers.
+        """
+
+        org_id, user_id = RuntimeApiRoutes.scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        persistence = cls._persistence(request)
+        run_row = await persistence.query_run_usage(org_id=org_id, run_id=run_id)
+        if run_row is None or run_row.user_id != user_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "run not found")
+        call_rows = await persistence.query_model_call_usage_for_run(
+            org_id=org_id, run_id=run_id
+        )
+        calls, _ = await cls._run_call_details(
+            persistence,
+            org_id=org_id,
+            call_rows=call_rows,
+        )
+        return RunUsageCallsResponse(run_id=run_id, calls=calls)
 
     @classmethod
     async def usage_conversation(
@@ -1320,6 +1394,13 @@ class UsageApiRoutes:
         )
         start, end = UsageQueryService.parse_period(period)
         persistence = cls._persistence(request)
+        conversation = await persistence.get_conversation(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+        if conversation is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "conversation not found")
         # Reuse query_run_usage_for_range and filter by conversation_id —
         # this avoids a second port method while remaining bounded by
         # the period window.
@@ -1429,6 +1510,130 @@ class UsageApiRoutes:
         """Retrieve the runtime persistence port from app state."""
 
         return request.app.state.runtime_persistence
+
+    @classmethod
+    async def _run_call_details(
+        cls,
+        persistence,  # type: ignore[no-untyped-def]
+        *,
+        org_id: str,
+        call_rows,
+    ) -> tuple[tuple[RunUsageCallRow, ...], tuple[UsageOperationRow, ...]]:  # type: ignore[no-untyped-def]
+        """Attach edges for display without joining them into canonical totals."""
+
+        edge_rows = await persistence.list_usage_attribution_edges_for_usage_records(
+            org_id=org_id,
+            usage_record_ids=tuple(row.id for row in call_rows),
+        )
+        edges_by_usage: dict[str, list[UsageAttributionEdgeRow]] = defaultdict(list)
+        for edge in edge_rows:
+            edges_by_usage[edge.usage_record_id].append(
+                UsageAttributionEdgeRow(
+                    edge_id=edge.edge_id,
+                    usage_record_id=edge.usage_record_id,
+                    operation_id=edge.operation_id,
+                    artifact_id=edge.artifact_id,
+                    stage_id=edge.stage_id,
+                    surface_id=edge.surface_id,
+                    relationship=edge.relationship.value,
+                    created_at=edge.created_at,
+                )
+            )
+        calls = tuple(
+            RunUsageCallRow(
+                id=row.id,
+                parent_event_id=row.parent_event_id,
+                task_id=row.task_id,
+                subagent_id=row.subagent_id,
+                model_provider=row.model_provider,
+                model_name=row.model_name,
+                purpose=row.purpose,
+                surface_id=row.surface_id,
+                input=row.input_tokens,
+                output=row.output_tokens,
+                cached_input=row.cached_input_tokens,
+                total=row.total_tokens,
+                duration_ms=row.duration_ms,
+                cost_micro_usd=row.cost_micro_usd,
+                created_at=row.created_at,
+                attribution_edges=tuple(
+                    sorted(
+                        edges_by_usage.get(row.id, ()),
+                        key=lambda edge: (edge.created_at, edge.edge_id),
+                    )
+                ),
+            )
+            for row in call_rows
+        )
+        return calls, cls._operation_totals(call_rows, edge_rows)
+
+    @classmethod
+    def _operation_totals(
+        cls,
+        call_rows,
+        edge_rows,
+    ) -> tuple[UsageOperationRow, ...]:  # type: ignore[no-untyped-def]
+        """Group edge-linked usage per operation, deduping each usage record."""
+
+        rows_by_id = {row.id: row for row in call_rows}
+        buckets: dict[str, dict[str, object]] = {}
+        for edge in edge_rows:
+            row = rows_by_id.get(edge.usage_record_id)
+            if row is None:
+                continue
+            bucket = buckets.setdefault(
+                edge.operation_id,
+                {
+                    "records": {},
+                    "artifact_ids": set(),
+                    "stage_ids": set(),
+                    "surface_ids": set(),
+                },
+            )
+            records = bucket["records"]
+            assert isinstance(records, dict)
+            records[row.id] = row
+            if edge.artifact_id is not None:
+                artifact_ids = bucket["artifact_ids"]
+                assert isinstance(artifact_ids, set)
+                artifact_ids.add(edge.artifact_id)
+            if edge.stage_id is not None:
+                stage_ids = bucket["stage_ids"]
+                assert isinstance(stage_ids, set)
+                stage_ids.add(edge.stage_id)
+            if edge.surface_id is not None:
+                surface_ids = bucket["surface_ids"]
+                assert isinstance(surface_ids, set)
+                surface_ids.add(edge.surface_id)
+
+        result: list[UsageOperationRow] = []
+        for operation_id, bucket in buckets.items():
+            records = bucket["records"]
+            artifact_ids = bucket["artifact_ids"]
+            stage_ids = bucket["stage_ids"]
+            surface_ids = bucket["surface_ids"]
+            assert isinstance(records, dict)
+            assert isinstance(artifact_ids, set)
+            assert isinstance(stage_ids, set)
+            assert isinstance(surface_ids, set)
+            usage_rows = tuple(records.values())
+            result.append(
+                UsageOperationRow(
+                    operation_id=operation_id,
+                    artifact_ids=tuple(sorted(artifact_ids)),
+                    stage_ids=tuple(sorted(stage_ids)),
+                    surface_ids=tuple(sorted(surface_ids)),
+                    total=UsageTotals(
+                        input=sum(row.input_tokens for row in usage_rows),
+                        output=sum(row.output_tokens for row in usage_rows),
+                        cached_input=sum(row.cached_input_tokens for row in usage_rows),
+                        total=sum(row.total_tokens for row in usage_rows),
+                        runs_count=len({row.run_id for row in usage_rows}),
+                        cost_micro_usd=cls._sum_costs(usage_rows),
+                    ),
+                )
+            )
+        return tuple(sorted(result, key=lambda row: row.operation_id))
 
     @classmethod
     def _cap_cold_start(cls, start: datetime, end: datetime) -> datetime:
@@ -1863,6 +2068,13 @@ class UsageApiRouter:
             methods=["GET"],
             response_model=RunUsageBreakdown,
             name=Keys.RouteName.USAGE_RUN,
+        )
+        router.add_api_route(
+            "/runs/{run_id}/calls",
+            UsageApiRoutes.usage_run_calls,
+            methods=["GET"],
+            response_model=RunUsageCallsResponse,
+            name=Keys.RouteName.USAGE_RUN_CALLS,
         )
         router.add_api_route(
             "/conversations/{conversation_id}",

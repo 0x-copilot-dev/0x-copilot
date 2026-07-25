@@ -8,9 +8,10 @@ import logging
 import os
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.contracts import (
     ModelConfig,
     ModelReasoningConfig,
@@ -44,6 +45,19 @@ class _EnvFields:
     # Generative Surfaces v2 master flag (PRD-A1). Registered now but read by
     # nothing until emission lands in PRD-A3 — flag-off byte-identical.
     SURFACES_V2 = "SURFACES_V2"
+    # SDR-19 single rollout gate for artifact/effect persistence. It stays
+    # dark until E2 cutover; storage composition and API routes read it.
+    ARTIFACT_EFFECTS_V2 = "ARTIFACT_EFFECTS_V2"
+    # B1 migration seam. New `/drafts/` writes use canonical Artifact
+    # revisions only when this is explicitly enabled alongside A2 storage.
+    ARTIFACT_DRAFTS_V2 = "ARTIFACT_DRAFTS_V2"
+    # Generative Surfaces v2.1 (PRD-A3). ``enforce`` is parsed so deployment
+    # configuration fails honestly, but startup validation refuses it until
+    # durable canonical arguments plus the generic stage/executor exist.
+    OPERATION_GATEWAY_MODE = "OPERATION_GATEWAY_MODE"
+    # C3 workspace migration lane. ``enforce`` routes every /workspace mutation
+    # through A3 -> A4 -> A5; it never enables the retired direct broker path.
+    WORKSPACE_EFFECT_MODE = "WORKSPACE_EFFECT_MODE"
     # Worker-side ``MODEL_DELTA`` coalesce window in ms. When > 0, the streaming
     # executor accumulates chunks for the window and flushes via
     # ``append_events_batch`` (one DB round-trip per batch). Default 0 (disabled).
@@ -71,6 +85,9 @@ class _EnvFields:
     # (unlimited / keep forever); only the single_user_desktop profile sets them.
     FILE_STORE_MAX_BYTES = "RUNTIME_FILE_STORE_MAX_BYTES"
     FILE_STORE_RETENTION_DAYS = "RUNTIME_FILE_STORE_RETENTION_DAYS"
+    # Explicit durable shared-volume root for artifact blobs when metadata uses
+    # Postgres. There is deliberately no Postgres bytea fallback.
+    ARTIFACT_BLOB_ROOT = "RUNTIME_ARTIFACT_BLOB_ROOT"
     MCP_BACKEND_REGISTRY_URL = "MCP_BACKEND_REGISTRY_URL"
     MCP_AUTH_REDIRECT_URI = "MCP_AUTH_REDIRECT_URI"
     SKILLS_BACKEND_REGISTRY_URL = "SKILLS_BACKEND_REGISTRY_URL"
@@ -153,6 +170,30 @@ class RuntimeExecutionSettings(RuntimeContract):
     # switch (chat-only degradation). Resolves identically to
     # ``SurfacesV2Flag.enabled()`` (same env var, same truthy set, same default).
     surfaces_v2: bool = True
+    # SDR-19 is dark by default. When false product routes remain absent and
+    # no artifact repository is composed.
+    artifact_effects_v2: bool = False
+    artifact_drafts_v2: bool = False
+    # v2.1 Universal Operation Gateway. A3 is observational only, so the
+    # initial default is explicitly off.
+    operation_gateway_mode: OperationGatewayMode = OperationGatewayMode.OFF
+    # v2.1 workspace product integration. Kept separately from the universal
+    # gateway flag so the workspace cohort can roll out and roll back without
+    # widening enforcement to unrelated capabilities.
+    workspace_effect_mode: OperationGatewayMode = OperationGatewayMode.OFF
+
+    @model_validator(mode="after")
+    def _artifact_drafts_require_repository(self) -> "RuntimeExecutionSettings":
+        if self.artifact_drafts_v2 and not self.artifact_effects_v2:
+            raise ValueError("ARTIFACT_DRAFTS_V2 requires ARTIFACT_EFFECTS_V2")
+        if (
+            self.workspace_effect_mode is OperationGatewayMode.ENFORCE
+            and self.operation_gateway_mode is not OperationGatewayMode.ENFORCE
+        ):
+            raise ValueError(
+                "WORKSPACE_EFFECT_MODE=enforce requires OPERATION_GATEWAY_MODE=enforce"
+            )
+        return self
 
 
 class RuntimeStoreSettings(RuntimeContract):
@@ -172,6 +213,9 @@ class RuntimeStoreSettings(RuntimeContract):
     # keeps history forever. Conversations whose last activity predates the
     # window are physically reaped by the cleanup sweeper (startup + on demand).
     file_store_retention_days: int = Field(default=0, ge=0)
+    # Required for the Postgres backend. API and worker processes must mount
+    # this same durable root; factory construction fails closed when absent.
+    artifact_blob_root: str | None = None
 
 
 class RuntimeMcpSettings(RuntimeContract):
@@ -393,6 +437,24 @@ class RuntimeSettings(BaseSettings):
                 ).lower()
                 in _truthy,
                 surfaces_v2=_s(v, E.SURFACES_V2, "true").lower() in _truthy,
+                artifact_effects_v2=_s(v, E.ARTIFACT_EFFECTS_V2, "false").lower()
+                in _truthy,
+                artifact_drafts_v2=_s(v, E.ARTIFACT_DRAFTS_V2, "false").lower()
+                in _truthy,
+                operation_gateway_mode=OperationGatewayMode(
+                    _s(
+                        v,
+                        E.OPERATION_GATEWAY_MODE,
+                        OperationGatewayMode.OFF.value,
+                    ).lower()
+                ),
+                workspace_effect_mode=OperationGatewayMode(
+                    _s(
+                        v,
+                        E.WORKSPACE_EFFECT_MODE,
+                        OperationGatewayMode.OFF.value,
+                    ).lower()
+                ),
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
@@ -400,6 +462,7 @@ class RuntimeSettings(BaseSettings):
                 file_store_root=_o(v, E.FILE_STORE_ROOT),
                 file_store_max_bytes=int(_s(v, E.FILE_STORE_MAX_BYTES, "0")),
                 file_store_retention_days=int(_s(v, E.FILE_STORE_RETENTION_DAYS, "0")),
+                artifact_blob_root=_o(v, E.ARTIFACT_BLOB_ROOT),
             ),
             mcp=RuntimeMcpSettings(
                 backend_registry_url=_o(v, E.MCP_BACKEND_REGISTRY_URL),

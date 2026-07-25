@@ -5,13 +5,12 @@
 // AI backend consumes the derived MCP JSON Schemas via `tools/list` and does
 // NOT hand-copy these types.
 //
-// SCOPE (foundation, read-only core): only the safe read-only surface is
-// modelled here — navigate, snapshot (accessibility inspect), screenshot,
-// wait, and close. Side-effecting actions (click/type/select/submit/upload/
-// download) are DEFERRED; their action classes are named in the enum with a
-// `// deferred` marker so the policy layer can reason about them, but no tool
-// schema is exposed for them yet. There is deliberately NO generic
-// eval/JS/selector/coordinate/CDP escape hatch.
+// SCOPE: the safe read surface (navigate/snapshot/screenshot/wait/close) plus
+// the first exact staged-effect cohort (click/submit). Public read dispatch
+// cannot invoke either action; A4/A5 reaches them only through the private
+// prepare/apply/reconcile protocol. Type/select/upload/download remain outside
+// this production cohort. There is deliberately NO generic eval/JS/selector/
+// coordinate/CDP escape hatch.
 
 import { z } from "zod";
 
@@ -24,6 +23,14 @@ export const DESKTOP_BROWSER_SERVER_NAME = "desktop_browser";
 
 /** Broker audience — every action credential is bound to this audience. */
 export const BROWSER_BROKER_AUDIENCE = "desktop-browser-broker";
+
+/**
+ * Browser build shipped with the pinned root Playwright 1.61.1 dependency.
+ * The worker independently reports the launched binary's version and Electron
+ * main refuses to expose the broker when it does not match this value.
+ */
+export const PINNED_CHROMIUM_VERSION = "149.0.7827.55";
+export const PINNED_PLAYWRIGHT_VERSION = "1.61.1";
 
 export const BrowserProfileMode = {
   Ephemeral: "ephemeral",
@@ -201,6 +208,34 @@ export const BrowserRunBindingSchema = z.object({
 });
 export type BrowserRunBinding = z.infer<typeof BrowserRunBindingSchema>;
 
+// --- AI broker read request ----------------------------------------------
+
+/**
+ * The complete authority the AI process may send to Electron main for a read.
+ * It deliberately cannot carry a profile, origin policy, action class,
+ * approval, deadline, page handle, or browser-process credential. Main derives
+ * those fields from its own policy and emits a full BrowserActionRequest only
+ * after reclassifying the named tool.
+ */
+export const BrowserReadToolCallSchema = z
+  .object({
+    name: z.string().min(1).max(128),
+    arguments: z.unknown(),
+  })
+  .strict();
+export type BrowserReadToolCall = z.infer<typeof BrowserReadToolCallSchema>;
+
+export const BrowserReadBrokerRequestSchema = z
+  .object({
+    runId: z.string().min(1).max(255),
+    workspaceId: z.string().min(1).max(255),
+    tool: BrowserReadToolCallSchema,
+  })
+  .strict();
+export type BrowserReadBrokerRequest = z.infer<
+  typeof BrowserReadBrokerRequestSchema
+>;
+
 // --- Element references ---------------------------------------------------
 
 export const BrowserElementRefSchema = z.object({
@@ -221,6 +256,14 @@ export interface BrowserSnapshotNode {
   role: string;
   /** Redacted accessible name — never a raw value/secret. */
   name: string;
+  /** Generation-bound exact target fingerprint used by a staged plan. */
+  fingerprint?: string;
+  /** Safe exact-form review facts; absent for non-form/unaddressable nodes. */
+  formFingerprint?: string;
+  /** SHA-256 of exact successful controls; raw names/values never leave worker. */
+  formPayloadDigest?: string;
+  formActionUrl?: string;
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   children?: BrowserSnapshotNode[];
 }
 
@@ -230,6 +273,33 @@ export const BrowserSnapshotNodeSchema: z.ZodType<BrowserSnapshotNode> = z.lazy(
       ref: z.string(),
       role: z.string(),
       name: z.string(),
+      fingerprint: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/u)
+        .optional(),
+      formFingerprint: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/u)
+        .optional(),
+      formPayloadDigest: z
+        .string()
+        .regex(/^[a-f0-9]{64}$/u)
+        .optional(),
+      formActionUrl: z
+        .string()
+        .url()
+        .refine((value) => {
+          const parsed = new URL(value);
+          return (
+            parsed.protocol === "https:" &&
+            parsed.username === "" &&
+            parsed.password === "" &&
+            parsed.search === "" &&
+            parsed.hash === ""
+          );
+        })
+        .optional(),
+      method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
       children: z.array(BrowserSnapshotNodeSchema).optional(),
     }),
 );
@@ -335,6 +405,11 @@ export const BrowserActionResultSchema = z.object({
   version: z.literal(1),
   requestId: z.string().min(1),
   sessionId: z.string(),
+  /** Opaque exact-plan facts; present only after a successful live-page read. */
+  sessionRef: z.lazy(() => OpaqueBrowserRefSchema).optional(),
+  pageRef: z.lazy(() => OpaqueBrowserRefSchema).optional(),
+  topLevelOrigin: CanonicalOriginSchema.optional(),
+  pageGeneration: z.number().int().nonnegative().optional(),
   actionId: z.string(),
   status: z.enum([
     BrowserActionStatus.Succeeded,
@@ -352,6 +427,260 @@ export const BrowserActionResultSchema = z.object({
   snapshot: BrowserSnapshotNodeSchema.optional(),
 });
 export type BrowserActionResult = z.infer<typeof BrowserActionResultSchema>;
+
+// --- Private staged-effect protocol ---------------------------------------
+//
+// These values travel only over Electron-main's private worker bridge. They
+// are intentionally NOT broker tool arguments: no remote service receives a
+// cookie, a browser-process credential, a selector, a host path, or an ability
+// to invoke a generic effect action.
+
+const SHA256_HEX = z.string().regex(/^[a-f0-9]{64}$/u);
+export const OpaqueBrowserRefSchema = z
+  .string()
+  .min(1)
+  .max(2048)
+  .refine(
+    (value) => {
+      if (
+        value.startsWith("/") ||
+        value.startsWith("~") ||
+        value.startsWith("\\") ||
+        /^file:/iu.test(value) ||
+        /^https?:/iu.test(value) ||
+        /^data:/iu.test(value) ||
+        /(?:^|[\\/])\.\.?([\\/]|$)/u.test(value)
+      )
+        return false;
+      try {
+        const parsed = new URL(value);
+        return (
+          parsed.protocol !== "file:" &&
+          parsed.protocol !== "http:" &&
+          parsed.protocol !== "https:" &&
+          parsed.protocol !== "data:" &&
+          parsed.hostname !== "" &&
+          parsed.search === "" &&
+          parsed.hash === ""
+        );
+      } catch {
+        return false;
+      }
+    },
+    { message: "browser reference must be opaque and scoped" },
+  );
+
+export const BrowserEffectActionKind = {
+  Click: "click",
+  Input: "input",
+  Select: "select",
+  Submit: "submit",
+  UploadSubmit: "upload_submit",
+} as const;
+export type BrowserEffectActionKind =
+  (typeof BrowserEffectActionKind)[keyof typeof BrowserEffectActionKind];
+
+export const BrowserPreconditionSchema = z.object({
+  pageGeneration: z.number().int().nonnegative(),
+  origin: CanonicalOriginSchema,
+  elementFingerprint: SHA256_HEX.optional(),
+  formFingerprint: SHA256_HEX.optional(),
+  formPayloadDigest: SHA256_HEX.optional(),
+});
+export type BrowserPrecondition = z.infer<typeof BrowserPreconditionSchema>;
+
+/** Immutable A2 revision metadata authorized for a staged upload. */
+export const BrowserUploadArtifactSchema = z.object({
+  artifactRef: OpaqueBrowserRefSchema.refine(
+    (value) => value.startsWith("artifact://"),
+    { message: "upload source must be an artifact revision" },
+  ),
+  digest: SHA256_HEX,
+  byteSize: z.number().int().nonnegative(),
+  mediaType: z.string().min(1).max(255),
+  suggestedFilename: z
+    .string()
+    .min(1)
+    .max(255)
+    .refine(
+      (value) =>
+        value.trim() === value &&
+        value !== "." &&
+        value !== ".." &&
+        !/[\\/\u0000]/u.test(value),
+      { message: "upload filename must be safe metadata" },
+    ),
+});
+export type BrowserUploadArtifact = z.infer<typeof BrowserUploadArtifactSchema>;
+
+export const BrowserActionPlanSchema = z
+  .object({
+    sessionRef: OpaqueBrowserRefSchema,
+    pageRef: OpaqueBrowserRefSchema,
+    origin: CanonicalOriginSchema,
+    topLevelOrigin: CanonicalOriginSchema,
+    actionKind: z.enum([
+      BrowserEffectActionKind.Click,
+      BrowserEffectActionKind.Input,
+      BrowserEffectActionKind.Select,
+      BrowserEffectActionKind.Submit,
+      BrowserEffectActionKind.UploadSubmit,
+    ]),
+    elementRef: z.string().min(1).max(255).optional(),
+    elementFingerprint: SHA256_HEX.optional(),
+    formFingerprint: SHA256_HEX.optional(),
+    formPayloadDigest: SHA256_HEX.optional(),
+    formActionUrl: z
+      .string()
+      .url()
+      .max(2048)
+      .refine((value) => {
+        const parsed = new URL(value);
+        return (
+          parsed.protocol === "https:" &&
+          parsed.username === "" &&
+          parsed.password === "" &&
+          parsed.search === "" &&
+          parsed.hash === ""
+        );
+      })
+      .optional(),
+    method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).optional(),
+    canonicalFieldsRef: OpaqueBrowserRefSchema,
+    fieldsDigest: SHA256_HEX,
+    uploadArtifactRefs: z.array(OpaqueBrowserRefSchema).max(32).readonly(),
+    uploadArtifacts: z.array(BrowserUploadArtifactSchema).max(32).readonly(),
+    precondition: BrowserPreconditionSchema,
+    preconditionDigest: SHA256_HEX,
+    userVisibleSummary: z.string().min(1).max(512),
+  })
+  .superRefine((plan, ctx) => {
+    const requiresElement = true;
+    if (
+      requiresElement &&
+      (plan.elementRef === undefined || plan.elementFingerprint === undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "browser action requires exact element identity",
+      });
+    }
+    const authorizedRefs = plan.uploadArtifacts.map(
+      (upload) => upload.artifactRef,
+    );
+    if (
+      plan.uploadArtifactRefs.length !== authorizedRefs.length ||
+      plan.uploadArtifactRefs.some(
+        (ref, index) => ref !== authorizedRefs[index],
+      )
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "upload authorization must bind every exact artifact revision",
+      });
+    }
+    if (
+      plan.actionKind === BrowserEffectActionKind.UploadSubmit &&
+      authorizedRefs.length === 0
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "upload_submit requires an artifact revision",
+      });
+    }
+    if (plan.precondition.origin !== plan.origin) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "precondition origin must match plan origin",
+      });
+    }
+    if (plan.precondition.elementFingerprint !== plan.elementFingerprint) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "precondition fingerprint must match action element",
+      });
+    }
+    if (plan.precondition.formFingerprint !== plan.formFingerprint) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "precondition fingerprint must match action form",
+      });
+    }
+    if (plan.precondition.formPayloadDigest !== plan.formPayloadDigest) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "precondition payload digest must match action form",
+      });
+    }
+    const formIdentity = [
+      plan.formFingerprint,
+      plan.formPayloadDigest,
+      plan.formActionUrl,
+      plan.method,
+    ];
+    const formIdentityCount = formIdentity.filter(
+      (value) => value !== undefined,
+    ).length;
+    if (formIdentityCount !== 0 && formIdentityCount !== formIdentity.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "browser form identity must be complete or absent",
+      });
+    }
+    if (
+      (plan.actionKind === BrowserEffectActionKind.Submit ||
+        plan.actionKind === BrowserEffectActionKind.UploadSubmit) &&
+      (plan.formFingerprint === undefined ||
+        plan.formPayloadDigest === undefined ||
+        plan.formActionUrl === undefined ||
+        plan.method === undefined)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "browser submission requires exact form identity",
+      });
+    }
+  });
+export type BrowserActionPlan = z.infer<typeof BrowserActionPlanSchema>;
+
+export const BrowserPrepareResultSchema = z
+  .object({
+    preparedRef: OpaqueBrowserRefSchema.optional(),
+    observedPreconditionDigest: SHA256_HEX,
+    expiresAt: z.string().max(64).optional(),
+    preconditionDrift: z.boolean(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.preconditionDrift === (value.preparedRef !== undefined)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "prepared action must be either prepared or drifted",
+      });
+    }
+  });
+export type BrowserPrepareResult = z.infer<typeof BrowserPrepareResultSchema>;
+
+export const BrowserEffectOutcome = {
+  Applied: "applied",
+  PreconditionDrift: "precondition_drift",
+  Failed: "failed",
+  Indeterminate: "indeterminate",
+} as const;
+export type BrowserEffectOutcome =
+  (typeof BrowserEffectOutcome)[keyof typeof BrowserEffectOutcome];
+
+export const BrowserEffectReceiptSchema = z.object({
+  outcome: z.enum([
+    BrowserEffectOutcome.Applied,
+    BrowserEffectOutcome.PreconditionDrift,
+    BrowserEffectOutcome.Failed,
+    BrowserEffectOutcome.Indeterminate,
+  ]),
+  receiptRef: OpaqueBrowserRefSchema.optional(),
+  resultDigest: SHA256_HEX.optional(),
+  safeMessage: z.string().max(512).optional(),
+});
+export type BrowserEffectReceipt = z.infer<typeof BrowserEffectReceiptSchema>;
 
 // --- Bounds ---------------------------------------------------------------
 

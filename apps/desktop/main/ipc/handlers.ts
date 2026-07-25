@@ -16,9 +16,12 @@ import {
   RendererGrantSchema,
   RequestFolderGrantParamsSchema,
   RevokeGrantParamsSchema,
+  WorkspaceApprovalHostDecisionRequestSchema,
+  WorkspaceApprovalHostDecisionResultSchema,
   type RequestFolderGrantParams,
 } from "../capabilities/schemas";
 import type { RendererGrant } from "../capabilities/types";
+import type { WorkspaceApprovalHostPort } from "../capabilities/workspace-approval";
 import { CONNECTOR_CHANNELS } from "../connectors/channels";
 import {
   ConnectorCatalogResponseSchema,
@@ -29,6 +32,9 @@ import {
 import {
   AuthWorkspaceParamsSchema,
   AuthLinkWalletParamsSchema,
+  ArtifactContentHandleParamsSchema,
+  ArtifactContentOpenParamsSchema,
+  ArtifactRevisionParamsSchema,
   CHANNELS,
   EmptyParamsSchema,
   IpcValidationError,
@@ -130,6 +136,8 @@ export interface RegisterHandlersDeps {
   readonly auth?: AuthHandlers;
   readonly tier2?: Tier2InboundDispatcher;
   readonly capability?: CapabilityHandlers;
+  /** C3-only, path-free host port. No broker or filesystem command crosses it. */
+  readonly workspaceApproval?: WorkspaceApprovalHostPort;
   readonly connectors?: ConnectorHandlers;
   readonly logger?: IpcLogger;
 }
@@ -178,6 +186,58 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       throw err;
     }
   });
+
+  ipcMain.handle(
+    CHANNELS.transportArtifactContentOpen,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactContentOpen,
+        ArtifactContentOpenParamsSchema,
+        raw,
+      );
+      return bridge.openArtifactContent(params);
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.transportArtifactContentRead,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactContentRead,
+        ArtifactContentHandleParamsSchema,
+        raw,
+      );
+      return bridge.readArtifactContent(params.handle);
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.transportArtifactContentClose,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactContentClose,
+        ArtifactContentHandleParamsSchema,
+        raw,
+      );
+      await bridge.closeArtifactContent(params.handle);
+      return { ok: true as const };
+    },
+  );
+  ipcMain.handle(
+    CHANNELS.transportArtifactRevision,
+    async (_event, raw: unknown) => {
+      const params = parseOrThrow(
+        CHANNELS.transportArtifactRevision,
+        ArtifactRevisionParamsSchema,
+        raw,
+      );
+      try {
+        return wrapTransportValue(await bridge.createArtifactRevision(params));
+      } catch (err) {
+        const wire = toTransportHttpErrorWire(err);
+        if (wire !== null) return wrapTransportError(wire);
+        throw err;
+      }
+    },
+  );
 
   ipcMain.handle(
     CHANNELS.transportSubscribe,
@@ -386,6 +446,25 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
     );
   }
 
+  const workspaceApproval = deps.workspaceApproval;
+  if (workspaceApproval) {
+    ipcMain.handle(
+      CAPABILITY_CHANNELS.decideWorkspaceApproval,
+      async (_event, raw: unknown) => {
+        const request = parseOrThrow(
+          CAPABILITY_CHANNELS.decideWorkspaceApproval,
+          WorkspaceApprovalHostDecisionRequestSchema,
+          raw,
+        );
+        // Strict-parse this narrow, path-free result before it reaches the
+        // renderer. A receipt/permit/prepared-ref is retained in main only.
+        return WorkspaceApprovalHostDecisionResultSchema.parse(
+          await workspaceApproval.decide(request),
+        );
+      },
+    );
+  }
+
   const connectors = deps.connectors;
   if (connectors) {
     ipcMain.handle(
@@ -420,6 +499,10 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
   return () => {
     const channels: string[] = [
       CHANNELS.transportRequest,
+      CHANNELS.transportArtifactContentOpen,
+      CHANNELS.transportArtifactContentRead,
+      CHANNELS.transportArtifactContentClose,
+      CHANNELS.transportArtifactRevision,
       CHANNELS.transportSubscribe,
       CHANNELS.transportUnsubscribe,
       CHANNELS.transportSessionSnapshot,
@@ -445,6 +528,9 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
         CAPABILITY_CHANNELS.listGrants,
         CAPABILITY_CHANNELS.revokeGrant,
       );
+    }
+    if (workspaceApproval) {
+      channels.push(CAPABILITY_CHANNELS.decideWorkspaceApproval);
     }
     if (connectors) {
       channels.push(CONNECTOR_CHANNELS.listCatalog, CONNECTOR_CHANNELS.connect);

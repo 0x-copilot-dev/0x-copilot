@@ -11,14 +11,13 @@
 //      through it with no bypass list,
 //   3. emits a single `READY {"version": "..."}` line on stdout that the
 //      supervisor's health probe parses (health + version pin), and
-//   4. wires a `SessionWorkerPort` over the real engine so read-only actions
-//      dispatch against isolated, ephemeral-by-default contexts.
+//   4. wires authenticated, closed main<->worker RPC over a `SessionWorkerPort`
+//      so reads and exact staged prepare/apply/reconcile calls reach isolated,
+//      ephemeral-by-default contexts.
 //
-// The main<->worker action transport (how the broker forwards a dispatch to
-// THIS process) is the next slice's seam; this entry stands up the process,
-// the proxy, and the engine so the supervisor lifecycle is real. It is excluded
-// from unit tests (it needs a real browser); the session + policy + supervisor
-// contracts are covered by the fake-engine suites.
+// This entry is excluded from unit tests because it needs a real browser; the
+// RPC, session, policy, and supervisor contracts are covered by fake-engine
+// and cross-layer composition suites.
 
 import { mkdir, rm, writeFile } from "node:fs/promises";
 
@@ -30,16 +29,21 @@ import { SessionWorkerPort } from "../session-worker-port";
 import { StagingArea } from "../staging";
 import {
   BrowserOriginPolicySchema,
+  BrowserProfileMode,
   type BrowserActionRequest,
   type BrowserOriginPolicy,
 } from "../protocol";
+import {
+  BROWSER_WORKER_RPC_TOKEN_ENV,
+  installBrowserWorkerRpcServer,
+} from "../worker-rpc";
 
 interface WorkerEnv {
   readonly stagingRoot: string;
   readonly profilesRoot: string;
   readonly ephemeralRoot: string;
-  readonly browserVersion: string;
-  readonly executablePath?: string;
+  readonly rpcToken: string;
+  readonly executablePath: string;
   readonly originPolicy: BrowserOriginPolicy;
 }
 
@@ -50,8 +54,8 @@ function readEnv(env: NodeJS.ProcessEnv): WorkerEnv {
     stagingRoot: requireEnv(env, "BROWSER_STAGING_ROOT"),
     profilesRoot: requireEnv(env, "BROWSER_PROFILES_ROOT"),
     ephemeralRoot: requireEnv(env, "BROWSER_EPHEMERAL_ROOT"),
-    browserVersion: env.BROWSER_PINNED_VERSION ?? "chromium-pinned",
-    executablePath: env.BROWSER_EXECUTABLE_PATH,
+    rpcToken: requireEnv(env, BROWSER_WORKER_RPC_TOKEN_ENV),
+    executablePath: requireEnv(env, "BROWSER_EXECUTABLE_PATH"),
     originPolicy,
   };
 }
@@ -90,7 +94,7 @@ export async function main(
     profilesRoot: cfg.profilesRoot,
     ephemeralRoot: cfg.ephemeralRoot,
     fs: profileFs,
-    browserVersion: cfg.browserVersion,
+    browserVersion: engine.version(),
   });
   const stagingFs = {
     mkdir: (p: string, o: { recursive: boolean; mode?: number }) =>
@@ -100,7 +104,16 @@ export async function main(
   };
 
   const workerPort = new SessionWorkerPort({
+    // These schemas are discovery-only. The worker's dispatch_read RPC still
+    // rejects them; execution is reachable solely through prepare/apply.
+    includeActionTools: true,
     createSession: async (binding: BrowserActionRequest["binding"]) => {
+      if (
+        binding.profileMode !== BrowserProfileMode.Ephemeral ||
+        binding.profileId !== "ephemeral"
+      ) {
+        throw new Error("browser worker accepts ephemeral read profiles only");
+      }
       const manifest = await profiles.newEphemeral(binding.workspaceId);
       const staging = new StagingArea({
         stagingRoot: cfg.stagingRoot,
@@ -113,10 +126,18 @@ export async function main(
         originPolicy: cfg.originPolicy,
         staging,
         runId: binding.runId,
+        onClose: () => profiles.discardEphemeral(manifest),
       });
       await session.open();
       return session;
     },
+  });
+
+  const uninstallRpc = installBrowserWorkerRpcServer({
+    process,
+    token: cfg.rpcToken,
+    version: engine.version(),
+    worker: workerPort,
   });
 
   // Health line the supervisor parses (READY + pinned version).
@@ -125,6 +146,7 @@ export async function main(
   );
 
   const shutdown = async (): Promise<void> => {
+    uninstallRpc();
     await workerPort.closeAll();
     await engine.close();
     await proxy.stop();

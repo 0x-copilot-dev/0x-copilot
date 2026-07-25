@@ -45,6 +45,14 @@ USAGE_BUDGET_TABLES = (
     "usage_budget_state",
     "usage_budget_reservations",
 )
+ARTIFACT_REPOSITORY_TABLES = (
+    "runtime_artifacts",
+    "runtime_artifact_revisions",
+    "runtime_artifact_idempotency",
+    "runtime_artifact_reference_edges",
+    "runtime_artifact_gc_candidates",
+    "runtime_artifact_gc_quarantine",
+)
 
 
 def _migration_sql(filename: str) -> str:

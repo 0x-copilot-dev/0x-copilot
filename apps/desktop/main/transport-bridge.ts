@@ -1,4 +1,7 @@
 import type {
+  ArtifactContentRequest,
+  ArtifactContentResponse,
+  ArtifactRevisionRequest,
   Session,
   SseSubscribeOptions,
   SseSubscription,
@@ -6,6 +9,7 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@0x-copilot/chat-transport";
+import { isArtifactTransport } from "@0x-copilot/chat-transport";
 
 import type { StreamEventPayload } from "./ipc/schemas";
 
@@ -38,6 +42,11 @@ export class TransportBridge {
   readonly #emit: StreamEventEmitter;
   readonly #onRunFeedMessage?: (raw: string) => void;
   readonly #subscriptions = new Map<string, SubscriptionHandle>();
+  readonly #artifactReaders = new Map<
+    string,
+    ReadableStreamDefaultReader<Uint8Array>
+  >();
+  #nextArtifactHandle = 1;
 
   constructor(emit: StreamEventEmitter, options: TransportBridgeOptions) {
     this.#transport = options.transport;
@@ -47,6 +56,54 @@ export class TransportBridge {
 
   async request<T>(req: TypedRequest): Promise<T> {
     return this.#transport.request<T>(req);
+  }
+
+  async openArtifactContent(
+    request: ArtifactContentRequest,
+  ): Promise<
+    Omit<ArtifactContentResponse, "body"> & { readonly handle: string }
+  > {
+    if (!isArtifactTransport(this.#transport)) {
+      throw new Error("This desktop transport does not support artifact bytes");
+    }
+    const content = await this.#transport.getArtifactContent(request);
+    const handle = `artifact-stream-${this.#nextArtifactHandle++}`;
+    this.#artifactReaders.set(handle, content.body.getReader());
+    const { body: _body, ...metadata } = content;
+    return { handle, ...metadata };
+  }
+
+  async readArtifactContent(
+    handle: string,
+  ): Promise<{ readonly done: boolean; readonly chunk: Uint8Array | null }> {
+    const reader = this.#artifactReaders.get(handle);
+    if (!reader) throw new Error("Artifact stream is no longer available");
+    const next = await reader.read();
+    if (next.done) {
+      this.#artifactReaders.delete(handle);
+      reader.releaseLock();
+      return { done: true, chunk: null };
+    }
+    return { done: false, chunk: next.value };
+  }
+
+  async closeArtifactContent(handle: string): Promise<void> {
+    const reader = this.#artifactReaders.get(handle);
+    if (!reader) return;
+    this.#artifactReaders.delete(handle);
+    await reader.cancel();
+    reader.releaseLock();
+  }
+
+  async createArtifactRevision(
+    request: ArtifactRevisionRequest,
+  ): Promise<unknown> {
+    if (!isArtifactTransport(this.#transport)) {
+      throw new Error(
+        "This desktop transport does not support artifact revisions",
+      );
+    }
+    return this.#transport.createArtifactRevision(request);
   }
 
   sessionSnapshot(): {
@@ -123,6 +180,11 @@ export class TransportBridge {
       handle.subscription.close();
     }
     this.#subscriptions.clear();
+    for (const [, reader] of this.#artifactReaders) {
+      void reader.cancel();
+      reader.releaseLock();
+    }
+    this.#artifactReaders.clear();
   }
 
   activeSubscriptionCount(): number {

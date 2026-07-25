@@ -41,6 +41,7 @@ class RetentionKind(StrEnum):
     MESSAGES_TOMBSTONED = "messages_tombstoned"
     EVENTS_TOMBSTONED = "events_tombstoned"
     MEMORY_ITEMS_TOMBSTONED = "memory_items_tombstoned"
+    ARTIFACTS_TOMBSTONED = "artifacts_tombstoned"
 
 
 class RetentionPolicyRecord(RuntimeContract):

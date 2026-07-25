@@ -24,6 +24,12 @@ import pytest
 # Tables truncated between tests. Listed CASCADE-safely; psycopg runs the
 # TRUNCATE in one statement so order doesn't matter.
 _RUNTIME_TABLES = (
+    "runtime_artifact_reference_edges",
+    "runtime_artifact_gc_quarantine",
+    "runtime_artifact_gc_candidates",
+    "runtime_artifact_idempotency",
+    "runtime_artifact_revisions",
+    "runtime_artifacts",
     "runtime_deletion_evidence",
     "runtime_legal_holds",
     "runtime_audit_log",

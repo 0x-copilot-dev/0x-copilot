@@ -174,6 +174,53 @@ describe("IpcTransport.request", () => {
   });
 });
 
+describe("IpcTransport artifact bytes", () => {
+  it("reassembles exact byte chunks without exposing the main-process stream handle", async () => {
+    const bytes = new Uint8Array([0xef, 0xbb, 0xbf, 0x61, 0x0d, 0x0a]);
+    let reads = 0;
+    const bridge = makeFakeBridge(async (channel) => {
+      if (channel === CHANNELS.transportArtifactContentOpen) {
+        return {
+          handle: "main-only-handle",
+          contentType: "text/csv",
+          contentLength: bytes.byteLength,
+          etag: '"sha256:abc"',
+          filename: "sample.csv",
+        };
+      }
+      if (channel === CHANNELS.transportArtifactContentRead) {
+        reads += 1;
+        return reads === 1
+          ? { done: false, chunk: bytes }
+          : { done: true, chunk: null };
+      }
+      return undefined;
+    });
+    const transport = makeTransport(bridge);
+
+    const content = await transport.getArtifactContent({
+      artifactId: "artifact_1",
+      revision: 2,
+    });
+
+    expect(
+      new Uint8Array(await new Response(content.body).arrayBuffer()),
+    ).toEqual(bytes);
+    expect(content).toMatchObject({
+      contentType: "text/csv",
+      contentLength: 6,
+      etag: '"sha256:abc"',
+      filename: "sample.csv",
+    });
+    expect("handle" in content).toBe(false);
+    expect(bridge.invokeCalls().map((call) => call.channel)).toEqual([
+      CHANNELS.transportArtifactContentOpen,
+      CHANNELS.transportArtifactContentRead,
+      CHANNELS.transportArtifactContentRead,
+    ]);
+  });
+});
+
 describe("IpcTransport.getSession and capabilities", () => {
   it("returns the bootstrap session synchronously", () => {
     const bridge = makeFakeBridge();

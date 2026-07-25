@@ -12,7 +12,10 @@ import {
 } from "@0x-copilot/chat-transport";
 
 import { TransportBridge } from "../transport-bridge";
-import { CAPABILITY_CHANNELS } from "../capabilities/channels";
+import {
+  CAPABILITY_CHANNELS,
+  isCapabilityChannel,
+} from "../capabilities/channels";
 import {
   CHANNELS,
   IpcValidationError,
@@ -128,6 +131,10 @@ describe("registerIpcHandlers — channel registration", () => {
   it("registers every documented channel", () => {
     const { ipcMain } = setup();
     expect(ipcMain.has(CHANNELS.transportRequest)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactContentOpen)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactContentRead)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactContentClose)).toBe(true);
+    expect(ipcMain.has(CHANNELS.transportArtifactRevision)).toBe(true);
     expect(ipcMain.has(CHANNELS.transportSubscribe)).toBe(true);
     expect(ipcMain.has(CHANNELS.transportUnsubscribe)).toBe(true);
     expect(ipcMain.has(CHANNELS.transportSessionSnapshot)).toBe(true);
@@ -849,5 +856,105 @@ describe("capability.* channels", () => {
     expect(ipcMain.has(CAPABILITY_CHANNELS.requestFolderGrant)).toBe(false);
     expect(ipcMain.has(CAPABILITY_CHANNELS.listGrants)).toBe(false);
     expect(ipcMain.has(CAPABILITY_CHANNELS.revokeGrant)).toBe(false);
+  });
+});
+
+describe("capability.decide-workspace-approval", () => {
+  const request = {
+    snapshot: {
+      runId: "run_c3_001",
+      stageId: "stage_c3_001",
+      revision: 7,
+      proposalDigest: "a".repeat(64),
+      targetDigest: "b".repeat(64),
+    },
+    decision: "approve" as const,
+  };
+  const result = {
+    stageId: request.snapshot.stageId,
+    revision: request.snapshot.revision,
+    decision: "approve" as const,
+    status: "approved" as const,
+  };
+
+  function setupWorkspaceApproval(response: typeof result = result) {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    const workspaceApproval = { decide: vi.fn(async () => response) };
+    const teardown = registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+      workspaceApproval,
+    });
+    return { ipcMain, workspaceApproval, teardown };
+  }
+
+  it("registers only the narrow decision channel when the host is present", () => {
+    const { ipcMain } = setupWorkspaceApproval();
+    expect(ipcMain.has(CAPABILITY_CHANNELS.decideWorkspaceApproval)).toBe(true);
+    expect(isCapabilityChannel("capability.workspace-commit")).toBe(false);
+    expect(isCapabilityChannel("capability.broker-mutate")).toBe(false);
+  });
+
+  it("does not register the channel without the main-owned host", () => {
+    const ipcMain = makeFakeIpcMain();
+    const transport = new FakeTransport();
+    const bridge = new TransportBridge(() => undefined, { transport });
+    registerIpcHandlers({
+      ipcMain: ipcMain as unknown as Parameters<
+        typeof registerIpcHandlers
+      >[0]["ipcMain"],
+      bridge,
+    });
+    expect(ipcMain.has(CAPABILITY_CHANNELS.decideWorkspaceApproval)).toBe(
+      false,
+    );
+  });
+
+  it("forwards only the safe stage snapshot and returns the reduced safe result", async () => {
+    const { ipcMain, workspaceApproval } = setupWorkspaceApproval();
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.decideWorkspaceApproval, 1, request),
+    ).resolves.toEqual(result);
+    expect(workspaceApproval.decide).toHaveBeenCalledWith(request);
+  });
+
+  it("rejects a renderer payload that smuggles a physical root or prepared reference", async () => {
+    const { ipcMain, workspaceApproval } = setupWorkspaceApproval();
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.decideWorkspaceApproval, 1, {
+        ...request,
+        snapshot: {
+          ...request.snapshot,
+          root: "/Users/alice/private",
+          preparedRef: "workspace-prepared://private-c3",
+        },
+      }),
+    ).rejects.toBeInstanceOf(IpcValidationError);
+    expect(workspaceApproval.decide).not.toHaveBeenCalled();
+  });
+
+  it("blocks an accidental receipt, permit, or host-path field in the outbound result", async () => {
+    const { ipcMain } = setupWorkspaceApproval({
+      ...result,
+      decisionLedgerId: "ledger_c3_001",
+      permit: "wcp_private",
+      preparedRef: "workspace-prepared://private-c3",
+      root: "/Users/alice/private",
+    } as typeof result);
+    await expect(
+      ipcMain.invoke(CAPABILITY_CHANNELS.decideWorkspaceApproval, 1, request),
+    ).rejects.toThrow();
+  });
+
+  it("removes the decision channel during teardown", () => {
+    const { ipcMain, teardown } = setupWorkspaceApproval();
+    teardown();
+    expect(ipcMain.has(CAPABILITY_CHANNELS.decideWorkspaceApproval)).toBe(
+      false,
+    );
   });
 });

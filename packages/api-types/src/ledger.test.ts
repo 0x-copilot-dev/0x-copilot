@@ -8,6 +8,7 @@ import {
   formatLedgerId,
   isLedgerEventType,
   isPendingWorkResponse,
+  isPendingWorkV2Response,
   isSurfaceEventV2,
   parseLedgerId,
   type ActionClass,
@@ -24,6 +25,7 @@ import {
   type EffectExecutorKind,
   type EffectOutcome,
   type EffectPolicy,
+  type EffectProposalKind,
   type EffectStageStatus,
   type GateAuthState,
   type GateDecision,
@@ -219,6 +221,15 @@ const ENUM_TUPLES = {
     "sandbox",
     "builtin",
   ] as const satisfies readonly EffectExecutorKind[],
+  effect_proposal_kind: [
+    "canonical_arguments",
+    "artifact_revision",
+    "workspace_change_set",
+    "row_set",
+    "browser_submission",
+    "sandbox_patch",
+    "builtin_payload",
+  ] as const satisfies readonly EffectProposalKind[],
   effect_stage_status: [
     "staged",
     "approved",
@@ -451,5 +462,70 @@ describe("isPendingWorkResponse (PRD-E2)", () => {
     expect(isPendingWorkResponse({ v: 1, agents: [] })).toBe(false);
     expect(isPendingWorkResponse(null)).toBe(false);
     expect(isPendingWorkResponse("nope")).toBe(false);
+  });
+});
+
+describe("isPendingWorkV2Response (E1 D6)", () => {
+  const response = {
+    v: 2,
+    items: [
+      {
+        run_id: "run_safe_1",
+        subject_kind: "effect",
+        subject_id: "stage_safe_1",
+        status: "held",
+        opened_sequence_no: 4,
+        latest_sequence_no: 7,
+      },
+    ],
+    warnings: [{ run_id: "run_omitted_1", status: "omitted" }],
+    next_cursor: "opaque-keyset",
+    has_more: true,
+  };
+
+  it("accepts the exact safe canonical response shape", () => {
+    expect(isPendingWorkV2Response(response)).toBe(true);
+  });
+
+  it("rejects a response that leaks presentation or target data", () => {
+    expect(
+      isPendingWorkV2Response({
+        ...response,
+        items: [{ ...response.items[0], title: "do not expose this" }],
+      }),
+    ).toBe(false);
+    expect(
+      isPendingWorkV2Response({
+        ...response,
+        warnings: [{ ...response.warnings[0], reason: "do not expose this" }],
+      }),
+    ).toBe(false);
+  });
+
+  it("rejects malformed ids, sequence values, and pagination metadata", () => {
+    expect(
+      isPendingWorkV2Response({
+        ...response,
+        items: [{ ...response.items[0], opened_sequence_no: 0 }],
+      }),
+    ).toBe(false);
+    expect(isPendingWorkV2Response({ ...response, next_cursor: 7 })).toBe(
+      false,
+    );
+    expect(isPendingWorkV2Response({ v: 2, items: [], warnings: [] })).toBe(
+      false,
+    );
+    expect(
+      isPendingWorkV2Response({
+        ...response,
+        items: [{ ...response.items[0], subject_id: "file:///private/data" }],
+      }),
+    ).toBe(false);
+    expect(
+      isPendingWorkV2Response({
+        ...response,
+        warnings: [{ ...response.warnings[0], run_id: "../../foreign" }],
+      }),
+    ).toBe(false);
   });
 });

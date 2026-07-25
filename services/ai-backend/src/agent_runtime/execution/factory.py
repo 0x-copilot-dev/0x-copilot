@@ -25,6 +25,7 @@ from agent_runtime.execution.deep_agent_builder import (
     CODE_MODE_GUIDANCE,
     SANDBOX_EXECUTE_GUIDANCE,
     WORKSPACE_ACCESS_GUIDANCE,
+    WORKSPACE_STAGED_WRITE_GUIDANCE,
     WORKSPACE_WRITE_GUIDANCE,
     DeepAgentBuildRequest,
     DeepAgentsBackend,
@@ -41,6 +42,10 @@ from agent_runtime.capabilities.mcp.middleware.dynamic_loader import (
     LoadMcpServerInput,
     LoadMcpServerTool,
 )
+from agent_runtime.capabilities.operations.probes import (
+    OperationShadowProbe,
+    wrap_model_tool_for_shadow,
+)
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -49,6 +54,9 @@ from agent_runtime.capabilities.tools.builtin.ask_a_question import (
 )
 from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
     StageRowsetWriteInput,
+)
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    PublishArtifactInput,
 )
 from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
     SuggestMcpConnectorInput,
@@ -202,7 +210,12 @@ async def _assemble_harness(
     # authority (a writable grant + a per-run capability context + a snapshot
     # store). This one signal gates BOTH the approval permission and the
     # writable prompt guidance.
-    workspace_writable = bool(getattr(workspace_backend, "supports_writes", False))
+    workspace_effect_staging = bool(
+        getattr(workspace_backend, "uses_effect_staging", False)
+    )
+    workspace_writable = bool(
+        getattr(workspace_backend, "supports_writes", False) or workspace_effect_staging
+    )
     deep_backend = _composed_deep_backend(
         runtime_dependencies.subagent_artifacts_backend,
         drafts_backend=runtime_dependencies.drafts_backend,
@@ -221,6 +234,7 @@ async def _assemble_harness(
             code_mode_tool=runtime_dependencies.code_mode_tool,
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
+            publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             runtime_context=runtime_context,
         )
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
@@ -229,9 +243,18 @@ async def _assemble_harness(
         # result for block, or left untouched for auto. Fails open to the
         # deployment default snapshot (write=ask → the existing MCP approval)
         # when no policy is configured, so an unconfigured run is unchanged.
+        from agent_runtime.capabilities.mcp.operation_adapter import (
+            is_enforced_mcp_gateway_active,
+        )
+
         enforced_tools = ToolUsePolicyEnforcer.enforce(
             model_tools=model_tools,
             snapshot=ToolUsePolicyResolver.resolve(runtime_context),
+            delegated_tool_names=(
+                frozenset({McpValues.ToolName.CALL_MCP_TOOL})
+                if is_enforced_mcp_gateway_active()
+                else frozenset()
+            ),
         )
         model_tools = enforced_tools.tools
         model_instructions = _instructions_with_capability_tools(
@@ -246,8 +269,12 @@ async def _assemble_harness(
                     ),
                     suggestions=runtime_context.suggested_connectors,
                 ),
-                workspace_active=workspace_backend is not None,
+                workspace_active=bool(
+                    workspace_backend is not None
+                    and getattr(workspace_backend, "advertise_workspace", True)
+                ),
                 workspace_writable=workspace_writable,
+                workspace_effect_staging=workspace_effect_staging,
             ),
             code_mode_active=runtime_dependencies.code_mode_tool is not None,
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
@@ -300,7 +327,10 @@ async def _assemble_harness(
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
                 interrupt_on=enforced_tools.interrupt_on,
-                permissions=_workspace_write_permissions(workspace_writable),
+                permissions=_workspace_write_permissions(
+                    workspace_writable,
+                    effect_staged=workspace_effect_staging,
+                ),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
             )
@@ -338,9 +368,12 @@ def _model_visible_tools(
     code_mode_tool: object | None = None,
     sandbox_execute_tool: object | None = None,
     stage_rowset_write_tool: object | None = None,
+    publish_artifact_tool: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
-    model_tools = list(tools)
+    model_tools = [
+        wrap_model_tool_for_shadow(tool, capability="builtin") for tool in tools
+    ]
     auth_session_creator = _auth_session_creator(mcp_registry)
     local_tool_names = _local_tool_names(
         model_tools,
@@ -432,15 +465,29 @@ def _model_visible_tools(
     # is off. Appended last so they receive the SAME tool-policy / approval /
     # budget middleware every other model tool does — they are not privileged.
     if code_mode_tool is not None:
-        model_tools.append(code_mode_tool)
+        model_tools.append(
+            wrap_model_tool_for_shadow(
+                code_mode_tool,
+                capability="builtin",
+            )
+        )
     if sandbox_execute_tool is not None:
-        model_tools.append(sandbox_execute_tool)
+        model_tools.append(
+            wrap_model_tool_for_shadow(
+                sandbox_execute_tool,
+                capability="builtin",
+            )
+        )
     # PRD-D3 — the gated bulk row-set staging tool. Injected as a domain adapter
     # (the worker builds it per run when SURFACES_V2 is on) and wrapped here with
     # its typed schema, like the other builtin tools. Flag off ⇒ `None` ⇒ absent.
     if stage_rowset_write_tool is not None:
         model_tools.append(
             _structured_tool(stage_rowset_write_tool, StageRowsetWriteInput)
+        )
+    if publish_artifact_tool is not None:
+        model_tools.append(
+            _structured_tool(publish_artifact_tool, PublishArtifactInput)
         )
     return tuple(model_tools)
 
@@ -452,7 +499,11 @@ def _model_visible_tools(
 _WORKSPACE_WRITE_GLOB: Final = "/workspace/**"
 
 
-def _workspace_write_permissions(workspace_writable: bool) -> tuple[object, ...]:  # noqa: FBT001
+def _workspace_write_permissions(
+    workspace_writable: bool,  # noqa: FBT001
+    *,
+    effect_staged: bool = False,  # noqa: FBT001, FBT002
+) -> tuple[object, ...]:
     """Return the host-write approval permission when the run can write to host folders.
 
     A single Deep Agents ``FilesystemPermission`` with ``mode="interrupt"`` over
@@ -462,7 +513,7 @@ def _workspace_write_permissions(workspace_writable: bool) -> tuple[object, ...]
     empty tuple when the run has no writable host grant, so the read-only /
     non-desktop path installs no permission and stays byte-identical.
     """
-    if not workspace_writable:
+    if not workspace_writable or effect_staged:
         return ()
     # Imported lazily so the deepagents permission type is referenced in exactly
     # one place and non-workspace runs never touch it.
@@ -510,12 +561,26 @@ def _local_tool_names(
 def _structured_tool(tool_adapter: object, args_schema: type[object]) -> StructuredTool:
     """Wrap a domain tool adapter as a LangChain ``StructuredTool`` with a typed schema."""
 
+    name = str(getattr(tool_adapter, "name"))
+
     async def invoke_adapter(**kwargs: Any) -> object:
-        return await tool_adapter.ainvoke(kwargs)  # type: ignore[attr-defined]
+        async def _invoke_legacy() -> object:
+            return await tool_adapter.ainvoke(kwargs)  # type: ignore[attr-defined]
+
+        # The provider dispatch inside ``CallMcpTool`` owns the MCP probe; an
+        # umbrella-level probe here would double-count the same invocation.
+        if name in {McpValues.ToolName.CALL_MCP_TOOL, "publish_artifact"}:
+            return await _invoke_legacy()
+        return await OperationShadowProbe.invoke_legacy(
+            capability="builtin",
+            op=name,
+            arguments=kwargs,
+            legacy=_invoke_legacy,
+        )
 
     return StructuredTool.from_function(
         coroutine=invoke_adapter,
-        name=str(getattr(tool_adapter, "name")),
+        name=name,
         description=str(getattr(tool_adapter, "description")),
         args_schema=args_schema,
     )
@@ -796,6 +861,7 @@ def _instructions_with_workspace(
     instructions: str,
     workspace_active: bool,
     workspace_writable: bool = False,
+    workspace_effect_staging: bool = False,
 ) -> str:
     """Append the ``/workspace/`` guidance block when the route is active.
 
@@ -810,7 +876,11 @@ def _instructions_with_workspace(
     if not workspace_active:
         return instructions
     guidance = (
-        WORKSPACE_WRITE_GUIDANCE if workspace_writable else WORKSPACE_ACCESS_GUIDANCE
+        WORKSPACE_STAGED_WRITE_GUIDANCE
+        if workspace_effect_staging
+        else WORKSPACE_WRITE_GUIDANCE
+        if workspace_writable
+        else WORKSPACE_ACCESS_GUIDANCE
     )
     return "\n\n".join((instructions, guidance))
 

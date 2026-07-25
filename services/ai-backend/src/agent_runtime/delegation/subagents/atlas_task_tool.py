@@ -57,14 +57,16 @@ from deepagents.middleware.subagents import (  # type: ignore[import-untyped]
     _subagent_tracing_context,
     create_sub_agent,
 )
-
-
-# Stable contract: anything emitted from a subagent's runtime carries this
-# key in its RunnableConfig.metadata. The worker's StreamUpdateProcessor
-# reads it to register a deterministic (subgraph_task_id → supervisor_call_id)
-# link the first time it sees a chunk from that subgraph; subsequent events
-# from the same subgraph hit the cache.
-SUPERVISOR_TASK_CALL_ID_KEY = "supervisor_task_call_id"
+from agent_runtime.capabilities.operations.context import OperationContext
+from agent_runtime.capabilities.operations.probes import OperationShadowProbe
+from agent_runtime.delegation.subagents.operation_identity import (
+    SUBAGENT_DELEGATION_OPERATION_ID_KEY,
+    SUBAGENT_PARENT_OPERATION_ID_KEY,
+    SUBAGENT_ROOT_OPERATION_ID_KEY,
+    SUPERVISOR_TASK_CALL_ID_KEY,
+    SubagentOperationIdentityFactory,
+)
+from agent_runtime.surfaces_v2.ledger_models import Producer
 
 
 def build_atlas_task_tool(
@@ -212,16 +214,7 @@ def build_atlas_task_tool(
         - `configurable.supervisor_task_call_id` (defensive — second channel)
         - `metadata.supervisor_task_call_id` (primary — what the worker reads)
         """
-        tool_call_id = runtime.tool_call_id
-        return {
-            "configurable": {
-                "ls_agent_type": "subagent",
-                SUPERVISOR_TASK_CALL_ID_KEY: tool_call_id,
-            },
-            "metadata": {
-                SUPERVISOR_TASK_CALL_ID_KEY: tool_call_id,
-            },
-        }
+        return build_subagent_invocation_config(runtime.tool_call_id)
 
     def task(
         description: str,
@@ -263,8 +256,35 @@ def build_atlas_task_tool(
             subagent_type, description, runtime
         )
         subagent_config = _build_subagent_config(runtime)
-        with _subagent_tracing_context():
-            result = await subagent.ainvoke(subagent_state, subagent_config)
+
+        async def _invoke_subagent() -> object:
+            with OperationContext.producer_scope(Producer.SUBAGENT):
+
+                async def _dispatch() -> object:
+                    with _subagent_tracing_context():
+                        return await subagent.ainvoke(subagent_state, subagent_config)
+
+                dispatched = await OperationShadowProbe.invoke_legacy(
+                    capability="subagent",
+                    op="dispatch",
+                    arguments={
+                        "description": description,
+                        "subagent_type": subagent_type,
+                    },
+                    legacy=_dispatch,
+                )
+                await OperationShadowProbe.observe_model_result(dispatched)
+                return dispatched
+
+        result = await OperationShadowProbe.invoke_legacy(
+            capability="builtin",
+            op="task",
+            arguments={
+                "description": description,
+                "subagent_type": subagent_type,
+            },
+            legacy=_invoke_subagent,
+        )
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
     return StructuredTool.from_function(
@@ -275,6 +295,49 @@ def build_atlas_task_tool(
         infer_schema=False,
         args_schema=TaskToolSchema,
     )
+
+
+def build_subagent_invocation_config(
+    supervisor_task_call_id: str | None,
+) -> RunnableConfig:
+    """Build config metadata that pins a child graph to its parent operation.
+
+    The helper is deliberately separate from the upstream task-tool mirror so
+    tests can verify the correlation contract without depending on LangChain's
+    private ``ToolRuntime`` construction.
+    """
+
+    link = (
+        SubagentOperationIdentityFactory.for_active_context(
+            supervisor_task_call_id=supervisor_task_call_id
+        )
+        if supervisor_task_call_id
+        else None
+    )
+    correlation_metadata: dict[str, object] = {
+        SUPERVISOR_TASK_CALL_ID_KEY: supervisor_task_call_id,
+    }
+    correlation_configurable: dict[str, object] = {
+        "ls_agent_type": "subagent",
+        SUPERVISOR_TASK_CALL_ID_KEY: supervisor_task_call_id,
+    }
+    if link is not None:
+        # These are deterministic functions of trusted run identity and
+        # tool-call id.  Downstream stream/usage consumers can therefore
+        # rebuild the same parent/child relationship after a reconnect
+        # without a FIFO assignment or mutable in-process map.
+        correlation_metadata.update(
+            {
+                SUBAGENT_DELEGATION_OPERATION_ID_KEY: link.delegation_operation_id,
+                SUBAGENT_PARENT_OPERATION_ID_KEY: link.delegation_operation_id,
+                SUBAGENT_ROOT_OPERATION_ID_KEY: link.child_root_operation_id,
+            }
+        )
+        correlation_configurable.update(correlation_metadata)
+    return {
+        "configurable": correlation_configurable,
+        "metadata": correlation_metadata,
+    }
 
 
 def install_atlas_task_tool() -> None:

@@ -9,6 +9,8 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.settings import RuntimeSettings
 from copilot_service_contracts.deployment_profile import ENV_DEPLOYMENT_PROFILE
 from runtime_adapters.factory import RuntimeAdapterFactory
+from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
+from runtime_adapters.file.artifact_metadata_store import FileArtifactMetadataStore
 
 
 def _file_settings(tmp_path) -> RuntimeSettings:
@@ -17,6 +19,7 @@ def _file_settings(tmp_path) -> RuntimeSettings:
             "OPENAI_API_KEY": "sk-test",
             "RUNTIME_STORE_BACKEND": "file",
             "RUNTIME_FILE_STORE_ROOT": str(tmp_path / "store"),
+            "ARTIFACT_EFFECTS_V2": "true",
         }
     )
 
@@ -26,7 +29,7 @@ class TestFileBackendFactoryGating:
         monkeypatch.setenv(ENV_DEPLOYMENT_PROFILE, "single_user_desktop")
         ports = RuntimeAdapterFactory.from_settings(_file_settings(tmp_path))
         assert ports.backend == "file"
-        assert ports.persistence is ports.event_store is ports.queue
+        assert ports.persistence is ports.event_store
         assert ports.postgres_store is None
         # Satellite ports are all wired.
         assert ports.draft_store is not None
@@ -34,6 +37,8 @@ class TestFileBackendFactoryGating:
         assert ports.subagent_store is not None
         assert ports.source_store is not None
         assert ports.conversation_tool_ordinal_store is not None
+        assert isinstance(ports.artifact_metadata_store, FileArtifactMetadataStore)
+        assert isinstance(ports.artifact_blob_store, FileArtifactBlobStore)
 
     def test_rejects_non_desktop_profile(self, tmp_path, monkeypatch) -> None:
         monkeypatch.setenv(ENV_DEPLOYMENT_PROFILE, "saas_multi_tenant")

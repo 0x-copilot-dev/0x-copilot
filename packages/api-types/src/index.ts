@@ -1,10 +1,34 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
+import { LEDGER_EVENT_TYPES as WORK_LEDGER_EVENT_TYPES } from "./ledger";
+
+export type {
+  ArtifactCreateMultipartFields,
+  ArtifactDetailResponse,
+  ArtifactListResponse,
+  ArtifactMutationResponse,
+  ArtifactPromotionRequest,
+  ArtifactRevisionMultipartFields,
+  ArtifactRevisionResponse,
+} from "./artifacts";
+export {
+  isArtifactDetailResponse,
+  isArtifactListResponse,
+  isArtifactMutationResponse,
+  isArtifactRevisionResponse,
+} from "./artifacts";
+export type {
+  ArtifactPreviewState,
+  ArtifactRenderState,
+} from "./artifactSurface";
+export { isArtifactRenderState } from "./artifactSurface";
 
 // Work Ledger vocabulary (Generative Surfaces v2, SDR §5 / PRD-A1). `ledger.ts`
 // is the single canonical home for all v2 ledger/domain type additions across
 // every wave; this barrel only ever gains re-export lines, never a type body.
 export type {
   LedgerEventType,
+  ArtifactRuntimeEventType,
+  ArtifactRuntimeEventPayloadMap,
   GateAuthState,
   GateOutcome,
   WritePolicy,
@@ -92,6 +116,12 @@ export type {
   StagedWrite,
   OperationRequest,
   OperationDescriptor,
+  UsageAttributionRelationship,
+  UsageAttributionEdge,
+  OperationUsageTotals,
+  OperationNodeStatus,
+  OperationNode,
+  OperationTree,
   OperationDisposition,
   Artifact,
   ArtifactRevision,
@@ -101,6 +131,8 @@ export type {
   ProposalRef,
   EffectStage,
   EffectDecision,
+  WorkspaceApprovalDecisionRequest,
+  WorkspaceApprovalDecisionReceipt,
   EffectExecutionRequest,
   EffectExecutionResult,
   StageRevisionRequest,
@@ -116,9 +148,23 @@ export type {
   UsageRecord,
   RunReceiptRow,
   RunReceipt,
+  ReceiptRunStatusV2,
+  ReceiptOperationsV2,
+  ReceiptArtifactsV2,
+  ReceiptReadsV2,
+  ReceiptEffectsV2,
+  ReceiptGatesV2,
+  ReceiptUsageTotalV2,
+  ReceiptUsageReferenceV2,
+  ReceiptUsageV2,
+  ReceiptWarningV2,
+  RunReceiptV2,
   // PRD-E3 — tamper-evident receipt export bundle.
   ReceiptExportRow,
   ReceiptExportBundle,
+  ReceiptExportRefClassV2,
+  ReceiptExportV2Row,
+  ReceiptExportV2,
   SurfaceViewState,
   SurfaceSnapshot,
   RunSurfacesResponse,
@@ -133,14 +179,29 @@ export type {
   LegacyPresentationProjection,
   LegacyGateProjection,
   LegacyCompatibilityProjection,
+  // Sources v2 — safe provenance projection.
+  SourceFactKindV2,
+  SourceFactV2,
+  SourcesProjectionV2,
   // PRD-E2 — cross-run pending-work queue read model.
   PendingItemKind,
   PendingWorkItem,
   PendingAgentRow,
   PendingWorkResponse,
+  // E1 D6 — safe canonical v2.1 pending-work page.
+  PendingWorkSubjectKindV2,
+  PendingWorkStatusV2,
+  PendingWorkItemV2,
+  PendingWorkV2RunWarning,
+  PendingWorkV2Response,
 } from "./ledger";
 export {
   LEDGER_EVENT_TYPES,
+  ARTIFACT_EVENT_TYPES,
+  ARTIFACT_RUNTIME_EVENT_TYPES,
+  OPERATION_EVENT_TYPES,
+  EFFECT_EVENT_TYPES,
+  GATE_V2_EVENT_TYPES,
   isLedgerEventType,
   isSurfaceEventV2,
   isLedgerPayloadForWrite,
@@ -164,6 +225,8 @@ export {
   sha256Hex,
   // PRD-E2 — pending-work envelope guard.
   isPendingWorkResponse,
+  // E1 D6 — strict canonical pending-work boundary guard.
+  isPendingWorkV2Response,
 } from "./ledger";
 
 // Branded ID types — used in approval payloads + responses (P1-A re-scoped,
@@ -182,6 +245,10 @@ import type {
 // Local binding for the shared ledger payloads used in RuntimeEventPayloadByType
 // below (the block above re-exports them but does not bind them into local scope).
 import type {
+  ArtifactRuntimeEventPayloadMap,
+  ArtifactRuntimeEventType,
+  LedgerEventPayloadMap,
+  UsageAttributionRelationship,
   UsageRecordedPayload,
   ActionClassifiedPayload,
   ReadExecutedPayload,
@@ -455,6 +522,30 @@ export type RuntimeEventSource =
   | "subagent"
   | "summarization"
   | "system";
+
+// A1 owns these append-only tuple positions. Runtime transport references the
+// canonical ledger mirror instead of redeclaring v2.1 wire literals here.
+// A5 appends the seven universal-effect lifecycle rows after A2/A3's artifact
+// slice; they remain reference-only and use the same SSE/replay envelope.
+const RUNTIME_LEDGER_V21_EVENT_TYPES = [
+  WORK_LEDGER_EVENT_TYPES[15],
+  WORK_LEDGER_EVENT_TYPES[16],
+  WORK_LEDGER_EVENT_TYPES[17],
+  WORK_LEDGER_EVENT_TYPES[18],
+  WORK_LEDGER_EVENT_TYPES[19],
+  WORK_LEDGER_EVENT_TYPES[20],
+  WORK_LEDGER_EVENT_TYPES[21],
+  WORK_LEDGER_EVENT_TYPES[23],
+  WORK_LEDGER_EVENT_TYPES[24],
+  WORK_LEDGER_EVENT_TYPES[25],
+  WORK_LEDGER_EVENT_TYPES[26],
+  WORK_LEDGER_EVENT_TYPES[27],
+  WORK_LEDGER_EVENT_TYPES[28],
+  WORK_LEDGER_EVENT_TYPES[29],
+] as const;
+type RuntimeLedgerV21EventType =
+  (typeof RUNTIME_LEDGER_V21_EVENT_TYPES)[number];
+
 export type RuntimeApiEventType =
   | "run_queued"
   | "run_started"
@@ -515,6 +606,8 @@ export type RuntimeApiEventType =
   | "decision.recorded"
   | "write.applied"
   | "receipt.emitted"
+  | ArtifactRuntimeEventType
+  | RuntimeLedgerV21EventType
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -588,6 +681,10 @@ export const RUNTIME_API_EVENT_TYPES = [
   "decision.recorded",
   "write.applied",
   "receipt.emitted",
+  // Artifact + universal-effect lifecycle rows are pinned by the v2.1 ledger
+  // slice above. Keeping a single spread makes the backend contract parser
+  // resolve the transport tuple without following imports across files.
+  ...RUNTIME_LEDGER_V21_EVENT_TYPES,
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -1490,6 +1587,30 @@ export interface RunUsageCallRow {
   duration_ms: number;
   cost_micro_usd: number | null;
   created_at: string;
+  /** Immutable operation/output links. Multiple links never duplicate this
+   * call's tokens or cost in canonical totals. */
+  attribution_edges: UsageAttributionEdgeRow[];
+}
+
+/** Public read-model form of one immutable usage attribution edge. */
+export interface UsageAttributionEdgeRow {
+  edge_id: string;
+  usage_record_id: string;
+  operation_id: string;
+  artifact_id: string | null;
+  stage_id: string | null;
+  surface_id: string | null;
+  relationship: UsageAttributionRelationship;
+  created_at: string;
+}
+
+/** Per-operation canonical usage total, deduped by usage record ID. */
+export interface UsageOperationRow {
+  operation_id: string;
+  artifact_ids: string[];
+  stage_ids: string[];
+  surface_ids: string[];
+  total: UsageTotals;
 }
 
 export interface RunUsageBreakdown {
@@ -1506,6 +1627,13 @@ export interface RunUsageBreakdown {
   status: string;
   total: UsageTotals;
   by_call: RunUsageCallRow[];
+  by_operation: UsageOperationRow[];
+}
+
+/** Response from `GET /v1/usage/runs/{run_id}/calls`. */
+export interface RunUsageCallsResponse {
+  run_id: string;
+  calls: RunUsageCallRow[];
 }
 
 export interface UsageRunRow {
@@ -2387,7 +2515,10 @@ export interface ApprovalUndoRequestedPayload {
   [key: string]: unknown;
 }
 
-export interface RuntimeEventPayloadByType {
+export interface RuntimeEventPayloadByType
+  extends
+    ArtifactRuntimeEventPayloadMap,
+    Pick<LedgerEventPayloadMap, RuntimeLedgerV21EventType> {
   run_queued: RuntimeLifecyclePayload;
   run_started: RuntimeLifecyclePayload;
   run_cancelling: RuntimeLifecyclePayload;

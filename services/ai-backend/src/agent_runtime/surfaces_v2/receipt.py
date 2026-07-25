@@ -41,6 +41,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     SurfaceKind,
     ViewTier,
 )
+from agent_runtime.surfaces_v2.receipt_v2 import ReceiptFoldV2, RunReceiptV2
 from agent_runtime.surfaces_v2.staging import StagedWriteFold, StagedWriteStatus
 
 _LOGGER = logging.getLogger(__name__)
@@ -680,4 +681,10 @@ class ReceiptEmitter:
             _LOGGER.warning(Messages.RECEIPT_EMIT_RAISED, exc_info=True)
 
 
-__all__ = ["ReceiptEmitFn", "ReceiptEmitter", "ReceiptFold"]
+__all__ = [
+    "ReceiptEmitFn",
+    "ReceiptEmitter",
+    "ReceiptFold",
+    "ReceiptFoldV2",
+    "RunReceiptV2",
+]

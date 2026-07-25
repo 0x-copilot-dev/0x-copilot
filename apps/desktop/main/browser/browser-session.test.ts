@@ -1,10 +1,13 @@
 // @vitest-environment node
+import { createHash } from "node:crypto";
+
 import { describe, expect, it } from "vitest";
 
 import { BrowserSession } from "./browser-session";
 import type {
   BrowserEngine,
   DownloadCapture,
+  ElementObservation,
   ElementTarget,
   EngineContext,
   EnginePage,
@@ -18,7 +21,9 @@ import {
 } from "./action-policy";
 import {
   BrowserActionClass,
+  BrowserEffectActionKind,
   BrowserProfileMode,
+  type BrowserActionPlan,
   type BrowserActionRequest,
   type BrowserOriginPolicy,
 } from "./protocol";
@@ -57,6 +62,11 @@ class FakePage implements EnginePage {
   readonly selects: { target: ElementTarget; value: string }[] = [];
   readonly submits: ElementTarget[] = [];
   readonly downloads: ElementTarget[] = [];
+  readonly observations = new Map<string, ElementObservation>();
+  targetAttached = true;
+  formActionUrl: string | undefined;
+  formPayloadDigest: string | undefined;
+  formMethod: "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | undefined;
   async goto(
     url: string,
   ): Promise<{ url: string; title: string; status: number }> {
@@ -64,6 +74,42 @@ class FakePage implements EnginePage {
     return { url, title: "Example", status: 200 };
   }
   async accessibilitySnapshot(): Promise<RawAxNode | null> {
+    this.observations.clear();
+    let index = 0;
+    const annotate = (node: RawAxNode): void => {
+      const targetId = `fake-target-${index}`;
+      const elementFingerprint = (index + 1).toString(16).padStart(64, "0");
+      const formFingerprint =
+        index === 0 &&
+        this.formActionUrl !== undefined &&
+        this.formPayloadDigest !== undefined &&
+        this.formMethod !== undefined
+          ? "f".repeat(64)
+          : undefined;
+      node.targetId = targetId;
+      node.elementFingerprint = elementFingerprint;
+      node.formFingerprint = formFingerprint;
+      node.formPayloadDigest =
+        formFingerprint === undefined ? undefined : this.formPayloadDigest;
+      node.formActionUrl =
+        formFingerprint === undefined ? undefined : this.formActionUrl;
+      node.formMethod =
+        formFingerprint === undefined ? undefined : this.formMethod;
+      this.observations.set(targetId, {
+        elementFingerprint,
+        ...(formFingerprint === undefined
+          ? {}
+          : {
+              formFingerprint,
+              formPayloadDigest: this.formPayloadDigest,
+              formActionUrl: this.formActionUrl,
+              formMethod: this.formMethod,
+            }),
+      });
+      index += 1;
+      for (const child of node.children ?? []) annotate(child);
+    };
+    if (this.ax !== null) annotate(this.ax);
     return this.ax;
   }
   async screenshot(): Promise<Uint8Array> {
@@ -75,6 +121,11 @@ class FakePage implements EnginePage {
   }
   async currentTitle(): Promise<string> {
     return "Example";
+  }
+  async observeRef(target: ElementTarget): Promise<ElementObservation | null> {
+    return this.targetAttached
+      ? (this.observations.get(target.targetId) ?? null)
+      : null;
   }
   async clickRef(target: ElementTarget): Promise<void> {
     this.clicks.push(target);
@@ -196,6 +247,87 @@ function req(
   };
 }
 
+function stagedClickPlan(
+  session: BrowserSession,
+  fingerprint: string,
+): BrowserActionPlan {
+  return {
+    sessionRef: session.sessionRef,
+    pageRef: session.pageRef,
+    origin: "https://example.com",
+    topLevelOrigin: "https://example.com",
+    actionKind: BrowserEffectActionKind.Click,
+    elementRef: "e2_0",
+    elementFingerprint: fingerprint,
+    canonicalFieldsRef:
+      "operation://op_00000000-0000-4000-8000-000000000001/args",
+    fieldsDigest: "a".repeat(64),
+    uploadArtifactRefs: [],
+    uploadArtifacts: [],
+    precondition: {
+      pageGeneration: session.generation,
+      origin: "https://example.com",
+      elementFingerprint: fingerprint,
+    },
+    preconditionDigest: preconditionDigest({
+      pageGeneration: session.generation,
+      origin: "https://example.com",
+      elementFingerprint: fingerprint,
+    }),
+    userVisibleSummary: "Review browser click on https://example.com.",
+  };
+}
+
+function stagedSubmitPlan(
+  session: BrowserSession,
+  input: {
+    elementFingerprint: string;
+    formFingerprint: string;
+    formPayloadDigest: string;
+    formActionUrl: string;
+    method: "POST";
+  },
+): BrowserActionPlan {
+  const precondition = {
+    pageGeneration: session.generation,
+    origin: "https://example.com",
+    elementFingerprint: input.elementFingerprint,
+    formFingerprint: input.formFingerprint,
+    formPayloadDigest: input.formPayloadDigest,
+  };
+  return {
+    ...stagedClickPlan(session, input.elementFingerprint),
+    actionKind: BrowserEffectActionKind.Submit,
+    formFingerprint: input.formFingerprint,
+    formPayloadDigest: input.formPayloadDigest,
+    formActionUrl: input.formActionUrl,
+    method: input.method,
+    precondition,
+    preconditionDigest: preconditionDigest(precondition),
+    userVisibleSummary: "Review browser submit on https://example.com.",
+  };
+}
+
+function preconditionDigest(value: {
+  pageGeneration: number;
+  origin: string;
+  elementFingerprint?: string;
+  formFingerprint?: string;
+  formPayloadDigest?: string;
+}): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        element_fingerprint: value.elementFingerprint ?? null,
+        form_fingerprint: value.formFingerprint ?? null,
+        form_payload_digest: value.formPayloadDigest ?? null,
+        origin: value.origin,
+        page_generation: value.pageGeneration,
+      }),
+    )
+    .digest("hex");
+}
+
 describe("BrowserSession read-only actions", () => {
   it("navigates to an approved origin and bumps the generation", async () => {
     const engine = new FakeEngine();
@@ -283,6 +415,215 @@ describe("BrowserSession read-only actions", () => {
     const r = await session.dispatch(req("browser_close", {}));
     expect(r.status).toBe("succeeded");
     expect(engine.closed).toBe(true);
+  });
+});
+
+describe("BrowserSession staged effect bridge", () => {
+  it("prepares and consumes an exact click once", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const snapshot = await session.dispatch(req("browser_snapshot", {}));
+    const fingerprint = snapshot.snapshot?.fingerprint;
+    expect(fingerprint).toBeTruthy();
+    const prepared = await session.prepareAction(
+      stagedClickPlan(session, fingerprint!),
+    );
+    expect(prepared.preconditionDrift).toBe(false);
+    const applied = await session.applyPrepared(prepared.preparedRef!);
+    expect(applied.outcome).toBe("applied");
+    expect(engine.page.clicks).toHaveLength(1);
+    // One-use handle prevents a duplicate command from dispatching a click.
+    const replay = await session.applyPrepared(prepared.preparedRef!);
+    expect(replay.outcome).toBe("indeterminate");
+    expect(engine.page.clicks).toHaveLength(1);
+  });
+
+  it("never substitutes an element after page-generation drift", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const first = await session.dispatch(req("browser_snapshot", {}));
+    const prepared = await session.prepareAction(
+      stagedClickPlan(session, first.snapshot?.fingerprint!),
+    );
+    await session.dispatch(req("browser_snapshot", {}));
+    const result = await session.applyPrepared(prepared.preparedRef!);
+    expect(result.outcome).toBe("precondition_drift");
+    expect(engine.page.clicks).toHaveLength(0);
+  });
+
+  it("never substitutes a lookalike after the exact DOM handle detaches", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const snapshot = await session.dispatch(req("browser_snapshot", {}));
+    engine.page.targetAttached = false;
+
+    const prepared = await session.prepareAction(
+      stagedClickPlan(session, snapshot.snapshot?.fingerprint!),
+    );
+
+    expect(prepared.preconditionDrift).toBe(true);
+    expect(prepared.preparedRef).toBeUndefined();
+    expect(engine.page.clicks).toHaveLength(0);
+  });
+
+  it("binds submit approval to the live form action, method, fingerprint, and payload", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    engine.page.formActionUrl = "https://example.com/orders";
+    engine.page.formPayloadDigest = "9".repeat(64);
+    engine.page.formMethod = "POST";
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const snapshot = await session.dispatch(req("browser_snapshot", {}));
+    const plan = stagedSubmitPlan(session, {
+      elementFingerprint: snapshot.snapshot?.fingerprint!,
+      formFingerprint: snapshot.snapshot?.formFingerprint!,
+      formPayloadDigest: snapshot.snapshot?.formPayloadDigest!,
+      formActionUrl: snapshot.snapshot?.formActionUrl!,
+      method: "POST",
+    });
+    engine.page.observations.set("fake-target-0", {
+      elementFingerprint: snapshot.snapshot?.fingerprint!,
+      formFingerprint: "e".repeat(64),
+      formPayloadDigest: snapshot.snapshot?.formPayloadDigest!,
+      formActionUrl: "https://example.com/other",
+      formMethod: "POST",
+    });
+
+    const prepared = await session.prepareAction(plan);
+
+    expect(prepared.preconditionDrift).toBe(true);
+    expect(engine.page.submits).toHaveLength(0);
+  });
+
+  it("rejects a form-value mutation during prepare with zero dispatch", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    engine.page.formActionUrl = "https://example.com/orders";
+    engine.page.formPayloadDigest = "9".repeat(64);
+    engine.page.formMethod = "POST";
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const snapshot = await session.dispatch(req("browser_snapshot", {}));
+    const plan = stagedSubmitPlan(session, {
+      elementFingerprint: snapshot.snapshot?.fingerprint!,
+      formFingerprint: snapshot.snapshot?.formFingerprint!,
+      formPayloadDigest: snapshot.snapshot?.formPayloadDigest!,
+      formActionUrl: snapshot.snapshot?.formActionUrl!,
+      method: "POST",
+    });
+    engine.page.observations.set("fake-target-0", {
+      elementFingerprint: snapshot.snapshot?.fingerprint!,
+      formFingerprint: snapshot.snapshot?.formFingerprint!,
+      formPayloadDigest: "8".repeat(64),
+      formActionUrl: snapshot.snapshot?.formActionUrl!,
+      formMethod: "POST",
+    });
+
+    const prepared = await session.prepareAction(plan);
+
+    expect(prepared.preconditionDrift).toBe(true);
+    expect(prepared.preparedRef).toBeUndefined();
+    expect(engine.page.submits).toHaveLength(0);
+    expect(engine.page.clicks).toHaveLength(0);
+  });
+
+  it("rechecks form values immediately before apply and never dispatches on drift", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    engine.page.formActionUrl = "https://example.com/orders";
+    engine.page.formPayloadDigest = "9".repeat(64);
+    engine.page.formMethod = "POST";
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const snapshot = await session.dispatch(req("browser_snapshot", {}));
+    const plan = stagedSubmitPlan(session, {
+      elementFingerprint: snapshot.snapshot?.fingerprint!,
+      formFingerprint: snapshot.snapshot?.formFingerprint!,
+      formPayloadDigest: snapshot.snapshot?.formPayloadDigest!,
+      formActionUrl: snapshot.snapshot?.formActionUrl!,
+      method: "POST",
+    });
+    const prepared = await session.prepareAction(plan);
+    expect(prepared.preconditionDrift).toBe(false);
+    engine.page.observations.set("fake-target-0", {
+      elementFingerprint: snapshot.snapshot?.fingerprint!,
+      formFingerprint: snapshot.snapshot?.formFingerprint!,
+      formPayloadDigest: "7".repeat(64),
+      formActionUrl: snapshot.snapshot?.formActionUrl!,
+      formMethod: "POST",
+    });
+
+    const applied = await session.applyPrepared(prepared.preparedRef!);
+
+    expect(applied.outcome).toBe("precondition_drift");
+    expect(engine.page.submits).toHaveLength(0);
+    expect(engine.page.clicks).toHaveLength(0);
+  });
+
+  it("rejects a forged cross-language precondition digest before prepare", async () => {
+    const engine = new FakeEngine();
+    withButton(engine);
+    const { session } = makeSession(engine);
+    await session.dispatch(
+      req(
+        "browser_navigate",
+        { url: "https://example.com" },
+        BrowserActionClass.Navigate,
+      ),
+    );
+    const snapshot = await session.dispatch(req("browser_snapshot", {}));
+    const plan = {
+      ...stagedClickPlan(session, snapshot.snapshot?.fingerprint!),
+      preconditionDigest: "0".repeat(64),
+    };
+
+    const prepared = await session.prepareAction(plan);
+
+    expect(prepared.preconditionDrift).toBe(true);
+    expect(engine.page.clicks).toHaveLength(0);
   });
 });
 

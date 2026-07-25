@@ -58,6 +58,7 @@ import {
 
 import type {
   AgentRunStatus,
+  ArtifactKind,
   ConversationConnectorScopes,
   ConversationId,
   ModelSelectionRequest,
@@ -97,7 +98,6 @@ import {
   projectSurfaceTabs,
   projectToolCalls,
   projectLedger,
-  ledgerTabsAsSurfaceTabs,
   surfaceIdForTabUri,
   tabUriForSurface,
   type TcTab,
@@ -115,10 +115,12 @@ import { ReceiptSurface } from "../../surfaces/receipt";
 import { PostureChip } from "./PostureChip";
 import { PendingCounterChip } from "./PendingCounterChip";
 import { usePendingWork } from "./usePendingWork";
+import { usePendingWorkV2 } from "./usePendingWorkV2";
 import {
   projectPendingCards,
   type PendingCard,
 } from "./pendingCardsProjection";
+import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import { projectReceipt, type ReceiptProjection } from "./projectReceipt";
 import {
   projectLedgerSources,
@@ -129,6 +131,16 @@ import type { PendingAgentRow } from "@0x-copilot/api-types";
 // the Transport port). Called unconditionally (Rules of Hooks) but inert when
 // `surfacesV2` is false (`enabled: false` ⇒ no request).
 import { useSurfacesV2 } from "./useSurfacesV2";
+import {
+  ArtifactSurface,
+  artifactUri,
+  parseArtifactSurfaceUri,
+} from "../../artifacts";
+import type { ArtifactDownloadPort } from "../../ports/ArtifactDownloadPort";
+import { CanvasFocusCards } from "./CanvasFocusCards";
+import { CanvasLifecyclePanel } from "./CanvasLifecyclePanel";
+import { EffectStageCard } from "./EffectStageCard";
+import { projectCanvasLifecycle } from "./canvasLifecycle";
 
 // PR-3.10: pure selector projecting approval state off the SAME single canonical
 // event stream (FR-3.3). Feeds the in-chat ApprovalCard/conf-card (TcChat) and
@@ -172,6 +184,38 @@ const EMPTY_CARDS: readonly PendingCard[] = [];
 const EMPTY_RECEIPT: ReceiptProjection = { receipt: null, emittedSeq: null };
 const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
   new Map();
+const EFFECT_STAGE_URI_PREFIX = "effect-stage://";
+
+function effectStageUri(stageId: string): string {
+  return `${EFFECT_STAGE_URI_PREFIX}${encodeURIComponent(stageId)}`;
+}
+
+function effectStageIdForUri(uri: string): string | null {
+  if (!uri.startsWith(EFFECT_STAGE_URI_PREFIX)) return null;
+  const encoded = uri.slice(EFFECT_STAGE_URI_PREFIX.length);
+  if (encoded === "") return null;
+  try {
+    const stageId = decodeURIComponent(encoded);
+    return stageId === "" ? null : stageId;
+  } catch {
+    return null;
+  }
+}
+
+function artifactKindForRendererHint(hint: string | null): ArtifactKind | null {
+  switch (hint) {
+    case "artifact-code":
+      return "code";
+    case "artifact-document":
+      return "document";
+    case "artifact-dataset":
+      return "dataset";
+    case "artifact-file":
+      return "file";
+    default:
+      return null;
+  }
+}
 
 /**
  * Best-effort extraction of a staged draft's body text from the hydrated
@@ -416,6 +460,8 @@ export interface RunDestinationProps {
    */
   readonly onCopyText?: (text: string) => Promise<void>;
   readonly onSaveFile?: (text: string, filename: string) => Promise<void>;
+  /** B2: host-owned exact-byte save path for artifact downloads. */
+  readonly artifactDownloadPort?: ArtifactDownloadPort;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -439,6 +485,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     surfacesV2 = false,
     onCopyText,
     onSaveFile,
+    artifactDownloadPort,
   } = props;
 
   const transport = useTransport();
@@ -564,6 +611,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // E2/F3: a monotonic nonce the "N waiting" counter chip bumps to command the
   // rail onto the Approvals tab (one-directional; the rail reacts to increases).
   const [approvalsFocusSignal, setApprovalsFocusSignal] = useState(0);
+  // E1 D6: a Review action from the canonical cross-run list carries an opaque
+  // run/subject target. Effects resolve onto the destination run's existing
+  // lifecycle URI after its stream binds; gates intentionally have no canvas
+  // payload and land in Studio's existing gate region instead.
+  const [pendingWorkV2Review, setPendingWorkV2Review] =
+    useState<PendingWorkCardV2 | null>(null);
   // B3: the surface whose effective tier just upgraded generic → shaped (drives
   // the non-modal ViewUpgradeToast). `null` = no pending upgrade toast.
   const [upgradedSurface, setUpgradedSurface] = useState<{
@@ -786,6 +839,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setEditingDiffId(null);
       // Surfaces v2: a run switch resets the gate/toast state too.
       setGatePolicies(EMPTY_GATE_POLICIES);
+      setPendingWorkV2Review(null);
       setUpgradedSurface(null);
       prevTierRef.current = new Map();
       selectRun(nextRunId);
@@ -1117,14 +1171,148 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // unconditionally so the hydration hook can read `ledger.lastLedgerSeq`; the
   // strip only USES it when `surfacesV2` is on.
   const ledger = useMemo(() => projectLedger(session.events), [session.events]);
-  // SDR §11 strictness: flag on ⇒ tabs come ONLY from ledger events; flag off ⇒
-  // the v1 selector, byte-identical to today. Never mix the two strips.
+  // B3 owns the one client presentation truth. It folds artifacts, ordinary
+  // surfaces, universal effects, gates, and terminal receipts from the durable
+  // production event stream — no shape inference or legacy surface envelope.
+  const canvasLifecycle = useMemo(
+    () => (surfacesV2 ? projectCanvasLifecycle(session.events) : null),
+    [surfacesV2, session.events],
+  );
+  const displayedCanvasLifecycle = useMemo(() => {
+    if (!surfacesV2) return null;
+    if (scrubbedSeq === null) return canvasLifecycle;
+    return projectCanvasLifecycle(
+      session.events.filter((event) => event.sequence_no <= scrubbedSeq),
+    );
+  }, [surfacesV2, canvasLifecycle, scrubbedSeq, session.events]);
+  const stageById = useMemo(() => {
+    const map = new Map<string, LedgerStagedWrite>();
+    if (!surfacesV2) return map;
+    for (const stage of ledger.stages.values()) map.set(stage.stageId, stage);
+    return map;
+  }, [surfacesV2, ledger]);
+  const stageBySurfaceId = useMemo(() => {
+    const map = new Map<string, LedgerStagedWrite>();
+    for (const stage of stageById.values()) {
+      if (stage.surfaceId !== "") map.set(stage.surfaceId, stage);
+    }
+    return map;
+  }, [stageById]);
+  const v2CanvasTabs = useMemo(() => {
+    const uriBySubjectKey = new Map<string, string>();
+    if (displayedCanvasLifecycle === null) {
+      return {
+        tabs: [] as Array<{ uri: string; title: string; lastSeq: number }>,
+        uriBySubjectKey,
+        preferredUri: "",
+      };
+    }
+    const tabs: Array<{ uri: string; title: string; lastSeq: number }> = [];
+    const seen = new Set<string>();
+    const add = (
+      uri: string,
+      title: string,
+      lastSeq: number,
+      key: string,
+    ): void => {
+      uriBySubjectKey.set(key, uri);
+      if (seen.has(uri)) return;
+      seen.add(uri);
+      tabs.push({ uri, title, lastSeq });
+    };
+    for (const subject of displayedCanvasLifecycle.tabs) {
+      if (subject.kind === "artifact") {
+        const kind = artifactKindForRendererHint(subject.rendererHint);
+        if (kind !== null && subject.revision !== null) {
+          add(
+            artifactUri(kind, subject.subjectId, subject.revision),
+            `${subject.title} · r${subject.revision}`,
+            subject.lastSeq,
+            subject.key,
+          );
+        }
+        continue;
+      }
+      if (subject.kind === "surface") {
+        const surface = ledger.surfaces.get(subject.subjectId);
+        if (surface !== undefined) {
+          add(
+            tabUriForSurface(surface),
+            subject.title,
+            subject.lastSeq,
+            subject.key,
+          );
+        }
+        continue;
+      }
+      if (subject.kind === "effect") {
+        const stage = stageById.get(subject.subjectId);
+        const surface =
+          stage === undefined
+            ? undefined
+            : ledger.surfaces.get(stage.surfaceId);
+        add(
+          surface === undefined
+            ? effectStageUri(subject.subjectId)
+            : tabUriForSurface(surface),
+          subject.title,
+          subject.lastSeq,
+          subject.key,
+        );
+      }
+    }
+    const preferredUri =
+      (displayedCanvasLifecycle.activeSubjectKey === null
+        ? undefined
+        : uriBySubjectKey.get(displayedCanvasLifecycle.activeSubjectKey)) ??
+      tabs[0]?.uri ??
+      "";
+    return { tabs, uriBySubjectKey, preferredUri };
+  }, [displayedCanvasLifecycle, ledger, stageById]);
+
+  // E1 D6 Review is intentionally a local navigation operation. The aggregate
+  // API names an authorised run + opaque subject only; it never sends a target
+  // path or surface body. For an effect, the destination run's own lifecycle
+  // fold supplies the stable canvas URI. For a gate, Studio's existing gate
+  // region is the honest review surface.
+  const handleReviewPendingWorkV2 = useCallback(
+    (card: PendingWorkCardV2): void => {
+      if (card.runId !== session.runId) {
+        handleSelectRun(card.runId);
+      }
+      if (card.subjectKind === "effect") {
+        setPendingWorkV2Review(card);
+      }
+      setMode("studio");
+    },
+    [handleSelectRun, session.runId, setMode],
+  );
+
+  useEffect(() => {
+    if (
+      !surfacesV2 ||
+      pendingWorkV2Review === null ||
+      pendingWorkV2Review.runId !== session.runId
+    ) {
+      return;
+    }
+    const uri = v2CanvasTabs.uriBySubjectKey.get(
+      `effect:${pendingWorkV2Review.subjectId}`,
+    );
+    if (uri === undefined) {
+      // The destination run may still be binding/replaying. Keep the intent
+      // until its canonical lifecycle fold exposes the local URI.
+      return;
+    }
+    setPinnedUri(uri);
+    setPendingWorkV2Review(null);
+  }, [pendingWorkV2Review, session.runId, surfacesV2, v2CanvasTabs]);
+
+  // SDR §11 strictness: flag on ⇒ tabs come only from B3's lifecycle fold; flag
+  // off ⇒ the old v1 selector remains byte-identical. Never mix the two paths.
   const surfaceTabList = useMemo(
-    () =>
-      surfacesV2
-        ? ledgerTabsAsSurfaceTabs(ledger)
-        : projectSurfaceTabs(session.events),
-    [surfacesV2, ledger, session.events],
+    () => (surfacesV2 ? v2CanvasTabs.tabs : projectSurfaceTabs(session.events)),
+    [surfacesV2, v2CanvasTabs, session.events],
   );
   // Content hydration for the v2 canvas (SurfaceStore endpoint via Transport).
   // Called unconditionally (Rules of Hooks); inert when `surfacesV2` is false
@@ -1156,6 +1344,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   );
   const newestUri =
     visibleSurfaceTabs.length > 0 ? visibleSurfaceTabs[0].uri : "";
+  const lifecyclePreferredUri = visibleSurfaceTabs.some(
+    (tab) => tab.uri === v2CanvasTabs.preferredUri,
+  )
+    ? v2CanvasTabs.preferredUri
+    : newestUri;
 
   // `activeUri` derivation (scrub wins → pin wins → a pending diff pulls focus →
   // else follow the newest surface). A pin only holds while its surface is still
@@ -1166,15 +1359,19 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       ? pinnedUri
       : null;
   const followDiffUri =
-    !isScrubbed && openSurfaceDiffs.length > 0
+    !surfacesV2 && !isScrubbed && openSurfaceDiffs.length > 0
       ? openSurfaceDiffs[0].uri
       : undefined;
   const scrubTargetUri =
     scrubbedSeq !== null ? scrubIndex.get(scrubbedSeq)?.surfaceUri : undefined;
   const activeUri =
-    isScrubbed && scrubTargetUri !== undefined && scrubTargetUri !== ""
+    !surfacesV2 &&
+    scrubbedSeq !== null &&
+    scrubTargetUri !== undefined &&
+    scrubTargetUri !== ""
       ? scrubTargetUri
-      : (effectivePin ?? followDiffUri ?? newestUri);
+      : (effectivePin ??
+        (surfacesV2 ? lifecyclePreferredUri : (followDiffUri ?? newestUri)));
 
   const surfaceTabs = useMemo<readonly TcTab[]>(
     () =>
@@ -1240,17 +1437,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     liveCards,
     ledger.lastLedgerSeq,
   );
-
-  // D1/D3: index the folded stages by the surface they target so the canvas can
-  // mount the staged-draft / staged-table surface for the active tab.
-  const stageBySurfaceId = useMemo(() => {
-    const map = new Map<string, LedgerStagedWrite>();
-    if (!surfacesV2) return map;
-    for (const stage of ledger.stages.values()) {
-      if (stage.surfaceId !== "") map.set(stage.surfaceId, stage);
-    }
-    return map;
-  }, [surfacesV2, ledger]);
+  // Canonical v2.1 queue: Studio-only and independently identity-authorised by
+  // the endpoint. Focus deliberately does not fetch or mount its expanded
+  // cross-run list; the compact Focus layout remains unchanged.
+  const pendingWorkV21 = usePendingWorkV2(
+    transport,
+    surfacesV2 && enabled && mode === "studio" && session.runId !== null,
+    session.runId,
+    ledger.lastLedgerSeq,
+  );
 
   // D1/D3 stage decision helper — every stage mutation rides the Transport port
   // (no bare fetch/window) keyed on `stage_id` + the owning `run_id` (SDR §6).
@@ -1407,6 +1602,36 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // the pure adapter registry). Only meaningful on the v2 path.
   const renderV2Surface = useCallback(
     (uri: string): ReactNode => {
+      if (uri === "" && displayedCanvasLifecycle !== null) {
+        return (
+          <CanvasLifecyclePanel
+            lifecycle={displayedCanvasLifecycle.lifecycle}
+            failure={displayedCanvasLifecycle.failure}
+            onRetry={session.retry}
+          />
+        );
+      }
+      if (parseArtifactSurfaceUri(uri) !== null) {
+        return (
+          <ArtifactSurface
+            uri={uri}
+            transport={transport}
+            downloadPort={artifactDownloadPort}
+          />
+        );
+      }
+      const effectStageId = effectStageIdForUri(uri);
+      if (effectStageId !== null) {
+        const subject = displayedCanvasLifecycle?.tabs.find(
+          (item) => item.kind === "effect" && item.subjectId === effectStageId,
+        );
+        return (
+          <EffectStageCard
+            stageId={effectStageId}
+            title={subject?.title ?? "Proposed change"}
+          />
+        );
+      }
       const id = surfaceIdForTabUri(uri);
       if (id === null) return null;
       const stage = stageBySurfaceId.get(id);
@@ -1447,6 +1672,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       stageBySurfaceId,
       ledger,
       hydration,
+      displayedCanvasLifecycle,
+      session.retry,
       receiptProjection,
       handleRowDecision,
       handleStageApply,
@@ -1455,8 +1682,30 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       handleStageReject,
       handleStageRestore,
       copyReceiptText,
+      transport,
+      artifactDownloadPort,
     ],
   );
+
+  // Focus uses the identical lifecycle fold as Studio, but only its compact
+  // cards. Opening a card selects its stable subject URI then switches mode;
+  // no Focus path mounts the full canvas renderer.
+  const handleOpenLifecycleSubject = useCallback(
+    (subjectKey: string): void => {
+      const uri = v2CanvasTabs.uriBySubjectKey.get(subjectKey);
+      if (uri === undefined) return;
+      setPinnedUri(uri);
+      setMode("studio");
+    },
+    [v2CanvasTabs, setMode],
+  );
+  const focusCards =
+    surfacesV2 && displayedCanvasLifecycle !== null ? (
+      <CanvasFocusCards
+        projection={displayedCanvasLifecycle}
+        onOpenSubject={handleOpenLifecycleSubject}
+      />
+    ) : undefined;
 
   // B3: detect a generic → shaped effective-tier upgrade for any surface and
   // raise the non-modal ViewUpgradeToast. Pure edge detection over the ledger
@@ -1502,14 +1751,36 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         currentRunId: stageRunId,
       }
     : undefined;
+  // E1 D6's canonical list is additive during migration. Only pass it after a
+  // verified non-empty response or an explicit partial-result marker:
+  // absent/404/cohort-off paths preserve the legacy rail DOM exactly and never
+  // claim that an unavailable queue is empty.
+  const railPendingWorkV21 =
+    surfacesV2 &&
+    mode === "studio" &&
+    (pendingWorkV21.cards.length > 0 || pendingWorkV21.hasOmittedRuns)
+      ? {
+          cards: pendingWorkV21.cards,
+          loading: pendingWorkV21.status === "loading",
+          partial: pendingWorkV21.hasOmittedRuns,
+          stale: pendingWorkV21.status === "error",
+          hasMore: pendingWorkV21.hasMore,
+          onReview: handleReviewPendingWorkV2,
+          onLoadMore: pendingWorkV21.loadMore,
+        }
+      : undefined;
 
   // The pending diff handed to the center pane — ONLY for the active surface,
   // and never while scrubbed off-now (FR-3.15). It clears prop-driven: once the
   // diff resolves (optimistic or server), it drops out of `openSurfaceDiffs`, so
   // TcSurfaceMount receives `null` and hides the controls (no internal state).
-  const activeSurfaceDiff = isScrubbed
-    ? undefined
-    : openSurfaceDiffs.find((entry) => entry.uri === activeUri);
+  // B3 v2 subjects are declared ledger/artifact/effect identities. The retired
+  // v1 envelope diff selector remains on the flag-off compatibility path only;
+  // it may not hydrate or steer a v2 canvas subject.
+  const activeSurfaceDiff =
+    surfacesV2 || isScrubbed
+      ? undefined
+      : openSurfaceDiffs.find((entry) => entry.uri === activeUri);
   const pendingDiff = useMemo<PendingDiffHandle | null>(
     () =>
       activeSurfaceDiff === undefined
@@ -1653,6 +1924,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // null/undefined when the flag is off ⇒ the rail is byte-identical.
       ledgerSources={ledgerSourcesProjection}
       pendingV2={railPendingV2}
+      pendingWorkV21={railPendingWorkV21}
       focusApprovalsSignal={surfacesV2 ? approvalsFocusSignal : undefined}
       // WS-F: Focus Run-details panel collapse — persisted per conversation.
       panelCollapsed={focusPanelCollapsed}
@@ -1700,6 +1972,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // fallback only (a shaped surface hides it).
       activeShapeRequest={activeShapeRequest}
       onShapeRequest={surfacesV2 ? handleShapeRequest : undefined}
+      // B3 Focus is a compact projection of the same lifecycle—not a hidden
+      // full Studio canvas. Undefined on the v1 path preserves legacy Focus.
+      focusCards={focusCards}
       // PRD-04: the proposed surface diff for the active surface + the
       // decision callbacks. ThreadCanvas forwards these to TcSurfaceMount,
       // which renders the Approve/Reject/Suggest controls around the diff.
@@ -1736,7 +2011,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // `canvasEl` bare below.
   const v2CanvasBody = (
     <div data-testid="run-v2-canvas-body" style={v2CanvasBodyStyle}>
-      {ledger.openGates.length > 0 ? (
+      {mode === "studio" && ledger.openGates.length > 0 ? (
         <div data-testid="run-v2-gate-region" style={gateRegionStyle}>
           {ledger.openGates.map((gate) => (
             <TcGateCard

@@ -15,8 +15,13 @@ from typing import Any
 from pydantic import Field, ValidationError
 
 from agent_runtime.api.constants import Values
+from agent_runtime.capabilities.operations.builtin_adapter import (
+    BuiltinOperationAdapter,
+)
 from agent_runtime.api.mcp_discovery_service import McpDiscoveryService
 from agent_runtime.execution.contracts import RuntimeContract
+
+_OPERATION = BuiltinOperationAdapter(tool_name=Values.Tool.SUGGEST_MCP_CONNECTOR)
 
 
 class _Limits:
@@ -73,12 +78,18 @@ class SuggestMcpConnectorTool:
         parsed = SuggestMcpConnectorInputParser.parse(raw_input)
         if isinstance(parsed, dict):
             return parsed
-        result = await McpDiscoveryService.offer(
-            server_id=parsed.server_id,
-            reason=parsed.reason,
-            expected_value=parsed.expected_value,
+        invocation = await _OPERATION.execute(
+            arguments=parsed.model_dump(mode="json"),
+            legacy=lambda: McpDiscoveryService.offer(
+                server_id=parsed.server_id,
+                reason=parsed.reason,
+                expected_value=parsed.expected_value,
+            ),
+            safe_summary="Connector suggestion was recorded.",
         )
-        return dict(result)
+        if invocation.value is not None:
+            return dict(invocation.value)
+        return {"ok": False, "message": invocation.safe_summary}
 
     async def __call__(
         self, raw_input: SuggestMcpConnectorInput | Mapping[str, Any] | str

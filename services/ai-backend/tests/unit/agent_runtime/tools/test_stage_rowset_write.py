@@ -12,14 +12,23 @@ import pytest
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.stage_ledger import RuntimeStageLedger
+from agent_runtime.capabilities.operations.context import OperationContext
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
+    RowSetEffectProposal,
+    RowSetProposalReceipt,
     StageRowsetWriteInput,
     StageRowsetWriteTool,
 )
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 from agent_runtime.surfaces_v2.staging import WriteStager
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord
+from tests.unit.agent_runtime.capabilities.operations.helpers import (
+    BoundContextMixin,
+    RecordingEmitter,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -155,3 +164,103 @@ class TestToolInvoke:
         )
         assert result["ok"] is False
         assert store.events_by_run[_RUN] == []  # typed domain rejection, no event
+
+
+class _RecordingProposalPort:
+    """A generic effect stager canary with no executor or transport handle."""
+
+    def __init__(self) -> None:
+        self.proposals: list[tuple[RowSetEffectProposal, str | None]] = []
+
+    async def stage_row_set(
+        self,
+        *,
+        proposal: RowSetEffectProposal,
+        operation_id: str | None,
+    ) -> RowSetProposalReceipt:
+        self.proposals.append((proposal, operation_id))
+        return RowSetProposalReceipt(
+            stage_id="stg_00000000-0000-4000-8000-000000000001",
+            proposal_ref=(
+                "proposal://stg_00000000-0000-4000-8000-000000000001/revisions/1"
+            ),
+            surface_id="surface://rowset-1",
+            rows_staged=len(proposal.rows),
+            rows_pre_held=len(proposal.agent_holds),
+            status="staged",
+        )
+
+
+class TestGatewayRowSetProposal(BoundContextMixin):
+    async def test_enforce_mode_builds_one_generic_row_set_proposal(self) -> None:
+        """The compatibility tool can stage, but has no route to apply or dispatch."""
+
+        proposal_port = _RecordingProposalPort()
+        tool = StageRowsetWriteTool(
+            proposal_stager=proposal_port,
+            run=_run(),
+            org_id=_ORG,
+            run_id=_RUN,
+        )
+        emitter = RecordingEmitter()
+        token = self.bind(
+            emitter=emitter,
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+        )
+        try:
+            result = await tool.ainvoke(
+                {
+                    "target_connector": "linear",
+                    "target_op": "update_issue",
+                    "title": "Reprioritize",
+                    "rows": _ROWS,
+                    "agent_holds": [{"row_key": "iss-2", "reason": "recent reply"}],
+                }
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert result == {
+            "ok": True,
+            "stage_id": "stg_00000000-0000-4000-8000-000000000001",
+            "surface_id": "surface://rowset-1",
+            "rows_staged": 2,
+            "rows_pre_held": 1,
+            "status": "staged",
+        }
+        assert len(proposal_port.proposals) == 1
+        proposal, operation_id = proposal_port.proposals[0]
+        assert proposal.proposal_kind == "row_set"
+        assert operation_id is not None
+        assert [event[0] for event in emitter.events] == [
+            LedgerEventType.OPERATION_REQUESTED,
+            LedgerEventType.OPERATION_CLASSIFIED,
+            LedgerEventType.OPERATION_COMPLETED,
+        ]
+
+    async def test_enforce_mode_refuses_legacy_v2_stager_before_emission(self) -> None:
+        """A legacy surface stager is not a substitute for a generic effect port."""
+
+        tool, store = _tool()
+        token = self.bind(
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+        )
+        try:
+            result = await tool.ainvoke(
+                {
+                    "target_connector": "linear",
+                    "target_op": "update_issue",
+                    "title": "Reprioritize",
+                    "rows": _ROWS,
+                }
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert result == {
+            "ok": False,
+            "message": "Bulk staging is not available in this run.",
+        }
+        assert store.events_by_run[_RUN] == []

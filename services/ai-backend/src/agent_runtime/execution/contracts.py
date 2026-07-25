@@ -628,6 +628,10 @@ class RuntimeDependencies(RuntimeContract):
     # appends it to the model-visible tool set. ``None`` (and absent from the
     # model's tool surface) with the flag off, so those runs are byte-identical.
     stage_rowset_write_tool: object | None = None
+    # Optional B1 explicit artifact-publication tool. Built only when the A2
+    # repository is fully composed behind ``ARTIFACT_EFFECTS_V2``; absent on
+    # the dark path so ordinary model tool surfaces remain unchanged.
+    publish_artifact_tool: object | None = None
     # Optional process-wide TTL cache for MCP discovery (the
     # ``connect + list_tools + list_resources`` round-trips on
     # ``McpLoader.load_server``). When ``None`` the loader behaves

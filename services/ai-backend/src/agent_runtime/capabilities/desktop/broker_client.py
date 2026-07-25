@@ -41,7 +41,8 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+import re
+from collections.abc import AsyncIterable, Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
@@ -51,6 +52,39 @@ from pydantic import BaseModel, ConfigDict, Field
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 
 logger = logging.getLogger(__name__)
+
+_OPAQUE_COMPONENT: Final = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
+_HOST_SESSION_REF: Final = re.compile(r"^whs_[A-Za-z0-9_-]{32,160}$")
+
+
+def _workspace_prepared_id(prepared_ref: str) -> str:
+    """Decode only the safe opaque tail accepted by Electron's v2 routes."""
+
+    prefix = "workspace-prepared://"
+    if not prepared_ref.startswith(prefix):
+        raise BrokerProtocolError("workspace prepared reference is invalid")
+    identifier = prepared_ref[len(prefix) :]
+    if _OPAQUE_COMPONENT.fullmatch(identifier) is None:
+        raise BrokerProtocolError("workspace prepared reference is invalid")
+    return identifier
+
+
+def _assert_host_session_wire_is_private(body: Mapping[str, object]) -> None:
+    """Reject any host-session field outside the narrow opaque contract.
+
+    This is intentionally stricter than the generic broker models.  A future
+    Electron change must not accidentally put a read capability, permit,
+    prepared reference, device identity, root, or path into the worker's
+    private bootstrap response and have Pydantic silently ignore it.
+    """
+
+    expected = {"host_session_ref", "expires_at", "grants"}
+    if set(body) != expected or not isinstance(body["grants"], list):
+        raise BrokerProtocolError("workspace host session response is invalid")
+    allowed_grant_fields = {"grant_id", "mount", "mode", "label", "status"}
+    for grant in body["grants"]:
+        if not isinstance(grant, dict) or set(grant) - allowed_grant_fields:
+            raise BrokerProtocolError("workspace host session response is invalid")
 
 
 class Routes:
@@ -77,6 +111,12 @@ class Routes:
     #: releases it. RAM-only, main-side; the projection is path-free.
     RUNS_BEGIN: Final = "/v1/runs/begin"
     RUNS_END: Final = "/v1/runs/end"
+    #: C2 staged workspace mutation protocol. These are private loopback
+    #: routes, never facade/public API routes.
+    WORKSPACE_PREPARE: Final = "/internal/workspace/v2/prepare"
+    WORKSPACE_HOST_SESSIONS: Final = "/internal/workspace/v2/host-sessions"
+    WORKSPACE_PREPARED: Final = "/internal/workspace/v2/prepared"
+    WORKSPACE_CLAIMS: Final = "/internal/workspace/v2/claims"
 
 
 class Header:
@@ -140,6 +180,12 @@ class ErrorCode:
     INVALID_JSON: Final = "invalid_json"
     METHOD_NOT_ALLOWED: Final = "method_not_allowed"
     INTERNAL: Final = "internal"
+    WORKSPACE_WRITE_UNSUPPORTED: Final = "workspace_write_unsupported"
+    WORKSPACE_CAPABILITY_DENIED: Final = "workspace_capability_denied"
+    WORKSPACE_PERMIT_DENIED: Final = "workspace_permit_denied"
+    WORKSPACE_PREPARED_NOT_FOUND: Final = "workspace_prepared_not_found"
+    WORKSPACE_PRECONDITION_DRIFT: Final = "workspace_precondition_drift"
+    WORKSPACE_CONFLICT: Final = "workspace_conflict"
 
 
 # --- typed exceptions --------------------------------------------------------
@@ -225,6 +271,24 @@ class BrokerUnsupportedError(BrokerError):
     code = ErrorCode.UNSUPPORTED
 
 
+class WorkspaceAuthorityDeniedError(BrokerError):
+    """A main-issued workspace capability or exact permit was rejected."""
+
+    code = ErrorCode.WORKSPACE_CAPABILITY_DENIED
+
+
+class WorkspacePreconditionDriftError(BrokerError):
+    """The checked workspace baseline changed before commit."""
+
+    code = ErrorCode.WORKSPACE_PRECONDITION_DRIFT
+
+
+class WorkspaceConflictError(BrokerError):
+    """The prepared workspace reservation cannot be committed safely."""
+
+    code = ErrorCode.WORKSPACE_CONFLICT
+
+
 # Per-op filesystem codes → dedicated exception. Any code NOT in this map
 # (envelope/protocol/config codes, or an unknown code) is a protocol error.
 _CODE_TO_EXCEPTION: Final[Mapping[str, type[BrokerError]]] = {
@@ -237,6 +301,12 @@ _CODE_TO_EXCEPTION: Final[Mapping[str, type[BrokerError]]] = {
     ErrorCode.NOT_A_FILE: BrokerNotAFileError,
     ErrorCode.TOO_LARGE: BrokerTooLargeError,
     ErrorCode.UNSUPPORTED: BrokerUnsupportedError,
+    ErrorCode.WORKSPACE_WRITE_UNSUPPORTED: BrokerUnsupportedError,
+    ErrorCode.WORKSPACE_CAPABILITY_DENIED: WorkspaceAuthorityDeniedError,
+    ErrorCode.WORKSPACE_PERMIT_DENIED: WorkspaceAuthorityDeniedError,
+    ErrorCode.WORKSPACE_PREPARED_NOT_FOUND: BrokerNotFoundError,
+    ErrorCode.WORKSPACE_PRECONDITION_DRIFT: WorkspacePreconditionDriftError,
+    ErrorCode.WORKSPACE_CONFLICT: WorkspaceConflictError,
 }
 
 
@@ -392,6 +462,56 @@ class RunContextRelease(_BrokerModel):
     """``/v1/runs/end`` — whether the run's pinned context existed and was dropped."""
 
     released: bool = False
+
+
+class WorkspaceUploadSlot(_BrokerModel):
+    """One private staged-content slot returned by workspace prepare."""
+
+    slot: str
+    digest: str = Field(min_length=64, max_length=64)
+    size: int = Field(ge=0)
+
+
+class WorkspacePreparedEffect(_BrokerModel):
+    """Opaque broker prepare result; it carries no physical path."""
+
+    prepared_ref: str = Field(min_length=1, max_length=2048)
+    expires_at: int = Field(ge=0)
+    observed_target_digest: str = Field(min_length=64, max_length=64)
+    upload_slots: tuple[WorkspaceUploadSlot, ...] = ()
+
+
+class WorkspaceHostSessionGrant(_BrokerModel):
+    """Path-free grant projection bound to one private host session."""
+
+    grant_id: str = Field(alias="grantId")
+    mode: Literal["read_only", "read_write_no_delete", "read_write"]
+    label: str = ""
+    status: Literal["active", "revoked"] = "active"
+    mount: str
+
+
+class WorkspaceHostSession(_BrokerModel):
+    """Opaque main-issued session reference; never a read capability or permit."""
+
+    host_session_ref: str = Field(min_length=36, max_length=192)
+    expires_at: int = Field(ge=0)
+    grants: tuple[WorkspaceHostSessionGrant, ...] = ()
+
+
+class WorkspaceCommitResult(_BrokerModel):
+    """Stable result for a one-use workspace commit or reconcile."""
+
+    outcome: Literal[
+        "applied",
+        "already_applied",
+        "precondition_drift",
+        "failed",
+        "indeterminate",
+    ]
+    receipt_ref: str = Field(min_length=1, max_length=2048)
+    result_digest: str | None = Field(default=None, min_length=64, max_length=64)
+    safe_message: str | None = Field(default=None, max_length=512)
 
 
 # --- client ------------------------------------------------------------------
@@ -658,6 +778,114 @@ class DesktopBrokerClient:
         )
         return RunContextRelease.model_validate(body)
 
+    # --- v2 workspace authority (C2) --------------------------------------
+
+    async def workspace_host_session(
+        self,
+        *,
+        run_id: str,
+        user_id: str,
+    ) -> WorkspaceHostSession:
+        """Bootstrap one opaque, run-bound host session over the private broker.
+
+        The response deliberately omits the C2 read capability, device id,
+        root, prepared ref, and permit.  The worker retains only the opaque
+        ``host_session_ref`` it must echo for prepare/commit.
+        """
+
+        body = await self._post(
+            Routes.WORKSPACE_HOST_SESSIONS,
+            {"run_id": run_id, "user_id": user_id},
+            accepted_statuses=frozenset({200, 201}),
+        )
+        _assert_host_session_wire_is_private(body)
+        session = WorkspaceHostSession.model_validate(body)
+        if _HOST_SESSION_REF.fullmatch(session.host_session_ref) is None:
+            raise BrokerProtocolError("workspace host session reference is invalid")
+        return session
+
+    async def workspace_prepare(
+        self,
+        *,
+        host_session_ref: str,
+        change_set: Mapping[str, object],
+    ) -> WorkspacePreparedEffect:
+        """Reserve a CAS-checked workspace change set without mutation.
+
+        ``host_session_ref`` is an opaque Electron-main binding for one exact
+        run/user/device. The transport bearer alone is insufficient, and the
+        main-issued read capability never leaves the desktop process.
+        """
+
+        if _HOST_SESSION_REF.fullmatch(host_session_ref) is None:
+            raise BrokerProtocolError("workspace host session reference is invalid")
+        payload = {"host_session_ref": host_session_ref, **dict(change_set)}
+        body = await self._post(
+            Routes.WORKSPACE_PREPARE,
+            payload,
+            accepted_statuses=frozenset({200, 201}),
+        )
+        return WorkspacePreparedEffect.model_validate(body)
+
+    async def workspace_upload(
+        self,
+        *,
+        prepared_ref: str,
+        slot: str,
+        content: AsyncIterable[bytes],
+        final: bool,
+    ) -> None:
+        """Stream immutable artifact bytes into a private prepared slot.
+
+        The payload is deliberately raw octets rather than base64 JSON. The
+        Electron authority validates exact accumulated size/digest before it
+        will make the slot commit-eligible.
+        """
+
+        prepared_id = _workspace_prepared_id(prepared_ref)
+        if _OPAQUE_COMPONENT.fullmatch(slot) is None:
+            raise BrokerProtocolError("workspace slot reference is invalid")
+        await self._put_stream(
+            f"{Routes.WORKSPACE_PREPARED}/{prepared_id}/content/{slot}",
+            content=content,
+            final=final,
+        )
+
+    async def workspace_commit(
+        self, *, prepared_ref: str, host_session_ref: str
+    ) -> WorkspaceCommitResult:
+        """Commit using only an opaque host-session reference.
+
+        Electron main derives the exact prepared binding, consumes the verified
+        approval reservation, and keeps the raw one-use C2 permit in-process.
+        """
+
+        prepared_id = _workspace_prepared_id(prepared_ref)
+        if _HOST_SESSION_REF.fullmatch(host_session_ref) is None:
+            raise BrokerProtocolError("workspace host session reference is invalid")
+        body = await self._post(
+            f"{Routes.WORKSPACE_PREPARED}/{prepared_id}/commit",
+            {"host_session_ref": host_session_ref},
+        )
+        return WorkspaceCommitResult.model_validate(body)
+
+    async def workspace_reconcile(self, *, claim_id: str) -> WorkspaceCommitResult:
+        """Ask the native journal to reconcile a prior non-terminal claim."""
+
+        if _OPAQUE_COMPONENT.fullmatch(claim_id) is None:
+            raise BrokerProtocolError("workspace claim reference is invalid")
+        body = await self._post(
+            f"{Routes.WORKSPACE_CLAIMS}/{claim_id}/reconcile",
+            {},
+        )
+        return WorkspaceCommitResult.model_validate(body)
+
+    async def workspace_abort(self, *, prepared_ref: str) -> None:
+        """Release an uncommitted native reservation, without host mutation."""
+
+        prepared_id = _workspace_prepared_id(prepared_ref)
+        await self._post(f"{Routes.WORKSPACE_PREPARED}/{prepared_id}/abort", {})
+
     @staticmethod
     def _mutation_payload(
         payload: dict[str, object], run_capability_context: str | None
@@ -670,7 +898,11 @@ class DesktopBrokerClient:
     # --- transport ----------------------------------------------------------
 
     async def _post(
-        self, route: str, payload: Mapping[str, object]
+        self,
+        route: str,
+        payload: Mapping[str, object],
+        *,
+        accepted_statuses: frozenset[int] = frozenset({200}),
     ) -> dict[str, object]:
         """POST ``payload`` to ``route`` with broker auth; return the JSON body dict.
 
@@ -709,9 +941,44 @@ class DesktopBrokerClient:
             )
             raise BrokerProtocolError("capability broker response too large")
 
-        if response.status_code == 200:
+        if response.status_code in accepted_statuses:
             return self._parse_success(route, response)
         self._raise_for_error(route, response)
+
+    async def _put_stream(
+        self,
+        route: str,
+        *,
+        content: AsyncIterable[bytes],
+        final: bool,
+    ) -> None:
+        """PUT raw staged bytes with the same private broker authentication."""
+
+        url = f"{self._config.base_url.rstrip('/')}{route}"
+        headers = {
+            Header.AUTHORIZATION: f"Bearer {self._config.token}",
+            Header.PROTOCOL: self._config.protocol_version,
+            Header.CONTENT_TYPE: "application/octet-stream",
+            "x-workspace-upload-final": "true" if final else "false",
+        }
+        try:
+            response = await self._http.put(
+                url,
+                content=content,
+                headers=headers,
+                timeout=self._config.timeout_seconds,
+            )
+        except httpx.TimeoutException:
+            raise BrokerUnavailableError(
+                "capability broker request timed out"
+            ) from None
+        except httpx.HTTPError:
+            raise BrokerUnavailableError("capability broker is unreachable") from None
+        if len(response.content) > self._config.max_response_bytes:
+            raise BrokerProtocolError("capability broker response too large")
+        if response.status_code != 200:
+            self._raise_for_error(route, response)
+        self._parse_success(route, response)
 
     @staticmethod
     def _parse_success(route: str, response: httpx.Response) -> dict[str, object]:

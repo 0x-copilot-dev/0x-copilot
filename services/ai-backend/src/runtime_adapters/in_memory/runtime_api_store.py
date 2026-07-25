@@ -12,6 +12,7 @@ from starlette import status
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.ports import RuntimeEventIdempotencyConflict
 from copilot_audit_chain import AuditChainSigner
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
@@ -31,6 +32,7 @@ from agent_runtime.persistence.records import (
     CompressionEventRecord,
     ModelPricingRecord,
     OutboxStatus,
+    RetentionKind,
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
@@ -38,6 +40,7 @@ from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
+    UsageAttributionEdge,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -50,6 +53,7 @@ from runtime_adapters.base import (
     StatusTransition,
     _Fields,
 )
+from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ACTIVE_RUN_STATUSES,
@@ -68,7 +72,10 @@ from runtime_api.schemas import (
     MessageRole,
     MessageStatus,
     RuntimeApprovalResolvedCommand,
+    RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
@@ -83,6 +90,26 @@ from runtime_api.schemas import (
 class InMemoryRuntimeApiStore:
     """In-memory implementation of persistence, event store, and queue ports."""
 
+    # D7 receipts are durable audit artifacts. This test/dev adapter can model
+    # signatures but cannot truthfully claim a durable, exportable audit record.
+    receipt_export_v2_available = False
+
+    def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
+        """Attach the gated artifact hooks without changing legacy construction."""
+
+        self._artifact_lifecycle_jobs = jobs
+
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        jobs = self._artifact_lifecycle_jobs
+        if jobs is None:
+            return None
+        return await jobs.on_org_deleted(org_id=org_id, deleted_at=deleted_at)
+
     async def open(self) -> None:
         """Lifecycle parity with the Postgres adapter — no pool to open."""
 
@@ -93,6 +120,7 @@ class InMemoryRuntimeApiStore:
         """Lifecycle parity with the Postgres adapter — no schema to migrate."""
 
     def __init__(self) -> None:
+        self._artifact_lifecycle_jobs: ArtifactLifecycleJobs | None = None
         self.conversations: dict[str, ConversationRecord] = {}
         self.messages: dict[str, MessageRecord] = {}
         self.runs: dict[str, RunRecord] = {}
@@ -107,10 +135,16 @@ class InMemoryRuntimeApiStore:
         self.approval_batch_items: dict[str, ApprovalBatchItemRecord] = {}
         self._approval_batch_locks: dict[str, asyncio.Lock] = {}
         self.events_by_run: dict[str, list[RuntimeEventEnvelope]] = {}
+        # Exact immutable-event lookup for server-side artifact promotion.  This
+        # is deliberately separate from the per-run replay list: promotion
+        # never searches event history by content/call-id text.
+        self._events_by_id: dict[str, RuntimeEventEnvelope] = {}
         self.run_commands: list[RuntimeRunCommand] = []
         self.cancel_commands: list[RuntimeCancelCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
         self.stage_commit_commands: list[RuntimeStageCommitCommand] = []
+        self.effect_commit_commands: list[RuntimeEffectCommitCommand] = []
+        self.effect_reconcile_commands: list[RuntimeEffectReconcileCommand] = []
         self._queue_order: list[str] = []
         self._queue_payloads: dict[str, dict[str, object]] = {}
         self._queue_statuses: dict[str, OutboxStatus] = {}
@@ -131,6 +165,11 @@ class InMemoryRuntimeApiStore:
         # Usage tracking — tests assert against these dicts directly.
         self.run_usage: dict[str, RuntimeRunUsageRecord] = {}
         self.model_call_usage: list[RuntimeModelCallUsageRecord] = []
+        # Attribution is a separate immutable relation.  Keeping it outside
+        # ``model_call_usage`` ensures that adding several edges can never
+        # inflate canonical usage totals.
+        self.usage_attribution_edges: dict[str, tuple[str, UsageAttributionEdge]] = {}
+        self._usage_attribution_edge_ids_by_key: dict[tuple[object, ...], str] = {}
         self.pricing_rows: list[ModelPricingRecord] = []
         self.user_daily_usage: dict[
             tuple[str, str, str, str, str], UsageDailyUserRow
@@ -372,6 +411,27 @@ class InMemoryRuntimeApiStore:
         )[:limit]
         return tuple(reversed(newest_first))
 
+    async def get_message_by_id(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str,
+        message_id: str,
+    ) -> MessageRecord | None:
+        """Return one live message through the in-memory primary-key map."""
+
+        message = self.messages.get(message_id)
+        if (
+            message is None
+            or message.org_id != org_id
+            or message.conversation_id != conversation_id
+            or message.run_id != run_id
+            or message.deleted_at is not None
+        ):
+            return None
+        return message
+
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         """Append a runtime-created message."""
 
@@ -514,9 +574,23 @@ class InMemoryRuntimeApiStore:
         if conversation is None:
             return None
         if conversation.deleted_at is not None:
+            if self._artifact_lifecycle_jobs is not None:
+                await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    deleted_at=conversation.deleted_at,
+                )
             return conversation
         updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
         self.conversations[conversation_id] = updated
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                deleted_at=now,
+            )
         return updated
 
     async def restore_conversation(
@@ -1320,6 +1394,8 @@ class InMemoryRuntimeApiStore:
         seen.update(c.org_id for c in self.conversations.values())
         seen.update(m.org_id for m in self.messages.values())
         seen.update(r.org_id for r in self.runs.values())
+        if self._artifact_lifecycle_jobs is not None:
+            seen.update(await self._artifact_lifecycle_jobs.list_org_ids())
         return tuple(sorted(seen))
 
     async def sweep_retention_kind(
@@ -1341,6 +1417,19 @@ class InMemoryRuntimeApiStore:
 
         from agent_runtime.persistence.records import RetentionSweepOutcome
 
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            if self._artifact_lifecycle_jobs is None or dry_run:
+                return RetentionSweepOutcome(org_id=org_id, kind=kind)
+            result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=datetime.now(timezone.utc),
+                limit=chunk_size or None,
+            )
+            return RetentionSweepOutcome(
+                org_id=org_id,
+                kind=kind,
+                deleted=len(result.purge.purged_artifact_ids),
+            )
         return RetentionSweepOutcome(
             org_id=org_id,
             kind=kind,
@@ -1516,7 +1605,7 @@ class InMemoryRuntimeApiStore:
                 _Fields.DELETED_AT: now.isoformat(),
             },
         )
-        return HistoryDeletionResponse(
+        result = HistoryDeletionResponse(
             org_id=org_id,
             user_id=user_id,
             conversations_archived=conversations_archived,
@@ -1525,6 +1614,13 @@ class InMemoryRuntimeApiStore:
             events_retained=events_retained,
             audit_event_id=audit_event_id,
         )
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_user_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                deleted_at=now,
+            )
+        return result
 
     # ------------------------------------------------------------------
     # Usage + pricing
@@ -1542,6 +1638,60 @@ class InMemoryRuntimeApiStore:
     ) -> None:
         """Append a per-call usage record."""
         self.model_call_usage.append(record)
+
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append one immutable usage-to-operation edge.
+
+        The natural identity makes retry delivery idempotent while a distinct
+        usage-record ID (for example, a model retry) remains a distinct edge.
+        """
+
+        if not any(
+            record.id == edge.usage_record_id and record.org_id == org_id
+            for record in self.model_call_usage
+        ):
+            raise LookupError("usage attribution requires an in-tenant usage record")
+
+        natural_key = (org_id, *edge.idempotency_key)
+        if natural_key in self._usage_attribution_edge_ids_by_key:
+            return False
+
+        existing = self.usage_attribution_edges.get(edge.edge_id)
+        if existing is not None:
+            if existing == (org_id, edge):
+                return False
+            raise ValueError("usage attribution edge_id already exists")
+
+        self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
+        self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
+        return True
+
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Return only edges belonging to the trusted organization scope."""
+
+        requested_ids = set(usage_record_ids)
+        if not requested_ids:
+            return ()
+        return tuple(
+            sorted(
+                (
+                    edge
+                    for stored_org_id, edge in self.usage_attribution_edges.values()
+                    if stored_org_id == org_id and edge.usage_record_id in requested_ids
+                ),
+                key=lambda edge: (edge.created_at, edge.edge_id),
+            )
+        )
 
     async def update_run_usage_cost(
         self,
@@ -2345,6 +2495,11 @@ class InMemoryRuntimeApiStore:
 
         if not events:
             return ()
+        if any(event.event_id is not None for event in events):
+            raise ValueError(
+                "stable event ids require append_event; batch append is reserved "
+                "for newly allocated stream events"
+            )
         run_ids = {event.run_id for event in events}
         if len(run_ids) > 1:
             raise ValueError(
@@ -2365,6 +2520,23 @@ class InMemoryRuntimeApiStore:
         """
 
         events = self.events_by_run.setdefault(event.run_id, [])
+        if event.event_id is not None:
+            existing = next(
+                (item for item in events if item.event_id == event.event_id),
+                None,
+            )
+            if existing is not None:
+                if event.matches_envelope(existing):
+                    return existing
+                raise RuntimeEventIdempotencyConflict(
+                    run_id=event.run_id,
+                    event_id=event.event_id,
+                )
+        envelope_kwargs: dict[str, object] = {}
+        if event.event_id is not None:
+            envelope_kwargs["event_id"] = event.event_id
+        if event.created_at is not None:
+            envelope_kwargs["created_at"] = event.created_at
         envelope = RuntimeEventEnvelope(
             run_id=event.run_id,
             conversation_id=event.conversation_id,
@@ -2391,8 +2563,10 @@ class InMemoryRuntimeApiStore:
             presentation=event.presentation,
             payload=event.payload,
             metadata=event.metadata,
+            **envelope_kwargs,
         )
         events.append(envelope)
+        self._events_by_id[envelope.event_id] = envelope
         if event.run_id in self.runs:
             await self.set_run_latest_sequence(
                 run_id=event.run_id,
@@ -2417,6 +2591,23 @@ class InMemoryRuntimeApiStore:
             for event in self.events_by_run.get(run_id, ())
             if event.sequence_no > after_sequence
         )
+
+    async def get_event_by_id(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        event_id: str,
+    ) -> RuntimeEventEnvelope | None:
+        """Return one event only when its immutable id and scope both match."""
+
+        event = self._events_by_id.get(event_id)
+        if event is None or event.run_id != run_id:
+            return None
+        run = self.runs.get(run_id)
+        if run is None or run.org_id != org_id:
+            return None
+        return event
 
     async def get_latest_sequence(self, *, run_id: str) -> int:
         """Return latest persisted sequence number for a run."""
@@ -2476,6 +2667,74 @@ class InMemoryRuntimeApiStore:
             approval_id=None,
             payload=command.model_dump(mode="json"),
         )
+
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        """Enqueue an A5 effect commit command for deterministic worker tests."""
+
+        self.effect_commit_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        """Enqueue an A5 effect reconciliation command for deterministic worker tests."""
+
+        self.effect_reconcile_commands.append(command)
+        self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_artifact_event(
+        self,
+        command: RuntimeArtifactEventCommand,
+    ) -> None:
+        """Idempotently mirror one canonical artifact event into this queue."""
+
+        payload = command.model_dump(mode="json")
+        expected = {
+            **payload,
+            _Fields.COMMAND_ID: command.command_id,
+            _Fields.COMMAND_TYPE: (
+                PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED
+            ),
+            _Fields.ORG_ID: command.org_id,
+            _Fields.RUN_ID: command.run_id,
+            _Fields.APPROVAL_ID: None,
+        }
+        existing = self._queue_payloads.get(command.command_id)
+        if existing is not None:
+            if existing != expected:
+                raise ValueError("artifact queue command id conflicts")
+            return
+        self._register_command(
+            command_id=command.command_id,
+            command_type=(PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED),
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=payload,
+        )
+
+    async def artifact_event_status(
+        self,
+        *,
+        event_id: str,
+    ) -> OutboxStatus | None:
+        """Return public queue state for canonical acknowledgement recovery."""
+
+        return self._queue_statuses.get(event_id)
 
     async def claim_next(
         self,

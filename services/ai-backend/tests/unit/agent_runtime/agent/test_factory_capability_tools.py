@@ -17,6 +17,11 @@ from agent_runtime.execution.contracts import (
     RuntimeDependencies,
 )
 from agent_runtime.execution.factory import acreate_agent_runtime
+from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.tools.builtin.publish_artifact import (
+    PublishArtifactTool,
+)
 from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
 
 
@@ -66,6 +71,7 @@ class TestCapabilityToolsAbsentByDefault:
         assert fake_dependencies.sandbox_execute_tool is None
         # PRD-D3 — the bulk-staging tool defaults off too (flag-off byte-identical).
         assert fake_dependencies.stage_rowset_write_tool is None
+        assert fake_dependencies.publish_artifact_tool is None
 
     async def test_stage_rowset_write_absent_by_default(
         self,
@@ -76,6 +82,7 @@ class TestCapabilityToolsAbsentByDefault:
             runtime_context_admin, fake_dependencies
         )
         assert "stage_rowset_write" not in names
+        assert "publish_artifact" not in names
 
 
 class _FakeRowsetTool:
@@ -99,6 +106,23 @@ class TestStageRowsetWriteRegistration:
         )
         names, _prompt = await _tool_names_and_prompt(runtime_context_admin, deps)
         assert "stage_rowset_write" in names
+
+
+class TestPublishArtifactRegistration:
+    async def test_present_only_when_worker_populates_the_flagged_slot(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        deps = fake_dependencies.model_copy(
+            update={
+                "publish_artifact_tool": PublishArtifactTool(
+                    gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
+                )
+            }
+        )
+        names, _prompt = await _tool_names_and_prompt(runtime_context_admin, deps)
+        assert "publish_artifact" in names
 
 
 class TestCodeModeToolRegistration:

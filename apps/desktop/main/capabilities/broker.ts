@@ -25,6 +25,15 @@ import {
   type GrantMode,
   type GrantProvider,
 } from "./types";
+import {
+  LocalWorkspaceAuthority,
+  WorkspaceAuthorityError,
+  type WorkspaceChangeEntry,
+  type WorkspaceChangeSet,
+  type WorkspaceCommitResult,
+  type WorkspaceRunFacts,
+} from "./workspace-authority";
+import type { WorkspaceApprovalPermitHandoff } from "./workspace-approval";
 
 // Authenticated loopback capability broker (AC5 slice 1 — skeleton).
 //
@@ -71,6 +80,7 @@ const MAX_BODY_BYTES = 64 * 1024;
 // cap sized to hold `FS_LIMITS.maxWriteBytes` (8 MiB) as base64 plus JSON
 // overhead. Every OTHER route keeps the tight 64 KiB cap.
 const MAX_WRITE_BODY_BYTES = 12 * 1024 * 1024;
+const MAX_WORKSPACE_UPLOAD_BYTES = 128 * 1024 * 1024;
 
 const ROUTES = {
   handshake: "/v1/handshake",
@@ -88,6 +98,10 @@ const ROUTES = {
   fsMkdir: "/v1/fs/mkdir",
   fsDelete: "/v1/fs/delete",
   fsMove: "/v1/fs/move",
+  workspacePrepare: "/internal/workspace/v2/prepare",
+  workspaceHostSessions: "/internal/workspace/v2/host-sessions",
+  workspaceCommit: "/internal/workspace/v2/prepared",
+  workspaceClaims: "/internal/workspace/v2/claims",
 } as const;
 
 // Routes whose request body may carry file content (larger body cap).
@@ -112,7 +126,33 @@ const ADVERTISED_METHODS = [
   "makeDir",
   "deletePath",
   "movePath",
+  "prepareWorkspaceEffect",
+  "uploadWorkspaceContent",
+  "commitWorkspaceEffect",
+  "reconcileWorkspaceClaim",
+  "abortWorkspaceEffect",
 ] as const;
+
+const LEGACY_FILESYSTEM_METHODS = new Set<string>([
+  "statPath",
+  "listDir",
+  "readFile",
+  "glob",
+  "grep",
+  "writeFile",
+  "editFile",
+  "makeDir",
+  "deletePath",
+  "movePath",
+]);
+
+const WORKSPACE_V2_METHODS = new Set<string>([
+  "prepareWorkspaceEffect",
+  "uploadWorkspaceContent",
+  "commitWorkspaceEffect",
+  "reconcileWorkspaceClaim",
+  "abortWorkspaceEffect",
+]);
 
 // The minimum grant MODE each FS route requires. Fail-closed: an unknown route
 // defaults to the highest bar (`read_write`), and `modeSatisfies` fails closed
@@ -146,6 +186,12 @@ export interface CapabilityBrokerConfig {
    * to a fresh RAM-only store keyed by the same CSPRNG as the token.
    */
   readonly runContexts?: RunContextStore;
+  /**
+   * The v2 authority. Its presence withdraws every legacy filesystem endpoint;
+   * this is intentionally distinct from the boot bearer, which carries no
+   * filesystem right.
+   */
+  readonly workspaceAuthority?: LocalWorkspaceAuthority;
 }
 
 export interface CapabilityBrokerHandle {
@@ -154,11 +200,41 @@ export interface CapabilityBrokerHandle {
   readonly port: number;
 }
 
+/**
+ * Main-owned session state.  Its read capability and device identity never
+ * leave Electron main; the child process sees only the opaque map key.
+ */
+interface WorkspaceHostSessionState {
+  readonly facts: WorkspaceRunFacts;
+  readonly readCapability: string;
+  readonly grantIds: readonly string[];
+  readonly expiresAt: number;
+}
+
+interface CompletedWorkspaceCommit {
+  readonly hostSessionRef: string;
+  readonly result: WorkspaceCommitResult;
+}
+
+const HOST_SESSION_REF = /^whs_[A-Za-z0-9_-]{32,160}$/u;
+
 export class CapabilityBroker {
   readonly #grants: GrantProvider;
   readonly #hostFs: HostFs | null;
   readonly #randomBytes: (size: number) => Buffer;
   readonly #runContexts: RunContextStore;
+  readonly #workspaceAuthority: LocalWorkspaceAuthority | null;
+  #workspaceApprovalPermitHandoff: WorkspaceApprovalPermitHandoff | null = null;
+  readonly #workspaceHostSessions = new Map<
+    string,
+    WorkspaceHostSessionState
+  >();
+  readonly #preparedHostSessions = new Map<string, string>();
+  readonly #completedWorkspaceCommits = new Map<
+    string,
+    CompletedWorkspaceCommit
+  >();
+  #workspaceHostSessionSequence = 0;
 
   #server: Server | null = null;
   #tokenBuf: Buffer | null = null;
@@ -174,10 +250,27 @@ export class CapabilityBroker {
     this.#runContexts =
       config.runContexts ??
       new RunContextStore({ randomBytes: this.#randomBytes });
+    this.#workspaceAuthority = config.workspaceAuthority ?? null;
   }
 
   isRunning(): boolean {
     return this.#server !== null;
+  }
+
+  /**
+   * Main-only wiring seam for C3's verified-approval reservation source.
+   * There is intentionally no IPC, environment, or HTTP route for setting it.
+   */
+  installWorkspaceApprovalPermitHandoff(
+    handoff: WorkspaceApprovalPermitHandoff,
+  ): void {
+    if (
+      this.#workspaceApprovalPermitHandoff !== null &&
+      this.#workspaceApprovalPermitHandoff !== handoff
+    ) {
+      throw new Error("workspace approval permit handoff is already installed");
+    }
+    this.#workspaceApprovalPermitHandoff = handoff;
   }
 
   /**
@@ -235,6 +328,10 @@ export class CapabilityBroker {
     this.#tokenBuf = null;
     this.#saltBuf = null;
     this.#port = 0;
+    this.#workspaceHostSessions.clear();
+    this.#preparedHostSessions.clear();
+    this.#completedWorkspaceCommits.clear();
+    this.#workspaceHostSessionSequence = 0;
     // Per-run snapshots are RAM-only and MUST NOT survive a restart — drop them
     // so a fresh boot never inherits a prior boot's pinned authority.
     this.#runContexts.clear();
@@ -289,9 +386,11 @@ export class CapabilityBroker {
       respondJson(res, 403, { error: "forbidden" });
       return;
     }
-    // 2) Method: JSON-RPC-ish over POST only. OPTIONS (preflight) is refused
-    //    outright — we never negotiate CORS.
-    if (req.method !== "POST") {
+    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+    const upload = parseWorkspaceUploadPath(pathname);
+    // 2) Private v2 content slots use PUT with raw bytes. Every other broker
+    // method remains POST+JSON. OPTIONS is always refused: no CORS.
+    if (req.method !== "POST" && !(req.method === "PUT" && upload !== null)) {
       respondJson(res, 405, { error: "method_not_allowed" });
       return;
     }
@@ -307,9 +406,14 @@ export class CapabilityBroker {
       respondJson(res, 401, { error: "unauthorized" });
       return;
     }
-    // 5) Body (size-capped, JSON). Write routes carry file content, so they get
+    // 5) A v2 upload streams bytes directly into private prepared storage. It
+    // never becomes JSON/base64 and never takes a host filesystem path.
+    if (upload !== null) {
+      await this.#handleWorkspaceUpload(upload, req, res);
+      return;
+    }
+    // 6) Body (size-capped, JSON). Write routes carry file content, so they get
     //    the larger cap; every other route keeps the tight 64 KiB cap.
-    const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
     const bodyCap = WRITE_BODY_ROUTES.has(pathname)
       ? MAX_WRITE_BODY_BYTES
       : MAX_BODY_BYTES;
@@ -328,7 +432,9 @@ export class CapabilityBroker {
       case ROUTES.handshake:
         respondJson(res, 200, {
           protocol: CAPABILITY_BROKER_PROTOCOL,
-          methods: ADVERTISED_METHODS,
+          methods: this.#advertisedMethods(),
+          workspace_write_available:
+            this.#workspaceAuthority?.writableAvailable() ?? false,
           serverTime: Date.now(),
         });
         return;
@@ -381,6 +487,12 @@ export class CapabilityBroker {
         respondJson(res, 200, { released });
         return;
       }
+      case ROUTES.workspaceHostSessions:
+        await this.#handleWorkspaceHostSession(body, res);
+        return;
+      case ROUTES.workspacePrepare:
+        await this.#handleWorkspacePrepare(body, res);
+        return;
       case ROUTES.fsStat:
       case ROUTES.fsList:
       case ROUTES.fsRead:
@@ -394,22 +506,35 @@ export class CapabilityBroker {
         await this.#handleFs(pathname, body, res);
         return;
       default:
+        if (pathname.startsWith(`${ROUTES.workspaceCommit}/`)) {
+          await this.#handleWorkspacePreparedRoute(pathname, body, res);
+          return;
+        }
+        if (pathname.startsWith(`${ROUTES.workspaceClaims}/`)) {
+          await this.#handleWorkspaceClaimRoute(pathname, body, res);
+          return;
+        }
         respondJson(res, 404, { error: "not_found" });
         return;
     }
   }
 
   /**
-   * Dispatch a filesystem READ op. Resolves the grant from the CURRENT active
-   * snapshot (revoked → `grant_required`), gates on grant mode, then runs the
-   * op on `HostFs`. All failures collapse to a generic `{ error: <code> }`
-   * with a mapped status — never a host path, never an internal stack.
+   * Dispatch an AC5 legacy filesystem operation. Once the v2 authority is
+   * installed, ALL of these paths are withdrawn — including reads — because a
+   * process-wide boot bearer is not a workspace read capability. C2's native
+   * read-capability port is the only permitted successor; until that platform
+   * primitive is available we fail closed rather than retain a weaker route.
    */
   async #handleFs(
     route: string,
     body: unknown,
     res: ServerResponse,
   ): Promise<void> {
+    if (this.#workspaceAuthority !== null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
     // Fail closed if no executor was wired.
     if (this.#hostFs === null) {
       respondJson(res, 404, { error: "unsupported" });
@@ -433,6 +558,249 @@ export class CapabilityBroker {
       const { status, code } = fsErrorResponse(err);
       respondJson(res, status, { error: code });
     }
+  }
+
+  async #handleWorkspacePrepare(
+    body: unknown,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#workspaceAuthority;
+    if (authority === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    try {
+      const params = requireRecord(body);
+      const hostSessionRef = requireHostSessionRef(params);
+      const session = this.#requireWorkspaceHostSession(hostSessionRef);
+      const prepared = await authority.prepareChangeSet(
+        session.readCapability,
+        parseWorkspaceChangeSet(params),
+      );
+      this.#preparedHostSessions.set(prepared.preparedRef, hostSessionRef);
+      respondJson(res, 201, {
+        prepared_ref: prepared.preparedRef,
+        expires_at: prepared.expiresAt,
+        observed_target_digest: prepared.observedTargetDigest,
+        upload_slots: prepared.uploadSlots.map((slot) => ({
+          slot: slot.slot,
+          digest: slot.digest,
+          size: slot.size,
+        })),
+      });
+    } catch (error) {
+      respondWorkspaceError(res, error);
+    }
+  }
+
+  /**
+   * Bootstrap a run-scoped, main-owned C2 read capability for the intended
+   * supervised worker.  The request's boot bearer authenticates transport only;
+   * the authority derives device identity and live grants in Electron main.
+   * The response deliberately contains just one opaque session reference and
+   * path-free grant projections — never a capability, root, permit, or path.
+   */
+  async #handleWorkspaceHostSession(
+    body: unknown,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#workspaceAuthority;
+    if (authority === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    try {
+      const params = requireRecord(body);
+      const host = await authority.createPrivateHostSession(
+        requireOpaqueId(params, "run_id"),
+        requireOpaqueId(params, "user_id"),
+      );
+      const hostSessionRef = this.#newWorkspaceHostSessionRef();
+      this.#workspaceHostSessions.set(
+        hostSessionRef,
+        Object.freeze({
+          facts: Object.freeze({ ...host.facts }),
+          readCapability: host.readCapability,
+          grantIds: Object.freeze([...host.grantIds]),
+          expiresAt: host.expiresAt,
+        }),
+      );
+      const grantIds = new Set(host.grantIds);
+      const grants = (await this.#grants.listAll())
+        .filter((grant) => grantIds.has(grant.grantId))
+        .map((grant) => toBrokerGrant(grant, this.#mountId(grant.root)));
+      respondJson(res, 201, {
+        host_session_ref: hostSessionRef,
+        expires_at: host.expiresAt,
+        grants,
+      });
+    } catch (error) {
+      respondWorkspaceError(res, error);
+    }
+  }
+
+  async #handleWorkspaceUpload(
+    upload: WorkspaceUploadPath,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#workspaceAuthority;
+    if (authority === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    try {
+      await streamBinaryBody(req, MAX_WORKSPACE_UPLOAD_BYTES, async (chunk) => {
+        await authority.uploadPreparedContent(
+          upload.preparedRef,
+          upload.slot,
+          chunk,
+        );
+      });
+      if (headerValue(req, "x-workspace-upload-final") === "true") {
+        await authority.sealPreparedContent(upload.preparedRef, upload.slot);
+      }
+      respondJson(res, 200, {
+        accepted: true,
+        sealed: headerValue(req, "x-workspace-upload-final") === "true",
+      });
+    } catch (error) {
+      // A partial or malformed upload must never remain an eligible staging
+      // object. Abort is idempotent at this boundary; suppress its outcome so
+      // the caller receives the original validation/stream error only.
+      await authority
+        .abortPreparedChangeSet(upload.preparedRef)
+        .catch(() => {});
+      // Preserve the exact host-session association until the caller aborts
+      // or the session expires. A later commit can then ask the C2 authority
+      // for its terminal staging state and return `workspace_conflict` (409)
+      // before touching a one-use approval reservation. Dropping it here
+      // would incorrectly turn a failed upload into permit-denied (403).
+      this.#completedWorkspaceCommits.delete(upload.preparedRef);
+      respondWorkspaceError(res, error);
+    }
+  }
+
+  async #handleWorkspacePreparedRoute(
+    pathname: string,
+    body: unknown,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#workspaceAuthority;
+    if (authority === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    const prepared = parseWorkspacePreparedPath(pathname);
+    if (prepared === null) {
+      respondJson(res, 404, { error: "not_found" });
+      return;
+    }
+    try {
+      if (prepared.action === "abort") {
+        await authority.abortPreparedChangeSet(prepared.preparedRef);
+        this.#preparedHostSessions.delete(prepared.preparedRef);
+        this.#completedWorkspaceCommits.delete(prepared.preparedRef);
+        respondJson(res, 200, { aborted: true });
+        return;
+      }
+      const params = requireRecord(body);
+      const hostSessionRef = requireHostSessionRef(params);
+      const session = this.#requireWorkspaceHostSession(hostSessionRef);
+      const completed = this.#completedWorkspaceCommits.get(
+        prepared.preparedRef,
+      );
+      if (completed !== undefined) {
+        if (completed.hostSessionRef !== hostSessionRef) {
+          throw new WorkspaceAuthorityError("workspace_permit_denied");
+        }
+        respondJson(res, 200, workspaceCommitWire(completed.result));
+        return;
+      }
+      if (
+        this.#preparedHostSessions.get(prepared.preparedRef) !== hostSessionRef
+      ) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      const binding = await authority.commitEligibleBinding(
+        prepared.preparedRef,
+      );
+      if (!sameWorkspaceFacts(binding.facts, session.facts)) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      const handoff = this.#workspaceApprovalPermitHandoff;
+      if (handoff === null) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      // The exact approval binding comes exclusively from C2's prepared state.
+      // The worker supplied only the opaque host-session reference above.
+      const permit = await handoff.take({
+        facts: binding.facts,
+        preparedRef: binding.preparedRef,
+        stageId: binding.stageId,
+        revision: binding.revision,
+        decisionLedgerId: binding.decisionLedgerId,
+        changeSetDigest: binding.changeSetDigest,
+        targetDigest: binding.targetDigest,
+        proposalDigest: binding.proposalDigest,
+      });
+      if (permit === null) {
+        throw new WorkspaceAuthorityError("workspace_permit_denied");
+      }
+      // The raw C2 permit exists only in this Electron-main stack frame. It is
+      // neither returned to the child nor accepted as a child-controlled body.
+      const result = await authority.commitPreparedChangeSet(
+        prepared.preparedRef,
+        permit,
+      );
+      this.#completedWorkspaceCommits.set(
+        prepared.preparedRef,
+        Object.freeze({ hostSessionRef, result }),
+      );
+      respondJson(res, 200, workspaceCommitWire(result));
+    } catch (error) {
+      respondWorkspaceError(res, error);
+    }
+  }
+
+  async #handleWorkspaceClaimRoute(
+    pathname: string,
+    _body: unknown,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#workspaceAuthority;
+    if (authority === null) {
+      respondJson(res, 404, { error: "unsupported" });
+      return;
+    }
+    const claimId = parseWorkspaceClaimPath(pathname);
+    if (claimId === null) {
+      respondJson(res, 404, { error: "not_found" });
+      return;
+    }
+    try {
+      respondJson(
+        res,
+        200,
+        workspaceCommitWire(await authority.reconcileCommit(claimId)),
+      );
+    } catch (error) {
+      respondWorkspaceError(res, error);
+    }
+  }
+
+  #newWorkspaceHostSessionRef(): string {
+    this.#workspaceHostSessionSequence += 1;
+    return `whs_${this.#randomBytes(32).toString("base64url")}_${this.#workspaceHostSessionSequence}`;
+  }
+
+  #requireWorkspaceHostSession(ref: string): WorkspaceHostSessionState {
+    const session = this.#workspaceHostSessions.get(ref);
+    if (session === undefined || session.expiresAt <= Date.now()) {
+      this.#workspaceHostSessions.delete(ref);
+      throw new WorkspaceAuthorityError("workspace_capability_denied");
+    }
+    return session;
   }
 
   /**
@@ -483,6 +851,17 @@ export class CapabilityBroker {
       .update(root, "utf-8")
       .digest("base64url");
     return `mnt_${digest.slice(0, 24)}`;
+  }
+
+  #advertisedMethods(): readonly string[] {
+    const authority = this.#workspaceAuthority;
+    if (authority === null) return ADVERTISED_METHODS;
+    return ADVERTISED_METHODS.filter((method) => {
+      if (LEGACY_FILESYSTEM_METHODS.has(method)) return false;
+      if (WORKSPACE_V2_METHODS.has(method))
+        return authority.writableAvailable();
+      return true;
+    });
   }
 
   #authorized(req: IncomingMessage): boolean {
@@ -553,6 +932,226 @@ function requireString(params: object, key: string): string {
     throw new FsError("invalid_request", `missing ${key}`);
   }
   return value;
+}
+
+function requireOpaqueId(params: object, key: string): string {
+  const value = requireString(params, key);
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(value)) {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value;
+}
+
+function requireHostSessionRef(params: object): string {
+  const value = requireString(params, "host_session_ref");
+  if (!HOST_SESSION_REF.test(value)) {
+    throw new FsError("invalid_request", "invalid host_session_ref");
+  }
+  return value;
+}
+
+function sameWorkspaceFacts(
+  left: WorkspaceRunFacts,
+  right: WorkspaceRunFacts,
+): boolean {
+  return (
+    left.runId === right.runId &&
+    left.userId === right.userId &&
+    left.deviceId === right.deviceId
+  );
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new FsError("invalid_request", "request body must be an object");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireBoolean(params: object, key: string): boolean {
+  const value = (params as Record<string, unknown>)[key];
+  if (typeof value !== "boolean") {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value;
+}
+
+function requirePositiveInteger(params: object, key: string): number {
+  const value = (params as Record<string, unknown>)[key];
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value as number;
+}
+
+function requireDigest(params: object, key: string): string {
+  const value = requireString(params, key);
+  if (!/^[a-f0-9]{64}$/u.test(value)) {
+    throw new FsError("invalid_request", `invalid ${key}`);
+  }
+  return value;
+}
+
+function parseWorkspaceChangeSet(
+  params: Record<string, unknown>,
+): WorkspaceChangeSet {
+  const rawEntries = params.entries;
+  if (
+    !Array.isArray(rawEntries) ||
+    rawEntries.length === 0 ||
+    rawEntries.length > 1_000
+  ) {
+    throw new FsError("invalid_request", "invalid entries");
+  }
+  return {
+    stageId: requireString(params, "stage_id"),
+    revision: requirePositiveInteger(params, "revision"),
+    decisionLedgerId: requireString(params, "decision_ledger_id"),
+    grantId: requireString(params, "grant_id"),
+    mount: requireString(params, "mount"),
+    changeSetDigest: requireDigest(params, "change_set_digest"),
+    targetDigest: requireDigest(params, "target_digest"),
+    proposalDigest: requireDigest(params, "proposal_digest"),
+    entries: rawEntries.map((entry) =>
+      parseWorkspaceEntry(requireRecord(entry)),
+    ),
+  };
+}
+
+function parseWorkspaceEntry(
+  params: Record<string, unknown>,
+): WorkspaceChangeEntry {
+  const operation = requireString(params, "operation");
+  if (
+    operation !== "create" &&
+    operation !== "replace" &&
+    operation !== "delete" &&
+    operation !== "move" &&
+    operation !== "mkdir"
+  ) {
+    throw new FsError("invalid_request", "invalid workspace operation");
+  }
+  const precondition = requireRecord(params.precondition);
+  const destination = optionalString(params, "destination_relative_path");
+  const contentDigest = optionalString(params, "content_digest");
+  const contentSize = optionalInt(params, "content_size");
+  const contentSlot = optionalString(params, "content_slot");
+  if (contentDigest !== undefined && !/^[a-f0-9]{64}$/u.test(contentDigest)) {
+    throw new FsError("invalid_request", "invalid content_digest");
+  }
+  if (contentSize !== undefined && contentSize < 0) {
+    throw new FsError("invalid_request", "invalid content_size");
+  }
+  const needsContent = operation === "create" || operation === "replace";
+  if (
+    needsContent !==
+    (contentDigest !== undefined &&
+      contentSize !== undefined &&
+      contentSlot !== undefined)
+  ) {
+    throw new FsError(
+      "invalid_request",
+      "workspace content declaration mismatch",
+    );
+  }
+  if (
+    !needsContent &&
+    (contentDigest !== undefined ||
+      contentSize !== undefined ||
+      contentSlot !== undefined)
+  ) {
+    throw new FsError("invalid_request", "unexpected workspace content");
+  }
+  if ((operation === "move") !== (destination !== undefined)) {
+    throw new FsError("invalid_request", "workspace destination mismatch");
+  }
+  return {
+    operation,
+    relativePath: requireString(params, "relative_path"),
+    destinationRelativePath: destination,
+    contentDigest,
+    contentSize,
+    contentSlot,
+    precondition: {
+      exists: requireBoolean(precondition, "exists"),
+      kind: optionalWorkspaceKind(precondition, "kind"),
+      stableId: optionalString(precondition, "stable_id"),
+      sha256: optionalDigest(precondition, "sha256"),
+    },
+  };
+}
+
+function optionalWorkspaceKind(
+  params: Record<string, unknown>,
+  key: string,
+): "file" | "directory" | undefined {
+  const value = optionalString(params, key);
+  if (value === undefined || value === "file" || value === "directory")
+    return value;
+  throw new FsError("invalid_request", `invalid ${key}`);
+}
+
+function optionalDigest(
+  params: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = optionalString(params, key);
+  if (value === undefined || /^[a-f0-9]{64}$/u.test(value)) return value;
+  throw new FsError("invalid_request", `invalid ${key}`);
+}
+
+interface WorkspaceUploadPath {
+  readonly preparedRef: string;
+  readonly slot: string;
+}
+
+function parseWorkspaceUploadPath(
+  pathname: string,
+): WorkspaceUploadPath | null {
+  const match =
+    /^\/internal\/workspace\/v2\/prepared\/([A-Za-z0-9_-]{1,120})\/content\/([A-Za-z0-9_-]{1,120})$/u.exec(
+      pathname,
+    );
+  if (match === null) return null;
+  return { preparedRef: preparedRefFromId(match[1]), slot: match[2] };
+}
+
+function parseWorkspacePreparedPath(pathname: string): {
+  readonly preparedRef: string;
+  readonly action: "commit" | "abort";
+} | null {
+  const match =
+    /^\/internal\/workspace\/v2\/prepared\/([A-Za-z0-9_-]{1,120})\/(commit|abort)$/u.exec(
+      pathname,
+    );
+  if (match === null) return null;
+  return {
+    preparedRef: preparedRefFromId(match[1]),
+    action: match[2] as "commit" | "abort",
+  };
+}
+
+function parseWorkspaceClaimPath(pathname: string): string | null {
+  const match =
+    /^\/internal\/workspace\/v2\/claims\/([A-Za-z0-9_-]{1,160})\/reconcile$/u.exec(
+      pathname,
+    );
+  return match?.[1] ?? null;
+}
+
+function preparedRefFromId(id: string): string {
+  return `workspace-prepared://${id}`;
+}
+
+function workspaceCommitWire(
+  result: WorkspaceCommitResult,
+): Record<string, unknown> {
+  return {
+    outcome: result.outcome,
+    receipt_ref: result.receiptRef,
+    result_digest: result.resultDigest,
+    safe_message: result.safeMessage,
+  };
 }
 
 // `path` must be PRESENT and a string, but an empty string is valid — it
@@ -628,6 +1227,28 @@ function fsErrorResponse(err: unknown): { status: number; code: string } {
   return { status: 500, code: "internal" };
 }
 
+function respondWorkspaceError(res: ServerResponse, error: unknown): void {
+  if (error instanceof BodyTooLargeError) {
+    respondJson(res, 413, { error: "payload_too_large" });
+    return;
+  }
+  if (error instanceof WorkspaceAuthorityError) {
+    const status =
+      error.code === "workspace_write_unsupported"
+        ? 404
+        : error.code === "workspace_prepared_not_found"
+          ? 404
+          : error.code === "workspace_capability_denied" ||
+              error.code === "workspace_permit_denied"
+            ? 403
+            : 409;
+    respondJson(res, status, { error: error.code });
+    return;
+  }
+  const { status, code } = fsErrorResponse(error);
+  respondJson(res, status, { error: code });
+}
+
 class BodyTooLargeError extends Error {}
 
 function readJsonBody(
@@ -671,6 +1292,30 @@ function readJsonBody(
       reject(err);
     });
   });
+}
+
+async function streamBinaryBody(
+  req: IncomingMessage,
+  maxBytes: number,
+  onChunk: (chunk: Uint8Array) => Promise<void>,
+): Promise<void> {
+  let size = 0;
+  try {
+    for await (const rawChunk of req) {
+      const chunk = Buffer.isBuffer(rawChunk)
+        ? rawChunk
+        : Buffer.from(rawChunk);
+      size += chunk.byteLength;
+      if (size > maxBytes) {
+        req.resume();
+        throw new BodyTooLargeError();
+      }
+      await onChunk(chunk);
+    }
+  } catch (error) {
+    req.resume();
+    throw error;
+  }
 }
 
 // The renderer is a real Chromium context; a fetch from it to this loopback is

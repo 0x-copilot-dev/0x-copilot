@@ -33,6 +33,7 @@ from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.surfaces_v2.constants import Keys as _LedgerKeys
 from agent_runtime.surfaces_v2.constants import Values as _LedgerValues
+from agent_runtime.surfaces_v2.ledger_models import WorkLedgerVocabulary
 from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     AgentRunStatus,
@@ -94,6 +95,26 @@ class _Fields:
     USAGE_TOKENS_IN = "tokens_in"
     USAGE_TOKENS_OUT = "tokens_out"
     USAGE_SURFACE_ID = "surface_id"
+
+
+class _OperationFields:
+    """A1 operation-event wire keys; all projection remains reference-only."""
+
+    VERSION = "v"
+    OPERATION_ID = "operation_id"
+    PRODUCER = "producer"
+    CAPABILITY = "capability"
+    OP = "op"
+    ARGS_DIGEST = "args_digest"
+    PARENT_OPERATION_ID = "parent_operation_id"
+    EFFECT_CLASS = "effect_class"
+    BASIS = "basis"
+    CONFIDENCE = "confidence"
+    OUTCOME = "outcome"
+    RESULT_REF = "result_ref"
+    LATENCY_MS = "latency_ms"
+    FAILURE_CODE = "failure_code"
+    RETRYABLE = "retryable"
 
 
 class RuntimeEventPresentationProjector:
@@ -204,6 +225,37 @@ class RuntimeEventPresentationProjector:
             return cls._write_applied_payload(payload)
         if event_type is RuntimeApiEventType.RECEIPT_EMITTED:
             return cls._receipt_emitted_payload(payload)
+        if event_type in {
+            RuntimeApiEventType.ARTIFACT_CREATED,
+            RuntimeApiEventType.ARTIFACT_REVISED,
+            RuntimeApiEventType.ARTIFACT_PROMOTED,
+            RuntimeApiEventType.ARTIFACT_PRESENTATION_DECIDED,
+        }:
+            return cls._artifact_ledger_payload(
+                event_type=event_type,
+                payload=payload,
+            )
+        if event_type in {
+            RuntimeApiEventType.EFFECT_STAGED,
+            RuntimeApiEventType.EFFECT_REVISED,
+            RuntimeApiEventType.EFFECT_DECISION_RECORDED,
+            RuntimeApiEventType.EFFECT_CLAIMED,
+            RuntimeApiEventType.EFFECT_APPLIED,
+            RuntimeApiEventType.EFFECT_INDETERMINATE,
+            RuntimeApiEventType.EFFECT_RECONCILED,
+        }:
+            return cls._effect_ledger_payload(
+                event_type=event_type,
+                payload=payload,
+            )
+        if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
+            return cls._operation_requested_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
+            return cls._operation_classified_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_COMPLETED:
+            return cls._operation_completed_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_FAILED:
+            return cls._operation_failed_payload(payload)
         return payload
 
     @classmethod
@@ -325,6 +377,21 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.DECISION_RECORDED,
             RuntimeApiEventType.WRITE_APPLIED,
             RuntimeApiEventType.RECEIPT_EMITTED,
+            RuntimeApiEventType.ARTIFACT_CREATED,
+            RuntimeApiEventType.ARTIFACT_REVISED,
+            RuntimeApiEventType.ARTIFACT_PROMOTED,
+            RuntimeApiEventType.ARTIFACT_PRESENTATION_DECIDED,
+            RuntimeApiEventType.OPERATION_REQUESTED,
+            RuntimeApiEventType.OPERATION_CLASSIFIED,
+            RuntimeApiEventType.OPERATION_COMPLETED,
+            RuntimeApiEventType.OPERATION_FAILED,
+            RuntimeApiEventType.EFFECT_STAGED,
+            RuntimeApiEventType.EFFECT_REVISED,
+            RuntimeApiEventType.EFFECT_DECISION_RECORDED,
+            RuntimeApiEventType.EFFECT_CLAIMED,
+            RuntimeApiEventType.EFFECT_APPLIED,
+            RuntimeApiEventType.EFFECT_INDETERMINATE,
+            RuntimeApiEventType.EFFECT_RECONCILED,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -814,6 +881,89 @@ class RuntimeEventPresentationProjector:
             tokens = payload.get(token_key)
             if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens >= 0:
                 safe_payload[token_key] = tokens
+        return safe_payload
+
+    @classmethod
+    def _operation_requested_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project the operation identity/digest row without argument content."""
+
+        safe_payload = cls._operation_base(payload)
+        for text_key in (
+            _OperationFields.PRODUCER,
+            _OperationFields.CAPABILITY,
+            _OperationFields.OP,
+            _OperationFields.ARGS_DIGEST,
+            _OperationFields.PARENT_OPERATION_ID,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        return safe_payload
+
+    @classmethod
+    def _operation_classified_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project bounded classification facts; reasons and arguments stay private."""
+
+        safe_payload = cls._operation_base(payload)
+        for text_key in (
+            _OperationFields.EFFECT_CLASS,
+            _OperationFields.BASIS,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        confidence = payload.get(_OperationFields.CONFIDENCE)
+        if (
+            isinstance(confidence, (int, float))
+            and not isinstance(confidence, bool)
+            and 0 <= confidence <= 1
+        ):
+            safe_payload[_OperationFields.CONFIDENCE] = confidence
+        return safe_payload
+
+    @classmethod
+    def _operation_completed_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project a bounded outcome and optional immutable result reference."""
+
+        safe_payload = cls._operation_base(payload)
+        for text_key in (
+            _OperationFields.OUTCOME,
+            _OperationFields.RESULT_REF,
+        ):
+            value = cls._text(payload.get(text_key))
+            if value is not None:
+                safe_payload[text_key] = value
+        latency_ms = payload.get(_OperationFields.LATENCY_MS)
+        if (
+            isinstance(latency_ms, int)
+            and not isinstance(latency_ms, bool)
+            and latency_ms >= 0
+        ):
+            safe_payload[_OperationFields.LATENCY_MS] = latency_ms
+        return safe_payload
+
+    @classmethod
+    def _operation_failed_payload(cls, payload: JsonObject) -> JsonObject:
+        """Project a safe code and retry hint; exception text is never exposed."""
+
+        safe_payload = cls._operation_base(payload)
+        failure_code = cls._text(payload.get(_OperationFields.FAILURE_CODE))
+        if failure_code is not None:
+            safe_payload[_OperationFields.FAILURE_CODE] = failure_code
+        retryable = payload.get(_OperationFields.RETRYABLE)
+        if isinstance(retryable, bool):
+            safe_payload[_OperationFields.RETRYABLE] = retryable
+        return safe_payload
+
+    @classmethod
+    def _operation_base(cls, payload: JsonObject) -> JsonObject:
+        safe_payload: JsonObject = {}
+        version = payload.get(_OperationFields.VERSION)
+        if isinstance(version, int) and not isinstance(version, bool):
+            safe_payload[_OperationFields.VERSION] = version
+        operation_id = cls._text(payload.get(_OperationFields.OPERATION_ID))
+        if operation_id is not None:
+            safe_payload[_OperationFields.OPERATION_ID] = operation_id
         return safe_payload
 
     @classmethod
@@ -1378,6 +1528,57 @@ class RuntimeEventPresentationProjector:
         return safe_payload
 
     @classmethod
+    def _artifact_ledger_payload(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> JsonObject:
+        """Validate and canonicalize a reference-only artifact ledger payload."""
+
+        try:
+            validated = WorkLedgerVocabulary.validate_payload(
+                event_type.value,
+                payload,
+            )
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning(
+                "Rejected malformed artifact ledger payload event_type=%s",
+                event_type.value,
+            )
+            return {}
+        return validated.model_dump(mode="json", by_alias=True)
+
+    @classmethod
+    def _effect_ledger_payload(
+        cls,
+        *,
+        event_type: RuntimeApiEventType,
+        payload: JsonObject,
+    ) -> JsonObject:
+        """Validate and canonicalize a reference-only universal-effect row.
+
+        ``WorkLedgerVocabulary`` is a strict Pydantic allow-list: unknown
+        fields, raw proposal bytes, physical paths, and malformed opaque refs
+        are rejected before the event can enter replay or SSE. ``exclude_none``
+        preserves additive v:1 compatibility rather than manufacturing fields
+        absent from a historical row.
+        """
+
+        try:
+            validated = WorkLedgerVocabulary.validate_payload(
+                event_type.value,
+                payload,
+            )
+        except (TypeError, ValueError):
+            logging.getLogger(__name__).warning(
+                "Rejected malformed effect ledger payload event_type=%s",
+                event_type.value,
+            )
+            return {}
+        return validated.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    @classmethod
     def _copy_payload_version(
         cls, payload: JsonObject, safe_payload: JsonObject
     ) -> None:
@@ -1874,11 +2075,63 @@ class RuntimeEventDraft(_RuntimeEventBase):
     """
 
     org_id: str
+    # Optional producer-assigned identity for durable outbox publication.
+    # Ordinary model/tool stream events leave this unset and retain the
+    # adapter-generated UUID behavior.  A retry with the same stable id and
+    # identical body returns the original envelope instead of appending twice.
+    event_id: str | None = None
+    # When an outbox command represents an earlier domain mutation, preserve
+    # that mutation time on the ledger.  Unset keeps the historical append-time
+    # behavior for every existing producer.
+    created_at: datetime | None = None
 
     @field_validator(Keys.Field.ORG_ID, mode="before")
     @classmethod
     def _normalize_org_id(cls, value: object, info: ValidationInfo) -> str:
         return ValueNormalizer.normalize_id(value, info.field_name)
+
+    @field_validator(Keys.Field.EVENT_ID, mode="before")
+    @classmethod
+    def _normalize_optional_event_id(
+        cls, value: object, info: ValidationInfo
+    ) -> str | None:
+        return ValueNormalizer.normalize_optional_id(value, info.field_name)
+
+    def matches_envelope(self, envelope: RuntimeEventEnvelope) -> bool:
+        """Return whether ``envelope`` is the idempotent result of this draft."""
+
+        expected_activity = (
+            self.activity_kind
+            or RuntimeEventPresentationProjector.activity_kind_for(
+                event_type=self.event_type,
+                source=self.source,
+            )
+        )
+        return (
+            self.event_id is not None
+            and envelope.event_id == self.event_id
+            and envelope.run_id == self.run_id
+            and envelope.conversation_id == self.conversation_id
+            and envelope.source == self.source
+            and envelope.event_type == self.event_type
+            and envelope.trace_id == self.trace_id
+            and envelope.parent_event_id == self.parent_event_id
+            and envelope.span_id == self.span_id
+            and envelope.parent_span_id == self.parent_span_id
+            and envelope.parent_task_id == self.parent_task_id
+            and envelope.task_id == self.task_id
+            and envelope.subagent_id == self.subagent_id
+            and envelope.display_title == self.display_title
+            and envelope.summary == self.summary
+            and envelope.status == self.status
+            and envelope.activity_kind == expected_activity
+            and envelope.visibility == self.visibility
+            and envelope.redaction_state == self.redaction_state
+            and envelope.presentation == self.presentation
+            and envelope.payload == self.payload
+            and envelope.metadata == self.metadata
+            and (self.created_at is None or envelope.created_at == self.created_at)
+        )
 
     @classmethod
     def from_stream_event(

@@ -47,6 +47,19 @@ class TestRegistry:
         assert registry.provider is provider
         assert registry.provider_id is SandboxProviderId.LANGSMITH
 
+    def test_unverified_provider_is_rejected_before_tool_composition(self) -> None:
+        class UnverifiedProvider(FakeSandboxProvider):
+            @property
+            def isolation_ready(self) -> bool:
+                return False
+
+        with pytest.raises(SandboxError) as excinfo:
+            SandboxProviderRegistry.from_config(
+                _active_config(),
+                overrides={SandboxProviderId.LANGSMITH: UnverifiedProvider()},
+            )
+        assert excinfo.value.code is SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED
+
 
 class TestSessionStore:
     async def test_upsert_get_list_delete(self) -> None:
@@ -72,3 +85,32 @@ class TestSeam:
             provider_overrides={SandboxProviderId.LANGSMITH: FakeSandboxProvider()},
         )
         assert isinstance(service, RemoteExecutionService)
+
+    def test_production_provider_without_verified_attestation_is_absent(self) -> None:
+        # No provider override means production composition selects the shipped
+        # LangSmith adapter. It cannot yet attest the D3 controls, so it must
+        # not expose a degraded model-visible sandbox tool.
+        assert build_sandbox_backend(_active_config()) is None
+
+
+class TestLaunchAttestation:
+    async def test_effective_attestation_is_checked_again_at_launch(self) -> None:
+        class AttestationLiar(FakeSandboxProvider):
+            async def attest(self, request):  # noqa: ANN001
+                verified = await super().attest(request)
+                return verified.model_copy(update={"host_credentials_absent": False})
+
+        config = _active_config()
+        provider = AttestationLiar()
+        registry = SandboxProviderRegistry.from_config(
+            config, overrides={SandboxProviderId.LANGSMITH: provider}
+        )
+        service = RemoteExecutionService(
+            registry=registry,
+            config=config,
+            session_store=InMemorySandboxSessionStore(),
+        )
+        with pytest.raises(SandboxError) as excinfo:
+            await service.create(make_request())
+        assert excinfo.value.code is SandboxErrorCode.SANDBOX_ISOLATION_UNVERIFIED
+        assert provider.create_calls == 0

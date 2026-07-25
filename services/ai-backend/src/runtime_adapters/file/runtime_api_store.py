@@ -54,6 +54,7 @@ from starlette import status
 from agent_runtime.api.constants import Messages
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.persistence.constants import Values as PersistenceValues
+from agent_runtime.persistence.ports import RuntimeEventIdempotencyConflict
 from copilot_audit_chain import AuditChainSigner, ChainVerificationResult
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
@@ -80,6 +81,7 @@ from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
+    UsageAttributionEdge,
     UsageConversationAggregateRecord,
     UsageDailyConnectorRow,
     UsageDailyOrgRow,
@@ -88,6 +90,7 @@ from agent_runtime.persistence.records import (
     UsageDailyUserRow,
 )
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
+from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
 from runtime_adapters.file._audit_manifest import (
     AuditManifest,
     AuditManifestVerifier,
@@ -134,7 +137,10 @@ from runtime_api.schemas import (
     MessageRecord,
     MessageRole,
     RuntimeApprovalResolvedCommand,
+    RuntimeArtifactEventCommand,
     RuntimeCancelCommand,
+    RuntimeEffectCommitCommand,
+    RuntimeEffectReconcileCommand,
     RuntimeEventDraft,
     RuntimeEventEnvelope,
     RuntimeEventPresentationProjector,
@@ -156,6 +162,7 @@ class _Tables:
     APPROVAL_BATCH_ITEMS = "approval_batch_items"
     RUN_USAGE = "run_usage"
     MODEL_CALL_USAGE = "model_call_usage"
+    USAGE_ATTRIBUTION_EDGES = "usage_attribution_edges"
     PRICING = "pricing"
     USER_DAILY = "usage_daily_user"
     ORG_DAILY = "usage_daily_org"
@@ -215,6 +222,37 @@ class _PurgeOutcome:
 class FileRuntimeApiStore:
     """On-disk implementation of persistence, event store, and queue ports."""
 
+    # The file adapter persists append-only audit material across process restarts.
+    receipt_export_v2_available = True
+
+    def configure_artifact_lifecycle(self, jobs: ArtifactLifecycleJobs) -> None:
+        """Attach the gated repository lifecycle to existing store operations."""
+
+        self._artifact_lifecycle_jobs = jobs
+
+    async def tombstone_artifacts_for_org_deletion(
+        self,
+        *,
+        org_id: str,
+        deleted_at: datetime,
+    ) -> object | None:
+        jobs = self._artifact_lifecycle_jobs
+        if jobs is None:
+            return None
+        protected = tuple(
+            sorted(
+                conversation.conversation_id
+                for conversation in self.conversations.values()
+                if conversation.org_id == org_id
+                and LegalHoldPolicy.is_on_hold(conversation)
+            )
+        )
+        return await jobs.on_org_deleted(
+            org_id=org_id,
+            deleted_at=deleted_at,
+            protected_conversation_ids=protected,
+        )
+
     def __init__(
         self,
         root: str | Path,
@@ -223,6 +261,7 @@ class FileRuntimeApiStore:
         retention_days: int = 0,
         compaction_enabled: bool = True,
     ) -> None:
+        self._artifact_lifecycle_jobs: ArtifactLifecycleJobs | None = None
         self._layout = FileStoreLayout(Path(root))
         # Boot-time bounded-growth compaction of the append-with-fold state
         # ledgers (default ON; a kill switch for the persistence path).
@@ -252,6 +291,10 @@ class FileRuntimeApiStore:
         self.messages: dict[str, MessageRecord] = {}
         self.runs: dict[str, RunRecord] = {}
         self.events_by_run: dict[str, list[RuntimeEventEnvelope]] = {}
+        # Materialized exact-id index used by artifact source promotion.  It is
+        # rebuilt from immutable JSONL on open, never by scanning at request
+        # time for a guessed payload/call-id substring.
+        self._events_by_id: dict[str, RuntimeEventEnvelope] = {}
         self.approval_requests: dict[str, ApprovalRequestRecord] = {}
         self.approval_decisions: dict[str, ApprovalDecisionRecord] = {}
         self.approval_batches: dict[str, ApprovalBatchRecord] = {}
@@ -262,6 +305,8 @@ class FileRuntimeApiStore:
         self.tool_invocations: dict[str, ToolInvocationRecord] = {}
         self.run_usage: dict[str, RuntimeRunUsageRecord] = {}
         self.model_call_usage: list[RuntimeModelCallUsageRecord] = []
+        self.usage_attribution_edges: dict[str, tuple[str, UsageAttributionEdge]] = {}
+        self._usage_attribution_edge_ids_by_key: dict[tuple[object, ...], str] = {}
         self.pricing_rows: list[ModelPricingRecord] = []
         self.user_daily_usage: dict[
             tuple[str, str, str, str, str], UsageDailyUserRow
@@ -309,6 +354,8 @@ class FileRuntimeApiStore:
         self.cancel_commands: list[RuntimeCancelCommand] = []
         self.approval_commands: list[RuntimeApprovalResolvedCommand] = []
         self.stage_commit_commands: list[RuntimeStageCommitCommand] = []
+        self.effect_commit_commands: list[RuntimeEffectCommitCommand] = []
+        self.effect_reconcile_commands: list[RuntimeEffectReconcileCommand] = []
         self._queue_order: list[str] = []
         self._queue_payloads: dict[str, dict[str, object]] = {}
         self._queue_statuses: dict[str, OutboxStatus] = {}
@@ -636,6 +683,7 @@ class FileRuntimeApiStore:
         for envelope in envelopes:
             bucket = self.events_by_run.setdefault(envelope.run_id, [])
             bucket.append(envelope)
+            self._events_by_id[envelope.event_id] = envelope
         for bucket in self.events_by_run.values():
             bucket.sort(key=lambda event: event.sequence_no)
 
@@ -716,6 +764,20 @@ class FileRuntimeApiStore:
                 order.append(r.id)
             model_calls[r.id] = r
         self.model_call_usage = [model_calls[i] for i in order]
+        for rec in self._ledger(_Tables.USAGE_ATTRIBUTION_EDGES).load_puts():
+            org_id = rec.get("org_id")
+            edge_payload = rec.get("edge")
+            if not isinstance(org_id, str) or not isinstance(edge_payload, dict):
+                continue
+            edge = UsageAttributionEdge.model_validate(edge_payload)
+            natural_key = (org_id, *edge.idempotency_key)
+            if (
+                edge.edge_id in self.usage_attribution_edges
+                or natural_key in self._usage_attribution_edge_ids_by_key
+            ):
+                continue
+            self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
+            self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
         pricing: dict[str, ModelPricingRecord] = {}
         pricing_order: list[str] = []
         for rec in self._ledger(_Tables.PRICING).load_puts():
@@ -1237,6 +1299,27 @@ class FileRuntimeApiStore:
         )[:limit]
         return tuple(reversed(newest_first))
 
+    async def get_message_by_id(
+        self,
+        *,
+        org_id: str,
+        conversation_id: str,
+        run_id: str,
+        message_id: str,
+    ) -> MessageRecord | None:
+        """Return one live message through the loaded primary-key map."""
+
+        message = self.messages.get(message_id)
+        if (
+            message is None
+            or message.org_id != org_id
+            or message.conversation_id != conversation_id
+            or message.run_id != run_id
+            or message.deleted_at is not None
+        ):
+            return None
+        return message
+
     async def append_message(self, message: MessageRecord) -> MessageRecord:
         async with self._conversation_lock(message.conversation_id):
             self.messages[message.message_id] = message
@@ -1272,6 +1355,11 @@ class FileRuntimeApiStore:
         )
         if conversation is None:
             return None
+        if LegalHoldPolicy.is_on_hold(conversation):
+            # The file profile stores the authoritative hold fact directly on
+            # the conversation.  Returning it unchanged keeps a held artifact
+            # out of the lifecycle tombstone path as well.
+            return conversation
         merged: dict[str, tuple[str, ...] | None] = dict(
             conversation.enabled_connectors
         )
@@ -1354,11 +1442,25 @@ class FileRuntimeApiStore:
         if conversation is None:
             return None
         if conversation.deleted_at is not None:
+            if self._artifact_lifecycle_jobs is not None:
+                await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                    org_id=org_id,
+                    user_id=user_id,
+                    conversation_id=conversation_id,
+                    deleted_at=conversation.deleted_at,
+                )
             return conversation
         updated = conversation.model_copy(update={"deleted_at": now, "updated_at": now})
         async with self._conversation_lock(conversation_id):
             self.conversations[conversation_id] = updated
             self._persist_conversation(updated)
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_conversation_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                deleted_at=now,
+            )
         return updated
 
     async def restore_conversation(
@@ -1770,6 +1872,11 @@ class FileRuntimeApiStore:
         :meth:`append_event` calls.
         """
 
+        envelope_kwargs: dict[str, object] = {}
+        if event.event_id is not None:
+            envelope_kwargs["event_id"] = event.event_id
+        if event.created_at is not None:
+            envelope_kwargs["created_at"] = event.created_at
         return RuntimeEventEnvelope(
             run_id=event.run_id,
             conversation_id=event.conversation_id,
@@ -1796,13 +1903,27 @@ class FileRuntimeApiStore:
             presentation=event.presentation,
             payload=event.payload,
             metadata=event.metadata,
+            **envelope_kwargs,
         )
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         async with self._conversation_lock(event.conversation_id):
             events = self.events_by_run.setdefault(event.run_id, [])
+            if event.event_id is not None:
+                existing = next(
+                    (item for item in events if item.event_id == event.event_id),
+                    None,
+                )
+                if existing is not None:
+                    if event.matches_envelope(existing):
+                        return existing
+                    raise RuntimeEventIdempotencyConflict(
+                        run_id=event.run_id,
+                        event_id=event.event_id,
+                    )
             envelope = self._envelope_for(event, sequence_no=len(events) + 1)
             events.append(envelope)
+            self._events_by_id[envelope.event_id] = envelope
             self._persist_event(envelope, org_id=event.org_id)
             if event.run_id in self.runs:
                 await self.set_run_latest_sequence(
@@ -1829,6 +1950,11 @@ class FileRuntimeApiStore:
 
         if not events:
             return ()
+        if any(event.event_id is not None for event in events):
+            raise ValueError(
+                "stable event ids require append_event; batch append is reserved "
+                "for newly allocated stream events"
+            )
         run_ids = {event.run_id for event in events}
         if len(run_ids) > 1:
             raise ValueError(
@@ -1847,6 +1973,8 @@ class FileRuntimeApiStore:
             # failed/interrupted write leaves no phantom events behind.
             self._persist_events_batch(envelopes, org_id=first.org_id)
             bucket.extend(envelopes)
+            for envelope in envelopes:
+                self._events_by_id[envelope.event_id] = envelope
             if first.run_id in self.runs:
                 await self.set_run_latest_sequence(
                     run_id=first.run_id,
@@ -1864,6 +1992,23 @@ class FileRuntimeApiStore:
             run_id=run_id, after_sequence=after_sequence
         )
         return tuple(RuntimeEventEnvelope.model_validate_json(doc) for doc in docs)
+
+    async def get_event_by_id(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        event_id: str,
+    ) -> RuntimeEventEnvelope | None:
+        """Return one materialized immutable event only in its owning scope."""
+
+        event = self._events_by_id.get(event_id)
+        if event is None or event.run_id != run_id:
+            return None
+        run = self.runs.get(run_id)
+        if run is None or run.org_id != org_id:
+            return None
+        return event
 
     async def get_latest_sequence(self, *, run_id: str) -> int:
         return self._index.latest_sequence(run_id=run_id)
@@ -2317,7 +2462,7 @@ class FileRuntimeApiStore:
             now=now,
             user_id=user_id,
         )
-        return HistoryDeletionResponse(
+        result = HistoryDeletionResponse(
             org_id=org_id,
             user_id=user_id,
             conversations_archived=outcome.conversations,
@@ -2326,6 +2471,20 @@ class FileRuntimeApiStore:
             events_retained=outcome.retained_events,
             audit_event_id=outcome.audit_event_id,
         )
+        if self._artifact_lifecycle_jobs is not None:
+            await self._artifact_lifecycle_jobs.on_user_deleted(
+                org_id=org_id,
+                user_id=user_id,
+                deleted_at=now,
+                protected_conversation_ids=tuple(
+                    sorted(
+                        conversation.conversation_id
+                        for conversation in targets
+                        if LegalHoldPolicy.is_on_hold(conversation)
+                    )
+                ),
+            )
+        return result
 
     # ==================================================================
     # Export / import (portable single-conversation archive) — file store only
@@ -2537,7 +2696,9 @@ class FileRuntimeApiStore:
             if run.conversation_id != conversation_id:
                 continue
             self.runs.pop(run.run_id, None)
-            self.events_by_run.pop(run.run_id, None)
+            removed_events = self.events_by_run.pop(run.run_id, ())
+            for event in removed_events:
+                self._events_by_id.pop(event.event_id, None)
             if run.idempotency_key is not None:
                 key = (run.org_id, run.user_id, run.idempotency_key)
                 self._run_idempotency.pop(key, None)
@@ -2651,6 +2812,67 @@ class FileRuntimeApiStore:
             self.model_call_usage.append(record)
             self._ledger(_Tables.MODEL_CALL_USAGE).append_put(
                 record.model_dump(mode="json")
+            )
+
+    async def append_usage_attribution_edge(
+        self,
+        *,
+        org_id: str,
+        edge: UsageAttributionEdge,
+    ) -> bool:
+        """Append a retry-safe immutable relation without rewriting usage."""
+
+        async with self._state_lock:
+            if not any(
+                record.id == edge.usage_record_id and record.org_id == org_id
+                for record in self.model_call_usage
+            ):
+                raise LookupError(
+                    "usage attribution requires an in-tenant usage record"
+                )
+
+            natural_key = (org_id, *edge.idempotency_key)
+            if natural_key in self._usage_attribution_edge_ids_by_key:
+                return False
+
+            existing = self.usage_attribution_edges.get(edge.edge_id)
+            if existing is not None:
+                if existing == (org_id, edge):
+                    return False
+                raise ValueError("usage attribution edge_id already exists")
+
+            self.usage_attribution_edges[edge.edge_id] = (org_id, edge)
+            self._usage_attribution_edge_ids_by_key[natural_key] = edge.edge_id
+            self._ledger(_Tables.USAGE_ATTRIBUTION_EDGES).append_put(
+                {
+                    "org_id": org_id,
+                    "edge": edge.model_dump(mode="json"),
+                }
+            )
+            return True
+
+    async def list_usage_attribution_edges_for_usage_records(
+        self,
+        *,
+        org_id: str,
+        usage_record_ids: Sequence[str],
+    ) -> Sequence[UsageAttributionEdge]:
+        """Read immutable edges for a known organization-scoped call set."""
+
+        requested_ids = set(usage_record_ids)
+        if not requested_ids:
+            return ()
+        async with self._state_lock:
+            return tuple(
+                sorted(
+                    (
+                        edge
+                        for stored_org_id, edge in self.usage_attribution_edges.values()
+                        if stored_org_id == org_id
+                        and edge.usage_record_id in requested_ids
+                    ),
+                    key=lambda edge: (edge.created_at, edge.edge_id),
+                )
             )
 
     async def update_run_usage_cost(
@@ -3241,6 +3463,8 @@ class FileRuntimeApiStore:
         seen.update(c.org_id for c in self.conversations.values())
         seen.update(m.org_id for m in self.messages.values())
         seen.update(r.org_id for r in self.runs.values())
+        if self._artifact_lifecycle_jobs is not None:
+            seen.update(await self._artifact_lifecycle_jobs.list_org_ids())
         return tuple(sorted(seen))
 
     async def sweep_retention_kind(
@@ -3265,6 +3489,27 @@ class FileRuntimeApiStore:
         removed without deleting.
         """
 
+        if kind is RetentionKind.ARTIFACTS_TOMBSTONED:
+            if self._artifact_lifecycle_jobs is None or dry_run:
+                return RetentionSweepOutcome(org_id=org_id, kind=kind)
+            result = await self._artifact_lifecycle_jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=datetime.now(timezone.utc),
+                limit=chunk_size or None,
+                protected_conversation_ids=tuple(
+                    sorted(
+                        conversation.conversation_id
+                        for conversation in self.conversations.values()
+                        if conversation.org_id == org_id
+                        and LegalHoldPolicy.is_on_hold(conversation)
+                    )
+                ),
+            )
+            return RetentionSweepOutcome(
+                org_id=org_id,
+                kind=kind,
+                deleted=len(result.purge.purged_artifact_ids),
+            )
         if kind is not RetentionKind.MESSAGES:
             return RetentionSweepOutcome(org_id=org_id, kind=kind)
 
@@ -3400,6 +3645,71 @@ class FileRuntimeApiStore:
             payload=command.model_dump(mode="json"),
         )
 
+    async def enqueue_effect_commit(self, command: RuntimeEffectCommitCommand) -> None:
+        """Enqueue an A5 effect commit command."""
+
+        self.effect_commit_commands.append(command)
+        await self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_effect_reconcile(
+        self, command: RuntimeEffectReconcileCommand
+    ) -> None:
+        """Enqueue an A5 effect reconciliation command."""
+
+        self.effect_reconcile_commands.append(command)
+        await self._register_command(
+            command_id=command.command_id,
+            command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
+            org_id=command.org_id,
+            run_id=command.run_id,
+            approval_id=None,
+            payload=command.model_dump(mode="json"),
+        )
+
+    async def enqueue_artifact_event(
+        self,
+        command: RuntimeArtifactEventCommand,
+    ) -> None:
+        """Idempotently mirror one canonical artifact event into durable queue state."""
+
+        payload = command.model_dump(mode="json")
+        command_type = PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED
+        async with self._state_lock:
+            full_payload = self._command_payload(
+                command_id=command.command_id,
+                command_type=command_type,
+                org_id=command.org_id,
+                run_id=command.run_id,
+                approval_id=None,
+                payload=payload,
+            )
+            existing = self._queue_payloads.get(command.command_id)
+            if existing is not None:
+                if existing != full_payload:
+                    raise ValueError("artifact queue command id conflicts")
+                return
+            self._register_command_locked(
+                command_id=command.command_id,
+                full_payload=full_payload,
+            )
+
+    async def artifact_event_status(
+        self,
+        *,
+        event_id: str,
+    ) -> OutboxStatus | None:
+        """Return public durable queue state for canonical ack recovery."""
+
+        async with self._state_lock:
+            return self._queue_statuses.get(event_id)
+
     async def claim_next(
         self, *, worker_id: str, lock_expires_at: datetime
     ) -> RuntimeWorkerClaim | None:
@@ -3464,28 +3774,57 @@ class FileRuntimeApiStore:
         payload: dict[str, object],
     ) -> None:
         async with self._state_lock:
-            available_at = datetime.now(timezone.utc)
-            self._queue_order.append(command_id)
-            full_payload = {
-                **payload,
-                _Fields.COMMAND_ID: command_id,
-                _Fields.COMMAND_TYPE: command_type,
-                _Fields.ORG_ID: org_id,
-                _Fields.RUN_ID: run_id,
-                _Fields.APPROVAL_ID: approval_id,
-            }
-            self._queue_payloads[command_id] = full_payload
-            self._queue_statuses[command_id] = OutboxStatus.PENDING
-            self._queue_attempts[command_id] = 0
-            self._queue_available_at[command_id] = available_at
-            self._append_queue_op(
-                {
-                    "op": "enqueue",
-                    "command_id": command_id,
-                    "payload": full_payload,
-                    "available_at": available_at.isoformat(),
-                }
+            self._register_command_locked(
+                command_id=command_id,
+                full_payload=self._command_payload(
+                    command_id=command_id,
+                    command_type=command_type,
+                    org_id=org_id,
+                    run_id=run_id,
+                    approval_id=approval_id,
+                    payload=payload,
+                ),
             )
+
+    @staticmethod
+    def _command_payload(
+        *,
+        command_id: str,
+        command_type: str,
+        org_id: str,
+        run_id: str,
+        approval_id: str | None,
+        payload: dict[str, object],
+    ) -> dict[str, object]:
+        return {
+            **payload,
+            _Fields.COMMAND_ID: command_id,
+            _Fields.COMMAND_TYPE: command_type,
+            _Fields.ORG_ID: org_id,
+            _Fields.RUN_ID: run_id,
+            _Fields.APPROVAL_ID: approval_id,
+        }
+
+    def _register_command_locked(
+        self,
+        *,
+        command_id: str,
+        full_payload: dict[str, object],
+    ) -> None:
+        available_at = datetime.now(timezone.utc)
+        self._queue_order.append(command_id)
+        self._queue_payloads[command_id] = full_payload
+        self._queue_statuses[command_id] = OutboxStatus.PENDING
+        self._queue_attempts[command_id] = 0
+        self._queue_available_at[command_id] = available_at
+        self._append_queue_op(
+            {
+                "op": "enqueue",
+                "command_id": command_id,
+                "payload": full_payload,
+                "available_at": available_at.isoformat(),
+            }
+        )
 
     def _claim_command(
         self, *, command_id: str, worker_id: str, lock_expires_at: datetime

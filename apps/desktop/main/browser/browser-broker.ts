@@ -13,11 +13,10 @@
 //   - it never returns the worker credential; the AI credential never reaches
 //     the renderer or worker.
 //
-// It exposes exactly two routes — `tools/list` (read-only schemas) and `action`
-// (dispatch a typed read-only action) — forwarding the latter to an injected
-// `BrowserWorkerPort`. The worker credential + the main<->worker channel are
-// owned elsewhere; this broker is the AI-facing edge and is unit-tested against
-// a fake port.
+// It exposes the read-only MCP façade (`tools/list` + `action`) and a separate,
+// unadvertised exact-effect bridge (`private/prepare|apply|reconcile`) consumed
+// only by A5. The public action route reclassifies and rejects every side
+// effect. The worker credential + main<->worker channel are owned elsewhere.
 
 import { randomBytes as nodeRandomBytes, timingSafeEqual } from "node:crypto";
 import {
@@ -30,11 +29,28 @@ import type { AddressInfo } from "node:net";
 
 import {
   BROWSER_BROKER_AUDIENCE,
+  BROWSER_PROTOCOL_VERSION,
+  BrowserActionPlanSchema,
   BrowserActionRequestSchema,
+  BrowserEffectReceiptSchema,
+  BrowserPrepareResultSchema,
+  BrowserReadBrokerRequestSchema,
+  BrowserToolName,
+  OpaqueBrowserRefSchema,
+  READ_ACTION_CLASSES,
+  classifyTool,
+  type BrowserActionPlan,
   type BrowserActionRequest,
   type BrowserActionResult,
+  type BrowserEffectReceipt,
+  type BrowserPrepareResult,
 } from "./protocol";
-import { BROWSER_TOOL_SCHEMAS, type BrowserToolSchema } from "./tool-schemas";
+import type { BrowserPrivateEffectWorkerPort } from "./private-effect-bridge";
+import {
+  BrowserReadAuthorityError,
+  type BrowserReadAuthority,
+} from "./read-authority";
+import type { BrowserToolSchema } from "./tool-schemas";
 
 export const BROWSER_BROKER_PROTOCOL = "1";
 
@@ -45,6 +61,9 @@ const ROUTES = {
   handshake: "/v1/browser/handshake",
   toolsList: "/v1/browser/tools/list",
   action: "/v1/browser/action",
+  privatePrepare: "/v1/browser/private/prepare",
+  privateApply: "/v1/browser/private/apply",
+  privateReconcile: "/v1/browser/private/reconcile",
 } as const;
 
 export interface BrowserWorkerPort {
@@ -54,6 +73,14 @@ export interface BrowserWorkerPort {
 
 export interface BrowserBrokerConfig {
   readonly worker: BrowserWorkerPort;
+  /** Main-owned run/profile/origin authority; never provided by the AI caller. */
+  readonly readAuthority: BrowserReadAuthority;
+  /**
+   * Main-owned staged-effect authority. These methods are deliberately
+   * unavailable from tools/list and share only the authenticated loopback
+   * transport. When absent, every private route fails closed.
+   */
+  readonly privateEffects?: BrowserPrivateEffectWorkerPort;
   readonly randomBytes?: (size: number) => Buffer;
   readonly now?: () => number;
   /** Replay-cache TTL for nonces/request ids (default 5 min). */
@@ -70,11 +97,17 @@ interface RequestEnvelope {
   nonce?: unknown;
   requestId?: unknown;
   expiresAt?: unknown;
-  action?: unknown;
+  runId?: unknown;
+  workspaceId?: unknown;
+  tool?: unknown;
+  plan?: unknown;
+  preparedRef?: unknown;
 }
 
 export class BrowserBroker {
   readonly #worker: BrowserWorkerPort;
+  readonly #readAuthority: BrowserReadAuthority;
+  readonly #privateEffects: BrowserPrivateEffectWorkerPort | undefined;
   readonly #randomBytes: (size: number) => Buffer;
   readonly #now: () => number;
   readonly #nonceTtlMs: number;
@@ -87,6 +120,8 @@ export class BrowserBroker {
 
   constructor(config: BrowserBrokerConfig) {
     this.#worker = config.worker;
+    this.#readAuthority = config.readAuthority;
+    this.#privateEffects = config.privateEffects;
     this.#randomBytes = config.randomBytes ?? nodeRandomBytes;
     this.#now = config.now ?? Date.now;
     this.#nonceTtlMs = config.nonceTtlMs ?? 5 * 60 * 1000;
@@ -187,15 +222,112 @@ export class BrowserBroker {
       case ROUTES.toolsList:
         return respondJson(res, 200, { tools: await this.#worker.listTools() });
       case ROUTES.action: {
-        const parsed = BrowserActionRequestSchema.safeParse(envelope.action);
+        const parsed = BrowserReadBrokerRequestSchema.safeParse({
+          runId: envelope.runId,
+          workspaceId: envelope.workspaceId,
+          tool: envelope.tool,
+        });
         if (!parsed.success)
-          return respondJson(res, 400, { error: "invalid_action" });
-        const result = await this.#worker.dispatch(parsed.data);
+          return respondJson(res, 400, { error: "invalid_read_request" });
+        const actionClass = classifyTool(parsed.data.tool.name);
+        // The broker is a read-only MCP façade. Classification is derived in
+        // Electron main, never accepted from the caller. A generic click is an
+        // external effect even if a compromised caller labels it as a read.
+        if (actionClass === null || !READ_ACTION_CLASSES.has(actionClass)) {
+          return respondJson(res, 403, { error: "read_operation_required" });
+        }
+        const tools = await this.#worker.listTools();
+        if (!tools.some((tool) => tool.name === parsed.data.tool.name)) {
+          return respondJson(res, 403, { error: "tool_not_advertised" });
+        }
+        let binding;
+        try {
+          binding = this.#readAuthority.resolveBinding({
+            runId: parsed.data.runId,
+            workspaceId: parsed.data.workspaceId,
+          });
+        } catch (err) {
+          if (err instanceof BrowserReadAuthorityError) {
+            return respondJson(res, 403, { error: err.code });
+          }
+          throw err;
+        }
+        const deadlineMs = Math.max(
+          1,
+          Math.min(30_000, Number(envelope.expiresAt) - this.#now()),
+        );
+        const request = BrowserActionRequestSchema.parse({
+          version: BROWSER_PROTOCOL_VERSION,
+          requestId: String(envelope.requestId),
+          binding,
+          actionClass,
+          toolName: parsed.data.tool.name,
+          arguments: parsed.data.tool.arguments,
+          deadlineMs,
+        });
+        const result = await this.#worker.dispatch(request);
+        if (parsed.data.tool.name === BrowserToolName.Close) {
+          this.#readAuthority.revoke(parsed.data.runId);
+        }
         return respondJson(res, 200, { result });
       }
+      case ROUTES.privatePrepare:
+        return this.#prepareEffect(envelope, res);
+      case ROUTES.privateApply:
+        return this.#applyEffect(envelope, res);
+      case ROUTES.privateReconcile:
+        return this.#reconcileEffect(envelope, res);
       default:
         return respondJson(res, 404, { error: "not_found" });
     }
+  }
+
+  async #prepareEffect(
+    envelope: RequestEnvelope,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#privateEffects;
+    if (authority === undefined)
+      return respondJson(res, 503, { error: "browser_effects_unavailable" });
+    const parsed = BrowserActionPlanSchema.safeParse(envelope.plan);
+    if (!parsed.success)
+      return respondJson(res, 400, { error: "invalid_browser_action_plan" });
+    const prepared: BrowserPrepareResult = BrowserPrepareResultSchema.parse(
+      await authority.prepareAction(parsed.data as BrowserActionPlan),
+    );
+    return respondJson(res, 200, { prepared });
+  }
+
+  async #applyEffect(
+    envelope: RequestEnvelope,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#privateEffects;
+    if (authority === undefined)
+      return respondJson(res, 503, { error: "browser_effects_unavailable" });
+    const parsed = OpaqueBrowserRefSchema.safeParse(envelope.preparedRef);
+    if (!parsed.success)
+      return respondJson(res, 400, { error: "invalid_prepared_ref" });
+    const receipt: BrowserEffectReceipt = BrowserEffectReceiptSchema.parse(
+      await authority.applyPrepared(parsed.data),
+    );
+    return respondJson(res, 200, { receipt });
+  }
+
+  async #reconcileEffect(
+    envelope: RequestEnvelope,
+    res: ServerResponse,
+  ): Promise<void> {
+    const authority = this.#privateEffects;
+    if (authority === undefined)
+      return respondJson(res, 503, { error: "browser_effects_unavailable" });
+    const parsed = OpaqueBrowserRefSchema.safeParse(envelope.preparedRef);
+    if (!parsed.success)
+      return respondJson(res, 400, { error: "invalid_prepared_ref" });
+    const receipt: BrowserEffectReceipt = BrowserEffectReceiptSchema.parse(
+      await authority.reconcileAction(parsed.data),
+    );
+    return respondJson(res, 200, { receipt });
   }
 
   /**
@@ -215,6 +347,7 @@ export class BrowserBroker {
     const now = this.#now();
     this.#sweep(now);
     if (expiresAt < now) return "expired";
+    if (expiresAt > now + this.#nonceTtlMs) return "expiry_too_far";
     if (this.#seenNonces.has(nonce)) return "replayed_nonce";
     if (this.#seenRequestIds.has(requestId)) return "replayed_request_id";
 
