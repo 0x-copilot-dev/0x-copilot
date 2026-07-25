@@ -38,8 +38,12 @@ _RUN = "run_stage"
 _CONV = "conv_stage"
 
 
-def _identity_headers() -> dict[str, str]:
-    return {"x-enterprise-org-id": _ORG, "x-enterprise-user-id": _USER}
+def _identity_headers(*, user_id: str = _USER) -> dict[str, str]:
+    return {
+        "x-enterprise-org-id": _ORG,
+        "x-enterprise-user-id": user_id,
+        "x-enterprise-permission-scopes": "runtime:use",
+    }
 
 
 def _settings() -> RuntimeSettings:
@@ -295,3 +299,19 @@ class TestFlagOnErrors:
             f"/v1/agent/stages/ghost?run_id={_RUN}", headers=_identity_headers()
         )
         assert resp.status_code == 404
+
+    def test_foreign_and_absent_stages_share_an_opaque_404(self, monkeypatch) -> None:
+        b = _build_client(monkeypatch, flag_on=True)
+        client = b.client
+        stage_id, _draft_id = b.stage_a_draft()
+
+        foreign = client.get(
+            f"/v1/agent/stages/{stage_id}?run_id={_RUN}",
+            headers=_identity_headers(user_id="mallory"),
+        )
+        absent = client.get(
+            f"/v1/agent/stages/ghost?run_id={_RUN}", headers=_identity_headers()
+        )
+
+        assert foreign.status_code == absent.status_code == 404
+        assert foreign.json() == absent.json() == {"detail": "resource not found"}

@@ -17,6 +17,21 @@ from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import ConversationRecord
 
 
+def _headers(
+    org_id: str = "org_a",
+    user_id: str = "user_1",
+    *,
+    scopes: str = "runtime:use,audit:read",
+) -> dict[str, str]:
+    """Verified runtime identity used by the public usage-route tests."""
+
+    return {
+        "x-enterprise-org-id": org_id,
+        "x-enterprise-user-id": user_id,
+        "x-enterprise-permission-scopes": scopes,
+    }
+
+
 def _client_with_seed_runs(
     *,
     org_id: str = "org_a",
@@ -77,9 +92,9 @@ def _client_with_seed_runs(
         completed_at=completed,
         status="completed",
     )
-    return TestClient(
-        RuntimeApiAppFactory.create_app(ports=ports, settings=settings)
-    ), store
+    client = TestClient(RuntimeApiAppFactory.create_app(ports=ports, settings=settings))
+    client.headers.update(_headers(org_id, user_id))
+    return client, store
 
 
 class TestUsageMe:
@@ -87,7 +102,7 @@ class TestUsageMe:
         client, _ = _client_with_seed_runs()
         response = client.get(
             "/v1/usage/me",
-            params={"org_id": "org_a", "user_id": "user_1", "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         body = response.json()
@@ -101,10 +116,19 @@ class TestUsageMe:
         assert body["by_model"][0]["provider"] == "openai"
         assert body["by_model"][0]["runs_count"] == 2
 
-    def test_400_when_org_id_missing_and_no_service_token(self) -> None:
+    def test_401_without_verified_identity(self) -> None:
         client, _ = _client_with_seed_runs()
-        response = client.get("/v1/usage/me", params={"period": "today"})
-        assert response.status_code == 400
+        for header in (
+            "x-enterprise-org-id",
+            "x-enterprise-user-id",
+            "x-enterprise-permission-scopes",
+        ):
+            client.headers.pop(header, None)
+        response = client.get(
+            "/v1/usage/me",
+            params={"org_id": "query_org", "user_id": "query_user", "period": "today"},
+        )
+        assert response.status_code == 401
 
 
 class TestUsageRun:
@@ -112,7 +136,7 @@ class TestUsageRun:
         client, _ = _client_with_seed_runs()
         response = client.get(
             "/v1/usage/runs/r1",
-            params={"org_id": "org_a", "user_id": "user_1"},
+            params={},
         )
         assert response.status_code == 200
         body = response.json()
@@ -126,7 +150,7 @@ class TestUsageRun:
         client, _ = _client_with_seed_runs()
         response = client.get(
             "/v1/usage/runs/nope",
-            params={"org_id": "org_a", "user_id": "user_1"},
+            params={},
         )
         assert response.status_code == 404
 
@@ -134,7 +158,7 @@ class TestUsageRun:
         client, _ = _client_with_seed_runs(org_id="org_a")
         response = client.get(
             "/v1/usage/runs/r1",
-            params={"org_id": "org_b", "user_id": "user_x"},
+            headers=_headers("org_b", "user_x"),
         )
         # Different tenant can't see org_a's run.
         assert response.status_code == 404
@@ -183,7 +207,7 @@ class TestUsageOrgSubagents:
         )
         response = client.get(
             "/v1/usage/org/subagents",
-            params={"org_id": "org_a", "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         body = response.json()
@@ -195,7 +219,7 @@ class TestUsageOrgSubagents:
         client, _ = _client_with_seed_runs()
         response = client.get(
             "/v1/usage/org/subagents",
-            params={"org_id": "org_a", "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         body = response.json()
@@ -245,7 +269,7 @@ class TestUsageOrgPurpose:
         )
         response = client.get(
             "/v1/usage/org/purpose",
-            params={"org_id": "org_a", "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         body = response.json()
@@ -253,6 +277,45 @@ class TestUsageOrgPurpose:
         by_purpose = {row["purpose"]: row for row in body["rows"]}
         assert by_purpose["main"]["call_count"] == 1
         assert by_purpose["tool_interpretation"]["call_count"] == 2
+
+
+class TestUsageOrgLeastPrivilege:
+    """Tenant-wide usage stays hard-denied even while RBAC is in audit mode."""
+
+    def test_missing_admin_or_audit_scope_is_denied_and_audited(self) -> None:
+        client, _ = _client_with_seed_runs()
+        audit_rows: list[dict[str, object]] = []
+
+        def append_audit(**row: object) -> None:
+            audit_rows.append(row)
+
+        client.app.state.runtime_audit_appender = append_audit
+        response = client.get(
+            "/v1/usage/org",
+            headers=_headers(scopes="runtime:use"),
+        )
+
+        assert response.status_code == 403
+        assert (
+            response.json()["detail"]
+            == "Audit or user-administrator permission is required"
+        )
+        assert len(audit_rows) == 1
+        assert audit_rows[0]["event_type"] == "rbac.denied"
+        audit_data = audit_rows[0]["data"]
+        assert isinstance(audit_data, dict)
+        assert audit_data["outcome"] == "denied"
+        assert audit_data["resource_id"] == "/v1/usage/org"
+
+    def test_user_admin_scope_can_read_org_usage(self) -> None:
+        client, _ = _client_with_seed_runs()
+
+        response = client.get(
+            "/v1/usage/org",
+            headers=_headers(scopes="runtime:use,admin:users"),
+        )
+
+        assert response.status_code == 200
 
 
 class TestUsageByConnector:
@@ -326,7 +389,7 @@ class TestUsageByConnector:
         )
         response = client.get(
             "/v1/usage/me",
-            params={"org_id": "org_a", "user_id": "user_1", "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         by_connector = {
@@ -363,7 +426,7 @@ class TestUsageByConnector:
         )
         response = client.get(
             "/v1/usage/conversations/conv-1",
-            params={"org_id": "org_a", "user_id": "user_1", "period": "30d"},
+            params={"period": "30d"},
         )
         assert response.status_code == 200
         by_connector = {

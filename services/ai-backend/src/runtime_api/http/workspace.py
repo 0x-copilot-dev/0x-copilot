@@ -17,6 +17,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from agent_runtime.api.constants import Keys
 from agent_runtime.api.workspace_feed_service import WorkspaceFeedService
+from runtime_api.http.e1_authorization import E1Authorization
 from runtime_api.identity import Identity
 from runtime_api.schemas import (
     SourceListResponse,
@@ -57,6 +58,19 @@ class WorkspaceFeedRoutes:
         limit: int = Query(200, ge=1, le=500),
     ) -> SourceListResponse:
         """Return deduplicated citation sources for the Sources tab, optionally scoped to one run."""
+        await E1Authorization.require_owned_conversation(
+            request,
+            identity=identity,
+            conversation_id=conversation_id,
+        )
+        if run_id is not None:
+            run = await E1Authorization.require_owned_run(
+                request,
+                identity=identity,
+                run_id=run_id,
+            )
+            if getattr(run, "conversation_id", None) != conversation_id:
+                raise E1Authorization.not_found()
         return await cls._service(request).list_sources(
             org_id=identity.org_id,
             conversation_id=conversation_id,

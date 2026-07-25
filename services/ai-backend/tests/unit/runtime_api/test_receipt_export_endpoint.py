@@ -42,6 +42,14 @@ class ReceiptExportEndpointMixin:
     ORG = "org_e3"
     USER = "user_e3"
 
+    @classmethod
+    def _headers(cls, *, user_id: str | None = None) -> dict[str, str]:
+        return {
+            "x-enterprise-org-id": cls.ORG,
+            "x-enterprise-user-id": user_id or cls.USER,
+            "x-enterprise-permission-scopes": "runtime:use",
+        }
+
     async def _setup(
         self,
         *,
@@ -241,7 +249,7 @@ class TestExportRunReceiptHttp(ReceiptExportEndpointMixin):
         ) as client:
             response = await client.get(
                 f"/v1/agent/runs/{run.run_id}/receipt/export",
-                params={"org_id": self.ORG, "user_id": self.USER},
+                headers=self._headers(),
             )
         assert response.status_code == 200
         body = response.json()
@@ -270,7 +278,7 @@ class TestExportRunReceiptHttp(ReceiptExportEndpointMixin):
         ) as client:
             response = await client.get(
                 f"/v1/agent/runs/{run.run_id}/receipt/export",
-                params={"org_id": self.ORG, "user_id": self.USER},
+                headers=self._headers(),
             )
         assert response.status_code == 409
 
@@ -280,13 +288,17 @@ class TestExportRunReceiptHttp(ReceiptExportEndpointMixin):
         app, run = await self._app_and_run(AgentRunStatus.COMPLETED)
         monkeypatch.setenv("RUNTIME_ENVIRONMENT", "production")
         monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
+        monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "receipt-test-token")
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"
         ) as client:
             response = await client.get(
                 f"/v1/agent/runs/{run.run_id}/receipt/export",
-                params={"org_id": self.ORG, "user_id": self.USER},
+                headers={
+                    **self._headers(),
+                    "x-enterprise-service-token": "receipt-test-token",
+                },
             )
         assert response.status_code == 503
         assert "AUDIT_HMAC_KEY" not in response.text
@@ -311,7 +323,7 @@ class TestExportRunReceiptV2Http(ReceiptExportEndpointMixin):
         ) as client:
             response = await client.get(
                 f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
-                params={"org_id": self.ORG, "user_id": "foreign_user"},
+                headers=self._headers(user_id="foreign_user"),
             )
 
         assert response.status_code == 404
@@ -325,7 +337,7 @@ class TestExportRunReceiptV2Http(ReceiptExportEndpointMixin):
         ) as client:
             response = await client.get(
                 f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
-                params={"org_id": self.ORG, "user_id": self.USER},
+                headers=self._headers(),
             )
 
         assert response.status_code == 503
@@ -345,7 +357,7 @@ class TestExportRunReceiptV2Http(ReceiptExportEndpointMixin):
         ) as client:
             response = await client.get(
                 f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
-                params={"org_id": self.ORG, "user_id": self.USER},
+                headers=self._headers(),
             )
 
         assert response.status_code == 200
@@ -367,13 +379,17 @@ class TestExportRunReceiptV2Http(ReceiptExportEndpointMixin):
         )
         monkeypatch.setenv("RUNTIME_ENVIRONMENT", "production")
         monkeypatch.delenv("AUDIT_HMAC_KEY", raising=False)
+        monkeypatch.setenv("ENTERPRISE_SERVICE_TOKEN", "receipt-test-token")
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(
             transport=transport, base_url="http://test"
         ) as client:
             response = await client.get(
                 f"/v1/agent/runs/{run.run_id}/receipt/export-v2",
-                params={"org_id": self.ORG, "user_id": self.USER},
+                headers={
+                    **self._headers(),
+                    "x-enterprise-service-token": "receipt-test-token",
+                },
             )
 
         assert response.status_code == 503
