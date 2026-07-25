@@ -273,6 +273,14 @@ class RuntimeApiAppFactory:
         # state always (harmless when the flag is off — the route is not mounted,
         # so nothing reaches it); folds the caller's runs on read (no new table).
         app.state.pending_work_service = cls.default_pending_work_service(app)
+        # E1 D6 — canonical v2.1 pending work is stricter than the legacy
+        # v2 queue.  Compose it only for the existing enforced workspace cohort;
+        # the router receives the exact same boolean below.
+        app.state.pending_work_v2_service = (
+            cls.default_pending_work_v2_service(app)
+            if workspace_approval_enabled
+            else None
+        )
         app.state.workspace_feed_service = cls.default_workspace_feed_service(app)
         # PR 6.1 — share_service composes ShareStore + persistence + event
         # store + workspace_feed (sources tab) + draft_service (drafts).
@@ -784,6 +792,28 @@ class RuntimeApiAppFactory:
             return None
         return PendingWorkService(
             persistence=ports.persistence, event_store=ports.event_store
+        )
+
+    @classmethod
+    def default_pending_work_v2_service(cls, app):  # type: ignore[no-untyped-def]
+        """Wire E1 D6's canonical, identity-scoped pending-work aggregate.
+
+        The service reads only the runtime persistence/event ports; no facade,
+        backend, host, or workspace-path dependency can enter this read model.
+        It is only reachable while the workspace-effect enforcement cohort is
+        active (the matching route is mounted under that same condition).
+        """
+
+        from agent_runtime.api.pending_work_v2_service import (
+            PendingWorkV2QueryService,
+        )
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return PendingWorkV2QueryService(
+            persistence=ports.persistence,
+            event_store=ports.event_store,
         )
 
     @classmethod

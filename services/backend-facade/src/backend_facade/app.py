@@ -1080,6 +1080,29 @@ def create_app(
             identity=identity,
         )
 
+    # E1 D6 — the canonical v2.1 queue is deliberately additive while legacy
+    # pending work remains readable during migration.  The ai-backend owns its
+    # stricter workspace-enforcement route gate; this facade preserves that 404
+    # verbatim and only stamps the verified identity and paging inputs.
+    @app.get("/v1/agent/pending-work-v2")
+    async def pending_work_v2(
+        request: Request,
+        limit: int = Query(20, ge=1, le=50),
+        cursor: str | None = Query(None, max_length=512),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        params: dict[str, object] = {"limit": limit}
+        if cursor is not None:
+            params["cursor"] = cursor
+        return await forward_json(
+            app,
+            "GET",
+            "/v1/agent/pending-work-v2",
+            target="ai_backend",
+            params=identity.scoped_params(params),
+            identity=identity,
+        )
+
     @app.post("/v1/skills")
     async def create_skill(
         request: Request, payload: dict[str, object]

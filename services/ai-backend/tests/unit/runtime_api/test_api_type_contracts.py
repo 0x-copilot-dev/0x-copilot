@@ -6,6 +6,11 @@ import re
 from copilot_service_contracts.work_ledger import LEDGER_EVENT_TYPES
 
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.api.pending_work_v2_service import (
+    PendingWorkV2Response,
+    PendingWorkV2RunWarning,
+)
+from agent_runtime.surfaces_v2.pending_work_v2 import PendingWorkItemV2
 from runtime_api.schemas import (
     AgentRunStatus,
     RunHistoryEntry,
@@ -35,6 +40,55 @@ def test_run_history_entry_fields_match_api_types() -> None:
         "step_count",
         "pending_approval_count",
     }
+
+
+def test_pending_work_v2_fields_match_api_types() -> None:
+    """E1 D6 — the intentionally tiny public queue cannot drift or grow leaks."""
+
+    repo_root = Path(__file__).resolve().parents[5]
+    ledger_types = (repo_root / "packages/api-types/src/ledger.ts").read_text()
+
+    assert set(PendingWorkV2Response.model_fields) == {
+        "v",
+        "items",
+        "warnings",
+        "next_cursor",
+        "has_more",
+    }
+    assert set(PendingWorkV2RunWarning.model_fields) == {"run_id", "status"}
+    assert set(PendingWorkItemV2.model_fields) == {
+        "run_id",
+        "subject_kind",
+        "subject_id",
+        "status",
+        "opened_sequence_no",
+        "latest_sequence_no",
+    }
+    assert _typescript_interface_fields(ledger_types, "PendingWorkV2Response") == set(
+        PendingWorkV2Response.model_fields
+    )
+    assert _typescript_interface_fields(ledger_types, "PendingWorkV2RunWarning") == set(
+        PendingWorkV2RunWarning.model_fields
+    )
+    assert _typescript_interface_fields(ledger_types, "PendingWorkItemV2") == set(
+        PendingWorkItemV2.model_fields
+    )
+
+
+def _typescript_interface_fields(source: str, name: str) -> set[str]:
+    match = re.search(
+        rf"export interface {name}\s*\{{(?P<body>.*?)^\}}",
+        source,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert match is not None, f"missing TypeScript interface {name}"
+    return set(
+        re.findall(
+            r"^\s*(?:readonly\s+)?([a-z_]+)\??\s*:",
+            match.group("body"),
+            re.MULTILINE,
+        )
+    )
 
 
 class TestApiTypeContracts:

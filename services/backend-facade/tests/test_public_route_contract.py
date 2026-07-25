@@ -21,6 +21,10 @@ def test_openapi_includes_core_product_paths() -> None:
         # PRD-12 — the rail Run-badge count; must be registered above
         # ``/v1/agent/runs/{run_id}`` so the literal is not shadowed.
         "/v1/agent/runs/active_count",
+        # E1 D6 — canonical v2.1 pending work (the ai-backend may return 404
+        # until its workspace-enforcement cohort is active; facade registration
+        # and identity forwarding remain a public contract).
+        "/v1/agent/pending-work-v2",
         "/v1/agent/models",
         "/v1/skills",
         "/v1/agent/history",
