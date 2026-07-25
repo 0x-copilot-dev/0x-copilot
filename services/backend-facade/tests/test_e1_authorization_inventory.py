@@ -28,6 +28,7 @@ _USER = "user_e1_facade"
 _SECRET = "e1-facade-auth-secret"
 _PATH_VALUES = {
     "{run_id}": "run_owner",
+    "{source_id}": "source_v2_owner",
     "{artifact_id}": "art_owner",
     "{revision}": "1",
     "{stage_id}": "stage_owner",
