@@ -128,6 +128,11 @@ import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import { projectReceiptV2, type ReceiptV2Projection } from "./projectReceiptV2";
 import { projectSourcesV2 } from "../../projections/sourcesV2";
 import type { PendingAgentRow } from "@0x-copilot/api-types";
+import {
+  projectLegacyV2Replay,
+  type LegacyV2ReplayProjection,
+  type PendingAgentRow,
+} from "@0x-copilot/api-types";
 // PRD-B1: Generative Surfaces v2 content hydration (SurfaceStore endpoint via
 // the Transport port). Called unconditionally (Rules of Hooks) but inert when
 // `surfacesV2` is false (`enabled: false` ⇒ no request).
@@ -201,6 +206,15 @@ const EMPTY_RECEIPT_V2: ReceiptV2Projection = {
 const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
   new Map();
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
+// E2 D3: historic rows are selected through a read-only compatibility reader.
+// Kept stable while the Studio canvas flag is off so the legacy cockpit remains
+// byte-identical and never inspects older surface envelopes on that path.
+const EMPTY_LEGACY_V2_REPLAY: LegacyV2ReplayProjection = {
+  reader_version: 1,
+  mode: "empty",
+  surfaces: [],
+  quarantined: [],
+};
 const EFFECT_STAGE_URI_PREFIX = "effect-stage://";
 const RECEIPT_V2_URI_PREFIX = "receipt-v2://";
 const SOURCE_OPEN_UNAVAILABLE = "This source is no longer available.";
@@ -1371,6 +1385,35 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // unconditionally so the hydration hook can read `ledger.lastLedgerSeq`; the
   // strip only USES it when `surfacesV2` is on.
   const ledger = useMemo(() => projectLedger(session.events), [session.events]);
+  // E2 D3: select historic v2 presentation facts through the versioned,
+  // pure compatibility reader. This is intentionally not a conversion into
+  // `ledger` state: old run events remain append-only and every returned
+  // surface is read-only. The v2.1 lifecycle continues to own canonical tabs.
+  const legacyV2Replay = useMemo<LegacyV2ReplayProjection>(
+    () =>
+      surfacesV2
+        ? projectLegacyV2Replay(session.events)
+        : EMPTY_LEGACY_V2_REPLAY,
+    [surfacesV2, session.events],
+  );
+  const legacyV2SurfaceBySubject = useMemo(
+    () =>
+      new Map(
+        legacyV2Replay.surfaces
+          .filter((surface) => surface.origin === "ledger")
+          .map((surface) => [surface.subject_id, surface] as const),
+      ),
+    [legacyV2Replay],
+  );
+  const legacyV2StateByUri = useMemo(() => {
+    const states = new Map<string, Record<string, unknown>>();
+    for (const surface of legacyV2Replay.surfaces) {
+      if (surface.state !== null) states.set(surface.uri, { ...surface.state });
+    }
+    return states;
+  }, [legacyV2Replay]);
+  const legacyV2ReadOnlyStream =
+    legacyV2Replay.mode === "legacy_v2" || legacyV2Replay.mode === "mixed";
   // B3 owns the one client presentation truth. It folds artifacts, ordinary
   // surfaces, universal effects, gates, and terminal receipts from the durable
   // production event stream — no shape inference or legacy surface envelope.
@@ -1418,10 +1461,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   }, [stageById]);
   const v2CanvasTabs = useMemo(() => {
     const uriBySubjectKey = new Map<string, string>();
+    const legacyUris = new Set<string>();
     if (displayedCanvasLifecycle === null) {
       return {
         tabs: [] as Array<{ uri: string; title: string; lastSeq: number }>,
         uriBySubjectKey,
+        legacyUris,
         preferredUri: "",
       };
     }
@@ -1432,11 +1477,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       title: string,
       lastSeq: number,
       key: string,
-    ): void => {
+      legacy = false,
+    ): boolean => {
       uriBySubjectKey.set(key, uri);
-      if (seen.has(uri)) return;
+      if (seen.has(uri)) return false;
       seen.add(uri);
       tabs.push({ uri, title, lastSeq });
+      if (legacy) legacyUris.add(uri);
+      return true;
     };
     for (const subject of displayedCanvasLifecycle.tabs) {
       if (subject.kind === "artifact") {
@@ -1452,6 +1500,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         continue;
       }
       if (subject.kind === "surface") {
+        const legacy = legacyV2SurfaceBySubject.get(subject.subjectId);
+        if (legacy !== undefined) {
+          add(
+            legacy.uri,
+            legacy.title ?? subject.title,
+            Math.max(subject.lastSeq, legacy.last_sequence_no),
+            subject.key,
+            true,
+          );
+          continue;
+        }
         const surface = ledger.surfaces.get(subject.subjectId);
         if (surface !== undefined) {
           add(
@@ -1465,6 +1524,23 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       }
       if (subject.kind === "effect") {
         const stage = stageById.get(subject.subjectId);
+        // A legacy `write.staged` is historical evidence, not an active v2.1
+        // effect. Its companion historic surface is already mounted above via
+        // the compatibility renderer; do not create a second mutable stage
+        // tab (and do not invent one if the old stream had no surface).
+        if (stage !== undefined && legacyV2ReadOnlyStream) {
+          const legacy = legacyV2SurfaceBySubject.get(stage.surfaceId);
+          if (legacy !== undefined) {
+            add(
+              legacy.uri,
+              legacy.title ?? subject.title,
+              Math.max(subject.lastSeq, legacy.last_sequence_no),
+              subject.key,
+              true,
+            );
+          }
+          continue;
+        }
         const surface =
           stage === undefined
             ? undefined
@@ -1479,14 +1555,33 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         );
       }
     }
+    // Historic presentation envelopes predate `surface.created`, so they have
+    // no lifecycle subject. Append their exact old URI/state only when it does
+    // not collide with a canonical tab; canonical v2.1 owns collisions.
+    for (const surface of legacyV2Replay.surfaces) {
+      add(
+        surface.uri,
+        surface.title ?? surface.uri,
+        surface.last_sequence_no,
+        `legacy-v2:${surface.origin}:${surface.subject_id}`,
+        true,
+      );
+    }
     const preferredUri =
       (displayedCanvasLifecycle.activeSubjectKey === null
         ? undefined
         : uriBySubjectKey.get(displayedCanvasLifecycle.activeSubjectKey)) ??
       tabs[0]?.uri ??
       "";
-    return { tabs, uriBySubjectKey, preferredUri };
-  }, [displayedCanvasLifecycle, ledger, stageById]);
+    return { tabs, uriBySubjectKey, legacyUris, preferredUri };
+  }, [
+    displayedCanvasLifecycle,
+    ledger,
+    legacyV2Replay,
+    legacyV2ReadOnlyStream,
+    legacyV2SurfaceBySubject,
+    stageById,
+  ]);
 
   // E1 D4/D5 canonical folds over the same append-only event list. Receipt v2
   // is intentionally independent of lifecycle tabs: a terminal chat-only run
@@ -1634,11 +1729,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     () =>
       surfacesV2
         ? (uri: string) => {
+            if (v2CanvasTabs.legacyUris.has(uri)) {
+              return legacyV2StateByUri.get(uri);
+            }
             const id = surfaceIdForTabUri(uri);
             return id !== null ? hydration.stateFor(id) : undefined;
           }
         : undefined,
-    [surfacesV2, hydration],
+    [surfacesV2, hydration, legacyV2StateByUri, v2CanvasTabs],
   );
   const visibleSurfaceTabs = useMemo(() => {
     const eligible = surfaceTabList.filter((tab) => !closedUris.has(tab.uri));
@@ -1698,18 +1796,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // Null off the v2 path or before a `view.derived` lands.
   const activeViewState = useMemo(() => {
     if (!surfacesV2) return null;
+    if (v2CanvasTabs.legacyUris.has(activeUri)) return null;
     const id = surfaceIdForTabUri(activeUri);
     if (id === null) return null;
     return ledger.surfaces.get(id)?.viewState ?? null;
-  }, [surfacesV2, activeUri, ledger]);
+  }, [surfacesV2, activeUri, ledger, v2CanvasTabs]);
 
   // PRD-B4: the active surface's folded "Suggest a shape" state (idle by default).
   const activeShapeRequest = useMemo<LedgerShapeRequestState>(() => {
     if (!surfacesV2) return "idle";
+    if (v2CanvasTabs.legacyUris.has(activeUri)) return "idle";
     const id = surfaceIdForTabUri(activeUri);
     if (id === null) return "idle";
     return ledger.surfaces.get(id)?.shapeRequest ?? "idle";
-  }, [surfacesV2, activeUri, ledger]);
+  }, [surfacesV2, activeUri, ledger, v2CanvasTabs]);
 
   // ============================================================
   // Generative Surfaces v2 — integration mount pass
@@ -2203,6 +2303,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           />
         );
       }
+      // E2 D3 compatibility tabs intentionally fall through to the existing
+      // fixed renderer registry. They are historic read-only subjects, never
+      // current stages/effects, even if an old URI happens to resemble a v2
+      // surface URI.
+      if (v2CanvasTabs.legacyUris.has(uri)) return null;
       const effectStageId = effectStageIdForUri(uri);
       if (effectStageId !== null) {
         const workspaceReview = workspaceStageReviews.get(effectStageId);
@@ -2301,6 +2406,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       handleWorkspaceDecision,
       handleWorkspaceArtifactEdit,
       handleWorkspaceArtifactDownload,
+      v2CanvasTabs,
     ],
   );
 
@@ -2660,7 +2766,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           onOpen={handleOpenReceiptV2}
         />
       ) : null}
-      {mode === "studio" && ledger.openGates.length > 0 ? (
+      {mode === "studio" &&
+        !legacyV2ReadOnlyStream &&
+        ledger.openGates.length > 0 ? (
         <div data-testid="run-v2-gate-region" style={gateRegionStyle}>
           {ledger.openGates.map((gate) => (
             <TcGateCard

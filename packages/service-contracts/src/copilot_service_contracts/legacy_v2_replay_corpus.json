@@ -1,0 +1,372 @@
+{
+  "schema_version": 1,
+  "reader_version": 1,
+  "checked_in_sources": [
+    {
+      "id": "work_ledger_golden_events",
+      "path": "packages/service-contracts/src/copilot_service_contracts/work_ledger_golden_events.json",
+      "kind": "legacy_v2_run_events",
+      "replay": "direct"
+    },
+    {
+      "id": "surface_store_golden_state",
+      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces_v2/fixtures/surface_store_golden_state.json",
+      "kind": "derived_legacy_v2_snapshot",
+      "replay": "paired_with_work_ledger_golden_events"
+    },
+    {
+      "id": "github_list_issues_spec",
+      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces/fixtures/github_list_issues.spec.json",
+      "kind": "legacy_surface_spec",
+      "replay": "spec_only_late_merge"
+    },
+    {
+      "id": "gmail_message_spec",
+      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces/fixtures/gmail_message.spec.json",
+      "kind": "legacy_surface_spec",
+      "replay": "spec_only_late_merge"
+    },
+    {
+      "id": "linear_get_issue_spec",
+      "path": "services/ai-backend/tests/unit/agent_runtime/surfaces/fixtures/linear_get_issue.spec.json",
+      "kind": "legacy_surface_spec",
+      "replay": "spec_only_late_merge"
+    },
+    {
+      "id": "surface_eval_baseline",
+      "path": "services/ai-backend/tests/evals/surfaces/baselines/baseline_replay.json",
+      "kind": "evaluation_metadata",
+      "replay": "quarantined_not_run_events",
+      "reason": "The file contains aggregate evaluator output, not append-only run events or a surface payload."
+    },
+    {
+      "id": "e2_shadow_comparison_vectors",
+      "path": "services/ai-backend/tests/unit/agent_runtime/fixtures/e2_shadow_comparison_parity_vectors.json",
+      "kind": "shadow_comparison_metadata",
+      "replay": "quarantined_not_run_events",
+      "reason": "The file compares precomputed legacy and canonical projections; it is not an append-only event stream and cannot safely hydrate a historic surface."
+    }
+  ],
+  "cases": [
+    {
+      "id": "connector_subject_declared_reference_hydration",
+      "events": [
+        {
+          "event_id": "legacy-tool-result",
+          "event_type": "tool_result",
+          "sequence_no": 1,
+          "payload": {
+            "call_id": "call-142",
+            "output": {
+              "issue": {
+                "identifier": "ENG-142",
+                "title": "Fix stream reconnect",
+                "state": { "name": "In Progress" }
+              }
+            }
+          }
+        },
+        {
+          "event_id": "legacy-surface-created",
+          "event_type": "surface.created",
+          "sequence_no": 2,
+          "payload": {
+            "v": 1,
+            "surface_id": "connector:linear:issue:ENG-142",
+            "kind": "record",
+            "source": { "connector": "linear", "op": "get_issue" },
+            "title": "ENG-142",
+            "payload_ref": "call:call-142"
+          }
+        },
+        {
+          "event_id": "legacy-spec",
+          "event_type": "surface_spec_generated",
+          "sequence_no": 3,
+          "payload": {
+            "surface_uri": "connector:linear:issue:ENG-142",
+            "spec": {
+              "spec_version": 1,
+              "archetype": "record",
+              "source": { "server": "seed:linear", "tool": "get_issue" },
+              "title_path": "issue.title",
+              "fields": []
+            }
+          }
+        }
+      ],
+      "expected": {
+        "reader_version": 1,
+        "mode": "legacy_v2",
+        "surfaces": [
+          {
+            "subject_id": "connector:linear:issue:ENG-142",
+            "uri": "record://legacy-v2/connector%3Alinear%3Aissue%3AENG-142",
+            "kind": "record",
+            "title": "ENG-142",
+            "source_connector": "linear",
+            "source_op": "get_issue",
+            "payload_ref": "call:call-142",
+            "state": {
+              "spec": {
+                "spec_version": 1,
+                "archetype": "record",
+                "source": { "server": "seed:linear", "tool": "get_issue" },
+                "title_path": "issue.title",
+                "fields": []
+              },
+              "data": {
+                "issue": {
+                  "identifier": "ENG-142",
+                  "title": "Fix stream reconnect",
+                  "state": { "name": "In Progress" }
+                }
+              }
+            },
+            "last_sequence_no": 3,
+            "origin": "ledger",
+            "read_only": true
+          }
+        ],
+        "quarantined": []
+      }
+    },
+    {
+      "id": "historic_envelope_late_spec",
+      "events": [
+        {
+          "event_id": "envelope-result",
+          "event_type": "tool_result",
+          "sequence_no": 1,
+          "payload": {
+            "surface": {
+              "surface_uri": "table://github/issues",
+              "archetype": "table",
+              "state": {
+                "data": {
+                  "repository": { "full_name": "acme/roadmap" },
+                  "issues": [{ "number": 42, "title": "Reconnect safely" }]
+                }
+              }
+            }
+          }
+        },
+        {
+          "event_id": "envelope-spec",
+          "event_type": "surface_spec_generated",
+          "sequence_no": 2,
+          "payload": {
+            "surface_uri": "table://github/issues",
+            "archetype": "table",
+            "spec": {
+              "spec_version": 1,
+              "archetype": "table",
+              "source": { "server": "seed:github", "tool": "list_issues" },
+              "title_path": "repository.full_name",
+              "items_path": "issues",
+              "columns": []
+            }
+          }
+        }
+      ],
+      "expected": {
+        "reader_version": 1,
+        "mode": "legacy_v2",
+        "surfaces": [
+          {
+            "subject_id": "table://github/issues",
+            "uri": "table://github/issues",
+            "kind": "table",
+            "title": null,
+            "source_connector": null,
+            "source_op": null,
+            "payload_ref": null,
+            "state": {
+              "data": {
+                "repository": { "full_name": "acme/roadmap" },
+                "issues": [{ "number": 42, "title": "Reconnect safely" }]
+              },
+              "spec": {
+                "spec_version": 1,
+                "archetype": "table",
+                "source": { "server": "seed:github", "tool": "list_issues" },
+                "title_path": "repository.full_name",
+                "items_path": "issues",
+                "columns": []
+              }
+            },
+            "last_sequence_no": 2,
+            "origin": "envelope",
+            "read_only": true
+          }
+        ],
+        "quarantined": []
+      }
+    },
+    {
+      "id": "mixed_v21_and_legacy_surface",
+      "events": [
+        {
+          "event_id": "v21-operation",
+          "event_type": "operation.requested",
+          "sequence_no": 1,
+          "payload": {
+            "v": 1,
+            "operation_id": "op_00000000-0000-4000-8000-000000000001"
+          }
+        },
+        {
+          "event_id": "legacy-message",
+          "event_type": "surface.created",
+          "sequence_no": 2,
+          "payload": {
+            "v": 1,
+            "surface_id": "connector:gmail:message:abc",
+            "kind": "message",
+            "title": "Unread message"
+          }
+        }
+      ],
+      "expected": {
+        "reader_version": 1,
+        "mode": "mixed",
+        "surfaces": [
+          {
+            "subject_id": "connector:gmail:message:abc",
+            "uri": "message://legacy-v2/connector%3Agmail%3Amessage%3Aabc",
+            "kind": "message",
+            "title": "Unread message",
+            "source_connector": null,
+            "source_op": null,
+            "payload_ref": null,
+            "state": null,
+            "last_sequence_no": 2,
+            "origin": "ledger",
+            "read_only": true
+          }
+        ],
+        "quarantined": []
+      }
+    },
+    {
+      "id": "canonical_v21_surface_is_left_to_canonical_projector",
+      "events": [
+        {
+          "event_id": "v21-operation",
+          "event_type": "operation.requested",
+          "sequence_no": 1,
+          "payload": {
+            "v": 1,
+            "operation_id": "op_00000000-0000-4000-8000-000000000002"
+          }
+        },
+        {
+          "event_id": "v21-surface",
+          "event_type": "surface.created",
+          "sequence_no": 2,
+          "payload": {
+            "v": 1,
+            "surface_id": "surface_current",
+            "kind": "table",
+            "source": { "connector": "linear", "op": "list_issues" },
+            "title": "Open issues",
+            "payload_ref": "operation://op_00000000-0000-4000-8000-000000000002/result"
+          }
+        }
+      ],
+      "expected": {
+        "reader_version": 1,
+        "mode": "canonical_v21",
+        "surfaces": [],
+        "quarantined": []
+      }
+    },
+    {
+      "id": "malformed_records_are_quarantined_without_fabrication",
+      "events": [
+        {
+          "event_id": "missing-subject",
+          "event_type": "surface.created",
+          "sequence_no": 1,
+          "payload": { "v": 1 }
+        },
+        {
+          "event_id": "invalid-envelope-uri",
+          "event_type": "tool_result",
+          "sequence_no": 2,
+          "payload": {
+            "surface": {
+              "surface_uri": "not a uri",
+              "state": { "data": { "must_not_mount": true } }
+            }
+          }
+        },
+        {
+          "event_id": "orphaned-spec",
+          "event_type": "surface_spec_generated",
+          "sequence_no": 3,
+          "payload": {
+            "surface_id": "not-bound-to-a-surface",
+            "spec": { "archetype": "record" }
+          }
+        },
+        {
+          "event_id": "unhydrated-subject",
+          "event_type": "surface.created",
+          "sequence_no": 4,
+          "payload": {
+            "v": 1,
+            "surface_id": "connector:linear:missing-body",
+            "kind": "record",
+            "payload_ref": "call:missing"
+          }
+        }
+      ],
+      "expected": {
+        "reader_version": 1,
+        "mode": "legacy_v2",
+        "surfaces": [
+          {
+            "subject_id": "connector:linear:missing-body",
+            "uri": "record://legacy-v2/connector%3Alinear%3Amissing-body",
+            "kind": "record",
+            "title": null,
+            "source_connector": null,
+            "source_op": null,
+            "payload_ref": "call:missing",
+            "state": null,
+            "last_sequence_no": 4,
+            "origin": "ledger",
+            "read_only": true
+          }
+        ],
+        "quarantined": [
+          {
+            "sequence_no": 1,
+            "event_type": "surface.created",
+            "code": "missing_surface_subject",
+            "subject_id": null
+          },
+          {
+            "sequence_no": 2,
+            "event_type": "tool_result",
+            "code": "invalid_surface_uri",
+            "subject_id": null
+          },
+          {
+            "sequence_no": 3,
+            "event_type": "surface_spec_generated",
+            "code": "orphaned_surface_spec",
+            "subject_id": "not-bound-to-a-surface"
+          },
+          {
+            "sequence_no": 4,
+            "event_type": "surface.created",
+            "code": "unhydrated_payload_ref",
+            "subject_id": "connector:linear:missing-body"
+          }
+        ]
+      }
+    }
+  ]
+}
