@@ -170,6 +170,17 @@ export interface ServiceEnvInputs {
     readonly baseUrl?: string;
     readonly token?: string;
   };
+  /**
+   * Electron-main workspace authority for the supervised ai-backend only.
+   * This is intentionally a separate, private capability from the browser
+   * broker: it authenticates the worker to the host-session bootstrap but
+   * never gives a renderer, facade, or backend process a workspace permit.
+   */
+  readonly workspaceBroker?: {
+    readonly enabled: boolean;
+    readonly baseUrl?: string;
+    readonly token?: string;
+  };
 }
 
 // Builds the FULL child environment for one supervised service: filtered
@@ -248,6 +259,20 @@ export function buildServiceEnv(
         env.DESKTOP_BROWSER_BROKER_TOKEN = browser.token;
       } else {
         env.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
+      }
+      const workspace = inputs.workspaceBroker;
+      if (
+        workspace?.enabled === true &&
+        workspace.baseUrl !== undefined &&
+        workspace.baseUrl !== "" &&
+        workspace.token !== undefined &&
+        workspace.token !== ""
+      ) {
+        env.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "true";
+        env.DESKTOP_WORKSPACE_BROKER_URL = workspace.baseUrl;
+        env.DESKTOP_WORKSPACE_BROKER_TOKEN = workspace.token;
+      } else {
+        env.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "false";
       }
       // The override wins when the supervisor has resolved the effective backend
       // for this boot (post-migration gate); otherwise fall back to the pure

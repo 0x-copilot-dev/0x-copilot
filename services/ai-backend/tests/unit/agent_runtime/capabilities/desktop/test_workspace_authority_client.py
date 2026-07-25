@@ -39,11 +39,33 @@ class TestWorkspaceAuthorityClient:
             seen.append(request)
             assert request.headers["authorization"] == f"Bearer {TOKEN}"
             assert request.headers["x-capability-protocol"] == "1"
+            if request.url.path == "/internal/workspace/v2/host-sessions":
+                assert request.method == "POST"
+                assert json.loads((await request.aread()).decode("utf-8")) == {
+                    "run_id": "run_1",
+                    "user_id": "user_1",
+                }
+                return httpx.Response(
+                    201,
+                    json={
+                        "host_session_ref": f"whs_{'x' * 43}",
+                        "expires_at": 1_900_000_000_000,
+                        "grants": [
+                            {
+                                "grant_id": "grant_1",
+                                "mount": "mnt_1",
+                                "mode": "read_write",
+                                "status": "active",
+                            }
+                        ],
+                    },
+                )
             if request.url.path == "/internal/workspace/v2/prepare":
                 assert request.method == "POST"
                 body = json.loads((await request.aread()).decode("utf-8"))
-                assert body["read_capability"] == "wrc_main_issued"
-                assert "root" not in body
+                assert body["host_session_ref"] == f"whs_{'x' * 43}"
+                assert "read_capability" not in body
+                assert "root" not in body and "permit" not in body
                 return httpx.Response(
                     201,
                     json={
@@ -64,7 +86,7 @@ class TestWorkspaceAuthorityClient:
             if request.url.path.endswith("/commit"):
                 assert request.method == "POST"
                 assert json.loads((await request.aread()).decode("utf-8")) == {
-                    "permit": "wcp_main_only"
+                    "host_session_ref": f"whs_{'x' * 43}"
                 }
                 return httpx.Response(
                     200,
@@ -77,8 +99,9 @@ class TestWorkspaceAuthorityClient:
             raise AssertionError(request.url.path)
 
         client = _client(httpx.MockTransport(handler))
+        host = await client.workspace_host_session(run_id="run_1", user_id="user_1")
         prepared = await client.workspace_prepare(
-            read_capability="wrc_main_issued",
+            host_session_ref=host.host_session_ref,
             change_set={
                 "stage_id": "stg_1",
                 "revision": 1,
@@ -99,17 +122,18 @@ class TestWorkspaceAuthorityClient:
         )
         result = await client.workspace_commit(
             prepared_ref=prepared.prepared_ref,
-            commit_permit="wcp_main_only",
+            host_session_ref=host.host_session_ref,
         )
         assert result.outcome == "applied"
         assert result.receipt_ref == "workspace-receipt://wcc_1"
         assert [request.url.path for request in seen] == [
+            "/internal/workspace/v2/host-sessions",
             "/internal/workspace/v2/prepare",
             "/internal/workspace/v2/prepared/prepared_1/content/slot_1",
             "/internal/workspace/v2/prepared/prepared_1/commit",
         ]
 
-    async def test_commit_permit_rejection_is_typed_and_prepared_uri_is_validated(
+    async def test_host_session_rejection_is_typed_and_prepared_uri_is_validated(
         self,
     ) -> None:
         client = _client(
@@ -122,7 +146,7 @@ class TestWorkspaceAuthorityClient:
         with pytest.raises(WorkspaceAuthorityDeniedError):
             await client.workspace_commit(
                 prepared_ref="workspace-prepared://prepared_1",
-                commit_permit="not-issued-by-main",
+                host_session_ref=f"whs_{'x' * 43}",
             )
         with pytest.raises(Exception, match="workspace prepared reference"):
             await client.workspace_abort(prepared_ref="workspace-prepared:///host/path")

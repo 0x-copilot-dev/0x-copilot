@@ -774,6 +774,8 @@ class RuntimeApiAppFactory:
                 event_store=ports.event_store,
             ),
             queue=ports.queue,
+            blobs=getattr(ports, "artifact_blob_store", None),
+            references=getattr(ports, "artifact_reference_provider", None),
         )
 
     @classmethod

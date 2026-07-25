@@ -50,13 +50,19 @@ class WorkspaceApprovalDecisionReceipt(BaseModel):
     stage_id: str = Field(min_length=1, max_length=128)
     revision: PositiveInt
     decision_ledger_id: str = Field(min_length=1, max_length=128)
+    change_set_digest: str = Field(pattern=_SHA256)
     proposal_digest: str = Field(pattern=_SHA256)
     target_digest: str = Field(pattern=_SHA256)
     decision: Literal["approve", "reject"]
     status: Literal["approved", "rejected"]
 
     @classmethod
-    def from_state(cls, state: EffectStageState) -> "WorkspaceApprovalDecisionReceipt":
+    def from_state(
+        cls,
+        state: EffectStageState,
+        *,
+        change_set_digest: str,
+    ) -> "WorkspaceApprovalDecisionReceipt":
         """Project a receipt only if the folded decision is exact and terminal."""
 
         recorded = state.decision
@@ -80,6 +86,7 @@ class WorkspaceApprovalDecisionReceipt(BaseModel):
             stage_id=state.stage_id,
             revision=recorded.revision,
             decision_ledger_id=recorded.ledger_id,
+            change_set_digest=change_set_digest,
             proposal_digest=recorded.proposal_digest,
             target_digest=recorded.target_digest,
             decision=recorded.decision.value,

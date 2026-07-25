@@ -54,6 +54,7 @@ from agent_runtime.capabilities.http_pool import BackendHttpPool
 logger = logging.getLogger(__name__)
 
 _OPAQUE_COMPONENT: Final = re.compile(r"^[A-Za-z0-9_-]{1,160}$")
+_HOST_SESSION_REF: Final = re.compile(r"^whs_[A-Za-z0-9_-]{32,160}$")
 
 
 def _workspace_prepared_id(prepared_ref: str) -> str:
@@ -66,6 +67,24 @@ def _workspace_prepared_id(prepared_ref: str) -> str:
     if _OPAQUE_COMPONENT.fullmatch(identifier) is None:
         raise BrokerProtocolError("workspace prepared reference is invalid")
     return identifier
+
+
+def _assert_host_session_wire_is_private(body: Mapping[str, object]) -> None:
+    """Reject any host-session field outside the narrow opaque contract.
+
+    This is intentionally stricter than the generic broker models.  A future
+    Electron change must not accidentally put a read capability, permit,
+    prepared reference, device identity, root, or path into the worker's
+    private bootstrap response and have Pydantic silently ignore it.
+    """
+
+    expected = {"host_session_ref", "expires_at", "grants"}
+    if set(body) != expected or not isinstance(body["grants"], list):
+        raise BrokerProtocolError("workspace host session response is invalid")
+    allowed_grant_fields = {"grant_id", "mount", "mode", "label", "status"}
+    for grant in body["grants"]:
+        if not isinstance(grant, dict) or set(grant) - allowed_grant_fields:
+            raise BrokerProtocolError("workspace host session response is invalid")
 
 
 class Routes:
@@ -95,6 +114,7 @@ class Routes:
     #: C2 staged workspace mutation protocol. These are private loopback
     #: routes, never facade/public API routes.
     WORKSPACE_PREPARE: Final = "/internal/workspace/v2/prepare"
+    WORKSPACE_HOST_SESSIONS: Final = "/internal/workspace/v2/host-sessions"
     WORKSPACE_PREPARED: Final = "/internal/workspace/v2/prepared"
     WORKSPACE_CLAIMS: Final = "/internal/workspace/v2/claims"
 
@@ -461,6 +481,24 @@ class WorkspacePreparedEffect(_BrokerModel):
     upload_slots: tuple[WorkspaceUploadSlot, ...] = ()
 
 
+class WorkspaceHostSessionGrant(_BrokerModel):
+    """Path-free grant projection bound to one private host session."""
+
+    grant_id: str = Field(alias="grantId")
+    mode: Literal["read_only", "read_write_no_delete", "read_write"]
+    label: str = ""
+    status: Literal["active", "revoked"] = "active"
+    mount: str
+
+
+class WorkspaceHostSession(_BrokerModel):
+    """Opaque main-issued session reference; never a read capability or permit."""
+
+    host_session_ref: str = Field(min_length=36, max_length=192)
+    expires_at: int = Field(ge=0)
+    grants: tuple[WorkspaceHostSessionGrant, ...] = ()
+
+
 class WorkspaceCommitResult(_BrokerModel):
     """Stable result for a one-use workspace commit or reconcile."""
 
@@ -742,19 +780,46 @@ class DesktopBrokerClient:
 
     # --- v2 workspace authority (C2) --------------------------------------
 
+    async def workspace_host_session(
+        self,
+        *,
+        run_id: str,
+        user_id: str,
+    ) -> WorkspaceHostSession:
+        """Bootstrap one opaque, run-bound host session over the private broker.
+
+        The response deliberately omits the C2 read capability, device id,
+        root, prepared ref, and permit.  The worker retains only the opaque
+        ``host_session_ref`` it must echo for prepare/commit.
+        """
+
+        body = await self._post(
+            Routes.WORKSPACE_HOST_SESSIONS,
+            {"run_id": run_id, "user_id": user_id},
+            accepted_statuses=frozenset({200, 201}),
+        )
+        _assert_host_session_wire_is_private(body)
+        session = WorkspaceHostSession.model_validate(body)
+        if _HOST_SESSION_REF.fullmatch(session.host_session_ref) is None:
+            raise BrokerProtocolError("workspace host session reference is invalid")
+        return session
+
     async def workspace_prepare(
         self,
         *,
-        read_capability: str,
+        host_session_ref: str,
         change_set: Mapping[str, object],
     ) -> WorkspacePreparedEffect:
         """Reserve a CAS-checked workspace change set without mutation.
 
-        ``read_capability`` is issued by Electron main for one exact
-        run/user/device. The transport bearer alone is insufficient.
+        ``host_session_ref`` is an opaque Electron-main binding for one exact
+        run/user/device. The transport bearer alone is insufficient, and the
+        main-issued read capability never leaves the desktop process.
         """
 
-        payload = {"read_capability": read_capability, **dict(change_set)}
+        if _HOST_SESSION_REF.fullmatch(host_session_ref) is None:
+            raise BrokerProtocolError("workspace host session reference is invalid")
+        payload = {"host_session_ref": host_session_ref, **dict(change_set)}
         body = await self._post(
             Routes.WORKSPACE_PREPARE,
             payload,
@@ -787,14 +852,20 @@ class DesktopBrokerClient:
         )
 
     async def workspace_commit(
-        self, *, prepared_ref: str, commit_permit: str
+        self, *, prepared_ref: str, host_session_ref: str
     ) -> WorkspaceCommitResult:
-        """Commit a prepared change using the exact one-use main-issued permit."""
+        """Commit using only an opaque host-session reference.
+
+        Electron main derives the exact prepared binding, consumes the verified
+        approval reservation, and keeps the raw one-use C2 permit in-process.
+        """
 
         prepared_id = _workspace_prepared_id(prepared_ref)
+        if _HOST_SESSION_REF.fullmatch(host_session_ref) is None:
+            raise BrokerProtocolError("workspace host session reference is invalid")
         body = await self._post(
             f"{Routes.WORKSPACE_PREPARED}/{prepared_id}/commit",
-            {"permit": commit_permit},
+            {"host_session_ref": host_session_ref},
         )
         return WorkspaceCommitResult.model_validate(body)
 

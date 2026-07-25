@@ -68,6 +68,7 @@ export interface WorkspaceApprovalPermitTakeRequest {
   readonly stageId: string;
   readonly revision: number;
   readonly decisionLedgerId: string;
+  readonly changeSetDigest: string;
   readonly proposalDigest: string;
   readonly targetDigest: string;
 }
@@ -107,6 +108,7 @@ export class WorkspaceApprovalPermitSource implements WorkspaceApprovalPermitHan
       stageId: verified.stage_id,
       revision: verified.revision,
       decisionLedgerId: verified.decision_ledger_id,
+      changeSetDigest: verified.change_set_digest,
       proposalDigest: verified.proposal_digest,
       targetDigest: verified.target_digest,
     });
@@ -339,6 +341,7 @@ const ReceiptSchema = {
       "stage_id",
       "revision",
       "decision_ledger_id",
+      "change_set_digest",
       "proposal_digest",
       "target_digest",
       "decision",
@@ -354,6 +357,8 @@ const ReceiptSchema = {
       record.revision < 1 ||
       typeof record.decision_ledger_id !== "string" ||
       !OPAQUE_LEDGER_ID.test(record.decision_ledger_id) ||
+      typeof record.change_set_digest !== "string" ||
+      !SHA256_HEX.test(record.change_set_digest) ||
       typeof record.proposal_digest !== "string" ||
       !SHA256_HEX.test(record.proposal_digest) ||
       typeof record.target_digest !== "string" ||
@@ -369,6 +374,7 @@ const ReceiptSchema = {
         stage_id: record.stage_id,
         revision: record.revision,
         decision_ledger_id: record.decision_ledger_id,
+        change_set_digest: record.change_set_digest,
         proposal_digest: record.proposal_digest,
         target_digest: record.target_digest,
         decision: record.decision,
@@ -382,6 +388,7 @@ function approvalKey(input: {
   readonly stageId: string;
   readonly revision: number;
   readonly decisionLedgerId: string;
+  readonly changeSetDigest: string;
   readonly proposalDigest: string;
   readonly targetDigest: string;
 }): string {
@@ -389,6 +396,7 @@ function approvalKey(input: {
     input.stageId,
     input.revision,
     input.decisionLedgerId,
+    input.changeSetDigest,
     input.proposalDigest,
     input.targetDigest,
   ]);
@@ -405,7 +413,8 @@ function isSafePermitTake(input: WorkspaceApprovalPermitTakeRequest): boolean {
     input.revision > 0 &&
     OPAQUE_LEDGER_ID.test(input.decisionLedgerId) &&
     SHA256_HEX.test(input.proposalDigest) &&
-    SHA256_HEX.test(input.targetDigest)
+    SHA256_HEX.test(input.targetDigest) &&
+    SHA256_HEX.test(input.changeSetDigest)
   );
 }
 
@@ -419,6 +428,7 @@ function mintedPermitMatches(
     permit.stageId === input.stageId &&
     permit.revision === input.revision &&
     permit.decisionLedgerId === input.decisionLedgerId &&
+    permit.changeSetDigest === input.changeSetDigest &&
     permit.proposalDigest === input.proposalDigest &&
     permit.targetDigest === input.targetDigest &&
     permit.runId === input.facts.runId &&

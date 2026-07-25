@@ -176,6 +176,9 @@ describe("buildServiceEnv(ai-backend)", () => {
     expect(env.RUNTIME_ENABLE_DESKTOP_BROWSER).toBe("false");
     expect(env.DESKTOP_BROWSER_BROKER_URL).toBeUndefined();
     expect(env.DESKTOP_BROWSER_BROKER_TOKEN).toBeUndefined();
+    expect(env.RUNTIME_ENABLE_DESKTOP_WORKSPACE).toBe("false");
+    expect(env.DESKTOP_WORKSPACE_BROKER_URL).toBeUndefined();
+    expect(env.DESKTOP_WORKSPACE_BROKER_TOKEN).toBeUndefined();
     // Backend-only settings do not leak.
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
     expect(env.BACKEND_ENVIRONMENT).toBeUndefined();
@@ -233,6 +236,31 @@ describe("buildServiceEnv(ai-backend)", () => {
     }
     expect(ENV_PASSTHROUGH_ALLOWLIST).not.toContain(
       "DESKTOP_BROWSER_BROKER_TOKEN",
+    );
+  });
+
+  it("injects the private workspace broker into ai-backend only", () => {
+    const withWorkspace: ServiceEnvInputs = {
+      ...inputs(),
+      workspaceBroker: {
+        enabled: true,
+        baseUrl: "http://127.0.0.1:54322",
+        token: "workspace-broker-secret",
+      },
+    };
+    const ai = buildServiceEnv("ai-backend", withWorkspace);
+    expect(ai.RUNTIME_ENABLE_DESKTOP_WORKSPACE).toBe("true");
+    expect(ai.DESKTOP_WORKSPACE_BROKER_URL).toBe("http://127.0.0.1:54322");
+    expect(ai.DESKTOP_WORKSPACE_BROKER_TOKEN).toBe("workspace-broker-secret");
+
+    for (const sibling of ["backend", "backend-facade"] as const) {
+      const env = buildServiceEnv(sibling, withWorkspace);
+      expect(env.RUNTIME_ENABLE_DESKTOP_WORKSPACE).toBeUndefined();
+      expect(env.DESKTOP_WORKSPACE_BROKER_URL).toBeUndefined();
+      expect(env.DESKTOP_WORKSPACE_BROKER_TOKEN).toBeUndefined();
+    }
+    expect(ENV_PASSTHROUGH_ALLOWLIST).not.toContain(
+      "DESKTOP_WORKSPACE_BROKER_TOKEN",
     );
   });
 

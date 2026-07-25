@@ -57,7 +57,7 @@ class WorkspaceEffectStageRoutes:
     ) -> WorkspaceApprovalDecisionReceipt:
         service = cls._service(request)
         try:
-            state = await service.record_decision(
+            recorded = await service.record_decision(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 run_id=run_id,
@@ -67,7 +67,10 @@ class WorkspaceEffectStageRoutes:
                 proposal_digest=payload.proposal_digest,
                 target_digest=payload.target_digest,
             )
-            return WorkspaceApprovalDecisionReceipt.from_state(state)
+            return WorkspaceApprovalDecisionReceipt.from_state(
+                recorded.state,
+                change_set_digest=recorded.change_set_digest,
+            )
         except EffectStageError as exc:
             raise cls._http(exc) from exc
 

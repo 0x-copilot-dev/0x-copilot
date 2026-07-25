@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,6 +21,7 @@ from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
 from agent_runtime.surfaces_v2.entities import EffectTarget
 from agent_runtime.surfaces_v2.ledger_ids import LedgerIdCodec
 from agent_runtime.surfaces_v2.ledger_ids import WorkspaceTargetRefCodec
@@ -31,6 +33,10 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectProposalKind,
 )
 from runtime_adapters.factory import RuntimeAdapterFactory
+from runtime_adapters.artifact_references import (
+    ArtifactReferenceEdge,
+    ArtifactReferenceKind,
+)
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import AgentRunStatus, RunRecord
@@ -41,6 +47,62 @@ _RUN = "run_workspace_receipt"
 _CONVERSATION = "conv_workspace_receipt"
 _OPERATION = "op_00000000-0000-4000-8000-000000000123"
 _ARTIFACT = "art_00000000-0000-4000-8000-000000000123"
+_WORKSPACE_ENTRIES = [
+    {
+        "operation": "create",
+        "relative_path": "receipt.csv",
+        "content_slot": "content_0",
+        "content_digest": "c" * 64,
+        "content_size": 0,
+        "precondition": {"exists": False},
+    }
+]
+_WORKSPACE_CHANGE_SET_DIGEST = sha256_hex(
+    canonical_json_bytes(
+        {
+            "grant_id": "grant_receipt",
+            "mount": "receipt",
+            "entries": _WORKSPACE_ENTRIES,
+        }
+    )
+)
+
+
+async def _one_chunk(body: bytes):
+    yield body
+
+
+async def _workspace_material(
+    ports: object, *, user_id: str, target_digest: str
+) -> tuple[str, str]:
+    material = {
+        "grant_id": "grant_receipt",
+        "mount": "receipt",
+        "change_set_digest": _WORKSPACE_CHANGE_SET_DIGEST,
+        "target_digest": target_digest,
+        "entries": _WORKSPACE_ENTRIES,
+    }
+    body = canonical_json_bytes(material)
+    proposal_digest = sha256_hex(body)
+    blobs = ports.artifact_blob_store
+    references = ports.artifact_reference_provider
+    await blobs.put_stream(
+        expected_digest=proposal_digest,
+        chunks=_one_chunk(body),
+        byte_limit=2 * 1024 * 1024,
+    )
+    await references.acquire(
+        ArtifactReferenceEdge(
+            org_id=_ORG,
+            edge_id=f"workspace-receipt-material-{proposal_digest}",
+            user_id=user_id,
+            blob_key=proposal_digest,
+            reference_kind=ArtifactReferenceKind.EFFECT,
+            reference_id=f"workspace-material://sha256/{proposal_digest}",
+            created_at=datetime.now(timezone.utc),
+        )
+    )
+    return f"workspace-material://sha256/{proposal_digest}", proposal_digest
 
 
 def _settings(*, enabled: bool) -> RuntimeSettings:
@@ -53,6 +115,7 @@ def _settings(*, enabled: bool) -> RuntimeSettings:
         environ.update(
             {
                 "SURFACES_V2": "true",
+                "ARTIFACT_EFFECTS_V2": "true",
                 "OPERATION_GATEWAY_MODE": "enforce",
                 "WORKSPACE_EFFECT_MODE": "enforce",
             }
@@ -132,7 +195,7 @@ def _bundle(*, enabled: bool = True) -> _Bundle:
     store = InMemoryRuntimeApiStore()
     store.runs[_RUN] = _run(run_id=_RUN, user_id=_USER)
     store.events_by_run.setdefault(_RUN, [])
-    ports = RuntimeAdapterFactory.from_store(store)
+    ports = RuntimeAdapterFactory.from_store(store, artifact_effects_v2=True)
     app = RuntimeApiAppFactory.create_app(
         ports=ports, settings=_settings(enabled=enabled)
     )
@@ -161,6 +224,15 @@ async def _stage_effect(*, store, ports, run, user_id: str, executor):  # noqa: 
         ),
     )
     workspace = executor is EffectExecutorKind.WORKSPACE
+    target_digest = "b" * 64
+    proposal_content_ref = f"operation://{_OPERATION}/args"
+    proposal_digest = "a" * 64
+    if workspace:
+        proposal_content_ref, proposal_digest = await _workspace_material(
+            ports,
+            user_id=user_id,
+            target_digest=target_digest,
+        )
     return await stager.stage(
         scope=scope,
         proposed_effect=ProposedEffect(
@@ -177,19 +249,15 @@ async def _stage_effect(*, store, ports, run, user_id: str, executor):  # noqa: 
                 ),
                 display_label="Finance workspace" if workspace else "Managed record",
             ),
-            target_digest="b" * 64,
+            target_digest=target_digest,
             display_target="Finance workspace" if workspace else "Managed record",
             proposal_kind=(
                 EffectProposalKind.WORKSPACE_CHANGE_SET
                 if workspace
                 else EffectProposalKind.CANONICAL_ARGUMENTS
             ),
-            proposal_content_ref=(
-                f"artifact://{_ARTIFACT}/revisions/1"
-                if workspace
-                else f"operation://{_OPERATION}/args"
-            ),
-            proposal_digest="a" * 64,
+            proposal_content_ref=proposal_content_ref,
+            proposal_digest=proposal_digest,
             proposal_media_type=(
                 "application/vnd.0xcopilot.workspace-change-set+json"
                 if workspace
@@ -247,6 +315,7 @@ class TestWorkspaceApprovalDecisionReceipt:
             "decision_ledger_id": LedgerIdCodec.format(
                 decision_event.run_id, decision_event.sequence_no
             ),
+            "change_set_digest": _WORKSPACE_CHANGE_SET_DIGEST,
             "proposal_digest": decision_event.payload["proposal_digest"],
             "target_digest": decision_event.payload["target_digest"],
             "decision": decision_event.payload["decision"],
@@ -265,6 +334,7 @@ class TestWorkspaceApprovalDecisionReceipt:
             "stage_id",
             "revision",
             "decision_ledger_id",
+            "change_set_digest",
             "proposal_digest",
             "target_digest",
             "decision",
@@ -344,6 +414,27 @@ class TestWorkspaceApprovalDecisionReceipt:
 
         response = bundle.client.post(
             _url(stage.stage_id), headers=_headers(), json=body
+        )
+
+        assert response.status_code == 409
+        assert _event_types(bundle.store) == ["effect.staged"]
+        assert bundle.store.effect_commit_commands == []
+
+    def test_unverifiable_workspace_material_is_rejected_before_decision(
+        self,
+    ) -> None:
+        bundle = _bundle()
+        stage = bundle.stage_workspace()
+        proposal_digest = stage.current_revision.proposal_digest
+        asyncio.run(
+            bundle.ports.artifact_reference_provider.release(
+                org_id=_ORG,
+                edge_id=f"workspace-receipt-material-{proposal_digest}",
+            )
+        )
+
+        response = bundle.client.post(
+            _url(stage.stage_id), headers=_headers(), json=_body(stage)
         )
 
         assert response.status_code == 409

@@ -99,6 +99,31 @@ export interface WorkspacePreparedEffect {
   readonly uploadSlots: readonly WorkspaceUploadSlot[];
 }
 
+/**
+ * Main-only binding facts for one prepared C2 effect.  This deliberately
+ * excludes the native handle, root, read capability, and raw permit.  The
+ * private broker uses it to consume a verified approval reservation without
+ * accepting any approval facts from the worker.
+ */
+export interface WorkspacePreparedBinding {
+  readonly preparedRef: string;
+  readonly facts: WorkspaceRunFacts;
+  readonly stageId: string;
+  readonly revision: number;
+  readonly decisionLedgerId: string;
+  readonly changeSetDigest: string;
+  readonly targetDigest: string;
+  readonly proposalDigest: string;
+}
+
+/** Main-only read authority retained by the local broker host-session map. */
+export interface WorkspacePrivateHostSession {
+  readonly facts: WorkspaceRunFacts;
+  readonly readCapability: string;
+  readonly grantIds: readonly string[];
+  readonly expiresAt: number;
+}
+
 export interface WorkspaceUploadSlot {
   readonly slot: string;
   readonly digest: string;
@@ -370,6 +395,44 @@ export class LocalWorkspaceAuthority {
     return capability;
   }
 
+  /**
+   * Main-only bootstrap for one authenticated worker host session.  The
+   * worker supplies only run/user identifiers over the broker's per-boot
+   * authenticated channel; the device id and the actual read capability stay
+   * in Electron main.  This is intentionally not an IPC/preload surface.
+   */
+  async createPrivateHostSession(
+    runId: string,
+    userId: string,
+  ): Promise<WorkspacePrivateHostSession> {
+    this.#requireWritable();
+    const facts: WorkspaceRunFacts = {
+      runId,
+      userId,
+      deviceId: this.#deviceId,
+    };
+    const now = this.#now();
+    const grantIds = (await this.#grants.listAll())
+      .filter(
+        (grant) =>
+          grant.status === "active" &&
+          grant.profileId === userId &&
+          grant.deviceId === this.#deviceId &&
+          grant.expiresAt !== undefined &&
+          grant.expiresAt > now &&
+          grant.rootIdentity !== undefined &&
+          grant.allowedPathPrefixes !== undefined,
+      )
+      .map((grant) => grant.grantId);
+    const capability = await this.createReadCapability(facts, grantIds);
+    return Object.freeze({
+      facts,
+      readCapability: capability.capability,
+      grantIds: capability.grantIds,
+      expiresAt: capability.expiresAt,
+    });
+  }
+
   async prepareChangeSet(
     capabilityId: string,
     changeSet: WorkspaceChangeSet,
@@ -419,6 +482,47 @@ export class LocalWorkspaceAuthority {
     this.#prepared.set(preparedRef, state);
     await this.#journal.put(this.#journalRecord(state, "prepared"));
     return prepared;
+  }
+
+  /**
+   * Return the exact non-sensitive binding for a prepared effect.  This is a
+   * main-only lookup: the worker never receives these values as caller input
+   * for commit, and no native/root/capability state is exposed.
+   */
+  preparedBinding(preparedRef: string): WorkspacePreparedBinding {
+    const state = this.#requirePrepared(preparedRef);
+    return Object.freeze({
+      preparedRef: state.prepared.preparedRef,
+      facts: Object.freeze({ ...state.facts }),
+      stageId: state.changeSet.stageId,
+      revision: state.changeSet.revision,
+      decisionLedgerId: state.changeSet.decisionLedgerId,
+      changeSetDigest: state.changeSet.changeSetDigest,
+      targetDigest: state.changeSet.targetDigest,
+      proposalDigest: state.changeSet.proposalDigest,
+    });
+  }
+
+  /**
+   * Return a prepared binding only when C2 has a live, sealed reservation that
+   * is still eligible to consume an approval.  The broker calls this before
+   * taking a one-use receipt reservation, so a failed upload/CAS conflict
+   * cannot burn a valid user approval or masquerade as an authorization error.
+   */
+  async commitEligibleBinding(
+    preparedRef: string,
+  ): Promise<WorkspacePreparedBinding> {
+    this.#requireWritable();
+    const state = this.#requirePrepared(preparedRef);
+    await this.#assertPreparedLive(state);
+    const journal = await this.#journal.get(preparedRef);
+    if (
+      journal?.state !== "prepared" ||
+      [...state.uploads.values()].some((progress) => !progress.sealed)
+    ) {
+      throw new WorkspaceAuthorityError("workspace_conflict");
+    }
+    return this.preparedBinding(preparedRef);
   }
 
   async uploadPreparedContent(

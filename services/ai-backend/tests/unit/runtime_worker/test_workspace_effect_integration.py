@@ -134,8 +134,9 @@ class RecordingAuthority(WorkspaceAuthorityPort):
     observed_precondition_digest: str
     prepare_calls: list[WorkspacePrepareCommand] = field(default_factory=list)
     uploads: list[tuple[str, str, bytes]] = field(default_factory=list)
-    commits: list[tuple[str, str]] = field(default_factory=list)
+    commits: list[str] = field(default_factory=list)
     aborts: list[str] = field(default_factory=list)
+    commit_result: WorkspaceCommitResult | None = None
 
     async def prepare(
         self, command: WorkspacePrepareCommand
@@ -164,11 +165,9 @@ class RecordingAuthority(WorkspaceAuthorityPort):
             body.extend(chunk)
         self.uploads.append((prepared_ref, content_ref, bytes(body)))
 
-    async def commit(
-        self, prepared_ref: str, commit_permit: str
-    ) -> WorkspaceCommitResult:
-        self.commits.append((prepared_ref, commit_permit))
-        return WorkspaceCommitResult(
+    async def commit(self, prepared_ref: str) -> WorkspaceCommitResult:
+        self.commits.append(prepared_ref)
+        return self.commit_result or WorkspaceCommitResult(
             outcome="applied",
             receipt_ref="workspace-receipt://private-c3",
             result_digest=hashlib.sha256(BODY).hexdigest(),
@@ -185,23 +184,6 @@ class RecordingAuthority(WorkspaceAuthorityPort):
         self.aborts.append(prepared_ref)
 
 
-@dataclass
-class RecordingPermitSource:
-    permit: str | None = "wcp_main_approved"
-    requests: list[tuple[EffectExecutionRequest, str]] = field(default_factory=list)
-
-    async def take(
-        self,
-        *,
-        scope: EffectExecutionScope,
-        request: EffectExecutionRequest,
-        prepared_ref: str,
-    ) -> str | None:
-        assert scope == _execution_scope()
-        self.requests.append((request, prepared_ref))
-        return self.permit
-
-
 class StaticScopeResolver:
     async def resolve(self, *, run_id: str) -> EffectExecutionScope | None:
         return _execution_scope() if run_id == RUN_ID else None
@@ -216,7 +198,6 @@ class IntegratedHarness:
     overlay_store: InMemoryWorkspaceOverlayStore
     sessions: InMemoryWorkspaceHostSessionRegistry
     authority: RecordingAuthority
-    permits: RecordingPermitSource
     stager: EffectStager
     stage_id: str
     precondition_digest: str
@@ -259,7 +240,7 @@ class IntegratedHarness:
 async def _harness(
     *,
     grant: WorkspaceGrantBinding | None = None,
-    permit: str | None = "wcp_main_approved",
+    commit_result: WorkspaceCommitResult | None = None,
     observed_digest: str | None = None,
 ) -> IntegratedHarness:
     publication = InMemoryArtifactPublicationCoordinator()
@@ -352,16 +333,15 @@ async def _harness(
     authority = RecordingAuthority(
         proposals=proposals,
         observed_precondition_digest=(observed_digest or stored.precondition_digest),
+        commit_result=commit_result,
     )
-    permits = RecordingPermitSource(permit=permit)
     sessions.bind(
         scope=scope,
         session=WorkspaceHostSession(
             grants=(grant or _grant(),),
             base_read=_UnusedBase(),  # type: ignore[arg-type]
-            read_capability="wrc_main_issued",
+            host_session_ref=f"whs_{'x' * 43}",
             authority=authority,
-            permit_source=permits,
         ),
     )
     return IntegratedHarness(
@@ -372,7 +352,6 @@ async def _harness(
         overlay_store=overlay_store,
         sessions=sessions,
         authority=authority,
-        permits=permits,
         stager=stager,
         stage_id=state.stage_id,
         precondition_digest=stored.precondition_digest,
@@ -391,9 +370,7 @@ async def test_exact_approved_csv_commits_once_through_workspace_executor() -> N
     assert first.status is EffectCoordinatorStatus.APPLIED
     assert first.outcome is EffectOutcome.APPLIED
     assert duplicate.status is EffectCoordinatorStatus.REPLAYED
-    assert harness.authority.commits == [
-        ("workspace-prepared://prepared-c3", "wcp_main_approved")
-    ]
+    assert harness.authority.commits == ["workspace-prepared://prepared-c3"]
     assert harness.authority.uploads[0][2] == BODY
     assert len(harness.authority.prepare_calls) == 1
     prepared = harness.authority.prepare_calls[0]
@@ -403,9 +380,7 @@ async def test_exact_approved_csv_commits_once_through_workspace_executor() -> N
     assert (
         prepared.material.entries[0].content_digest == hashlib.sha256(BODY).hexdigest()
     )
-    assert harness.permits.requests[0][0].decision_ledger_id == (
-        approved.decision.ledger_id if approved.decision is not None else ""
-    )
+    assert prepared.host_session_ref.startswith("whs_")
     claim = await harness.claims.get(
         org_id=_execution_scope().org_id,
         executor=EffectExecutorKind.WORKSPACE,
@@ -424,7 +399,6 @@ async def test_baseline_drift_aborts_before_claim_and_commit() -> None:
 
     assert result.status is EffectCoordinatorStatus.PRECONDITION_DRIFT
     assert harness.authority.commits == []
-    assert harness.permits.requests == []
     assert harness.authority.aborts == ["workspace-prepared://prepared-c3"]
     assert await harness.claims.list_incomplete() == ()
 
@@ -453,8 +427,14 @@ async def test_revoked_or_read_only_grant_after_approval_never_prepares(
     assert await harness.claims.list_incomplete() == ()
 
 
-async def test_missing_main_permit_cannot_fall_through_to_commit() -> None:
-    harness = await _harness(permit=None)
+async def test_private_authority_denial_cannot_fall_through_to_host_write() -> None:
+    harness = await _harness(
+        commit_result=WorkspaceCommitResult(
+            outcome="failed",
+            receipt_ref="workspace-receipt://private-c3",
+            safe_message="Workspace approval is unavailable.",
+        )
+    )
     await harness.approve()
     command = harness.outbox.commands["workspace-approve-c3"]
 
@@ -462,9 +442,10 @@ async def test_missing_main_permit_cannot_fall_through_to_commit() -> None:
 
     assert result.status is EffectCoordinatorStatus.APPLIED
     assert result.outcome is EffectOutcome.FAILED
-    assert harness.authority.commits == []
+    # The executor can invoke only its private authority port. It has no raw
+    # permit, so the failed handoff cannot fall through to a host write path.
+    assert harness.authority.commits == ["workspace-prepared://prepared-c3"]
     assert len(harness.authority.prepare_calls) == 1
-    assert len(harness.permits.requests) == 1
 
 
 async def test_stale_overlay_binding_after_approval_never_prepares() -> None:

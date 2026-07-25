@@ -39,7 +39,6 @@ from agent_runtime.surfaces_v2.ledger_models import (
 
 _OPAQUE_SLOT = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
 _SAFE_MESSAGE = "The workspace change could not be completed safely."
-_PERMIT_UNAVAILABLE = "The approved workspace permit is unavailable."
 
 
 class WorkspacePrecondition(RuntimeContract):
@@ -162,11 +161,11 @@ class WorkspaceProposalMaterial(RuntimeContract):
 
 @dataclass(frozen=True)
 class WorkspacePrepareCommand:
-    """Main-issued read capability plus server-resolved immutable material."""
+    """Opaque private host session plus server-resolved immutable material."""
 
     scope: EffectExecutionScope
     request: EffectExecutionRequest
-    read_capability: str
+    host_session_ref: str
     material: WorkspaceProposalMaterial
 
 
@@ -178,24 +177,6 @@ class WorkspaceProposalResolver(Protocol):
         self, *, scope: EffectExecutionScope, request: EffectExecutionRequest
     ) -> WorkspacePrepareCommand:
         """Return server-held material and a main-issued read capability."""
-
-
-@runtime_checkable
-class WorkspaceCommitPermitSource(Protocol):
-    """Read a permit Electron main already minted after verified user approval.
-
-    This port is intentionally read-only: no AI-backend implementation may
-    create, sign, or widen a permit.
-    """
-
-    async def take(
-        self,
-        *,
-        scope: EffectExecutionScope,
-        request: EffectExecutionRequest,
-        prepared_ref: str,
-    ) -> str | None:
-        """Return the exact one-use permit, or ``None`` if none was issued."""
 
 
 @runtime_checkable
@@ -220,10 +201,8 @@ class WorkspaceAuthorityPort(Protocol):
     async def upload(self, prepared_ref: str, content_ref: str) -> None:
         """Upload one immutable content reference into its prepared slot."""
 
-    async def commit(
-        self, prepared_ref: str, commit_permit: str
-    ) -> WorkspaceCommitResult:
-        """Consume one exact main-issued permit and commit once."""
+    async def commit(self, prepared_ref: str) -> WorkspaceCommitResult:
+        """Commit through the main-only approval/permit handoff exactly once."""
 
     async def reconcile(self, claim_id: str) -> WorkspaceCommitResult:
         """Determine a previous commit's result without blind replay."""
@@ -247,13 +226,16 @@ class BrokerWorkspaceAuthority(WorkspaceAuthorityPort):
     ) -> None:
         self._client = client
         self._content = content
-        self._prepared: dict[str, tuple[EffectExecutionScope, dict[str, str]]] = {}
+        self._prepared: dict[
+            str,
+            tuple[EffectExecutionScope, dict[str, str], str],
+        ] = {}
 
     async def prepare(
         self, command: WorkspacePrepareCommand
     ) -> WorkspacePreparedEffect:
         prepared = await self._client.workspace_prepare(
-            read_capability=command.read_capability,
+            host_session_ref=command.host_session_ref,
             change_set=command.material.broker_wire(command.request),
         )
         expected = {
@@ -281,7 +263,11 @@ class BrokerWorkspaceAuthority(WorkspaceAuthorityPort):
                 raise WorkspaceAuthorityContractError(
                     "workspace content reference missing"
                 )
-        self._prepared[prepared.prepared_ref] = (command.scope, expected)
+        self._prepared[prepared.prepared_ref] = (
+            command.scope,
+            expected,
+            command.host_session_ref,
+        )
         return prepared
 
     async def upload(self, prepared_ref: str, content_ref: str) -> None:
@@ -290,7 +276,7 @@ class BrokerWorkspaceAuthority(WorkspaceAuthorityPort):
             raise WorkspaceAuthorityContractError(
                 "workspace prepared state is unavailable"
             )
-        scope, slots = state
+        scope, slots, _host_session_ref = state
         matches = [
             slot for slot, reference in slots.items() if reference == content_ref
         ]
@@ -305,11 +291,15 @@ class BrokerWorkspaceAuthority(WorkspaceAuthorityPort):
             final=True,
         )
 
-    async def commit(
-        self, prepared_ref: str, commit_permit: str
-    ) -> WorkspaceCommitResult:
+    async def commit(self, prepared_ref: str) -> WorkspaceCommitResult:
+        state = self._prepared.get(prepared_ref)
+        if state is None:
+            raise WorkspaceAuthorityContractError(
+                "workspace prepared state is unavailable"
+            )
+        _scope, _slots, host_session_ref = state
         return await self._client.workspace_commit(
-            prepared_ref=prepared_ref, commit_permit=commit_permit
+            prepared_ref=prepared_ref, host_session_ref=host_session_ref
         )
 
     async def reconcile(self, claim_id: str) -> WorkspaceCommitResult:
@@ -321,7 +311,7 @@ class BrokerWorkspaceAuthority(WorkspaceAuthorityPort):
 
 
 class WorkspaceEffectExecutor:
-    """A5 executor which cannot write without the Electron-issued permit."""
+    """A5 executor whose commit uses only the private opaque host session."""
 
     kind = EffectExecutorKind.WORKSPACE
     capabilities = EffectExecutorCapabilities(
@@ -337,12 +327,10 @@ class WorkspaceEffectExecutor:
         scope: EffectExecutionScope,
         authority: WorkspaceAuthorityPort,
         proposal_resolver: WorkspaceProposalResolver,
-        permit_source: WorkspaceCommitPermitSource,
     ) -> None:
         self._scope = scope
         self._authority = authority
         self._proposal_resolver = proposal_resolver
-        self._permit_source = permit_source
         self._prepared_requests: dict[str, EffectExecutionRequest] = {}
 
     async def prepare(self, request: EffectExecutionRequest) -> PreparedEffect:
@@ -379,14 +367,7 @@ class WorkspaceEffectExecutor:
         request = self._prepared_requests.get(prepared.prepared_ref)
         if request is None or request != prepared.request:
             return _failed(_SAFE_MESSAGE)
-        permit = await self._permit_source.take(
-            scope=self._scope,
-            request=request,
-            prepared_ref=prepared.prepared_ref,
-        )
-        if permit is None:
-            return _failed(_PERMIT_UNAVAILABLE)
-        result = await self._authority.commit(prepared.prepared_ref, permit)
+        result = await self._authority.commit(prepared.prepared_ref)
         return _to_effect_result(result)
 
     async def reconcile(self, claim: EffectClaim) -> EffectExecutionResult:
@@ -434,7 +415,6 @@ __all__ = [
     "WorkspaceAuthorityContractError",
     "WorkspaceAuthorityPort",
     "WorkspaceChangeEntry",
-    "WorkspaceCommitPermitSource",
     "WorkspaceEffectExecutor",
     "WorkspacePrecondition",
     "WorkspacePrepareCommand",
