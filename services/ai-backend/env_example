@@ -28,6 +28,23 @@ RUNTIME_WORKER_POLL_INTERVAL_SECONDS=1
 RUNTIME_WORKER_LOCK_SECONDS=60
 RUNTIME_START_IN_PROCESS_WORKER=true
 RUNTIME_ALLOW_EMPTY_CAPABILITIES=false
+# --- E2 independent rollout lanes ------------------------------------------
+# Every canonical lane is dark by default and is resolved once during process
+# boot. Valid values are exactly: off, shadow, enforce. There is intentionally
+# no global E2 switch. Existing V2 controls remain compatibility inputs only:
+# they can raise a matching lane's effective authority, but an E2 `off` can
+# never lower it or re-enable a direct write. `SURFACES_V2` is not a v2.1
+# presentation switch.
+ARTIFACT_REPOSITORY_MODE=off
+OPERATION_GATEWAY_MODE=off
+EFFECT_STAGER_MODE=off
+EFFECT_COMMIT_MODE=off
+PRESENTATION_V2_1_MODE=off
+WORKSPACE_OVERLAY_MODE=off
+WORKSPACE_COMMIT_MODE=off
+MCP_GATEWAY_MODE=off
+SANDBOX_ADAPTER_MODE=off
+BROWSER_ADAPTER_MODE=off
 # P4 Stage 1 — fold append_event INSERT + agent_runs.latest_sequence_no
 # UPDATE into one transaction (default on; flip to false to roll back to
 # the pre-P4 two-transaction path).

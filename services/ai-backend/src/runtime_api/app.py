@@ -214,6 +214,16 @@ class RuntimeApiAppFactory:
         # (env) and injected-ports (test) paths — route handlers read
         # feature flags (e.g. enable_local_models) from here.
         app.state.runtime_settings = _settings
+        # E2 D1 resolves its entire configuration from RuntimeSettings before
+        # this composition root runs.  The API intentionally logs the snapshot
+        # but defers effect-port validation to RuntimeWorker: a multi-process
+        # API does not own the worker's descriptor/executor/attestation graph.
+        # Static invalid combinations have already failed RuntimeSettings.load.
+        app.state.e2_rollout = _settings.execution.rollout
+        _STRUCTURED_LOGGER.info(
+            "e2_rollout_resolved",
+            metadata=_settings.execution.rollout.safe_diagnostics(process="api"),
+        )
         app.state.runtime_persistence = _ports.persistence
         app.state.runtime_event_store = _ports.event_store
         app.state.runtime_notifications = _notifications
