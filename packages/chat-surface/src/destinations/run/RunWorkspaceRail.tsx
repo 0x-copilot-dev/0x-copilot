@@ -383,7 +383,7 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
   const agentsBody: ReactNode = (
     <>
       {/* PRD-E2 — the fleet view leads; the subagent detail stays below. */}
-      {pendingV2 !== undefined ? (
+      {pendingV2 !== undefined && pendingV2.agents.length > 0 ? (
         <AgentFleetList
           agents={pendingV2.agents}
           currentRunId={pendingV2.currentRunId}

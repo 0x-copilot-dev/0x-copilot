@@ -298,9 +298,10 @@ interface FocusRow {
 
 /**
  * Preserve stream/archive order while expressing the parent relation when the
- * additive projection fields are present. A real parent entry wins. When the
- * parent is the main orchestrator (and therefore has no child task entry), a
- * synthetic lead keeps the hierarchy visible without inventing backend data.
+ * additive projection fields are present. A real parent entry wins. Synthetic
+ * leads are only rendered when the parent signal is explicit (name or non-
+ * orchestrator role). Supervisor-only hints are not interpreted as a concrete
+ * lead because the backend emits that alias by default.
  */
 function focusRows(entries: readonly SubagentEntry[]): readonly FocusRow[] {
   const byTaskId = new Map(entries.map((entry) => [entry.task_id, entry]));
@@ -316,9 +317,12 @@ function focusRows(entries: readonly SubagentEntry[]): readonly FocusRow[] {
       childByParent.set(view.parentTaskId, children);
       continue;
     }
-    const parentName =
-      view.parentAgentName ?? displayAgentRole(view.parentAgentRole);
-    if (parentName) {
+    const parentRoleLabel = displayAgentRole(view.parentAgentRole);
+    const parentName = view.parentAgentName ?? parentRoleLabel;
+    const shouldGroupOrphan =
+      parentName !== null && parentRoleLabel !== "Orchestrator";
+
+    if (shouldGroupOrphan) {
       const key =
         view.parentTaskId ?? `${view.parentAgentRole ?? "agent"}:${parentName}`;
       const children = orphanGroups.get(key) ?? [];
@@ -345,9 +349,11 @@ function focusRows(entries: readonly SubagentEntry[]): readonly FocusRow[] {
     const hasRealParent =
       view.parentTaskId !== null && byTaskId.has(view.parentTaskId);
     if (hasRealParent) continue;
-    const parentName =
-      view.parentAgentName ?? displayAgentRole(view.parentAgentRole);
-    const orphanKey = parentName
+    const parentRoleLabel = displayAgentRole(view.parentAgentRole);
+    const parentName = view.parentAgentName ?? parentRoleLabel;
+    const shouldRenderSyntheticLead =
+      parentName !== null && parentRoleLabel !== "Orchestrator";
+    const orphanKey = shouldRenderSyntheticLead
       ? (view.parentTaskId ??
         `${view.parentAgentRole ?? "agent"}:${parentName}`)
       : null;

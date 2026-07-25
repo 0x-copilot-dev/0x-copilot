@@ -147,6 +147,24 @@ describe("RunWorkspaceRail pendingV2 (PRD-E2)", () => {
     expect(screen.getByTestId("agent-fleet-list")).toBeInTheDocument();
   });
 
+  it("hides AgentFleetList when pendingV2 has no cross-run agents", () => {
+    render(
+      <RunWorkspaceRail
+        mode="studio"
+        chatSlot={chatSlot()}
+        pendingV2={{
+          ...pendingV2(),
+          cards: [],
+          agents: [],
+        }}
+      />,
+    );
+    fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
+    expect(screen.queryByTestId("agent-fleet-list")).toBeNull();
+    expect(screen.queryByTestId("agent-fleet-empty")).toBeNull();
+    expect(screen.getByText(/Subagents run here/i)).toBeInTheDocument();
+  });
+
   it("the approvals badge count adds the cross-run cards", () => {
     render(
       <RunWorkspaceRail

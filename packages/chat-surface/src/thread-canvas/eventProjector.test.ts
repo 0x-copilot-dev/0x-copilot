@@ -105,6 +105,18 @@ describe("eventProjector.project", () => {
     expect(state.activity.map((e) => e.title)).toEqual(["Visible"]);
   });
 
+  it("hides receipt.emitted from activity feed", () => {
+    nextSeq = 0;
+    const state = project([
+      makeEnvelope("run_started", { display_title: "Visible" }),
+      makeEnvelope("receipt.emitted", {
+        display_title: "Run Receipt",
+        payload: { receipt: { status: "completed" } },
+      }),
+    ]);
+    expect(state.activity.map((e) => e.title)).toEqual(["Visible"]);
+  });
+
   it("only emits beads for state-changing events", () => {
     nextSeq = 0;
     const state = project([

@@ -262,7 +262,7 @@ describe("AgentsTab Focus rows", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders a synthetic Orchestrator lead, child indent, model chip, and delegated-work anchor from additive fields", () => {
+  it("renders a synthetic explicit parent lead for non-orchestrator role hints", () => {
     const orchestrated = {
       ...entry({
         task_id: "task_research",
@@ -272,14 +272,13 @@ describe("AgentsTab Focus rows", () => {
         duration_ms: null,
       }),
       parent_task_id: "main-agent",
-      parent_agent_name: "Orchestrator",
-      parent_agent_role: "orchestrator",
+      parent_agent_role: "planner",
       model_display_label: "Haiku 4.5",
       current_activity: "Searching trusted source material",
     } as SubagentEntry;
     render(<AgentsTab subagents={seedSubagentMap([orchestrated])} />);
 
-    expect(screen.getByText("Orchestrator")).toBeInTheDocument();
+    expect(screen.getByText("Planner")).toBeInTheDocument();
     expect(screen.getByText("Haiku 4.5")).toBeInTheDocument();
     expect(
       screen.getByText("Searching trusted source material"),
@@ -287,5 +286,29 @@ describe("AgentsTab Focus rows", () => {
     const child = document.getElementById("subagent-task-task_research");
     expect(child).toHaveAttribute("data-task-id", "task_research");
     expect(child).toHaveClass("atlas-workspace-tab__item--child");
+  });
+
+  it("does not invent an Orchestrator lead when only supervisor role metadata is present", () => {
+    const orchestrated = {
+      ...entry({
+        task_id: "task_research",
+        display_title: "Research agent",
+        status: "running",
+        completed_at: null,
+        duration_ms: null,
+      }),
+      parent_task_id: "main-agent",
+      parent_agent_role: "orchestrator",
+      parent_agent_name: "Orchestrator",
+      model_display_label: "Haiku 4.5",
+      current_activity: "Searching trusted source material",
+    } as SubagentEntry;
+    render(<AgentsTab subagents={seedSubagentMap([orchestrated])} />);
+
+    expect(screen.queryByText("Orchestrator")).not.toBeInTheDocument();
+    expect(screen.getByText("Haiku 4.5")).toBeInTheDocument();
+    const child = document.getElementById("subagent-task-task_research");
+    expect(child).toHaveAttribute("data-task-id", "task_research");
+    expect(child).not.toHaveClass("atlas-workspace-tab__item--child");
   });
 });

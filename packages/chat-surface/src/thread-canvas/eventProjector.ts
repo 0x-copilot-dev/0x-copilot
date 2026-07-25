@@ -526,6 +526,11 @@ function isVisibleToUser(event: RuntimeEventEnvelope): boolean {
   if (event.visibility === "internal" || event.visibility === "audit") {
     return false;
   }
+  // Receipts are full-run completion artifacts and are surfaced by the dedicated
+  // receipt surface; they should not appear in the activity timeline.
+  if (event.event_type === "receipt.emitted") {
+    return false;
+  }
   // model_delta / reasoning_summary_delta are streaming entries — they
   // belong in activity but the renderer should batch them. The projector
   // includes them; throttling lives at the consumer (TcChat 3s flush).
