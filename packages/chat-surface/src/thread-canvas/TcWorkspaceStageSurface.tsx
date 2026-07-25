@@ -32,11 +32,17 @@ export interface TcWorkspaceStageSurfaceProps {
   /** Focus is intentionally compact; Studio presents the full review record. */
   readonly mode?: WorkspaceStageMode;
   /** Host records an approval of exactly this opaque stage id and revision. */
-  readonly onApprove: (stageId: string, revision: number) => void;
-  readonly onReject: (stageId: string, revision: number) => void;
-  readonly onRestore: (stageId: string) => void;
+  readonly onApprove?: (stageId: string, revision: number) => void;
+  readonly onReject?: (stageId: string, revision: number) => void;
+  readonly onRestore?: (stageId: string) => void;
   /** Host starts a new/rebased revision; this surface does not edit bytes itself. */
-  readonly onEdit: (stageId: string, revision: number) => void;
+  readonly onEdit?: (stageId: string, revision: number) => void;
+  /** Optional host wording, e.g. `Edit artifact` for canonical workspace stages. */
+  readonly editLabel?: string;
+  /** Optional artifact fallback. This is a host action, never a workspace write. */
+  readonly onDownloadArtifact?: () => void;
+  /** Honest reason when the active substrate cannot perform a requested action. */
+  readonly actionUnavailable?: string | null;
   readonly busy?: boolean;
 }
 
@@ -190,6 +196,9 @@ export function TcWorkspaceStageSurface({
   onReject,
   onRestore,
   onEdit,
+  editLabel = "Edit",
+  onDownloadArtifact,
+  actionUnavailable = null,
   busy = false,
 }: TcWorkspaceStageSurfaceProps): ReactElement {
   const projected = projectWorkspaceStage(stage, mode);
@@ -319,6 +328,9 @@ export function TcWorkspaceStageSurface({
           onReject={onReject}
           onRestore={onRestore}
           onEdit={onEdit}
+          editLabel={editLabel}
+          onDownloadArtifact={onDownloadArtifact}
+          actionUnavailable={actionUnavailable}
         />
       </div>
     </Card>
@@ -627,6 +639,9 @@ function WorkspaceStageActions({
   onReject,
   onRestore,
   onEdit,
+  editLabel,
+  onDownloadArtifact,
+  actionUnavailable,
 }: {
   readonly stage: WorkspaceStage;
   readonly revision: number | null;
@@ -640,6 +655,9 @@ function WorkspaceStageActions({
   readonly onReject: TcWorkspaceStageSurfaceProps["onReject"];
   readonly onRestore: TcWorkspaceStageSurfaceProps["onRestore"];
   readonly onEdit: TcWorkspaceStageSurfaceProps["onEdit"];
+  readonly editLabel: string;
+  readonly onDownloadArtifact: TcWorkspaceStageSurfaceProps["onDownloadArtifact"];
+  readonly actionUnavailable: TcWorkspaceStageSurfaceProps["actionUnavailable"];
 }): ReactElement {
   if (terminal) {
     return (
@@ -648,7 +666,7 @@ function WorkspaceStageActions({
       </Caption>
     );
   }
-  if (canRestore) {
+  if (canRestore && onRestore !== undefined) {
     return (
       <Button
         variant="primary"
@@ -662,29 +680,33 @@ function WorkspaceStageActions({
   }
   return (
     <>
-      <Button
-        variant={destructive ? "danger" : "primary"}
-        disabled={busy || !canDecide || revision === null}
-        onClick={() => {
-          if (revision !== null) onApprove(stage.stageId, revision);
-        }}
-        data-testid="tc-workspace-stage-approve"
-      >
-        {stage.status === "approved"
-          ? "Approved"
-          : `Approve rev ${revision ?? "?"}`}
-      </Button>
-      <Button
-        variant="secondary"
-        disabled={busy || !canDecide || revision === null}
-        onClick={() => {
-          if (revision !== null) onReject(stage.stageId, revision);
-        }}
-        data-testid="tc-workspace-stage-reject"
-      >
-        Reject
-      </Button>
-      {canEdit ? (
+      {onApprove !== undefined && onReject !== undefined ? (
+        <>
+          <Button
+            variant={destructive ? "danger" : "primary"}
+            disabled={busy || !canDecide || revision === null}
+            onClick={() => {
+              if (revision !== null) onApprove(stage.stageId, revision);
+            }}
+            data-testid="tc-workspace-stage-approve"
+          >
+            {stage.status === "approved"
+              ? "Approved"
+              : `Approve rev ${revision ?? "?"}`}
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={busy || !canDecide || revision === null}
+            onClick={() => {
+              if (revision !== null) onReject(stage.stageId, revision);
+            }}
+            data-testid="tc-workspace-stage-reject"
+          >
+            Reject
+          </Button>
+        </>
+      ) : null}
+      {canEdit && onEdit !== undefined ? (
         <Button
           variant="ghost"
           disabled={busy || revision === null}
@@ -693,8 +715,23 @@ function WorkspaceStageActions({
           }}
           data-testid="tc-workspace-stage-edit"
         >
-          Edit
+          {editLabel}
         </Button>
+      ) : null}
+      {onDownloadArtifact !== undefined ? (
+        <Button
+          variant="ghost"
+          disabled={busy}
+          onClick={onDownloadArtifact}
+          data-testid="tc-workspace-stage-download-artifact"
+        >
+          Download artifact
+        </Button>
+      ) : null}
+      {actionUnavailable !== null ? (
+        <Caption data-testid="tc-workspace-stage-action-unavailable">
+          {actionUnavailable}
+        </Caption>
       ) : null}
     </>
   );

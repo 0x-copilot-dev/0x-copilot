@@ -53,6 +53,7 @@ import {
   type ProjectSummary,
   type RunEmptyComposerCtx,
   type RunStartRequest,
+  type WorkspaceStageHost,
 } from "@0x-copilot/chat-surface";
 import type { Transport } from "@0x-copilot/chat-transport";
 import type {
@@ -899,6 +900,7 @@ export function RunBinder({
   onOpenLocalModelSettings,
   onOpenConnectors,
   onOpenSkills,
+  workspaceStageHost,
 }: {
   /** The active conversation from the nav; `null` = a brand-new chat. */
   readonly conversationId: ConversationId | null;
@@ -915,6 +917,8 @@ export function RunBinder({
   readonly onOpenConnectors?: () => void;
   /** Navigate to the Skills surface — composer skills settings. */
   readonly onOpenSkills?: () => void;
+  /** C3's desktop-only, digest-pinned workspace approval bridge. */
+  readonly workspaceStageHost?: WorkspaceStageHost;
 }): ReactElement {
   const transport = useTransport();
   // Composer chrome ports: the inline Tools popover's MCP surface (the shared
@@ -1131,6 +1135,7 @@ export function RunBinder({
       onCopyText={copyTextToClipboard}
       onSaveFile={saveTextToFile}
       artifactDownloadPort={{ saveArtifact: saveArtifactStream }}
+      workspaceStageHost={workspaceStageHost}
     />
   );
 }

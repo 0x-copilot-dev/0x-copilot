@@ -67,6 +67,7 @@ import type {
   SourceEntry,
   SurfaceEdits,
 } from "@0x-copilot/api-types";
+import { isArtifactTransport } from "@0x-copilot/chat-transport";
 
 import {
   humanTransportMessage,
@@ -94,6 +95,7 @@ import {
   TcGateCard,
   TcStagedDraftSurface,
   TcStagedTableSurface,
+  TcWorkspaceStageSurface,
   ViewUpgradeToast,
   projectSurfaceTabs,
   projectToolCalls,
@@ -137,10 +139,19 @@ import {
   parseArtifactSurfaceUri,
 } from "../../artifacts";
 import type { ArtifactDownloadPort } from "../../ports/ArtifactDownloadPort";
+import type {
+  WorkspaceApprovalSnapshot,
+  WorkspaceStageHost,
+} from "../../ports/WorkspaceStageHostPort";
 import { CanvasFocusCards } from "./CanvasFocusCards";
 import { CanvasLifecyclePanel } from "./CanvasLifecyclePanel";
 import { EffectStageCard } from "./EffectStageCard";
 import { projectCanvasLifecycle } from "./canvasLifecycle";
+import {
+  projectWorkspaceStageLifecycle,
+  type WorkspaceStageReview,
+  type WorkspaceStageReviewProjection,
+} from "./workspaceStageLifecycle";
 
 // PR-3.10: pure selector projecting approval state off the SAME single canonical
 // event stream (FR-3.3). Feeds the in-chat ApprovalCard/conf-card (TcChat) and
@@ -184,6 +195,7 @@ const EMPTY_CARDS: readonly PendingCard[] = [];
 const EMPTY_RECEIPT: ReceiptProjection = { receipt: null, emittedSeq: null };
 const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
   new Map();
+const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
 const EFFECT_STAGE_URI_PREFIX = "effect-stage://";
 
 function effectStageUri(stageId: string): string {
@@ -215,6 +227,66 @@ function artifactKindForRendererHint(hint: string | null): ArtifactKind | null {
     default:
       return null;
   }
+}
+
+function isMatchingDesktopWorkspaceDecision(
+  value: unknown,
+  snapshot: WorkspaceApprovalSnapshot,
+  decision: "approve" | "reject",
+): boolean {
+  const result = plainRecord(value);
+  if (result === null) return false;
+  const expectedStatus = decision === "approve" ? "approved" : "rejected";
+  return (
+    result.stageId === snapshot.stageId &&
+    result.revision === snapshot.revision &&
+    result.decision === decision &&
+    (result.status === expectedStatus || result.status === "cancelled")
+  );
+}
+
+function isMatchingWebWorkspaceDecision(
+  value: unknown,
+  snapshot: WorkspaceApprovalSnapshot,
+  decision: "approve" | "reject",
+): boolean {
+  const receipt = plainRecord(value);
+  if (receipt === null) return false;
+  return (
+    receipt.stage_id === snapshot.stageId &&
+    receipt.revision === snapshot.revision &&
+    receipt.decision === decision &&
+    receipt.proposal_digest === snapshot.proposalDigest &&
+    receipt.target_digest === snapshot.targetDigest &&
+    receipt.status === (decision === "approve" ? "approved" : "rejected") &&
+    typeof receipt.decision_ledger_id === "string" &&
+    receipt.decision_ledger_id.length > 0 &&
+    typeof receipt.change_set_digest === "string" &&
+    receipt.change_set_digest.length > 0
+  );
+}
+
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function workspaceStageActionMessage(
+  review: WorkspaceStageReview,
+  host: WorkspaceStageHost,
+  message: string | null,
+): string | null {
+  if (message !== null) return message;
+  if (review.snapshot === null) {
+    return review.stage.status === "rejected"
+      ? "This rejected revision cannot be restored through the canonical workspace API. Create a new artifact revision to propose another change."
+      : "This stage is incomplete, stale, or governed by policy. No workspace change can be approved.";
+  }
+  if (host.kind === "web") {
+    return "This browser can record the reviewed decision, but it cannot write to your local workspace.";
+  }
+  return null;
 }
 
 /**
@@ -462,6 +534,13 @@ export interface RunDestinationProps {
   readonly onSaveFile?: (text: string, filename: string) => Promise<void>;
   /** B2: host-owned exact-byte save path for artifact downloads. */
   readonly artifactDownloadPort?: ArtifactDownloadPort;
+  /**
+   * C3's narrow workspace authority seam. Desktop receives only the
+   * digest-pinned Electron-main approval port; web deliberately has no local
+   * write authority and uses the canonical facade decision route instead.
+   * Omitted preserves the existing generic effect-stage rendering exactly.
+   */
+  readonly workspaceStageHost?: WorkspaceStageHost;
 }
 
 export function RunDestination(props: RunDestinationProps): ReactElement {
@@ -486,6 +565,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     onCopyText,
     onSaveFile,
     artifactDownloadPort,
+    workspaceStageHost,
   } = props;
 
   const transport = useTransport();
@@ -608,6 +688,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // PATCHed to the connector and rides the OAuth resolve server-side.
   const [gatePolicies, setGatePolicies] =
     useState<ReadonlyMap<string, LedgerGateWritePolicy>>(EMPTY_GATE_POLICIES);
+  // C3: only local UI progress/error for the narrow digest-pinned decision
+  // handoff. No optimistic stage status is ever stored here; SSE/replay remains
+  // the authority for approved/rejected/applied state.
+  const [workspaceStageBusyId, setWorkspaceStageBusyId] = useState<
+    string | null
+  >(null);
+  const [workspaceStageMessages, setWorkspaceStageMessages] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
   // E2/F3: a monotonic nonce the "N waiting" counter chip bumps to command the
   // rail onto the Approvals tab (one-directional; the rail reacts to increases).
   const [approvalsFocusSignal, setApprovalsFocusSignal] = useState(0);
@@ -626,6 +715,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // B3: the last effective tier seen per surface — the generic→shaped edge
   // detector for the toast. A ref (not state) so it never triggers a re-render.
   const prevTierRef = useRef<Map<string, LedgerViewTier>>(new Map());
+
+  useEffect(() => {
+    setWorkspaceStageBusyId(null);
+    setWorkspaceStageMessages(new Map());
+  }, [session.runId]);
 
   const handleActivateTab = useCallback((uri: string): void => {
     // A manual tab click pins — the strip stops auto-following newer surfaces
@@ -1185,6 +1279,24 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       session.events.filter((event) => event.sequence_no <= scrubbedSeq),
     );
   }, [surfacesV2, canvasLifecycle, scrubbedSeq, session.events]);
+  // C3: fold the same canonical event prefix as the lifecycle into a safe
+  // workspace-stage review. The projection withholds unknown/stale data rather
+  // than guessing a generic write surface. ThreadCanvas only mounts overrides
+  // at live-now, but using the same prefix keeps tab state and compact Focus
+  // cards semantically aligned while scrubbing.
+  const workspaceStageReviews = useMemo(
+    () =>
+      !surfacesV2
+        ? EMPTY_WORKSPACE_STAGE_REVIEWS
+        : projectWorkspaceStageLifecycle(
+            scrubbedSeq === null
+              ? session.events
+              : session.events.filter(
+                  (event) => event.sequence_no <= scrubbedSeq,
+                ),
+          ),
+    [surfacesV2, scrubbedSeq, session.events],
+  );
   const stageById = useMemo(() => {
     const map = new Map<string, LedgerStagedWrite>();
     if (!surfacesV2) return map;
@@ -1525,6 +1637,197 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [transport, stageRunId],
   );
 
+  const setWorkspaceStageMessage = useCallback(
+    (stageId: string, message: string | null): void => {
+      setWorkspaceStageMessages((previous) => {
+        const next = new Map(previous);
+        if (message === null) next.delete(stageId);
+        else next.set(stageId, message);
+        return next;
+      });
+    },
+    [],
+  );
+
+  // C3 D6/D8: decide only the current digest-pinned snapshot. Desktop calls
+  // its narrow Electron-main bridge; web uses the canonical facade route and
+  // deliberately does not obtain or claim any local workspace capability.
+  const handleWorkspaceDecision = useCallback(
+    (
+      stageId: string,
+      revision: number,
+      decision: "approve" | "reject",
+    ): void => {
+      const review = workspaceStageReviews.get(stageId);
+      const snapshot = review?.snapshot ?? null;
+      if (
+        snapshot === null ||
+        snapshot.revision !== revision ||
+        snapshot.runId !== session.runId
+      ) {
+        setWorkspaceStageMessage(
+          stageId,
+          "This stage changed before the decision could be recorded. Review the current revision.",
+        );
+        return;
+      }
+      if (workspaceStageHost === undefined) {
+        setWorkspaceStageMessage(
+          stageId,
+          "Workspace approval is unavailable in this host. No workspace change was made.",
+        );
+        return;
+      }
+
+      const expectedStatus = decision === "approve" ? "approved" : "rejected";
+      setWorkspaceStageBusyId(stageId);
+      setWorkspaceStageMessage(stageId, null);
+      void (async () => {
+        try {
+          if (workspaceStageHost.kind === "desktop") {
+            const result = await workspaceStageHost.approvalPort.decide({
+              snapshot,
+              decision,
+            });
+            if (
+              !isMatchingDesktopWorkspaceDecision(result, snapshot, decision)
+            ) {
+              throw new Error(
+                "workspace approval host returned an invalid result",
+              );
+            }
+            if (result.status === "cancelled") {
+              setWorkspaceStageMessage(
+                stageId,
+                "Native confirmation was cancelled. No workspace change was made.",
+              );
+              return;
+            }
+          } else {
+            const receipt = await transport.request<unknown>({
+              method: "POST",
+              path: `/v1/agent/effect-stages/${encodeURIComponent(
+                snapshot.stageId,
+              )}/decisions?run_id=${encodeURIComponent(snapshot.runId)}`,
+              body: {
+                revision: snapshot.revision,
+                decision,
+                proposal_digest: snapshot.proposalDigest,
+                target_digest: snapshot.targetDigest,
+              },
+            });
+            if (!isMatchingWebWorkspaceDecision(receipt, snapshot, decision)) {
+              throw new Error(
+                "workspace approval receipt did not match the stage",
+              );
+            }
+          }
+          setWorkspaceStageMessage(
+            stageId,
+            `Decision recorded as ${expectedStatus}. Waiting for the run ledger.`,
+          );
+        } catch {
+          setWorkspaceStageMessage(
+            stageId,
+            "The workspace decision was not recorded. No workspace change was made.",
+          );
+        } finally {
+          setWorkspaceStageBusyId((current) =>
+            current === stageId ? null : current,
+          );
+        }
+      })();
+    },
+    [
+      session.runId,
+      setWorkspaceStageMessage,
+      transport,
+      workspaceStageHost,
+      workspaceStageReviews,
+    ],
+  );
+
+  // A staged artifact is the only edit affordance available at this product
+  // boundary. Opening it creates an ordinary artifact-edit flow; it never
+  // mutates a workspace stage or invents a legacy stage-revision request.
+  const handleWorkspaceArtifactEdit = useCallback(
+    (stageId: string): void => {
+      const fallback = workspaceStageReviews.get(stageId)?.artifactFallback;
+      if (fallback === null || fallback === undefined) {
+        setWorkspaceStageMessage(
+          stageId,
+          "This stage has no editable artifact. Create a new workspace proposal to continue.",
+        );
+        return;
+      }
+      setPinnedUri(
+        artifactUri(fallback.kind, fallback.artifactId, fallback.revision),
+      );
+      setWorkspaceStageMessage(stageId, null);
+    },
+    [setWorkspaceStageMessage, workspaceStageReviews],
+  );
+
+  // Web's only local-file outcome is an explicit browser download. It uses the
+  // existing Transport + ArtifactDownloadPort pair and never says that a
+  // workspace write happened. Desktop may still open/edit the artifact, but
+  // this download fallback is intentionally offered only by the web host.
+  const handleWorkspaceArtifactDownload = useCallback(
+    (stageId: string): void => {
+      const fallback = workspaceStageReviews.get(stageId)?.artifactFallback;
+      if (
+        fallback === null ||
+        fallback === undefined ||
+        artifactDownloadPort === undefined ||
+        !isArtifactTransport(transport)
+      ) {
+        setWorkspaceStageMessage(
+          stageId,
+          "The artifact download is unavailable. No workspace change was made.",
+        );
+        return;
+      }
+      setWorkspaceStageBusyId(stageId);
+      setWorkspaceStageMessage(stageId, null);
+      void transport
+        .getArtifactContent({
+          artifactId: fallback.artifactId,
+          revision: fallback.revision,
+        })
+        .then((content) =>
+          artifactDownloadPort.saveArtifact({
+            filename:
+              content.filename ?? `workspace-artifact-r${fallback.revision}`,
+            contentType: content.contentType,
+            body: content.body,
+          }),
+        )
+        .then(() => {
+          setWorkspaceStageMessage(
+            stageId,
+            "Artifact downloaded. No local workspace change was made.",
+          );
+        })
+        .catch(() => {
+          setWorkspaceStageMessage(
+            stageId,
+            "The artifact could not be downloaded. No workspace change was made.",
+          );
+        })
+        .finally(() => {
+          setWorkspaceStageBusyId((current) =>
+            current === stageId ? null : current,
+          );
+        });
+    },
+    [
+      artifactDownloadPort,
+      setWorkspaceStageMessage,
+      transport,
+      workspaceStageReviews,
+    ],
+  );
+
   // C2 gate callbacks. Connect / Skip fire the host `McpAuthPort` (the SAME
   // mid-run OAuth launcher the in-chat `mcp_auth` card uses); absent → inert but
   // visible (desktop has no mid-run launcher wired yet). The write-policy choice
@@ -1622,6 +1925,44 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       }
       const effectStageId = effectStageIdForUri(uri);
       if (effectStageId !== null) {
+        const workspaceReview = workspaceStageReviews.get(effectStageId);
+        if (workspaceReview !== undefined && workspaceStageHost !== undefined) {
+          const artifactFallback = workspaceReview.artifactFallback;
+          const canDownloadArtifact =
+            workspaceStageHost?.kind === "web" &&
+            artifactFallback !== null &&
+            artifactDownloadPort !== undefined;
+          return (
+            <TcWorkspaceStageSurface
+              stage={workspaceReview.stage}
+              busy={workspaceStageBusyId === effectStageId}
+              onApprove={(stageId, revision) =>
+                handleWorkspaceDecision(stageId, revision, "approve")
+              }
+              onReject={(stageId, revision) =>
+                handleWorkspaceDecision(stageId, revision, "reject")
+              }
+              onEdit={
+                artifactFallback === null
+                  ? undefined
+                  : (stageId) => handleWorkspaceArtifactEdit(stageId)
+              }
+              editLabel={
+                artifactFallback === null ? undefined : "Edit artifact"
+              }
+              onDownloadArtifact={
+                canDownloadArtifact
+                  ? () => handleWorkspaceArtifactDownload(effectStageId)
+                  : undefined
+              }
+              actionUnavailable={workspaceStageActionMessage(
+                workspaceReview,
+                workspaceStageHost,
+                workspaceStageMessages.get(effectStageId) ?? null,
+              )}
+            />
+          );
+        }
         const subject = displayedCanvasLifecycle?.tabs.find(
           (item) => item.kind === "effect" && item.subjectId === effectStageId,
         );
@@ -1684,6 +2025,13 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       copyReceiptText,
       transport,
       artifactDownloadPort,
+      workspaceStageReviews,
+      workspaceStageHost,
+      workspaceStageBusyId,
+      workspaceStageMessages,
+      handleWorkspaceDecision,
+      handleWorkspaceArtifactEdit,
+      handleWorkspaceArtifactDownload,
     ],
   );
 
