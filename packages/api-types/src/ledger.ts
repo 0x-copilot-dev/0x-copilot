@@ -1224,6 +1224,114 @@ export interface RunReceipt {
 }
 
 // ---------------------------------------------------------------------------
+// Receipt v2 — pure accountability projection (PRD-E1 D4).
+//
+// This is deliberately separate from `RunReceipt`, which is the existing
+// receipt surface/export shape. Receipt v2 is an additive read model over the
+// canonical ledger plus its explicitly read-side compatibility events; it does
+// not introduce a route, emit a ledger row, or authorize/ref-dereference data.
+// ---------------------------------------------------------------------------
+
+/** A known run lifecycle status, or `unknown` when a pure ledger fold was not
+ * given the enclosing run's status. */
+export type ReceiptRunStatusV2 =
+  | "unknown"
+  | "queued"
+  | "running"
+  | "waiting_for_approval"
+  | "cancelling"
+  | "cancelled"
+  | "completed"
+  | "failed"
+  | "timed_out"
+  | "blocked"
+  | "indeterminate";
+
+export interface ReceiptOperationsV2 {
+  readonly requested: number;
+  /** Lifecycle completion rows, including a completed row whose outcome is
+   * failed or blocked; those outcome counters remain visible below. */
+  readonly completed: number;
+  readonly failed: number;
+  readonly blocked: number;
+}
+
+export interface ReceiptArtifactsV2 {
+  readonly created: number;
+  readonly revised: number;
+  readonly promoted: number;
+}
+
+export interface ReceiptReadsV2 {
+  readonly completed: number;
+}
+
+export interface ReceiptEffectsV2 {
+  readonly proposed: number;
+  readonly approved: number;
+  readonly rejected: number;
+  readonly applied: number;
+  readonly partial: number;
+  /** Effects still waiting to settle after the complete prefix. */
+  readonly held: number;
+  /** Observed indeterminate effect outcomes. */
+  readonly indeterminate: number;
+  /** Proposed effects with an explicitly external effect class. */
+  readonly external: number;
+  /** Proposed effects with an explicitly internal effect class. */
+  readonly internal: number;
+  /** Proposed canonical effects without a truthful class. */
+  readonly unclassified: number;
+}
+
+export interface ReceiptGatesV2 {
+  readonly opened: number;
+  readonly resolved: number;
+  readonly pending: number;
+}
+
+/** One ledger-backed usage total. No attribution edge is synthesized here. */
+export interface ReceiptUsageTotalV2 {
+  readonly purpose: UsagePurpose;
+  readonly records: number;
+  readonly tokens_in: number;
+  readonly tokens_out: number;
+}
+
+/** A usage row's ledger identity only; opaque body/edge refs are intentionally
+ * absent until a durable usage-attribution contract supplies them. */
+export interface ReceiptUsageReferenceV2 {
+  readonly ledger_id: string;
+  readonly purpose: UsagePurpose;
+}
+
+export interface ReceiptUsageV2 {
+  readonly totals_by_purpose: readonly ReceiptUsageTotalV2[];
+  readonly references: readonly ReceiptUsageReferenceV2[];
+}
+
+/** A fixed, non-content-bearing warning code with a deterministic count. */
+export interface ReceiptWarningV2 {
+  readonly code: string;
+  readonly count: number;
+}
+
+/** Additive D4 receipt projection. It is safe to fold at any ledger prefix. */
+export interface RunReceiptV2 {
+  readonly run_id: string;
+  readonly status: ReceiptRunStatusV2;
+  readonly generated_at: string;
+  readonly fold_ref: string;
+  readonly operations: ReceiptOperationsV2;
+  readonly artifacts: ReceiptArtifactsV2;
+  readonly reads: ReceiptReadsV2;
+  readonly effects: ReceiptEffectsV2;
+  readonly gates: ReceiptGatesV2;
+  readonly usage: ReceiptUsageV2;
+  readonly unresolved_warnings: readonly ReceiptWarningV2[];
+}
+
+// ---------------------------------------------------------------------------
 // Receipt export (PRD-E3). Served by `GET /v1/agent/runs/{run_id}/receipt/export`
 // — the receipt's first + only wire surface, re-folded from the ledger and
 // HMAC-chained with the shared `packages/audit-chain` signer so flipping one
