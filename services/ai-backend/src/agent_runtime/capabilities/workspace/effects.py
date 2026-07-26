@@ -28,7 +28,6 @@ from agent_runtime.capabilities.operations.contracts import (
 )
 from agent_runtime.capabilities.workspace.contracts import (
     OverlayEntry,
-    WorkspaceMutationResult,
     mount_id_for_path,
     normalize_virtual_path,
 )
@@ -37,7 +36,10 @@ from agent_runtime.capabilities.operations.stage_authority import (
 )
 from agent_runtime.capabilities.operations.errors import OperationStageCapabilityError
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
-from agent_runtime.capabilities.workspace.overlay import _WorkspaceOverlayMutationEngine
+from agent_runtime.capabilities.workspace.overlay import (
+    _WorkspaceOverlayMutationEngine,
+    _WorkspaceOverlayPlan,
+)
 from agent_runtime.capabilities.workspace.ports import (
     WorkspaceBaseReadPort,
     WorkspaceOverlayStorePort,
@@ -222,8 +224,9 @@ class WorkspaceOperationAdapter(OperationAdapter):
     """The sole model-mutation gateway for one workspace run.
 
     This is the only public constructor that owns the private raw overlay
-    engine.  It is invoked exclusively by :class:`OperationGateway`; model
-    backends receive this adapter but never a raw overlay capability.
+    engine.  It is retained exclusively by worker-owned operation composition
+    and invoked by :class:`OperationGateway`; model backends receive only the
+    narrow ``WorkspaceOperationPort`` and never this adapter or raw engine.
     """
 
     def __init__(
@@ -262,16 +265,15 @@ class WorkspaceOperationAdapter(OperationAdapter):
             raise OperationStageCapabilityError()
         capability._consume_for(request)
         arguments = _request_arguments(request)
-        before = await self._mutations._manifest()
-        mutation = await self._mutate(request.op, arguments)
-        paths = _bound_paths(request.op, arguments, mutation)
+        plan = await self._mutations._plan(op=request.op, arguments=arguments)
+        paths = _operation_paths(request.op, arguments)
 
-        if mutation.entry is None:
+        if not _plan_entries(plan, paths):
             prior = next(
                 (
-                    before.entry_at(path)
+                    plan.baseline.entry_at(path)
                     for path in paths
-                    if before.entry_at(path) is not None
+                    if plan.baseline.entry_at(path) is not None
                 ),
                 None,
             )
@@ -291,6 +293,13 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 actor=self._services.actor,
                 idempotency_key=f"workspace-cancel:{request.operation_id}",
             )
+            try:
+                await self._mutations._project(plan)
+            except Exception:
+                # The pre-existing stage is already cancelled, so a failed
+                # projection leaves the prior model-visible overlay intact and
+                # cannot be approved or executed.
+                raise
             return GatewayProposedEffect(
                 stage_id=state.stage_id,
                 proposal_ref=state.current_revision.proposal_ref,
@@ -301,11 +310,7 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 activity_ref=state.current_revision.proposal_ref,
             )
 
-        entries = tuple(
-            entry
-            for path in paths
-            if (entry := mutation.manifest.entry_at(path)) is not None
-        )
+        entries = _plan_entries(plan, paths)
         if not entries:
             raise RuntimeError("workspace proposal has no overlay entries")
         grant = self._services.grant_for_path(entries[0].virtual_path)
@@ -339,21 +344,20 @@ class WorkspaceOperationAdapter(OperationAdapter):
         )
         revision = state.current_revision
         try:
-            await self._mutations._bind_stage(
-                virtual_paths=paths,
+            await self._mutations._project(
+                plan,
                 stage_id=state.stage_id,
                 stage_revision=revision.revision,
-                expected_manifest_version=mutation.manifest.version,
             )
         except Exception:
-            # A stage whose overlay binding lost its optimistic-CAS race must
-            # never remain approvable. Best-effort cancellation makes the
-            # durable stage visibly inert; the original conflict still fails
-            # the operation and a fresh request must re-read current content.
+            # Projection is intentionally after durable material+stage writes.
+            # A failed optimistic projection therefore never changes the
+            # model-visible overlay; cancel the just-created/revised stage so
+            # it cannot be approved while not represented in the workspace.
             await self._cancel_safely(
                 request=request,
                 state=state,
-                reason="workspace-bind-race",
+                reason="workspace-project-failed",
             )
             raise
         return GatewayProposedEffect(
@@ -367,42 +371,6 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 else None
             ),
         )
-
-    async def _mutate(
-        self, op: str, arguments: dict[str, object]
-    ) -> WorkspaceMutationResult:
-        author = "agent"
-        if op in {"create", "replace", "write"}:
-            path = _required_text(arguments, "virtual_path")
-            content = _required_text(arguments, "content")
-            if op == "create":
-                return await self._mutations._propose_create(
-                    path, content, author=author
-                )
-            return await self._mutations._propose_replace(path, content, author=author)
-        if op == "edit":
-            return await self._mutations._propose_edit(
-                _required_text(arguments, "virtual_path"),
-                _required_text(arguments, "old_string"),
-                _required_text(arguments, "new_string", allow_empty=True),
-                replace_all=bool(arguments.get("replace_all", False)),
-                author=author,
-            )
-        if op == "delete":
-            return await self._mutations._propose_delete(
-                _required_text(arguments, "virtual_path"), author=author
-            )
-        if op == "move":
-            return await self._mutations._propose_move(
-                _required_text(arguments, "source_virtual_path"),
-                _required_text(arguments, "destination_virtual_path"),
-                author=author,
-            )
-        if op == "mkdir":
-            return await self._mutations._propose_mkdir(
-                _required_text(arguments, "virtual_path"), author=author
-            )
-        raise RuntimeError("workspace operation is not stageable")
 
     async def _stage_or_revise(
         self,
@@ -570,15 +538,15 @@ def _operation_paths(op: str, arguments: dict[str, object]) -> tuple[str, ...]:
     return (normalize_virtual_path(_required_text(arguments, "virtual_path")),)
 
 
-def _bound_paths(
-    op: str,
-    arguments: dict[str, object],
-    mutation: WorkspaceMutationResult,
-) -> tuple[str, ...]:
-    paths = _operation_paths(op, arguments)
-    if mutation.entry is None:
-        return paths
-    return paths
+def _plan_entries(
+    plan: _WorkspaceOverlayPlan,
+    paths: tuple[str, ...],
+) -> tuple[OverlayEntry, ...]:
+    """Read only the request-local candidate, never a visible overlay write."""
+
+    return tuple(
+        entry for path in paths if (entry := plan.candidate.entry_at(path)) is not None
+    )
 
 
 def _required_text(

@@ -43,9 +43,15 @@ from agent_runtime.capabilities.workspace.effects import (
     WorkspaceGrantBinding,
     WorkspaceGrantGate,
     WorkspaceOperationAdapter,
+    WorkspaceProposalStorePort,
     WorkspaceStoredProposal,
 )
 from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
+from agent_runtime.capabilities.workspace.operation_port import WorkspaceOperationPort
+from agent_runtime.capabilities.workspace.ports import (
+    WorkspaceOverlayReadPort,
+    WorkspaceOverlayStorePort,
+)
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
     EffectStageScope,
@@ -220,15 +226,69 @@ class RecordingProposalStore:
         )
 
 
+class ExplodingProposalStore:
+    """Failure injection: no visible projection may precede durable material."""
+
+    async def persist(
+        self,
+        *,
+        operation_id: str,
+        grant: WorkspaceGrantBinding,
+        entries: tuple[OverlayEntry, ...],
+    ) -> WorkspaceStoredProposal:
+        del operation_id, grant, entries
+        raise RuntimeError("proposal persistence unavailable")
+
+
+class ExplodingStageLedger(FakeLedger):
+    """Failure injection: a failed ledger append must leave no stage or overlay."""
+
+    async def append_stage_event(self, **kwargs: object) -> object:
+        self.append_calls += 1
+        raise RuntimeError("stage ledger unavailable")
+
+
+class ExplodingOutbox(FakeOutbox):
+    """A pre-approval workspace stage must never reach the command outbox."""
+
+    async def enqueue_after_decision(self, command: object) -> None:
+        del command
+        self.enqueue_calls += 1
+        raise AssertionError("a staged workspace mutation must not enqueue a command")
+
+
+class ExplodingProjectionOverlayStore:
+    """Fail only the final durable projection, never request-local planning."""
+
+    def __init__(self, delegate: InMemoryWorkspaceOverlayStore) -> None:
+        self._delegate = delegate
+        self.append_calls = 0
+
+    async def get_manifest(self, *, run_id: str):
+        return await self._delegate.get_manifest(run_id=run_id)
+
+    async def get_manifest_version(self, *, run_id: str, version: int):
+        return await self._delegate.get_manifest_version(run_id=run_id, version=version)
+
+    async def append_revision(self, **kwargs: object):
+        del kwargs
+        self.append_calls += 1
+        raise RuntimeError("overlay projection unavailable")
+
+    async def compact(self, *, run_id: str):
+        return await self._delegate.compact(run_id=run_id)
+
+
 @dataclass
 class Harness:
     backend: WorkspaceGatewayBackend
+    adapter: WorkspaceOperationAdapter
     base: ExplodingWorkspaceBase
     overlays: InMemoryWorkspaceOverlayStore
     ledger: FakeLedger
     outbox: FakeOutbox
     emitter: RecordingEmitter
-    proposals: RecordingProposalStore
+    proposals: WorkspaceProposalStorePort
     stager: EffectStager
     grant: WorkspaceGrantBinding
 
@@ -278,27 +338,32 @@ def _harness(
     grant: WorkspaceGrantBinding | None = None,
     expose_grant: bool = True,
     adapter_type: type[WorkspaceOperationAdapter] = WorkspaceOperationAdapter,
+    proposal_store: WorkspaceProposalStorePort | None = None,
+    ledger: FakeLedger | None = None,
+    outbox: FakeOutbox | None = None,
+    overlay_store: WorkspaceOverlayStorePort | None = None,
 ) -> Harness:
     base = ExplodingWorkspaceBase(files)
     overlays = InMemoryWorkspaceOverlayStore()
+    active_overlay_store = overlay_store or overlays
     blobs = InMemoryArtifactBlobStore()
     merged = MergedWorkspaceBackend(
         run_id=RUN_ID,
         base_read=base,
-        overlay_store=overlays,
+        overlay_store=WorkspaceOverlayReadPort.bind(active_overlay_store),
         blob_store=blobs,
     )
-    ledger = FakeLedger()
-    outbox = FakeOutbox()
+    active_ledger = ledger or FakeLedger()
+    active_outbox = outbox or FakeOutbox()
     stager = EffectStager(
-        ledger=ledger,
-        outbox=outbox,
+        ledger=active_ledger,
+        outbox=active_outbox,
         clock=FakeClock(),
         stage_ids=FakeStageIds(),
     )
     resolved_grant = grant or _grant()
     grants = (resolved_grant,) if expose_grant else ()
-    proposals = RecordingProposalStore()
+    proposals = proposal_store or RecordingProposalStore()
     gateway = OperationGateway(
         descriptors=DEFAULT_OPERATION_DESCRIPTORS,
         gates=WorkspaceGrantGate(grants=grants),
@@ -316,20 +381,20 @@ def _harness(
         ),
         run_id=RUN_ID,
         base_read=base,
-        overlay_store=overlays,
+        overlay_store=active_overlay_store,
         blob_store=blobs,
     )
     return Harness(
         backend=WorkspaceGatewayBackend(
             merged=merged,
-            gateway=gateway,
-            adapter=adapter,
+            operations=WorkspaceOperationPort.bind(gateway=gateway, adapter=adapter),
             grants=grants,
         ),
+        adapter=adapter,
         base=base,
         overlays=overlays,
-        ledger=ledger,
-        outbox=outbox,
+        ledger=active_ledger,
+        outbox=active_outbox,
         emitter=RecordingEmitter(),
         proposals=proposals,
         stager=stager,
@@ -419,6 +484,133 @@ async def test_model_cannot_use_the_read_facade_to_mutate_without_a_stage() -> N
     assert harness.base.mutation_calls == []
 
 
+async def test_model_backend_object_graph_exposes_only_the_narrow_operation_port() -> (
+    None
+):
+    """Normal model/backend traversal cannot reach an adapter or raw engine."""
+
+    harness = _harness()
+    backend = harness.backend
+    port = getattr(backend, "_operations")
+    assert not hasattr(backend, "_adapter")
+    assert not hasattr(backend, "_gateway")
+    for forbidden in ("_adapter", "_gateway", "_mutations", "_overlay_store"):
+        with pytest.raises(AttributeError):
+            getattr(port, forbidden)
+    assert isinstance(getattr(port, "_queue"), asyncio.Queue)
+    overlay_read = getattr(backend, "_merged")._overlay_store
+    with pytest.raises(AttributeError):
+        getattr(overlay_read, "append_revision")
+
+
+async def test_failed_proposal_persistence_leaves_workspace_reads_byte_identical() -> (
+    None
+):
+    path = f"/workspace/{MOUNT}/report.csv"
+    original = b"account,total\nAcme,10\n"
+    harness = _harness(
+        files={path: original},
+        proposal_store=ExplodingProposalStore(),
+    )
+    token = harness.bind()
+    try:
+        before = await harness.backend.aread(path)
+        result = await harness.backend.awrite(path, "account,total\nAcme,20\n")
+        after = await harness.backend.aread(path)
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
+    assert after == before
+    assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entries == ()
+    assert harness.ledger.events_by_stage == {}
+    assert harness.outbox.enqueue_calls == 0
+    assert harness.base.files[path] == original
+    assert harness.base.mutation_calls == []
+
+
+async def test_failed_stage_append_leaves_workspace_reads_byte_identical() -> None:
+    path = f"/workspace/{MOUNT}/report.csv"
+    original = b"account,total\nAcme,10\n"
+    ledger = ExplodingStageLedger()
+    harness = _harness(files={path: original}, ledger=ledger)
+    token = harness.bind()
+    try:
+        before = await harness.backend.aread(path)
+        result = await harness.backend.awrite(path, "account,total\nAcme,20\n")
+        after = await harness.backend.aread(path)
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
+    assert after == before
+    assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entries == ()
+    assert ledger.events_by_stage == {}
+    assert harness.outbox.enqueue_calls == 0
+    assert harness.base.files[path] == original
+    assert harness.base.mutation_calls == []
+
+
+async def test_preapproval_workspace_stage_cannot_reach_an_exploding_outbox() -> None:
+    """Outbox persistence is structurally unavailable until a later approval."""
+
+    path = f"/workspace/{MOUNT}/outbox.csv"
+    outbox = ExplodingOutbox()
+    harness = _harness(outbox=outbox)
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(path, "account,total\nAcme,20\n")
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert (
+        result.error == "Workspace change staged for review; the host was not modified."
+    )
+    assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entry_at(
+        path
+    ) is not None
+    assert harness.ledger.append_calls == 1
+    assert outbox.enqueue_calls == 0
+    assert harness.base.mutation_calls == []
+
+
+async def test_failed_overlay_projection_never_exposes_content_or_an_approvable_stage() -> (
+    None
+):
+    path = f"/workspace/{MOUNT}/report.csv"
+    original = b"account,total\nAcme,10\n"
+    overlays = InMemoryWorkspaceOverlayStore()
+    projection = ExplodingProjectionOverlayStore(overlays)
+    harness = _harness(
+        files={path: original},
+        overlay_store=projection,
+    )
+    token = harness.bind()
+    try:
+        before = await harness.backend.aread(path)
+        result = await harness.backend.awrite(path, "account,total\nAcme,20\n")
+        after = await harness.backend.aread(path)
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
+    assert after == before
+    assert (await overlays.get_manifest(run_id=RUN_ID)).entries == ()
+    assert harness.outbox.enqueue_calls == 0
+    assert projection.append_calls == 1
+    states = [
+        await harness.stager.get_state(
+            scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER), stage_id=stage_id
+        )
+        for stage_id in harness.ledger.events_by_stage
+    ]
+    assert states and all(
+        state.status is EffectStageStatus.CANCELLED for state in states
+    )
+    assert harness.base.files[path] == original
+    assert harness.base.mutation_calls == []
+
+
 async def test_forged_scope_dynamic_activation_and_reflection_cannot_stage_mutation() -> (
     None
 ):
@@ -451,7 +643,7 @@ async def test_forged_scope_dynamic_activation_and_reflection_cannot_stage_mutat
         assert activate is function_local_activation()
         with OperationContext.operation_scope(request.operation_id):
             with pytest.raises(OperationStageCapabilityError):
-                await harness.backend._adapter.build_proposal(request)
+                await harness.adapter.build_proposal(request)
 
             # A caller can forge the former string scope, dynamically locate
             # private module state, and allocate a lookalike object. Activation
@@ -463,9 +655,7 @@ async def test_forged_scope_dynamic_activation_and_reflection_cannot_stage_mutat
                 )
             forged = object.__new__(GatewayStageCapability)
             with pytest.raises(OperationStageCapabilityError):
-                await harness.backend._adapter.build_proposal_with_capability(
-                    request, forged
-                )
+                await harness.adapter.build_proposal_with_capability(request, forged)
         with pytest.raises(TypeError, match="activated only by OperationGateway"):
             GatewayStageCapability()
         assert not hasattr(stage_authority, "_mint_gateway_stage_capability")
@@ -528,7 +718,7 @@ async def test_valid_gateway_capability_stages_once_and_cannot_be_replayed() -> 
 
     path = f"/workspace/{MOUNT}/replay.csv"
     harness = _harness(adapter_type=CapturingWorkspaceAdapter)
-    adapter = harness.backend._adapter
+    adapter = harness.adapter
     assert isinstance(adapter, CapturingWorkspaceAdapter)
     token = harness.bind()
     try:

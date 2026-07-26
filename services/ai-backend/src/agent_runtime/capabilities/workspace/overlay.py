@@ -2,9 +2,10 @@
 
 This module deliberately exposes no public API.  ``WorkspaceOperationAdapter``
 in :mod:`agent_runtime.capabilities.workspace.effects` is the sole production
-constructor and caller.  Model-visible backends receive the adapter, never this
-engine, so a model mutation has to cross the universal operation/effect gateway
-before an overlay revision can be appended.
+constructor and caller, retained behind the worker-owned operation route.
+Model-visible backends receive only ``WorkspaceOperationPort``, so a model
+mutation has to cross the universal operation/effect gateway before an overlay
+revision can be appended.
 
 The engine keeps its own read composition for edit preconditions.  That is an
 internal, non-model recovery/read path only; it has no host-write dependency.
@@ -13,6 +14,7 @@ internal, non-model recovery/read path only; it has no host-write dependency.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
 from agent_runtime.capabilities.workspace.contracts import (
@@ -36,12 +38,76 @@ from agent_runtime.capabilities.workspace.errors import (
     WorkspaceIsDirectoryError,
     WorkspaceLimitError,
     WorkspaceNotFoundError,
+    WorkspaceOverlayConflictError,
     WorkspaceOverlayError,
 )
 from agent_runtime.capabilities.workspace.ports import (
     WorkspaceBaseReadPort,
+    WorkspaceOverlayReadPort,
     WorkspaceOverlayStorePort,
 )
+
+
+@dataclass(frozen=True)
+class _WorkspaceOverlayPlan:
+    """A candidate manifest that cannot become model-visible by itself.
+
+    Planning may persist content-addressed bytes, but its manifest lives only in
+    the request-local store below.  The real overlay is updated exactly once by
+    ``_project`` after proposal material and the effect stage are durable.
+    """
+
+    baseline: OverlayManifest
+    candidate: OverlayManifest
+    primary_path: str | None
+
+
+class _PlanningOverlayStore:
+    """Request-local, non-durable manifest store used to compile a proposal."""
+
+    def __init__(self, manifest: OverlayManifest) -> None:
+        self._manifest = manifest
+
+    async def get_manifest(self, *, run_id: str) -> OverlayManifest:
+        if run_id != self._manifest.run_id:
+            raise WorkspaceOverlayConflictError()
+        return self._manifest
+
+    async def get_manifest_version(
+        self, *, run_id: str, version: int
+    ) -> OverlayManifest | None:
+        if run_id != self._manifest.run_id:
+            return None
+        return self._manifest if version == self._manifest.version else None
+
+    async def append_revision(
+        self,
+        *,
+        run_id: str,
+        expected_version: int,
+        mutations: tuple[OverlayMutation, ...] | list[OverlayMutation],
+    ) -> OverlayManifest:
+        current = await self.get_manifest(run_id=run_id)
+        if current.version != expected_version:
+            raise WorkspaceOverlayConflictError()
+        next_version = current.version + 1
+        entries = {entry.virtual_path: entry for entry in current.entries}
+        for mutation in mutations:
+            if mutation.kind is OverlayMutationKind.REMOVE:
+                entries.pop(mutation.virtual_path, None)
+            elif mutation.entry is not None:
+                entries[mutation.virtual_path] = mutation.entry.model_copy(
+                    update={"overlay_revision": next_version}
+                )
+        self._manifest = OverlayManifest(
+            run_id=run_id,
+            version=next_version,
+            entries=tuple(entries[path] for path in sorted(entries)),
+        )
+        return self._manifest
+
+    async def compact(self, *, run_id: str) -> OverlayManifest:
+        return await self.get_manifest(run_id=run_id)
 
 
 class _WorkspaceOverlayMutationEngine:
@@ -75,6 +141,127 @@ class _WorkspaceOverlayMutationEngine:
         """Return the current immutable run overlay manifest."""
 
         return await self._overlay_store.get_manifest(run_id=self._run_id)
+
+    async def _plan(
+        self,
+        *,
+        op: str,
+        arguments: dict[str, object],
+        author: str = "agent",
+    ) -> _WorkspaceOverlayPlan:
+        """Compile one overlay candidate without touching the durable manifest.
+
+        The existing mutation primitives are deliberately reused against a
+        request-local manifest adapter.  This keeps all path, size, edit, and
+        baseline rules identical to direct overlay-domain tests while making
+        proposal compilation side-effect-free for model-visible reads.
+        """
+
+        baseline = await self._manifest()
+        planner = _WorkspaceOverlayMutationEngine(
+            run_id=self._run_id,
+            base_read=self._base_read,
+            overlay_store=_PlanningOverlayStore(baseline),
+            blob_store=self._blob_store,
+        )
+        if op in {"create", "replace", "write"}:
+            path = self._required_text(arguments, "virtual_path")
+            content = self._required_text(arguments, "content", allow_empty=True)
+            result = (
+                await planner._propose_create(path, content, author=author)
+                if op == "create"
+                else await planner._propose_replace(path, content, author=author)
+            )
+            primary_path = path
+        elif op == "edit":
+            primary_path = self._required_text(arguments, "virtual_path")
+            result = await planner._propose_edit(
+                primary_path,
+                self._required_text(arguments, "old_string"),
+                self._required_text(arguments, "new_string", allow_empty=True),
+                replace_all=bool(arguments.get("replace_all", False)),
+                author=author,
+            )
+        elif op == "delete":
+            primary_path = self._required_text(arguments, "virtual_path")
+            result = await planner._propose_delete(primary_path, author=author)
+        elif op == "move":
+            source = self._required_text(arguments, "source_virtual_path")
+            primary_path = self._required_text(arguments, "destination_virtual_path")
+            result = await planner._propose_move(source, primary_path, author=author)
+        elif op == "mkdir":
+            primary_path = self._required_text(arguments, "virtual_path")
+            result = await planner._propose_mkdir(primary_path, author=author)
+        else:
+            raise RuntimeError("workspace operation is not stageable")
+        return _WorkspaceOverlayPlan(
+            baseline=baseline,
+            candidate=result.manifest,
+            primary_path=primary_path,
+        )
+
+    async def _project(
+        self,
+        plan: _WorkspaceOverlayPlan,
+        *,
+        stage_id: str | None = None,
+        stage_revision: int | None = None,
+    ) -> WorkspaceMutationResult:
+        """Publish a durable candidate only after its stage has been recorded.
+
+        ``expected_version`` pins projection to the exact read used for
+        planning.  A competing overlay update therefore fails closed instead
+        of exposing a proposal whose stage describes older workspace content.
+        """
+
+        if (stage_id is None) is not (stage_revision is None):
+            raise ValueError(
+                "workspace stage projection requires id and revision together"
+            )
+        before = {entry.virtual_path: entry for entry in plan.baseline.entries}
+        after = {entry.virtual_path: entry for entry in plan.candidate.entries}
+        mutations: list[OverlayMutation] = []
+        for path in sorted(set(before) | set(after)):
+            candidate = after.get(path)
+            if candidate is None:
+                mutations.append(
+                    OverlayMutation(kind=OverlayMutationKind.REMOVE, virtual_path=path)
+                )
+                continue
+            if stage_id is not None and stage_revision is not None:
+                candidate = candidate.model_copy(
+                    update={"stage_id": stage_id, "stage_revision": stage_revision}
+                )
+            if before.get(path) != candidate:
+                mutations.append(
+                    OverlayMutation(
+                        kind=OverlayMutationKind.UPSERT,
+                        virtual_path=path,
+                        entry=candidate,
+                    )
+                )
+        if not mutations:
+            return WorkspaceMutationResult(
+                entry=(
+                    plan.baseline.entry_at(plan.primary_path)
+                    if plan.primary_path is not None
+                    else None
+                ),
+                manifest=plan.baseline,
+            )
+        updated = await self._overlay_store.append_revision(
+            run_id=self._run_id,
+            expected_version=plan.baseline.version,
+            mutations=tuple(mutations),
+        )
+        return WorkspaceMutationResult(
+            entry=(
+                updated.entry_at(plan.primary_path)
+                if plan.primary_path is not None
+                else None
+            ),
+            manifest=updated,
+        )
 
     async def _propose_create(
         self, virtual_path: str, content: bytes | str, *, author: str = "agent"
@@ -313,7 +500,7 @@ class _WorkspaceOverlayMutationEngine:
         backend = MergedWorkspaceBackend(
             run_id=self._run_id,
             base_read=self._base_read,
-            overlay_store=self._overlay_store,
+            overlay_store=WorkspaceOverlayReadPort.bind(self._overlay_store),
             blob_store=self._blob_store,
         )
         try:
@@ -378,52 +565,6 @@ class _WorkspaceOverlayMutationEngine:
         )
         return WorkspaceMutationResult(
             entry=updated.entry_at(mutation.virtual_path), manifest=updated
-        )
-
-    async def _bind_stage(
-        self,
-        *,
-        virtual_paths: tuple[str, ...],
-        stage_id: str,
-        stage_revision: int,
-        expected_manifest_version: int,
-    ) -> OverlayManifest:
-        """Bind exact current overlay entries to one A4 stage revision.
-
-        The binding is a second optimistic manifest revision.  A stale caller
-        cannot silently attach an approval surface to newer overlay content:
-        the compare-and-append fails and the new content remains unbound/held.
-        """
-
-        manifest = await self._overlay_store.get_manifest(run_id=self._run_id)
-        if manifest.version != expected_manifest_version:
-            from agent_runtime.capabilities.workspace.errors import (  # noqa: PLC0415
-                WorkspaceOverlayConflictError,
-            )
-
-            raise WorkspaceOverlayConflictError()
-        mutations: list[OverlayMutation] = []
-        for raw_path in virtual_paths:
-            path = normalize_virtual_path(raw_path)
-            entry = manifest.entry_at(path)
-            if entry is None:
-                raise WorkspaceNotFoundError()
-            mutations.append(
-                OverlayMutation(
-                    kind=OverlayMutationKind.UPSERT,
-                    virtual_path=path,
-                    entry=entry.model_copy(
-                        update={
-                            "stage_id": stage_id,
-                            "stage_revision": stage_revision,
-                        }
-                    ),
-                )
-            )
-        return await self._overlay_store.append_revision(
-            run_id=self._run_id,
-            expected_version=manifest.version,
-            mutations=tuple(mutations),
         )
 
     async def _precondition_for_base(
@@ -494,6 +635,18 @@ class _WorkspaceOverlayMutationEngine:
     @staticmethod
     def _as_bytes(content: bytes | str) -> bytes:
         return content if isinstance(content, bytes) else content.encode("utf-8")
+
+    @staticmethod
+    def _required_text(
+        arguments: dict[str, object],
+        key: str,
+        *,
+        allow_empty: bool = False,
+    ) -> str:
+        value = arguments.get(key)
+        if not isinstance(value, str) or (not allow_empty and not value):
+            raise RuntimeError(f"workspace argument {key} is invalid")
+        return value
 
 
 __all__: tuple[()] = ()

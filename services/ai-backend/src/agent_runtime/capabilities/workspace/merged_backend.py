@@ -27,7 +27,7 @@ from agent_runtime.capabilities.workspace.errors import (
 )
 from agent_runtime.capabilities.workspace.ports import (
     WorkspaceBaseReadPort,
-    WorkspaceOverlayStorePort,
+    WorkspaceOverlayReadPort,
 )
 
 
@@ -44,7 +44,7 @@ class MergedWorkspaceBackend:
         *,
         run_id: str,
         base_read: WorkspaceBaseReadPort,
-        overlay_store: WorkspaceOverlayStorePort,
+        overlay_store: WorkspaceOverlayReadPort,
         blob_store: ArtifactBlobStorePort,
     ) -> None:
         self._run_id = run_id

@@ -85,6 +85,20 @@ def _imports(source_root: Path, module: str) -> tuple[str, ...]:
                 candidate = f"{base}.{alias.name}"
                 if _module_path(source_root, candidate) is not None:
                     dependencies.add(candidate)
+        elif isinstance(node, ast.Call) and node.args:
+            is_dynamic_import = (
+                isinstance(node.func, ast.Name) and node.func.id == "__import__"
+            ) or (
+                isinstance(node.func, ast.Attribute)
+                and node.func.attr == "import_module"
+            )
+            target = node.args[0]
+            if (
+                is_dynamic_import
+                and isinstance(target, ast.Constant)
+                and isinstance(target.value, str)
+            ):
+                dependencies.add(target.value)
     return tuple(sorted(dependencies))
 
 
@@ -145,7 +159,7 @@ def test_model_visible_workspace_graph_cannot_reach_raw_overlay_unmediated() -> 
     assert _unmediated_raw_engine_paths(_SOURCE_ROOT) == ()
 
 
-def test_graph_guard_rejects_direct_and_function_local_indirect_raw_imports(
+def test_graph_guard_rejects_direct_alias_function_local_and_dynamic_raw_imports(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "src"
@@ -158,6 +172,30 @@ def test_graph_guard_rejects_direct_and_function_local_indirect_raw_imports(
         path.write_text("", encoding="utf-8")
     deep.write_text(
         "from agent_runtime.capabilities.workspace.overlay import _WorkspaceOverlayMutationEngine\n",
+        encoding="utf-8",
+    )
+    assert _unmediated_raw_engine_paths(source) == (
+        (
+            "agent_runtime.capabilities.workspace.deep_backend",
+            "agent_runtime.capabilities.workspace.overlay",
+        ),
+    )
+
+    deep.write_text(
+        "import agent_runtime.capabilities.workspace.overlay as raw_overlay\n",
+        encoding="utf-8",
+    )
+    assert _unmediated_raw_engine_paths(source) == (
+        (
+            "agent_runtime.capabilities.workspace.deep_backend",
+            "agent_runtime.capabilities.workspace.overlay",
+        ),
+    )
+
+    deep.write_text(
+        "import importlib as dynamic\n"
+        "def model_reachable_helper():\n"
+        "    return dynamic.import_module('agent_runtime.capabilities.workspace.overlay')\n",
         encoding="utf-8",
     )
     assert _unmediated_raw_engine_paths(source) == (
@@ -206,6 +244,13 @@ def test_only_operation_gateway_imports_private_stage_activation_controls() -> N
         _SOURCE_ROOT / "agent_runtime/capabilities/workspace/deep_backend.py"
     ).read_text(encoding="utf-8")
     assert "build_proposal_with_capability" not in backend_source
+    assert "_adapter" not in backend_source
+    assert "_gateway" not in backend_source
+    port_source = (
+        _SOURCE_ROOT / "agent_runtime/capabilities/workspace/operation_port.py"
+    ).read_text(encoding="utf-8")
+    assert "workspace.effects" not in port_source
+    assert "workspace.overlay" not in port_source
 
 
 def test_activation_import_guard_rejects_a_function_local_model_backend_import(

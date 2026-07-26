@@ -1280,6 +1280,12 @@ class RuntimeRunHandler:
         from agent_runtime.capabilities.workspace.merged_backend import (  # noqa: PLC0415
             MergedWorkspaceBackend,
         )
+        from agent_runtime.capabilities.workspace.operation_port import (  # noqa: PLC0415
+            WorkspaceOperationPort,
+        )
+        from agent_runtime.capabilities.workspace.ports import (  # noqa: PLC0415
+            WorkspaceOverlayReadPort,
+        )
         from runtime_worker.workspace_effect_storage import (  # noqa: PLC0415
             RuntimeWorkspaceProposalStore,
         )
@@ -1327,7 +1333,7 @@ class RuntimeRunHandler:
         merged = MergedWorkspaceBackend(
             run_id=run.run_id,
             base_read=session.base_read,
-            overlay_store=self._workspace_overlay_store,
+            overlay_store=WorkspaceOverlayReadPort.bind(self._workspace_overlay_store),
             blob_store=self._artifact_blob_store,
         )
         gate = WorkspaceGrantGate(grants=session.grants)
@@ -1349,13 +1355,15 @@ class RuntimeRunHandler:
         )
         return WorkspaceGatewayBackend(
             merged=merged,
-            gateway=gateway,
-            adapter=WorkspaceOperationAdapter(
-                services=services,
-                run_id=run.run_id,
-                base_read=session.base_read,
-                overlay_store=self._workspace_overlay_store,
-                blob_store=self._artifact_blob_store,
+            operations=WorkspaceOperationPort.bind(
+                gateway=gateway,
+                adapter=WorkspaceOperationAdapter(
+                    services=services,
+                    run_id=run.run_id,
+                    base_read=session.base_read,
+                    overlay_store=self._workspace_overlay_store,
+                    blob_store=self._artifact_blob_store,
+                ),
             ),
             grants=session.grants,
         )
