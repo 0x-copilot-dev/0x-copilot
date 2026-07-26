@@ -1,0 +1,75 @@
+name: ci-e2-final-conformance
+
+# E2 D9 is a release gate, but the repository is intentionally not at the
+# cutover state yet. PR/push runs therefore publish a deterministic report and
+# prove its canaries; a release operator dispatches this workflow with
+# `require_all=true`, which fails closed on any FAIL or BLOCKED row.
+on:
+  pull_request:
+    paths:
+      - "services/ai-backend/**"
+      - "services/backend/**"
+      - "services/backend-facade/**"
+      - "packages/api-types/**"
+      - "packages/service-contracts/**"
+      - "packages/surface-renderers/**"
+      - "tools/check_e2_final_conformance.py"
+      - "tools/check_service_boundaries.py"
+      - ".github/workflows/ci-e2-final-conformance.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/ai-backend/**"
+      - "services/backend/**"
+      - "services/backend-facade/**"
+      - "packages/api-types/**"
+      - "packages/service-contracts/**"
+      - "packages/surface-renderers/**"
+      - "tools/check_e2_final_conformance.py"
+      - "tools/check_service_boundaries.py"
+      - ".github/workflows/ci-e2-final-conformance.yml"
+  workflow_dispatch:
+    inputs:
+      require_all:
+        description: "Fail unless every E2 D9 condition passes"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  report-and-canaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/ai-backend/requirements.txt
+      - name: Install D9 runner dependencies
+        run: |
+          python -m pip install --upgrade pip pytest
+          python -m pip install ./packages/service-contracts
+          python -m pip install -r services/ai-backend/requirements.txt
+      - name: Prove D9 runner and planted canaries
+        run: |
+          cd services/ai-backend
+          PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest \
+            tests/unit/agent_runtime/release/test_e2_final_conformance.py \
+            ../../tools/test_check_service_boundaries.py -q
+      - name: Publish D9 conformance report
+        run: |
+          PYTHONPATH="services/ai-backend/src:packages/service-contracts/src" \
+            python tools/check_e2_final_conformance.py --json | tee e2-final-conformance.json
+      - name: Enforce D9 release readiness
+        if: github.event_name == 'workflow_dispatch' && inputs.require_all
+        run: |
+          PYTHONPATH="services/ai-backend/src:packages/service-contracts/src" \
+            python tools/check_e2_final_conformance.py --require-all
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2-final-conformance
+          path: e2-final-conformance.json
