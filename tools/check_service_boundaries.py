@@ -68,9 +68,11 @@ def boundary_violations(
     return tuple(sorted(violations))
 
 
-_TS_IMPORT = re.compile(
+_TS_STATIC_IMPORT = re.compile(
     r"(?:import(?:\s+type)?|export)\s+(?:[^;]*?\s+from\s+)?[\"']([^\"']+)[\"']"
 )
+_TS_DYNAMIC_IMPORT = re.compile(r"\bimport\s*\(\s*[\"']([^\"']+)[\"']\s*\)")
+_TS_REQUIRE = re.compile(r"(?<![\w$.])require\s*\(\s*[\"']([^\"']+)[\"']\s*\)")
 _TYPESCRIPT_EXTENSIONS = (".ts", ".tsx", ".mts", ".cts")
 _DESKTOP_MAIN_IMPORT_PREFIX = "@0x-copilot/desktop/main"
 _DESKTOP_MAIN_IPC_CONTRACTS = (
@@ -88,8 +90,10 @@ def desktop_ipc_boundary_violations(repo_root: Path = REPO_ROOT) -> tuple[str, .
     contracts.  Only preload may import ``ipcRenderer``/``contextBridge`` and
     only Electron main may import ``ipcMain`` or broker implementation code.
     This scanner is intentionally lexical because TypeScript is not imported by
-    a Python release gate; it recognizes module specifiers rather than broad
-    comment/text keywords and is covered by planted canaries.
+    a Python release gate; it recognizes only static import/export,
+    ``import(\"literal\")``, and ``require(\"literal\")`` module specifiers
+    rather than attempting broader JavaScript parsing.  The forms are covered
+    by planted canaries.
     """
 
     checks: list[tuple[str, Path, frozenset[str]]] = [
@@ -158,7 +162,12 @@ def _typescript_sources(root: Path) -> tuple[Path, ...]:
 
 
 def _typescript_imports(path: Path) -> tuple[str, ...]:
-    return tuple(_TS_IMPORT.findall(path.read_text(encoding="utf-8")))
+    source = path.read_text(encoding="utf-8")
+    return tuple(
+        module
+        for pattern in (_TS_STATIC_IMPORT, _TS_DYNAMIC_IMPORT, _TS_REQUIRE)
+        for module in pattern.findall(source)
+    )
 
 
 def _desktop_main_ipc_contracts(repo_root: Path) -> frozenset[Path]:

@@ -109,6 +109,26 @@ def test_desktop_ipc_scanner_rejects_shared_package_escape_to_desktop_main(
     )
 
 
+def test_desktop_ipc_scanner_rejects_dynamic_and_require_main_imports(
+    tmp_path: Path,
+) -> None:
+    renderer = _desktop_boundary_fixture(tmp_path)
+    main_capabilities = tmp_path / "apps/desktop/main/capabilities"
+    (main_capabilities / "broker.ts").write_text("export const broker = {};\n")
+    (renderer / "dynamic.ts").write_text(
+        'void import("../main/capabilities/broker");\n'
+    )
+    shared = tmp_path / "packages/chat-surface/src"
+    (shared / "require.ts").write_text(
+        'const broker = require("../../../apps/desktop/main/capabilities/broker");\n'
+    )
+
+    assert desktop_ipc_boundary_violations(tmp_path) == (
+        "chat-surface:require.ts:desktop-main-import:../../../apps/desktop/main/capabilities/broker",
+        "desktop-renderer:dynamic.ts:desktop-main-import:../main/capabilities/broker",
+    )
+
+
 def test_desktop_ipc_scanner_allows_only_resolved_typed_ipc_contracts(
     tmp_path: Path,
 ) -> None:
