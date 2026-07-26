@@ -63,6 +63,11 @@ export {
 
 // === WC-P5a — MCP-OAuth launcher port TYPE (AD-6) ===
 export type { McpAuthPort } from "./mcpAuthPort";
+export {
+  useConnectorConsentStates,
+  type ConnectorConsentStateController,
+  type ConnectorConsentStates,
+} from "./useConnectorConsentStates";
 
 // === PRD-C2 — global write-posture chip ===
 export { PostureChip, type PostureChipProps } from "./PostureChip";
