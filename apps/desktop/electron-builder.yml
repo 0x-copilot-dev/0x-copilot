@@ -24,16 +24,7 @@ directories:
 files:
   - out/**/*
   - package.json
-  # C2's Darwin-only retained-handle workspace authority is loaded relative to
-  # the bundled main output. Keep its loader next to that output and unpack
-  # the ABI-specific `.node` binary (native modules cannot execute in asar).
-  - from: native/workspace-fs
-    to: out/native/workspace-fs
-    filter:
-      - "**/*"
 asar: true
-asarUnpack:
-  - out/native/workspace-fs/**/*.node
 
 # Local iteration uses normal compression for speed; CI overrides to maximum
 # (electron-builder -c.compression=maximum) for smaller release artifacts.

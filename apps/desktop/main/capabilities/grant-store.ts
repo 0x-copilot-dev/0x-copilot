@@ -57,12 +57,6 @@ export interface GrantStoreConfig {
   readonly rootIdentity?: (root: string) => Promise<GrantRootIdentity>;
   /** Local signed-in profile/device facts recorded on newly issued grants. */
   readonly profileId?: string;
-  /**
-   * Main-only resolver for the verified signed-in profile. The picker never
-   * receives its result and renderer input cannot supply it. When it is not
-   * available, the grant stays read-capable but cannot become a C2 write grant.
-   */
-  readonly profileIdResolver?: () => Promise<string | null>;
   readonly deviceId?: string;
   /** Default expiry for newly created grants. Defaults to thirty days. */
   readonly grantTtlMs?: number;
@@ -96,7 +90,6 @@ export class GrantStore implements GrantProvider {
     | ((root: string) => Promise<GrantRootIdentity>)
     | undefined;
   readonly #profileId: string | undefined;
-  readonly #profileIdResolver: (() => Promise<string | null>) | undefined;
   readonly #deviceId: string | undefined;
   readonly #grantTtlMs: number;
 
@@ -115,7 +108,6 @@ export class GrantStore implements GrantProvider {
     this.#clock = config.clock ?? Date.now;
     this.#rootIdentity = config.rootIdentity;
     this.#profileId = config.profileId;
-    this.#profileIdResolver = config.profileIdResolver;
     this.#deviceId = config.deviceId;
     this.#grantTtlMs = config.grantTtlMs ?? 30 * 24 * 60 * 60 * 1000;
   }
@@ -140,7 +132,6 @@ export class GrantStore implements GrantProvider {
       this.#rootIdentity === undefined
         ? undefined
         : await this.#rootIdentity(input.root);
-    const profileId = await this.#resolveProfileId();
     const grant: Grant = {
       grantId: this.#uuid(),
       root: input.root,
@@ -150,7 +141,7 @@ export class GrantStore implements GrantProvider {
       createdAt: now,
       updatedAt: now,
       rootIdentity,
-      profileId,
+      profileId: this.#profileId,
       deviceId: this.#deviceId,
       allowedPathPrefixes: normalizePrefixes(input.allowedPathPrefixes),
       expiresAt: input.expiresAt ?? now + this.#grantTtlMs,
@@ -213,21 +204,6 @@ export class GrantStore implements GrantProvider {
       capturedAt: this.#clock(),
       grants: Object.freeze(active.map((g) => Object.freeze({ ...g }))),
     });
-  }
-
-  async #resolveProfileId(): Promise<string | undefined> {
-    if (this.#profileIdResolver === undefined) return this.#profileId;
-    try {
-      const profileId = await this.#profileIdResolver();
-      return typeof profileId === "string" && profileId.trim() !== ""
-        ? profileId
-        : undefined;
-    } catch {
-      // A transient auth/facade failure must never turn a renderer-selected
-      // identity into a writable grant. The resulting grant remains usable for
-      // the read-only broker but C2's strict profile match rejects it.
-      return undefined;
-    }
   }
 
   // --- persistence ---
