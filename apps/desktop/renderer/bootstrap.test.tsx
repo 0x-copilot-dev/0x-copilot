@@ -199,10 +199,17 @@ describe("renderer bootstrap", () => {
       root.querySelector("[data-destination='run'][aria-current='page']"),
     ).not.toBeNull();
 
+    // The production bootstrap—not a parity fixture—owns the desktop window
+    // frame around the routed shell. Keep this structural seam explicit so a
+    // later mount refactor cannot quietly move chrome back into a harness.
+    const frame = root.querySelector("[data-testid='desktop-window-frame']");
+    expect(frame).not.toBeNull();
+
     // The destination outlet renders the real Run cockpit (PR-6.7), not a
     // phase placeholder: its root + header + idle empty composer are present.
     const outlet = root.querySelector("[data-testid='destination-outlet']");
     expect(outlet).not.toBeNull();
+    expect(frame?.contains(outlet)).toBe(true);
     expect(outlet?.getAttribute("data-destination")).toBe("run");
     expect(
       root.querySelector("[data-testid='run-destination']"),

@@ -205,7 +205,7 @@ function writeAggregate(resultRows) {
     `- Vendor manifest: [design/PROVENANCE.json](../design/PROVENANCE.json) (source, support runtime, and CSS checksums).`,
     `- Repository commit measured: \`${git(["rev-parse", "HEAD"])}\`; origin/main: \`${git(["rev-parse", "origin/main"])}\`.`,
     `- Design capture: Design Compiler state selected at construction from \`?state=…\`; autoplay disabled; runtime-only \`data-parity-anchor\` attributes added after mount.`,
-    `- Live capture: [render-live-chat-tool-call-shell.test.tsx](../../../lib/render-live-chat-tool-call-shell.test.tsx) mounts actual \`RunDestination\` with \`surfacesV2\`, real \`ThreadCanvas\`, real \`Composer\`, and its normal Transport/SSE projection path.`,
+    `- Live capture: [render-live-chat-tool-call-shell.test.tsx](../../../lib/render-live-chat-tool-call-shell.test.tsx) mounts the shipping desktop \`DesktopWindowFrame\` and \`DestinationOutlet\`, which routes through the real desktop \`RunBinder\` into \`RunDestination\` / \`ThreadCanvas\` with its normal Transport/SSE projection path.`,
     `- Browser extraction: shared [extract-playwright.mjs](../../../lib/extract-playwright.mjs) + [extract-computed.js](../../../lib/extract-computed.js), viewport 1200×816.`,
     `- Comparator: shared [compare.mjs](../../../lib/compare.mjs); every anchor map is \`strict: true\` and declares **no** \`expectDivergence\` waiver.`,
     "",

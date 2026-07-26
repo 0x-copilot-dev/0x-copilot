@@ -9,70 +9,70 @@
       "label": "shell.frame",
       "group": "Cockpit shell",
       "design": "[data-parity-anchor=\"shell\"]",
-      "live": "#parity-frame",
-      "what": "Fixed 1200 × 816 Run cockpit frame."
+      "live": "[data-testid=\"desktop-window-frame\"]",
+      "what": "Shipping desktop renderer window frame."
     },
     {
       "label": "shell.header",
       "group": "Cockpit shell",
       "design": "[data-parity-anchor=\"window-bar\"]",
-      "live": "#parity-frame [data-testid=\"run-header\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"run-header\"]",
       "what": "Top identity and run-status chrome."
     },
     {
       "label": "shell.mode-switcher",
       "group": "Cockpit shell",
       "design": "[data-parity-anchor=\"mode-switcher\"]",
-      "live": "#parity-frame [data-testid=\"run-mode-switcher\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"run-mode-switcher\"]",
       "what": "Focus / Studio state selector."
     },
     {
       "label": "chat.column",
       "group": "Chat",
       "design": "[data-parity-anchor=\"chat-column\"]",
-      "live": "#parity-frame [data-testid=\"tc-chat\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"tc-chat\"]",
       "what": "Shared live chat column."
     },
     {
       "label": "chat.transcript",
       "group": "Chat",
       "design": "[data-parity-anchor=\"chat-transcript\"]",
-      "live": "#parity-frame [data-testid=\"tc-chat-messages\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"tc-chat-messages\"]",
       "what": "Transcript viewport receiving user, reasoning, and assistant content."
     },
     {
       "label": "chat.composer",
       "group": "Chat",
       "design": "[data-parity-anchor=\"composer\"]",
-      "live": "#parity-frame [data-testid=\"composer\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"composer\"]",
       "what": "Shipping Composer, not a parity-only substitute."
     },
     {
       "label": "thinking.activity-panel",
       "group": "Focus thinking",
       "design": "[data-parity-anchor=\"focus-activity-panel\"]",
-      "live": "#parity-frame [data-testid=\"tc-focus-panel\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"tc-focus-panel\"]",
       "what": "Focus-mode run-detail side panel."
     },
     {
       "label": "thinking.activity-heading",
       "group": "Focus thinking",
       "design": "[data-parity-anchor=\"focus-activity-heading\"]",
-      "live": "#parity-frame [data-testid=\"tc-focus-panel\"] > div:first-child",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"tc-focus-panel\"] > div:first-child",
       "what": "Focus panel heading."
     },
     {
       "label": "thinking.reasoning",
       "group": "Focus thinking",
       "design": "[data-parity-anchor=\"thinking-card\"]",
-      "live": "#parity-frame [data-testid=\"tc-chat-message-run-assistant-2\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"tc-chat-message-run-assistant-2\"]",
       "what": "In-flight reasoning / assistant work in the shared transcript."
     },
     {
       "label": "thinking.plan",
       "group": "Focus thinking",
       "design": "[data-parity-anchor=\"focus-plan\"]",
-      "live": "#parity-frame [data-testid=\"focus-plan\"]",
+      "live": "[data-testid=\"desktop-window-frame\"] [data-testid=\"focus-plan\"]",
       "what": "The shipping FocusPlan rendered inside the Focus activity panel."
     }
   ]

@@ -45,3 +45,40 @@ body {
 #root > * {
   -webkit-app-region: no-drag;
 }
+
+/* The app-side part of the hidden-inset desktop window. Native traffic lights
+   and the OS shadow remain Electron-owned; this frame gives web contents a
+   single clipped visual surface at the same boundary the renderer mounts. */
+.desktop-window-frame {
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 12px;
+  background: var(--color-bg);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 70%),
+    0 40px 100px -30px rgb(0 0 0 / 80%);
+}
+
+/* Both bootstrap's full shell and its routed Run outlet are normal desktop
+   children. The frame, not a fixture, owns their fill-and-clip contract. */
+.desktop-window-frame > [data-component="chat-shell"],
+.desktop-window-frame > [data-testid="destination-outlet"],
+.desktop-window-frame > [data-testid="run-destination"] {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* The Run cockpit already owns the transcript-to-composer spacing through its
+   chat column. The general standalone composer margin would add a second gap
+   only in the desktop host, so the hosted composer stays flush in that slot. */
+.desktop-window-frame [data-testid="run-composer"] .aui-composer {
+  margin: 0 auto;
+}
