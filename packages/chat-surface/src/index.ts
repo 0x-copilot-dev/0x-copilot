@@ -1013,6 +1013,11 @@ export {
   APPEARANCE_THEMES,
   APPEARANCE_ACCENTS,
   APPEARANCE_DENSITIES,
+  // Connector-suggestion appetite — the sibling preferences controller
+  // (same /v1/me/preferences round-trip, hosts pass their transport).
+  useConnectorSuggestions,
+  DEFAULT_CONNECTOR_SUGGESTIONS,
+  CONNECTOR_SUGGESTION_MODES,
   ShortcutsPage,
   SHORTCUTS,
   type AppearancePageProps,
