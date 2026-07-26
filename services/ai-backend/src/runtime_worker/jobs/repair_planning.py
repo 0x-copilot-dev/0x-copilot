@@ -1,23 +1,25 @@
-"""Bounded, planning-only D12 repair/reconciliation worker loop.
+"""Bounded D12 repair planning with an optional, fail-closed executor seam.
 
-This job can observe existing durable effect claims and runtime event history,
-then persist *only* the redacted candidate/withheld output of ``RepairPlanner``.
-It deliberately has no cleanup, deletion, approval, queue, apply, resend, or
-executor dependency.  A future, separately authorized reconciliation executor
-may consume a candidate; this runner never does.
+This job always persists the redacted candidate/withheld output of
+``RepairPlanner`` before any optional executor sees it.  The default remains
+planning-only.  Worker composition may opt into a narrow executor that
+revalidates each candidate against live durable facts before enqueueing a
+body-free reconciliation command.  The planner itself still owns no cleanup,
+deletion, approval, apply, resend, or external executor capability.
 """
 
 from __future__ import annotations
 
 import asyncio
 from collections import defaultdict
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
 import logging
 import os
 from time import perf_counter
+from typing import Protocol, runtime_checkable
 
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.effects.claims import (
@@ -47,6 +49,7 @@ from agent_runtime.surfaces_v2.repair_planning import (
 )
 from agent_runtime.surfaces_v2.repair_reconciliation import (
     RepairCandidateKind,
+    RepairDecision,
     RepairDecisionState,
     RepairEffectState,
     RepairEvidenceState,
@@ -120,6 +123,40 @@ class RepairPlanningCycleResult:
     candidates: int = 0
     withheld: int = 0
     failed: int = 0
+    queued: int = 0
+    already_queued: int = 0
+    revalidated_withheld: int = 0
+    unsupported: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class RepairExecutionResult:
+    """Identifier-free result from a safely composed candidate executor.
+
+    A failed enqueue is deliberately distinct from a revalidation-withheld
+    candidate: failures keep the source cursor in place for retry, while a
+    newer hold/reference fact is an honest, safe no-op.
+    """
+
+    queued: int = 0
+    already_queued: int = 0
+    withheld: int = 0
+    unsupported: int = 0
+    failed: int = 0
+
+
+@runtime_checkable
+class RepairCandidateExecutor(Protocol):
+    """Narrow worker-owned execution seam for persisted D12 candidates."""
+
+    async def execute(
+        self,
+        *,
+        tenant_id: str,
+        decisions: Sequence[RepairDecision],
+        now: datetime,
+    ) -> RepairExecutionResult:
+        """Revalidate and safely dispatch supported candidate actions only."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +167,20 @@ class RepairPlanningSourcePage:
     expected_cursor: EffectClaimScanCursor | None
     next_cursor: EffectClaimScanCursor | None
     advance_cursor: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EffectClaimRepairRevalidation:
+    """Fresh trusted facts bound to one durable effect claim.
+
+    This internal worker value is never persisted or logged.  It keeps the
+    original claim beside its newly collected redacted record so a later queue
+    command can be scoped to the exact tenant/run/claim tuple that was just
+    revalidated.
+    """
+
+    claim: EffectClaim
+    record: RepairSnapshotRecord
 
 
 class EffectClaimRepairSnapshotCollector:
@@ -248,6 +299,43 @@ class EffectClaimRepairSnapshotCollector:
             next_cursor=next_cursor,
             advance_cursor=advance_cursor,
         )
+
+    async def revalidate_effect_claim(
+        self,
+        *,
+        tenant_id: str,
+        claim_id: str,
+        now: datetime | None = None,
+    ) -> EffectClaimRepairRevalidation | None:
+        """Reload one claim and recompute its safety facts immediately before dispatch.
+
+        A persisted candidate is deliberately not execution authority.  A hold,
+        reference, run state, or claim can change while a planned page waits in
+        durable storage.  Any unavailable, foreign, malformed, or incomplete
+        fact is represented by ``None`` or a later withheld decision; it never
+        becomes a queue command.
+        """
+
+        try:
+            claim = await self._claims.get_by_claim_id(
+                org_id=tenant_id,
+                claim_id=claim_id,
+            )
+            if claim is None or claim.org_id != tenant_id or claim.claim_id != claim_id:
+                return None
+            record = await self._record_for_claim(
+                claim=claim,
+                now=_as_utc(now or datetime.now(UTC)),
+                force_incomplete=False,
+            )
+            if record.tenant_id != tenant_id or record.candidate_id != claim_id:
+                return None
+            return EffectClaimRepairRevalidation(claim=claim, record=record)
+        except Exception:
+            # A revalidation source may fail because a store, hold lookup, or
+            # event stream is unavailable.  Do not expose source detail and do
+            # not enqueue from stale planning facts.
+            return None
 
     async def _record_for_claim(
         self,
@@ -463,7 +551,13 @@ class EffectClaimRepairSnapshotCollector:
 
 
 class RepairPlanningRunner:
-    """Persist bounded planner pages without an execution capability."""
+    """Persist bounded plans and optionally dispatch fresh safe candidates.
+
+    The executor is intentionally optional and receives only *persisted*
+    candidate decisions.  It must revalidate every decision before creating a
+    durable command.  Keeping the cursor in place on an execution failure makes
+    restart/retry safe without treating a stale plan as authority.
+    """
 
     def __init__(
         self,
@@ -471,6 +565,7 @@ class RepairPlanningRunner:
         collector: EffectClaimRepairSnapshotCollector,
         snapshots: RepairPlanningSnapshotStore,
         planner: RepairPlanner | None = None,
+        candidate_executor: RepairCandidateExecutor | None = None,
         page_size: int = RepairPlanningLoopEnv.DEFAULT_PAGE_SIZE,
         max_claims: int = RepairPlanningLoopEnv.DEFAULT_MAX_CLAIMS,
         metrics: LifecycleOperationalMetrics | None = None,
@@ -485,21 +580,23 @@ class RepairPlanningRunner:
         self._planner = (
             planner if planner is not None else RepairPlanner(metrics=self._metrics)
         )
+        self._candidate_executor = candidate_executor
         self._page_size = page_size
         self._max_claims = max_claims
 
     async def run_once(
         self, *, now: datetime | None = None
     ) -> RepairPlanningCycleResult:
-        """Collect and persist one bounded planning pass; never execute a repair."""
+        """Collect, persist, then optionally dispatch one bounded safe pass."""
 
         started_at = perf_counter()
+        reference_now = _as_utc(now or datetime.now(UTC))
         try:
             source_cursor = await self._snapshots.load_effect_claim_scan_cursor()
             source_page = await self._collector.collect(
                 limit=self._max_claims,
                 cursor=source_cursor,
-                now=now,
+                now=reference_now,
             )
         except Exception:
             self._record_failure(elapsed_seconds=perf_counter() - started_at)
@@ -509,17 +606,29 @@ class RepairPlanningRunner:
         for snapshot in source_page.snapshots:
             try:
                 page_result = await self._plan_snapshot(snapshot)
+                execution_result = await self._execute_snapshot(
+                    snapshot=snapshot,
+                    now=reference_now,
+                )
                 result = RepairPlanningCycleResult(
                     snapshots=result.snapshots,
                     candidates=result.candidates + page_result.candidates,
                     withheld=result.withheld + page_result.withheld,
-                    failed=result.failed + page_result.failed,
+                    failed=result.failed + page_result.failed + execution_result.failed,
+                    queued=result.queued + execution_result.queued,
+                    already_queued=(
+                        result.already_queued + execution_result.already_queued
+                    ),
+                    revalidated_withheld=(
+                        result.revalidated_withheld + execution_result.withheld
+                    ),
+                    unsupported=result.unsupported + execution_result.unsupported,
                 )
                 state = await self._snapshots.load(
                     tenant_id=snapshot.tenant_id,
                     snapshot_id=snapshot.snapshot_id,
                 )
-                if state is None or not state.completed:
+                if state is None or not state.completed or execution_result.failed > 0:
                     snapshots_completed = False
             except Exception:
                 snapshots_completed = False
@@ -529,6 +638,10 @@ class RepairPlanningRunner:
                     candidates=result.candidates,
                     withheld=result.withheld,
                     failed=result.failed + 1,
+                    queued=result.queued,
+                    already_queued=result.already_queued,
+                    revalidated_withheld=result.revalidated_withheld,
+                    unsupported=result.unsupported,
                 )
         if snapshots_completed and source_page.advance_cursor:
             try:
@@ -543,8 +656,45 @@ class RepairPlanningRunner:
                     candidates=result.candidates,
                     withheld=result.withheld,
                     failed=result.failed + 1,
+                    queued=result.queued,
+                    already_queued=result.already_queued,
+                    revalidated_withheld=result.revalidated_withheld,
+                    unsupported=result.unsupported,
                 )
         return result
+
+    async def _execute_snapshot(
+        self,
+        *,
+        snapshot: RepairPlanningSnapshot,
+        now: datetime,
+    ) -> RepairExecutionResult:
+        """Hand persisted candidates to the optional narrow executor.
+
+        Running this after durable ``advance`` calls handles a crash between
+        planning and dispatch: on restart the same persisted candidate is read
+        again, revalidated, and maps to the same idempotent queue command.
+        """
+
+        executor = self._candidate_executor
+        if executor is None:
+            return RepairExecutionResult()
+        outcomes = await self._snapshots.list_outcomes(
+            tenant_id=snapshot.tenant_id,
+            snapshot_id=snapshot.snapshot_id,
+        )
+        candidates = tuple(
+            decision
+            for decision in outcomes
+            if decision.state is RepairDecisionState.CANDIDATE
+        )
+        if not candidates:
+            return RepairExecutionResult()
+        return await executor.execute(
+            tenant_id=snapshot.tenant_id,
+            decisions=candidates,
+            now=now,
+        )
 
     async def _plan_snapshot(
         self, snapshot: RepairPlanningSnapshot

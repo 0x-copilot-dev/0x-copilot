@@ -1315,8 +1315,13 @@ class RuntimeQueuePort(Protocol):
 
     async def enqueue_effect_reconcile(
         self, command: RuntimeEffectReconcileCommand
-    ) -> None:
-        """Enqueue reconciliation of an existing A5 effect claim only."""
+    ) -> bool:
+        """Enqueue reconciliation of an existing A5 effect claim only.
+
+        Returns ``False`` when the exact durable command was already present.
+        A conflicting reuse of the command id must fail closed rather than
+        overwrite a queued recovery request.
+        """
 
     async def claim_next(
         self,

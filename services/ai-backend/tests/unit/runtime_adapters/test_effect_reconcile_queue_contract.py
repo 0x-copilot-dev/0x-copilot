@@ -70,7 +70,7 @@ async def test_queue_adapters_persist_only_body_free_recovery_payload(
     else:
         store = FileRuntimeApiStore(tmp_path / "runtime")
 
-    await store.enqueue_effect_reconcile(command)
+    assert await store.enqueue_effect_reconcile(command) is True
     claimed = await store.claim_next(
         worker_id="worker_1",
         lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
@@ -92,8 +92,9 @@ async def test_queue_adapters_persist_only_body_free_recovery_payload(
 class _PostgresEnqueueSpy:
     captured: dict[str, object] | None = None
 
-    async def _enqueue_command(self, **kwargs: object) -> None:
+    async def _enqueue_command(self, **kwargs: object) -> bool:
         self.captured = kwargs
+        return True
 
 
 async def test_postgres_queue_adapter_serializes_only_body_free_recovery_payload() -> (
@@ -102,7 +103,9 @@ async def test_postgres_queue_adapter_serializes_only_body_free_recovery_payload
     command = _command()
     spy = _PostgresEnqueueSpy()
 
-    await PostgresRuntimeApiStore.enqueue_effect_reconcile(spy, command)  # type: ignore[arg-type]
+    assert (  # type: ignore[arg-type]
+        await PostgresRuntimeApiStore.enqueue_effect_reconcile(spy, command)
+    ) is True
 
     assert spy.captured is not None
     assert spy.captured["command_type"] == (
@@ -110,6 +113,7 @@ async def test_postgres_queue_adapter_serializes_only_body_free_recovery_payload
     )
     assert spy.captured["org_id"] == command.org_id
     assert spy.captured["aggregate_id"] == command.run_id
+    assert spy.captured["idempotent"] is True
     payload = spy.captured["payload"]
     assert isinstance(payload, dict)
     assert _FORBIDDEN_SCOPE_KEYS.isdisjoint(payload)
@@ -129,8 +133,9 @@ class _ArtifactQueueMirror:
 
     async def enqueue_effect_reconcile(
         self, command: RuntimeEffectReconcileCommand
-    ) -> None:
+    ) -> bool:
         self.reconcile_commands.append(command)
+        return True
 
 
 class _ArtifactCanonicalOutbox:
@@ -148,8 +153,56 @@ async def test_artifact_aware_queue_forwards_body_free_recovery_command() -> Non
     mirror = _ArtifactQueueMirror()
     queue = ArtifactAwareRuntimeQueue(mirror, _ArtifactCanonicalOutbox())
 
-    await queue.enqueue_effect_reconcile(command)
+    assert await queue.enqueue_effect_reconcile(command) is True
 
     assert mirror.reconcile_commands == [command]
     payload = mirror.reconcile_commands[0].model_dump(mode="json")
     assert _FORBIDDEN_SCOPE_KEYS.isdisjoint(payload)
+
+
+@pytest.mark.parametrize("adapter", ("memory", "file"))
+async def test_reconcile_queue_idempotently_absorbs_an_exact_recovery_replay(
+    adapter: str,
+    tmp_path,
+) -> None:
+    command = _command()
+    store: Any
+    if adapter == "memory":
+        store = InMemoryRuntimeApiStore()
+    else:
+        store = FileRuntimeApiStore(tmp_path / "runtime")
+
+    assert await store.enqueue_effect_reconcile(command) is True
+    assert await store.enqueue_effect_reconcile(command) is False
+    claimed = await store.claim_next(
+        worker_id="worker_1",
+        lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+    )
+
+    assert claimed is not None
+    assert claimed.command_id == command.command_id
+    assert (
+        await store.claim_next(
+            worker_id="worker_2",
+            lock_expires_at=datetime.now(timezone.utc) + timedelta(seconds=60),
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("adapter", ("memory", "file"))
+async def test_reconcile_queue_rejects_a_conflicting_command_id(
+    adapter: str,
+    tmp_path,
+) -> None:
+    command = _command()
+    conflicting = command.model_copy(update={"run_id": "run_conflicting"})
+    store: Any
+    if adapter == "memory":
+        store = InMemoryRuntimeApiStore()
+    else:
+        store = FileRuntimeApiStore(tmp_path / "runtime")
+
+    assert await store.enqueue_effect_reconcile(command) is True
+    with pytest.raises(ValueError, match="command id conflicts"):
+        await store.enqueue_effect_reconcile(conflicting)

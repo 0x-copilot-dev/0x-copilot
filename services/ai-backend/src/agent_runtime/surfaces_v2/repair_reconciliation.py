@@ -349,7 +349,7 @@ class RepairPlanner:
                 if has_more and page
                 else None
             )
-            decisions = tuple(self._decide(record) for record in page)
+            decisions = tuple(self.decide_record(record) for record in page)
             plan = RepairPlan(
                 tenant_id=request.tenant_id,
                 snapshot_id=request.snapshot_id,
@@ -437,8 +437,17 @@ class RepairPlanner:
         if any(record.tenant_id != request.tenant_id for record in request.records):
             raise RepairPlanningError(RepairPlanningErrorCode.CANDIDATE_TENANT_MISMATCH)
 
-    def _decide(self, record: RepairSnapshotRecord) -> RepairDecision:
-        reasons = self._blockers(record)
+    @staticmethod
+    def decide_record(record: RepairSnapshotRecord) -> RepairDecision:
+        """Derive one fail-closed decision from freshly collected facts.
+
+        The scheduled executor deliberately reuses this exact pure decision
+        rule after it re-reads a durable claim.  Keeping the check here avoids
+        a second, subtly weaker "is this safe to reconcile?" implementation at
+        the worker boundary.
+        """
+
+        reasons = RepairPlanner._blockers(record)
         if reasons:
             return RepairDecision(
                 candidate_id=record.candidate_id,

@@ -6593,15 +6593,16 @@ class PostgresRuntimeApiStore:
 
     async def enqueue_effect_reconcile(
         self, command: RuntimeEffectReconcileCommand
-    ) -> None:
-        """Enqueue reconciliation of an existing A5 effect claim for workers."""
+    ) -> bool:
+        """Idempotently enqueue reconciliation of an existing A5 claim."""
 
-        await self._enqueue_command(
+        return await self._enqueue_command(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
             org_id=command.org_id,
             aggregate_id=command.run_id,
             payload=command.model_dump(mode="json"),
+            idempotent=True,
         )
 
     async def claim_next(
@@ -6683,17 +6684,42 @@ class PostgresRuntimeApiStore:
         org_id: str,
         aggregate_id: str,
         payload: dict[str, object],
-    ) -> None:
+        idempotent: bool = False,
+    ) -> bool:
         now = datetime.now(timezone.utc)
         async with self._tenant_connection(org_id=org_id) as conn:
             async with conn.transaction():
-                await conn.execute(
+                if not idempotent:
+                    await conn.execute(
+                        """
+                        INSERT INTO runtime_outbox_events (
+                            id, aggregate_type, aggregate_id, org_id, event_type, payload_json,
+                            status, attempts, available_at, locked_by, lock_expires_at, created_at, updated_at
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, 'pending', 0, %s, NULL, NULL, %s, %s)
+                        """,
+                        (
+                            command_id,
+                            PersistenceValues.AggregateType.AGENT_RUN,
+                            aggregate_id,
+                            org_id,
+                            command_type,
+                            Jsonb(payload),
+                            now,
+                            now,
+                            now,
+                        ),
+                    )
+                    return True
+                inserted = await conn.execute(
                     """
                     INSERT INTO runtime_outbox_events (
                         id, aggregate_type, aggregate_id, org_id, event_type, payload_json,
                         status, attempts, available_at, locked_by, lock_expires_at, created_at, updated_at
                     )
                     VALUES (%s, %s, %s, %s, %s, %s, 'pending', 0, %s, NULL, NULL, %s, %s)
+                    ON CONFLICT (id) DO NOTHING
+                    RETURNING id
                     """,
                     (
                         command_id,
@@ -6707,6 +6733,27 @@ class PostgresRuntimeApiStore:
                         now,
                     ),
                 )
+                if await inserted.fetchone() is not None:
+                    return True
+                existing_cursor = await conn.execute(
+                    """
+                    SELECT org_id, aggregate_id, event_type, payload_json
+                    FROM runtime_outbox_events
+                    WHERE id = %s
+                    FOR SHARE
+                    """,
+                    (command_id,),
+                )
+                existing = await existing_cursor.fetchone()
+                if (
+                    existing is None
+                    or existing["org_id"] != org_id
+                    or existing["aggregate_id"] != aggregate_id
+                    or existing["event_type"] != command_type
+                    or existing["payload_json"] != payload
+                ):
+                    raise ValueError("runtime reconcile command id conflicts")
+                return False
 
     async def _mark_outbox(
         self, *, result: RuntimeWorkerResult, status_value: OutboxStatus
