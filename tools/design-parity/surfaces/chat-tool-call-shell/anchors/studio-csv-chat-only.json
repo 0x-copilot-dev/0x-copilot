@@ -1,0 +1,86 @@
+{
+  "surface": "chat-tool-call-shell",
+  "state": "studio-csv-chat-only",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "Supplied Chat & Tool Calls walkthrough, local CSV read answered in chat. No expected divergences are declared.",
+  "elements": [
+    {
+      "label": "shell.frame",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"shell\"]",
+      "live": "#parity-frame",
+      "what": "Fixed Run cockpit frame."
+    },
+    {
+      "label": "shell.header",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"window-bar\"]",
+      "live": "#parity-frame [data-testid=\"run-header\"]",
+      "what": "Top run chrome."
+    },
+    {
+      "label": "shell.mode-switcher",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"mode-switcher\"]",
+      "live": "#parity-frame [data-testid=\"run-mode-switcher\"]",
+      "what": "Studio is selected."
+    },
+    {
+      "label": "chat.column",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"chat-column\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat\"]",
+      "what": "Shared Studio chat column."
+    },
+    {
+      "label": "chat.transcript",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"chat-transcript\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat-messages\"]",
+      "what": "Transcript viewport."
+    },
+    {
+      "label": "chat.composer",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"composer\"]",
+      "live": "#parity-frame [data-testid=\"composer\"]",
+      "what": "Shipping Composer."
+    },
+    {
+      "label": "studio.canvas",
+      "group": "Studio",
+      "design": "[data-parity-anchor=\"studio-canvas\"]",
+      "live": "#parity-frame [data-testid=\"run-canvas-slot\"]",
+      "what": "Studio canvas region."
+    },
+    {
+      "label": "tool.csv.card",
+      "group": "Local CSV read",
+      "design": "[data-parity-anchor=\"tool-card-csv\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat-tool-csv-read\"] > details",
+      "what": "Completed filesystem-read tool card."
+    },
+    {
+      "label": "tool.csv.header",
+      "group": "Local CSV read",
+      "design": "[data-parity-anchor=\"tool-card-csv\"] .tcall__h",
+      "live": "#parity-frame [data-testid=\"tc-chat-tool-csv-read\"] summary",
+      "what": "Local read tool identity and outcome row."
+    },
+    {
+      "label": "csv.summary-card",
+      "group": "Local CSV read",
+      "design": "[data-parity-anchor=\"csv-card\"]",
+      "what": "The reference has an inline CSV summary card; shipping chat renders the raw tool result only.",
+      "baselineGap": "No shipping inline CSV-summary component is mounted for a chat-only read."
+    },
+    {
+      "label": "csv.chat-only-canvas",
+      "group": "Local CSV read",
+      "design": "[data-parity-anchor=\"studio-canvas-empty\"]",
+      "live": "#parity-frame [data-testid=\"canvas-lifecycle-panel\"]",
+      "what": "No custom canvas surface was created."
+    }
+  ]
+}

@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="copilot-v3.css">
+  <style>
+    body{overflow:auto}
+    @keyframes gsrise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes gsblink{0%,55%{opacity:1}56%,100%{opacity:0}}
+    @keyframes shimmer{to{background-position:-200% 0}}
+    .shim{background:linear-gradient(90deg,var(--mut2) 0%,var(--mut2) 35%,var(--tx) 50%,var(--mut2) 65%,var(--mut2) 100%);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:shimmer 1.5s linear infinite}
+    .tcall{border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;animation:gsrise .3s ease both}
+    .tcall__h{display:flex;align-items:center;gap:9px;padding:9px 11px;cursor:pointer}
+    .tcall__h:hover{background:var(--panel2)}
+    .tcall__logo{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;font-size:9px;font-weight:700;font-family:var(--body);flex:none}
+    .tcall__body{border-top:1px solid var(--line);padding:10px 12px;background:var(--ink2)}
+    .kv{display:flex;gap:9px;font-size:11px;padding:2px 0}
+    .kv b{font-family:var(--mono);font-size:9.5px;color:var(--mut2);width:66px;flex:none;font-weight:400;padding-top:2px}
+    .kv span{color:var(--tx2);min-width:0;line-height:1.55}
+    .pbadge{font-family:var(--mono);font-size:8.5px;letter-spacing:.04em;padding:2px 6px;border-radius:5px;border:1px solid var(--line2);display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
+  </style>
+</helmet>
+<div data-theme="{{ theme }}" data-accent="{{ accent }}" style="min-height:100vh;min-width:fit-content;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:20px;background:radial-gradient(900px 520px at 50% -12%, var(--accent-soft), transparent 60%), var(--ink);color:var(--tx)">
+
+  <div class="mw" style="width:1200px;height:816px;max-width:none;flex:none" data-screen-label="Chat & tool calls — {{ modeLabel }}">
+    <div class="mw-bar">
+      <div class="mw-dots"><span class="mw-dot r"></span><span class="mw-dot y"></span><span class="mw-dot g"></span></div>
+      <div class="mw-title"><b><span class="zx">0x</span>Copilot</b> — {{ modeLabel }}</div>
+      <div class="seg" style="margin-left:auto"><button data-on="{{ isFocus }}" onClick="{{ setFocus }}">Focus</button><button data-on="{{ isStudio }}" onClick="{{ setStudio }}">Studio</button></div>
+    </div>
+
+    <div class="ws3-main" style="flex:1;min-height:0;display:grid;grid-template-rows:minmax(0,1fr);grid-template-columns:{{ grid }}">
+      <!-- CHAT -->
+      <section style="min-width:0;min-height:0;display:flex;flex-direction:column;background:var(--ink);border-right:{{ chatBorder }}">
+        <div style="flex:none;display:flex;align-items:center;gap:9px;padding:11px 16px;border-bottom:1px solid var(--line)">
+          <span class="side-ava" style="width:26px;height:26px"><svg viewBox="0 0 400 400" width="17" height="17"><defs><linearGradient id="ck" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#9bd4ff"></stop><stop offset="1" stop-color="#4593d8"></stop></linearGradient></defs><g fill="url(#ck)"><path d="M200 96q46 10 54 60-28-8-54-24Z"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(60 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(120 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(180 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(240 200 200)"></path><path d="M200 96q46 10 54 60-28-8-54-24Z" transform="rotate(300 200 200)"></path></g><circle cx="200" cy="200" r="20" fill="#0b0a0e" stroke="url(#ck)" stroke-width="10"></circle></svg></span>
+          <div style="min-width:0"><div style="font-size:12.5px;font-weight:600;font-family:var(--disp)">Monday catch-up</div><div class="mono" style="font-size:9px;color:var(--mut2)">Claude Sonnet 4.5 · 6 tools · reads auto · writes ask</div></div>
+          <span class="chip" style="margin-left:auto">{{ toolsLive }}</span>
+        </div>
+
+        <div class="side-body scroll" ref="{{ chatRef }}" style="flex:1;min-height:0;overflow-y:auto;padding:16px;gap:14px">
+          <sc-for list="{{ items }}" as="it" hint-placeholder-count="0">
+            <!-- user -->
+            <sc-if value="{{ it.you }}" hint-placeholder-val="{{ false }}"><div class="msg you" style="animation:gsrise .3s ease both">{{ it.t }}</div></sc-if>
+
+            <!-- thinking (shimmer while active, collapsible when done) -->
+            <sc-if value="{{ it.think }}" hint-placeholder-val="{{ false }}">
+              <div style="animation:gsrise .3s ease both">
+                <div onClick="{{ it.toggle }}" style="display:flex;align-items:center;gap:8px;cursor:{{ it.cursor }}">
+                  <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--mut2)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M9.5 2a5.5 5.5 0 0 0-3.9 9.4c.6.6.9 1.3.9 2.1V15h6v-1.5c0-.8.3-1.5.9-2.1A5.5 5.5 0 0 0 9.5 2z" transform="translate(2.5 0)"></path><path d="M9 19h6M10 22h4"></path></svg>
+                  <sc-if value="{{ it.active }}" hint-placeholder-val="{{ false }}"><span class="shim" style="font-size:12px;font-weight:500">{{ it.t }}</span></sc-if>
+                  <sc-if value="{{ it.done }}" hint-placeholder-val="{{ false }}"><span style="font-size:11.5px;color:var(--mut)">{{ it.tDone }}</span><span class="mono" style="font-size:9px;color:var(--mut2);display:inline-flex;transform:{{ it.chev }};transition:transform .15s">▾</span></sc-if>
+                </div>
+                <sc-if value="{{ it.open }}" hint-placeholder-val="{{ false }}">
+                  <div style="margin:8px 0 0 21px;padding:10px 13px;border-left:2px solid var(--line2);display:flex;flex-direction:column;gap:7px;animation:gsrise .2s ease both">
+                    <sc-for list="{{ it.reasoning }}" as="rz" hint-placeholder-count="0">
+                      <div style="font-size:11.5px;color:var(--mut);line-height:1.6">{{ rz }}</div>
+                    </sc-for>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- bot text -->
+            <sc-if value="{{ it.bot }}" hint-placeholder-val="{{ false }}">
+              <div class="msg bot" style="animation:gsrise .3s ease both"><div class="who">0xCopilot</div>{{ it.t }}<sc-if value="{{ it.caret }}" hint-placeholder-val="{{ false }}"><span style="display:inline-block;width:6px;height:13px;background:var(--accent);border-radius:1px;vertical-align:-2px;margin-left:2px;animation:gsblink 1s step-end infinite"></span></sc-if></div>
+            </sc-if>
+
+            <!-- tool call card -->
+            <sc-if value="{{ it.tool }}" hint-placeholder-val="{{ false }}">
+              <div class="tcall">
+                <div class="tcall__h" onClick="{{ it.toggle }}">
+                  <span class="tcall__logo" style="background:{{ it.logoBg }};color:{{ it.logoC }}">{{ it.logo }}</span>
+                  <div style="min-width:0;flex:1">
+                    <div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap">
+                      <span class="mono" style="font-size:11px;color:var(--tx);font-weight:500">{{ it.fn }}</span>
+                      <span class="pbadge" style="color:{{ it.partyC }};border-color:{{ it.partyBorder }}"><span class="dotk" style="background:{{ it.partyC }};width:5px;height:5px"></span>{{ it.party }}</span>
+                      <span class="pbadge" style="color:var(--mut)">{{ it.rw }}</span>
+                    </div>
+                    <sc-if value="{{ it.running }}" hint-placeholder-val="{{ false }}"><div class="shim" style="font-size:10.5px;margin-top:3px">{{ it.status }}</div></sc-if>
+                    <sc-if value="{{ it.ok }}" hint-placeholder-val="{{ false }}"><div style="font-size:10.5px;color:var(--tx2);margin-top:3px">{{ it.summary }}</div></sc-if>
+                  </div>
+                  <sc-if value="{{ it.running }}" hint-placeholder-val="{{ false }}"><span class="spin" style="flex:none"></span></sc-if>
+                  <sc-if value="{{ it.ok }}" hint-placeholder-val="{{ false }}"><span style="flex:none;color:var(--jade);display:inline-flex"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></span></sc-if>
+                  <span class="mono" style="flex:none;font-size:9px;color:var(--mut2)">{{ it.dur }}</span>
+                </div>
+                <sc-if value="{{ it.open }}" hint-placeholder-val="{{ false }}">
+                  <div class="tcall__body">
+                    <div class="kv"><b>args</b><span class="mono" style="font-size:10px">{{ it.args }}</span></div>
+                    <sc-if value="{{ it.ok }}" hint-placeholder-val="{{ false }}"><div class="kv"><b>result</b><span class="mono" style="font-size:10px;color:var(--mut)">{{ it.result }}</span></div></sc-if>
+                    <div class="kv"><b>source</b><span class="mono" style="font-size:10px;color:var(--mut2)">{{ it.origin }}</span></div>
+                    <sc-if value="{{ it.hasSpawn }}" hint-placeholder-val="{{ false }}">
+                      <div style="margin-top:8px;padding-top:9px;border-top:1px dashed var(--line2)">
+                        <div style="display:flex;align-items:center;gap:7px"><span style="color:var(--accent);display:inline-flex"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v6M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM6 21v-3a3 3 0 0 1 3-3h6a3 3 0 0 1 3 3v3"></path></svg></span><span class="mono" style="font-size:9.5px;color:var(--accent)">spawned · {{ it.spawn }}</span></div>
+                        <div style="margin:6px 0 0 5px;padding-left:11px;border-left:1.5px solid var(--line2);display:flex;flex-direction:column;gap:5px">
+                          <sc-for list="{{ it.children }}" as="ch" hint-placeholder-count="3">
+                            <div style="display:flex;align-items:center;gap:7px;font-size:10px;color:var(--mut)"><span style="color:var(--jade);display:inline-flex"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></span>{{ ch.t }}</div>
+                          </sc-for>
+                        </div>
+                      </div>
+                    </sc-if>
+                  </div>
+                </sc-if>
+              </div>
+            </sc-if>
+
+            <!-- web search sources rollup -->
+            <sc-if value="{{ it.sources }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;animation:gsrise .3s ease both">
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--line)"><span class="mono" style="font-size:9px;letter-spacing:.1em;color:var(--mut2)">SOURCES · {{ it.n }}</span><span class="mono" style="margin-left:auto;font-size:9px;color:var(--mut2)">no surface — synthesized in chat</span></div>
+                <sc-for list="{{ it.list }}" as="sr" hint-placeholder-count="0">
+                  <div style="display:flex;align-items:center;gap:9px;padding:8px 11px;border-bottom:1px solid var(--line)">
+                    <span style="width:18px;height:18px;border-radius:5px;background:var(--panel3);color:var(--tx2);display:grid;place-items:center;font-size:8px;font-weight:700;flex:none">{{ sr.ini }}</span>
+                    <div style="min-width:0;flex:1"><div style="font-size:11px;color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ sr.t }}</div><div class="mono" style="font-size:9px;color:var(--mut2)">{{ sr.u }}</div></div>
+                    <span class="mono" style="flex:none;font-size:9px;color:var(--accent)">[{{ sr.c }}]</span>
+                  </div>
+                </sc-for>
+              </div>
+            </sc-if>
+
+            <!-- csv analysis inline result -->
+            <sc-if value="{{ it.csv }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid var(--line);border-radius:10px;background:var(--panel);overflow:hidden;animation:gsrise .3s ease both">
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 11px;border-bottom:1px solid var(--line)"><span class="tcall__logo" style="width:18px;height:18px;background:var(--panel3);color:var(--jade)">▤</span><span class="mono" style="font-size:10px;color:var(--tx2)">forecast_q1.csv</span><span class="mono" style="margin-left:auto;font-size:9px;color:var(--mut2)">742 rows · 9 cols · 61 KB</span></div>
+                <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line)">
+                  <sc-for list="{{ it.stats }}" as="st" hint-placeholder-count="0">
+                    <div style="background:var(--panel);padding:9px 11px"><div class="mono" style="font-size:8.5px;letter-spacing:.08em;color:var(--mut2)">{{ st.k }}</div><div style="font-size:13px;font-weight:600;font-family:var(--disp);margin-top:3px">{{ st.v }}</div></div>
+                  </sc-for>
+                </div>
+                <div style="padding:9px 11px;border-top:1px solid var(--line)"><span class="mono" style="font-size:9px;color:var(--mut2)">no surface — analysis answered in chat</span></div>
+              </div>
+            </sc-if>
+
+            <!-- file write card -->
+            <sc-if value="{{ it.file }}" hint-placeholder-val="{{ false }}">
+              <div style="border:1px solid {{ it.fBorder }};border-radius:10px;background:var(--panel);overflow:hidden;animation:gsrise .3s ease both">
+                <div style="display:flex;align-items:center;gap:9px;padding:9px 11px">
+                  <span class="tcall__logo" style="background:var(--panel3);color:var(--accent)"><svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4"></path></svg></span>
+                  <div style="min-width:0;flex:1"><div style="display:flex;align-items:center;gap:7px"><span class="mono" style="font-size:11px;color:var(--tx);font-weight:500">{{ it.path }}</span><span class="pbadge" style="color:{{ it.fTagC }};border-color:{{ it.fTagBorder }}">{{ it.fTag }}</span></div><div class="mono" style="font-size:9px;color:var(--mut2);margin-top:2px">{{ it.fMeta }}</div></div>
+                  <span class="pbadge" style="color:var(--jade);border-color:var(--line2)"><span class="dotk" style="background:var(--jade);width:5px;height:5px"></span>Local · built-in</span>
+                  <span class="mono" style="flex:none;font-size:10px;color:var(--jade)">+{{ it.fAdd }}</span>
+                </div>
+                <pre class="mono" style="margin:0;padding:10px 12px;border-top:1px solid var(--line);background:var(--ink2);font-size:10px;line-height:1.7;color:var(--tx2);overflow:auto;max-height:132px">{{ it.peek }}</pre>
+                <div style="display:flex;gap:7px;padding:8px 11px;border-top:1px solid var(--line)"><button class="cbtn cbtn--sm cbtn--ghost" onClick="{{ it.reveal }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path></svg>Reveal in files</button><button class="cbtn cbtn--sm cbtn--ghost" onClick="{{ it.reveal }}">Open</button><span class="mono" style="margin-left:auto;font-size:9px;color:var(--mut2);align-self:center">written {{ it.fAt }}</span></div>
+              </div>
+            </sc-if>
+          </sc-for>
+        </div>
+
+        <div class="sd-cmp"><div class="cmp">
+          <textarea rows="1" placeholder="Reply or steer…" value="{{ cmp }}" onChange="{{ onCmp }}" onKeyDown="{{ onCmpKey }}"></textarea>
+          <div class="cmp-row"><button class="cmp-pill"><span class="pd" style="background:#d97757"></span><span class="lb">Claude Sonnet 4.5</span></button><button class="cmp-pill"><span class="lb">Tools</span><span class="n">6</span></button><span class="cmp-hint">⏎ send</span><button class="cmp-send" disabled="{{ cmpEmpty }}" onClick="{{ onSend }}"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12l16-8-6 16-3.5-6.5z"></path></svg></button></div>
+        </div></div>
+      </section>
+
+      <!-- FOCUS ACTIVITY PANEL -->
+      <sc-if value="{{ isFocus }}" hint-placeholder-val="{{ true }}">
+        <aside class="sd" data-screen-label="Activity panel">
+          <div class="sd-h"><span class="t">Activity</span><span class="mono" style="margin-left:auto;font-size:9px;color:var(--mut2)">live</span></div>
+          <div class="side-body scroll" style="flex:1;min-height:0;overflow-y:auto;gap:14px">
+            <div>
+              <div class="sect-h" style="display:flex;align-items:center;gap:7px">Agents<sc-if value="{{ hasSub }}" hint-placeholder-val="{{ false }}"><span class="chip chip--sky" style="padding:1px 6px">{{ subAgentN }} running</span></sc-if></div>
+              <div style="display:flex;flex-direction:column;gap:8px;margin-top:9px">
+                <sc-for list="{{ agents }}" as="ag" hint-placeholder-count="1">
+                  <div style="margin-left:{{ ag.indent }};display:flex;gap:9px;align-items:flex-start;padding:9px 11px;border:1px solid var(--line);border-radius:9px;background:var(--panel)">
+                    <span style="flex:none;margin-top:1px">
+                      <sc-if value="{{ ag.isRun }}" hint-placeholder-val="{{ true }}"><span class="spin"></span></sc-if>
+                      <sc-if value="{{ ag.isDone }}" hint-placeholder-val="{{ false }}"><span style="color:var(--jade);display:inline-flex"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></span></sc-if>
+                    </span>
+                    <div style="min-width:0;flex:1">
+                      <div style="display:flex;align-items:center;gap:7px"><span style="font-size:11.5px;color:var(--tx);font-weight:500">{{ ag.role }}</span><span class="pbadge" style="color:{{ ag.tint }};border-color:var(--line2)">{{ ag.model }}</span></div>
+                      <div class="mono" style="font-size:9px;color:var(--mut2);margin-top:3px;line-height:1.5">{{ ag.cur }}</div>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+            <div>
+              <div class="sect-h">Plan</div>
+              <div class="plan" style="margin-top:9px">
+                <sc-for list="{{ planV }}" as="p" hint-placeholder-count="4">
+                  <div class="plan-step {{ p.cls }}">
+                    <span class="ic">
+                      <sc-if value="{{ p.done }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg></sc-if>
+                      <sc-if value="{{ p.pend }}" hint-placeholder-val="{{ true }}"><span class="spin"></span></sc-if>
+                      <sc-if value="{{ p.fut }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg></sc-if>
+                    </span>
+                    <span class="pt">{{ p.t }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+          <div style="flex:none;display:flex;align-items:center;gap:8px;padding:10px 12px;border-top:1px solid var(--line);background:var(--ink2)">
+            <sc-if value="{{ approvalsPending }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--amber)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg></sc-if>
+            <sc-if value="{{ approvalsClear }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="var(--mut)" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" style="flex:none"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z"></path></svg></sc-if>
+            <span class="mono" style="font-size:9px;color:var(--mut2)">{{ approvalsNote }}</span>
+          </div>
+        </aside>
+      </sc-if>
+
+      <!-- STUDIO CANVAS -->
+      <sc-if value="{{ isStudio }}" hint-placeholder-val="{{ false }}">
+        <section class="cv" style="position:relative" data-screen-label="Studio canvas">
+          <div class="sheet-scroll scroll" style="display:grid;place-items:center;padding:26px">
+            <div style="width:440px;max-width:100%;text-align:center;animation:gsrise .3s ease both">
+              <span style="width:52px;height:52px;border-radius:14px;border:1px dashed var(--line3);display:grid;place-items:center;color:var(--mut2);margin:0 auto 16px">{{ canvasIcon }}</span>
+              <h3 style="font-size:15px;letter-spacing:-.01em">{{ canvasTitle }}</h3>
+              <p style="font-size:12px;color:var(--mut);margin-top:8px;line-height:1.65">{{ canvasBody }}</p>
+              <sc-if value="{{ canvasHasChip }}" hint-placeholder-val="{{ false }}"><div style="display:inline-flex;margin-top:14px"><span class="chip">{{ canvasChip }}</span></div></sc-if>
+            </div>
+          </div>
+          <div style="flex:none;display:flex;align-items:center;gap:10px;padding:8px 16px;border-top:1px solid var(--line);background:var(--ink2)"><span class="mono" style="font-size:9px;letter-spacing:.12em;color:var(--mut)">CANVAS</span><span class="mono" style="font-size:9.5px;color:var(--mut2)">{{ canvasProv }}</span></div>
+        </section>
+      </sc-if>
+    </div>
+  </div>
+
+  <div style="width:1200px;flex:none;display:flex;align-items:center;gap:9px;flex-wrap:wrap" data-screen-label="Walkthrough strip">
+    <span class="mono" style="font-size:9px;letter-spacing:.14em;color:var(--mut2)">STEP</span>
+    <sc-for list="{{ chapters }}" as="c" hint-placeholder-count="0">
+      <button onClick="{{ c.click }}" style="display:inline-flex;align-items:center;gap:7px;padding:4px 11px;border-radius:999px;cursor:pointer;font-family:var(--body);font-size:11px;background:transparent;border:1px solid {{ c.bc }};color:{{ c.tc }}"><span class="mono" style="font-size:9px;color:{{ c.nc }}">{{ c.n }}</span>{{ c.label }}</button>
+    </sc-for>
+    <span class="mono" style="margin-left:auto;font-size:9px;color:var(--mut2)">← → to move</span>
+  </div>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;: {&quot;width&quot;: 1260, &quot;height&quot;: 900}, &quot;theme&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;dark&quot;, &quot;light&quot;], &quot;default&quot;: &quot;dark&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Appearance&quot;}, &quot;accent&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;sky&quot;, &quot;jade&quot;, &quot;ember&quot;, &quot;violet&quot;], &quot;default&quot;: &quot;sky&quot;, &quot;tsType&quot;: &quot;string&quot;, &quot;section&quot;: &quot;Appearance&quot;}, &quot;autoAdvance&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;, &quot;section&quot;: &quot;Walkthrough&quot;}}">
+const GOAL = "Catch me up on ENG-142, check the web for the payments-gateway incident postmortem, summarize forecast_q1.csv, and save a standup note.";
+const y = (t) => ({ k: "you", t });
+const bot = (t) => ({ k: "bot", t: t.replace(/\*\*/g, "") });
+const think = (t, tDone, reasoning) => ({ k: "think", t, tDone, reasoning });
+// tool: party = mcp | local | builtin
+const tool = (fn, o) => ({ k: "tool", fn, ...o });
+const CH = ["Thinking", "Read · 3rd-party", "Web search", "Read CSV · local", "Write file", "Wrap"];
+
+// full scripted transcript (final states); reveal is staged by index
+function script() {
+  return [
+    y(GOAL),                                                                                    // 0
+    think("Thinking through the request", "Thought for 4s — 4 tools, 1 file to write", [
+      "Four asks: a Linear status, a web postmortem, a CSV summary, and a file to write.",
+      "Linear + web + CSV are reads → run them without asking. The file write pauses for approval.",
+      "The postmortem and CSV are analysis, not records — answer inline, don't force a surface.",
+      "Order: read ENG-142, search the web, read the CSV, then write the standup note.",
+    ]),          // 1
+    tool("linear.issues.get", { party: "mcp", nm: "Linear", logo: "Li", logoC: "var(--violet)", rw: "read", args: '{ id: "ENG-142" }', status: "Reading issue from Linear…", summary: "ENG-142 · In Review · Dana Okafor · ships Thu Feb 12", result: "1 issue · state=In Review · priority=High", origin: "MCP · linear.app · OAuth (alex@northbeam.co)", dur: "0.3s" }), // 2
+    bot("**ENG-142** is in review with Dana and on track for **Thursday**. Now the incident postmortem — searching the web."), // 3
+    tool("web.search", { party: "mcp", nm: "Web", logo: "◍", logoC: "var(--accent)", rw: "read", args: '{ q: "payments gateway incident postmortem Jan 28" }', status: "Delegated to a research subagent…", summary: "3 relevant sources · synthesized below", result: "3 pages fetched, ranked", origin: "MCP · web.search · no auth", dur: "1.2s", spawn: "Research subagent · Haiku 4.5", children: ["web.search — 6 hits", "web.fetch × 3 — status page · postmortem · PR", "rank + dedupe → 3 kept, returned to lead"] }), // 4
+    { k: "sources", n: 3, list: [
+      { ini: "St", t: "Status page — Checkout latency incident (resolved)", u: "status.northbeam.co/incidents/0128", c: 1 },
+      { ini: "No", t: "Postmortem: token refresh & retry drops", u: "notion.so/eng/pm-0128", c: 2 },
+      { ini: "Gh", t: "PR #482 — retry idempotency", u: "github.com/northbeam/checkout/pull/482", c: 3 },
+    ] }, // 5
+    bot("The Jan 28 incident traces to stale tokens on queued retries [1][2]; the fix is idempotency-keyed re-signing, already up as PR #482 [3]. Same root cause as ENG-142."), // 6
+    tool("fs.read", { party: "local", nm: "Local", logo: "▤", logoC: "var(--jade)", rw: "read", args: '{ path: "forecast_q1.csv" }', status: "Reading forecast_q1.csv from disk…", summary: "742 rows × 9 cols parsed", result: "742 rows, headers: region, stage, amount, close_q…", origin: "Local filesystem · built-in · no network", dur: "0.1s" }), // 7
+    { k: "csv", stats: [
+      { k: "ROWS", v: "742" }, { k: "PIPELINE", v: "$4.1M" }, { k: "WTD CLOSE", v: "$1.6M" },
+      { k: "AT RISK", v: "18" }, { k: "MEDIAN AGE", v: "34d" }, { k: "TOP REGION", v: "EMEA" },
+    ] }, // 8
+    bot("**forecast_q1.csv**: $4.1M open pipeline, $1.6M weighted to close this quarter. 18 deals are stalled >60 days — mostly EMEA. Want those flagged in Salesforce?"), // 9
+    tool("fs.write", { party: "local", nm: "Local", logo: "▤", logoC: "var(--jade)", rw: "write", args: '{ path: "standup-2026-02-09.md", mode: "create" }', status: "Writing file…", summary: "Created standup-2026-02-09.md (+18 lines)", result: "created · 18 lines · 612 bytes", origin: "Local filesystem · built-in · write", dur: "0.1s" }), // 10
+    { k: "file" }, // 11
+    bot("Saved the standup note to your workspace. That's the catch-up — issue's on track, incident root cause confirmed, forecast summarized, note written."), // 12
+  ];
+}
+const FILE_PEEK = "# Standup — Mon Feb 9\n\n## Shipping\n- ENG-142 (checkout retries) — In Review, ships Thu\n  root cause = stale token on queued retries\n\n## Watch\n- 18 stale deals >60d (EMEA-heavy) — flag in SFDC?\n\n## Refs\n- Incident 0128 postmortem\n- PR #482 (retry idempotency)";
+
+// step index → how many transcript items are revealed
+const STEP_ITEMS = [2, 4, 7, 10, 12, 13];
+const STEP_CANVAS = [
+  { icon: "record", title: "This step renders a record surface", body: "Reads of a known tool (Linear) produce a generative surface — the issue card. That's the v2 demo; here the focus is the chat side.", chip: "linear.issues.get → record view", prov: "gv · record · shown in the Surfaces demo" },
+  { icon: "record", title: "This step renders a record surface", body: "Reads of a known tool (Linear) produce a generative surface — the issue card. That's the v2 demo; here the focus is the chat side.", chip: "linear.issues.get → record view", prov: "gv · record · shown in the Surfaces demo" },
+  { icon: "search", title: "Nothing to render", body: "A web search returns prose and sources, not a tool record. There's no honest surface to generate — so Studio stays empty and the answer, with citations, lives in the chat.", chip: null, prov: "web.search · no surface · answered in chat" },
+  { icon: "data", title: "Nothing to render", body: "Understanding a CSV is analysis, not a viewable record. The stats and takeaway belong in the reply — Studio doesn't invent a chart it can't stand behind.", chip: "prefers inline over a guessed chart", prov: "fs.read + analysis · no surface · answered in chat" },
+  { icon: "file", title: "A file was written", body: "Writing to the local filesystem isn't a third-party surface — the chat shows the file card (path, diff, reveal). Studio can preview the file, but the record of the action is in chat.", chip: "standup-2026-02-09.md · created", prov: "fs.write · local · previewable" },
+  { icon: "check", title: "Run complete", body: "Two reads produced surfaces, two produced only chat answers, one wrote a file. The chat is the throughline; Studio renders only what can be rendered honestly.", chip: null, prov: "6 steps · 4 tools · 1 file" },
+];
+const ICONS = {
+  record: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"></rect><path d="M3 9h18M8 4v16"></path></svg>',
+  search: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"></circle><path d="M21 21l-4.3-4.3"></path></svg>',
+  data: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"></ellipse><path d="M4 5v14c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"></path></svg>',
+  file: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14H6z"></path><path d="M14 3v4h4"></path></svg>',
+  check: '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12l5 5L20 7"></path></svg>',
+};
+
+class Component extends DCLogic {
+  state = { mode: "focus", step: 0, reveal: STEP_ITEMS[0], activeIdx: -1, open: {}, think: {}, cmp: "" };
+  timers = [];
+  gen = 0;
+  script = script();
+  t(ms, fn) { const g = this.gen; this.timers.push(setTimeout(() => { if (this.gen === g) fn(); }, ms)); }
+  clear() { this.gen++; this.timers.forEach(clearTimeout); this.timers = []; }
+
+  componentDidMount() {
+    this.play();
+    this._key = (e) => {
+      const tag = (e.target.tagName || "").toLowerCase();
+      if (tag === "textarea" || tag === "input") return;
+      if (e.key === "ArrowRight") this.jump(Math.min(this.state.step + 1, 5));
+      if (e.key === "ArrowLeft") this.jump(Math.max(this.state.step - 1, 0));
+    };
+    window.addEventListener("keydown", this._key);
+  }
+  componentWillUnmount() { this.clear(); window.removeEventListener("keydown", this._key); }
+
+  // reveal items up to target with a brief "active/running" beat on the last tool/think
+  play() {
+    const target = STEP_ITEMS[this.state.step];
+    const from = this.state.reveal;
+    if (this.props.autoAdvance === false) { this.setState({ reveal: target, activeIdx: -1 }); return; }
+    let i = from;
+    const tick = () => {
+      if (i >= target) { this.setState({ activeIdx: -1 }); return; }
+      const item = this.script[i];
+      const isProc = item.k === "think" || item.k === "tool";
+      this.setState({ reveal: i + 1, activeIdx: isProc ? i : -1 }, () => this.scroll());
+      const gap = isProc ? 1100 : (item.k === "bot" ? 700 : 500);
+      i++;
+      this.t(gap, tick);
+    };
+    tick();
+  }
+  jump(step) { this.clear(); this.setState({ step, reveal: STEP_ITEMS[step], activeIdx: -1 }, () => this.scroll()); }
+  scrollTop() { requestAnimationFrame(() => { if (this._chat) this._chat.scrollTop = 0; }); }
+  scroll() { requestAnimationFrame(() => requestAnimationFrame(() => { if (this._chat) this._chat.scrollTop = this._chat.scrollHeight + 999; })); }
+  onSend() { const t = this.state.cmp.trim(); if (!t) return; this.setState((s) => ({ cmp: "" })); this.showFlash = t; this.script.push(y(t), bot("Got it — same rules: reads run, writes ask. Nothing here approves silently.")); this.clear(); this.setState((s) => ({ reveal: this.script.length })); this.scroll(); }
+
+  renderVals() {
+    const s = this.state;
+    const partyMap = {
+      mcp: { label: "MCP · 3rd-party", c: "var(--accent)", border: "var(--accent-line)" },
+      local: { label: "Local · built-in", c: "var(--jade)", border: "var(--line2)" },
+    };
+    const items = this.script.slice(0, s.reveal).map((it, i) => {
+      const active = i === s.activeIdx;
+      if (it.k === "you") return { you: true, t: it.t };
+      if (it.k === "think") { const op = !!s.think[i]; return { think: true, active, done: !active, t: it.t, tDone: it.tDone, reasoning: it.reasoning || [], open: !active && op, chev: op ? "rotate(180deg)" : "none", cursor: active ? "default" : "pointer", toggle: () => { if (!active) this.setState((st) => ({ think: { ...st.think, [i]: !st.think[i] } })); } }; }
+      if (it.k === "bot") return { bot: true, t: it.t, caret: active };
+      if (it.k === "tool") {
+        const p = partyMap[it.party];
+        return {
+          tool: true, fn: it.fn, logo: it.logo, logoC: it.logoC, logoBg: "var(--panel3)",
+          party: p.label, partyC: p.c, partyBorder: p.border, rw: it.rw === "write" ? "write" : "read",
+          running: active, ok: !active, status: it.status, summary: it.summary,
+          args: it.args, result: it.result, origin: it.origin, dur: active ? "" : it.dur,
+          open: !!s.open[i], toggle: () => this.setState((st) => ({ open: { ...st.open, [i]: !st.open[i] } })),
+        };
+      }
+      if (it.k === "sources") return { sources: true, n: it.n, list: it.list };
+      if (it.k === "csv") return { csv: true, stats: it.stats };
+      if (it.k === "file") return {
+        file: true, path: "standup-2026-02-09.md", fTag: "new file", fTagC: "var(--jade)", fTagBorder: "rgba(87,199,133,.35)",
+        fBorder: "rgba(87,199,133,.3)", fMeta: "workspace root · markdown · 612 B", fAdd: "18", fAt: "11:44",
+        peek: FILE_PEEK, reveal: () => this.showToast(),
+      };
+      return {};
+    });
+    const c = STEP_CANVAS[s.step];
+    // Activity panel (Focus): orchestrator + spawned subagents
+    const agents = [{ role: "Orchestrator", model: "Sonnet 4.5", lead: true, status: s.step >= 5 ? "done" : "run", cur: c.prov }];
+    if (s.step >= 2) agents.push({ role: "Research · incident postmortem", model: "Haiku 4.5", sub: true, status: s.step > 2 ? "done" : "run", cur: s.step > 2 ? "3 sources returned to lead" : "web.fetch × 3 · ranking pages" });
+    if (s.step >= 3) agents.push({ role: "Analyst · forecast_q1.csv", model: "Haiku 4.5", sub: true, status: s.step > 3 ? "done" : "run", cur: s.step > 3 ? "summary returned to lead" : "parsing 742 rows · aggregating" });
+    const agentsV = agents.map((a) => ({
+      role: a.role, model: a.model, cur: a.cur, indent: a.sub ? "18px" : "0",
+      isRun: a.status === "run", isDone: a.status === "done", isLead: !!a.lead,
+      tint: a.sub ? "var(--accent)" : "var(--jade)",
+    }));
+    const plan = [
+      { t: "Status of ENG-142", done: s.step >= 2 }, { t: "Web: incident postmortem", done: s.step >= 3 },
+      { t: "Summarize forecast_q1.csv", done: s.step >= 4 }, { t: "Write standup note", done: s.step >= 5 },
+    ].map((p) => ({ t: p.t, done: p.done, cur: !p.done && ((p.t[0] === "S" && s.step < 2) || true) }));
+    const firstOpen = plan.findIndex((x) => !x.done);
+    const planV = plan.map((p, i) => { const pend = !p.done && i === firstOpen, fut = !p.done && i !== firstOpen; return { t: p.t, done: p.done, pend, fut, cls: p.done ? "done" : pend ? "pending" : "future" }; });
+    return {
+      theme: this.props.theme ?? "dark", accent: this.props.accent ?? "sky",
+      isFocus: s.mode === "focus", isStudio: s.mode === "studio",
+      modeLabel: s.mode === "focus" ? "Focus" : "Studio",
+      setFocus: () => this.setState({ mode: "focus" }), setStudio: () => this.setState({ mode: "studio" }),
+      grid: s.mode === "studio" ? "minmax(0,1fr) minmax(0,1.05fr)" : "minmax(0,1fr) 340px",
+      chatBorder: "1px solid var(--line)", rightLabel: s.mode === "studio" ? "Studio canvas" : "Activity",
+      agents: agentsV, planV, subAgentN: agents.filter((a) => a.sub && a.status === "run").length,
+      hasSub: agents.some((a) => a.sub && a.status === "run"),
+      approvalsPending: s.step === 4, approvalsClear: s.step !== 4,
+      approvalsNote: s.step === 4 ? "fs.write · standup note — held for you" : (s.step >= 5 ? "1 write approved · 0 held" : "reads only so far — nothing held"),
+      toolsLive: "6 tools live",
+      items, chatRef: (el) => { this._chat = el; },
+      cmp: s.cmp, cmpEmpty: !s.cmp.trim(),
+      onCmp: (e) => this.setState({ cmp: e.target.value }),
+      onCmpKey: (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.onSend(); } },
+      onSend: () => this.onSend(),
+      canvasIcon: React.createElement("span", { dangerouslySetInnerHTML: { __html: ICONS[c.icon] } }),
+      canvasTitle: c.title, canvasBody: c.body, canvasHasChip: !!c.chip, canvasChip: c.chip || "", canvasProv: c.prov,
+      chapters: CH.map((label, i) => ({
+        n: "0" + (i + 1), label, click: () => this.jump(i),
+        bc: i === s.step ? "var(--accent-line)" : "var(--line)",
+        tc: i === s.step ? "var(--accent)" : i < s.step ? "var(--tx2)" : "var(--mut2)",
+        nc: i === s.step ? "var(--accent)" : "var(--mut2)",
+      })),
+    };
+  }
+  showToast() { /* no-op placeholder for reveal */ }
+}
+
+</script>
+</body>
+</html>

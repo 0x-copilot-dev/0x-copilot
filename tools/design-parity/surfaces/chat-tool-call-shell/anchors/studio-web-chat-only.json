@@ -1,0 +1,86 @@
+{
+  "surface": "chat-tool-call-shell",
+  "state": "studio-web-chat-only",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "Supplied Chat & Tool Calls walkthrough, web-read answered in chat. No expected divergences are declared.",
+  "elements": [
+    {
+      "label": "shell.frame",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"shell\"]",
+      "live": "#parity-frame",
+      "what": "Fixed Run cockpit frame."
+    },
+    {
+      "label": "shell.header",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"window-bar\"]",
+      "live": "#parity-frame [data-testid=\"run-header\"]",
+      "what": "Top run chrome."
+    },
+    {
+      "label": "shell.mode-switcher",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"mode-switcher\"]",
+      "live": "#parity-frame [data-testid=\"run-mode-switcher\"]",
+      "what": "Studio is selected."
+    },
+    {
+      "label": "chat.column",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"chat-column\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat\"]",
+      "what": "Shared Studio chat column."
+    },
+    {
+      "label": "chat.transcript",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"chat-transcript\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat-messages\"]",
+      "what": "Transcript viewport."
+    },
+    {
+      "label": "chat.composer",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"composer\"]",
+      "live": "#parity-frame [data-testid=\"composer\"]",
+      "what": "Shipping Composer."
+    },
+    {
+      "label": "studio.canvas",
+      "group": "Studio",
+      "design": "[data-parity-anchor=\"studio-canvas\"]",
+      "live": "#parity-frame [data-testid=\"run-canvas-slot\"]",
+      "what": "Studio canvas region."
+    },
+    {
+      "label": "tool.web.card",
+      "group": "Web read",
+      "design": "[data-parity-anchor=\"tool-card-web\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat-tool-web-search\"] > details",
+      "what": "Completed web-search tool card."
+    },
+    {
+      "label": "tool.web.header",
+      "group": "Web read",
+      "design": "[data-parity-anchor=\"tool-card-web\"] .tcall__h",
+      "live": "#parity-frame [data-testid=\"tc-chat-tool-web-search\"] summary",
+      "what": "Web tool identity and outcome row."
+    },
+    {
+      "label": "web.sources-card",
+      "group": "Web read",
+      "design": "[data-parity-anchor=\"sources-card\"]",
+      "what": "The reference supplies an inline source-card; shipping RunDestination only has the tool result and chat answer.",
+      "baselineGap": "No matching inline web-source card is mounted in the shipping transcript."
+    },
+    {
+      "label": "web.chat-only-canvas",
+      "group": "Web read",
+      "design": "[data-parity-anchor=\"studio-canvas-empty\"]",
+      "live": "#parity-frame [data-testid=\"canvas-lifecycle-panel\"]",
+      "what": "No custom canvas surface was created."
+    }
+  ]
+}
