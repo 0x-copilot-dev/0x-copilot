@@ -20,6 +20,7 @@ from runtime_adapters.in_memory.artifact_cleanup_schedule_store import (
 )
 from runtime_worker.jobs.artifact_cleanup_execution import (
     ArtifactCleanupExecutionEnv,
+    ArtifactCleanupExecutionLoop,
     ArtifactCleanupExecutionRunner,
 )
 
@@ -151,6 +152,68 @@ class _FenceAwareStallingPersistence:
 
 
 @dataclass
+class _CancellationProbePersistence:
+    """Lifecycle double that can cooperate with or deliberately ignore cancel."""
+
+    org_ids: tuple[str, ...]
+    blocking_org_ids: frozenset[str]
+    ignore_cancellation_org_ids: frozenset[str]
+    calls: list[str] = field(default_factory=list)
+    audits: list[tuple[str, dict[str, object]]] = field(default_factory=list)
+    started: dict[str, asyncio.Event] = field(init=False)
+    finished: dict[str, asyncio.Event] = field(init=False)
+    _release: dict[str, asyncio.Event] = field(init=False)
+
+    def __post_init__(self) -> None:
+        self.started = {org_id: asyncio.Event() for org_id in self.org_ids}
+        self.finished = {org_id: asyncio.Event() for org_id in self.org_ids}
+        self._release = {org_id: asyncio.Event() for org_id in self.org_ids}
+
+    def release(self, org_id: str) -> None:
+        self._release[org_id].set()
+
+    async def list_retention_orgs(self) -> Sequence[str]:
+        return self.org_ids
+
+    async def execute_artifact_cleanup(
+        self,
+        *,
+        org_id: str,
+        now: datetime,
+        limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
+    ) -> ArtifactPhysicalCleanupOutcome:
+        del now
+        assert limit == 7
+        assert execution_fence is not None
+        await execution_fence.assert_active()
+        self.calls.append(org_id)
+        self.started[org_id].set()
+        try:
+            if org_id in self.blocking_org_ids:
+                while not self._release[org_id].is_set():
+                    try:
+                        await self._release[org_id].wait()
+                    except asyncio.CancelledError:
+                        if org_id not in self.ignore_cancellation_org_ids:
+                            raise
+            # A resumed hung pass must not perform another destructive phase
+            # once its original scheduler generation has been released.
+            await execution_fence.assert_active()
+            return _outcome(org_id)
+        finally:
+            self.finished[org_id].set()
+
+    async def write_audit_log(
+        self,
+        *,
+        event_type: str,
+        record: dict[str, object],
+    ) -> None:
+        self.audits.append((event_type, record))
+
+
+@dataclass
 class _MutableClock:
     value: datetime
 
@@ -169,6 +232,21 @@ class _FirstHeartbeatStopsSchedule(InMemoryArtifactCleanupScheduleStore):
         if kwargs["owner_id"] == self.stalled_owner:
             return None
         return await super().renew_lease(**kwargs)
+
+
+class _ObservingSchedule(InMemoryArtifactCleanupScheduleStore):
+    """In-memory schedule double exposing an exact-fence release for tests."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.execution_released: dict[str, asyncio.Event] = {}
+
+    def release_event(self, org_id: str) -> asyncio.Event:
+        return self.execution_released.setdefault(org_id, asyncio.Event())
+
+    async def release_tenant_execution(self, *, execution) -> None:  # noqa: ANN001
+        await super().release_tenant_execution(execution=execution)
+        self.release_event(execution.org_id).set()
 
 
 def _outcome(org_id: str, **changes: int) -> ArtifactPhysicalCleanupOutcome:
@@ -473,6 +551,199 @@ async def test_stalled_tenant_pass_blocks_successor_destructive_cleanup_after_ex
     resumed = await second.run_once()
     assert resumed.tenants_scanned == 1
     assert persistence.destructive_calls == ["org_a", "org_a"]
+
+
+async def test_deadline_cancels_cooperative_lifecycle_and_releases_tenant_fence() -> (
+    None
+):
+    """A cooperative pass is deferred, auditable, and conclusively unlocked."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a",),
+        blocking_org_ids=frozenset({"org_a"}),
+        ignore_cancellation_org_ids=frozenset(),
+    )
+    schedule = InMemoryArtifactCleanupScheduleStore()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        tenant_timeout_seconds=0.01,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.02,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    result = await asyncio.wait_for(runner.run_once(now=NOW), timeout=1)
+
+    assert result.failures == 1
+    assert result.deferred_tenants == 1
+    assert result.hung_tenants == 0
+    assert persistence.calls == ["org_a"]
+    assert persistence.finished["org_a"].is_set()
+    metadata = persistence.audits[0][1]["metadata"]
+    assert isinstance(metadata, dict)
+    assert metadata["execution_state"] == "deadline_cancelled"
+
+    # The cancelled task is conclusively stopped, so a later generation can
+    # acquire the exact tenant fence (the durable retry itself is still due
+    # later, but it never leaks a lock).
+    successor = await schedule.acquire_lease(
+        owner_id="successor",
+        now=NOW,
+        duration_seconds=60,
+    )
+    assert successor is not None
+    execution = await schedule.acquire_tenant_execution(
+        owner_id="successor",
+        fence_token=successor.fence_token,
+        org_id="org_a",
+        now=NOW,
+    )
+    assert execution is not None
+    await schedule.release_tenant_execution(execution=execution)
+    await schedule.release_lease(
+        owner_id="successor", fence_token=successor.fence_token, now=NOW
+    )
+
+
+async def test_hung_tenant_is_quarantined_while_later_tenants_progress() -> None:
+    """A cancellation-ignoring tenant cannot starve B/C or overlap its retry."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a", "org_b", "org_c"),
+        blocking_org_ids=frozenset({"org_a"}),
+        ignore_cancellation_org_ids=frozenset({"org_a"}),
+    )
+    schedule = _ObservingSchedule()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=3,
+        limit_per_org=7,
+        tenant_timeout_seconds=0.01,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.02,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    result = await asyncio.wait_for(runner.run_once(now=NOW), timeout=1)
+
+    assert result.tenants_scanned == 3
+    assert result.failures == 1
+    assert result.deferred_tenants == 1
+    assert result.hung_tenants == 1
+    assert persistence.calls == ["org_a", "org_b", "org_c"]
+    assert await schedule.load_cursor() == "org_c"
+    hung_metadata = persistence.audits[0][1]["metadata"]
+    assert isinstance(hung_metadata, dict)
+    assert hung_metadata["execution_state"] == "hung_quarantined"
+
+    # A new global owner can work unrelated tenants, but cannot enter the
+    # quarantined tenant until the original task exits and releases its exact
+    # adapter-backed fence.
+    successor = await schedule.acquire_lease(
+        owner_id="successor",
+        now=NOW,
+        duration_seconds=60,
+    )
+    assert successor is not None
+    blocked = await schedule.acquire_tenant_execution(
+        owner_id="successor",
+        fence_token=successor.fence_token,
+        org_id="org_a",
+        now=NOW,
+    )
+    assert blocked is None
+    other = await schedule.acquire_tenant_execution(
+        owner_id="successor",
+        fence_token=successor.fence_token,
+        org_id="org_b",
+        now=NOW,
+    )
+    assert other is not None
+    await schedule.release_tenant_execution(execution=other)
+    await schedule.release_lease(
+        owner_id="successor", fence_token=successor.fence_token, now=NOW
+    )
+
+    # Late completion does not advance the cursor or write a second audit row.
+    # Its only allowed state mutation is releasing the exact quarantined fence.
+    released_event = schedule.release_event("org_a")
+    persistence.release("org_a")
+    await asyncio.wait_for(persistence.finished["org_a"].wait(), timeout=1)
+    await asyncio.wait_for(released_event.wait(), timeout=1)
+    assert await schedule.load_cursor() == "org_c"
+    assert len(persistence.audits) == 3
+
+    later = await schedule.acquire_lease(owner_id="later", now=NOW, duration_seconds=60)
+    assert later is not None
+    released = await schedule.acquire_tenant_execution(
+        owner_id="later",
+        fence_token=later.fence_token,
+        org_id="org_a",
+        now=NOW,
+    )
+    assert released is not None
+    await schedule.release_tenant_execution(execution=released)
+    await schedule.release_lease(
+        owner_id="later", fence_token=later.fence_token, now=NOW
+    )
+
+
+async def test_loop_stop_is_bounded_with_a_quarantined_lifecycle_task() -> None:
+    """Graceful stop cannot await a cancellation-ignoring pass forever."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a",),
+        blocking_org_ids=frozenset({"org_a"}),
+        ignore_cancellation_org_ids=frozenset({"org_a"}),
+    )
+    schedule = _ObservingSchedule()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        tenant_timeout_seconds=30,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.05,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    loop = ArtifactCleanupExecutionLoop(runner=runner, interval_seconds=0.001)
+    await loop.start()
+    await asyncio.wait_for(persistence.started["org_a"].wait(), timeout=1)
+
+    await asyncio.wait_for(loop.stop(), timeout=0.2)
+    assert persistence.calls == ["org_a"]
+    assert not persistence.finished["org_a"].is_set()
+
+    # The fence survives the bounded shutdown return, so no successor can
+    # overlap the still-running pass. Release the test double and let the
+    # quarantine callback perform its sole legal mutation: exact-fence release.
+    successor = await schedule.acquire_lease(
+        owner_id="successor", now=datetime.now(UTC), duration_seconds=60
+    )
+    assert successor is not None
+    assert (
+        await schedule.acquire_tenant_execution(
+            owner_id="successor",
+            fence_token=successor.fence_token,
+            org_id="org_a",
+            now=datetime.now(UTC),
+        )
+        is None
+    )
+    await schedule.release_lease(
+        owner_id="successor",
+        fence_token=successor.fence_token,
+        now=datetime.now(UTC),
+    )
+    released_event = schedule.release_event("org_a")
+    persistence.release("org_a")
+    await asyncio.wait_for(persistence.finished["org_a"].wait(), timeout=1)
+    await asyncio.wait_for(released_event.wait(), timeout=1)
 
 
 async def test_restart_uses_durable_cursor_contract_after_prior_success() -> None:

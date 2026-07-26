@@ -227,10 +227,27 @@ class RuntimeWorkerEntrypoint:
                     ArtifactCleanupExecutionEnv.RETRY_MAX_SECONDS,
                     default=ArtifactCleanupExecutionEnv.DEFAULT_RETRY_MAX_SECONDS,
                 )
+                tenant_timeout_seconds = ArtifactCleanupExecutionEnv.env_float(
+                    ArtifactCleanupExecutionEnv.TENANT_TIMEOUT_SECONDS,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_TENANT_TIMEOUT_SECONDS,
+                )
+                cancel_grace_seconds = ArtifactCleanupExecutionEnv.env_float(
+                    ArtifactCleanupExecutionEnv.CANCEL_GRACE_SECONDS,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_CANCEL_GRACE_SECONDS,
+                )
+                stop_grace_seconds = ArtifactCleanupExecutionEnv.env_float(
+                    ArtifactCleanupExecutionEnv.STOP_GRACE_SECONDS,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_STOP_GRACE_SECONDS,
+                )
                 if retry_max_seconds < retry_base_seconds:
                     raise RuntimeError(
                         "ARTIFACT_CLEANUP_EXECUTION_RETRY_MAX_SECONDS must be at least "
                         "ARTIFACT_CLEANUP_EXECUTION_RETRY_BASE_SECONDS"
+                    )
+                if stop_grace_seconds < cancel_grace_seconds:
+                    raise RuntimeError(
+                        "ARTIFACT_CLEANUP_EXECUTION_STOP_GRACE_SECONDS must be at "
+                        "least ARTIFACT_CLEANUP_EXECUTION_CANCEL_GRACE_SECONDS"
                     )
                 artifact_cleanup_execution_loop = ArtifactCleanupExecutionLoop(
                     runner=ArtifactCleanupExecutionRunner(
@@ -244,6 +261,9 @@ class RuntimeWorkerEntrypoint:
                         lease_seconds=lease_seconds,
                         retry_base_seconds=retry_base_seconds,
                         retry_max_seconds=retry_max_seconds,
+                        tenant_timeout_seconds=tenant_timeout_seconds,
+                        cancel_grace_seconds=cancel_grace_seconds,
+                        stop_grace_seconds=stop_grace_seconds,
                     )
                 )
                 await artifact_cleanup_execution_loop.start()
@@ -256,6 +276,9 @@ class RuntimeWorkerEntrypoint:
                         "lease_seconds": lease_seconds,
                         "retry_base_seconds": retry_base_seconds,
                         "retry_max_seconds": retry_max_seconds,
+                        "tenant_timeout_seconds": tenant_timeout_seconds,
+                        "cancel_grace_seconds": cancel_grace_seconds,
+                        "stop_grace_seconds": stop_grace_seconds,
                     },
                 )
             # D12 planning is opt-in.  Execution is a second explicit switch:

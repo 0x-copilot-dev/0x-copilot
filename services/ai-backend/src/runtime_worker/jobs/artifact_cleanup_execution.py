@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
 import os
-from typing import Callable, Protocol, runtime_checkable
+from typing import Callable, Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from agent_runtime.artifacts.cleanup_schedule import (
@@ -49,6 +49,9 @@ class ArtifactCleanupExecutionEnv:
     LEASE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_LEASE_SECONDS"
     RETRY_BASE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_RETRY_BASE_SECONDS"
     RETRY_MAX_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_RETRY_MAX_SECONDS"
+    TENANT_TIMEOUT_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_TENANT_TIMEOUT_SECONDS"
+    CANCEL_GRACE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_CANCEL_GRACE_SECONDS"
+    STOP_GRACE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_STOP_GRACE_SECONDS"
 
     DEFAULT_INTERVAL_SECONDS = 900.0
     DEFAULT_MAX_ORGS = 100
@@ -56,6 +59,9 @@ class ArtifactCleanupExecutionEnv:
     DEFAULT_LEASE_SECONDS = 1_800.0
     DEFAULT_RETRY_BASE_SECONDS = 60.0
     DEFAULT_RETRY_MAX_SECONDS = 3_600.0
+    DEFAULT_TENANT_TIMEOUT_SECONDS = 300.0
+    DEFAULT_CANCEL_GRACE_SECONDS = 10.0
+    DEFAULT_STOP_GRACE_SECONDS = 15.0
 
     @classmethod
     def enabled(cls) -> bool:
@@ -127,7 +133,38 @@ class ArtifactCleanupExecutionResult:
     already_clean_tenants: int = 0
     failures: int = 0
     deferred_tenants: int = 0
+    hung_tenants: int = 0
     audit_failures: int = 0
+
+
+@dataclass(slots=True)
+class _LifecycleTask:
+    """One explicitly tracked destructive tenant pass.
+
+    The execution lease is intentionally held outside this task.  A task that
+    does not honour cancellation remains in this registry and keeps its
+    adapter-backed tenant fence until the task has actually finished.
+    """
+
+    execution: ArtifactCleanupTenantExecutionLease
+    task: asyncio.Task[ArtifactPhysicalCleanupOutcome]
+    quarantined: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class _LifecycleAttempt:
+    """A settled or quarantined lifecycle task observation."""
+
+    state: Literal[
+        "completed",
+        "failed",
+        "fence_lost",
+        "cancelled",
+        "timed_out",
+        "quarantined",
+    ]
+    outcome: ArtifactPhysicalCleanupOutcome | None = None
+    release_execution: bool = True
 
 
 class ArtifactCleanupExecutionRunner:
@@ -152,6 +189,9 @@ class ArtifactCleanupExecutionRunner:
         lease_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_LEASE_SECONDS,
         retry_base_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_RETRY_BASE_SECONDS,
         retry_max_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_RETRY_MAX_SECONDS,
+        tenant_timeout_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_TENANT_TIMEOUT_SECONDS,
+        cancel_grace_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_CANCEL_GRACE_SECONDS,
+        stop_grace_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_STOP_GRACE_SECONDS,
         metrics: LifecycleOperationalMetrics | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -161,6 +201,9 @@ class ArtifactCleanupExecutionRunner:
             or lease_seconds <= 0
             or retry_base_seconds <= 0
             or retry_max_seconds < retry_base_seconds
+            or tenant_timeout_seconds <= 0
+            or cancel_grace_seconds <= 0
+            or stop_grace_seconds < cancel_grace_seconds
         ):
             raise ValueError("artifact cleanup execution bounds are invalid")
         self._persistence = persistence
@@ -170,11 +213,27 @@ class ArtifactCleanupExecutionRunner:
         self._lease_seconds = lease_seconds
         self._retry_base_seconds = retry_base_seconds
         self._retry_max_seconds = retry_max_seconds
+        self._tenant_timeout_seconds = tenant_timeout_seconds
+        self._cancel_grace_seconds = cancel_grace_seconds
+        self._stop_grace_seconds = stop_grace_seconds
         self._owner_id = f"artifact-cleanup-{uuid4().hex}"
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._metrics = (
             metrics if metrics is not None else get_lifecycle_operational_metrics()
         )
+        self._stop_requested = asyncio.Event()
+        self._lifecycle_tasks: dict[str, _LifecycleTask] = {}
+
+    @property
+    def stop_grace_seconds(self) -> float:
+        """Upper bound used by the periodic loop's graceful stop."""
+
+        return self._stop_grace_seconds
+
+    def request_stop(self) -> None:
+        """Ask a current tenant pass to take the bounded cancellation path."""
+
+        self._stop_requested.set()
 
     async def run_once(
         self, *, now: datetime | None = None
@@ -232,6 +291,8 @@ class ArtifactCleanupExecutionRunner:
         current_time: Callable[[], datetime],
         keeper: "_ArtifactCleanupLeaseKeeper",
     ) -> ArtifactCleanupExecutionResult:
+        if self._stop_requested.is_set():
+            return ArtifactCleanupExecutionResult()
         try:
             org_ids = tuple(sorted(set(await self._persistence.list_retention_orgs())))
             cursor = await self._schedule.load_cursor()
@@ -246,6 +307,8 @@ class ArtifactCleanupExecutionRunner:
             cursor_after_org_id=cursor,
             limit=len(org_ids),
         ):
+            if self._stop_requested.is_set():
+                return result
             if result.tenants_scanned >= self._max_orgs:
                 break
             if not await keeper.renew_now():
@@ -284,26 +347,82 @@ class ArtifactCleanupExecutionRunner:
                 # would be less safe than a later retry.
                 _LOGGER.warning("artifact_cleanup_execution_tenant_busy")
                 continue
+            attempt: _LifecycleAttempt | None = None
             try:
-                outcome = await self._persistence.execute_artifact_cleanup(
+                attempt = await self._run_lifecycle_task(
                     org_id=org_id,
-                    now=reference_now,
-                    limit=self._limit_per_org,
-                    execution_fence=_ArtifactCleanupLifecycleFence(
-                        schedule=self._schedule,
-                        execution=execution,
-                        current_time=current_time,
-                    ),
+                    reference_now=reference_now,
+                    execution=execution,
+                    current_time=current_time,
                 )
-            except ArtifactCleanupExecutionFenceLostError:
-                self._record_metric(outcome="failed")
-                _LOGGER.warning("artifact_cleanup_execution_fence_lost")
-                return _replace(result, failures=result.failures + 1)
-            except Exception:
+                if attempt.state == "fence_lost":
+                    self._record_metric(outcome="failed")
+                    _LOGGER.warning("artifact_cleanup_execution_fence_lost")
+                    return _replace(result, failures=result.failures + 1)
+                if attempt.state == "completed":
+                    outcome = attempt.outcome
+                    if outcome is None:  # pragma: no cover - defensive invariant
+                        raise RuntimeError("completed artifact cleanup lacks outcome")
+                    # A long-running lifecycle call may span a heartbeat failure
+                    # or takeover. The lifecycle guard already fenced every
+                    # destructive phase; recheck the global generation before
+                    # recording outcome evidence or moving the fair cursor.
+                    if not await keeper.renew_now():
+                        self._record_metric(outcome="failed")
+                        _LOGGER.warning("artifact_cleanup_execution_lease_lost")
+                        return _replace(result, failures=result.failures + 1)
+                    self._record_outcome_metrics(outcome)
+                    audit_failed = not await self._write_audit(outcome=outcome)
+                    if audit_failed:
+                        self._record_metric(outcome="audit_failed")
+                    result = _replace(
+                        result,
+                        tenants_scanned=result.tenants_scanned + 1,
+                        purged_artifacts=result.purged_artifacts
+                        + outcome.purged_artifacts,
+                        quarantined_blobs=result.quarantined_blobs
+                        + outcome.quarantined_blobs,
+                        reaped_blobs=result.reaped_blobs + outcome.reaped_blobs,
+                        restored_blobs=result.restored_blobs + outcome.restored_blobs,
+                        withheld_blobs=result.withheld_blobs + outcome.withheld_blobs,
+                        already_clean_tenants=result.already_clean_tenants
+                        + int(_is_already_clean(outcome)),
+                        audit_failures=result.audit_failures + int(audit_failed),
+                    )
+                    try:
+                        advanced = await self._schedule.complete_tenant(
+                            owner_id=self._owner_id,
+                            fence_token=keeper.fence_token,
+                            expected_cursor=cursor,
+                            org_id=org_id,
+                            now=current_time(),
+                        )
+                    except Exception:
+                        self._record_metric(outcome="failed")
+                        _LOGGER.warning("artifact_cleanup_execution_cursor_unavailable")
+                        return _replace(result, failures=result.failures + 1)
+                    if not advanced:
+                        # A lost lease or concurrent successor means the physical
+                        # lifecycle may be retried, which is safe; do not
+                        # speculate about later cursor positions in this cycle.
+                        _LOGGER.warning(
+                            "artifact_cleanup_execution_cursor_not_advanced"
+                        )
+                        return _replace(result, failures=result.failures + 1)
+                    cursor = org_id
+                    continue
+
+                # A lifecycle task that misses its deadline has either stopped
+                # during cancellation grace or remains quarantined with its
+                # tenant execution fence.  Both cases are intentionally retried
+                # later rather than recording a potentially stale success.
                 self._record_metric(outcome="failed")
                 # Exception text can include a backend path or body-derived
                 # value.  Keep the worker log deliberately body-free.
-                _LOGGER.warning("artifact_cleanup_execution_tenant_failed")
+                _LOGGER.warning(
+                    "artifact_cleanup_execution_tenant_%s",
+                    "quarantined" if attempt.state == "quarantined" else "failed",
+                )
                 try:
                     deferred = await self._schedule.defer_failed_tenant(
                         owner_id=self._owner_id,
@@ -323,6 +442,7 @@ class ArtifactCleanupExecutionRunner:
                 audit_failed = not await self._write_audit(
                     outcome=ArtifactPhysicalCleanupOutcome(org_id=org_id),
                     deferred=deferred,
+                    execution_state=_execution_state_for_attempt(attempt),
                 )
                 if audit_failed:
                     self._record_metric(outcome="audit_failed")
@@ -331,70 +451,183 @@ class ArtifactCleanupExecutionRunner:
                     tenants_scanned=result.tenants_scanned + 1,
                     failures=result.failures + 1,
                     deferred_tenants=result.deferred_tenants + 1,
+                    hung_tenants=result.hung_tenants
+                    + int(attempt.state == "quarantined"),
                     audit_failures=result.audit_failures + int(audit_failed),
                 )
                 # The failed tenant is durably visible with a bounded retry;
                 # its cursor transition is atomic with that defer state, so
                 # later tenants can continue without silently losing it.
                 cursor = org_id
-                continue
-            else:
-                # A long-running lifecycle call may span a heartbeat failure
-                # or takeover. The lifecycle guard already fenced every
-                # destructive phase; recheck the global generation before
-                # recording outcome evidence or moving the fair cursor.
-                if not await keeper.renew_now():
-                    self._record_metric(outcome="failed")
-                    _LOGGER.warning("artifact_cleanup_execution_lease_lost")
-                    return _replace(result, failures=result.failures + 1)
-                self._record_outcome_metrics(outcome)
-                audit_failed = not await self._write_audit(outcome=outcome)
-                if audit_failed:
-                    self._record_metric(outcome="audit_failed")
-                result = _replace(
-                    result,
-                    tenants_scanned=result.tenants_scanned + 1,
-                    purged_artifacts=result.purged_artifacts + outcome.purged_artifacts,
-                    quarantined_blobs=result.quarantined_blobs
-                    + outcome.quarantined_blobs,
-                    reaped_blobs=result.reaped_blobs + outcome.reaped_blobs,
-                    restored_blobs=result.restored_blobs + outcome.restored_blobs,
-                    withheld_blobs=result.withheld_blobs + outcome.withheld_blobs,
-                    already_clean_tenants=result.already_clean_tenants
-                    + int(_is_already_clean(outcome)),
-                    audit_failures=result.audit_failures + int(audit_failed),
-                )
-                try:
-                    advanced = await self._schedule.complete_tenant(
-                        owner_id=self._owner_id,
-                        fence_token=keeper.fence_token,
-                        expected_cursor=cursor,
-                        org_id=org_id,
-                        now=current_time(),
-                    )
-                except Exception:
-                    self._record_metric(outcome="failed")
-                    _LOGGER.warning("artifact_cleanup_execution_cursor_unavailable")
-                    return _replace(result, failures=result.failures + 1)
-                if not advanced:
-                    # A lost lease or concurrent successor means the physical
-                    # lifecycle may be retried, which is safe; do not
-                    # speculate about later cursor positions in this cycle.
-                    _LOGGER.warning("artifact_cleanup_execution_cursor_not_advanced")
-                    return _replace(result, failures=result.failures + 1)
-                cursor = org_id
             finally:
-                try:
-                    await self._schedule.release_tenant_execution(execution=execution)
-                except Exception:
-                    _LOGGER.warning("artifact_cleanup_execution_fence_release_failed")
+                if attempt is None or attempt.release_execution:
+                    try:
+                        await self._schedule.release_tenant_execution(
+                            execution=execution
+                        )
+                    except Exception:
+                        _LOGGER.warning(
+                            "artifact_cleanup_execution_fence_release_failed"
+                        )
+            if self._stop_requested.is_set():
+                return result
         return result
+
+    async def _run_lifecycle_task(
+        self,
+        *,
+        org_id: str,
+        reference_now: datetime,
+        execution: ArtifactCleanupTenantExecutionLease,
+        current_time: Callable[[], datetime],
+    ) -> _LifecycleAttempt:
+        """Run one destructive pass under a bounded, cancellation-safe watch.
+
+        A timeout is deliberately not implemented with ``wait_for`` around the
+        lifecycle coroutine.  ``wait_for`` returns after it sends cancellation,
+        which would let a non-cooperative operation outlive the caller while a
+        naive ``finally`` releases its tenant fence.  We instead retain the
+        explicit task and only release that fence once the task is done.
+        """
+
+        task = asyncio.create_task(
+            self._persistence.execute_artifact_cleanup(
+                org_id=org_id,
+                now=reference_now,
+                limit=self._limit_per_org,
+                execution_fence=_ArtifactCleanupLifecycleFence(
+                    schedule=self._schedule,
+                    execution=execution,
+                    current_time=current_time,
+                ),
+            ),
+            name=f"artifact-cleanup-lifecycle-{execution.execution_token}",
+        )
+        tracked = _LifecycleTask(execution=execution, task=task)
+        self._lifecycle_tasks[execution.execution_token] = tracked
+        stop_waiter = asyncio.create_task(
+            self._stop_requested.wait(), name="artifact-cleanup-stop-waiter"
+        )
+        try:
+            done, _pending = await asyncio.wait(
+                (task, stop_waiter),
+                timeout=self._tenant_timeout_seconds,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+            if task in done:
+                return self._consume_lifecycle_task(tracked)
+            reason = "shutdown" if stop_waiter in done else "deadline"
+            return await self._cancel_or_quarantine_lifecycle_task(
+                tracked=tracked, reason=reason
+            )
+        except asyncio.CancelledError:
+            # A caller may be cancelled during process teardown.  Convert that
+            # into the same bounded cancellation path before returning control;
+            # it is never safe for the surrounding finally to drop this fence
+            # while the lifecycle task may still be executing.
+            return await self._cancel_or_quarantine_lifecycle_task(
+                tracked=tracked, reason="shutdown"
+            )
+        finally:
+            if not stop_waiter.done():
+                stop_waiter.cancel()
+            try:
+                await stop_waiter
+            except asyncio.CancelledError:
+                pass
+
+    def _consume_lifecycle_task(self, tracked: _LifecycleTask) -> _LifecycleAttempt:
+        """Consume a conclusively stopped task; its fence may now be released."""
+
+        self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
+        try:
+            return _LifecycleAttempt(state="completed", outcome=tracked.task.result())
+        except ArtifactCleanupExecutionFenceLostError:
+            return _LifecycleAttempt(state="fence_lost")
+        except asyncio.CancelledError:
+            return _LifecycleAttempt(state="cancelled")
+        except Exception:
+            return _LifecycleAttempt(state="failed")
+
+    async def _cancel_or_quarantine_lifecycle_task(
+        self, *, tracked: _LifecycleTask, reason: Literal["deadline", "shutdown"]
+    ) -> _LifecycleAttempt:
+        """Cancel a pass, then quarantine it if it survives the grace bound."""
+
+        task = tracked.task
+        if not task.done():
+            task.cancel()
+        done, _pending = await asyncio.wait((task,), timeout=self._cancel_grace_seconds)
+        if task in done:
+            # A deadline/cancellation is an auditable failed attempt even when
+            # the task happened to return normally during its cancellation
+            # grace. Its effects are lifecycle-idempotent and it will be
+            # reconciled on the later durable retry.
+            self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
+            self._discard_lifecycle_task_result(task)
+            return _LifecycleAttempt(
+                state="timed_out" if reason == "deadline" else "cancelled"
+            )
+        tracked.quarantined = True
+        task.add_done_callback(self._on_quarantined_lifecycle_task_done)
+        return _LifecycleAttempt(state="quarantined", release_execution=False)
+
+    @staticmethod
+    def _discard_lifecycle_task_result(
+        task: asyncio.Task[ArtifactPhysicalCleanupOutcome],
+    ) -> None:
+        """Consume a settled cancellation-race result without exposing details."""
+
+        try:
+            task.result()
+        except (asyncio.CancelledError, Exception):
+            return
+
+    def _on_quarantined_lifecycle_task_done(
+        self, task: asyncio.Task[ArtifactPhysicalCleanupOutcome]
+    ) -> None:
+        """Release only the exact fence after a quarantined task has stopped."""
+
+        for tracked in tuple(self._lifecycle_tasks.values()):
+            if tracked.task is task and tracked.quarantined:
+                asyncio.create_task(
+                    self._release_quarantined_lifecycle_task(tracked),
+                    name=(
+                        "artifact-cleanup-quarantine-release-"
+                        f"{tracked.execution.execution_token}"
+                    ),
+                )
+                return
+
+    async def _release_quarantined_lifecycle_task(
+        self, tracked: _LifecycleTask
+    ) -> None:
+        """Reap a stopped quarantined task without touching scheduler progress."""
+
+        try:
+            tracked.task.result()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            # The earlier timeout is already durably deferred/audited. Never
+            # log arbitrary adapter exception text from a late task.
+            _LOGGER.warning("artifact_cleanup_execution_quarantined_task_failed")
+        finally:
+            try:
+                await self._schedule.release_tenant_execution(
+                    execution=tracked.execution
+                )
+            except Exception:
+                _LOGGER.warning("artifact_cleanup_execution_fence_release_failed")
+            finally:
+                self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
 
     async def _write_audit(
         self,
         *,
         outcome: ArtifactPhysicalCleanupOutcome,
         deferred: ArtifactCleanupDeferredTenant | None = None,
+        execution_state: str | None = None,
     ) -> bool:
         """Write aggregate audit evidence only; audit trouble never retries bytes."""
 
@@ -429,6 +662,11 @@ class ArtifactCleanupExecutionRunner:
                             {
                                 "retry_count": deferred.failure_count,
                                 "retry_not_before": deferred.retry_not_before.isoformat(),
+                                **(
+                                    {"execution_state": execution_state}
+                                    if execution_state is not None
+                                    else {}
+                                ),
                             }
                             if deferred is not None
                             else {}
@@ -591,14 +829,25 @@ class ArtifactCleanupExecutionLoop:
 
     async def stop(self) -> None:
         self._stop.set()
+        self._runner.request_stop()
         task = self._task
-        self._task = None
         if task is None:
             return
         try:
-            await task
+            await asyncio.wait_for(
+                asyncio.shield(task), timeout=self._runner.stop_grace_seconds
+            )
+        except TimeoutError:
+            # Do not await an uncooperative lifecycle task indefinitely. The
+            # runner has already cancelled it and retains its per-tenant fence
+            # until it exits. Keep the loop task registered so a second loop
+            # cannot be started while this shutdown tail is still unwinding.
+            _LOGGER.warning("artifact_cleanup_execution_stop_grace_exceeded")
         except asyncio.CancelledError:
             return
+        else:
+            if self._task is task:
+                self._task = None
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -631,6 +880,7 @@ def _replace(
         ),
         failures=changes.get("failures", value.failures),
         deferred_tenants=changes.get("deferred_tenants", value.deferred_tenants),
+        hung_tenants=changes.get("hung_tenants", value.hung_tenants),
         audit_failures=changes.get("audit_failures", value.audit_failures),
     )
 
@@ -644,6 +894,17 @@ def _is_already_clean(outcome: ArtifactPhysicalCleanupOutcome) -> bool:
         + outcome.withheld_blobs
         == 0
     )
+
+
+def _execution_state_for_attempt(attempt: _LifecycleAttempt) -> str:
+    """Return a closed, body-free audit state for a failed lifecycle attempt."""
+
+    return {
+        "failed": "failed",
+        "cancelled": "cancelled_on_shutdown",
+        "timed_out": "deadline_cancelled",
+        "quarantined": "hung_quarantined",
+    }.get(attempt.state, "failed")
 
 
 def _fair_org_page(
