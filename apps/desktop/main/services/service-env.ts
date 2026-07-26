@@ -340,17 +340,18 @@ export function buildServiceEnv(
       const aiBackend =
         inputs.storeBackendOverride ?? resolveAiStoreBackend(inputs.processEnv);
       if (aiBackend === "file") {
-        // OPT-IN file-native store (JSONL folders under userData) instead of
-        // the Postgres `atlas_ai` DB. No relational DB env is set, so the
-        // ai-backend migration gate is skipped in desktop-supervisor.ts.
-        // ENTERPRISE_DEPLOYMENT_PROFILE=single_user_desktop is already set
-        // above; the runtime factory requires it for the file backend. Starts a
-        // FRESH store — existing Postgres conversations are NOT carried over
-        // until a Postgres->file migration exists.
+        // DEFAULT file-native store (JSONL folders under userData). No
+        // relational runtime env is set, so desktop-supervisor skips
+        // ai-backend's relational migration lane. The one-time verified
+        // Postgres-to-file carry-over is resolved before this env is built;
+        // Postgres is only the explicit rollback/fail-safe backend for a boot
+        // whose carry-over could not be trusted.
         env.RUNTIME_STORE_BACKEND = "file";
         env.RUNTIME_FILE_STORE_ROOT = aiFileStoreV1Root(inputs.userDataDir);
       } else {
-        // DEFAULT: Postgres AI store — byte-identical to prior boots.
+        // Explicit rollback/fail-safe: use the legacy Postgres AI store for
+        // this boot. Core backend identity/OAuth persistence remains Postgres
+        // in every desktop mode; this branch is only the ai-backend runtime.
         const dbUrl = databaseUrl({
           pgPort: inputs.pgPort,
           pgPassword: inputs.secrets.pgPassword,

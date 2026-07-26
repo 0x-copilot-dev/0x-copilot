@@ -1,9 +1,11 @@
 # Desktop runtime tooling
 
 Stages and boots the self-contained desktop runtime (bundled CPython 3.13 +
-PostgreSQL 17 + the three backend services) **without Electron**. The Electron
-supervisor later ships the staged tree as app resources and spawns exactly the
-processes `run-local.mjs` spawns.
+PostgreSQL 17 + the three backend services) **without Electron**. PostgreSQL
+remains necessary for core-backend identity/OAuth persistence. The packaged
+Electron supervisor is file-first for the ai-backend runtime; this CLI's
+Postgres-backed ai-backend boot is a hermetic staging/compatibility smoke, not
+proof of the packaged file-first desktop workflow.
 
 ## Files
 
@@ -63,11 +65,13 @@ backend/facade) plus `copilot-service-contracts` and
 2. `postgres/bin/pg_ctl -D <data> -l <log> -o "-p <port> -c listen_addresses=127.0.0.1 -c unix_socket_directories=<short-dir>" -w start`
 3. Create DBs `backend` + `ai_backend` via staged python + psycopg (**no psql/createdb in the zonky bundle**)
 4. `python services/backend/scripts/migrate.py apply` with `BACKEND_DATABASE_URL=postgresql+psycopg://…/backend`
-   and `python services/ai-backend/scripts/migrate.py apply` with `RUNTIME_DATABASE_URL=postgresql+psycopg://…/ai_backend`
-   (yoyo needs the explicit `+psycopg` driver marker; the bare `postgresql://` scheme resolves to psycopg2, which is not bundled)
+   and, for this compatibility-smoke only, `python services/ai-backend/scripts/migrate.py apply` with
+   `RUNTIME_DATABASE_URL=postgresql+psycopg://…/ai_backend` (yoyo needs the explicit `+psycopg` driver marker; the bare
+   `postgresql://` scheme resolves to psycopg2, which is not bundled). The packaged Electron file-store path skips this
+   ai-backend migration lane after its verified first-file-boot carry-over gate.
 5. Spawn, in order — see run-local.mjs for the full env of each:
    - backend: `python -m uvicorn backend_app.desktop_app:app` (`BACKEND_ENVIRONMENT=production`, plain `DATABASE_URL`, the four generated secrets)
-   - ai-backend: `python -m uvicorn runtime_api.app:app` (`RUNTIME_ENVIRONMENT=production`, `RUNTIME_STORE_BACKEND=postgres`, `RUNTIME_START_IN_PROCESS_WORKER=true`, **`RUNTIME_MIGRATIONS_AUTO_APPLY=false`**, `RUNTIME_ENABLE_LOCAL_MODELS=true`, `RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME=true`). The two local-model flags are separate authorisations:
+   - ai-backend compatibility smoke: `python -m uvicorn runtime_api.app:app` (`RUNTIME_ENVIRONMENT=production`, `RUNTIME_STORE_BACKEND=postgres`, `RUNTIME_START_IN_PROCESS_WORKER=true`, **`RUNTIME_MIGRATIONS_AUTO_APPLY=false`**, `RUNTIME_ENABLE_LOCAL_MODELS=true`, `RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME=true`). The packaged Electron supervisor instead defaults to `RUNTIME_STORE_BACKEND=file` and `RUNTIME_FILE_STORE_ROOT=<userData>/agent-data/v1`; the explicit `COPILOT_DESKTOP_FILE_STORE_V1=false` rollback path selects Postgres only for that boot. The two local-model flags are separate authorisations:
      - `RUNTIME_ENABLE_LOCAL_MODELS=true` surfaces the `/v1/local-models/*` API — **Settings → Local models** and the first-run local-model card (download an HF GGUF + run via a user-installed [Ollama](https://ollama.com/download) at `localhost:11434`). Every route but `/status` 404s when it is off.
      - `RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME=true` additionally authorises ai-backend to **detect the Ollama binary on this machine and start it** (`POST /v1/local-models/runtime/start`). It is what lets `/status` report a real `runtime_state` — telling "Ollama not installed" apart from "Ollama installed but stopped", which are otherwise the same `ollama_running:false` — and it is what the card's **Restart Ollama** action calls. **Desktop-only.** Containerised deployments (self-host, where `OLLAMA_BASE_URL` points at `host.docker.internal`) leave it off: they can neither see nor spawn a binary on the host, so they honestly report `runtime_state:"unknown"` and render no button that cannot work. The ai-backend default is `false`; the packaged supervisor sets both flags identically (`apps/desktop/main/services/service-env.ts`).
    - facade: `python -m uvicorn backend_facade.app:app` (`FACADE_ENVIRONMENT=production`, `BACKEND_URL`, `AI_BACKEND_URL`)
