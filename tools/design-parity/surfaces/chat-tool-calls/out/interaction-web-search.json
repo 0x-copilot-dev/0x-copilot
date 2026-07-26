@@ -1,0 +1,184 @@
+{
+  "baseUrl": "http://127.0.0.1:8109",
+  "design": {
+    "tool": {
+      "initial": {
+        "bodyVisible": false,
+        "headerRole": null,
+        "headerTabIndex": -1
+      },
+      "afterPointerOpen": {
+        "bodyVisible": true,
+        "args": "args{ q: \"payments gateway incident postmortem Jan 28\" }",
+        "result": "result3 pages fetched, ranked",
+        "source": "sourceMCP · web.search · no auth",
+        "spawnedTreeVisible": true,
+        "cardStyle": {
+          "fontFamily": "-apple-system, \"system-ui\", \"SF Pro Text\", \"Segoe UI\", system-ui, sans-serif",
+          "fontSize": "13px",
+          "fontWeight": "400",
+          "lineHeight": "19.5px",
+          "letterSpacing": "normal",
+          "color": "rgb(236, 236, 241)",
+          "backgroundColor": "rgb(17, 17, 20)",
+          "padding": "0px 0px 0px 0px",
+          "borderRadius": "10px",
+          "gap": "normal",
+          "display": "block",
+          "flexDirection": "row"
+        },
+        "bodyStyle": {
+          "fontFamily": "-apple-system, \"system-ui\", \"SF Pro Text\", \"Segoe UI\", system-ui, sans-serif",
+          "fontSize": "13px",
+          "fontWeight": "400",
+          "lineHeight": "19.5px",
+          "letterSpacing": "normal",
+          "color": "rgb(236, 236, 241)",
+          "backgroundColor": "rgb(13, 13, 16)",
+          "padding": "10px 12px 10px 12px",
+          "borderRadius": "0px",
+          "gap": "normal",
+          "display": "block",
+          "flexDirection": "row"
+        }
+      },
+      "keyboard": {
+        "bodyVisibleAfterEnter": false,
+        "bodyVisibleAfterSpace": false
+      }
+    },
+    "agent": {
+      "clickChangesDom": false,
+      "role": null,
+      "tabIndex": -1,
+      "cardStyle": {
+        "fontFamily": "-apple-system, \"system-ui\", \"SF Pro Text\", \"Segoe UI\", system-ui, sans-serif",
+        "fontSize": "13px",
+        "fontWeight": "400",
+        "lineHeight": "19.5px",
+        "letterSpacing": "normal",
+        "color": "rgb(236, 236, 241)",
+        "backgroundColor": "rgb(17, 17, 20)",
+        "padding": "9px 11px 9px 11px",
+        "borderRadius": "9px",
+        "gap": "9px",
+        "display": "flex",
+        "flexDirection": "row"
+      }
+    }
+  },
+  "live": {
+    "tool": {
+      "initial": {
+        "detailsOpen": false,
+        "argsVisible": false,
+        "resultVisible": false
+      },
+      "afterHeaderPointer": {
+        "detailsOpen": true,
+        "fieldLabels": ["args", "result", "source", "children"],
+        "argsText": "{\n  \"q\": \"payments gateway incident postmortem Jan 28\"\n}",
+        "resultText": "{\n  \"pages_fetched\": 3,\n  \"pages_kept\": 3\n}",
+        "sourceVisible": true,
+        "provenanceVisible": true,
+        "accessVisible": true,
+        "durationVisible": true,
+        "delegatedTaskIds": ["task_research_incident"],
+        "cardStyle": {
+          "fontFamily": "-apple-system, \"system-ui\", \"SF Pro Text\", \"Segoe UI\", system-ui, sans-serif",
+          "fontSize": "13px",
+          "fontWeight": "400",
+          "lineHeight": "19.5px",
+          "letterSpacing": "normal",
+          "color": "rgb(236, 236, 241)",
+          "backgroundColor": "rgb(17, 17, 20)",
+          "padding": "0px 0px 0px 0px",
+          "borderRadius": "10px",
+          "gap": "normal",
+          "display": "block",
+          "flexDirection": "row"
+        },
+        "bodyStyle": {
+          "fontFamily": "-apple-system, \"system-ui\", \"SF Pro Text\", \"Segoe UI\", system-ui, sans-serif",
+          "fontSize": "13px",
+          "fontWeight": "400",
+          "lineHeight": "19.5px",
+          "letterSpacing": "normal",
+          "color": "rgb(236, 236, 241)",
+          "backgroundColor": "rgb(13, 13, 16)",
+          "padding": "10px 12px 10px 12px",
+          "borderRadius": "0px",
+          "gap": "normal",
+          "display": "block",
+          "flexDirection": "row"
+        },
+        "preStyle": {
+          "fontFamily": "\"JetBrains Mono\", ui-monospace, SFMono-Regular, monospace",
+          "fontSize": "10px",
+          "fontWeight": "400",
+          "lineHeight": "15px",
+          "letterSpacing": "normal",
+          "color": "rgb(212, 212, 219)",
+          "backgroundColor": "rgba(0, 0, 0, 0)",
+          "padding": "0px 0px 0px 0px",
+          "borderRadius": "0px",
+          "gap": "normal",
+          "display": "block",
+          "flexDirection": "row"
+        }
+      },
+      "keyboard": {
+        "headerTabIndex": 0,
+        "openAfterEnter": true,
+        "openAfterSpace": false
+      }
+    },
+    "agent": {
+      "initial": {
+        "detailsOpen": false,
+        "timelineVisible": false
+      },
+      "afterHeaderPointer": {
+        "detailsOpen": false
+      },
+      "afterSummaryPointer": {
+        "detailsOpen": true,
+        "timelineRows": 2,
+        "timelineText": "Search web6 hitscompletedWeb FetchFetching postmortem and status pagerunning",
+        "cardStyle": {
+          "fontFamily": "-apple-system, \"system-ui\", \"SF Pro Text\", \"Segoe UI\", system-ui, sans-serif",
+          "fontSize": "13px",
+          "fontWeight": "400",
+          "lineHeight": "normal",
+          "letterSpacing": "normal",
+          "color": "rgb(236, 236, 241)",
+          "backgroundColor": "rgb(17, 17, 20)",
+          "padding": "9px 11px 9px 11px",
+          "borderRadius": "9px",
+          "gap": "9px",
+          "display": "flex",
+          "flexDirection": "row"
+        },
+        "activityStyle": {
+          "fontFamily": "\"JetBrains Mono\", ui-monospace, SFMono-Regular, monospace",
+          "fontSize": "9px",
+          "fontWeight": "400",
+          "lineHeight": "13.5px",
+          "letterSpacing": "normal",
+          "color": "rgb(100, 100, 109)",
+          "backgroundColor": "rgba(0, 0, 0, 0)",
+          "padding": "0px 0px 0px 0px",
+          "borderRadius": "0px",
+          "gap": "normal",
+          "display": "block",
+          "flexDirection": "row"
+        }
+      },
+      "keyboard": {
+        "summaryTabIndex": 0,
+        "openAfterEnter": true,
+        "openAfterSpace": false
+      }
+    }
+  }
+}

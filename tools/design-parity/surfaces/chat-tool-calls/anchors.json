@@ -1,6 +1,6 @@
 {
   "surface": "chat-tool-calls",
-  "note": "Chat & Tool Calls.dc.html's Focus / Web search walkthrough state compared with the actual shared TcChat tool card and Run-cockpit AgentsTab. The local design is the source of truth. Selector correspondence is intentionally explicit: a live tool card is not a design mock clone, and two absent pieces of the source design (lead/orchestrator row and model chip) are reported as real parity gaps rather than waived.",
+  "note": "Chat & Tool Calls.dc.html's Focus / Web search walkthrough state compared with the actual shared TcChat tool card and Run-cockpit AgentsTab. The local design is the visual source of truth. Selector correspondence is intentionally explicit: a live tool card is not a design mock clone. The reference's synthetic Orchestrator row is the one documented product divergence: the runtime sends a supervisor-role alias on a child but no parent task, and Focus intentionally does not invent one.",
   "state": "web-search",
   "elements": [
     {
@@ -78,48 +78,54 @@
       "group": "Agents",
       "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(1)",
       "live": "#agents .agent-activity-row[data-lead=\"true\"]",
-      "what": "Synthetic lead row derived from an actual child parent relation; it is not fabricated when that relation is absent."
+      "what": "Reference-only synthetic lead row. Focus renders a hierarchy only when the runtime emitted a concrete parent task.",
+      "expectDivergence": {
+        "absent": "The runtime emitted a supervisor/orchestrator role hint but no parent task. Focus must not fabricate an Orchestrator task or misleading hierarchy from that default alias."
+      }
     },
     {
       "label": "agents.card",
       "group": "Agents",
       "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2)",
-      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row",
-      "what": "Active research subagent row."
+      "live": "#agents [data-task-id=\"task_research_incident\"] .agent-activity-row",
+      "what": "Active research subagent row. It remains a root row until a concrete parent task exists.",
+      "expectDivergence": {
+        "margin": "The reference indents the agent below its synthetic Orchestrator. Live correctly keeps it at depth zero until the runtime emits a concrete parent task."
+      }
     },
     {
       "label": "agents.icon",
       "group": "Agents",
       "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > span:first-child",
-      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__lifecycle",
+      "live": "#agents [data-task-id=\"task_research_incident\"] .agent-activity-row__lifecycle",
       "what": "Active-agent status glyph."
     },
     {
       "label": "agents.name",
       "group": "Agents",
       "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > div > div:first-child > span:first-child",
-      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__name",
+      "live": "#agents [data-task-id=\"task_research_incident\"] .agent-activity-row__name",
       "what": "Agent title."
     },
     {
       "label": "agents.model",
       "group": "Agents",
       "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) .pbadge",
-      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__model",
+      "live": "#agents [data-task-id=\"task_research_incident\"] .agent-activity-row__model",
       "what": "Model identity, rendered only when the runtime sent a safe display label."
     },
     {
       "label": "agents.activity",
       "group": "Agents",
       "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > div > div:nth-child(2)",
-      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__activity",
+      "live": "#agents [data-task-id=\"task_research_incident\"] .agent-activity-row__activity",
       "what": "Current subagent work line."
     },
     {
       "label": "agents.status",
       "group": "Agents",
       "design": "[data-screen-label=\"Activity panel\"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2) > span:first-child .spin",
-      "live": "#agents .atlas-workspace-tab__item--child .agent-activity-row__spinner",
+      "live": "#agents [data-task-id=\"task_research_incident\"] .agent-activity-row__spinner",
       "what": "Running status treatment."
     }
   ]

@@ -2,11 +2,11 @@
 /*
  * Chat & Tool Calls — interaction audit
  *
- * This is deliberately an audit recorder, not a golden test: it presses every
- * mapped tool/agent control on both sides and writes the observed semantics,
- * state transitions, payload visibility, and selected computed styles. That
- * makes a mock defect (or a live-app defect) visible instead of silently
- * accepting whichever behavior happened to be implemented first.
+ * This assertive audit presses every mapped tool/agent control on both sides,
+ * writes the observed semantics, state transitions, payload visibility, and
+ * selected computed styles, and exits non-zero when the documented contract
+ * changes. It makes a mock defect (or a live-app defect) visible instead of
+ * silently accepting whichever behavior happened to be implemented first.
  *
  * Prerequisite: render the live fixture, then serve tools/design-parity:
  *   node_modules/.bin/vitest run --config tools/design-parity/vitest.config.mjs \
@@ -20,6 +20,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { chromium } from "playwright";
+
+function requireAudit(condition, message) {
+  if (!condition) throw new Error(`Interaction audit failed: ${message}`);
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const argv = process.argv.slice(2);
@@ -114,6 +118,10 @@ try {
       card.querySelector(".tcall__body"),
     ),
   }));
+  requireAudit(
+    report.design.tool.afterPointerOpen.bodyVisible,
+    "design Web search pointer activation must expose its payload",
+  );
   await header.click();
   await header.focus();
   await design.keyboard.press("Enter");
@@ -123,6 +131,13 @@ try {
     bodyVisibleAfterEnter: bodyAfterEnter > 0,
     bodyVisibleAfterSpace: (await body.count()) > 0,
   };
+  requireAudit(
+    report.design.tool.initial.headerRole === null &&
+      report.design.tool.initial.headerTabIndex === -1 &&
+      !report.design.tool.keyboard.bodyVisibleAfterEnter &&
+      !report.design.tool.keyboard.bodyVisibleAfterSpace,
+    "design Web search header is intentionally pointer-only; record a semantic change if that changes",
+  );
   const agent = design.locator(
     '[data-screen-label="Activity panel"] .side-body > div:first-child > div:nth-child(2) > div:nth-child(2)',
   );
@@ -137,6 +152,12 @@ try {
       globalThis.__interactionStyle(node),
     ),
   };
+  requireAudit(
+    !report.design.agent.clickChangesDom &&
+      report.design.agent.role === null &&
+      report.design.agent.tabIndex === -1,
+    "design agent scan row must remain a non-interactive status display in this state",
+  );
   await design.close();
 
   const live = await browser.newPage({
@@ -186,6 +207,19 @@ try {
     ),
     preStyle: globalThis.__interactionStyle(card.querySelector("pre")),
   }));
+  requireAudit(
+    report.live.tool.afterHeaderPointer.detailsOpen &&
+      report.live.tool.afterHeaderPointer.argsText &&
+      report.live.tool.afterHeaderPointer.resultText &&
+      report.live.tool.afterHeaderPointer.sourceVisible &&
+      report.live.tool.afterHeaderPointer.provenanceVisible &&
+      report.live.tool.afterHeaderPointer.accessVisible &&
+      report.live.tool.afterHeaderPointer.durationVisible &&
+      report.live.tool.afterHeaderPointer.delegatedTaskIds.includes(
+        "task_research_incident",
+      ),
+    "live Web search disclosure must expose safe payload, provenance, duration, and delegated task facts",
+  );
   await liveHeader.click();
   await liveHeader.focus();
   await live.keyboard.press("Enter");
@@ -196,8 +230,14 @@ try {
     openAfterEnter,
     openAfterSpace: await liveTool.evaluate((node) => node.open),
   };
+  requireAudit(
+    report.live.tool.keyboard.headerTabIndex === 0 &&
+      report.live.tool.keyboard.openAfterEnter &&
+      !report.live.tool.keyboard.openAfterSpace,
+    "live Web search native summary must support Enter to open and Space to close",
+  );
   const liveAgent = live.locator(
-    "#agents .atlas-workspace-tab__item--child .agent-activity-row",
+    '#agents [data-task-id="task_research_incident"] .agent-activity-row',
   );
   const agentHeader = liveAgent.locator(".agent-activity-row__content");
   const agentDetails = liveAgent.locator(
@@ -217,6 +257,10 @@ try {
   report.live.agent.afterHeaderPointer = {
     detailsOpen: await agentDetails.evaluate((node) => node.open),
   };
+  requireAudit(
+    !report.live.agent.afterHeaderPointer.detailsOpen,
+    "live agent scan content must not masquerade as a disclosure control",
+  );
   await agentSummary.click();
   report.live.agent.afterSummaryPointer = await liveAgent.evaluate((card) => ({
     detailsOpen: card.querySelector("details")?.open,
@@ -240,6 +284,14 @@ try {
     openAfterEnter: agentOpenAfterEnter,
     openAfterSpace: await agentDetails.evaluate((node) => node.open),
   };
+  requireAudit(
+    report.live.agent.afterSummaryPointer.detailsOpen &&
+      report.live.agent.afterSummaryPointer.timelineRows === 2 &&
+      report.live.agent.keyboard.summaryTabIndex === 0 &&
+      report.live.agent.keyboard.openAfterEnter &&
+      !report.live.agent.keyboard.openAfterSpace,
+    "live agent detail summary must reveal its timeline by pointer and keyboard",
+  );
   await live.close();
 } finally {
   await browser.close();

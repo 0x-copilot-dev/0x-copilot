@@ -70,7 +70,7 @@ const webSearch: ToolCallEntry = {
 
 const researchSubagent: SubagentEntry & {
   readonly parent_agent_role: string;
-  readonly parent_agent_name: string;
+  readonly parent_agent_name: string | null;
   readonly model_display_label: string;
   readonly current_activity: string;
 } = {
@@ -89,11 +89,17 @@ const researchSubagent: SubagentEntry & {
   safe_error_code: null,
   safe_error_message: null,
   token_usage: null,
-  parent_agent_role: "orchestrator",
-  parent_agent_name: "Orchestrator",
+  parent_agent_role: "supervisor",
+  parent_agent_name: null,
   model_display_label: "Haiku 4.5",
   current_activity: "web.fetch × 3 · ranking pages",
 };
+
+// `supervisor` is the runtime's role alias, not an independently emitted
+// subagent task. Keep this factual role-only hint in the fixture so the parity
+// harness catches a regression that would invent a misleading parent row (or
+// indent this real task beneath one). A concrete `parent_task_id` is required
+// before Focus represents a hierarchy.
 
 const researchActivities: ReadonlyMap<
   string,
