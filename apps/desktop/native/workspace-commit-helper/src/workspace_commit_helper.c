@@ -53,6 +53,7 @@
 #define MAX_CLAIM_BYTES 160u
 #define MAX_STAGE_DIR_BYTES 48u
 #define JOURNAL_MAGIC "C2JNLv2"
+#define JOURNAL_VERSION 3
 
 enum request {
   ROOT_IDENTITY = 1, PREPARE = 2, WRITE = 3, SEAL = 4, COMMIT = 5,
@@ -68,6 +69,8 @@ enum journal_state { JOURNAL_PREPARED = 1, JOURNAL_AUTHORIZED = 2,
   JOURNAL_COMMITTING = 3, JOURNAL_APPLIED = 4,
   JOURNAL_INDETERMINATE = 5, JOURNAL_FAILED_BEFORE_EFFECT = 6,
   JOURNAL_CLEANED = 7 };
+enum claim_acquire_result { CLAIM_ACQUIRED = 1, CLAIM_EXISTS = 2,
+  CLAIM_BINDING_MISMATCH = 3, CLAIM_ACQUIRE_ERROR = 4 };
 
 struct reader { const uint8_t *data; size_t length; size_t offset; };
 struct writer { uint8_t *data; size_t length; size_t capacity; };
@@ -111,6 +114,7 @@ struct prepared {
   ino_t root_ino;
   char journal_name[48];
   char stage_dir[48];
+  char binding_digest[65];
   struct entry *entries;
   uint32_t entry_count;
   struct prepared *next;
@@ -126,6 +130,7 @@ struct journal_record {
   char handle[37];
   char claim[MAX_CLAIM_BYTES + 1];
   char stage_dir[MAX_STAGE_DIR_BYTES];
+  char binding_digest[65];
   uint8_t mac[MAC_BYTES];
 };
 
@@ -234,6 +239,66 @@ static void hex(const uint8_t *input, size_t length, char *out) {
   static const char digits[] = "0123456789abcdef"; size_t i;
   for (i = 0; i < length; i++) { out[i * 2] = digits[input[i] >> 4]; out[i * 2 + 1] = digits[input[i] & 15]; }
   out[length * 2] = '\0';
+}
+
+/* The claim binding is a canonical, length-delimited description of the
+ * approved effect. A claim ID is only a coordination key: this digest pins
+ * the root identity, each operation, every target spelling, its observed
+ * precondition, and the exact staged-content promise. Two helpers may never
+ * use the same claim to authorize different filesystem effects. */
+static void binding_u8(CC_SHA256_CTX *context, uint8_t value) {
+  CC_SHA256_Update(context, &value, 1);
+}
+
+static void binding_u32(CC_SHA256_CTX *context, uint32_t value) {
+  uint8_t encoded[4]; write_be32(encoded, value);
+  CC_SHA256_Update(context, encoded, sizeof encoded);
+}
+
+static void binding_u64(CC_SHA256_CTX *context, uint64_t value) {
+  uint8_t encoded[8]; write_be64(encoded, value);
+  CC_SHA256_Update(context, encoded, sizeof encoded);
+}
+
+static void binding_string(CC_SHA256_CTX *context, const char *value) {
+  size_t length = value ? strlen(value) : 0;
+  binding_u32(context, (uint32_t)length);
+  if (length) CC_SHA256_Update(context, value, (CC_LONG)length);
+}
+
+static void binding_snapshot(CC_SHA256_CTX *context, const struct snapshot *snapshot) {
+  binding_u8(context, snapshot->exists ? 1 : 0);
+  binding_u8(context, (uint8_t)snapshot->kind);
+  binding_u64(context, (uint64_t)snapshot->dev);
+  binding_u64(context, (uint64_t)snapshot->ino);
+  binding_u64(context, (uint64_t)snapshot->mode);
+  binding_u64(context, (uint64_t)snapshot->size);
+  binding_string(context, snapshot->digest);
+}
+
+static int compute_prepared_binding(struct prepared *prepared) {
+  static const char domain[] = "workspace-commit-effect-v1";
+  CC_SHA256_CTX context; uint8_t digest[CC_SHA256_DIGEST_LENGTH]; uint32_t i;
+  CC_SHA256_Init(&context);
+  binding_string(&context, domain);
+  binding_u64(&context, (uint64_t)prepared->root_dev);
+  binding_u64(&context, (uint64_t)prepared->root_ino);
+  binding_u32(&context, prepared->entry_count);
+  for (i = 0; i < prepared->entry_count; i++) {
+    const struct entry *entry = &prepared->entries[i];
+    binding_u8(&context, (uint8_t)entry->operation);
+    binding_string(&context, entry->relative_path);
+    binding_u8(&context, entry->has_destination ? 1 : 0);
+    binding_string(&context, entry->destination_relative_path);
+    binding_snapshot(&context, &entry->source);
+    binding_snapshot(&context, &entry->destination);
+    binding_string(&context, entry->slot);
+    binding_string(&context, entry->expected_digest);
+    binding_u64(&context, entry->expected_size);
+  }
+  CC_SHA256_Final(digest, &context);
+  hex(digest, sizeof digest, prepared->binding_digest);
+  return 1;
 }
 
 static int regular_digest_fd(int fd, char out[65], struct stat *stat_out) {
@@ -408,6 +473,29 @@ static int journal_store(const char *name, struct journal_record *record) {
   return 1;
 }
 
+/* Claim acquisition is intentionally not implemented with a rename. A
+ * deterministic claim name is shared by independently launched helpers, so a
+ * replacing rename would allow two helpers to each believe they own the same
+ * approved effect. O_EXCL gives the journal directory the only authority to
+ * select an owner; the file and directory are both fsynced before we report
+ * success. Return 1=created, 0=already exists, -1=durability/error. */
+static int journal_store_no_replace(const char *name, struct journal_record *record) {
+  uint8_t mac[MAC_BYTES]; int fd; int saved_errno = 0;
+  journal_mac(record, mac); memcpy(record->mac, mac, sizeof mac);
+  fd = openat(journal_fd, name,
+      O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW_ANY, 0600);
+  if (fd < 0) return errno == EEXIST ? 0 : -1;
+  if (write_all(fd, record, sizeof *record) || fsync(fd) < 0) saved_errno = errno ? errno : EIO;
+  if (close(fd) < 0 && !saved_errno) saved_errno = errno;
+  if (!saved_errno && fsync(journal_fd) < 0) saved_errno = errno;
+  if (!saved_errno) return 1;
+  /* We created this name but could not prove it durable. Remove only that
+   * exact newly-created entry, then fsync the removal before failing closed. */
+  if (unlinkat(journal_fd, name, 0) == 0) (void)fsync(journal_fd);
+  errno = saved_errno;
+  return -1;
+}
+
 static int journal_load(const char *name, struct journal_record *record) {
   uint8_t expected[MAC_BYTES], difference = 0; size_t i; int fd;
   fd = openat(journal_fd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW_ANY);
@@ -416,7 +504,7 @@ static int journal_load(const char *name, struct journal_record *record) {
   }
   journal_mac(record, expected);
   for (i = 0; i < MAC_BYTES; i++) difference |= (uint8_t)(expected[i] ^ record->mac[i]);
-  return memcmp(record->magic, JOURNAL_MAGIC, 7) == 0 && record->version == 2 &&
+  return memcmp(record->magic, JOURNAL_MAGIC, 7) == 0 && record->version == JOURNAL_VERSION &&
       difference == 0 && record->state >= JOURNAL_PREPARED &&
       record->state <= JOURNAL_CLEANED;
 }
@@ -437,21 +525,86 @@ static int index_claim(const char *id, enum outcome outcome, enum journal_state 
   claim->outcome = outcome; claim->state = state; claim->next = claim_head; claim_head = claim; return 1;
 }
 
+static void journal_record_for(const struct prepared *prepared,
+    enum journal_state state, enum outcome outcome, const char *claim,
+    int cleanup_complete, struct journal_record *record) {
+  memset(record, 0, sizeof *record);
+  memcpy(record->magic, JOURNAL_MAGIC, 7); record->version = JOURNAL_VERSION;
+  record->state = (uint8_t)state; record->outcome = (uint8_t)outcome;
+  record->cleanup_complete = cleanup_complete ? 1 : 0;
+  record->entry_count = (uint16_t)prepared->entry_count;
+  snprintf(record->handle, sizeof record->handle, "%s", prepared->handle);
+  snprintf(record->claim, sizeof record->claim, "%s", claim ? claim : "");
+  snprintf(record->stage_dir, sizeof record->stage_dir, "%s", prepared->stage_dir);
+  snprintf(record->binding_digest, sizeof record->binding_digest, "%s", prepared->binding_digest);
+}
+
+static int claim_transition_allowed(enum journal_state previous,
+    enum journal_state next) {
+  if (previous == next) return 1;
+  if (previous == JOURNAL_PREPARED)
+    return next == JOURNAL_AUTHORIZED || next == JOURNAL_FAILED_BEFORE_EFFECT;
+  if (previous == JOURNAL_AUTHORIZED)
+    return next == JOURNAL_COMMITTING || next == JOURNAL_FAILED_BEFORE_EFFECT;
+  if (previous == JOURNAL_COMMITTING)
+    return next == JOURNAL_APPLIED || next == JOURNAL_INDETERMINATE;
+  return 0;
+}
+
+/* Updating a claim after acquisition is permitted only for the helper whose
+ * durable no-replace record names the same preparation and binding. This
+ * check is not used for exclusion; O_EXCL above is the exclusion primitive.
+ * It prevents a foreign helper from rewriting the winner's lifecycle. */
+static int journal_claim_update_owned(const struct prepared *prepared,
+    const struct journal_record *next) {
+  struct journal_record current; char name[80];
+  claim_journal_name(next->claim, name);
+  if (!journal_load(name, &current) || strcmp(current.claim, next->claim) != 0 ||
+      strcmp(current.handle, prepared->handle) != 0 ||
+      strcmp(current.binding_digest, prepared->binding_digest) != 0 ||
+      !claim_transition_allowed((enum journal_state)current.state,
+          (enum journal_state)next->state)) return 0;
+  return journal_store(name, (struct journal_record *)next);
+}
+
+static enum claim_acquire_result journal_acquire_claim(
+    const struct prepared *prepared, const char *claim, enum outcome *existing_outcome) {
+  struct journal_record wanted, existing; char name[80]; int created;
+  /* This is deliberately PREPARED, not AUTHORIZED: the O_EXCL claim is
+   * acquired before the final mutable precondition check and only graduates
+   * to AUTHORIZED once that check is still true. */
+  journal_record_for(prepared, JOURNAL_PREPARED, FAILED, claim, 0, &wanted);
+  claim_journal_name(claim, name);
+  created = journal_store_no_replace(name, &wanted);
+  if (created < 0) return CLAIM_ACQUIRE_ERROR;
+  if (created == 1) {
+    if (!index_claim(claim, FAILED, JOURNAL_PREPARED)) return CLAIM_ACQUIRE_ERROR;
+    return CLAIM_ACQUIRED;
+  }
+  if (!journal_load(name, &existing) || strcmp(existing.claim, claim) != 0)
+    return CLAIM_ACQUIRE_ERROR;
+  /* Same claim with another root/effect is a conflict, never an idempotency
+   * shortcut. The caller must create a fresh approval for its own binding. */
+  if (strcmp(existing.binding_digest, prepared->binding_digest) != 0)
+    return CLAIM_BINDING_MISMATCH;
+  if (!index_claim(existing.claim, (enum outcome)existing.outcome,
+      (enum journal_state)existing.state)) return CLAIM_ACQUIRE_ERROR;
+  if (existing.state == JOURNAL_APPLIED) *existing_outcome = ALREADY_APPLIED;
+  else if (existing.state == JOURNAL_COMMITTING ||
+      existing.state == JOURNAL_INDETERMINATE ||
+      existing.state == JOURNAL_AUTHORIZED ||
+      existing.state == JOURNAL_PREPARED) *existing_outcome = INDETERMINATE;
+  else *existing_outcome = (enum outcome)existing.outcome;
+  return CLAIM_EXISTS;
+}
+
 static int journal_transition(struct prepared *prepared, enum journal_state state,
     enum outcome outcome, const char *claim, int cleanup_complete) {
-  struct journal_record record; char claim_name[80];
-  memset(&record, 0, sizeof record);
-  memcpy(record.magic, JOURNAL_MAGIC, 7); record.version = 2;
-  record.state = (uint8_t)state; record.outcome = (uint8_t)outcome;
-  record.cleanup_complete = cleanup_complete ? 1 : 0;
-  record.entry_count = (uint16_t)prepared->entry_count;
-  snprintf(record.handle, sizeof record.handle, "%s", prepared->handle);
-  snprintf(record.claim, sizeof record.claim, "%s", claim ? claim : "");
-  snprintf(record.stage_dir, sizeof record.stage_dir, "%s", prepared->stage_dir);
+  struct journal_record record;
+  journal_record_for(prepared, state, outcome, claim, cleanup_complete, &record);
   if (!journal_store(prepared->journal_name, &record)) return 0;
   if (record.claim[0]) {
-    claim_journal_name(record.claim, claim_name);
-    if (!journal_store(claim_name, &record)) return 0;
+    if (!journal_claim_update_owned(prepared, &record)) return 0;
   }
   if (!index_claim(record.claim, outcome, state)) return 0;
   if ((state == JOURNAL_PREPARED && test_crash_boundary == 1) ||
@@ -702,6 +855,7 @@ static void command_prepare(struct reader *reader, struct writer *out, uint8_t *
   arc4random_buf(random, sizeof random); strcpy(prepared->handle, "nwh_"); hex(random, sizeof random, prepared->handle + 4);
   snprintf(prepared->journal_name, sizeof prepared->journal_name, "c2j-%s", prepared->handle + 4);
   snprintf(prepared->stage_dir, sizeof prepared->stage_dir, "%s", staging_run_name);
+  if (!compute_prepared_binding(prepared)) { destroy_prepared(prepared); *failure = INTERNAL; return; }
   /* Recreate deterministic private stage names only after the handle exists. */
   for (i = 0; i < count; i++) if (prepared->entries[i].slot &&
       !create_stage(prepared, &prepared->entries[i], i)) { destroy_prepared(prepared); *failure = INTERNAL; return; }
@@ -740,20 +894,35 @@ static void write_commit_result(struct writer *out, enum outcome outcome, const 
 }
 
 static void command_commit(struct reader *reader, struct writer *out, uint8_t *failure) {
-  char *handle = reader_string(reader, 80), *claim = reader_string(reader, MAX_CLAIM_BYTES); struct prepared *prepared; struct claim *existing; uint32_t i; enum outcome result = APPLIED;
+  char *handle = reader_string(reader, 80), *claim = reader_string(reader, MAX_CLAIM_BYTES); struct prepared *prepared; struct claim *existing; uint32_t i; enum outcome result = APPLIED, prior; enum claim_acquire_result acquired;
   if (!handle || !claim || reader->offset != reader->length) { free(handle); free(claim); *failure = INVALID; return; }
-  existing = find_claim(claim);
-  if (!existing && journal_lookup_claim(claim) < 0) { free(handle); free(claim); *failure = INTERNAL; return; }
-  existing = find_claim(claim); if (existing) { enum outcome known; journal_outcome_for(existing, &known); write_commit_result(out, known == APPLIED ? ALREADY_APPLIED : known, claim); free(handle); free(claim); return; }
-  prepared = find_prepared(handle); free(handle); if (!prepared || !root_matches(prepared)) { write_commit_result(out, INDETERMINATE, claim); free(claim); return; }
+  prepared = find_prepared(handle);
+  /* A repeat after its original transaction was released is a read-only
+   * recovery query. It must never reconstruct a write from an old handle. */
+  if (!prepared) {
+    existing = find_claim(claim);
+    if (!existing && journal_lookup_claim(claim) < 0) { free(handle); free(claim); *failure = INTERNAL; return; }
+    existing = find_claim(claim);
+    if (existing) { enum outcome known; journal_outcome_for(existing, &known); write_commit_result(out, known == APPLIED ? ALREADY_APPLIED : known, claim); }
+    else write_commit_result(out, INDETERMINATE, claim);
+    free(handle); free(claim); return;
+  }
+  if (!root_matches(prepared)) { write_commit_result(out, INDETERMINATE, claim); free(handle); free(claim); return; }
+  /* Acquire the claim before observing mutable target entries. Otherwise a
+   * loser that arrives just after the winner's create could report a local
+   * drift rather than the winner's durable claim outcome. */
+  acquired = journal_acquire_claim(prepared, claim, &prior);
+  if (acquired == CLAIM_BINDING_MISMATCH) { free(handle); free(claim); *failure = CONFLICT; return; }
+  if (acquired == CLAIM_ACQUIRE_ERROR) { free(handle); free(claim); *failure = INTERNAL; return; }
+  if (acquired == CLAIM_EXISTS) { write_commit_result(out, prior, claim); free(handle); free(claim); return; }
   for (i = 0; i < prepared->entry_count; i++) if (!entry_live(&prepared->entries[i]) || ((prepared->entries[i].operation == CREATE || prepared->entries[i].operation == REPLACE) && !prepared->entries[i].sealed)) {
     journal_transition(prepared, JOURNAL_FAILED_BEFORE_EFFECT, PRECONDITION_DRIFT, claim, 0);
     if (cleanup_prepared_stages(prepared)) journal_transition(prepared, JOURNAL_FAILED_BEFORE_EFFECT, PRECONDITION_DRIFT, claim, 1);
-    write_commit_result(out, PRECONDITION_DRIFT, claim); free(claim); return;
+    write_commit_result(out, PRECONDITION_DRIFT, claim); free(handle); free(claim); return;
   }
   if (!journal_transition(prepared, JOURNAL_AUTHORIZED, FAILED, claim, 0) ||
       !journal_transition(prepared, JOURNAL_COMMITTING, INDETERMINATE, claim, 0)) {
-    write_commit_result(out, INDETERMINATE, claim); free(claim); return;
+    write_commit_result(out, INDETERMINATE, claim); free(handle); free(claim); return;
   }
   for (i = 0; i < prepared->entry_count; i++) if (!commit_entry(&prepared->entries[i])) { result = INDETERMINATE; break; }
   if (result == APPLIED) {
@@ -768,7 +937,7 @@ static void command_commit(struct reader *reader, struct writer *out, uint8_t *f
        * never retried automatically. */
     journal_transition(prepared, JOURNAL_INDETERMINATE, INDETERMINATE, claim, 0);
   }
-  write_commit_result(out, result, claim); destroy_prepared(prepared); free(claim);
+  write_commit_result(out, result, claim); destroy_prepared(prepared); free(handle); free(claim);
 }
 
 static void command_reconcile_claim(struct reader *reader, struct writer *out, uint8_t *failure) {

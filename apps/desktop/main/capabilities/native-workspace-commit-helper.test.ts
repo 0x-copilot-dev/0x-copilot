@@ -425,6 +425,111 @@ describeNative("native workspace commit helper", () => {
     ).resolves.toMatchObject({ outcome: "already_applied" });
   });
 
+  it("atomically admits exactly one of two helpers for the same approved create", async () => {
+    const workspace = root("copilot-native-claim-race-");
+    const store = privateStore();
+    const body = Buffer.from("one durable native effect", "utf8");
+    const [first, second] = await Promise.all([launch(store), launch(store)]);
+    const entries = [
+      {
+        operation: "create" as const,
+        relativePath: "race.md",
+        contentSlot: "payload",
+        contentDigest: digest(body),
+        contentSize: body.byteLength,
+        precondition: { exists: false as const },
+      },
+    ];
+    const [firstPrepared, secondPrepared] = await Promise.all([
+      first.prepare(workspace, entries),
+      second.prepare(workspace, entries),
+    ]);
+    await Promise.all([
+      first.writePrepared(firstPrepared, "payload", body),
+      second.writePrepared(secondPrepared, "payload", body),
+    ]);
+    await Promise.all([
+      first.sealPrepared(firstPrepared, "payload"),
+      second.sealPrepared(secondPrepared, "payload"),
+    ]);
+
+    // This is a true cross-process race over one private journal directory.
+    // Exactly one O_EXCL creator may reach fclonefileat; the other helper sees
+    // the winner's record and returns an existing/recovery outcome.
+    const results = await Promise.all([
+      first.commitPrepared(firstPrepared, "claim_two_helper_create_1"),
+      second.commitPrepared(secondPrepared, "claim_two_helper_create_1"),
+    ]);
+    const outcomes = results.map((result) => result.outcome);
+    expect(outcomes.filter((outcome) => outcome === "applied")).toHaveLength(1);
+    expect(
+      outcomes.filter(
+        (outcome) =>
+          outcome === "already_applied" || outcome === "indeterminate",
+      ),
+    ).toHaveLength(1);
+    expect(readFileSync(join(workspace, "race.md"), "utf8")).toBe(
+      "one durable native effect",
+    );
+    expect(
+      readdirSync(store.journal).filter((name) => name.startsWith("c2c-")),
+    ).toHaveLength(1);
+
+    await first.close();
+    helpers.splice(helpers.indexOf(first), 1);
+    await second.close();
+    helpers.splice(helpers.indexOf(second), 1);
+    const recovered = await launch(store);
+    await expect(
+      recovered.reconcileClaim("claim_two_helper_create_1"),
+    ).resolves.toMatchObject({ outcome: "already_applied" });
+  });
+
+  it("fails closed when a second helper binds an existing claim to another effect", async () => {
+    const workspace = root("copilot-native-claim-binding-");
+    const store = privateStore();
+    const approved = Buffer.from("approved effect A", "utf8");
+    const foreign = Buffer.from("foreign effect B", "utf8");
+    const [owner, foreignHelper] = await Promise.all([
+      launch(store),
+      launch(store),
+    ]);
+    const prepareCreate = async (
+      helper: NativeWorkspaceCommitHelper,
+      body: Buffer,
+    ) => {
+      const prepared = await helper.prepare(workspace, [
+        {
+          operation: "create",
+          relativePath: "binding.md",
+          contentSlot: "payload",
+          contentDigest: digest(body),
+          contentSize: body.byteLength,
+          precondition: { exists: false },
+        },
+      ]);
+      await helper.writePrepared(prepared, "payload", body);
+      await helper.sealPrepared(prepared, "payload");
+      return prepared;
+    };
+    const [ownedPrepared, foreignPrepared] = await Promise.all([
+      prepareCreate(owner, approved),
+      prepareCreate(foreignHelper, foreign),
+    ]);
+    await expect(
+      owner.commitPrepared(ownedPrepared, "claim_binding_conflict_1"),
+    ).resolves.toMatchObject({ outcome: "applied" });
+    await expect(
+      foreignHelper.commitPrepared(foreignPrepared, "claim_binding_conflict_1"),
+    ).rejects.toMatchObject({ code: "workspace_conflict" });
+    expect(readFileSync(join(workspace, "binding.md"), "utf8")).toBe(
+      "approved effect A",
+    );
+    expect(
+      readdirSync(store.journal).filter((name) => name.startsWith("c2c-")),
+    ).toHaveLength(1);
+  });
+
   it("fails closed on a tampered durable lifecycle record", async () => {
     const workspace = root("copilot-native-journal-tamper-");
     const store = privateStore();
