@@ -38,6 +38,10 @@ from runtime_worker.jobs.repair_planning import (
     RepairPlanningLoopEnv,
     RepairPlanningRunner,
 )
+from runtime_worker.jobs.repair_execution import (
+    RepairExecutionEnv,
+    RepairReconciliationExecutor,
+)
 from runtime_worker.jobs.audit_export_verification import (
     AuditExportVerificationSampler,
     AuditExportVerificationSamplingEnv,
@@ -170,12 +174,20 @@ class RuntimeWorkerEntrypoint:
                         "dry_run": retention_loop._dry_run,
                     },
                 )
-            # D12 is intentionally an opt-in planning loop. It is not a
-            # scheduler for cleanup or effect reconciliation: it owns no queue
-            # and it passes no executor into the runner.
-            if RepairPlanningLoopEnv.env_bool(
+            # D12 planning is opt-in.  Execution is a second explicit switch:
+            # it consumes only persisted candidate rows, freshly revalidates
+            # them, and can enqueue only body-free reconciliation commands.
+            # Physical artifact cleanup remains owned by the retention sweeper
+            # and its hold/reference-locked lifecycle jobs.
+            repair_planning_enabled = RepairPlanningLoopEnv.env_bool(
                 RepairPlanningLoopEnv.ENABLED, default=False
-            ):
+            )
+            repair_execution_enabled = RepairExecutionEnv.enabled()
+            if repair_execution_enabled and not repair_planning_enabled:
+                raise RuntimeError(
+                    "REPAIR_EXECUTION_ENABLED requires REPAIR_PLANNING_ENABLED."
+                )
+            if repair_planning_enabled:
                 if effect_claim_store is None:
                     raise RuntimeError(
                         "REPAIR_PLANNING_ENABLED requires SURFACES_V2 and "
@@ -222,6 +234,14 @@ class RuntimeWorkerEntrypoint:
                             settings=settings,
                             persistence=async_ports.persistence,
                         ),
+                        candidate_executor=(
+                            RepairReconciliationExecutor(
+                                collector=repair_collector,
+                                queue=async_ports.queue,
+                            )
+                            if repair_execution_enabled
+                            else None
+                        ),
                         max_claims=max_claims,
                         page_size=page_size,
                     )
@@ -233,6 +253,7 @@ class RuntimeWorkerEntrypoint:
                         "interval_seconds": repair_planning_loop._interval,
                         "max_claims": max_claims,
                         "page_size": page_size,
+                        "repair_execution_enabled": repair_execution_enabled,
                     },
                 )
             # D7/D12 audit-export verification is a bounded, read-only sampler.

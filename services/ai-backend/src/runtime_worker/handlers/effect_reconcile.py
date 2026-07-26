@@ -9,6 +9,7 @@ from agent_runtime.effects.coordinator import EffectReconcileCommand
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from runtime_api.schemas import RuntimeEffectReconcileCommand
+from runtime_api.schemas import RunRecord
 from runtime_worker.handlers.effect_commit import (
     EffectCoordinatorFactory,
     RuntimeRunLookupPort,
@@ -26,6 +27,21 @@ class EffectClaimLookupPort(Protocol):
         """Return a tenant-scoped effect claim, if it still exists."""
 
 
+@runtime_checkable
+class EffectReconcileAuditPort(Protocol):
+    """Append safe reconciliation evidence without carrying effect bodies."""
+
+    async def emit_effect_reconciled(
+        self,
+        *,
+        run: RunRecord,
+        claim: EffectClaim,
+        status: str,
+        safe_code: str,
+    ) -> None:
+        """Record the final body-free reconciliation disposition."""
+
+
 class RuntimeEffectReconcileHandler:
     """Revalidate recovery scope before asking A5 to reconcile a prior claim.
 
@@ -41,10 +57,12 @@ class RuntimeEffectReconcileHandler:
         persistence: RuntimeRunLookupPort,
         claims: EffectClaimLookupPort,
         coordinator_factory: EffectCoordinatorFactory,
+        audit_emitter: EffectReconcileAuditPort | None = None,
     ) -> None:
         self._persistence = persistence
         self._claims = claims
         self._coordinator_factory = coordinator_factory
+        self._audit_emitter = audit_emitter
 
     async def handle(self, command: RuntimeEffectReconcileCommand) -> None:
         """Delegate only a claim that is durably bound to this tenant and run."""
@@ -76,7 +94,35 @@ class RuntimeEffectReconcileHandler:
             claim_id=command.claim_id,
         )
         coordinator = self._coordinator_factory.for_run(run=run)
-        await coordinator.reconcile(pure_command)
+        result = await coordinator.reconcile(pure_command)
+        audit_emitter = self._audit_emitter
+        if audit_emitter is not None:
+            try:
+                await audit_emitter.emit_effect_reconciled(
+                    run=run,
+                    claim=claim,
+                    status=_safe_result_field(result, "status"),
+                    safe_code=_safe_result_field(result, "safe_code"),
+                )
+            except Exception:
+                # A chain writer outage must not replay or re-run a safe
+                # reconciliation result.  The queue's normal completion path
+                # remains authoritative for retry/recovery.
+                pass
 
 
-__all__ = ("EffectClaimLookupPort", "RuntimeEffectReconcileHandler")
+def _safe_result_field(result: object, name: str) -> str:
+    """Extract a bounded enum-like result field without trusting a fake port."""
+
+    value = getattr(result, name, "unknown")
+    value = getattr(value, "value", value)
+    if not isinstance(value, str) or len(value) > 64:
+        return "unknown"
+    return value
+
+
+__all__ = (
+    "EffectClaimLookupPort",
+    "EffectReconcileAuditPort",
+    "RuntimeEffectReconcileHandler",
+)

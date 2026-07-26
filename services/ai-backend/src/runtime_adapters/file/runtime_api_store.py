@@ -3833,18 +3833,30 @@ class FileRuntimeApiStore:
 
     async def enqueue_effect_reconcile(
         self, command: RuntimeEffectReconcileCommand
-    ) -> None:
-        """Enqueue an A5 effect reconciliation command."""
+    ) -> bool:
+        """Durably enqueue one body-free reconciliation command exactly once."""
 
-        self.effect_reconcile_commands.append(command)
-        await self._register_command(
+        payload = command.model_dump(mode="json")
+        full_payload = self._command_payload(
             command_id=command.command_id,
             command_type=PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED,
             org_id=command.org_id,
             run_id=command.run_id,
             approval_id=None,
-            payload=command.model_dump(mode="json"),
+            payload=payload,
         )
+        async with self._state_lock:
+            existing = self._queue_payloads.get(command.command_id)
+            if existing is not None:
+                if existing != full_payload:
+                    raise ValueError("runtime reconcile command id conflicts")
+                return False
+            self.effect_reconcile_commands.append(command)
+            self._register_command_locked(
+                command_id=command.command_id,
+                full_payload=full_payload,
+            )
+        return True
 
     async def enqueue_artifact_event(
         self,

@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
+from agent_runtime.effects.claims import EffectClaim
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
 )
+from agent_runtime.surfaces_v2.ledger_models import EffectActor, EffectExecutorKind
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -81,6 +83,29 @@ class WorkerAuditEmitterMixin:
             status="pending",
             created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
             metadata={},
+        )
+
+    @staticmethod
+    def make_effect_claim() -> EffectClaim:
+        return EffectClaim(
+            org_id="org_a",
+            run_id="run_a",
+            stage_id="stg_123e4567-e89b-42d3-a456-426614174000",
+            revision=1,
+            claim_id="clm_a",
+            idempotency_key="audit-effect-claim",
+            executor=EffectExecutorKind.WORKSPACE,
+            proposal_digest="a" * 64,
+            target_digest="b" * 64,
+            target_ref="workspace-target://grant_1/path_token_1",
+            proposal_ref=(
+                "proposal://stg_123e4567-e89b-42d3-a456-426614174000/revisions/1"
+            ),
+            proposal_content_ref=(
+                "artifact://art_018f47a6-7b2c-7b10-8f21-12345678b002/revisions/1"
+            ),
+            actor=EffectActor.USER,
+            decision_ledger_id="raudit.001",
         )
 
 
@@ -235,6 +260,35 @@ class TestToolCallOutcomeEmit(WorkerAuditEmitterMixin):
         _, record = store.audit_log[0]
         assert record["outcome"] == "failure"
         assert record["metadata"]["error_code"] == "tool_exception"
+
+
+class TestEffectReconciliationAudit(WorkerAuditEmitterMixin):
+    def test_reconciliation_emits_safe_claim_only_metadata(self) -> None:
+        emitter, store = self.make_emitter()
+        run = self.make_run()
+        claim = self.make_effect_claim()
+
+        asyncio.run(
+            emitter.emit_effect_reconciled(
+                run=run,
+                claim=claim,
+                status="applied",
+                safe_code="reconcile_unavailable",
+            )
+        )
+
+        event_type, record = store.audit_log[0]
+        assert event_type == "effect_reconciled"
+        assert record["resource_type"] == "effect_claim"
+        assert record["resource_id"] == claim.claim_id
+        assert record["outcome"] == "success"
+        assert record["metadata"] == {
+            "stage_id": claim.stage_id,
+            "revision": claim.revision,
+            "executor": "workspace",
+            "status": "applied",
+            "code": "reconcile_unavailable",
+        }
 
 
 class TestChainContinuesAcrossEmits(WorkerAuditEmitterMixin):

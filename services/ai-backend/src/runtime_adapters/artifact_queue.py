@@ -62,8 +62,13 @@ class ArtifactAwareRuntimeQueue:
 
     async def enqueue_effect_reconcile(
         self, command: RuntimeEffectReconcileCommand
-    ) -> None:
-        await self._queue.enqueue_effect_reconcile(command)
+    ) -> bool:
+        # Older queue mirrors returned ``None`` before the repair executor
+        # needed to distinguish a replay.  Treat that legacy successful return
+        # as an insertion while preserving the explicit false result of the
+        # durable idempotent implementations.
+        result = await self._queue.enqueue_effect_reconcile(command)
+        return result is not False
 
     async def claim_next(
         self,

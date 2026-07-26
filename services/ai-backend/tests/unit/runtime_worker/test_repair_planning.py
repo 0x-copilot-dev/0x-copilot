@@ -212,6 +212,14 @@ class _Claims:
             ordered = [claim for claim in ordered if _claim_scan_key(claim) > after]
         return tuple(ordered[:limit])
 
+    async def get_by_claim_id(
+        self, *, org_id: str, claim_id: str
+    ) -> EffectClaim | None:
+        for claim in self.rows:
+            if claim.org_id == org_id and claim.claim_id == claim_id:
+                return claim
+        return None
+
     async def update(self, *args: object, **kwargs: object) -> None:
         del args, kwargs
         self.dangerous_calls += 1
@@ -295,6 +303,82 @@ async def test_terminal_trusted_claim_persists_candidate_without_an_effect() -> 
     assert outcomes[0].candidate_id == _claim().claim_id
     assert claims.dangerous_calls == 0
     assert events.dangerous_calls == 0
+
+
+async def test_execution_revalidation_reloads_a_live_hold_before_dispatch() -> None:
+    claim = _claim()
+    holds = _Holds(state=RepairLegalHoldState.NONE)
+    claims = _Claims(rows=(claim,))
+    events = _Events(events=(_event(claim),))
+    collector = EffectClaimRepairSnapshotCollector(
+        persistence=_Persistence(run=_run()),
+        event_store=events,
+        claims=claims,
+        legal_holds=holds,
+        supported_reconcile_executors=frozenset({EffectExecutorKind.WORKSPACE}),
+        max_events_per_run=10,
+        quiet_period=timedelta(seconds=30),
+    )
+
+    initial = await collector.collect(limit=10, now=NOW)
+    initial_record = initial.snapshots[0].records[0]
+    assert (
+        RepairPlanner()
+        .plan(
+            RepairPlanningRequest(
+                tenant_id=ORG,
+                snapshot_id="initial_snapshot",
+                as_of=NOW,
+                records=(initial_record,),
+            )
+        )
+        .decisions[0]
+        .state
+        is RepairDecisionState.CANDIDATE
+    )
+
+    holds.state = RepairLegalHoldState.ACTIVE
+    revalidated = await collector.revalidate_effect_claim(
+        tenant_id=ORG,
+        claim_id=claim.claim_id,
+        now=NOW,
+    )
+
+    assert revalidated is not None
+    fresh = RepairPlanner.decide_record(revalidated.record)
+    assert fresh.state is RepairDecisionState.WITHHELD
+    assert "live_legal_hold" in {reason.value for reason in fresh.reasons}
+    assert holds.calls == 2
+
+
+async def test_execution_revalidation_withholds_when_the_reference_graph_changes() -> (
+    None
+):
+    claim = _claim()
+    holds = _Holds(state=RepairLegalHoldState.NONE)
+    claims = _Claims(rows=(claim,))
+    events = _Events(events=(_event(claim),))
+    collector = EffectClaimRepairSnapshotCollector(
+        persistence=_Persistence(run=_run()),
+        event_store=events,
+        claims=claims,
+        legal_holds=holds,
+        supported_reconcile_executors=frozenset({EffectExecutorKind.WORKSPACE}),
+        max_events_per_run=10,
+        quiet_period=timedelta(seconds=30),
+    )
+
+    events.events = (_event(claim, sequence_no=2),)
+    revalidated = await collector.revalidate_effect_claim(
+        tenant_id=ORG,
+        claim_id=claim.claim_id,
+        now=NOW,
+    )
+
+    assert revalidated is not None
+    fresh = RepairPlanner.decide_record(revalidated.record)
+    assert fresh.state is RepairDecisionState.WITHHELD
+    assert "incomplete_graph" in {reason.value for reason in fresh.reasons}
 
 
 @pytest.mark.parametrize(

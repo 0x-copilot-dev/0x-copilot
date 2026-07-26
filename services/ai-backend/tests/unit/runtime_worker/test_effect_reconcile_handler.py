@@ -8,7 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from agent_runtime.effects.claims import EffectClaim
-from agent_runtime.effects.coordinator import EffectReconcileCommand
+from agent_runtime.effects.coordinator import (
+    EffectCoordinatorResult,
+    EffectCoordinatorStatus,
+    EffectReconcileCommand,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.surfaces_v2.ledger_models import EffectActor, EffectExecutorKind
@@ -127,7 +131,13 @@ class _Coordinator:
 
     async def reconcile(self, command: EffectReconcileCommand) -> object:
         self.commands.append(command)
-        return object()
+        return EffectCoordinatorResult(
+            status=EffectCoordinatorStatus.APPLIED,
+            stage_id=STAGE,
+            revision=2,
+            claim_id=CLAIM_ID,
+            safe_code="reconcile_unavailable",
+        )
 
 
 @dataclass
@@ -138,6 +148,14 @@ class _Factory:
     def for_run(self, *, run: RunRecord) -> _Coordinator:
         self.runs.append(run)
         return self.coordinator
+
+
+@dataclass
+class _Audit:
+    calls: list[dict[str, object]] = field(default_factory=list)
+
+    async def emit_effect_reconciled(self, **kwargs: object) -> None:
+        self.calls.append(dict(kwargs))
 
 
 async def test_reconcile_handler_validates_claim_and_maps_body_free_command() -> None:
@@ -160,6 +178,29 @@ async def test_reconcile_handler_validates_claim_and_maps_body_free_command() ->
         "org_id": ORG,
         "claim_id": CLAIM_ID,
     }
+
+
+async def test_reconcile_handler_emits_body_free_audit_after_reconciliation() -> None:
+    run = _run()
+    claim = _claim()
+    audit = _Audit()
+    handler = RuntimeEffectReconcileHandler(
+        persistence=_Runs(run=run),
+        claims=_Claims(claim=claim),
+        coordinator_factory=_Factory(coordinator=_Coordinator()),
+        audit_emitter=audit,
+    )
+
+    await handler.handle(_command())
+
+    assert audit.calls == [
+        {
+            "run": run,
+            "claim": claim,
+            "status": "applied",
+            "safe_code": "reconcile_unavailable",
+        }
+    ]
 
 
 async def test_reconcile_handler_rejects_claim_run_mismatch_before_loading_run() -> (

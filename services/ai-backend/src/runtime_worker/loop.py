@@ -48,6 +48,7 @@ from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
 from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
 from runtime_worker.handlers.effect_reconcile import RuntimeEffectReconcileHandler
+from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.mcp_operation_storage import RuntimeMcpEffectCoordinatorFactory
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from agent_runtime.persistence.ports import (
@@ -251,10 +252,9 @@ class RuntimeWorker:
         )
         self.effect_commit_handler = effect_commit_handler
         self.effect_reconcile_handler = effect_reconcile_handler
-        # D12's planning runner receives this exact instance from the worker
-        # entrypoint.  That matters for the in-memory adapter; file/Postgres
-        # would read the same durable data either way.  It has no queue or
-        # executor authority and is only surfaced as a read source.
+        # D12's planner and optional execution bridge receive this exact claim
+        # source from the worker entrypoint.  That matters for the in-memory
+        # adapter; file/Postgres would read the same durable data either way.
         self.effect_claim_store: EffectClaimStore | None = effect_claim_store
         self.repair_reconcile_supported_executors: frozenset[EffectExecutorKind] = (
             frozenset()
@@ -294,6 +294,7 @@ class RuntimeWorker:
                 persistence=self.persistence,
                 claims=claims,
                 coordinator_factory=factory,
+                audit_emitter=WorkerAuditEmitter(persistence=self.persistence),
             )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

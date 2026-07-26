@@ -50,6 +50,7 @@ class LifecycleMetricName:
     RETENTION_EXECUTION_FAILURES_TOTAL = (
         "surfaces_lifecycle_retention_execution_failures_total"
     )
+    REPAIR_EXECUTION_TOTAL = "surfaces_lifecycle_repair_execution_total"
     AUDIT_VERIFICATION_TOTAL = "surfaces_lifecycle_audit_verification_total"
     AUTHORIZATION_DENIALS_TOTAL = "surfaces_lifecycle_authorization_denials_total"
 
@@ -91,6 +92,22 @@ class ReconcileBacklogStateLabel:
 
     CANDIDATE = "candidate"
     WITHHELD = "withheld"
+
+
+class RepairExecutionActionLabel:
+    """Closed executable D12 action families."""
+
+    EFFECT_RECONCILE = "effect_reconcile"
+
+
+class RepairExecutionOutcomeLabel:
+    """Closed outcomes for the durable repair execution seam."""
+
+    QUEUED = "queued"
+    ALREADY_QUEUED = "already_queued"
+    WITHHELD = "withheld"
+    UNSUPPORTED = "unsupported"
+    FAILED = "failed"
 
 
 class AuditVerificationFormatLabel:
@@ -201,6 +218,18 @@ _RETENTION_EXECUTION_KINDS: Final[frozenset[str]] = frozenset(
         "sweep_cycle",
     }
 )
+_REPAIR_EXECUTION_ACTIONS: Final[frozenset[str]] = frozenset(
+    {RepairExecutionActionLabel.EFFECT_RECONCILE}
+)
+_REPAIR_EXECUTION_OUTCOMES: Final[frozenset[str]] = frozenset(
+    {
+        RepairExecutionOutcomeLabel.QUEUED,
+        RepairExecutionOutcomeLabel.ALREADY_QUEUED,
+        RepairExecutionOutcomeLabel.WITHHELD,
+        RepairExecutionOutcomeLabel.UNSUPPORTED,
+        RepairExecutionOutcomeLabel.FAILED,
+    }
+)
 _AUDIT_FORMATS: Final[frozenset[str]] = frozenset(
     {
         AuditVerificationFormatLabel.RECEIPT_V1,
@@ -270,6 +299,14 @@ LIFECYCLE_METRIC_REGISTRY: Final[tuple[LifecycleMetricDefinition, ...]] = (
         labels=(("kind", tuple(sorted((*_RETENTION_EXECUTION_KINDS, _OTHER)))),),
     ),
     LifecycleMetricDefinition(
+        name=LifecycleMetricName.REPAIR_EXECUTION_TOTAL,
+        instrument="counter",
+        labels=(
+            ("action", tuple(sorted((*_REPAIR_EXECUTION_ACTIONS, _OTHER)))),
+            ("outcome", tuple(sorted((*_REPAIR_EXECUTION_OUTCOMES, _OTHER)))),
+        ),
+    ),
+    LifecycleMetricDefinition(
         name=LifecycleMetricName.AUDIT_VERIFICATION_TOTAL,
         instrument="counter",
         labels=(
@@ -336,6 +373,7 @@ class LifecycleOperationalMetrics:
         self._plan_duration_seconds: Any | None = None
         self._retention_lag_seconds: Any | None = None
         self._retention_execution_failures_total: Any | None = None
+        self._repair_execution_total: Any | None = None
         self._audit_verification_total: Any | None = None
         self._authorization_denials_total: Any | None = None
         self._reconcile_backlog = {
@@ -561,6 +599,30 @@ class LifecycleOperationalMetrics:
                 "lifecycle_metrics.retention_failure.record_failed", exc_info=True
             )
 
+    def record_repair_execution(self, *, action: str, outcome: str) -> None:
+        """Count a D12 dispatch outcome without resource-identifying labels."""
+
+        if self._repair_execution_total is None:
+            self._repair_execution_total = self._counter(
+                LifecycleMetricName.REPAIR_EXECUTION_TOTAL
+            )
+        if self._repair_execution_total is None:
+            return
+        try:
+            self._repair_execution_total.add(
+                1,
+                {
+                    "action": self._closed(action, _REPAIR_EXECUTION_ACTIONS, _OTHER),
+                    "outcome": self._closed(
+                        outcome, _REPAIR_EXECUTION_OUTCOMES, _OTHER
+                    ),
+                },
+            )
+        except Exception:
+            logger.debug(
+                "lifecycle_metrics.repair_execution.record_failed", exc_info=True
+            )
+
     def record_audit_verification(self, *, format: str, succeeded: bool) -> None:
         """Count receipt verification attempts and failures with a closed format label."""
 
@@ -658,6 +720,8 @@ __all__ = (
     "LifecyclePlanOutcomeLabel",
     "LifecyclePlannerLabel",
     "ReconcileBacklogStateLabel",
+    "RepairExecutionActionLabel",
+    "RepairExecutionOutcomeLabel",
     "RetentionLagStageLabel",
     "VerificationOutcomeLabel",
     "get_lifecycle_operational_metrics",

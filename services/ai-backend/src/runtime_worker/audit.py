@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, ClassVar
 
 from agent_runtime.api.ports import PersistencePort
+from agent_runtime.effects.claims import EffectClaim
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -25,6 +26,7 @@ class _Actions:
     APPROVAL_DECISION = "approval_decision"
     TOOL_CALL_OUTCOME = "tool_call_outcome"
     CONVERSATION_FORK = "conversation.fork"
+    EFFECT_RECONCILED = "effect_reconciled"
 
 
 class _Outcomes:
@@ -42,6 +44,7 @@ class _ResourceTypes:
     # Fork target (the new conversation row). Metadata carries both
     # source_conversation_id and share_id so SIEM queries can pivot on either side.
     CONVERSATION = "conversation"
+    EFFECT_CLAIM = "effect_claim"
 
 
 class _ActorTypes:
@@ -223,6 +226,61 @@ class WorkerAuditEmitter:
             if outcome.lower() in {"completed", "success"}
             else _Outcomes.FAILURE,
             metadata=metadata,
+        )
+
+    async def emit_effect_reconciled(
+        self,
+        *,
+        run: RunRecord,
+        claim: EffectClaim,
+        status: str,
+        safe_code: str,
+    ) -> None:
+        """Audit one body-free effect reconciliation outcome.
+
+        A reconciliation may observe or settle a previously claimed effect,
+        but it never carries proposal bytes, target bytes, or a connector
+        response into the audit chain.  The durable claim id is the resource
+        identifier; the remaining fields are closed operational facts.
+        """
+
+        safe_status = (
+            status
+            if status
+            in {
+                "applied",
+                "replayed",
+                "refused",
+                "indeterminate",
+            }
+            else "unknown"
+        )
+        outcome = (
+            _Outcomes.SUCCESS
+            if safe_status in {"applied", "replayed"}
+            else _Outcomes.FAILURE
+        )
+        safe_codes = {
+            "claim_not_found",
+            "claim_scope_mismatch",
+            "scope_unavailable",
+            "reconcile_unavailable",
+            "unknown",
+        }
+        await self._emit(
+            event_type=_Actions.EFFECT_RECONCILED,
+            run=run,
+            actor_type=_ActorTypes.WORKER,
+            resource_type=_ResourceTypes.EFFECT_CLAIM,
+            resource_id=claim.claim_id,
+            outcome=outcome,
+            metadata={
+                "stage_id": claim.stage_id,
+                "revision": claim.revision,
+                "executor": claim.executor.value,
+                "status": safe_status,
+                "code": safe_code if safe_code in safe_codes else "unknown",
+            },
         )
 
     async def emit_conversation_fork(
