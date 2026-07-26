@@ -264,6 +264,33 @@ describe("buildServiceEnv(ai-backend)", () => {
     );
   });
 
+  it("injects signed C2 bootstrap evidence into ai-backend only", () => {
+    const withAttestation: ServiceEnvInputs = {
+      ...inputs(),
+      workspaceAttestation: {
+        publicKey: "spki-public-key",
+        payload: "signed-payload",
+        signature: "ed25519-signature",
+      },
+    };
+    const ai = buildServiceEnv("ai-backend", withAttestation);
+    expect(ai.DESKTOP_WORKSPACE_ATTESTATION_PUBLIC_KEY).toBe("spki-public-key");
+    expect(ai.DESKTOP_WORKSPACE_ATTESTATION_PAYLOAD).toBe("signed-payload");
+    expect(ai.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE).toBe(
+      "ed25519-signature",
+    );
+
+    for (const sibling of ["backend", "backend-facade"] as const) {
+      const env = buildServiceEnv(sibling, withAttestation);
+      expect(env.DESKTOP_WORKSPACE_ATTESTATION_PUBLIC_KEY).toBeUndefined();
+      expect(env.DESKTOP_WORKSPACE_ATTESTATION_PAYLOAD).toBeUndefined();
+      expect(env.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE).toBeUndefined();
+    }
+    expect(ENV_PASSTHROUGH_ALLOWLIST).not.toContain(
+      "DESKTOP_WORKSPACE_ATTESTATION_PAYLOAD",
+    );
+  });
+
   it("does not let a hostile process env inject the runtime-management flag", () => {
     // The flag is set by the supervisor, never passed through: it is not on
     // ENV_PASSTHROUGH_ALLOWLIST, so its value is always the supervisor's.

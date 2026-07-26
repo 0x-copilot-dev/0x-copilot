@@ -36,6 +36,10 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/agent/runs/{run_id}/sources/{source_id}/open",
         # Generative Surfaces v2 (PRD-B4) — user-invited "Suggest a shape".
         "/v1/agent/surfaces/{surface_id}/shape-request",
+        # C2 — Electron-main-only signed capability statement. The endpoint
+        # requires the host service token (not a renderer bearer) and forwards
+        # only to ai-backend for verification.
+        "/v1/agent/desktop-workspace-attestation",
         # Generative Surfaces v2 (PRD-E3) — the tamper-evident receipt export.
         "/v1/agent/runs/{run_id}/receipt/export",
         # PRD-E1 D7 — safe, signed, versioned receipt export.

@@ -65,6 +65,7 @@ import {
 } from "./app-protocol";
 import {
   createCapabilityService,
+  DesktopWorkspaceAttestationPublisher,
   isDesktopFilesystemEnabled,
   type CapabilityService,
 } from "./capabilities";
@@ -297,8 +298,12 @@ function startAutoUpdate(): void {
 // logged and never crosses renderer IPC. A broker failure must never block
 // boot — the app is fully usable without host-folder grants.
 async function startCapabilitySubsystem(): Promise<{
-  readonly baseUrl: string;
-  readonly token: string;
+  readonly workspaceBroker: {
+    readonly baseUrl: string;
+    readonly token: string;
+  } | null;
+  /** Main-only signer; its private key never reaches a child process. */
+  readonly workspaceAttestation: DesktopWorkspaceAttestationPublisher;
 } | null> {
   try {
     // Plaintext is legitimate in dev AND whenever the user's secure-storage
@@ -328,6 +333,12 @@ async function startCapabilitySubsystem(): Promise<{
       },
       allowPlaintextFallback: allowPlaintext,
     });
+    // C2 launch evidence is created from main-owned authority facts before
+    // services start. It contains no path/grant/renderer input and is signed
+    // with a one-boot key whose public half is injected only into ai-backend.
+    const workspaceAttestation = new DesktopWorkspaceAttestationPublisher({
+      attestation: capabilityService.workspaceWriteAttestation(),
+    });
     // A disabled native/C2 authority does not even register an approval host:
     // recording an approval without a possible main-only permit path would
     // strand a stage and weaken the fail-closed launch gate.
@@ -347,10 +358,15 @@ async function startCapabilitySubsystem(): Promise<{
     // supervised ai-backend receives the credential only when C2's writable
     // host authority is available, so an unavailable workspace fails closed.
     console.log("[capability-broker] listening on", handle.baseUrl);
-    if (workspaceApprovalPermitSource === null) return null;
     return {
-      baseUrl: handle.baseUrl,
-      token: capabilityService.brokerAuthToken(),
+      workspaceBroker:
+        workspaceApprovalPermitSource === null
+          ? null
+          : {
+              baseUrl: handle.baseUrl,
+              token: capabilityService.brokerAuthToken(),
+            },
+      workspaceAttestation,
     };
   } catch (err) {
     workspaceApprovalPermitSource = null;
@@ -526,9 +542,12 @@ if (hasSingleInstanceLock) {
     // RUNTIME_ENABLE_DESKTOP_FILESYSTEM, read ONCE at boot — when unset/false
     // the broker never binds and (because capabilityService stays null) the
     // capability IPC channels are never registered, so calls fail closed.
-    const workspaceBroker = isDesktopFilesystemEnabled(process.env)
+    const capabilitySubsystem = isDesktopFilesystemEnabled(process.env)
       ? await startCapabilitySubsystem()
       : null;
+    const workspaceBroker = capabilitySubsystem?.workspaceBroker ?? null;
+    const workspaceAttestation =
+      capabilitySubsystem?.workspaceAttestation ?? null;
     if (!isDesktopFilesystemEnabled(process.env)) {
       console.log(
         "[capabilities] desktop filesystem disabled " +
@@ -556,6 +575,18 @@ if (hasSingleInstanceLock) {
         supervisedEnv.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "false";
         delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_URL;
         delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_TOKEN;
+      }
+      if (workspaceAttestation !== null) {
+        const bootstrap = workspaceAttestation.bootstrap();
+        supervisedEnv.DESKTOP_WORKSPACE_ATTESTATION_PUBLIC_KEY =
+          bootstrap.publicKey;
+        supervisedEnv.DESKTOP_WORKSPACE_ATTESTATION_PAYLOAD = bootstrap.payload;
+        supervisedEnv.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE =
+          bootstrap.signature;
+      } else {
+        delete supervisedEnv.DESKTOP_WORKSPACE_ATTESTATION_PUBLIC_KEY;
+        delete supervisedEnv.DESKTOP_WORKSPACE_ATTESTATION_PAYLOAD;
+        delete supervisedEnv.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE;
       }
       if (isDesktopBrowserEnabled(process.env)) {
         try {
@@ -619,6 +650,20 @@ if (hasSingleInstanceLock) {
       supervisor
         .start()
         .then(({ facadeUrl, hostToken }) => {
+          // The child verifies the bootstrap envelope before its in-process
+          // worker starts. This facade publication is the runtime ingress for
+          // a fresh signed statement and leaves a failed/missing bridge safely
+          // unattested; it never delays or weakens normal desktop boot.
+          if (workspaceAttestation !== null) {
+            void workspaceAttestation
+              .publish({ facadeBaseUrl: facadeUrl, hostToken })
+              .catch((err: unknown) => {
+                console.error(
+                  "[workspace-attestation] publication failed; workspace writes remain unavailable:",
+                  err,
+                );
+              });
+          }
           wireTransportAndIpc(facadeUrl, hostToken);
         })
         .catch(async (err: unknown) => {

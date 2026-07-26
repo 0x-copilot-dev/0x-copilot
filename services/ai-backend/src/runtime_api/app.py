@@ -49,6 +49,9 @@ from agent_runtime.api.user_policies_resolver import (
 )
 from agent_runtime.api.workspace_coordinator import WorkspaceCoordinator
 from agent_runtime.artifacts import ArtifactService
+from agent_runtime.capabilities.desktop.workspace_attestation import (
+    DesktopWorkspaceAttestationRegistry,
+)
 from agent_runtime.deployment import (
     DeploymentProfile,
     log_profile,
@@ -71,6 +74,9 @@ from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
 from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
 from runtime_adapters.repair_planning import build_audit_export_verification_store
 from runtime_api.http.account_merge_routes import AccountMergeApiRouter
+from runtime_api.http.desktop_workspace_attestation import (
+    DesktopWorkspaceAttestationRouter,
+)
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.retention_routes import (
     RetentionAdminRouter,
@@ -224,6 +230,12 @@ class RuntimeApiAppFactory:
         # (env) and injected-ports (test) paths — route handlers read
         # feature flags (e.g. enable_local_models) from here.
         app.state.runtime_settings = _settings
+        # C2's signed bootstrap is verified before the in-process worker
+        # evaluates E2 readiness. A later Electron-main renewal arrives via
+        # the facade route below; absence/malformed input remains fail-closed.
+        app.state.desktop_workspace_attestation_registry = (
+            DesktopWorkspaceAttestationRegistry.from_environment()
+        )
         # E2 D1 resolves its entire configuration from RuntimeSettings before
         # this composition root runs.  The API intentionally logs the snapshot
         # but defers effect-port validation to RuntimeWorker: a multi-process
@@ -375,6 +387,7 @@ class RuntimeApiAppFactory:
         # Round 2 — local (Ollama) model management. Gated by
         # RUNTIME_ENABLE_LOCAL_MODELS; every route but /status 404s when off.
         app.include_router(LocalModelsApiRouter.create_router())
+        app.include_router(DesktopWorkspaceAttestationRouter.create_router())
         app.add_exception_handler(
             RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error
         )
@@ -1320,6 +1333,9 @@ class RuntimeApiAppFactory:
             artifact_blob_store=getattr(ports, "artifact_blob_store", None),
             artifact_reference_store=getattr(
                 ports, "artifact_reference_provider", None
+            ),
+            workspace_attestation_registry=getattr(
+                app.state, "desktop_workspace_attestation_registry", None
             ),
         )
         app.state.runtime_in_process_worker = worker
