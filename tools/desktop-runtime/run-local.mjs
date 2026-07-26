@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 /**
- * run-local.mjs — boot the STAGED desktop runtime end-to-end on this mac and
- * smoke-test it, exactly the way the Electron supervisor will:
+ * run-local.mjs — boot the STAGED desktop service topology end-to-end on this
+ * mac and smoke-test the legacy PostgreSQL compatibility lane. It shares the
+ * bundled services and single_user_desktop posture with Electron, but is NOT
+ * the production desktop store-selection authority: Electron uses
+ * apps/desktop/main/services/service-env.ts, whose resolver defaults
+ * ai-backend to the file-native store. This drill deliberately pins Postgres
+ * so it can continue covering the historic relational migration/boot path.
  *
  *   node tools/desktop-runtime/run-local.mjs [--dest apps/desktop/resources] [--keep]
  *
@@ -11,7 +16,8 @@
  *      the zonky postgres bundle ships NO psql/createdb)
  *   3. run both services' scripts/migrate.py apply with the staged interpreter
  *   4. start backend (backend_app.desktop_app:app), ai-backend (in-proc
- *      worker, postgres store), facade — all via staged `python -m uvicorn`
+ *      worker, deliberately pinned legacy Postgres store), facade — all via
+ *      staged `python -m uvicorn`
  *      under the single_user_desktop profile with per-run generated secrets
  *   5. health-gate all three, then smoke:
  *        GET /v1/health on backend, ai-backend, facade   (expect 200)

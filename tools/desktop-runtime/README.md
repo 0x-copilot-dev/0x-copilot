@@ -1,9 +1,10 @@
 # Desktop runtime tooling
 
-Stages and boots the self-contained desktop runtime (bundled CPython 3.13 +
-PostgreSQL 17 + the three backend services) **without Electron**. The Electron
-supervisor later ships the staged tree as app resources and spawns exactly the
-processes `run-local.mjs` spawns.
+Stages the self-contained desktop runtime (bundled CPython 3.13, PostgreSQL 17,
+and the three backend services) **without Electron**. The Electron supervisor
+ships the staged tree as app resources and starts the same service topology.
+The headless `run-local.mjs` drill deliberately exercises the legacy Postgres
+compatibility lane; it is not the desktop ai-backend store-selection authority.
 
 ## Files
 
@@ -57,7 +58,28 @@ backend/facade) plus `copilot-service-contracts` and
 `copilot-audit-chain`. Every service process runs with
 `PYTHONPATH=<svc>/site-packages:<svc>/src` — nothing else.
 
-## Boot contract (proven by run-local.mjs)
+## Store-selection authority
+
+The supervised desktop target is `single_user_desktop` and **file-first** for
+the **ai-backend** runtime store. `apps/desktop/main/services/service-env.ts`
+is the sole resolver used by both the supervisor and the child-env builder:
+
+- unset, empty, and unrecognised `COPILOT_DESKTOP_FILE_STORE_V1` values resolve
+  to `RUNTIME_STORE_BACKEND=file` at `<userData>/agent-data/v1`;
+- an explicit truthy value also resolves to file;
+- only an explicit falsey value (`0`, `false`, `no`, `off`, or `disabled`)
+  selects the legacy `atlas_ai` Postgres store as a rollback escape hatch;
+- the supervisor may make a **one-boot** Postgres choice after a verified
+  Postgres-to-file carry-over cannot be trusted, preserving existing history
+  rather than opening an empty file store.
+
+The embedded PostgreSQL cluster remains required for `backend` identity, OAuth,
+and vault data in every desktop mode. It is not the default ai-backend runtime
+store. The actual GUI/supervisor validation path is
+`node tools/desktop-runtime/run-supervised.mjs`; this headless drill preserves
+the legacy Postgres lane on purpose and cannot prove file-first boot.
+
+## Legacy Postgres compatibility boot contract (proven by run-local.mjs)
 
 1. `postgres/bin/initdb -D <data> -U postgres -A trust -E UTF8 --no-locale --no-instructions`
 2. `postgres/bin/pg_ctl -D <data> -l <log> -o "-p <port> -c listen_addresses=127.0.0.1 -c unix_socket_directories=<short-dir>" -w start`
@@ -65,7 +87,9 @@ backend/facade) plus `copilot-service-contracts` and
 4. `python services/backend/scripts/migrate.py apply` with `BACKEND_DATABASE_URL=postgresql+psycopg://…/backend`
    and `python services/ai-backend/scripts/migrate.py apply` with `RUNTIME_DATABASE_URL=postgresql+psycopg://…/ai_backend`
    (yoyo needs the explicit `+psycopg` driver marker; the bare `postgresql://` scheme resolves to psycopg2, which is not bundled)
-5. Spawn, in order — see run-local.mjs for the full env of each:
+5. Spawn, in order — see run-local.mjs for the full env of each. Its
+   `RUNTIME_STORE_BACKEND=postgres` setting is deliberate coverage for the
+   legacy compatibility lane, not the production desktop default:
    - backend: `python -m uvicorn backend_app.desktop_app:app` (`BACKEND_ENVIRONMENT=production`, plain `DATABASE_URL`, the four generated secrets)
    - ai-backend: `python -m uvicorn runtime_api.app:app` (`RUNTIME_ENVIRONMENT=production`, `RUNTIME_STORE_BACKEND=postgres`, `RUNTIME_START_IN_PROCESS_WORKER=true`, **`RUNTIME_MIGRATIONS_AUTO_APPLY=false`**, `RUNTIME_ENABLE_LOCAL_MODELS=true`, `RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME=true`). The two local-model flags are separate authorisations:
      - `RUNTIME_ENABLE_LOCAL_MODELS=true` surfaces the `/v1/local-models/*` API — **Settings → Local models** and the first-run local-model card (download an HF GGUF + run via a user-installed [Ollama](https://ollama.com/download) at `localhost:11434`). Every route but `/status` 404s when it is off.
