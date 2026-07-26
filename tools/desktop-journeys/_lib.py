@@ -42,7 +42,16 @@ from pathlib import Path
 # _lib.py lives at <repo>/tools/desktop-journeys/_lib.py
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DRIVER = REPO_ROOT / "tools" / "cli-testing" / "harness" / "driver.mjs"
-DOTENV = REPO_ROOT / "services" / "ai-backend" / ".env"
+# A branch worktree normally does not contain the ignored local ``.env`` file.
+# Let a journey explicitly point at the checkout that owns that developer-local
+# file while preserving the repo-local path as the ordinary, safe default.  The
+# override is intentionally a path only: ``load_env_key`` still returns the
+# value directly to a password field and never logs it.
+DOTENV = Path(
+    os.environ.get(
+        "COPILOT_JOURNEY_DOTENV", REPO_ROOT / "services" / "ai-backend" / ".env"
+    )
+)
 RUNS_DIR = Path(__file__).resolve().parent / "runs"
 
 CTL_PORT = int(os.environ.get("CTL_PORT", "8790"))
