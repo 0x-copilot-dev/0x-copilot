@@ -145,6 +145,7 @@
   },
   {
     "tool_name": "read",
+    "model_tool_aliases": ["read_file"],
     "capability": "workspace",
     "op": "read",
     "source": "delegation.middleware.filesystem",
@@ -172,6 +173,7 @@
   },
   {
     "tool_name": "write",
+    "model_tool_aliases": ["write_file"],
     "capability": "workspace",
     "op": "write",
     "source": "delegation.middleware.filesystem",
@@ -181,6 +183,7 @@
   },
   {
     "tool_name": "edit",
+    "model_tool_aliases": ["edit_file"],
     "capability": "workspace",
     "op": "edit",
     "source": "delegation.middleware.filesystem",
