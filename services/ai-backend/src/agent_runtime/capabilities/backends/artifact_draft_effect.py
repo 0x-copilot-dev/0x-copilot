@@ -106,6 +106,15 @@ class ArtifactDraftRevision(RuntimeContract):
         return self
 
 
+class ArtifactDraftRevisionForbidden(PermissionError):
+    """A canonical Artifact binding exists but is inaccessible or inconsistent.
+
+    ``None`` remains reserved for a genuinely absent canonical binding, which
+    is the only safe signal to use the legacy draft migration path. This error
+    must remain opaque to callers and must never trigger a mutable fallback.
+    """
+
+
 @runtime_checkable
 class ArtifactDraftRevisionResolverPort(Protocol):
     """Resolve a virtual draft only through its canonical Artifact revision."""
@@ -119,7 +128,11 @@ class ArtifactDraftRevisionResolverPort(Protocol):
         run_id: str,
         draft_id: str,
     ) -> ArtifactDraftRevision | None:
-        """Return the current scoped Artifact revision or ``None``."""
+        """Return the current revision, ``None`` only when never imported.
+
+        Raises :class:`ArtifactDraftRevisionForbidden` when a canonical
+        Artifact exists but cannot be used by this exact owner/run binding.
+        """
 
 
 @dataclass(frozen=True)
@@ -150,8 +163,17 @@ class ArtifactDraftRevisionResolver(ArtifactDraftRevisionResolverPort):
                 user_id=user_id,
                 artifact_id=binding.artifact_id,
             )
-        except ArtifactNotFoundError:
-            return None
+        except ArtifactNotFoundError as exc:
+            try:
+                await self.artifacts.get_metadata_for_org(
+                    org_id=org_id,
+                    artifact_id=binding.artifact_id,
+                )
+            except ArtifactNotFoundError:
+                # No canonical record exists at all: this is the narrow,
+                # legitimate migration compatibility signal.
+                return None
+            raise ArtifactDraftRevisionForbidden() from exc
         artifact = record.artifact
         revision = record.current_revision.revision
         if (
@@ -159,7 +181,7 @@ class ArtifactDraftRevisionResolver(ArtifactDraftRevisionResolverPort):
             or artifact.run_id != run_id
             or revision.source_ref != binding.source_ref
         ):
-            return None
+            raise ArtifactDraftRevisionForbidden()
         return ArtifactDraftRevision(
             artifact_id=artifact.artifact_id,
             revision=revision.revision,
@@ -305,12 +327,17 @@ class ArtifactDraftMcpEffectMaterialResolver:
     ) -> McpEffectMaterial | None:
         try:
             parsed_ref = ArtifactContentRefCodec.parse(request.proposal_content_ref)
+        except ValueError:
+            # This resolver is additive to the generic MCP material chain.
+            # A non-Artifact proposal belongs to that normal route.
+            return None
+        try:
             target = await self.targets.resolve(
                 reference=request.target_ref,
                 digest=request.target_digest,
             )
             if target is None:
-                return None
+                raise ArtifactDraftRevisionForbidden()
             record, stored, stream = await self.artifacts.stream_revision(
                 org_id=self.org_id,
                 user_id=self.user_id,
@@ -324,10 +351,10 @@ class ArtifactDraftMcpEffectMaterialResolver:
                 or stored.revision.content_digest != request.proposal_digest
                 or stored.revision.byte_size > _DRAFT_MAX_BYTES
             ):
-                return None
+                raise ArtifactDraftRevisionForbidden()
             body = await _read_bounded(stream, limit=_DRAFT_MAX_BYTES)
             if body is None or sha256_hex(body) != request.proposal_digest:
-                return None
+                raise ArtifactDraftRevisionForbidden()
             text = body.decode("utf-8")
             arguments: JsonObject = {"body": text}
             if target.title:
@@ -345,10 +372,24 @@ class ArtifactDraftMcpEffectMaterialResolver:
                 proposal_digest=request.proposal_digest,
                 arguments_digest=sha256_hex(canonical_json_bytes(arguments)),
             )
-        except (ArtifactNotFoundError, UnicodeDecodeError, ValueError, TypeError):
-            return None
-        except Exception:
-            return None
+        except ArtifactDraftRevisionForbidden:
+            raise
+        except ArtifactNotFoundError as exc:
+            try:
+                await self.artifacts.get_metadata_for_org(
+                    org_id=self.org_id,
+                    artifact_id=parsed_ref.artifact_id,
+                )
+            except ArtifactNotFoundError:
+                # An Artifact proposal reached A5, so it is never a legacy
+                # migration candidate. Refuse rather than falling through to
+                # generic operation arguments.
+                raise ArtifactDraftRevisionForbidden() from exc
+            raise ArtifactDraftRevisionForbidden() from exc
+        except (UnicodeDecodeError, ValueError, TypeError) as exc:
+            raise ArtifactDraftRevisionForbidden() from exc
+        except Exception as exc:
+            raise ArtifactDraftRevisionForbidden() from exc
 
     def open_artifact_reference(self, *, reference: str) -> AsyncIterator[bytes]:
         async def _stream() -> AsyncIterator[bytes]:
@@ -424,6 +465,7 @@ def _validate_digest(value: str) -> None:
 __all__ = (
     "ArtifactDraftMcpEffectMaterialResolver",
     "ArtifactDraftRevision",
+    "ArtifactDraftRevisionForbidden",
     "ArtifactDraftRevisionResolver",
     "ArtifactDraftRevisionResolverPort",
     "ArtifactDraftSendTarget",

@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.persistence.encryption import FieldCodec
-from agent_runtime.persistence.ports import OptimisticConflict
+from agent_runtime.persistence.ports import DraftOwnershipConflict, OptimisticConflict
 from agent_runtime.persistence.records import (
     DraftEffectSupersession,
     DraftRecord,
@@ -52,58 +52,77 @@ class PostgresDraftStore:
             org_id=record.org_id,
         )
         async with self._parent._tenant_connection(org_id=record.org_id) as conn:  # type: ignore[attr-defined]
-            async with conn.cursor() as cur:
-                try:
-                    await cur.execute(
-                        f"""
+            # The owner check and insert must share a transaction-scoped lock.
+            # Without it, concurrent first writes could both observe no history
+            # and establish different owners at different versions.
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"runtime-draft-owner:{record.org_id}:{record.draft_id}",),
+                )
+                async with conn.cursor() as cur:
+                    try:
+                        await cur.execute(
+                            f"""
                         INSERT INTO {_TABLE}
                             (id, draft_id, version, org_id, conversation_id,
                              run_id, user_id, title, content_text,
                              target_connector, target_metadata, citation_ids,
                              status, encryption_version, created_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                         WHERE NOT EXISTS (
+                            SELECT 1
+                              FROM {_TABLE}
+                             WHERE org_id = %s AND draft_id = %s AND user_id <> %s
+                         )
+                        RETURNING id
                         """,
-                        (
-                            record.id,
-                            record.draft_id,
-                            record.version,
-                            record.org_id,
-                            record.conversation_id,
-                            record.run_id,
-                            record.user_id,
-                            (title_encrypted or "").encode("utf-8")
-                            if title_encrypted
-                            else b"",
-                            (content_encrypted or "").encode("utf-8")
-                            if content_encrypted
-                            else b"",
-                            record.target_connector,
-                            json.dumps(metadata_encrypted).encode("utf-8")
-                            if metadata_encrypted is not None
-                            else None,
-                            list(record.citation_ids),
-                            record.status.value,
-                            codec.write_version,
-                            record.created_at,
-                        ),
-                    )
-                except Exception as exc:
-                    # UNIQUE (org_id, draft_id, version) collision means a
-                    # concurrent writer raced us; surface as the typed
-                    # conflict so callers can re-fetch and retry.
-                    if (
-                        "duplicate key" in str(exc).lower()
-                        or "unique" in str(exc).lower()
-                    ):
-                        latest = await self.latest(
-                            org_id=record.org_id, draft_id=record.draft_id
+                            (
+                                record.id,
+                                record.draft_id,
+                                record.version,
+                                record.org_id,
+                                record.conversation_id,
+                                record.run_id,
+                                record.user_id,
+                                (title_encrypted or "").encode("utf-8")
+                                if title_encrypted
+                                else b"",
+                                (content_encrypted or "").encode("utf-8")
+                                if content_encrypted
+                                else b"",
+                                record.target_connector,
+                                json.dumps(metadata_encrypted).encode("utf-8")
+                                if metadata_encrypted is not None
+                                else None,
+                                list(record.citation_ids),
+                                record.status.value,
+                                codec.write_version,
+                                record.created_at,
+                                record.org_id,
+                                record.draft_id,
+                                record.user_id,
+                            ),
                         )
-                        raise OptimisticConflict(
-                            draft_id=record.draft_id,
-                            expected_version=record.version,
-                            actual_version=latest.version if latest else 0,
-                        ) from exc
-                    raise
+                        if await cur.fetchone() is None:
+                            raise DraftOwnershipConflict(draft_id=record.draft_id)
+                    except Exception as exc:
+                        # UNIQUE (org_id, draft_id, version) collision means a
+                        # concurrent writer raced us; surface as the typed
+                        # conflict so callers can re-fetch and retry.
+                        if (
+                            "duplicate key" in str(exc).lower()
+                            or "unique" in str(exc).lower()
+                        ):
+                            latest = await self.latest(
+                                org_id=record.org_id, draft_id=record.draft_id
+                            )
+                            raise OptimisticConflict(
+                                draft_id=record.draft_id,
+                                expected_version=record.version,
+                                actual_version=latest.version if latest else 0,
+                            ) from exc
+                        raise
         return record
 
     async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from threading import RLock
 
-from agent_runtime.persistence.ports import OptimisticConflict
+from agent_runtime.persistence.ports import DraftOwnershipConflict, OptimisticConflict
 from agent_runtime.persistence.records import (
     DraftEffectSupersession,
     DraftRecord,
@@ -38,6 +38,8 @@ class InMemoryDraftStore:
         with self._lock:
             key = (record.org_id, record.draft_id)
             history = self.versions.setdefault(key, [])
+            if history and history[-1].user_id != record.user_id:
+                raise DraftOwnershipConflict(draft_id=record.draft_id)
             if any(existing.version == record.version for existing in history):
                 latest_version = history[-1].version if history else 0
                 raise OptimisticConflict(

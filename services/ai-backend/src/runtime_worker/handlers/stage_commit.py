@@ -624,7 +624,12 @@ class RuntimeStageCommitHandler:
         latest = await self._draft_store.latest(
             org_id=record.org_id, draft_id=record.draft_id
         )
-        if latest is None or latest.status is not DraftStatus.SEND_PENDING_APPROVAL:
+        run_user_id = getattr(run, "user_id", None)
+        if (
+            latest is None
+            or latest.user_id != run_user_id
+            or latest.status is not DraftStatus.SEND_PENDING_APPROVAL
+        ):
             return
         next_record = latest.model_copy(
             update={

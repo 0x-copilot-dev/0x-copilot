@@ -35,6 +35,18 @@ class OptimisticConflict(RuntimeError):
         self.actual_version = actual_version
 
 
+class DraftOwnershipConflict(RuntimeError):
+    """Raised when a later draft version would change its established owner.
+
+    A draft's ``user_id`` is immutable after version 1. This repository-level
+    check protects direct writers as well as user-facing lifecycle transitions.
+    """
+
+    def __init__(self, *, draft_id: str) -> None:
+        super().__init__(f"draft {draft_id} cannot change owner")
+        self.draft_id = draft_id
+
+
 class ConversationOrdinalConflict(RuntimeError):
     """Raised when an ordinal allocator races another writer for the same conversation.
 
@@ -145,7 +157,9 @@ class DraftStorePort(DraftEffectSupersessionStorePort, Protocol):
         """Persist one new draft version. ``version`` must be ``latest+1``.
 
         Raises :class:`OptimisticConflict` if a row with that
-        ``(org_id, draft_id, version)`` already exists.
+        ``(org_id, draft_id, version)`` already exists. Raises
+        :class:`DraftOwnershipConflict` if an existing draft's owner differs
+        from ``record.user_id``.
         """
 
     async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:

@@ -23,10 +23,15 @@ from agent_runtime.capabilities.auth_gate import (
 )
 from agent_runtime.capabilities.backends.artifact_draft_backend import (
     ArtifactDraftBackend,
+    ArtifactDraftPathBinding,
 )
 from agent_runtime.capabilities.backends.artifact_draft_effect import (
     ArtifactDraftMcpEffectMaterialResolver,
+    ArtifactDraftRevisionForbidden,
     ArtifactDraftSendTargetStore,
+)
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationArgumentMaterialResolver,
 )
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
@@ -60,6 +65,7 @@ from runtime_adapters.in_memory.effect_claim_store import InMemoryEffectClaimSto
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, DraftSendRequest, RunRecord
 from runtime_api.schemas import ApprovalDecision
+from runtime_api.http.errors import RuntimeApiError
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
 from runtime_worker.mcp_effect_executor import McpEffectExecutor
@@ -141,6 +147,17 @@ class _FailingSupersessionLookup:
         raise RuntimeError("simulated draft-to-stage correlation outage")
 
 
+class _UnexpectedGenericMaterial:
+    """Fails the test if an Artifact denial falls into generic MCP material."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def resolve(self, **_kwargs: object) -> bytes | None:
+        self.calls += 1
+        return b"{}"
+
+
 @dataclass(frozen=True)
 class _References:
     material: ArtifactDraftMcpEffectMaterialResolver
@@ -182,8 +199,9 @@ class _Harness:
                 )
             }
         )
+        self.metadata = InMemoryArtifactMetadataStore(publication)
         self.artifacts = ArtifactService(
-            metadata=InMemoryArtifactMetadataStore(publication),
+            metadata=self.metadata,
             blobs=self.blobs,
             run_scopes=self.scopes,
         )
@@ -448,6 +466,103 @@ async def test_artifact_stager_distinguishes_forbidden_from_unmigrated_legacy_ro
 
     assert h.runtime.events_by_run[_RUN] == []
     assert h.runtime.effect_commit_commands == []
+
+
+@pytest.mark.parametrize("failure", ("inaccessible", "mismatched"))
+async def test_canonical_binding_failure_is_not_a_legacy_fallback(
+    monkeypatch: pytest.MonkeyPatch, failure: str
+) -> None:
+    """Existing-but-unusable canonical records fail closed before side effects."""
+
+    monkeypatch.setenv("SURFACES_V2", "true")
+    h = _Harness()
+    await h.seed_and_import()
+    binding = ArtifactDraftPathBinding(
+        org_id=_ORG,
+        user_id=_USER,
+        conversation_id=_CONVERSATION,
+        run_id=_RUN,
+        draft_id=_DRAFT_ID,
+    )
+    record = h.metadata._records[(_ORG, binding.artifact_id)]  # noqa: SLF001
+    artifact_update = (
+        {"user_id": "user_same_org_peer"}
+        if failure == "inaccessible"
+        else {"conversation_id": "conv_other"}
+    )
+    h.metadata._records[(_ORG, binding.artifact_id)] = record.model_copy(  # noqa: SLF001
+        update={"artifact": record.artifact.model_copy(update=artifact_update)}
+    )
+
+    with pytest.raises(RuntimeApiError) as exc:
+        await h.stage()
+
+    assert exc.value.http_status == 404
+    latest = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert latest is not None
+    assert latest.version == 1
+    assert latest.status is DraftStatus.DRAFT
+    assert h.runtime.events_by_run[_RUN] == []
+    assert h.runtime.approval_requests == {}
+    assert h.runtime.approval_commands == []
+    assert h.runtime.effect_commit_commands == []
+    assert h.drafts.effect_supersessions == {}
+
+
+async def test_mcp_material_resolver_raises_for_an_inaccessible_canonical_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The generic MCP material chain cannot fall through to mutable arguments."""
+
+    monkeypatch.setenv("SURFACES_V2", "true")
+    h = _Harness()
+    await h.seed_and_import()
+    response = await h.stage()
+    assert response.stage_id is not None
+    state = await h.effect_stager().get_state(
+        scope=EffectStageScope(run_id=_RUN, owner_ref=f"principal://users/{_USER}"),
+        stage_id=response.stage_id,
+    )
+    request = EffectExecutionRequest(
+        stage_id=response.stage_id,
+        revision=state.current_revision.revision,
+        idempotency_key="resolver-inaccessible",
+        target_ref=state.target.target_ref,
+        target_digest=state.target_digest,
+        proposal_ref=state.current_revision.proposal_ref,
+        proposal_content_ref=state.current_revision.proposal_content_ref,
+        proposal_digest=state.current_revision.proposal_digest,
+        actor=EffectActor.USER,
+        decision_ledger_id="led_resolver_inaccessible",
+    )
+    binding = ArtifactDraftPathBinding(
+        org_id=_ORG,
+        user_id=_USER,
+        conversation_id=_CONVERSATION,
+        run_id=_RUN,
+        draft_id=_DRAFT_ID,
+    )
+    record = h.metadata._records[(_ORG, binding.artifact_id)]  # noqa: SLF001
+    h.metadata._records[(_ORG, binding.artifact_id)] = record.model_copy(  # noqa: SLF001
+        update={
+            "artifact": record.artifact.model_copy(
+                update={"user_id": "user_same_org_peer"}
+            )
+        }
+    )
+    _, material = await _coordinator(h, _RecordingConnector(requests=[]))
+
+    with pytest.raises(ArtifactDraftRevisionForbidden):
+        await material.resolve(request)
+
+    generic_material = _UnexpectedGenericMaterial()
+    resolver = McpOperationArgumentMaterialResolver(
+        arguments=generic_material,
+        additional_material_resolvers=(material,),
+    )
+    with pytest.raises(ArtifactDraftRevisionForbidden):
+        await resolver.resolve(request)
+    assert generic_material.calls == 0
 
 
 async def test_changes_after_stage_cannot_alter_approved_payload_and_retry_is_idempotent(

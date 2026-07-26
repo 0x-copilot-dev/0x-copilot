@@ -63,7 +63,10 @@ from agent_runtime.execution.factory import (
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import astream_runtime_resume
 from agent_runtime.persistence import with_optimistic_retry
-from agent_runtime.persistence.ports import ConversationToolOrdinalStorePort
+from agent_runtime.persistence.ports import (
+    ConversationToolOrdinalStorePort,
+    DraftOwnershipConflict,
+)
 from agent_runtime.persistence.records import (
     BatchOutcomeStatus,
     BatchTransitionOutcome,
@@ -872,12 +875,18 @@ class RuntimeApprovalHandler:
             return
         metadata = approval.metadata if hasattr(approval, "metadata") else {}
         draft_id = str(metadata.get("draft_id", ""))
+        approval_owner_id = getattr(approval, "user_id", None)
         if not draft_id:
             return
         latest = await self._draft_store.latest(org_id=run.org_id, draft_id=draft_id)
-        if latest is None or latest.status is not DraftStatus.SEND_PENDING_APPROVAL:
+        if (
+            latest is None
+            or latest.user_id != approval_owner_id
+            or latest.status is not DraftStatus.SEND_PENDING_APPROVAL
+        ):
             # State changed since the approval was posted (e.g. a concurrent
-            # discard, or an already-applied send). Idempotent no-op.
+            # discard, owner change attempt, or an already-applied send).
+            # Idempotent no-op; this worker cannot take ownership on approval.
             return
 
         # PRD-D2 flag-flip hardening (WYSIWYG). A v1 draft-send approval created
@@ -910,7 +919,6 @@ class RuntimeApprovalHandler:
 
         next_record = self._next_draft_version(
             previous=latest,
-            decided_by_user_id=decided_by_user_id or run.user_id,
             status=terminal_status,
         )
         applied_edit_keys: list[str] = []
@@ -918,7 +926,12 @@ class RuntimeApprovalHandler:
             next_record, applied_edit_keys = self._apply_edits_to_draft(
                 record=next_record, edits=edits
             )
-        persisted = await self._draft_store.insert_version(next_record)
+        try:
+            persisted = await self._draft_store.insert_version(next_record)
+        except DraftOwnershipConflict:
+            # A direct writer raced this approval with an owner change attempt.
+            # Never emit an event or audit a transition that did not persist.
+            return
         await self._emit_draft_updated(run=run, record=persisted)
         await self._write_draft_audit(
             run=run,
@@ -1070,7 +1083,6 @@ class RuntimeApprovalHandler:
     def _next_draft_version(
         *,
         previous: object,
-        decided_by_user_id: str,
         status: object,
     ) -> object:
         """Return a new ``DraftRecord`` at ``previous.version + 1`` with the given status."""
@@ -1083,7 +1095,7 @@ class RuntimeApprovalHandler:
             org_id=previous.org_id,
             conversation_id=previous.conversation_id,
             run_id=previous.run_id,
-            user_id=decided_by_user_id,
+            user_id=previous.user_id,
             title=previous.title,
             content_text=previous.content_text,
             target_connector=previous.target_connector,

@@ -132,6 +132,7 @@ class TestDraftSendResolution:
         assert latest is not None
         assert latest.version == 3
         assert latest.status is DraftStatus.SENT
+        assert latest.user_id == "user_sarah"
 
         # Audit chain has draft.send.completed.
         audit_calls = persistence.audit_calls

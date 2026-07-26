@@ -24,7 +24,7 @@ from deepagents.backends.protocol import (
 
 from agent_runtime.api.constants import Keys, Values
 from agent_runtime.execution.contracts import StreamEventSource
-from agent_runtime.persistence.ports import DraftStorePort
+from agent_runtime.persistence.ports import DraftOwnershipConflict, DraftStorePort
 from agent_runtime.persistence.records import (
     DraftPath,
     DraftRecord,
@@ -157,11 +157,13 @@ class DraftBackend(BackendProtocol):
         draft_id = self._extract_draft_id(file_path)
         if draft_id is None:
             return WriteResult(error=_Errors.INVALID_PATH)
-        await self._append_version(
+        persisted = await self._append_version(
             draft_id=draft_id,
             content_text=content,
             status=DraftStatus.DRAFT,
         )
+        if persisted is None:
+            return WriteResult(error=_Errors.FILE_NOT_FOUND)
         return WriteResult(path=DraftPath.for_draft_id(draft_id))
 
     def edit(
@@ -188,6 +190,8 @@ class DraftBackend(BackendProtocol):
         latest = await self._store.latest(org_id=self._org_id, draft_id=draft_id)
         if latest is None:
             return EditResult(error=_Errors.FILE_NOT_FOUND)
+        if latest.user_id != self._user_id:
+            return EditResult(error=_Errors.FILE_NOT_FOUND)
         if not latest.content_text:
             return EditResult(error=_Errors.EMPTY_DRAFT)
         occurrences = latest.content_text.count(old_string)
@@ -201,11 +205,13 @@ class DraftBackend(BackendProtocol):
             new_content = latest.content_text.replace(old_string, new_string)
         else:
             new_content = latest.content_text.replace(old_string, new_string, 1)
-        await self._append_version(
+        persisted = await self._append_version(
             draft_id=draft_id,
             content_text=new_content,
             status=DraftStatus.DRAFT,
         )
+        if persisted is None:
+            return EditResult(error=_Errors.FILE_NOT_FOUND)
         return EditResult(
             path=DraftPath.for_draft_id(draft_id),
             occurrences=occurrences if replace_all else 1,
@@ -335,7 +341,7 @@ class DraftBackend(BackendProtocol):
         draft_id: str,
         content_text: str,
         status: DraftStatus,
-    ) -> DraftRecord:
+    ) -> DraftRecord | None:
         """Insert the next version row and emit DRAFT_UPDATED.
 
         Holds a per-draft asyncio lock so the "read latest → +1 → insert" trio
@@ -344,6 +350,8 @@ class DraftBackend(BackendProtocol):
         """
         async with self._lock_for(draft_id):
             latest = await self._store.latest(org_id=self._org_id, draft_id=draft_id)
+            if latest is not None and latest.user_id != self._user_id:
+                return None
             next_version = (latest.version + 1) if latest is not None else 1
             # Carry forward citation/connector/metadata from the previous version so
             # a plain write doesn't silently strip send-metadata set by an earlier turn.
@@ -356,7 +364,7 @@ class DraftBackend(BackendProtocol):
                 org_id=self._org_id,
                 conversation_id=self._conversation_id,
                 run_id=self._run_id,
-                user_id=self._user_id,
+                user_id=latest.user_id if latest is not None else self._user_id,
                 title=_title_for(content_text),
                 content_text=content_text,
                 target_connector=target_connector,
@@ -365,7 +373,10 @@ class DraftBackend(BackendProtocol):
                 status=status,
                 created_at=datetime.now(timezone.utc),
             )
-            persisted = await self._store.insert_version(record)
+            try:
+                persisted = await self._store.insert_version(record)
+            except DraftOwnershipConflict:
+                return None
         if self._emit is not None:
             await self._emit(persisted)
         return persisted

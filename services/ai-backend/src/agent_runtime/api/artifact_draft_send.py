@@ -19,6 +19,7 @@ from agent_runtime.artifacts import ArtifactService
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
 from agent_runtime.capabilities.backends.artifact_draft_effect import (
     ArtifactDraftRevisionResolver,
+    ArtifactDraftRevisionForbidden,
     ArtifactDraftRevisionResolverPort,
     ArtifactDraftSendTarget,
     ArtifactDraftSendTargetStore,
@@ -127,13 +128,16 @@ class ArtifactDraftSendStager(ArtifactDraftSendStagerPort):
         revision_resolver = self.revisions or ArtifactDraftRevisionResolver(
             artifacts=self.artifacts
         )
-        revision = await revision_resolver.resolve(
-            org_id=org_id,
-            user_id=user_id,
-            conversation_id=conversation_id,
-            run_id=run_id,
-            draft_id=draft_id,
-        )
+        try:
+            revision = await revision_resolver.resolve(
+                org_id=org_id,
+                user_id=user_id,
+                conversation_id=conversation_id,
+                run_id=run_id,
+                draft_id=draft_id,
+            )
+        except ArtifactDraftRevisionForbidden as exc:
+            raise ArtifactDraftSendForbidden() from exc
         if revision is None:
             return None
 

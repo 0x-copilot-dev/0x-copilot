@@ -1328,6 +1328,11 @@ class WriteStager:
         )
         if base_record is None:
             raise StageNotFound()
+        if base_record.user_id != self._run_attr(run, "user_id"):
+            # A staged edit is a mutable draft transition. The StageService
+            # already binds ``run`` to the authenticated caller; do not let a
+            # same-org peer reuse an opaque stage reference to edit its owner.
+            raise StageForbidden()
 
         new_record = self._next_draft_version(
             previous=base_record,

@@ -324,11 +324,30 @@ class PostgresArtifactMetadataStore:
                 for_update=False,
             )
 
+    async def get_artifact_for_org(
+        self,
+        *,
+        org_id: str,
+        artifact_id: str,
+        include_deleted: bool = False,
+    ) -> ArtifactStoredRecord | None:
+        """Internal same-org classifier; it does not authorize a public read."""
+
+        async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
+            return await self._select_record(
+                conn,
+                org_id=org_id,
+                user_id=None,
+                artifact_id=artifact_id,
+                include_deleted=include_deleted,
+                for_update=False,
+            )
+
     async def get_revision(
         self,
         *,
         org_id: str,
-        user_id: str,
+        user_id: str | None,
         artifact_id: str,
         revision: int,
         include_deleted: bool = False,
@@ -830,14 +849,18 @@ class PostgresArtifactMetadataStore:
         include_deleted: bool,
         for_update: bool,
     ) -> ArtifactStoredRecord | None:
+        user_clause = "AND a.user_id = %s" if user_id is not None else ""
+        params: tuple[object, ...] = (org_id, artifact_id)
+        if user_id is not None:
+            params = (org_id, user_id, artifact_id)
         cursor = await conn.execute(
             f"""
             {self._record_select()}
-             WHERE a.org_id = %s AND a.user_id = %s AND a.artifact_id = %s
+             WHERE a.org_id = %s {user_clause} AND a.artifact_id = %s
                {" " if include_deleted else "AND a.deleted_at IS NULL"}
              {"FOR UPDATE OF a" if for_update else ""}
             """,
-            (org_id, user_id, artifact_id),
+            params,
         )
         row = await cursor.fetchone()
         return self._record_from_row(row) if row is not None else None

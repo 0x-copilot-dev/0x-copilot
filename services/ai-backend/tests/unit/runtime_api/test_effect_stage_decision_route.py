@@ -276,6 +276,83 @@ class TestEffectStageDecisionRoute:
         assert bundle.store.approval_commands == []
         assert bundle.store.effect_commit_commands == []
 
+    def test_same_org_peer_cannot_patch_then_send_an_imported_artifact_draft(
+        self,
+    ) -> None:
+        """A failed PATCH cannot re-stamp ownership and unlock a later send."""
+
+        bundle = _Bundle()
+        bundle.import_artifact_draft()
+        patch_body = {"expected_version": 1, "content_text": "Peer takeover"}
+        send_body = {
+            "expected_version": 1,
+            "target_connector": "gmail",
+            "target_metadata": {"op": "send_email"},
+        }
+
+        denied_patch = bundle.client.patch(
+            f"/v1/agent/drafts/{_DRAFT}",
+            headers=_headers(user_id=_OTHER_USER),
+            json=patch_body,
+        )
+        absent_patch = bundle.client.patch(
+            "/v1/agent/drafts/cafebabecafebabecafebabecafebabe",
+            headers=_headers(user_id=_OTHER_USER),
+            json=patch_body,
+        )
+        denied_send = bundle.client.post(
+            f"/v1/agent/drafts/{_DRAFT}/send",
+            headers=_headers(user_id=_OTHER_USER),
+            json=send_body,
+        )
+
+        assert denied_patch.status_code == 404
+        assert _stable_error(denied_patch.json()) == _stable_error(absent_patch.json())
+        assert denied_send.status_code == 404
+        latest = asyncio.run(
+            bundle.ports.draft_store.latest(org_id=_ORG, draft_id=_DRAFT)
+        )
+        assert latest is not None
+        assert latest.version == 1
+        assert latest.user_id == _USER
+        assert latest.content_text == "The exact immutable Artifact revision."
+        assert bundle.store.events_by_run[_RUN] == []
+        assert bundle.store.approval_requests == {}
+        assert bundle.store.approval_commands == []
+        assert bundle.store.effect_commit_commands == []
+
+    def test_same_org_peer_cannot_discard_an_imported_artifact_draft(self) -> None:
+        """Discard is an owner-only terminal transition with opaque denial."""
+
+        bundle = _Bundle()
+        bundle.import_artifact_draft()
+        body = {"expected_version": 1}
+
+        denied = bundle.client.post(
+            f"/v1/agent/drafts/{_DRAFT}/discard",
+            headers=_headers(user_id=_OTHER_USER),
+            json=body,
+        )
+        absent = bundle.client.post(
+            "/v1/agent/drafts/cafebabecafebabecafebabecafebabe/discard",
+            headers=_headers(user_id=_OTHER_USER),
+            json=body,
+        )
+
+        assert denied.status_code == 404
+        assert _stable_error(denied.json()) == _stable_error(absent.json())
+        latest = asyncio.run(
+            bundle.ports.draft_store.latest(org_id=_ORG, draft_id=_DRAFT)
+        )
+        assert latest is not None
+        assert latest.version == 1
+        assert latest.user_id == _USER
+        assert latest.status is DraftStatus.DRAFT
+        assert bundle.store.events_by_run[_RUN] == []
+        assert bundle.store.approval_requests == {}
+        assert bundle.store.approval_commands == []
+        assert bundle.store.effect_commit_commands == []
+
     def test_cross_org_request_is_an_opaque_404_without_a_decision_or_command(
         self,
     ) -> None:

@@ -20,6 +20,7 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
 from agent_runtime.surfaces_v2.staging import (
     MalformedDecision,
+    StageForbidden,
     StageFrozen,
     StageNotFound,
     StagedWriteStatus,
@@ -172,6 +173,31 @@ class TestUserRevision:
         v2 = await h.drafts.get_version(org_id=_ORG, draft_id=draft.draft_id, version=2)
         assert v2.content_text == new_body
         assert "write.applied" not in h.event_types()
+
+    async def test_same_org_peer_cannot_add_a_user_revision_to_another_draft(
+        self,
+    ) -> None:
+        h = StagerHarness()
+        draft = await h.seed_draft()
+        state = await h.stage(draft)
+        peer_run = h.run.model_copy(update={"user_id": "user_same_org_peer"})
+        before_events = h.event_types()
+
+        with pytest.raises(StageForbidden):
+            await h.stager.add_user_revision(
+                run=peer_run,
+                org_id=_ORG,
+                run_id=_RUN,
+                stage_id=state.stage_id,
+                base_rev=1,
+                content_text="Peer takeover",
+            )
+
+        latest = await h.drafts.latest(org_id=_ORG, draft_id=draft.draft_id)
+        assert latest is not None
+        assert latest.version == 1
+        assert latest.user_id == _USER
+        assert h.event_types() == before_events
 
     async def test_stale_base_rev_conflicts_and_emits_nothing(self) -> None:
         h = StagerHarness()

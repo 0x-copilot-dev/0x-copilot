@@ -15,7 +15,11 @@ from agent_runtime.capabilities.auth_gate import (
     CapabilityAuthOutcome,
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode, StreamEventSource
-from agent_runtime.persistence.ports import DraftStorePort, OptimisticConflict
+from agent_runtime.persistence.ports import (
+    DraftOwnershipConflict,
+    DraftStorePort,
+    OptimisticConflict,
+)
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from runtime_api.http.errors import RuntimeApiError
@@ -118,8 +122,9 @@ class DraftService:
         request: DraftPatchRequest,
     ) -> Draft:
         """Apply a user edit to an existing draft; raises 409 on version conflict or terminal state."""
-        latest = await self._expect(
+        latest = await self._expect_owned_mutable_draft(
             org_id=org_id,
+            user_id=user_id,
             draft_id=draft_id,
             expected_version=request.expected_version,
         )
@@ -128,12 +133,11 @@ class DraftService:
         next_record = self._next_version(
             previous=latest,
             run_id=None,
-            user_id=user_id,
             content_text=request.content_text,
             title_override=request.title,
             status=DraftStatus.DRAFT,
         )
-        persisted = await self._store.insert_version(next_record)
+        persisted = await self._insert_owned_version(next_record)
         await self._audit(
             org_id=org_id,
             user_id=user_id,
@@ -151,7 +155,7 @@ class DraftService:
         request: DraftSendRequest,
     ) -> DraftSendResponse:
         """Initiate a draft send: auth-gate check → insert v+1 → approval row → event."""
-        latest = await self._expect_owned_send_draft(
+        latest = await self._expect_owned_mutable_draft(
             org_id=org_id,
             user_id=user_id,
             draft_id=draft_id,
@@ -196,13 +200,12 @@ class DraftService:
         next_record = self._next_version(
             previous=latest,
             run_id=host_run_id,
-            user_id=user_id,
             content_text=latest.content_text,
             target_connector=request.target_connector,
             target_metadata=dict(request.target_metadata or {}),
             status=DraftStatus.SEND_PENDING_APPROVAL,
         )
-        persisted = await self._store.insert_version(next_record)
+        persisted = await self._insert_owned_version(next_record)
 
         # 4b. Legacy PRD-D1 branch — retained only for a row that has not yet
         # acquired a canonical Artifact revision. New Artifact drafts never
@@ -266,8 +269,9 @@ class DraftService:
         request: DraftDiscardRequest,
     ) -> Draft:
         """Mark a draft as discarded; raises 409 if already sent (sent is irreversible)."""
-        latest = await self._expect(
+        latest = await self._expect_owned_mutable_draft(
             org_id=org_id,
+            user_id=user_id,
             draft_id=draft_id,
             expected_version=request.expected_version,
         )
@@ -276,11 +280,10 @@ class DraftService:
         next_record = self._next_version(
             previous=latest,
             run_id=None,
-            user_id=user_id,
             content_text=latest.content_text,
             status=DraftStatus.DISCARDED,
         )
-        persisted = await self._store.insert_version(next_record)
+        persisted = await self._insert_owned_version(next_record)
         await self._audit(
             org_id=org_id,
             user_id=user_id,
@@ -637,7 +640,7 @@ class DraftService:
                 },
             ) from exc
 
-    async def _expect_owned_send_draft(
+    async def _expect_owned_mutable_draft(
         self,
         *,
         org_id: str,
@@ -645,11 +648,11 @@ class DraftService:
         draft_id: str,
         expected_version: int,
     ) -> DraftRecord:
-        """Load a draft for sending without leaking a peer's draft existence.
+        """Load a mutable draft without leaking a peer's draft existence.
 
-        Draft sends are per-user actions.  This generic service boundary is
+        Draft mutations are per-user actions. This generic service boundary is
         intentionally independent of Artifact staging, so legacy and
-        feature-off sends cannot mutate another same-org user's draft either.
+        feature-off paths cannot mutate another same-org user's draft either.
         Checking the owner before the optimistic-version check also preserves
         the opaque 404 response if a peer guesses a stale version.
         """
@@ -688,7 +691,6 @@ class DraftService:
         *,
         previous: DraftRecord,
         run_id: str | None,
-        user_id: str,
         content_text: str,
         status: DraftStatus,
         title_override: str | None = None,
@@ -713,7 +715,7 @@ class DraftService:
             org_id=previous.org_id,
             conversation_id=previous.conversation_id,
             run_id=run_id,
-            user_id=user_id,
+            user_id=previous.user_id,
             title=title_override or _title_for(content_text, fallback=previous.title),
             content_text=content_text,
             target_connector=resolved_connector,
@@ -723,6 +725,14 @@ class DraftService:
             encryption_version=previous.encryption_version,
             created_at=datetime.now(timezone.utc),
         )
+
+    async def _insert_owned_version(self, record: DraftRecord) -> DraftRecord:
+        """Persist a verified owner-preserving version without exposing races."""
+
+        try:
+            return await self._store.insert_version(record)
+        except DraftOwnershipConflict as exc:
+            raise self._opaque_draft_not_found() from exc
 
     async def _audit(
         self,

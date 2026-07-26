@@ -527,6 +527,21 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                 include_deleted=include_deleted,
             )
 
+    async def get_artifact_for_org(
+        self,
+        *,
+        org_id: str,
+        artifact_id: str,
+        include_deleted: bool = False,
+    ) -> ArtifactStoredRecord | None:
+        with self._lock:
+            self._refresh_locked()
+            return await super().get_artifact_for_org(
+                org_id=org_id,
+                artifact_id=artifact_id,
+                include_deleted=include_deleted,
+            )
+
     async def get_revision(
         self,
         *,

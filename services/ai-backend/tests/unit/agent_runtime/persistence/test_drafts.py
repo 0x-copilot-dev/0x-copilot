@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from agent_runtime.api.draft_service import DraftService
-from agent_runtime.persistence.ports import OptimisticConflict
+from agent_runtime.persistence.ports import DraftOwnershipConflict, OptimisticConflict
 from agent_runtime.persistence.records import (
     DraftPath,
     DraftRecord,
@@ -109,6 +109,18 @@ class TestInMemoryDraftStore:
             await store.insert_version(_record(version=1))
         assert exc.value.expected_version == 1
         assert exc.value.actual_version == 1
+
+    async def test_rejects_later_version_that_changes_owner(self) -> None:
+        store = InMemoryDraftStore()
+        await store.insert_version(_record(version=1, user_id="user_owner"))
+
+        with pytest.raises(DraftOwnershipConflict):
+            await store.insert_version(_record(version=2, user_id="user_peer"))
+
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
+        assert latest is not None
+        assert latest.version == 1
+        assert latest.user_id == "user_owner"
 
     async def test_versions_monotone(self) -> None:
         store = InMemoryDraftStore()
