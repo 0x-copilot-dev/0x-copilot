@@ -198,6 +198,91 @@ class CountingSubagent:
 
 
 class TestSubagentShadowSeam(BoundContextMixin):
+    def test_enforced_sync_task_reuses_authoritative_coroutine(self) -> None:
+        subagent = CountingSubagent()
+        tool = build_atlas_task_tool(
+            [
+                {
+                    "name": "researcher",
+                    "description": "Researches.",
+                    "runnable": subagent,
+                }
+            ]
+        )
+        runtime = SimpleNamespace(
+            tool_call_id="call-task-sync-enforced",
+            state={},
+            config={},
+        )
+        token = self.bind(
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+        )
+        try:
+            assert tool.func is not None
+            command = tool.func(
+                description="Find facts",
+                subagent_type="researcher",
+                runtime=runtime,
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert command is not None
+        assert subagent.calls == 1
+
+    @pytest.mark.asyncio
+    async def test_enforced_task_and_dispatch_use_gateway_once_with_parent_link(
+        self,
+    ) -> None:
+        subagent = CountingSubagent()
+        tool = build_atlas_task_tool(
+            [
+                {
+                    "name": "researcher",
+                    "description": "Researches.",
+                    "runnable": subagent,
+                }
+            ]
+        )
+        runtime = SimpleNamespace(
+            tool_call_id="call-task-enforced",
+            state={},
+            config={},
+        )
+        emitter = OperationEmitter()
+        token = self.bind(
+            emitter=emitter,
+            mode=OperationGatewayMode.ENFORCE,
+            durable_arguments=True,
+        )
+        try:
+            assert tool.coroutine is not None
+            command = await tool.coroutine(
+                description="Find facts",
+                subagent_type="researcher",
+                runtime=runtime,
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert command is not None
+        assert subagent.calls == 1
+        requested = [
+            payload
+            for event_type, payload, _ in emitter.events
+            if event_type is LedgerEventType.OPERATION_REQUESTED
+        ]
+        assert len(requested) == 2
+        outer, inner = requested
+        assert outer["capability"] == "builtin"
+        assert outer["op"] == "task"
+        assert outer["producer"] == "model"
+        assert inner["capability"] == "subagent"
+        assert inner["op"] == "dispatch"
+        assert inner["producer"] == "subagent"
+        assert inner["parent_operation_id"] == outer["operation_id"]
+
     @pytest.mark.asyncio
     async def test_off_and_shadow_return_identical_subagent_command(self) -> None:
         subagent = CountingSubagent()
