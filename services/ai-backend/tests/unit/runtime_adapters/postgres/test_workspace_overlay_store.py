@@ -187,6 +187,19 @@ async def test_postgres_overlay_never_persists_an_unknown_run() -> None:
     assert database.rows == {}
 
 
+async def test_postgres_overlay_never_uses_current_manifest_as_snapshot_history() -> (
+    None
+):
+    database = _FakeDatabase()
+    store = PostgresWorkspaceOverlayStore(_FakeStore(database))
+    current = await store.append_revision(
+        run_id="run-one", expected_version=0, mutations=(_mutation(),)
+    )
+
+    assert current.version == 1
+    assert await store.get_manifest_version(run_id="run-one", version=1) is None
+
+
 async def test_postgres_overlay_rejects_a_corrupt_manifest_row() -> None:
     database = _FakeDatabase()
     database.rows["run-one"] = {

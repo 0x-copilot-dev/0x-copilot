@@ -17,6 +17,7 @@ class InMemoryWorkspaceOverlayStore:
 
     def __init__(self) -> None:
         self._manifests: dict[str, OverlayManifest] = {}
+        self._versions: dict[tuple[str, int], OverlayManifest] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._locks_guard = asyncio.Lock()
 
@@ -24,6 +25,15 @@ class InMemoryWorkspaceOverlayStore:
         lock = await self._lock_for(run_id)
         async with lock:
             return self._manifests.get(run_id, OverlayManifest(run_id=run_id))
+
+    async def get_manifest_version(
+        self, *, run_id: str, version: int
+    ) -> OverlayManifest | None:
+        """Return only a version recorded at append time."""
+
+        lock = await self._lock_for(run_id)
+        async with lock:
+            return self._versions.get((run_id, version))
 
     async def append_revision(
         self,
@@ -52,6 +62,7 @@ class InMemoryWorkspaceOverlayStore:
                 entries=tuple(entries[path] for path in sorted(entries)),
             )
             self._manifests[run_id] = updated
+            self._versions[(run_id, updated.version)] = updated
             return updated
 
     async def compact(self, *, run_id: str) -> OverlayManifest:

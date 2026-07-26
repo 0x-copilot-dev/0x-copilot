@@ -1,15 +1,13 @@
-"""Artifact-backed immutable file snapshots and trusted snapshot-plan selection.
+"""C1/A2-backed immutable snapshot selection and exact-byte file access.
 
 This module is deliberately a composition boundary.  It can resolve an exact
 A2 artifact revision using a verified worker-owned identity and stream only
 the content reference that it has already authorized.  It never accepts a
 workspace path, a desktop grant, a local path, or credentials for the sandbox.
 
-C1 overlay snapshots are intentionally not approximated here.  The C1 store
-currently exposes only its latest manifest and the D3 snapshot input does not
-identify an entry inside a multi-file overlay.  ``VersionedOverlay...Port``
-documents the exact immutable input needed before a composed overlay resolver
-can be attached.
+C1 overlay snapshots are resolved through a retained manifest version and the
+requested virtual path.  No resolver reads C1's mutable current view as a
+fallback, and all resulting content remains A2 digest-pinned bytes.
 """
 
 from __future__ import annotations
@@ -34,6 +32,13 @@ from agent_runtime.capabilities.sandbox.snapshot import (
     SandboxSnapshotSource,
     SandboxSnapshotSourceKind,
 )
+from agent_runtime.capabilities.workspace.contracts import (
+    WorkspaceEntryKind,
+    WorkspaceOverlayVersionRef,
+    blob_key_from_content_ref,
+)
+from agent_runtime.capabilities.workspace.errors import WorkspaceOverlayConflictError
+from agent_runtime.capabilities.workspace.ports import WorkspaceOverlayStorePort
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.ledger_ids import ArtifactContentRefCodec
 
@@ -97,6 +102,21 @@ class TrustedSandboxSnapshotPlanProvider(SandboxSnapshotPlanProvider):
                 SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
                 "An authorized immutable sandbox snapshot is unavailable.",
             )
+        for entry in plan.entries:
+            if entry.source.kind is not SandboxSnapshotSourceKind.OVERLAY:
+                continue
+            try:
+                overlay = WorkspaceOverlayVersionRef.parse(entry.source.source_ref)
+            except ValueError as exc:
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                    "An authorized immutable sandbox snapshot is unavailable.",
+                ) from exc
+            if overlay.run_id != identity.run_id:
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                    "An authorized immutable sandbox snapshot is unavailable.",
+                )
         return plan
 
 
@@ -119,6 +139,9 @@ class VersionedOverlaySnapshotFileResolverPort(Protocol):
     ) -> SandboxResolvedSnapshotSource | None:
         """Resolve exactly one canonical file in an immutable overlay version."""
 
+    async def open(self, *, content_ref: str) -> AsyncIterator[bytes]:
+        """Stream exactly one overlay blob authorized by resolution."""
+
 
 @dataclass(frozen=True)
 class _AuthorizedBlob:
@@ -131,8 +154,8 @@ class ArtifactRevisionSandboxSnapshotFileStore(SandboxSnapshotFileStorePort):
     """A2-backed store for exact artifact revisions in one verified user scope.
 
     This is intentionally created per verified identity by a worker composition
-    root.  Artifact ids do not contain tenant ownership, so a process-global
-    unscoped artifact resolver would be an authorization bypass.
+    root.  Artifact ids do not contain tenant or run ownership, so a
+    process-global unscoped artifact resolver would be an authorization bypass.
     """
 
     identity: SandboxSnapshotIdentity
@@ -143,13 +166,26 @@ class ArtifactRevisionSandboxSnapshotFileStore(SandboxSnapshotFileStorePort):
     )
 
     async def resolve(
-        self, *, source: SandboxSnapshotSource
+        self, *, source: SandboxSnapshotSource, virtual_path: str
     ) -> SandboxResolvedSnapshotSource | None:
         """Resolve one exact artifact revision; refuse every non-A2 source."""
 
+        del virtual_path
         if source.kind is not SandboxSnapshotSourceKind.ARTIFACT:
             return None
         parsed = ArtifactContentRefCodec.parse(source.source_ref)
+        record = await self.metadata_store.get_artifact(
+            org_id=self.identity.org_id,
+            user_id=self.identity.user_id,
+            artifact_id=parsed.artifact_id,
+        )
+        if (
+            record is None
+            or record.artifact.org_id != self.identity.org_id
+            or record.artifact.user_id != self.identity.user_id
+            or record.artifact.run_id != self.identity.run_id
+        ):
+            return None
         stored = await self.metadata_store.get_revision(
             org_id=self.identity.org_id,
             user_id=self.identity.user_id,
@@ -251,10 +287,187 @@ class ArtifactRevisionSandboxSnapshotFileStore(SandboxSnapshotFileStorePort):
         return _verified_stream()
 
 
+@dataclass
+class WorkspaceOverlaySandboxSnapshotFileResolver(
+    VersionedOverlaySnapshotFileResolverPort
+):
+    """C1 retained-manifest resolver backed by A2 content-addressed blobs.
+
+    The resolver is created for one verified run identity.  It accepts only an
+    overlay URI for that run, retrieves exactly the requested retained version,
+    and authorizes the resolved blob for a later one-shot-style stream.  C1
+    metadata never supplies bytes or a host path.
+    """
+
+    identity: SandboxSnapshotIdentity
+    overlay_store: WorkspaceOverlayStorePort
+    blob_store: ArtifactBlobStorePort
+    _authorized_blobs: dict[str, _AuthorizedBlob] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    async def resolve_overlay_file(
+        self,
+        *,
+        overlay_ref: str,
+        virtual_path: str,
+    ) -> SandboxResolvedSnapshotSource | None:
+        try:
+            overlay = WorkspaceOverlayVersionRef.parse(overlay_ref)
+        except ValueError:
+            return None
+        if overlay.run_id != self.identity.run_id:
+            return None
+        try:
+            manifest = await self.overlay_store.get_manifest_version(
+                run_id=overlay.run_id, version=overlay.version
+            )
+        except WorkspaceOverlayConflictError as exc:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            ) from exc
+        if (
+            manifest is None
+            or manifest.run_id != overlay.run_id
+            or manifest.version != overlay.version
+        ):
+            return None
+        entry = manifest.entry_at(virtual_path)
+        if (
+            entry is None
+            or entry.entry_kind is not WorkspaceEntryKind.FILE
+            or entry.content_ref is None
+            or entry.content_digest is None
+            or entry.byte_size is None
+        ):
+            return None
+        try:
+            blob_key = blob_key_from_content_ref(entry.content_ref)
+        except ValueError as exc:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox snapshot content did not match its immutable overlay.",
+            ) from exc
+        if blob_key != entry.content_digest:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox snapshot content did not match its immutable overlay.",
+            )
+        try:
+            stat = await self.blob_store.stat(blob_key)
+        except Exception as exc:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            ) from exc
+        if stat.blob_key != blob_key or stat.byte_size != entry.byte_size:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox snapshot content did not match its immutable overlay.",
+            )
+        self._authorized_blobs[entry.content_ref] = _AuthorizedBlob(
+            content_digest=entry.content_digest,
+            size_bytes=entry.byte_size,
+        )
+        return SandboxResolvedSnapshotSource(
+            kind=SandboxSnapshotSourceKind.OVERLAY,
+            source_ref=overlay_ref,
+            content_ref=entry.content_ref,
+            content_digest=entry.content_digest,
+            size_bytes=entry.byte_size,
+        )
+
+    async def open(self, *, content_ref: str) -> AsyncIterator[bytes]:
+        authorized = self._authorized_blobs.get(content_ref)
+        if authorized is None:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox snapshot content was not authorized for this operation.",
+            )
+        try:
+            stream = await self.blob_store.open_stream(authorized.content_digest)
+        except Exception as exc:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            ) from exc
+
+        async def _verified_stream() -> AsyncIterator[bytes]:
+            digest = hashlib.sha256()
+            total = 0
+            try:
+                async for chunk in stream:
+                    if not isinstance(chunk, bytes):
+                        raise SandboxError(
+                            SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                            "Sandbox snapshot content did not match its immutable overlay.",
+                        )
+                    digest.update(chunk)
+                    total += len(chunk)
+                    if total > authorized.size_bytes:
+                        raise SandboxError(
+                            SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                            "Sandbox snapshot content did not match its immutable overlay.",
+                        )
+                    yield chunk
+            except SandboxError:
+                raise
+            except Exception as exc:
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                    "An authorized immutable sandbox snapshot is unavailable.",
+                ) from exc
+            if (
+                total != authorized.size_bytes
+                or digest.hexdigest() != authorized.content_digest
+            ):
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                    "Sandbox snapshot content did not match its immutable overlay.",
+                )
+
+        return _verified_stream()
+
+
+@dataclass
+class C1A2SandboxSnapshotFileStore(SandboxSnapshotFileStorePort):
+    """Compose verified A2 revisions and C1 retained overlays for one run."""
+
+    artifacts: ArtifactRevisionSandboxSnapshotFileStore
+    overlays: VersionedOverlaySnapshotFileResolverPort
+    _artifact_content_refs: set[str] = field(
+        default_factory=set, init=False, repr=False
+    )
+
+    async def resolve(
+        self, *, source: SandboxSnapshotSource, virtual_path: str
+    ) -> SandboxResolvedSnapshotSource | None:
+        if source.kind is SandboxSnapshotSourceKind.ARTIFACT:
+            resolved = await self.artifacts.resolve(
+                source=source, virtual_path=virtual_path
+            )
+            if resolved is not None:
+                self._artifact_content_refs.add(resolved.content_ref)
+            return resolved
+        if source.kind is SandboxSnapshotSourceKind.OVERLAY:
+            return await self.overlays.resolve_overlay_file(
+                overlay_ref=source.source_ref, virtual_path=virtual_path
+            )
+        return None
+
+    async def open(self, *, content_ref: str) -> AsyncIterator[bytes]:
+        if content_ref in self._artifact_content_refs:
+            return await self.artifacts.open(content_ref=content_ref)
+        return await self.overlays.open(content_ref=content_ref)
+
+
 __all__ = (
     "ArtifactRevisionSandboxSnapshotFileStore",
+    "C1A2SandboxSnapshotFileStore",
     "SandboxSnapshotIdentity",
     "SandboxSnapshotPlanAuthorityPort",
     "TrustedSandboxSnapshotPlanProvider",
     "VersionedOverlaySnapshotFileResolverPort",
+    "WorkspaceOverlaySandboxSnapshotFileResolver",
 )
