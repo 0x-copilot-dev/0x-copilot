@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import os
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 import pytest_asyncio
@@ -14,6 +15,11 @@ from agent_runtime.artifacts.contracts import ArtifactScope
 from agent_runtime.artifacts.errors import (
     ArtifactConflictError,
     ArtifactIdempotencyConflictError,
+)
+from agent_runtime.persistence.records import (
+    LegalHoldReasonCode,
+    LegalHoldRecord,
+    LegalHoldScope,
 )
 from runtime_adapters._artifact_repository import ArtifactRetentionScope
 from runtime_adapters.artifact_references import PostgresArtifactReferenceStore
@@ -171,3 +177,66 @@ class TestPostgresArtifactRepositoryLive:
                 limit=10,
             )
         ).reaped_blob_keys == ()
+
+    async def test_late_legal_hold_after_purge_withholds_physical_reap(
+        self,
+        postgres_artifacts,
+    ) -> None:
+        """The scope row closes the hold gap after metadata is gone."""
+
+        parent, blob, metadata, _references, gc = postgres_artifacts
+        body = b"late-hold-postgres-cleanup"
+        scope = ArtifactScope(
+            org_id="pg_cleanup_hold_org",
+            user_id="pg_cleanup_hold_user",
+            conversation_id="pg_cleanup_hold_conversation",
+            run_id="pg_cleanup_hold_run",
+            trace_id="pg_cleanup_hold_trace",
+        )
+        await _publish(blob, body)
+        await metadata.create_artifact(make_create_command(41, body=body, scope=scope))
+        await metadata.soft_delete(make_delete_command(41, scope=scope))
+        purge = await metadata.purge_tombstones(
+            scope=ArtifactRetentionScope(org_id=scope.org_id),
+            deleted_before=NOW + timedelta(days=1),
+            limit=10,
+        )
+        candidate = purge.eligible_candidates[0]
+        cutoff = datetime.now(UTC) + timedelta(days=1)
+        assert await gc.collect_if_unreferenced(
+            org_id=scope.org_id,
+            candidate=candidate,
+            grace_before=cutoff,
+        )
+
+        hold = LegalHoldRecord(
+            id="lh_pg_cleanup_late_hold",
+            org_id=scope.org_id,
+            scope=LegalHoldScope.CONVERSATION,
+            resource_id=scope.conversation_id,
+            subject_user_id=scope.user_id,
+            reason_code=LegalHoldReasonCode.LEGAL_REQUEST,
+            created_by_user_id="pg_cleanup_retention_admin",
+            create_idempotency_key="pg-cleanup-hold-create-001",
+            create_request_digest=hashlib.sha256(b"pg-cleanup-hold").hexdigest(),
+        )
+        await parent.create_legal_hold(
+            record=hold,
+            audit_event={
+                "org_id": scope.org_id,
+                "user_id": hold.created_by_user_id,
+                "actor_type": "user",
+                "action": "legal_hold.created",
+                "resource_type": "legal_hold",
+                "resource_id": hold.id,
+                "outcome": "success",
+                "metadata": {"scope": "conversation"},
+                "created_at": datetime.now(UTC).isoformat(),
+            },
+        )
+
+        reaped = await gc.reap_quarantine(older_than=cutoff, limit=10)
+
+        assert reaped.reaped_blob_keys == ()
+        assert reaped.withheld_blob_keys == (candidate.blob_key,)
+        assert blob.coordinator.quarantine_path(candidate.blob_key).exists()

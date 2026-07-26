@@ -13,12 +13,14 @@ from typing import Iterator
 from runtime_adapters.file._jsonl import JsonlIo
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_adapters.file._advisory_lock import acquire_exclusive, release_exclusive
+from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
 
 
 @dataclass(frozen=True, slots=True)
 class FileArtifactCandidateState:
     provenance_org_id: str | None
     candidate_since: datetime
+    scopes: tuple[ArtifactGcCandidateScope, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,20 +143,51 @@ class FileArtifactPublicationCoordinator:
         blob_key: str,
         provenance_org_id: str | None,
         candidate_since: datetime,
+        scopes: tuple[ArtifactGcCandidateScope, ...] = (),
     ) -> None:
         current = self.candidates.get(blob_key)
-        if current is not None and current.candidate_since <= candidate_since:
-            return
-        state = FileArtifactCandidateState(
-            provenance_org_id=provenance_org_id,
-            candidate_since=candidate_since,
+        merged_scopes = tuple(
+            sorted(
+                {
+                    *(current.scopes if current is not None else ()),
+                    *scopes,
+                },
+                key=lambda scope: (
+                    scope.org_id,
+                    scope.user_id or "",
+                    scope.conversation_id or "",
+                ),
+            )
         )
+        state = FileArtifactCandidateState(
+            provenance_org_id=(
+                current.provenance_org_id
+                if current is not None and current.provenance_org_id is not None
+                else provenance_org_id
+            ),
+            candidate_since=(
+                min(current.candidate_since, candidate_since)
+                if current is not None
+                else candidate_since
+            ),
+            scopes=merged_scopes,
+        )
+        if state == current:
+            return
         self.candidates[blob_key] = state
         self._append_state_locked(
             "candidate",
             blob_key,
-            provenance_org_id=provenance_org_id,
-            candidate_since=candidate_since.isoformat(),
+            provenance_org_id=state.provenance_org_id,
+            candidate_since=state.candidate_since.isoformat(),
+            scopes=[
+                {
+                    "org_id": scope.org_id,
+                    "user_id": scope.user_id,
+                    "conversation_id": scope.conversation_id,
+                }
+                for scope in state.scopes
+            ],
         )
 
     def cancel_candidate_locked(self, blob_key: str) -> None:
@@ -179,6 +212,12 @@ class FileArtifactPublicationCoordinator:
         self.candidates.pop(blob_key, None)
         self.quarantine.pop(blob_key, None)
         self._append_state_locked("reap", blob_key)
+
+    def candidate_scopes_locked(
+        self, *, blob_key: str
+    ) -> tuple[ArtifactGcCandidateScope, ...]:
+        candidate = self.candidates.get(blob_key)
+        return candidate.scopes if candidate is not None else ()
 
     def pending_candidates_locked(
         self,
@@ -205,6 +244,28 @@ class FileArtifactPublicationCoordinator:
                 continue
             op = row.get("op")
             if op == "candidate":
+                scopes_json = row.get("scopes", ())
+                scopes: list[ArtifactGcCandidateScope] = []
+                if isinstance(scopes_json, list):
+                    for scope_json in scopes_json:
+                        if not isinstance(scope_json, dict):
+                            continue
+                        org_id = scope_json.get("org_id")
+                        if not isinstance(org_id, str) or not org_id:
+                            continue
+                        user_id = scope_json.get("user_id")
+                        conversation_id = scope_json.get("conversation_id")
+                        scopes.append(
+                            ArtifactGcCandidateScope(
+                                org_id=org_id,
+                                user_id=user_id if isinstance(user_id, str) else None,
+                                conversation_id=(
+                                    conversation_id
+                                    if isinstance(conversation_id, str)
+                                    else None
+                                ),
+                            )
+                        )
                 self.candidates[blob_key] = FileArtifactCandidateState(
                     provenance_org_id=(
                         str(row["provenance_org_id"])
@@ -213,6 +274,16 @@ class FileArtifactPublicationCoordinator:
                     ),
                     candidate_since=datetime.fromisoformat(
                         str(row["candidate_since"]).replace("Z", "+00:00")
+                    ),
+                    scopes=tuple(
+                        sorted(
+                            set(scopes),
+                            key=lambda scope: (
+                                scope.org_id,
+                                scope.user_id or "",
+                                scope.conversation_id or "",
+                            ),
+                        )
                     ),
                 )
             elif op == "quarantine":

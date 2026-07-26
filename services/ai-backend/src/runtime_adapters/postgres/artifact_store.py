@@ -763,6 +763,29 @@ class PostgresArtifactMetadataStore:
                             row["candidate_since"],
                         ),
                     )
+                # Keep only ownership facts needed to evaluate a *future*
+                # legal hold after these artifacts/revisions are gone.  The
+                # candidate row is the parent so scope rows automatically
+                # disappear on a re-reference, restoration, or final reap.
+                await conn.execute(
+                    """
+                    INSERT INTO runtime_artifact_gc_candidate_scopes (
+                        provenance_org_id, blob_key, user_id, conversation_id
+                    )
+                    SELECT DISTINCT
+                        a.org_id,
+                        r.blob_key,
+                        a.user_id,
+                        a.conversation_id
+                      FROM runtime_artifact_revisions r
+                      JOIN runtime_artifacts a
+                        ON a.org_id = r.org_id
+                       AND a.artifact_id = r.artifact_id
+                     WHERE r.org_id = %s AND r.artifact_id = ANY(%s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (scope.org_id, list(artifact_ids)),
+                )
                 await conn.execute(
                     """
                     DELETE FROM runtime_artifact_reference_edges

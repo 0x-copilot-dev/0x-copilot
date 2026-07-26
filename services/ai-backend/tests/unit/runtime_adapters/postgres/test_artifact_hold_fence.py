@@ -22,6 +22,12 @@ _RUNTIME_STORE = (
 _D11_MIGRATION = (_ROOT / "migrations" / "0011_legal_hold_management.sql").read_text(
     encoding="utf-8"
 )
+_PHYSICAL_CLEANUP_MIGRATION = next(
+    (_ROOT / "migrations").glob("*_artifact_physical_cleanup_scopes.sql")
+).read_text(encoding="utf-8")
+_POSTGRES_GC = (
+    _ROOT / "src" / "runtime_adapters" / "postgres" / "artifact_gc.py"
+).read_text(encoding="utf-8")
 
 
 def test_python_fence_order_matches_direct_hold_trigger() -> None:
@@ -125,3 +131,26 @@ def test_all_retention_families_use_a_hold_predicate_inside_shared_fences() -> N
 
     execute = _RUNTIME_STORE.index("async def _execute_sweep")
     assert "await acquire_artifact_hold_fences" in _RUNTIME_STORE[execute:]
+
+
+def test_physical_cleanup_revalidates_scoped_holds_immediately_before_unlink() -> None:
+    """Late holds serialize with the second, physical-delete phase."""
+
+    assert "runtime_artifact_gc_candidate_scopes" in _PHYSICAL_CLEANUP_MIGRATION
+    assert "artifact-gc-hold:" in _PHYSICAL_CLEANUP_MIGRATION
+    assert "runtime_artifact_hold_pin_or_release" in _PHYSICAL_CLEANUP_MIGRATION
+
+    reaper = _POSTGRES_GC.index("async def _reap_one")
+    first_fence = _POSTGRES_GC.index("await acquire_artifact_gc_hold_fence", reaper)
+    second_fence = _POSTGRES_GC.index(
+        "await acquire_artifact_gc_hold_fence", first_fence + 1
+    )
+    final_recheck = _POSTGRES_GC.index("await self._revalidation_state", second_fence)
+    unlink = _POSTGRES_GC.index("reaping.unlink()", final_recheck)
+    assert first_fence < second_fence < final_recheck < unlink
+    revalidation = _POSTGRES_GC.index("async def _revalidation_state")
+    state_body = _POSTGRES_GC[revalidation:]
+    assert "runtime_artifact_gc_candidate_scopes" in state_body
+    assert "NOT EXISTS" in state_body
+    assert "reference_kind <> 'legal_hold'" in state_body
+    assert "ORDER BY candidate_since ASC, provenance_org_id ASC" in _POSTGRES_GC

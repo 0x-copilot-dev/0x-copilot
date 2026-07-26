@@ -28,6 +28,7 @@ _RUNTIME_TABLES = (
     "runtime_workspace_overlay_manifests",
     "runtime_artifact_reference_edges",
     "runtime_artifact_gc_quarantine",
+    "runtime_artifact_gc_candidate_scopes",
     "runtime_artifact_gc_candidates",
     "runtime_artifact_idempotency",
     "runtime_artifact_revisions",

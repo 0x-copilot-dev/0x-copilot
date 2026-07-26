@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import hashlib
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.artifacts.contracts import ArtifactGcCandidate
 from runtime_adapters._artifact_repository import (
+    ArtifactGcCandidateScope,
     ArtifactQuarantineReapResult,
     ArtifactQuarantineReaper,
     ArtifactRetentionPurgeResult,
@@ -65,6 +66,44 @@ class ArtifactRetentionJobResult:
     purge: ArtifactRetentionPurgeResult
     quarantined_blob_keys: tuple[str, ...]
     reap: ArtifactQuarantineReapResult
+    withheld_blob_keys: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactPhysicalCleanupOutcome:
+    """Body-free aggregate result for one tenant's opt-in cleanup pass."""
+
+    org_id: str
+    purged_artifacts: int = 0
+    quarantined_blobs: int = 0
+    reaped_blobs: int = 0
+    restored_blobs: int = 0
+    withheld_blobs: int = 0
+
+    @classmethod
+    def from_result(
+        cls, *, org_id: str, result: ArtifactRetentionJobResult
+    ) -> "ArtifactPhysicalCleanupOutcome":
+        return cls(
+            org_id=org_id,
+            purged_artifacts=len(result.purge.purged_artifact_ids),
+            quarantined_blobs=len(result.quarantined_blob_keys),
+            reaped_blobs=len(result.reap.reaped_blob_keys),
+            restored_blobs=len(result.reap.restored_blob_keys),
+            withheld_blobs=len(result.withheld_blob_keys),
+        )
+
+
+class ArtifactCleanupExecutionFenceLostError(RuntimeError):
+    """A scheduler generation lost authority during a lifecycle pass."""
+
+
+@runtime_checkable
+class ArtifactCleanupExecutionFence(Protocol):
+    """Fence checked inside the lifecycle pass before destructive phases."""
+
+    async def assert_active(self) -> None:
+        """Raise if this tenant pass no longer owns its execution fence."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,6 +170,27 @@ class ArtifactLifecycleJobs:
         self.garbage_collector = garbage_collector
         self.quarantine_reaper = quarantine_reaper
         self.schedule = schedule or ArtifactLifecycleSchedule()
+        self._hold_revalidator: (
+            Callable[[tuple[ArtifactGcCandidateScope, ...]], bool] | None
+        ) = None
+
+    def configure_hold_revalidator(
+        self,
+        revalidator: Callable[[tuple[ArtifactGcCandidateScope, ...]], bool],
+    ) -> None:
+        """Bind the runtime-owned legal-hold view to physical GC.
+
+        The metadata/blob adapters deliberately do not own legal-hold state.
+        The runtime persistence adapter installs this callback while composing
+        the repository, keeping the retention control plane authoritative.
+        Postgres also performs the same query in its digest-locked transaction
+        as defense in depth.
+        """
+
+        self._hold_revalidator = revalidator
+        setter = getattr(self.garbage_collector, "set_hold_revalidator", None)
+        if callable(setter):
+            setter(revalidator)
 
     @staticmethod
     def _evidence_id(kind: str, *scope_parts: str) -> str:
@@ -332,7 +392,10 @@ class ArtifactLifecycleJobs:
         candidate_grace_before: datetime,
         quarantine_older_than: datetime,
         limit: int,
+        quarantine_recorded_at: datetime | None = None,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactRetentionJobResult:
+        await _require_execution_fence(execution_fence)
         discover = getattr(
             self.garbage_collector, "discover_orphaned_publications", None
         )
@@ -343,6 +406,7 @@ class ArtifactLifecycleJobs:
                 older_than=candidate_grace_before,
                 limit=limit,
             )
+        await _require_execution_fence(execution_fence)
         purge = await self.retention_purger.purge_tombstones(
             scope=scope,
             deleted_before=deleted_before,
@@ -362,26 +426,43 @@ class ArtifactLifecycleJobs:
             )
         }
         quarantined: list[str] = []
+        withheld: list[str] = []
         for candidate in sorted(
             candidates.values(),
             key=lambda value: (value.unreferenced_since, value.blob_key),
         )[:limit]:
+            await _require_execution_fence(execution_fence)
+            if self._has_active_hold(candidate.blob_key):
+                withheld.append(candidate.blob_key)
+                continue
             collected = await self.garbage_collector.collect_if_unreferenced(
                 org_id=scope.org_id,
                 candidate=candidate,
                 grace_before=candidate_grace_before,
+                quarantined_at=quarantine_recorded_at,
             )
             if collected:
                 quarantined.append(candidate.blob_key)
+        await _require_execution_fence(execution_fence)
         reap = await self.quarantine_reaper.reap_quarantine(
             older_than=quarantine_older_than,
             limit=limit,
+            provenance_org_id=scope.org_id,
         )
         return ArtifactRetentionJobResult(
             purge=purge,
             quarantined_blob_keys=tuple(quarantined),
             reap=reap,
+            withheld_blob_keys=tuple(sorted({*withheld, *reap.withheld_blob_keys})),
         )
+
+    def _has_active_hold(self, blob_key: str) -> bool:
+        """Best-effort preflight; collectors repeat this at the delete point."""
+
+        checker = getattr(self.garbage_collector, "has_active_hold", None)
+        if not callable(checker):
+            return False
+        return bool(checker(blob_key=blob_key))
 
     async def run_scheduled_retention(
         self,
@@ -390,6 +471,7 @@ class ArtifactLifecycleJobs:
         now: datetime,
         limit: int | None = None,
         protected_conversation_ids: tuple[str, ...] = (),
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactRetentionJobResult:
         """Run all three durable phases for one org from the live sweeper."""
 
@@ -405,12 +487,24 @@ class ArtifactLifecycleJobs:
             candidate_grace_before=now - schedule.candidate_grace,
             quarantine_older_than=now - schedule.quarantine_grace,
             limit=max(1, limit or schedule.limit),
+            quarantine_recorded_at=now,
+            execution_fence=execution_fence,
         )
+
+
+async def _require_execution_fence(
+    fence: ArtifactCleanupExecutionFence | None,
+) -> None:
+    if fence is not None:
+        await fence.assert_active()
 
 
 __all__ = (
     "ArtifactDeletionInventory",
     "ArtifactLifecycleEvidence",
+    "ArtifactCleanupExecutionFence",
+    "ArtifactCleanupExecutionFenceLostError",
+    "ArtifactPhysicalCleanupOutcome",
     "ArtifactLifecycleJobs",
     "ArtifactLifecycleSchedule",
     "ArtifactLifecycleStorePort",

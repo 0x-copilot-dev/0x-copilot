@@ -43,6 +43,25 @@ async def acquire_artifact_advisory_lock(
     )
 
 
+async def acquire_artifact_gc_hold_fence(
+    conn,
+    *,
+    blob_key: str,
+) -> None:
+    """Serialize final GC with a legal hold over a purged candidate scope.
+
+    The SQL legal-hold trigger takes this exact ``hashtextextended`` lock for
+    all matching durable candidate scopes.  It is intentionally separate from
+    the publication digest lock: legal-hold writers need no knowledge of a
+    filesystem path, while final GC needs an explicit TOCTOU fence.
+    """
+
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+        (f"artifact-gc-hold:{blob_key}",),
+    )
+
+
 async def restore_gc_quarantine(
     conn,
     *,
@@ -129,6 +148,7 @@ async def restore_quarantine_after_rollback(
 
 __all__ = (
     "acquire_artifact_advisory_lock",
+    "acquire_artifact_gc_hold_fence",
     "acquire_artifact_scope_lock",
     "artifact_advisory_lock_key",
     "artifact_scope_advisory_lock_key",

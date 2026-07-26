@@ -59,7 +59,12 @@ from runtime_adapters.base import (
     StatusTransition,
     _Fields,
 )
-from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
+from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
+from runtime_adapters.artifact_lifecycle import (
+    ArtifactCleanupExecutionFence,
+    ArtifactLifecycleJobs,
+    ArtifactPhysicalCleanupOutcome,
+)
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.schemas import (
     ACTIVE_RUN_STATUSES,
@@ -104,6 +109,7 @@ class InMemoryRuntimeApiStore:
         """Attach the gated artifact hooks without changing legacy construction."""
 
         self._artifact_lifecycle_jobs = jobs
+        jobs.configure_hold_revalidator(self._artifact_candidate_scope_is_held)
 
     async def tombstone_artifacts_for_org_deletion(
         self,
@@ -417,6 +423,46 @@ class InMemoryRuntimeApiStore:
             )
             for hold in self.legal_holds.values()
         )
+
+    def _artifact_candidate_scope_is_held(
+        self, scopes: tuple[ArtifactGcCandidateScope, ...]
+    ) -> bool:
+        """Revalidate live holds for purged metadata without exposing bodies.
+
+        This is invoked while the physical collector holds its artifact lock;
+        normal cleanup entrypoints additionally hold ``_legal_hold_lock`` for
+        the entire action, making a late legal-hold creation linearize before
+        or after—not through—the destructive boundary.
+        """
+
+        for scope in scopes:
+            for hold in self.legal_holds.values():
+                if hold.org_id != scope.org_id or hold.released_at is not None:
+                    continue
+                if hold.scope.value == "org" and hold.resource_id == scope.org_id:
+                    return True
+                if (
+                    hold.scope.value == "user"
+                    and scope.user_id is not None
+                    and hold.subject_user_id == scope.user_id
+                ):
+                    return True
+                if (
+                    hold.scope.value == "conversation"
+                    and scope.conversation_id is not None
+                    and hold.resource_id == scope.conversation_id
+                ):
+                    return True
+                # An unknown ownership dimension must never be guessed.  A
+                # conversation hold in that tenant is enough to withhold an
+                # otherwise un-attributable candidate.
+                if (
+                    hold.scope.value == "conversation"
+                    and scope.conversation_id is None
+                    and (scope.user_id is None or hold.subject_user_id == scope.user_id)
+                ):
+                    return True
+        return False
 
     async def list_conversations(
         self,
@@ -1598,6 +1644,43 @@ class InMemoryRuntimeApiStore:
             tombstoned=0,
             deleted=0,
             skipped_legal_hold=0,
+        )
+
+    async def execute_artifact_cleanup(
+        self,
+        *,
+        org_id: str,
+        now: datetime,
+        limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
+    ) -> ArtifactPhysicalCleanupOutcome:
+        """Run one trusted tenant cleanup under the same legal-hold fence.
+
+        This is deliberately separate from the generic retention API: the
+        opt-in worker owns scheduling, while this store owns the authoritative
+        legal-hold boundary.  No caller-provided user/content/body reaches the
+        physical lifecycle adapters.
+        """
+
+        async with self._legal_hold_lock:
+            jobs = self._artifact_lifecycle_jobs
+            if jobs is None:
+                return ArtifactPhysicalCleanupOutcome(org_id=org_id)
+            result = await jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=now,
+                limit=limit,
+                protected_conversation_ids=tuple(
+                    conversation.conversation_id
+                    for conversation in self.conversations.values()
+                    if conversation.org_id == org_id
+                    and self._conversation_is_held(conversation)
+                ),
+                execution_fence=execution_fence,
+            )
+        return ArtifactPhysicalCleanupOutcome.from_result(
+            org_id=org_id,
+            result=result,
         )
 
     async def insert_retention_deletion_evidence(self, record) -> None:
