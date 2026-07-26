@@ -218,3 +218,58 @@ describe("toApprovalsQueue", () => {
     expect(queue.recent).toHaveLength(0);
   });
 });
+
+describe("projectApprovals — ask_a_question", () => {
+  it("parses the question only for the ask_a_question kind", () => {
+    const projection = projectApprovals([
+      envelope({
+        event_type: "approval_requested",
+        payload: {
+          approval_id: "q-1",
+          approval_kind: "ask_a_question",
+          header: "Quick question",
+          question: "Which treasury should the payouts come from?",
+          options: [
+            { label: "Ops Safe", recommended: true },
+            { label: "Growth Safe" },
+          ],
+          multi_select: false,
+          allow_free_text: true,
+        },
+      }),
+    ]);
+    const question = projection.approvals[0]?.question;
+    expect(question?.question).toBe(
+      "Which treasury should the payouts come from?",
+    );
+    expect(question?.options[0]?.recommended).toBe(true);
+  });
+
+  it("leaves a plain approval's question null even though it carries a message", () => {
+    // Regression: `parseQuestion` falls back to `payload.message` (the tool
+    // mirrors the question there), and EVERY approval carries a `message`. With
+    // the projection keyed on payload shape instead of `approval_kind`, every
+    // approval in the cockpit rendered as a question card — Approve/Reject gone,
+    // replaced by option chips that were never offered.
+    const projection = projectApprovals([requested("appr-1")]);
+    expect(projection.approvals[0]?.question).toBeNull();
+  });
+
+  it("keeps the question through a redelivered frame that omits it", () => {
+    const projection = projectApprovals([
+      envelope({
+        event_type: "approval_requested",
+        payload: {
+          approval_id: "q-2",
+          approval_kind: "ask_a_question",
+          question: "Which channel?",
+        },
+      }),
+      envelope({
+        event_type: "approval_requested",
+        payload: { approval_id: "q-2", approval_kind: "ask_a_question" },
+      }),
+    ]);
+    expect(projection.approvals[0]?.question?.question).toBe("Which channel?");
+  });
+});

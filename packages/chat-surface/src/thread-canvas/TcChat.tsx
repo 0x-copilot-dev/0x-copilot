@@ -34,6 +34,9 @@ import {
   type ActivityParam,
   ConsentCard,
   ConnectorConsentCard,
+  QuestionCard,
+  type QuestionAnswer,
+  type QuestionSpec,
   EMPTY_CONNECTOR_TRUST,
   type ApprovalPresentation,
   type ConnectorTrust,
@@ -99,6 +102,11 @@ export interface TcChatApproval {
   readonly presentation: ApprovalPresentation | null;
   /** Server-derived trust clauses for an `mcp_auth` card; nulls are omitted. */
   readonly connectorTrust: ConnectorTrust;
+  /**
+   * Parsed `ask_a_question` payload. Non-null only for that kind, and the
+   * reason it routes to a card you ANSWER rather than one you approve.
+   */
+  readonly question: QuestionSpec | null;
   /** Resolved? Pending → card / conf-card; resolved → receipt. */
   readonly resolved: boolean;
   /** Final decision once resolved; null while pending. */
@@ -268,6 +276,13 @@ export interface TcChatProps {
   /** Reject the approval (host owns the POST); fires on Reject / `⌘⌫`. */
   readonly onReject?: (approvalId: string) => void;
   /**
+   * Answer an `ask_a_question` interrupt (host owns the POST). Separate from
+   * `onApprove` because the wire carries the answer text, and because an
+   * approval that silently became an answer would resume the run with the
+   * wrong payload.
+   */
+  readonly onAnswer?: (approvalId: string, answer: QuestionAnswer) => void;
+  /**
    * WC-P5a (AD-6/AD-7): host launcher for the `mcp_auth` Connect card. When an
    * approval's `approvalKind === "mcp_auth"` (or its id is `mcp_discovery:`-
    * prefixed), the card renders a Connect / Skip pair wired to this port instead
@@ -340,6 +355,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     approvals = EMPTY_APPROVALS,
     onApprove,
     onReject,
+    onAnswer,
     mcpAuthPort,
     renderComposer,
   } = props;
@@ -461,11 +477,13 @@ export function TcChat(props: TcChatProps): ReactElement {
         {visibleApprovals.length > 0 ? (
           <div data-testid="tc-chat-conf-cards" style={confCardsWrapStyle}>
             {visibleApprovals.map((approval) =>
-              approval.resolved
-                ? renderApprovalReceipt(approval)
-                : isMcpAuthApproval(approval)
-                  ? renderMcpAuthConnectCard(approval, mcpAuthPort)
-                  : renderConfCard(approval, onApprove, onReject),
+              approval.question !== null
+                ? renderQuestionCard(approval, onAnswer)
+                : approval.resolved
+                  ? renderApprovalReceipt(approval)
+                  : isMcpAuthApproval(approval)
+                    ? renderMcpAuthConnectCard(approval, mcpAuthPort)
+                    : renderConfCard(approval, onApprove, onReject),
             )}
           </div>
         ) : null}
@@ -491,11 +509,13 @@ export function TcChat(props: TcChatProps): ReactElement {
       {visibleApprovals.length > 0 ? (
         <div data-testid="tc-chat-approvals" style={approvalsWrapStyle}>
           {visibleApprovals.map((approval) =>
-            approval.resolved
-              ? renderApprovalReceipt(approval)
-              : isMcpAuthApproval(approval)
-                ? renderMcpAuthConnectCard(approval, mcpAuthPort)
-                : renderStudioApprovalCard(approval, onApprove, onReject),
+            approval.question !== null
+              ? renderQuestionCard(approval, onAnswer)
+              : approval.resolved
+                ? renderApprovalReceipt(approval)
+                : isMcpAuthApproval(approval)
+                  ? renderMcpAuthConnectCard(approval, mcpAuthPort)
+                  : renderStudioApprovalCard(approval, onApprove, onReject),
           )}
         </div>
       ) : null}
@@ -608,6 +628,33 @@ function renderConfCard(
         approveTestId={`tc-chat-conf-approve-${approval.approvalId}`}
         rejectTestId={`tc-chat-conf-reject-${approval.approvalId}`}
         testId={`tc-chat-conf-consent-${approval.approvalId}`}
+      />
+    </div>
+  );
+}
+
+// A question renders the SAME card in both modes. Focus and Studio differ in
+// how much context sits around the chat, not in what an interrupt looks like —
+// and unlike an approval there is no denser variant worth having.
+function renderQuestionCard(
+  approval: TcChatApproval,
+  onAnswer?: (approvalId: string, answer: QuestionAnswer) => void,
+): ReactNode {
+  if (approval.question === null) {
+    return null;
+  }
+  return (
+    <div
+      key={`question-${approval.approvalId}`}
+      data-testid={`tc-chat-question-${approval.approvalId}`}
+      data-approval-id={approval.approvalId}
+    >
+      <QuestionCard
+        spec={approval.question}
+        resolved={approval.resolved}
+        answer={approval.summary}
+        onAnswer={(answer) => onAnswer?.(approval.approvalId, answer)}
+        testId={`tc-chat-question-card-${approval.approvalId}`}
       />
     </div>
   );

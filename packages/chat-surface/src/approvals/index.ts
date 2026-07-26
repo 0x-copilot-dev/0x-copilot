@@ -8,6 +8,20 @@ export { ApprovalCard, type ApprovalCardProps } from "./ApprovalCard";
 // (`approvals.css`) so both hosts get it — the previous card's rules lived only
 // in the web app and never reached desktop.
 export { ConsentCard, type ConsentCardProps } from "./ConsentCard";
+// `ask_a_question` is an interrupt, not an approval: it blocks the run, it can
+// outlive the screen you are on, and its answer is an answer — not a consent.
+export {
+  QuestionCard,
+  type QuestionCardProps,
+  type QuestionAnswer,
+} from "./QuestionCard";
+export {
+  parseQuestion,
+  composeAnswer,
+  isAnswerable,
+  type QuestionSpec,
+  type QuestionOption,
+} from "./question";
 export {
   ConnectorConsentCard,
   type ConnectorConsentCardProps,

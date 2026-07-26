@@ -852,6 +852,7 @@ function approval(overrides: Partial<TcChatApproval> = {}): TcChatApproval {
     params: [{ label: "channel", value: "#launch-aurora" }],
     presentation: null,
     connectorTrust: EMPTY_CONNECTOR_TRUST,
+    question: null,
     resolved: false,
     decision: null,
     createdAtMs: 1716000090000,

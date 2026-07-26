@@ -440,3 +440,251 @@
   font-size: var(--font-size-mono-9-5);
   opacity: 0.7;
 }
+
+/* ==========================================================================
+   Question card — `ask_a_question`
+   ==========================================================================
+   Same frame as the consent card, deliberately different innards: a `?` chip
+   instead of the shield, an answer instead of an approval, and no reassurance
+   line — nothing here is being permitted, so there is no rule to restate.
+
+   Chip metrics are the kit's small-interactive-control rung, NOT the status-chip
+   rung: an option is something you press. `--font-size-2xs` (11.2px) is the
+   nearest sans rung to the design's 11.5px literal, which lands the chip at
+   26.8px against the design's 27.2px. On-scale beats pixel-exact — the thing
+   that actually read wrong was a 30px chip whose 12px label matched the 12.5px
+   question text beside it. An option must be smaller than the prose it answers.
+   ========================================================================== */
+
+.qc {
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+.qc__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.qc__icon {
+  width: 20px;
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  border: 1px solid var(--color-accent-line, var(--color-accent));
+  color: var(--color-accent);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
+}
+
+.qc__header {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.qc__meta {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+}
+
+/* Two metas (run name + selection count) both want the right edge; only the
+   first takes the auto margin so they sit as a pair rather than overlapping. */
+.qc__meta ~ .qc__meta {
+  margin-left: var(--space-sm);
+}
+
+.qc__body {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  padding: 11px 13px;
+}
+
+.qc__question {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-loose);
+  color: var(--color-text);
+}
+
+.qc__hint {
+  margin: 0;
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-base);
+  color: var(--color-text-muted);
+}
+
+/* `flex-end` so a chip carrying the Recommended eyebrow still sits on the same
+   baseline as its unlabelled siblings instead of pushing the row up. */
+.qc__chips {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 7px;
+}
+
+.qc__opt {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+/* The kit's eyebrow register (see `.sect-h`), so the marker reads as system
+   furniture rather than a new element. Accent — the product's one
+   "pay attention here" hue — resolves per theme through the token, so light
+   mode gets the oklab-darkened seed rather than a second hand-picked blue. */
+.qc__rec {
+  padding-left: 10px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  font-weight: var(--font-weight-medium);
+  letter-spacing: var(--tracking-eyebrow);
+  text-transform: uppercase;
+  color: var(--color-accent);
+}
+
+.qc__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+
+.qc__chip:hover {
+  background: var(--color-surface-muted);
+  border-color: var(--color-accent-line, var(--color-accent));
+}
+
+.qc__chip[data-on="true"] {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.qc__box {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  border: 1.5px solid var(--color-border-strong);
+  font-size: var(--font-size-mono-8-5);
+  line-height: 1;
+  color: var(--color-accent-contrast);
+}
+
+.qc__chip[data-on="true"] .qc__box {
+  border-color: var(--color-accent);
+  background: var(--color-accent);
+}
+
+.qc__input {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 6px 6px 6px 11px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  transition: border-color 0.12s;
+}
+
+.qc__input:focus-within {
+  border-color: var(--color-accent);
+}
+
+.qc__input input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+}
+
+.qc__input input::placeholder {
+  color: var(--color-text-muted);
+}
+
+.qc__send {
+  width: 24px;
+  height: 24px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.qc__send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.qc__actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+}
+
+.qc__answer {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-sm);
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.qc__answer-mark {
+  flex: none;
+  color: var(--color-success);
+  font-weight: var(--font-weight-bold);
+}
+
+.qc__foot {
+  margin: 0;
+  padding: 8px 13px;
+  background: var(--color-bg-elevated);
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-muted);
+}

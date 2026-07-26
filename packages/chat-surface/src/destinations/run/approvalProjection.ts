@@ -25,6 +25,7 @@
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import type { ActivityParam } from "../../approvals";
+import { parseQuestion, type QuestionSpec } from "../../approvals/question";
 import {
   parseApprovalPresentation,
   parseConnectorTrust,
@@ -87,6 +88,11 @@ export interface RunApproval {
    * source and the card must omit it rather than guess.
    */
   readonly connectorTrust: ConnectorTrust;
+  /**
+   * The parsed `ask_a_question` payload. Non-null only for that kind — it is
+   * the difference between a card you answer and a card you approve.
+   */
+  readonly question: QuestionSpec | null;
   readonly runId: string | null;
   /** Anchor for the rail's jump-to-card (the requesting event's id). */
   readonly messageId: string;
@@ -145,6 +151,7 @@ interface MutableApproval {
   target: string | null;
   presentation: ApprovalPresentation | null;
   connectorTrust: ConnectorTrust;
+  question: QuestionSpec | null;
   runId: string | null;
   messageId: string;
   sequenceNo: number;
@@ -283,6 +290,15 @@ function reduceRequested(
       parseConnectorTrust(payload),
       existing?.connectorTrust,
     ),
+    // Gated on the KIND, not on the payload's shape. `parseQuestion` falls
+    // back to `payload.message` (the tool mirrors the question there), and
+    // every approval carries a `message` — so without this gate every
+    // approval would render as a question card. Same replay rule as
+    // `presentation`: a later frame that omits it must not erase it.
+    question:
+      resolveApprovalKind(event) === "ask_a_question"
+        ? (parseQuestion(payload) ?? existing?.question ?? null)
+        : null,
     runId: event.run_id,
     messageId: event.event_id,
     sequenceNo: existing?.sequenceNo ?? event.sequence_no,
@@ -325,6 +341,7 @@ function freeze(m: MutableApproval): RunApproval {
     target: m.target,
     presentation: m.presentation,
     connectorTrust: m.connectorTrust,
+    question: m.question,
     runId: m.runId,
     messageId: m.messageId,
     sequenceNo: m.sequenceNo,
