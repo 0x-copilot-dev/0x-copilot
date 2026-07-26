@@ -11,6 +11,9 @@ from importlib.resources.abc import Traversable
 from pydantic import Field, TypeAdapter, field_validator
 
 from agent_runtime.capabilities.actions.catalog import ACTION_CATALOG
+from agent_runtime.capabilities.operations.builtin_catalog import (
+    DEFAULT_BUILTIN_OPERATION_CATALOG,
+)
 from agent_runtime.capabilities.operations.catalog import (
     DEFAULT_OPERATION_DESCRIPTORS,
 )
@@ -21,21 +24,6 @@ from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.ledger_models import EffectClass, EffectExecutorKind
 
 _EXEMPTIONS_FILE = "operation_descriptor_exemptions.json"
-_MODEL_TOOL_ALIASES: dict[str, tuple[str, str]] = {
-    # Deep Agents injects these model names after ``_model_visible_tools``.
-    # Map them to the canonical workspace/executor operation seam that A3
-    # actually observes; the conformance test builds these concrete middleware
-    # tools so an upstream addition cannot hide behind this mapping.
-    "ls": ("workspace", "ls"),
-    "read_file": ("workspace", "read"),
-    "write_file": ("workspace", "write"),
-    "edit_file": ("workspace", "edit"),
-    "glob": ("workspace", "glob"),
-    "grep": ("workspace", "grep"),
-    "execute": ("builtin", "execute"),
-    "write_todos": ("builtin", "write_todos"),
-    "task": ("builtin", "task"),
-}
 
 
 class CapabilityRegistration(RuntimeContract):
@@ -275,9 +263,9 @@ def registrations_from_model_tools(
             raise OperationConformanceError(
                 "model-facing callable has no operation name"
             )
-        capability, op = _MODEL_TOOL_ALIASES.get(
-            name,
-            ("builtin", name),
+        entry = DEFAULT_BUILTIN_OPERATION_CATALOG.resolve_model_tool_name(name)
+        capability, op = (
+            (entry.capability, entry.op) if entry is not None else ("builtin", name)
         )
         registrations.append(
             CapabilityRegistration(

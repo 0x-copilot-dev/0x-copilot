@@ -15,7 +15,7 @@ from enum import StrEnum
 from importlib.resources import files
 from importlib.resources.abc import Traversable
 
-from pydantic import Field, TypeAdapter, model_validator
+from pydantic import Field, TypeAdapter, field_validator, model_validator
 
 from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorEntry,
@@ -46,12 +46,24 @@ class BuiltinOperationCatalogEntry(RuntimeContract):
     """One reviewed callable seam, independent of feature-flag registration."""
 
     tool_name: str = Field(min_length=1, max_length=128)
+    model_tool_aliases: tuple[str, ...] = ()
     capability: str = Field(min_length=1, max_length=128)
     op: str = Field(min_length=1, max_length=128)
     source: str = Field(min_length=1, max_length=256)
     kind: BuiltinOperationKind
     execution: BuiltinOperationExecution
     model_visible: bool
+
+    @field_validator("model_tool_aliases")
+    @classmethod
+    def _model_tool_aliases_are_distinct(
+        cls, values: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        if any(not value or len(value) > 128 for value in values):
+            raise ValueError("model tool aliases must be non-empty bounded names")
+        if len(set(values)) != len(values):
+            raise ValueError("model tool aliases must be distinct")
+        return values
 
     @model_validator(mode="after")
     def _dynamic_tools_stay_descriptor_bound(self) -> "BuiltinOperationCatalogEntry":
@@ -66,6 +78,12 @@ class BuiltinOperationCatalogEntry(RuntimeContract):
             OperationDescriptorRegistry.normalize(self.op),
         )
 
+    @property
+    def model_tool_names(self) -> tuple[str, ...]:
+        """Return every concrete framework name approved for this operation."""
+
+        return (self.tool_name, *self.model_tool_aliases)
+
 
 class BuiltinOperationCatalogError(RuntimeError):
     """The checked-in builtin inventory is malformed or contradictory."""
@@ -74,11 +92,12 @@ class BuiltinOperationCatalogError(RuntimeError):
 class BuiltinOperationCatalog:
     """Immutable, exact-match inventory with fail-closed dynamic resolution."""
 
-    __slots__ = ("_by_key", "_by_tool_name")
+    __slots__ = ("_by_key", "_by_model_tool_name", "_by_tool_name")
 
     def __init__(self, entries: tuple[BuiltinOperationCatalogEntry, ...]) -> None:
         by_key: dict[tuple[str, str], BuiltinOperationCatalogEntry] = {}
         by_tool_name: dict[str, BuiltinOperationCatalogEntry] = {}
+        by_model_tool_name: dict[str, BuiltinOperationCatalogEntry] = {}
         for entry in entries:
             if entry.key in by_key:
                 raise BuiltinOperationCatalogError(
@@ -90,7 +109,14 @@ class BuiltinOperationCatalog:
                 )
             by_key[entry.key] = entry
             by_tool_name[entry.tool_name] = entry
+            for name in entry.model_tool_names:
+                if name in by_model_tool_name:
+                    raise BuiltinOperationCatalogError(
+                        f"duplicate model-visible tool name: {name}"
+                    )
+                by_model_tool_name[name] = entry
         self._by_key = by_key
+        self._by_model_tool_name = by_model_tool_name
         self._by_tool_name = by_tool_name
 
     @classmethod
@@ -121,6 +147,13 @@ class BuiltinOperationCatalog:
     def resolve_tool_name(self, tool_name: str) -> BuiltinOperationCatalogEntry | None:
         return self._by_tool_name.get(tool_name.strip())
 
+    def resolve_model_tool_name(
+        self, tool_name: str
+    ) -> BuiltinOperationCatalogEntry | None:
+        """Resolve a concrete model tool name, including reviewed framework aliases."""
+
+        return self._by_model_tool_name.get(tool_name.strip())
+
     def resolve(self, capability: str, op: str) -> BuiltinOperationCatalogEntry | None:
         key = (
             OperationDescriptorRegistry.normalize_capability(capability),
@@ -136,7 +169,7 @@ class BuiltinOperationCatalog:
     ) -> OperationDescriptorEntry:
         """Resolve only reviewed entries; unknown/dynamic names remain held."""
 
-        entry = self.resolve_tool_name(tool_name)
+        entry = self.resolve_model_tool_name(tool_name)
         if entry is None:
             return descriptors.safe_default(capability="builtin", op=tool_name)
         descriptor = descriptors.resolve_entry(entry.capability, entry.op)

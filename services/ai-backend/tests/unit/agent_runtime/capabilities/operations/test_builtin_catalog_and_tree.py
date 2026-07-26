@@ -101,6 +101,33 @@ class TestBuiltinOperationCatalog:
                 }
             )
 
+    def test_framework_aliases_resolve_to_the_reviewed_operation(self) -> None:
+        for name, key in (
+            ("read_file", ("workspace", "read")),
+            ("write_file", ("workspace", "write")),
+            ("edit_file", ("workspace", "edit")),
+        ):
+            entry = DEFAULT_BUILTIN_OPERATION_CATALOG.resolve_model_tool_name(name)
+
+            assert entry is not None
+            assert entry.key == key
+
+    def test_duplicate_framework_alias_fails_closed(self) -> None:
+        first = BuiltinOperationCatalogEntry(
+            tool_name="one",
+            model_tool_aliases=("framework_tool",),
+            capability="builtin",
+            op="one",
+            source="test",
+            kind=BuiltinOperationKind.BUILTIN,
+            execution=BuiltinOperationExecution.PURE,
+            model_visible=True,
+        )
+        second = first.model_copy(update={"tool_name": "two", "op": "two"})
+
+        with pytest.raises(BuiltinOperationCatalogError, match="model-visible"):
+            BuiltinOperationCatalog((first, second))
+
     def test_duplicate_catalog_identity_fails_closed(self) -> None:
         entry = BuiltinOperationCatalogEntry(
             tool_name="one",
