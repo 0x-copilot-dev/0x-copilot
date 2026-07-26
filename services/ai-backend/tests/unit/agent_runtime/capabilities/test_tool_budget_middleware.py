@@ -7,6 +7,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetMiddleware,
     ToolBudgetReject,
     ToolBudgetWarn,
+    WorkspaceToolBudgetOverride,
 )
 from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
 from agent_runtime.persistence.records import (
@@ -199,6 +200,58 @@ class TestBudgetCountsOnlyGuardEntries:
         assert "web_search" in decision.safe_message
         # The wildcard is a matching rule, not something the model can act on.
         assert "'*'" not in decision.safe_message
+
+
+class TestWorkspaceToolBudgetOverride:
+    """Settings → Model & behavior "Tool calls per run" layered over the rows.
+
+    The workspace number IS the workspace's wildcard budget, so it replaces
+    wildcard rows and leaves narrower ones alone: an operator who capped one
+    specific tool did so deliberately, and a workspace-wide preference must
+    not quietly widen it.
+    """
+
+    def test_unset_leaves_rows_untouched(self) -> None:
+        rows = [
+            _budget(org_id=None, tool_name="*", max_calls_per_run=10),
+            _budget(org_id="org_a", tool_name="web_search", max_calls_per_run=3),
+        ]
+        applied = WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=None)
+        assert [b.max_calls_per_run for b in applied] == [10, 3]
+
+    def test_replaces_wildcard_but_not_a_narrower_row(self) -> None:
+        rows = [
+            _budget(org_id=None, tool_name="*", max_calls_per_run=10),
+            _budget(org_id="org_a", tool_name="web_search", max_calls_per_run=3),
+        ]
+        applied = WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=25)
+        by_name = {b.tool_name: b.max_calls_per_run for b in applied}
+        assert by_name == {"*": 25, "web_search": 3}
+
+    def test_governs_a_tool_with_no_specific_row(self) -> None:
+        rows = [_budget(org_id=None, tool_name="*", max_calls_per_run=10)]
+        middleware = ToolBudgetMiddleware(
+            WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=2)
+        )
+        ledger = _ledger_with(tool_name="web_search", calls=2)
+        decision = middleware.check_admit(ledger=ledger, tool_name="web_search")
+        assert isinstance(decision, ToolBudgetReject)
+        assert decision.limit == 2
+
+    def test_synthesizes_a_wildcard_row_when_none_exists(self) -> None:
+        """Without this the setting would silently do nothing."""
+
+        rows = [_budget(org_id="org_a", tool_name="web_search", max_calls_per_run=3)]
+        applied = WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=7)
+        wildcard = [b for b in applied if b.tool_name == "*"]
+        assert len(wildcard) == 1
+        assert wildcard[0].max_calls_per_run == 7
+        assert wildcard[0].enforcement is ToolBudgetEnforcement.HARD
+
+    def test_no_rows_and_no_override_stays_empty(self) -> None:
+        """An empty result is the caller's signal to install no guard at all."""
+
+        assert WorkspaceToolBudgetOverride.apply([], max_calls_per_run=None) == ()
 
 
 class TestLedgerHelpers:

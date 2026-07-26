@@ -18,6 +18,7 @@ const BASE_VALUE: ModelBehaviorValue = {
   defaultModel: null,
   reasoningDepth: null,
   webAccess: false,
+  toolCallsPerRun: null,
   approvalPolicy: { readOnly: "auto", write: "require", danger: "require" },
   spend: { monthlyCapUsd: null, pauseAtCap: false },
 };
@@ -166,6 +167,67 @@ describe("<ModelBehaviorPage>", () => {
     // Selecting Auto (empty value) reports null.
     fireEvent.change(select, { target: { value: "" } });
     expect(onChange).toHaveBeenCalledWith({ reasoningDepth: null });
+  });
+
+  it("reports tool-call-cap edits, and blank means the deployment default", () => {
+    const onChange = vi.fn();
+    const { rerender } = render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={onChange}
+        controller={makeController()}
+      />,
+    );
+    const input = screen.getByTestId("tool-calls-per-run-input");
+
+    // Unset renders blank, with the default surfaced as the placeholder so
+    // "blank" reads as a concrete number rather than an unknown.
+    expect((input as HTMLInputElement).value).toBe("");
+    expect((input as HTMLInputElement).placeholder).toBe("10");
+
+    fireEvent.change(input, { target: { value: "25" } });
+    expect(onChange).toHaveBeenCalledWith({ toolCallsPerRun: 25 });
+
+    // Clearing the field returns to the deployment default.
+    rerender(
+      <ModelBehaviorPage
+        value={{ ...BASE_VALUE, toolCallsPerRun: 25 }}
+        onChange={onChange}
+        controller={makeController()}
+      />,
+    );
+    fireEvent.change(screen.getByTestId("tool-calls-per-run-input"), {
+      target: { value: "  " },
+    });
+    expect(onChange).toHaveBeenCalledWith({ toolCallsPerRun: null });
+  });
+
+  it("keeps the tool-call cap inside the range the server accepts", () => {
+    // Clamping here (rather than letting the save 400) means the user sees the
+    // corrected number as they type instead of an error after pressing Save.
+    const onChange = vi.fn();
+    render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={onChange}
+        controller={makeController()}
+      />,
+    );
+    const input = screen.getByTestId("tool-calls-per-run-input");
+
+    for (const [typed, expected] of [
+      ["0", 1],
+      ["-5", 1],
+      ["101", 100],
+      ["7.9", 7],
+    ] as const) {
+      fireEvent.change(input, { target: { value: typed } });
+      expect(onChange).toHaveBeenCalledWith({ toolCallsPerRun: expected });
+    }
+
+    // Non-numeric input is "unset", never NaN on the wire.
+    fireEvent.change(input, { target: { value: "abc" } });
+    expect(onChange).toHaveBeenCalledWith({ toolCallsPerRun: null });
   });
 
   it("reports web-access toggles", () => {

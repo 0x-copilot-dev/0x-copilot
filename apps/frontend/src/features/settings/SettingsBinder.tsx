@@ -377,6 +377,61 @@ export function SettingsBinder({
   const mbWebAccess =
     workspaceDefaults.defaults?.behavior_overrides?.web_access_default ?? true;
 
+  // Tool-call cap. Deferred behind the page SaveBar rather than autosaved like
+  // its neighbours: it is a free-text number, and autosave would PUT on every
+  // keystroke. `undefined` means "untouched", so the persisted value shows
+  // through without a second baseline state racing the async defaults load.
+  const mbToolCallsSaved =
+    workspaceDefaults.defaults?.behavior_overrides?.tool_calls_per_run ?? null;
+  const [toolCallsEdit, setToolCallsEdit] = useState<number | null | undefined>(
+    undefined,
+  );
+  const mbToolCalls =
+    toolCallsEdit === undefined ? mbToolCallsSaved : toolCallsEdit;
+  const toolCallsDirty =
+    toolCallsEdit !== undefined && toolCallsEdit !== mbToolCallsSaved;
+  const [toolCallsSaving, setToolCallsSaving] = useState(false);
+  const [toolCallsSaveError, setToolCallsSaveError] = useState<string | null>(
+    null,
+  );
+  const saveToolCalls = async (
+    toast: (message: string) => void,
+  ): Promise<void> => {
+    const current = workspaceDefaults.defaults;
+    if (current === null) {
+      setToolCallsSaveError(
+        "Couldn't save — retry once settings finish loading.",
+      );
+      return;
+    }
+    setToolCallsSaving(true);
+    setToolCallsSaveError(null);
+    try {
+      await workspaceDefaults.save({
+        default_model: current.default_model,
+        default_connectors: current.default_connectors,
+        retention_days: current.retention_days,
+        behavior_overrides: {
+          ...current.behavior_overrides,
+          tool_calls_per_run: mbToolCalls,
+        },
+        enabled_models: current.enabled_models,
+      });
+      setToolCallsEdit(undefined);
+      toast(
+        mbToolCalls === null
+          ? "Tool-call limit reset to the default."
+          : `Tool-call limit saved (${mbToolCalls} per tool).`,
+      );
+    } catch {
+      setToolCallsSaveError(
+        "Saving the tool-call limit failed — retry in a moment.",
+      );
+    } finally {
+      setToolCallsSaving(false);
+    }
+  };
+
   const persistDefaultModel = async (
     value: string | null,
     toast: (message: string) => void,
@@ -617,6 +672,7 @@ export function SettingsBinder({
               defaultModel: mbDefaultValue,
               reasoningDepth: mbReasoningDepth,
               webAccess: mbWebAccess,
+              toolCallsPerRun: mbToolCalls,
               approvalPolicy,
               spend,
             }}
@@ -641,6 +697,10 @@ export function SettingsBinder({
                     : "Web access off by default.",
                 );
               }
+              if (patch.toolCallsPerRun !== undefined) {
+                // Deferred, not autosaved — see the SaveBar wiring below.
+                setToolCallsEdit(patch.toolCallsPerRun);
+              }
               if (patch.approvalPolicy !== undefined) {
                 void persistApprovalPolicy(patch.approvalPolicy, toast);
               }
@@ -650,14 +710,21 @@ export function SettingsBinder({
             }}
             controller={controller}
             // Spend-cap SaveBar contract (deferred save, honest errors).
-            dirty={spendDirty}
-            saving={spendSaving}
-            saveError={spendSaveError}
+            // One SaveBar per section, so the two deferred fields (spend cap +
+            // tool-call cap) share it. Each half saves only when it is the one
+            // that changed — an untouched field must not be re-PUT.
+            dirty={spendDirty || toolCallsDirty}
+            saving={spendSaving || toolCallsSaving}
+            saveError={spendSaveError ?? toolCallsSaveError}
             error={spendLoadError}
             onRetry={loadSpend}
-            onSave={() => void saveSpend(toast)}
+            onSave={() => {
+              if (spendDirty) void saveSpend(toast);
+              if (toolCallsDirty) void saveToolCalls(toast);
+            }}
             onDiscard={() => {
               if (spendBaseline !== null) setSpend(spendBaseline);
+              setToolCallsEdit(undefined);
             }}
           />
         );

@@ -151,6 +151,8 @@ const DEFAULT_MODEL_BEHAVIOR: ModelBehaviorValue = {
   // `null` == "Auto": no persisted default → the runtime baseline (D1).
   reasoningDepth: null,
   webAccess: true,
+  // `null` == no workspace preference → the deployment's tool-call budget.
+  toolCallsPerRun: null,
   // Seed with the deployment fail-open posture (read=auto, write=ask,
   // destructive=require) — the SAME `_DEFAULT_MODES` the runtime uses when the
   // policy lane is unconfigured (D5/D-5). The real per-user policy is fetched
@@ -584,6 +586,66 @@ export function SettingsMount({
   const mbWebAccess =
     workspaceDefaults?.behavior_overrides?.web_access_default ?? true;
 
+  // Tool-call cap. Deferred behind the page SaveBar rather than autosaved like
+  // its neighbours: it is a free-text number, and autosave would PUT on every
+  // keystroke. `undefined` means "untouched", so the persisted value shows
+  // through without a second baseline state racing the async defaults load.
+  // Kept byte-identical to the web SettingsBinder so the hosts stay lockstep.
+  const mbToolCallsSaved =
+    workspaceDefaults?.behavior_overrides?.tool_calls_per_run ?? null;
+  const [toolCallsEdit, setToolCallsEdit] = useState<number | null | undefined>(
+    undefined,
+  );
+  const mbToolCalls =
+    toolCallsEdit === undefined ? mbToolCallsSaved : toolCallsEdit;
+  const toolCallsDirty =
+    toolCallsEdit !== undefined && toolCallsEdit !== mbToolCallsSaved;
+  const [toolCallsSaving, setToolCallsSaving] = useState(false);
+  const [toolCallsSaveError, setToolCallsSaveError] = useState<string | null>(
+    null,
+  );
+  const saveToolCalls = async (
+    toast: (message: string) => void,
+  ): Promise<void> => {
+    if (workspaceDefaults === null) {
+      setToolCallsSaveError(
+        "Couldn't save — retry once settings finish loading.",
+      );
+      return;
+    }
+    setToolCallsSaving(true);
+    setToolCallsSaveError(null);
+    try {
+      const updated = await transport.request<WorkspaceDefaultsResponse>({
+        method: "PUT",
+        path: "/v1/agent/workspace/defaults",
+        body: {
+          default_model: workspaceDefaults.default_model,
+          default_connectors: workspaceDefaults.default_connectors,
+          retention_days: workspaceDefaults.retention_days,
+          behavior_overrides: {
+            ...workspaceDefaults.behavior_overrides,
+            tool_calls_per_run: mbToolCalls,
+          },
+          enabled_models: workspaceDefaults.enabled_models,
+        } satisfies UpdateWorkspaceDefaultsRequest,
+      });
+      setWorkspaceDefaults(updated);
+      setToolCallsEdit(undefined);
+      toast(
+        mbToolCalls === null
+          ? "Tool-call limit reset to the default."
+          : `Tool-call limit saved (${mbToolCalls} per tool).`,
+      );
+    } catch {
+      setToolCallsSaveError(
+        "Saving the tool-call limit failed — retry in a moment.",
+      );
+    } finally {
+      setToolCallsSaving(false);
+    }
+  };
+
   const persistBehaviorOverride = async (
     patch: Partial<WorkspaceDefaultsResponse["behavior_overrides"]>,
     toast: (message: string) => void,
@@ -1009,6 +1071,7 @@ export function SettingsMount({
               defaultModel: mbDefaultValue,
               reasoningDepth: mbReasoningDepth,
               webAccess: mbWebAccess,
+              toolCallsPerRun: mbToolCalls,
               approvalPolicy,
               spend,
             }}
@@ -1033,6 +1096,10 @@ export function SettingsMount({
                     : "Web access off by default.",
                 );
               }
+              if (patch.toolCallsPerRun !== undefined) {
+                // Deferred, not autosaved — see the SaveBar wiring below.
+                setToolCallsEdit(patch.toolCallsPerRun);
+              }
               if (patch.approvalPolicy !== undefined) {
                 void persistApprovalPolicy(patch.approvalPolicy, toast);
               }
@@ -1042,15 +1109,21 @@ export function SettingsMount({
               setModelBehavior((prev) => ({ ...prev, ...patch }));
             }}
             controller={controller}
-            // Spend-cap SaveBar contract (deferred save, honest errors).
-            dirty={spendDirty}
-            saving={spendSaving}
-            saveError={spendSaveError}
+            // One SaveBar per section, so the two deferred fields (spend cap +
+            // tool-call cap) share it. Each half saves only when it is the one
+            // that changed — an untouched field must not be re-PUT.
+            dirty={spendDirty || toolCallsDirty}
+            saving={spendSaving || toolCallsSaving}
+            saveError={spendSaveError ?? toolCallsSaveError}
             error={spendLoadError}
             onRetry={loadSpend}
-            onSave={() => void saveSpend(toast)}
+            onSave={() => {
+              if (spendDirty) void saveSpend(toast);
+              if (toolCallsDirty) void saveToolCalls(toast);
+            }}
             onDiscard={() => {
               if (spendBaseline !== null) setSpend(spendBaseline);
+              setToolCallsEdit(undefined);
             }}
           />
         );

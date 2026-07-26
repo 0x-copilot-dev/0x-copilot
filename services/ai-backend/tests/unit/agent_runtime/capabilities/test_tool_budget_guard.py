@@ -150,7 +150,8 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
             result = await wrapped._arun("hi")
         finally:
             ToolBudgetGuard.unbind(token)
-        assert result == "echo-ok"
+        # The tool's own output leads; a low-headroom cap (3) also annotates it.
+        assert result.startswith("echo-ok")
         # One admitted call landed on the ledger.
         assert ledger.charged_calls("echo") == 1
 
@@ -259,6 +260,100 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
 
         assert _Limits.MAX_SURFACED_REJECTIONS >= 4
 
+    async def test_result_stays_clean_while_there_is_headroom(self) -> None:
+        """No note until the tail is in sight — every result would be noise."""
+
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name, description=inner.description, inner=inner
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
+            ),
+            ledger=ToolCallLedger(run_id="run-note-0"),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            result = await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+        assert result == "echo-ok"
+
+    async def test_counts_down_the_remaining_calls_as_the_cap_nears(self) -> None:
+        """The model gets the remaining count as a planning signal.
+
+        Without it the budget is invisible until the moment it refuses, so
+        the model plans as if calls were unlimited and then stops abruptly
+        with the work half-done.
+        """
+
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name, description=inner.description, inner=inner
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=4)]
+            ),
+            ledger=ToolCallLedger(run_id="run-note-1"),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            results = [await wrapped._arun("hi") for _ in range(4)]
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        # First call still has 3 left — at the threshold, so it reports.
+        assert "3 calls left" in results[0]
+        assert "2 calls left" in results[1]
+        # Singular at one remaining — the note is read by a model, not parsed.
+        assert "1 call left" in results[2]
+        assert "None left" in results[3]
+        assert "Do not call it again" in results[3]
+        # The tool's own output is never replaced, only annotated.
+        assert all(r.startswith("echo-ok") for r in results)
+
+    async def test_note_says_the_count_is_per_turn(self) -> None:
+        """A run IS a turn — the model must not carry an exhausted budget over."""
+
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name, description=inner.description, inner=inner
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=1)]
+            ),
+            ledger=ToolCallLedger(run_id="run-note-2"),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            result = await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+        assert "this turn" in result
+
+    async def test_ungoverned_tool_gets_no_note(self) -> None:
+        """With no budget there is no honest number to report."""
+
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name, description=inner.description, inner=inner
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="some_other_tool")]
+            ),
+            ledger=ToolCallLedger(run_id="run-note-3"),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            result = await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+        assert result == "echo-ok"
+
     async def test_rejection_names_the_requested_tool_not_the_wildcard(self) -> None:
         """A wildcard budget must still name the tool the model actually called.
 
@@ -320,7 +415,7 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
             result = await wrapped._arun("hi")
         finally:
             ToolBudgetGuard.unbind(token)
-        assert result == "echo-ok"
+        assert result.startswith("echo-ok")
         # Inner tool ran (soft = admit) AND the warning was emitted.
         assert len(inner.calls) == 1
         assert len(producer.events) == 1

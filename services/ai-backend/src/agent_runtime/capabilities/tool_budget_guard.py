@@ -20,6 +20,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetReject,
     ToolBudgetWarn,
 )
+from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
 from runtime_api.schemas import RuntimeApiEventType, RunRecord
@@ -29,6 +30,10 @@ if TYPE_CHECKING:  # pragma: no cover — typing-only; runtime import is lazy.
 
 
 _LOGGER = logging.getLogger(__name__)
+
+# Top-level key for the remaining-calls note on a dict-shaped tool result.
+# Distinct from the citation hint's key so both can ride on one result.
+_TOOL_BUDGET_NOTE_KEY = "_tool_budget_note"
 
 
 class _Limits:
@@ -175,6 +180,19 @@ class ToolBudgetGuard:
         self._ledger.record_input_tokens(call_id, observed_input_tokens)
         self._ledger.observed_settled(call_id)
 
+    def usage_note(self, *, tool_name: str) -> str | None:
+        """Return the remaining-calls note for ``tool_name``, or ``None``.
+
+        ``None`` when no budget governs the tool, or while there is still
+        comfortable headroom — the model only needs this once the tail is
+        in sight, and a note on every result is context spent for nothing.
+        """
+
+        usage = self._middleware.usage(ledger=self._ledger, tool_name=tool_name)
+        if usage is None or not usage.should_notify:
+            return None
+        return usage.render_note()
+
     async def emit_warning(self, *, decision: ToolBudgetWarn) -> None:
         """Best-effort BUDGET_WARNING emission."""
 
@@ -284,9 +302,10 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         try:
-            return self.inner._run(*args, **kwargs)
+            result = self.inner._run(*args, **kwargs)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
+        return self._with_usage_note(result, guard=guard)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Async gate: check budget, record the call, delegate to the inner tool."""
@@ -309,9 +328,29 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         try:
-            return await self.inner._arun(*args, **kwargs)
+            result = await self.inner._arun(*args, **kwargs)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
+        # Settled first, so the count the model reads includes this call.
+        return self._with_usage_note(result, guard=guard)
+
+    def _with_usage_note(self, result: object, *, guard: ToolBudgetGuard) -> object:
+        """Append the remaining-calls note to ``result`` when one is due.
+
+        Best-effort: annotating a result must never fail the tool call that
+        already succeeded, so any failure here returns the result untouched.
+        """
+
+        try:
+            note = guard.usage_note(tool_name=self.name)
+            if note is None:
+                return result
+            return ToolResultNote.append(
+                result, note=note, dict_key=_TOOL_BUDGET_NOTE_KEY
+            )
+        except Exception:  # noqa: BLE001 — an annotation is never worth a failure
+            _LOGGER.warning("tool_budget_note_failed", exc_info=True)
+            return result
 
     @staticmethod
     def _schedule_warning(*, guard: ToolBudgetGuard, decision: ToolBudgetWarn) -> None:

@@ -81,6 +81,111 @@ class ToolBudgetReject:
 ToolBudgetDecision = Union[ToolBudgetAdmit, ToolBudgetWarn, ToolBudgetReject]
 
 
+@dataclass(frozen=True)
+class ToolBudgetUsage:
+    """How much of one tool's per-run allowance is spent, for the model.
+
+    The budget used to be invisible until the moment it refused a call, so
+    the model planned as if it had unlimited calls and then hit a wall with
+    research half-finished. Reporting the remaining count as it goes lets it
+    spend what it has deliberately — the difference between "I have two
+    searches left, make them count" and an abrupt stop.
+    """
+
+    tool_name: str
+    used: int
+    limit: int
+
+    # Report only once the tail is in sight. Annotating every result would
+    # add a line to each of an agent's tool calls for no decision-relevant
+    # information while there is plenty of headroom.
+    NOTICE_THRESHOLD = 3
+
+    @property
+    def remaining(self) -> int:
+        """Calls left before the next one is refused; never negative."""
+        return max(self.limit - self.used, 0)
+
+    @property
+    def should_notify(self) -> bool:
+        """True once the remaining count is worth spending context on."""
+        return self.remaining <= self.NOTICE_THRESHOLD
+
+    def render_note(self) -> str:
+        """Build the model-facing note. Phrased as a plan instruction.
+
+        Says "this turn" because the allowance is per run: a fresh user
+        message starts over, so the model must not carry an exhausted
+        budget into how it answers the next one.
+        """
+
+        if self.remaining == 0:
+            return (
+                f"[Tool budget — {self.tool_name}: {self.used} of {self.limit} "
+                "calls used this turn. None left. Do not call it again; "
+                "answer with what you already have.]"
+            )
+        call_word = "call" if self.remaining == 1 else "calls"
+        return (
+            f"[Tool budget — {self.tool_name}: {self.used} of {self.limit} "
+            f"calls used this turn, {self.remaining} {call_word} left. "
+            "Make them count, then answer with what you have.]"
+        )
+
+
+class WorkspaceToolBudgetOverride:
+    """Applies the workspace's per-tool call cap over the configured rows.
+
+    The Settings "Model & behavior" control writes one number: how many
+    times the agent may call any single tool in a run. That number is the
+    workspace's own **wildcard** budget, so it replaces the wildcard rows
+    and leaves narrower rows alone — an operator who capped one specific
+    tool did so deliberately, and a workspace-wide preference must not
+    quietly widen it.
+
+    Pure: takes rows in, returns rows out. The caller owns the I/O.
+    """
+
+    @classmethod
+    def apply(
+        cls,
+        budgets: Sequence[ToolBudgetRecord],
+        *,
+        max_calls_per_run: int | None,
+    ) -> tuple[ToolBudgetRecord, ...]:
+        """Return ``budgets`` with the workspace cap applied to wildcard rows.
+
+        ``None`` (the setting is unset) returns the rows untouched. When a
+        cap is set but the deployment has no wildcard row to rewrite, one
+        is synthesized so the setting still governs rather than silently
+        doing nothing.
+        """
+
+        if max_calls_per_run is None:
+            return tuple(budgets)
+        rewritten = tuple(
+            budget.model_copy(update={"max_calls_per_run": max_calls_per_run})
+            if budget.tool_name == _GLOBAL_TOOL_NAME
+            else budget
+            for budget in budgets
+        )
+        if any(budget.tool_name == _GLOBAL_TOOL_NAME for budget in rewritten):
+            return rewritten
+        return (*rewritten, cls._synthesized(max_calls_per_run))
+
+    @staticmethod
+    def _synthesized(max_calls_per_run: int) -> ToolBudgetRecord:
+        """Build the wildcard row a deployment without one is missing."""
+
+        from agent_runtime.persistence.records.tool_budgets import (  # noqa: PLC0415
+            DefaultToolBudget,
+        )
+
+        return DefaultToolBudget.record().model_copy(
+            update={"max_calls_per_run": max_calls_per_run}
+        )
+
+
 class ToolBudgetMiddleware:
     """Stateless admit/warn/reject middleware; call accounting lives on the per-run ledger."""
 
@@ -135,6 +240,28 @@ class ToolBudgetMiddleware:
                 )
 
         return ToolBudgetAdmit()
+
+    def usage(
+        self,
+        *,
+        ledger: "ToolCallLedger",
+        tool_name: str,
+    ) -> "ToolBudgetUsage | None":
+        """Return how much of ``tool_name``'s budget is spent, or ``None``.
+
+        ``None`` means no budget governs this tool, so there is nothing
+        honest to report — callers must stay silent rather than invent a
+        limit.
+        """
+
+        budget = self._resolve_budget(tool_name)
+        if budget is None:
+            return None
+        return ToolBudgetUsage(
+            tool_name=tool_name,
+            used=ledger.charged_calls(tool_name),
+            limit=budget.max_calls_per_run,
+        )
 
     def _resolve_budget(self, tool_name: str) -> ToolBudgetRecord | None:
         """Return the most-specific budget that covers ``tool_name``, or ``None``."""
