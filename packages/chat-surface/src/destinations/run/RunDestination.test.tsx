@@ -713,6 +713,75 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
     );
   });
 
+  it("keeps completed subagents in Agents after a later message binds a new run", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+    const store = makeStore();
+    const view = render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={store}>
+          <RunDestination conversationId={CONV} runId={"run-a" as RunId} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
+    );
+    act(() => {
+      transport.emit(
+        event({
+          run_id: "run-a",
+          event_type: "subagent_started",
+          source: "subagent",
+          activity_kind: "subagent",
+          task_id: "task-history",
+          subagent_id: "prime_checker",
+          payload: { subagent_name: "prime_checker" },
+        }),
+      );
+      transport.emit(
+        event({
+          run_id: "run-a",
+          event_type: "subagent_completed",
+          source: "subagent",
+          activity_kind: "subagent",
+          task_id: "task-history",
+          subagent_id: "prime_checker",
+          status: "completed",
+          summary: "97 is prime.",
+          payload: {},
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+        "1",
+      ),
+    );
+
+    // The next user message binds run-b. Its run-scoped event array is empty,
+    // but the conversation-scoped Agents archive must retain the terminal row.
+    view.rerender(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={store}>
+          <RunDestination conversationId={CONV} runId={"run-b" as RunId} />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-b/stream"),
+    );
+    expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent("1");
+    fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
+    expect(
+      await screen.findByTestId("agent-activity-row-details-task-history"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Prime Checker")).toBeInTheDocument();
+  });
+
   it("renders a real subagent tool result in both fleet and Agents expansions from the one run stream", async () => {
     seqCounter = 0;
     const transport = new FakeTransport();
@@ -927,13 +996,14 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
   });
 });
 
-// === PR-3.11 — empty/idle goal composer + multi-run selection ===
+// === PR-3.11 — empty/idle goal composer + run rebinding ===
 //
 // Integration: with no run the shell mounts the empty-state goal composer
 // (FR-3.25); submitting a goal POSTs a run and binds it via the `runId` seam, so
-// the live cockpit mounts IN PLACE (the shell root node is unchanged). With >1
-// run the shell mounts the run selector (FR-3.26); picking a run rebinds the
-// session's SSE tail without remounting the ThreadCanvas.
+// the live cockpit mounts IN PLACE (the shell root node is unchanged). A
+// conversation can contain many runs, but the cockpit deliberately does not
+// spend vertical space on a run-history pill strip; direct run rebinding still
+// preserves the session/canvas invariants below.
 
 // A conversation head whose current (live) run is run-a. `runs` is carried for
 // readability only — the source binds run-a from `latest_run_id` and keeps
@@ -1368,7 +1438,7 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     );
   });
 
-  it("auto-binds the conversation's head (live) run and populates the multi-run selector (Phase 6)", async () => {
+  it("auto-binds the conversation's head run without rendering a multi-run strip", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
@@ -1381,11 +1451,7 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
       expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
     );
     expect(screen.queryByTestId("run-empty-state")).toBeNull();
-    // Phase 6: the runs-list endpoint populates `session.runs`, so the multi-run
-    // selector now renders (this conversation has two runs).
-    await waitFor(() =>
-      expect(screen.queryByTestId("run-multi-select")).not.toBeNull(),
-    );
+    expect(screen.queryByTestId("run-multi-select")).toBeNull();
   });
 
   it("rebinds the session's SSE tail to another run via the runId seam without remounting the canvas (FR-3.26)", async () => {
@@ -1433,7 +1499,7 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     expect(screen.getByTestId("thread-canvas")).toBe(canvasBefore);
   });
 
-  it("shows no multi-run selector for a single run", async () => {
+  it("shows no run-history strip for a single run", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages")

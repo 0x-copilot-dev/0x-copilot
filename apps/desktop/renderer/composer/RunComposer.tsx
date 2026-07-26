@@ -83,6 +83,8 @@ export interface RunComposerProps {
    * of deep-linking to Settings.
    */
   readonly providerKeysPort?: ProviderKeysPort;
+  /** Bumped after a Settings → Provider keys write so the mounted catalog reloads. */
+  readonly catalogRefreshKey?: number;
 }
 
 /**
@@ -114,6 +116,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     onGetLocalModels,
     connectorsPort,
     providerKeysPort,
+    catalogRefreshKey,
   } = props;
 
   // The last run-create failure, surfaced inline above the composer. The
@@ -147,7 +150,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
-  } = useRunComposerBindings();
+  } = useRunComposerBindings(catalogRefreshKey);
 
   // Provider-key writes must re-drive the catalog. The model popover's inline
   // "Add a provider key" form calls this port's `save`, so wrapping it refetches

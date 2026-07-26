@@ -82,11 +82,10 @@ export interface ModelPillProps {
   /** Footer deep-link → Settings → Local models (v3 "Get local models →"). */
   onGetLocalModels?: () => void;
   /**
-   * When provided, the "Add a provider key" footer opens an inline `<KeyForm>`
-   * sub-view INSIDE this popover instead of firing `onAddProviderKey` — the key
-   * is saved through this port and the popover closes on connect. When omitted,
-   * the footer keeps the deep-link behaviour (`onAddProviderKey`). The two are
-   * mutually preferred: `providerKeysPort` wins when both are set.
+   * Fallback surface for hosts that do not provide `onAddProviderKey`: opens an
+   * inline `<KeyForm>` sub-view inside this popover and saves through the port.
+   * Navigation deliberately wins when both are present, keeping Settings as the
+   * single provider-key setup surface for hosts that support it.
    */
   providerKeysPort?: ProviderKeysPort;
   /**

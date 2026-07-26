@@ -221,6 +221,31 @@ describe("RunEmptyComposer", () => {
     ).not.toBeNull();
   });
 
+  it("routes the empty-composer model footer to Settings instead of an inline key form", async () => {
+    const ctx = makeCtx();
+    const { container } = renderEmpty(ctx);
+    const modelButton = await waitFor(() => {
+      const button = container.querySelector<HTMLButtonElement>(
+        "button[aria-label^='Model:']",
+      );
+      expect(button).not.toBeNull();
+      return button as HTMLButtonElement;
+    });
+    fireEvent.click(modelButton);
+    const addKey = await waitFor(() => {
+      const link = [...document.querySelectorAll<HTMLAnchorElement>("a")].find(
+        (candidate) => candidate.textContent === "Add a provider key →",
+      );
+      expect(link).not.toBeUndefined();
+      return link as HTMLAnchorElement;
+    });
+
+    fireEvent.click(addKey);
+    expect(ctx.onOpenModelSettings).toHaveBeenCalledTimes(1);
+    // The popover closes and never mounts its inline plaintext-key form.
+    expect(document.querySelector("[data-testid='key-form']")).toBeNull();
+  });
+
   it("threads webSearchEnabled=false into the start-run payload when web search is toggled off", async () => {
     const ctx = makeCtx();
     const { container } = renderEmpty(ctx, fakeConnectorsPort());

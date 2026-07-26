@@ -900,6 +900,7 @@ export function RunBinder({
   onOpenLocalModelSettings,
   onOpenConnectors,
   onOpenSkills,
+  providerKeysRevision = 0,
   workspaceStageHost,
 }: {
   /** The active conversation from the nav; `null` = a brand-new chat. */
@@ -917,6 +918,8 @@ export function RunBinder({
   readonly onOpenConnectors?: () => void;
   /** Navigate to the Skills surface — composer skills settings. */
   readonly onOpenSkills?: () => void;
+  /** Bumped after Settings saves/removes a provider key; refreshes Run models. */
+  readonly providerKeysRevision?: number;
   /** C3's desktop-only, digest-pinned workspace approval bridge. */
   readonly workspaceStageHost?: WorkspaceStageHost;
 }): ReactElement {
@@ -985,7 +988,7 @@ export function RunBinder({
     return () => {
       cancelled = true;
     };
-  }, [transport]);
+  }, [transport, providerKeysRevision]);
 
   // Belt-and-braces: once a conversation exists, drop any minted new-chat key.
   // (The outlet re-keys this binder on the id change so it normally remounts
@@ -1057,6 +1060,7 @@ export function RunBinder({
         onOpenSkills={onOpenSkills}
         connectorsPort={connectorsPort}
         providerKeysPort={providerKeysPort}
+        catalogRefreshKey={providerKeysRevision}
         onGetLocalModels={onOpenLocalModelSettings}
       />
     ),
@@ -1066,6 +1070,7 @@ export function RunBinder({
       onOpenLocalModelSettings,
       connectorsPort,
       providerKeysPort,
+      providerKeysRevision,
     ],
   );
 
@@ -1096,6 +1101,7 @@ export function RunBinder({
         onGetLocalModels={onOpenLocalModelSettings}
         connectorsPort={connectorsPort}
         providerKeysPort={providerKeysPort}
+        catalogRefreshKey={providerKeysRevision}
       />
     ),
     [
@@ -1105,6 +1111,7 @@ export function RunBinder({
       onOpenLocalModelSettings,
       connectorsPort,
       providerKeysPort,
+      providerKeysRevision,
     ],
   );
 

@@ -128,6 +128,8 @@ export interface DestinationOutletProps {
   readonly onOpenConnectors?: () => void;
   /** Navigate to the Skills surface (Run composer's skills settings link). */
   readonly onOpenSkills?: () => void;
+  /** Bumped after Settings saves/removes a provider key; refreshes Run models. */
+  readonly providerKeysRevision?: number;
   /** C3's path-free desktop workspace approval bridge. */
   readonly workspaceStageHost?: WorkspaceStageHost;
 }
@@ -145,6 +147,7 @@ export function DestinationOutlet({
   onOpenLocalModelSettings,
   onOpenConnectors,
   onOpenSkills,
+  providerKeysRevision = 0,
   workspaceStageHost,
 }: DestinationOutletProps): ReactElement {
   // Fold deprecated slugs onto their recast surface BEFORE resolving content,
@@ -169,6 +172,7 @@ export function DestinationOutlet({
         onOpenLocalModelSettings,
         onOpenConnectors,
         onOpenSkills,
+        providerKeysRevision,
         workspaceStageHost,
       })}
     </div>
@@ -190,6 +194,7 @@ interface SurfaceContext {
   readonly onOpenLocalModelSettings?: () => void;
   readonly onOpenConnectors?: () => void;
   readonly onOpenSkills?: () => void;
+  readonly providerKeysRevision: number;
   readonly workspaceStageHost?: WorkspaceStageHost;
 }
 
@@ -215,6 +220,7 @@ function renderSurface(
           onOpenLocalModelSettings={ctx.onOpenLocalModelSettings}
           onOpenConnectors={ctx.onOpenConnectors}
           onOpenSkills={ctx.onOpenSkills}
+          providerKeysRevision={ctx.providerKeysRevision}
           workspaceStageHost={ctx.workspaceStageHost}
         />
       );

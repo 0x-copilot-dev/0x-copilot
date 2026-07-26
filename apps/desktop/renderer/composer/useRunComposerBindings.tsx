@@ -118,7 +118,9 @@ export interface RunComposerBindings {
  * the workspace-default seed and the keep-valid fallback from racing each
  * other's stale closures (identical to the pre-extraction `RunComposer`).
  */
-export function useRunComposerBindings(): RunComposerBindings {
+export function useRunComposerBindings(
+  catalogRefreshKey = 0,
+): RunComposerBindings {
   const transport = useTransport();
 
   // --- Skills ---
@@ -222,6 +224,19 @@ export function useRunComposerBindings(): RunComposerBindings {
     }
     setReloadToken((token) => token + 1);
   }, []);
+
+  // Provider-key setup happens in the Settings destination. The desktop keeps
+  // the Run destination mounted while Settings is open so an in-progress draft
+  // survives the round trip; this token is the corresponding data seam that
+  // refreshes the already-mounted catalog once Settings confirms a key write.
+  // Do not refetch on the initial mount: the normal catalog effect above is
+  // already responsible for that first load.
+  const seenCatalogRefreshKey = useRef(catalogRefreshKey);
+  useEffect(() => {
+    if (seenCatalogRefreshKey.current === catalogRefreshKey) return;
+    seenCatalogRefreshKey.current = catalogRefreshKey;
+    refresh();
+  }, [catalogRefreshKey, refresh]);
 
   useEffect(() => {
     let cancelled = false;

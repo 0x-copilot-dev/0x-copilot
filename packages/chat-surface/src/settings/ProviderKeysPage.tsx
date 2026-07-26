@@ -66,6 +66,12 @@ export interface ProviderKeysPageProps {
    */
   readonly onToast?: (message: string) => void;
   /**
+   * Fired after a provider-key write succeeds. Hosts use this to refresh
+   * already-mounted model pickers without making this presentation component
+   * aware of routing or transport caches.
+   */
+  readonly onProviderKeysChanged?: () => void;
+  /**
    * Fallback default-model chips per provider slug. The summary now carries a
    * server-projected `default_model` (PRD-F PR-F.5) which the row prefers;
    * these chips only fill in for older servers / keys stored without a model.
@@ -232,6 +238,7 @@ export function ProviderKeysPage({
   port,
   providers = PROVIDER_CATALOG,
   onToast,
+  onProviderKeysChanged,
   modelChips,
 }: ProviderKeysPageProps): ReactElement {
   const [keys, setKeys] = useState<readonly ProviderKeySummary[] | null>(null);
@@ -319,6 +326,11 @@ export function ProviderKeysPage({
           baseUrl,
           label,
         });
+        // Let the host refresh any still-mounted model picker now that the
+        // credential write is authoritative. This is intentionally after the
+        // successful save (and before the best-effort default-model write), so
+        // a failed secondary preference write never makes the picker stale.
+        onProviderKeysChanged?.();
         setKeys((prev) => [
           ...(prev ?? []).filter((key) => key.provider !== summary.provider),
           summary,
@@ -345,7 +357,7 @@ export function ProviderKeysPage({
               : `${target.entry.label} key ${keyVerb}.`,
         );
       },
-    [port, onToast],
+    [port, onToast, onProviderKeysChanged],
   );
 
   const handleRemove = useCallback(
@@ -368,6 +380,7 @@ export function ProviderKeysPage({
             delete next[entry.id];
             return next;
           });
+          onProviderKeysChanged?.();
           onToast?.(`${entry.label} key removed.`);
         })
         .catch((err: unknown) => {
@@ -384,7 +397,7 @@ export function ProviderKeysPage({
           });
         });
     },
-    [port, onToast, removing],
+    [port, onToast, onProviderKeysChanged, removing],
   );
 
   // Row model chip (PRD-F PR-F.5). The freshest in-session Add-flow pick wins;

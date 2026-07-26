@@ -233,6 +233,10 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
   // the user's in-surface tab clicks back here.
   const [settingsSection, setSettingsSection] =
     useState<SettingsSectionSlug | null>(null);
+  // Settings and Run stay mounted during a provider-key setup round trip so
+  // draft text survives. This revision tells the hidden Run composer to reload
+  // the model catalog after a successful Settings mutation.
+  const [providerKeysRevision, setProviderKeysRevision] = useState(0);
   // PR-6.6: the ⌘K command palette open state is lifted here so ⌘K flows through
   // a SINGLE listener (bootstrap's `useShellShortcuts`, FR-6.14). PaletteHost is
   // now controlled (`open`/`onOpenChange`) and no longer mounts its own
@@ -396,12 +400,20 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // PR-6.4: controlled section so the palette can deep-link Settings.
             activeSection={settingsSection}
             onSectionChange={setSettingsSection}
+            onProviderKeysChanged={() =>
+              setProviderKeysRevision((revision) => revision + 1)
+            }
             // PRD-12 D9 — Appearance is a pass-through over the boot controller
             // mounted at the renderer root; Settings no longer owns the state.
             appearanceValue={appearance.value}
             onAppearanceChange={appearance.change}
           />
-        ) : (
+        ) : null}
+        <div
+          hidden={settingsActive}
+          aria-hidden={settingsActive}
+          style={{ width: "100%", height: "100%", minHeight: 0 }}
+        >
           <DestinationOutlet
             destination={activeDestination}
             workspaceStageHost={workspaceStageHost}
@@ -437,8 +449,9 @@ function ChatShellForSession(props: ChatShellForSessionProps): ReactElement {
             // skills link → the Skills surface (slug `tools`).
             onOpenConnectors={() => handleNavigate("connectors")}
             onOpenSkills={() => handleNavigate("tools")}
+            providerKeysRevision={providerKeysRevision}
           />
-        )}
+        </div>
       </ChatShell>
       {/* PR-6.4: the global ⌘K palette + its topbar trigger. Mounted once at the
           shell root so ⌘K is global and the trigger overlays the topbar band.

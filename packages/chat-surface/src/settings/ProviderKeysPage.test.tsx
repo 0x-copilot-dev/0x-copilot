@@ -194,7 +194,14 @@ describe("<ProviderKeysPage>", () => {
   it("adds a key through the flow, storing the plaintext once and toasting", async () => {
     const port = makePort();
     const onToast = vi.fn();
-    render(<ProviderKeysPage port={port} onToast={onToast} />);
+    const onProviderKeysChanged = vi.fn();
+    render(
+      <ProviderKeysPage
+        port={port}
+        onToast={onToast}
+        onProviderKeysChanged={onProviderKeysChanged}
+      />,
+    );
 
     fireEvent.click(await screen.findByTestId("provider-add-openai"));
     fireEvent.change(screen.getByTestId("add-key-input"), {
@@ -216,6 +223,7 @@ describe("<ProviderKeysPage>", () => {
       "gpt-4o",
     );
     expect(onToast).toHaveBeenCalledWith("OpenAI key added.");
+    expect(onProviderKeysChanged).toHaveBeenCalledTimes(1);
   });
 
   it("persists the step-3 pick as the workspace default when the port supports it", async () => {

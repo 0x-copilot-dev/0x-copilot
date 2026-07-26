@@ -126,6 +126,12 @@ export interface SettingsMountProps {
   /** PR-6.4: reflect the user's in-surface section clicks back to the host. */
   readonly onSectionChange?: (slug: SettingsSectionSlug) => void;
   /**
+   * Called after a provider-key mutation succeeds. The renderer root uses this
+   * to refresh the still-mounted Run composer's model catalog after the user
+   * returns from Settings.
+   */
+  readonly onProviderKeysChanged?: () => void;
+  /**
    * PRD-12 D9 — the current appearance, owned by the renderer-root boot
    * controller (`useAppearanceSettings`) so it loads at launch and persists. The
    * Appearance section is a pure pass-through over `value` + `onChange`; Settings
@@ -265,6 +271,7 @@ export function SettingsMount({
   onSignOut,
   activeSection,
   onSectionChange,
+  onProviderKeysChanged,
   appearanceValue,
   onAppearanceChange,
 }: SettingsMountProps): ReactElement {
@@ -938,6 +945,7 @@ export function SettingsMount({
           <ProviderKeysPage
             port={providerKeysPort}
             onToast={toast}
+            onProviderKeysChanged={onProviderKeysChanged}
             modelChips={providerModelChips}
           />
         );

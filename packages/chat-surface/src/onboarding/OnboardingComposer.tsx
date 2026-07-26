@@ -77,6 +77,12 @@ export interface OnboardingComposerProps {
   readonly onModelChange: (id: string) => void;
   readonly onAddCustomModel?: (slug: string) => void;
   /**
+   * Model-popover footer deep-link → Settings → Provider keys. When supplied,
+   * this deliberately takes precedence over the inline key-form fallback.
+   * Forwarded verbatim to {@link AssistantComposer} → `ModelPill`.
+   */
+  readonly onAddProviderKey?: () => void;
+  /**
    * When set, the composer's ModelPill "Add a provider key" opens an inline
    * `<KeyForm>` sub-view inside the model popover (saved through this port).
    * Forwarded verbatim to {@link AssistantComposer}.
@@ -141,6 +147,7 @@ function OnboardingComposerInner(
     selectedModel,
     onModelChange,
     onAddCustomModel,
+    onAddProviderKey,
     providerKeysPort,
     onProviderKeyAdded,
     onGetLocalModels,
@@ -261,6 +268,7 @@ function OnboardingComposerInner(
         selectedModel={selectedModel}
         onModelChange={onModelChange}
         onAddCustomModel={onAddCustomModel}
+        onAddProviderKey={onAddProviderKey}
         providerKeysPort={providerKeysPort}
         onProviderKeyAdded={onProviderKeyAdded}
         onGetLocalModels={onGetLocalModels}

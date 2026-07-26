@@ -68,6 +68,8 @@ export interface RunEmptyComposerProps {
    * of the `onAddKey` deep-link.
    */
   readonly providerKeysPort?: ProviderKeysPort;
+  /** Bumped after a Settings → Provider keys write so the mounted catalog reloads. */
+  readonly catalogRefreshKey?: number;
   /**
    * Open Settings → Local models. Drives the model popover's "Get local models
    * →" footer link — the on-device sibling of the "Add a provider key" link.
@@ -83,6 +85,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     onOpenSkills,
     connectorsPort,
     providerKeysPort,
+    catalogRefreshKey,
     onGetLocalModels,
   } = props;
 
@@ -103,7 +106,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     refresh: refreshCatalog,
     localModelSizes,
     renderPlusMenu,
-  } = useRunComposerBindings();
+  } = useRunComposerBindings(catalogRefreshKey);
 
   // Provider-key writes must re-drive the composer's model catalog. The inline
   // "Add a provider key" form in the model popover calls this port's `save`, so
@@ -198,12 +201,10 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       onRemoveSkill={onRemoveSkill}
       onClearSkills={onClearSkills}
       toolsTrigger={connectorsTrigger}
-      // Inline "Add a provider key" form inside the model popover (host-owned
-      // provider-keys surface); unset ⇒ the pill keeps its `onAddKey` deep-link.
-      // NOTE: this mount is OnboardingComposer, which does not yet forward
-      // `onAddProviderKey` to its inner AssistantComposer — the empty-state's
-      // hero add-key already navigates (onAddKey below), so the pill footer keeps
-      // the inline form here until OnboardingComposer threads the deep-link.
+      // Settings is the one provider-key setup surface. Keep the inline port as
+      // a defensive fallback for a host that does not implement navigation, but
+      // the supplied deep-link below always wins in the desktop app.
+      onAddProviderKey={ctx.onOpenModelSettings}
       providerKeysPort={wrappedProviderKeysPort}
       // Model popover footer → Settings → Local models. Same deep-link idiom as
       // the provider-keys CTA, just the other half of the picker.

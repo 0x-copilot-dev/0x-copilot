@@ -34,9 +34,10 @@
 //   - PR-3.8 subagents / PR-3.9 streaming / PR-3.10 approvals: consume the same
 //     `session.events` projection + the surface `pendingDiff`/approve/reject
 //     props `ThreadCanvas` already exposes.
-//   - PR-3.11 empty/multi-run (DONE): `session.runs` + `session.selectRun` back
-//     the `RunMultiSelect` (mounted after the header when `runs.length > 1`),
-//     and `RunEmptyState` (goal composer) mounts in the canvas slot when
+//   - PR-3.11 empty/multi-run (DONE): `session.runs` still supports internal
+//     run rebinding (for direct links and pending-work review), while the
+//     cockpit deliberately omits a visible run-history strip. `RunEmptyState`
+//     mounts in the canvas slot when
 //     `session.runId === null`. Starting a goal binds the fresh run through the
 //     `runId` seam (`startedRunId` feeds `useRunSession.runId`), so empty→live
 //     swaps the slot content IN PLACE without remounting the shell (FR-3.25).
@@ -67,6 +68,8 @@ import {
   type RunId,
   type SourceEntry,
   type SourcesProjectionV2,
+  type SubagentEntry,
+  type SubagentListResponse,
   type SurfaceEdits,
 } from "@0x-copilot/api-types";
 import { isArtifactTransport } from "@0x-copilot/chat-transport";
@@ -171,17 +174,14 @@ import {
 // POST. Optional — hosts that have not wired a launcher pass nothing and the card
 // degrades to an inert (but visible) gate.
 import type { McpAuthPort } from "./mcpAuthPort";
-// PR-3.11: the two prototype-gap states — the empty/idle goal composer
-// (FR-3.25) and the multi-run selector (FR-3.26). Both mount inside this shell
-// (no separate host remount): the empty state binds a freshly-started run via
-// the `runId` seam, and the selector rebinds the session via `selectRun`.
+// PR-3.11: the empty/idle goal composer (FR-3.25) mounts inside this shell (no
+// separate host remount) and binds a freshly-started run via the `runId` seam.
 import { RunEmptyState, type StartRunError } from "./RunEmptyState";
 // PRD-04: pure selector projecting proposed surface diffs off the SAME single
 // canonical event stream (FR-3.3). Feeds the on-surface Approve/Reject controls
 // in TcSurfaceMount (via ThreadCanvas.pendingDiff); no second subscription.
 import { projectSurfaceDiffs } from "./_surfaceDiffs";
 import { RunHeader } from "./RunHeader";
-import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import { projectFocusPlan } from "./FocusPlan";
 import type { SourceRowSlot } from "../../workspace";
@@ -206,6 +206,7 @@ const EMPTY_RECEIPT_V2: ReceiptV2Projection = {
 const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
   new Map();
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
+const EMPTY_SUBAGENT_ARCHIVE: ReadonlyMap<string, SubagentEntry> = new Map();
 // E2 D3: historic rows are selected through a read-only compatibility reader.
 // Kept stable while the Studio canvas flag is off so the legacy cockpit remains
 // byte-identical and never inspects older surface envelopes on that path.
@@ -218,6 +219,104 @@ const EMPTY_LEGACY_V2_REPLAY: LegacyV2ReplayProjection = {
 const EFFECT_STAGE_URI_PREFIX = "effect-stage://";
 const RECEIPT_V2_URI_PREFIX = "receipt-v2://";
 const SOURCE_OPEN_UNAVAILABLE = "This source is no longer available.";
+
+interface ConversationSubagentArchive {
+  /** Archive plus any live entries remembered during this cockpit session. */
+  readonly subagents: ReadonlyMap<string, SubagentEntry>;
+  readonly loading: boolean;
+  readonly error: string | null;
+}
+
+/**
+ * The run event stream is intentionally run-scoped: binding a new message's
+ * run replaces `session.events`. The Agents tab, however, is conversation
+ * scoped. Seed it from the conversation archive and retain every live entry we
+ * have already observed; the current stream always wins for the same task.
+ */
+function useConversationSubagentArchive(
+  transport: ReturnType<typeof useTransport>,
+  conversationId: ConversationId,
+  liveSubagents: ReadonlyMap<string, SubagentEntry>,
+): ConversationSubagentArchive {
+  const [archived, setArchived] = useState<ReadonlyMap<string, SubagentEntry>>(
+    EMPTY_SUBAGENT_ARCHIVE,
+  );
+  const [rememberedLive, setRememberedLive] = useState<
+    ReadonlyMap<string, SubagentEntry>
+  >(EMPTY_SUBAGENT_ARCHIVE);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (conversationId === "new") {
+      setArchived(EMPTY_SUBAGENT_ARCHIVE);
+      setRememberedLive(EMPTY_SUBAGENT_ARCHIVE);
+      setLoading(false);
+      setError(null);
+      return undefined;
+    }
+
+    let cancelled = false;
+    setArchived(EMPTY_SUBAGENT_ARCHIVE);
+    setRememberedLive(EMPTY_SUBAGENT_ARCHIVE);
+    setLoading(true);
+    setError(null);
+    void transport
+      .request<SubagentListResponse>({
+        method: "GET",
+        path: `/v1/agent/conversations/${encodeURIComponent(conversationId)}/subagents`,
+      })
+      .then((response) => {
+        if (cancelled) return;
+        setArchived(
+          new Map(
+            Array.isArray(response?.subagents)
+              ? response.subagents.map((entry) => [entry.task_id, entry])
+              : [],
+          ),
+        );
+      })
+      .catch((reason: unknown) => {
+        if (cancelled) return;
+        setError(
+          reason instanceof Error && reason.message !== ""
+            ? reason.message
+            : "Could not load earlier subagents.",
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [conversationId, transport]);
+
+  useEffect(() => {
+    if (conversationId === "new" || liveSubagents.size === 0) return;
+    setRememberedLive((previous) => {
+      const next = new Map(previous);
+      let changed = false;
+      for (const [taskId, entry] of liveSubagents) {
+        if (next.get(taskId) !== entry) {
+          next.set(taskId, entry);
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [conversationId, liveSubagents]);
+
+  const subagents = useMemo(() => {
+    const merged = new Map(archived);
+    // A task that reached the live stream is fresher than the archive response.
+    for (const [taskId, entry] of rememberedLive) merged.set(taskId, entry);
+    for (const [taskId, entry] of liveSubagents) merged.set(taskId, entry);
+    return merged;
+  }, [archived, rememberedLive, liveSubagents]);
+
+  return { subagents, loading, error };
+}
 
 function effectStageUri(stageId: string): string {
   return `${EFFECT_STAGE_URI_PREFIX}${encodeURIComponent(stageId)}`;
@@ -1106,6 +1205,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const subagentProjection = useMemo(
     () => projectSubagents(session.events),
     [session.events],
+  );
+  const conversationSubagents = useConversationSubagentArchive(
+    transport,
+    conversationId,
+    subagentProjection.subagents,
   );
 
   // The detailed tool/reasoning timeline is another pure view of the same
@@ -2651,7 +2755,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     <RunWorkspaceRail
       mode={mode}
       chatSlot={chatSlot}
-      subagents={subagentProjection.subagents}
+      subagents={conversationSubagents.subagents}
+      subagentsLoading={conversationSubagents.loading}
+      subagentsError={conversationSubagents.error}
       subagentActivitiesByTask={subagentActivityProjection.activitiesByTask}
       sources={sources}
       sourcesLoading={sourcesLoading}
@@ -2831,16 +2937,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // pulses; terminal / null → absent.
         runStatus={session.runStatus}
         status={v2HeaderStatus}
-      />
-
-      {/* PR-3.11 (FR-3.26): the multi-run selector. It renders NOTHING for a
-          conversation with ≤1 run (single/zero-run cockpit stays chrome-free);
-          with >1 run it lets the user rebind the whole cockpit to another run
-          via `handleSelectRun` → `useRunSession.selectRun`. */}
-      <RunMultiSelect
-        runs={session.runs}
-        selectedRunId={session.runId}
-        onSelectRun={handleSelectRun}
       />
 
       {session.error !== null ? (
