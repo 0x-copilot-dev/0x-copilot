@@ -438,14 +438,16 @@ class PostgresMcpStore:
                 cur.execute(
                     """
                     INSERT INTO mcp_servers (
-                      server_id, org_id, user_id, name, display_name, url,
+                      server_id, org_id, user_id, connector_slug, name,
+                      display_name, url,
                       transport, auth_mode, auth_state, health, enabled,
                       required_scopes, last_discovery, oauth_client,
                       logo_url, brand_color, scopes_summary,
                       default_scopes, admin_managed,
                       created_at, updated_at
                     ) VALUES (
-                      %(server_id)s, %(org_id)s, %(user_id)s, %(name)s,
+                      %(server_id)s, %(org_id)s, %(user_id)s,
+                      %(connector_slug)s, %(name)s,
                       %(display_name)s, %(url)s, %(transport)s, %(auth_mode)s,
                       %(auth_state)s, %(health)s, %(enabled)s,
                       %(required_scopes)s, %(last_discovery)s, %(oauth_client)s,
@@ -786,6 +788,7 @@ class PostgresMcpStore:
             "server_id": record.server_id,
             "org_id": record.org_id,
             "user_id": record.user_id,
+            "connector_slug": record.connector_slug,
             "name": record.name,
             "display_name": record.display_name,
             "url": record.url,
@@ -815,6 +818,7 @@ class PostgresMcpStore:
             server_id=str(row["server_id"]),
             org_id=str(row["org_id"]),
             user_id=str(row["user_id"]),
+            connector_slug=cls._optional_str(row.get("connector_slug")),
             name=str(row["name"]),
             display_name=str(row["display_name"]),
             url=str(row["url"]),

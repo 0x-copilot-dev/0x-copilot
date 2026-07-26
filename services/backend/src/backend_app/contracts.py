@@ -85,6 +85,28 @@ class Validators:
         return slug
 
     @staticmethod
+    def normalize_connector_slug(value: object) -> str:
+        """Normalize a connector slug, keeping dashes.
+
+        A connector slug is not a name we are free to canonicalize — it is a
+        key into a catalog someone else wrote, and `cloudflare-bindings` is
+        spelled with a dash there. Running it through
+        :meth:`normalize_skill_slug` (which collapses dashes to underscores,
+        correctly, for skill *names*) turned it into `cloudflare_bindings`,
+        which matched no catalog entry: two of the thirteen curated servers
+        could not be installed at all.
+
+        So this lowercases and trims, and otherwise leaves the caller's slug
+        alone — the catalog lookup is the authority on whether it exists.
+        """
+
+        text = Validators.normalize_text(value).lower().replace(" ", "-")
+        slug = re.sub(r"[^a-z0-9_-]+", "-", text).strip("-_")
+        if not slug or not _SLUG_PATTERN.fullmatch(slug):
+            raise ValueError("connector slug must be a stable slug")
+        return slug
+
+    @staticmethod
     def normalize_text(value: object) -> str:
         if not isinstance(value, str):
             raise ValueError("value must be a string")
@@ -258,6 +280,21 @@ class McpServerRecord(BackendContract):
     server_id: str = Field(default_factory=lambda: uuid4().hex)
     org_id: str
     user_id: str
+    # The connector this installation IS, as opposed to how it was installed.
+    #
+    # ``server_id`` is an installation detail whose shape depends on which
+    # surface created the row: ``seed:<slug>`` from the catalog install,
+    # ``desktop:<vendor>:<product>`` from the desktop coordinator. Product
+    # logic that needs to know "which connector is this" used to recover the
+    # answer by parsing that id, falling back to ``name`` — and ``name`` is
+    # already lossy (both mint paths write ``slug.replace("-", "_")``), so the
+    # same connector resolved to ``cloudflare-bindings`` when seed-installed
+    # and ``cloudflare_bindings`` when profile-installed.
+    #
+    # ``None`` on rows written before this field existed; readers fall back to
+    # the historical derivation, which is what makes the change additive —
+    # no id is ever renumbered and no existing installation is orphaned.
+    connector_slug: str | None = None
     name: str
     display_name: str
     url: str
@@ -636,7 +673,8 @@ class InstallMcpServerRequest(BackendContract):
     @field_validator("slug")
     @classmethod
     def _normalize_slug(cls, value: object) -> str:
-        return Validators.normalize_skill_slug(value)
+        # Connector slug, not a skill name — dashes are part of the catalog key.
+        return Validators.normalize_connector_slug(value)
 
 
 class McpAuthSessionRecord(BackendContract):

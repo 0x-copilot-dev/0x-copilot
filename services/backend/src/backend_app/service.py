@@ -429,6 +429,8 @@ class McpRegistryService:
             server_id=entry.server_id,
             org_id=request.org_id,
             user_id=request.user_id,
+            # The identity, stated rather than recoverable from the id.
+            connector_slug=entry.slug,
             name=entry.slug.replace("-", "_"),
             display_name=entry.display_name,
             url=entry.url,
