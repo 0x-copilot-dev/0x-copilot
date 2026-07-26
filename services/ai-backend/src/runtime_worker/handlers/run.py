@@ -259,10 +259,9 @@ class RuntimeRunHandler:
         self._artifact_reference_store = artifact_reference_store
         self._workspace_host_sessions = workspace_host_sessions
         self._workspace_overlay_store = workspace_overlay_store
-        # D3's provider-specific complete-patch collector is deliberately an
-        # injected worker authority.  When it is absent, the sandbox factory is
-        # absent too; we never run an overlay snapshot without a reviewable
-        # patch outcome.  No C1 importer is accepted here.
+        # An injected collector is a test/extension seam. The file-native D3
+        # composition otherwise constructs its own A2-backed collector; it
+        # still accepts no C1 importer and never applies a patch at completion.
         self._sandbox_patch_collector = sandbox_patch_collector
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
@@ -354,6 +353,16 @@ class RuntimeRunHandler:
             raise AgentRuntimeError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 "Run command user_id does not match persisted run.",
+                retryable=False,
+                correlation_id=command.trace_id,
+            )
+        if not _runtime_context_matches_persisted_run(command.runtime_context, run):
+            # Queue payloads are transport, not authority. Refuse a stale or
+            # forged context before budgets, snapshot reads, provider attestation,
+            # or any external sandbox work can begin.
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Run command runtime context does not match persisted run.",
                 retryable=False,
                 correlation_id=command.trace_id,
             )
@@ -1170,6 +1179,7 @@ class RuntimeRunHandler:
             artifact_service=self.artifact_service,  # type: ignore[arg-type]
             artifact_blob_store=self._artifact_blob_store,  # type: ignore[arg-type]
             workspace_overlay_store=self._workspace_overlay_store,  # type: ignore[arg-type]
+            run_store=self.persistence,
             patch_collector=self._sandbox_patch_collector,  # type: ignore[arg-type]
             env=self._capability_env,
             provider_overrides=self._sandbox_provider_overrides,  # type: ignore[arg-type]
@@ -2525,6 +2535,20 @@ class RuntimeRunHandler:
         """Return the string value of ``key`` from ``context.trace_metadata``, or ``None`` if absent or blank."""
         value = context.trace_metadata.get(key)
         return value if isinstance(value, str) and value.strip() else None
+
+
+def _runtime_context_matches_persisted_run(
+    context: AgentRuntimeContext, run: RunRecord
+) -> bool:
+    """Require the queued execution context to be the run's persisted scope."""
+
+    persisted = run.runtime_context
+    return (
+        persisted is not None
+        and context.run_id == run.run_id == persisted.run_id
+        and context.org_id == run.org_id == persisted.org_id
+        and context.user_id == run.user_id == persisted.user_id
+    )
 
 
 def _termination_reason_for(exc: BaseException) -> TerminationReason:

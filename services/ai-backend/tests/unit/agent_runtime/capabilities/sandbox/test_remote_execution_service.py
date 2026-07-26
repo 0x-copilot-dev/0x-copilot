@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 
@@ -12,6 +13,8 @@ from agent_runtime.capabilities.sandbox.provider_registry import (
     InMemorySandboxSessionStore,
     SandboxProviderRegistry,
 )
+from agent_runtime.capabilities.sandbox.cleanup_store import FileSandboxCleanupStore
+from runtime_adapters.file._paths import FileStoreLayout
 from agent_runtime.capabilities.sandbox.remote_execution_service import (
     RemoteExecutionService,
     SandboxEventName,
@@ -54,6 +57,52 @@ def _service(provider=None, sink=None):
         ),
         provider,
     )
+
+
+class _FailingSessionStore:
+    async def upsert(self, _session) -> None:
+        raise OSError("simulated disk failure")
+
+    async def get(self, _session_id):
+        return None
+
+    async def list_non_terminal(self):
+        return ()
+
+    async def delete(self, _session_id) -> None:
+        return None
+
+
+async def test_create_persists_cleanup_duty_before_session_projection(
+    tmp_path: Path,
+) -> None:
+    """A post-create session-write failure leaves durable provider teardown data."""
+
+    config = active_config()
+    provider = FakeSandboxProvider()
+    registry = SandboxProviderRegistry.from_config(
+        config,
+        overrides={config.provider: provider},  # type: ignore[dict-item]
+    )
+    cleanup = FileSandboxCleanupStore(layout=FileStoreLayout(tmp_path))
+    service = RemoteExecutionService(
+        registry=registry,
+        config=config,
+        session_store=_FailingSessionStore(),  # type: ignore[arg-type]
+        cleanup_store=cleanup,
+    )
+
+    with pytest.raises(SandboxError, match="could not be recorded safely"):
+        await service.create(make_request())
+
+    duty = await cleanup.get("sandbox:run-1")
+    assert duty is not None
+    assert duty.run_id == "run-1"
+    assert duty.provider_session_ref == "fake-idem-1"
+    assert duty.state == "cleanup_pending"
+    # The durable duty is intentional: provider termination was not attempted
+    # merely because the session index write failed.
+    assert provider.terminated_refs == []
 
 
 class TestCreateTeardown:

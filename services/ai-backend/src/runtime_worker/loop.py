@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 import logging
 from typing import Protocol
@@ -124,6 +124,8 @@ class RuntimeWorker:
         workspace_overlay_store: object | None = None,
         workspace_attestation_registry: DesktopWorkspaceAttestationRegistry
         | None = None,
+        sandbox_provider_overrides: Mapping[object, object] | None = None,
+        capability_env: Mapping[str, str] | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -175,6 +177,8 @@ class RuntimeWorker:
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
         self.artifact_service = artifact_service
+        self._sandbox_provider_overrides = sandbox_provider_overrides
+        self._capability_env = capability_env
         if workspace_host_sessions is None and (
             callable(getattr(artifact_blob_store, "put_stream", None))
             and callable(getattr(artifact_reference_store, "acquire", None))
@@ -227,6 +231,8 @@ class RuntimeWorker:
             artifact_reference_store=artifact_reference_store,
             workspace_host_sessions=workspace_host_sessions,
             workspace_overlay_store=self.workspace_overlay_store,
+            sandbox_provider_overrides=sandbox_provider_overrides,
+            capability_env=capability_env,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -310,6 +316,7 @@ class RuntimeWorker:
             )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
+        self._sandbox_recovery_reaper = self._build_sandbox_recovery_reaper()
 
     def _validate_e2_rollout_startup(
         self,
@@ -477,6 +484,7 @@ class RuntimeWorker:
     async def run_once(self) -> bool:
         """Claim and process one command, returning whether work was found."""
 
+        await self._reap_sandbox_cleanup()
         claim = await self._claim_next()
         if claim is None:
             return False
@@ -489,6 +497,7 @@ class RuntimeWorker:
 
         processed = 0
         while True:
+            await self._reap_sandbox_cleanup()
             claims = await self._claim_batch()
             if not claims:
                 return processed
@@ -496,6 +505,28 @@ class RuntimeWorker:
                 *(self._handle_claim_with_limit(claim) for claim in claims)
             )
             processed += len(claims)
+
+    def _build_sandbox_recovery_reaper(self) -> object | None:
+        """Construct only the strict file-native D3 reaper, otherwise omit it."""
+
+        from runtime_worker.sandbox_composition import (  # noqa: PLC0415
+            FileSandboxRecoveryReaper,
+        )
+
+        return FileSandboxRecoveryReaper.compose(
+            file_store=self.event_store,
+            env=self._capability_env,
+            provider_overrides=self._sandbox_provider_overrides,  # type: ignore[arg-type]
+        )
+
+    async def _reap_sandbox_cleanup(self) -> None:
+        reaper = self._sandbox_recovery_reaper
+        if reaper is None:
+            return
+        try:
+            await reaper.run_once()  # type: ignore[union-attr]
+        except Exception:  # noqa: BLE001 - duty remains durable for next loop
+            self.logger.exception("sandbox cleanup reaper pass failed")
 
     async def _claim_next(self) -> RuntimeWorkerClaim | None:
         """Attempt to claim one command from the queue; returns ``None`` when the queue is empty."""

@@ -9,6 +9,7 @@ manifest or a host filesystem path.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Protocol
 
 from agent_runtime.capabilities.sandbox.snapshot import (
     SandboxSnapshotInput,
@@ -28,6 +29,14 @@ from agent_runtime.capabilities.workspace.errors import WorkspaceOverlayConflict
 from agent_runtime.capabilities.workspace.ports import WorkspaceOverlayStorePort
 
 
+class SandboxVerifiedRunStorePort(Protocol):
+    """Read the persisted run that anchors C1 snapshot ownership."""
+
+    async def get_run(self, *, org_id: str, run_id: str) -> object | None:
+        """Return the persisted run only within its authoritative org scope."""
+        ...
+
+
 @dataclass(frozen=True)
 class RuntimeWorkerOverlaySnapshotPlanAuthority(SandboxSnapshotPlanAuthorityPort):
     """Select only self-contained C1 files from a retained run manifest.
@@ -40,11 +49,21 @@ class RuntimeWorkerOverlaySnapshotPlanAuthority(SandboxSnapshotPlanAuthorityPort
     """
 
     overlay_store: WorkspaceOverlayStorePort
+    run_store: SandboxVerifiedRunStorePort
 
     async def load_plan(
         self, *, identity: SandboxSnapshotIdentity
     ) -> SandboxSnapshotPlan | None:
         try:
+            # The queue/model never chooses C1 ownership.  Resolve the run
+            # through persisted org scope first, then require all three identity
+            # facts to agree with the sealed runtime context before reading its
+            # overlay.  A run id alone is not a tenant boundary.
+            run = await self.run_store.get_run(
+                org_id=identity.org_id, run_id=identity.run_id
+            )
+            if not _run_matches_identity(run, identity):
+                return None
             current = await self.overlay_store.get_manifest(run_id=identity.run_id)
             if current.run_id != identity.run_id:
                 return None
@@ -54,6 +73,8 @@ class RuntimeWorkerOverlaySnapshotPlanAuthority(SandboxSnapshotPlanAuthorityPort
                 run_id=identity.run_id, version=current.version
             )
         except WorkspaceOverlayConflictError:
+            return None
+        except Exception:  # noqa: BLE001 - authority/storage failures fail closed
             return None
         if (
             retained is None
@@ -80,4 +101,28 @@ class RuntimeWorkerOverlaySnapshotPlanAuthority(SandboxSnapshotPlanAuthorityPort
         )
 
 
-__all__ = ("RuntimeWorkerOverlaySnapshotPlanAuthority",)
+def _run_matches_identity(
+    run: object | None, identity: SandboxSnapshotIdentity
+) -> bool:
+    """Check persisted run and persisted runtime context agree with D3 scope."""
+
+    if run is None:
+        return False
+    if (
+        getattr(run, "run_id", None) != identity.run_id
+        or getattr(run, "org_id", None) != identity.org_id
+        or getattr(run, "user_id", None) != identity.user_id
+    ):
+        return False
+    context = getattr(run, "runtime_context", None)
+    return (
+        getattr(context, "run_id", None) == identity.run_id
+        and getattr(context, "org_id", None) == identity.org_id
+        and getattr(context, "user_id", None) == identity.user_id
+    )
+
+
+__all__ = (
+    "RuntimeWorkerOverlaySnapshotPlanAuthority",
+    "SandboxVerifiedRunStorePort",
+)
