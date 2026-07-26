@@ -120,6 +120,22 @@ async def test_authority_refuses_a_current_manifest_without_immutable_history() 
     )
 
 
+async def test_authority_treats_no_c1_selection_as_absent_not_empty_plan() -> None:
+    authority = RuntimeWorkerOverlaySnapshotPlanAuthority(
+        overlay_store=InMemoryWorkspaceOverlayStore(),
+        run_store=_RunStore(_run()),
+    )
+
+    assert (
+        await authority.load_plan(
+            identity=SandboxSnapshotIdentity(
+                run_id="run_1", org_id="org_1", user_id="user_1"
+            )
+        )
+        is None
+    )
+
+
 async def test_authority_rejects_persisted_context_with_another_user_or_run() -> None:
     authority = RuntimeWorkerOverlaySnapshotPlanAuthority(
         overlay_store=InMemoryWorkspaceOverlayStore(),

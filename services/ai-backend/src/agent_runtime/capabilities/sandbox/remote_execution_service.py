@@ -273,6 +273,7 @@ class RemoteExecutionService:
             cleaned = await self._terminate_untracked(
                 run_id=request.run_id,
                 provider_session_ref=session.provider_session_ref,
+                operation_id=request.operation_id,
             )
             if cleaned:
                 raise SandboxError(
@@ -285,7 +286,11 @@ class RemoteExecutionService:
             ) from exc
 
     async def _terminate_untracked(
-        self, *, run_id: str, provider_session_ref: str
+        self,
+        *,
+        run_id: str,
+        provider_session_ref: str,
+        operation_id: str,
     ) -> bool:
         self._emit(SandboxEventName.CLEANUP_STARTED, run_id)
         try:
@@ -293,6 +298,7 @@ class RemoteExecutionService:
         except Exception:  # noqa: BLE001 - the caller reports indeterminate
             self._emit(SandboxEventName.CLEANUP_PENDING, run_id)
             return False
+        await self._mark_cleanup_cleaned(operation_id)
         self._emit(SandboxEventName.CLEANUP_CONFIRMED, run_id)
         return True
 

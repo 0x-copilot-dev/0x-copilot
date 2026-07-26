@@ -67,8 +67,12 @@ class RuntimeWorkerOverlaySnapshotPlanAuthority(SandboxSnapshotPlanAuthorityPort
             current = await self.overlay_store.get_manifest(run_id=identity.run_id)
             if current.run_id != identity.run_id:
                 return None
+            # An absent C1 overlay is an absent D3 selection, not approval for
+            # an empty provider workspace.  This is intentionally distinct
+            # from a nonzero retained-version lookup failure below: both fail
+            # closed, but only the latter represents pointer/history loss.
             if current.version == 0:
-                return SandboxSnapshotPlan()
+                return None
             retained = await self.overlay_store.get_manifest_version(
                 run_id=identity.run_id, version=current.version
             )

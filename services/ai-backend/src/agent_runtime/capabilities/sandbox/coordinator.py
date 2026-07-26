@@ -82,6 +82,14 @@ class SandboxLifecycleCoordinator:
     async def run(self, request: SandboxRunRequest) -> SandboxRunResult:
         """Run an immutable request, or fail closed instead of replaying it."""
 
+        # This is the final D3 execution boundary.  Do not create a provider
+        # session for an empty snapshot even if a malformed/internal caller
+        # bypasses the operation adapter and plan materializer.
+        if not request.create_request.snapshot.entries:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            )
         WorkspaceManifestBuilder.verify_manifest(
             request.create_request.snapshot, limits=self._limits
         )

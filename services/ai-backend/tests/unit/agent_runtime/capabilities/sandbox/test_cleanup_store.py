@@ -37,6 +37,15 @@ def _record_path(layout: FileStoreLayout, operation_id: str) -> Path:
     return layout.root / "sandbox" / "cleanup" / f"{layout.safe_key(operation_id)}.json"
 
 
+def _recovery_record_path(layout: FileStoreLayout, operation_id: str) -> Path:
+    return (
+        layout.root
+        / "sandbox"
+        / "cleanup-recovery"
+        / f"{layout.safe_key(operation_id)}.json"
+    )
+
+
 @pytest.mark.asyncio
 class TestFileSandboxCleanupStore:
     async def test_fsyncs_the_record_and_parent_directory(
@@ -101,6 +110,42 @@ class TestFileSandboxCleanupStore:
         assert await store.get(duty.operation_id) == cleaned
         with pytest.raises(SandboxCleanupScheduleError):
             await store.transition(record=cleaned, expected_transition_no=1)
+
+    async def test_primary_write_failure_is_retained_in_recovery_journal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A failed normal duty write cannot lose an existing provider ref."""
+
+        layout = FileStoreLayout(tmp_path / "agent-data")
+        duty = _schedule()
+        store = FileSandboxCleanupStore(layout=layout)
+
+        def fail_primary_write(*_args, **_kwargs) -> None:
+            raise SandboxFileRecordError("simulated primary duty failure")
+
+        monkeypatch.setattr(store._records, "write", fail_primary_write)  # noqa: SLF001 - fault injection
+        with pytest.raises(SandboxCleanupScheduleError, match="recovery journal"):
+            await store.schedule(duty)
+
+        recovery_path = _recovery_record_path(layout, duty.operation_id)
+        assert recovery_path.is_file()
+        reopened = FileSandboxCleanupStore(layout=FileStoreLayout(layout.root))
+        assert await reopened.get(duty.operation_id) == duty
+        assert await reopened.list_pending() == (duty,)
+
+        cleaned = duty.model_copy(
+            update={
+                "state": "cleaned",
+                "transition_no": 1,
+                "attempts": 1,
+                "updated_at": duty.updated_at + timedelta(seconds=1),
+            }
+        )
+        assert (
+            await reopened.transition(record=cleaned, expected_transition_no=0)
+            == cleaned
+        )
+        assert await reopened.list_pending() == ()
 
     async def test_serializes_duplicate_schedule_and_fails_closed_on_corruption(
         self, tmp_path: Path

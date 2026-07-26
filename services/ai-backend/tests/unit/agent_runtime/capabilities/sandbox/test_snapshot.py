@@ -72,6 +72,21 @@ def _resolved(
 
 
 class TestSandboxSnapshotBoundary:
+    async def test_refuses_zero_selected_inputs_without_resolving_any_source(
+        self,
+    ) -> None:
+        store = _SnapshotStore({})
+
+        with pytest.raises(SandboxError) as error:
+            await SandboxSnapshotBuilder.materialize(
+                plan=SandboxSnapshotPlan(),
+                store=store,
+                limits=SandboxSnapshotLimits(),
+            )
+
+        assert error.value.code is SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED
+        assert store.resolved_refs == []
+
     @pytest.mark.parametrize(
         "path",
         [

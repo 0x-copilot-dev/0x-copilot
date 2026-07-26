@@ -88,6 +88,50 @@ _DEPLOYMENT_PROFILE_ENV = "ENTERPRISE_DEPLOYMENT_PROFILE"
 
 
 @dataclass(frozen=True)
+class FileSandboxAuthorityPrerequisites:
+    """The three independently-owned prerequisites for model-visible D3.
+
+    This object is intentionally resolved only by the file-native composition
+    root.  It is not an injectable test/config switch: a provider double or an
+    A2-shaped object must never turn on a model capability before the actual
+    C1/A2 implementations exist.  The current runtime has none of these
+    complete authorities, so ``resolve`` returns ``None`` and D3 remains dark.
+
+    Future work must replace the ``None`` with concrete, verified adapters
+    owned by C1 and A2—not a protocol-shaped mock—and bind all three together:
+
+    * a retained full C1 base-plus-overlay snapshot exporter;
+    * a durable A2 result-and-deliverable publisher; and
+    * an explicit user-triggered C1 patch importer.
+    """
+
+    full_c1_snapshot_exporter: object
+    durable_a2_deliverable_publisher: object
+    user_triggered_c1_patch_importer: object
+
+    @classmethod
+    def resolve(
+        cls,
+        *,
+        runtime_context: AgentRuntimeContext,
+        layout: FileStoreLayout,
+    ) -> "FileSandboxAuthorityPrerequisites | None":
+        """Resolve only complete concrete production authority.
+
+        The present C1 authority exports retained overlay entries only, A2 is
+        not bound to requested deliverables, and no user-triggered C1 importer
+        consumes a sandbox patch.  Deliberately do not synthesize partial
+        objects here: returning ``None`` is the sole honest model posture.
+        ``runtime_context`` and ``layout`` stay in this private resolution
+        boundary so the future implementation derives scope from verified
+        worker facts rather than model arguments.
+        """
+
+        del runtime_context, layout
+        return None
+
+
+@dataclass(frozen=True)
 class SandboxWorkerBundle:
     """One complete, file-native factory for ``run_in_sandbox``.
 
@@ -132,9 +176,19 @@ class SandboxWorkerBundle:
         if values.get(_DEPLOYMENT_PROFILE_ENV, "") != _DESKTOP_PROFILE:
             return None
         layout = _file_layout(file_store)
+        if layout is None:
+            return None
+        prerequisites = FileSandboxAuthorityPrerequisites.resolve(
+            runtime_context=runtime_context,
+            layout=layout,
+        )
+        if prerequisites is None:
+            # Keep the descriptor/tool absent until C1 and A2 supply the full
+            # authority bundle above.  Provider overrides and artifact-service
+            # doubles are intentionally unable to change this answer.
+            return None
         if (
-            layout is None
-            or artifact_service is None
+            artifact_service is None
             or artifact_blob_store is None
             or workspace_overlay_store is None
             or run_store is None
@@ -438,6 +492,7 @@ def _environment() -> dict[str, str]:
 
 
 __all__ = (
+    "FileSandboxAuthorityPrerequisites",
     "FileSandboxRecoveryReaper",
     "FileSandboxWorkerRuntime",
     "SandboxWorkerBundle",

@@ -238,6 +238,15 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                 SandboxErrorCode.SNAPSHOT_INVALID,
                 "Sandbox snapshot is invalid.",
             ) from exc
+        # A model operation is authorized only against a nonempty, sealed C1
+        # selection.  Reject before creating the coordinator request so this
+        # guard holds even if a caller bypassed plan materialization with a
+        # constructed manifest.
+        if not verified.entries:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            )
         raw_entries: list[RawSnapshotEntry] = []
         for entry in verified.entries:
             raw_entries.append(

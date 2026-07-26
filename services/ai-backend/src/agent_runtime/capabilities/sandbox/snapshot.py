@@ -300,6 +300,16 @@ class SandboxSnapshotBuilder:
         store: SandboxSnapshotFileStorePort,
         limits: SandboxSnapshotLimits,
     ) -> SandboxSnapshotManifest:
+        # A command without a selected input set is never an empty-workspace
+        # convenience.  C1 must explicitly authorize at least one immutable
+        # input before D3 can construct a provider-facing manifest.  Keep this
+        # check at the reference-selection boundary so no resolver/provider
+        # sees a zero-input plan.
+        if not plan.entries:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            )
         entries: list[SandboxSnapshotEntry] = []
         total_bytes = 0
         for item in plan.entries:

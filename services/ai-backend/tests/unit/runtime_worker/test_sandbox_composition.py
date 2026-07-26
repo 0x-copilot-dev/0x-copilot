@@ -7,23 +7,16 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
 import inspect
-import json
 from types import SimpleNamespace
 
 import pytest
 
-from agent_runtime.capabilities.operations.context import (
-    OperationContext,
-    VerifiedOperationIdentity,
-)
-from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.sandbox.contracts import SandboxProviderId
 from agent_runtime.capabilities.sandbox.cleanup_store import SandboxCleanupSchedule
 from agent_runtime.capabilities.sandbox.ports import (
     SandboxPatchCollection,
     SandboxPatchCollectorPort,
 )
-from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 from agent_runtime.capabilities.workspace.contracts import (
     BaseExistence,
     BasePrecondition,
@@ -192,27 +185,6 @@ class _TransientTeardownProvider(_RecordingProvider):
         await super().terminate(provider_session_ref)
 
 
-class _ChangedAfterStatBlobStore:
-    """Reports the approved blob metadata but streams altered source bytes."""
-
-    def __init__(self, delegate: InMemoryArtifactBlobStore) -> None:
-        self._delegate = delegate
-
-    async def stat(self, blob_key: str):
-        return await self._delegate.stat(blob_key)
-
-    async def open_stream(self, blob_key: str) -> AsyncIterator[bytes]:
-        del blob_key
-
-        async def _changed() -> AsyncIterator[bytes]:
-            # Same byte length as the approved test blob: this reaches the
-            # sealed store's final digest verification rather than only a
-            # streaming size ceiling.
-            yield b"changed--original-bytes"
-
-        return _changed()
-
-
 @dataclass
 class _HistoryGapOverlayStore:
     manifest: OverlayManifest
@@ -292,256 +264,71 @@ def _bundle(
     )
 
 
-def _bind_context(context: AgentRuntimeContext):
-    return OperationContext.bind_for_run(
-        identity=VerifiedOperationIdentity(
-            org_id=context.org_id,
-            user_id=context.user_id,
-            conversation_id="conv_a",
-            run_id=context.run_id,
-        ),
-        policy_snapshot=ToolUsePolicySnapshot.from_response(workspace=None, user=None),
-        ledger_emitter=None,
-        artifact_service=None,
-        mode=OperationGatewayMode.ENFORCE,
-        canonical_arguments_durable=True,
-    )
-
-
 class TestSandboxWorkerBundle:
-    def test_legacy_default_is_absent_but_file_native_composition_is_exposed(
+    def test_partial_file_native_foundation_keeps_the_model_tool_absent(
         self, tmp_path
     ) -> None:
-        """There is one production route, not a dormant direct-tool fallback."""
+        """No fake provider/A2 surface can bypass the three authority gates."""
 
         context = _context()
         legacy = CapabilityToolWiring(runtime_context=context, env=_ENV)
         assert legacy.sandbox_execute_tool() is None
 
         bundle = _bundle(tmp_path=tmp_path, context=context)
-        assert bundle is not None
-        composed = CapabilityToolWiring(
-            runtime_context=context,
-            env=_ENV,
-            sandbox_tool_factory=bundle,
-        )
-        assert composed.sandbox_execute_tool() is not None
+        assert bundle is None
         construction = inspect.getsource(CapabilityToolWiring.sandbox_execute_tool)
         assert "build_sandbox_backend" not in construction
         assert "RemoteExecutionService" not in construction
 
-    async def test_file_first_bundle_builds_gateway_tool_and_binds_only_verified_run(
+    async def test_fakes_cannot_make_partial_d3_authority_model_visible(
         self, tmp_path
     ) -> None:
+        """A test provider/A2-shaped service is never a production authority."""
+
         context = _context()
         blobs = InMemoryArtifactBlobStore()
         overlays = InMemoryWorkspaceOverlayStore()
         await _seed_overlay(
             overlays=overlays, blobs=blobs, run_id="run_a", content=b"allowed"
         )
-        # A different org/user/run's C1 state is present but cannot be selected:
-        # C1's actual storage key is the verified run id, not a model argument.
-        await _seed_overlay(
-            overlays=overlays,
-            blobs=blobs,
-            run_id="run_b",
-            content=b"other-principal-data",
-        )
         provider = _RecordingProvider()
-        bundle = _bundle(
-            tmp_path=tmp_path,
-            context=context,
-            blobs=blobs,
-            overlays=overlays,
-            provider=provider,
-        )
-
-        assert bundle is not None
-        tool = bundle.build_tool(
-            identity_provider=lambda: SimpleNamespace(
-                run_id="run_a", org_id="org_a", user_id="user_a"
-            )
-        )
-        assert tool is not None
-        token = _bind_context(context)
-        try:
-            payload = json.loads(await tool.ainvoke({"command": "echo:ok"}))
-        finally:
-            OperationContext.unbind(token)
-
-        assert payload["status"] == "completed", payload
-        assert provider.received_bytes == len(b"allowed")
-        assert provider.received_paths == ["/workspace/project/report.csv"]
-        assert provider.create_requests[0].run_id == "run_a"
-
-    async def test_file_native_collector_publishes_patch_but_never_imports_it(
-        self, tmp_path
-    ) -> None:
-        """Normal D3 composition produces a review-only artifact-backed patch."""
-
-        context = _context()
-        blobs = InMemoryArtifactBlobStore()
-        overlays = InMemoryWorkspaceOverlayStore()
-        await _seed_overlay(
-            overlays=overlays, blobs=blobs, run_id="run_a", content=b"before"
-        )
-        before_manifest = await overlays.get_manifest(run_id="run_a")
         artifacts = _ArtifactService()
-        provider = _RecordingProvider()
-        bundle = _bundle(
-            tmp_path=tmp_path,
-            context=context,
-            blobs=blobs,
-            overlays=overlays,
-            artifacts=artifacts,
-            provider=provider,
-        )
-        assert bundle is not None
-        tool = bundle.build_tool(
-            identity_provider=lambda: SimpleNamespace(
-                run_id="run_a", org_id="org_a", user_id="user_a"
+
+        assert (
+            _bundle(
+                tmp_path=tmp_path,
+                context=context,
+                blobs=blobs,
+                overlays=overlays,
+                artifacts=artifacts,
+                provider=provider,
+                collector=_CompletePatchCollector(),
             )
+            is None
         )
-        assert tool is not None
-        token = _bind_context(context)
-        try:
-            payload = json.loads(
-                await tool.ainvoke(
-                    {"command": "write:/workspace/project/report.csv:after"}
-                )
-            )
-        finally:
-            OperationContext.unbind(token)
-
-        assert payload["status"] == "completed", payload
-        result = bundle._adapter.result_for(  # noqa: SLF001 - composition proof
-            provider.create_requests[0].operation_id
-        )
-        assert result is not None and result.patch is not None
-        assert result.patch.patch_ref.startswith("artifact://")
-        # One result artifact plus a separately immutable changed-file artifact;
-        # no C1 importer is present anywhere in this composed path.
-        assert b"after" in artifacts.published
-        assert await overlays.get_manifest(run_id="run_a") == before_manifest
-
-    async def test_changed_blob_is_sealed_and_rejected_before_provider_receives_bytes(
-        self, tmp_path
-    ) -> None:
-        context = _context()
-        canonical_blobs = InMemoryArtifactBlobStore()
-        overlays = InMemoryWorkspaceOverlayStore()
-        await _seed_overlay(
-            overlays=overlays,
-            blobs=canonical_blobs,
-            run_id="run_a",
-            content=b"approved-original-bytes",
-        )
-        provider = _RecordingProvider()
-        bundle = _bundle(
-            tmp_path=tmp_path,
-            context=context,
-            blobs=_ChangedAfterStatBlobStore(canonical_blobs),
-            overlays=overlays,
-            provider=provider,
-        )
-
-        assert bundle is not None
-        tool = bundle.build_tool(
-            identity_provider=lambda: SimpleNamespace(
-                run_id="run_a", org_id="org_a", user_id="user_a"
-            )
-        )
-        assert tool is not None
-        token = _bind_context(context)
-        try:
-            payload = json.loads(await tool.ainvoke({"command": "echo:never"}))
-        finally:
-            OperationContext.unbind(token)
-
-        assert payload["status"] == "failed"
         assert provider.create_calls == 0
         assert provider.received_bytes == 0
+        assert artifacts.published == []
 
-    async def test_bundle_refuses_cross_principal_or_run_snapshot_selection(
+    async def test_retained_history_loss_remains_a_separate_authority_failure(
         self, tmp_path
     ) -> None:
-        context = _context()
-        blobs = InMemoryArtifactBlobStore()
-        overlays = InMemoryWorkspaceOverlayStore()
-        await _seed_overlay(
-            overlays=overlays, blobs=blobs, run_id="run_a", content=b"principal-a"
-        )
-        await _seed_overlay(
-            overlays=overlays,
-            blobs=blobs,
-            run_id="run_b",
-            content=b"principal-b",
-        )
-        provider = _RecordingProvider()
-        bundle = _bundle(
-            tmp_path=tmp_path,
-            context=context,
-            blobs=blobs,
-            overlays=overlays,
-            provider=provider,
-        )
+        """Partial composition remains dark; C1 pointer loss is still not empty."""
 
-        assert bundle is not None
-        # This port is worker-owned in production. The bundle still defends
-        # against accidental cross-user/run wiring instead of allowing the C1
-        # run-keyed overlay authority to select another principal's run.
-        tool = bundle.build_tool(
-            identity_provider=lambda: SimpleNamespace(
-                run_id="run_b", org_id="org_b", user_id="user_b"
-            )
-        )
-        assert tool is not None
-        token = _bind_context(context)
-        try:
-            payload = json.loads(await tool.ainvoke({"command": "echo:never"}))
-        finally:
-            OperationContext.unbind(token)
-
-        assert payload == {
-            "status": "failed",
-            "summary": (
-                "An authorized immutable sandbox snapshot is unavailable; "
-                "no command was run."
-            ),
-        }
-        assert provider.create_calls == 0
-        assert provider.received_bytes == 0
-
-    async def test_retained_history_gap_fails_before_provider_provisioning(
-        self, tmp_path
-    ) -> None:
         context = _context()
         provider = _RecordingProvider()
-        bundle = _bundle(
-            tmp_path=tmp_path,
-            context=context,
-            overlays=_HistoryGapOverlayStore(
-                manifest=OverlayManifest(run_id="run_a", version=1)
-            ),
-            provider=provider,
-        )
-
-        assert bundle is not None
-        tool = bundle.build_tool(
-            identity_provider=lambda: SimpleNamespace(
-                run_id="run_a", org_id="org_a", user_id="user_a"
+        assert (
+            _bundle(
+                tmp_path=tmp_path,
+                context=context,
+                overlays=_HistoryGapOverlayStore(
+                    manifest=OverlayManifest(run_id="run_a", version=1)
+                ),
+                provider=provider,
             )
+            is None
         )
-        assert tool is not None
-        token = _bind_context(context)
-        try:
-            payload = json.loads(await tool.ainvoke({"command": "echo:never"}))
-        finally:
-            OperationContext.unbind(token)
-
-        assert payload["status"] == "failed"
         assert provider.create_calls == 0
-        assert provider.received_bytes == 0
 
     @pytest.mark.parametrize(
         "missing",
@@ -733,14 +520,10 @@ class TestSandboxWorkerBundle:
 
         assert provider.create_calls == 0
 
-    def test_default_file_worker_can_compose_only_with_test_attested_provider(
+    def test_default_file_worker_stays_dark_with_test_attested_provider(
         self, tmp_path
     ) -> None:
-        """Production wiring reaches the factory, but real deployment stays dark.
-
-        The fake provider is injected only in this hermetic proof. Without it
-        the repo's hard-false LangSmith adapter leaves the descriptor absent.
-        """
+        """Provider attestation cannot substitute the missing C1/A2 authorities."""
 
         store = FileRuntimeApiStore(tmp_path / "agent-data")
         settings = RuntimeSettings.load(environ={"SURFACES_V2": "false"})
@@ -763,10 +546,7 @@ class TestSandboxWorkerBundle:
                 SandboxProviderId.LANGSMITH: _RecordingProvider()
             },
         )  # type: ignore[arg-type]
-        assert isinstance(
-            worker.run_handler._sandbox_worker_bundle(_context()),  # noqa: SLF001
-            SandboxWorkerBundle,
-        )
+        assert worker.run_handler._sandbox_worker_bundle(_context()) is None  # noqa: SLF001
 
     def test_runtime_handler_passes_only_the_composed_bundle_to_wiring(
         self, tmp_path, monkeypatch
@@ -823,4 +603,4 @@ class TestSandboxWorkerBundle:
             SimpleNamespace(has_observations=False),  # type: ignore[arg-type]
         )
 
-        assert isinstance(captured["sandbox_tool_factory"], SandboxWorkerBundle)
+        assert captured["sandbox_tool_factory"] is None

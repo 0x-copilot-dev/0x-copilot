@@ -7,7 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from agent_runtime.capabilities.sandbox.contracts import SandboxError, _utcnow
+from agent_runtime.capabilities.sandbox._file_records import SandboxFileRecordError
+from agent_runtime.capabilities.sandbox.contracts import (
+    SandboxError,
+    SandboxErrorCode,
+    _utcnow,
+)
 from agent_runtime.capabilities.sandbox.ports import SandboxEvent
 from agent_runtime.capabilities.sandbox.provider_registry import (
     InMemorySandboxSessionStore,
@@ -15,6 +20,7 @@ from agent_runtime.capabilities.sandbox.provider_registry import (
 )
 from agent_runtime.capabilities.sandbox.cleanup_store import FileSandboxCleanupStore
 from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from agent_runtime.capabilities.sandbox.remote_execution_service import (
     RemoteExecutionService,
     SandboxEventName,
@@ -31,6 +37,7 @@ from tests.unit.agent_runtime.capabilities.sandbox.fakes import (
     FakeSandboxProvider,
     make_request,
 )
+from runtime_worker.sandbox_composition import FileSandboxRecoveryReaper
 
 
 class _RecordingSink:
@@ -73,6 +80,22 @@ class _FailingSessionStore:
         return None
 
 
+class _FailOnceTerminateProvider(FakeSandboxProvider):
+    """Fails teardown once, then lets a restarted reaper drain the duty."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_terminate = True
+
+    async def terminate(self, provider_session_ref: str) -> None:
+        self.terminated_refs.append(provider_session_ref)
+        if self.fail_terminate:
+            raise OSError("simulated teardown outage")
+        session = self._by_ref.get(provider_session_ref)  # noqa: SLF001 - fake state
+        if session is not None:
+            self._by_ref[provider_session_ref] = session.with_state("deleted")  # noqa: SLF001 - fake state
+
+
 async def test_create_persists_cleanup_duty_before_session_projection(
     tmp_path: Path,
 ) -> None:
@@ -103,6 +126,64 @@ async def test_create_persists_cleanup_duty_before_session_projection(
     # The durable duty is intentional: provider termination was not attempted
     # merely because the session index write failed.
     assert provider.terminated_refs == []
+
+
+async def test_primary_cleanup_write_and_immediate_teardown_failure_survives_restart(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A provider ref stays recoverable when both immediate steps fail.
+
+    The primary cleanup category is faulted after provider creation.  The
+    independent recovery journal must be durable before the service attempts
+    teardown, and a freshly composed worker must later drain that journal.
+    """
+
+    config = active_config()
+    provider = _FailOnceTerminateProvider()
+    registry = SandboxProviderRegistry.from_config(
+        config,
+        overrides={config.provider: provider},  # type: ignore[dict-item]
+    )
+    store = FileRuntimeApiStore(tmp_path / "agent-data")
+    cleanup = FileSandboxCleanupStore(layout=store.layout)
+
+    def fail_primary_write(*_args, **_kwargs) -> None:
+        raise SandboxFileRecordError("simulated primary cleanup persistence failure")
+
+    monkeypatch.setattr(cleanup._records, "write", fail_primary_write)  # noqa: SLF001 - fault injection
+    service = RemoteExecutionService(
+        registry=registry,
+        config=config,
+        session_store=InMemorySandboxSessionStore(),
+        cleanup_store=cleanup,
+    )
+
+    with pytest.raises(SandboxError) as excinfo:
+        await service.create(make_request())
+    assert excinfo.value.code is SandboxErrorCode.SANDBOX_EXECUTION_INDETERMINATE
+    duty = await cleanup.get("sandbox:run-1")
+    assert duty is not None
+    assert duty.provider_session_ref == "fake-idem-1"
+    assert duty.state == "cleanup_pending"
+
+    provider.fail_terminate = False
+    restarted = FileSandboxRecoveryReaper.compose(
+        file_store=FileRuntimeApiStore(tmp_path / "agent-data"),
+        env={
+            "ENTERPRISE_DEPLOYMENT_PROFILE": "single_user_desktop",
+            "RUNTIME_ENABLE_REMOTE_SANDBOX": "true",
+            "RUNTIME_SANDBOX_PROVIDER": "langsmith",
+            "RUNTIME_SANDBOX_REGION": "test-region",
+        },
+        provider_overrides={config.provider: provider},  # type: ignore[dict-item]
+    )
+    assert restarted is not None
+    assert await restarted.run_once() == ("sandbox:run-1",)
+    recovered = await FileSandboxCleanupStore(
+        layout=FileStoreLayout(tmp_path / "agent-data")
+    ).get("sandbox:run-1")
+    assert recovered is not None and recovered.state == "cleaned"
+    assert provider.terminated_refs == ["fake-idem-1", "fake-idem-1"]
 
 
 class TestCreateTeardown:
