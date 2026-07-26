@@ -50,7 +50,7 @@ describe("InlineToolResultCard", () => {
       />,
     );
 
-    const card = screen.getByTestId("tc-inline-web-sources");
+    const card = screen.getByTestId("tc-inline-web-sources-card");
     expect(card).toHaveAccessibleName(/2 sources returned by search the web/i);
     expect(within(card).getByText("First")).toBeInTheDocument();
     expect(within(card).getByText("Second")).toBeInTheDocument();
@@ -69,7 +69,7 @@ describe("InlineToolResultCard", () => {
       />,
     );
 
-    const card = screen.getByTestId("tc-inline-web-sources");
+    const card = screen.getByTestId("tc-inline-web-sources-card");
     expect(within(card).queryByRole("link")).not.toBeInTheDocument();
     expect(card).toHaveTextContent("web");
   });
@@ -104,7 +104,7 @@ describe("InlineToolResultCard", () => {
       />,
     );
 
-    const card = screen.getByTestId("tc-inline-csv-summary");
+    const card = screen.getByTestId("tc-inline-csv-summary-card");
     expect(card).toHaveAccessibleName("CSV summary for forecast_q1.csv");
     expect(card).toHaveTextContent("742 rows · 9 columns · 61 KB");
     expect(card).toHaveTextContent("PIPELINE");

@@ -51,12 +51,14 @@ function WebSourcesCard({
   const ordered = [...sources].sort((a, b) => a.ordinal - b.ordinal);
   return (
     <section
-      data-testid="tc-inline-web-sources"
+      data-testid="tc-inline-web-sources-card"
       aria-label={`${ordered.length} sources returned by ${toolTitle}`}
       style={cardStyle}
     >
       <div style={cardHeaderStyle}>
-        <span style={eyebrowStyle}>{`SOURCES · ${ordered.length}`}</span>
+        <span data-testid="tc-inline-web-sources" style={eyebrowStyle}>
+          {`SOURCES · ${ordered.length}`}
+        </span>
         <span style={chatOnlyStyle}>Synthesized in chat</span>
       </div>
       <div role="list">
@@ -133,7 +135,7 @@ function CsvSummaryCard({
   ].filter((part): part is string => part !== null);
   return (
     <section
-      data-testid="tc-inline-csv-summary"
+      data-testid="tc-inline-csv-summary-card"
       aria-label={`CSV summary for ${summary.name}`}
       style={cardStyle}
     >
@@ -141,7 +143,9 @@ function CsvSummaryCard({
         <span aria-hidden="true" style={csvGlyphStyle}>
           ▤
         </span>
-        <span style={csvNameStyle}>{summary.name}</span>
+        <span data-testid="tc-inline-csv-summary" style={csvNameStyle}>
+          {summary.name}
+        </span>
         <span style={chatOnlyStyle}>{meta.join(" · ")}</span>
       </div>
       {summary.metrics.length > 0 ? (
@@ -348,11 +352,11 @@ const cardHeaderStyle: CSSProperties = {
   padding: "8px 11px",
 };
 const eyebrowStyle: CSSProperties = {
-  color: "var(--color-text-muted)",
+  color: "var(--color-text-subtle)",
   fontFamily: "var(--font-mono)",
   fontSize: 9,
   letterSpacing: "0.1em",
-  lineHeight: 1.3,
+  lineHeight: "13.5px",
 };
 const chatOnlyStyle: CSSProperties = {
   color: "var(--color-text-muted)",
@@ -428,9 +432,12 @@ const csvGlyphStyle: CSSProperties = {
   width: 18,
 };
 const csvNameStyle: CSSProperties = {
-  color: "var(--color-text-secondary)",
+  // The design's --tx2 tier is the system's strong text rung: factual and
+  // quieter than an action while still distinct from muted metadata.
+  color: "var(--color-text-strong)",
   fontFamily: "var(--font-mono)",
   fontSize: 10,
+  lineHeight: "15px",
   overflow: "hidden",
   textOverflow: "ellipsis",
   whiteSpace: "nowrap",

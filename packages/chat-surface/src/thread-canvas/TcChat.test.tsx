@@ -656,7 +656,7 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
       ),
     );
     expect(
-      await screen.findByTestId("tc-inline-web-sources"),
+      await screen.findByTestId("tc-inline-web-sources-card"),
     ).toBeInTheDocument();
 
     rerender(
@@ -671,7 +671,7 @@ describe("TcChat — inline tool-call card (Workstream D)", () => {
       ),
     );
     expect(
-      screen.queryByTestId("tc-inline-web-sources"),
+      screen.queryByTestId("tc-inline-web-sources-card"),
     ).not.toBeInTheDocument();
   });
 
