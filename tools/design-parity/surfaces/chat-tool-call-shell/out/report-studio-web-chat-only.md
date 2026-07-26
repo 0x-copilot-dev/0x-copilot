@@ -5,14 +5,13 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-web-chat-only.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-web-chat-only.json`
 
-**Summary:** 🔴 HIGH 4 · 🟠 MEDIUM 17 · 🟡 LOW 41 · ⚪ INFO 9
+**Summary:** 🔴 HIGH 3 · 🟠 MEDIUM 17 · 🟡 LOW 43 · ⚪ INFO 10
 
-## 🔴 HIGH (4)
+## 🔴 HIGH (3)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
 | `shell.frame` | Cockpit shell | borderColor | rgba(255, 255, 255, 0.1) (--line2) → rgb(236, 236, 241) (--tx) |
-| `web.sources-card` | Web read | missing-in-live | present in design, ABSENT in live |
 | `web.chat-only-canvas` | Web read | backgroundColor | rgba(0, 0, 0, 0) (transparent) → rgb(17, 17, 20) (--panel) |
 | `web.chat-only-canvas` | Web read | borderColor | rgb(236, 236, 241) (--tx) → rgba(255, 255, 255, 0.06) (--line) |
 
@@ -38,7 +37,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `web.chat-only-canvas` | Web read | borderRadius | 0px → 12px |
 | `web.chat-only-canvas` | Web read | gap | normal → 8px |
 
-## 🟡 LOW (41)
+## 🟡 LOW (43)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -77,6 +76,8 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.web.header` | Web read | transition | all → none |
 | `tool.web.header` | Web read | width | 548.891px → 549px |
 | `tool.web.header` | Web read | tag | <div> → <summary> (semantic/default-style change) |
+| `web.sources-card` | Web read | transition | all → none |
+| `web.sources-card` | Web read | width | 69.3281px → 69.3125px |
 | `web.chat-only-canvas` | Web read | lineHeight | 19.5px → normal |
 | `web.chat-only-canvas` | Web read | transition | all → none |
 | `web.chat-only-canvas` | Web read | width | 613.109px → 613px |
@@ -84,7 +85,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `web.chat-only-canvas` | Web read | borderStyle | none → solid |
 | `web.chat-only-canvas` | Web read | tag | <div> → <section> (semantic/default-style change) |
 
-## ⚪ INFO (9)
+## ⚪ INFO (10)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -96,4 +97,5 @@ Design baseline (source of truth) vs live app, by computed style.
 | `studio.canvas` | Studio | text | “” → “RUN IN PROGRESSPreparing this runActivity will appear here i…” |
 | `tool.web.card` | Web read | text | “” → “@keyframes tc-tool-card-spin { to { transform: rotate(360deg…” |
 | `tool.web.header` | Web read | text | “” → “Wweb.searchMCP · Webread820 ms3 sources synthesized in chat✓…” |
+| `web.sources-card` | Web read | text | “SOURCES ·” → “SOURCES · 3” |
 | `web.chat-only-canvas` | Web read | text | “” → “RUN IN PROGRESSPreparing this runActivity will appear here i…” |

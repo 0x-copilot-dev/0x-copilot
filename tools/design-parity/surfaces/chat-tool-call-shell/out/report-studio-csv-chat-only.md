@@ -5,14 +5,13 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-csv-chat-only.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-csv-chat-only.json`
 
-**Summary:** 🔴 HIGH 4 · 🟠 MEDIUM 17 · 🟡 LOW 41 · ⚪ INFO 9
+**Summary:** 🔴 HIGH 3 · 🟠 MEDIUM 17 · 🟡 LOW 43 · ⚪ INFO 9
 
-## 🔴 HIGH (4)
+## 🔴 HIGH (3)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
 | `shell.frame` | Cockpit shell | borderColor | rgba(255, 255, 255, 0.1) (--line2) → rgb(236, 236, 241) (--tx) |
-| `csv.summary-card` | Local CSV read | missing-in-live | present in design, ABSENT in live |
 | `csv.chat-only-canvas` | Local CSV read | backgroundColor | rgba(0, 0, 0, 0) (transparent) → rgb(17, 17, 20) (--panel) |
 | `csv.chat-only-canvas` | Local CSV read | borderColor | rgb(236, 236, 241) (--tx) → rgba(255, 255, 255, 0.06) (--line) |
 
@@ -38,7 +37,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `csv.chat-only-canvas` | Local CSV read | borderRadius | 0px → 12px |
 | `csv.chat-only-canvas` | Local CSV read | gap | normal → 8px |
 
-## 🟡 LOW (41)
+## 🟡 LOW (43)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -77,6 +76,8 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.csv.header` | Local CSV read | transition | all → none |
 | `tool.csv.header` | Local CSV read | width | 548.891px → 549px |
 | `tool.csv.header` | Local CSV read | tag | <div> → <summary> (semantic/default-style change) |
+| `csv.summary-card` | Local CSV read | transition | all → none |
+| `csv.summary-card` | Local CSV read | width | 90.0156px → 90px |
 | `csv.chat-only-canvas` | Local CSV read | lineHeight | 19.5px → normal |
 | `csv.chat-only-canvas` | Local CSV read | transition | all → none |
 | `csv.chat-only-canvas` | Local CSV read | width | 613.109px → 613px |
