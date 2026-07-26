@@ -7,12 +7,13 @@ import { HostFs } from "./host-fs";
 import { UnavailableNativeWorkspaceAuthority } from "./native-workspace-authority";
 import { CapabilityService } from "./service";
 import {
+  isWorkspaceAuthorityBootstrap,
+  type WorkspaceAuthorityBootstrap,
+} from "./workspace-authority-bootstrap";
+import {
   InMemoryWorkspaceJournalStore,
   LocalWorkspaceAuthority,
-  type NativeWorkspaceAuthority,
-  type WorkspaceWriteAttestation,
 } from "./workspace-authority";
-import { EncryptedWorkspaceJournalStore } from "./workspace-journal";
 
 // Composition root for the capability subsystem (AC5 slice 1). Kept
 // electron-free (deps injected) so it is unit-testable; main/index.ts binds
@@ -39,22 +40,12 @@ export interface CreateCapabilityServiceConfig {
   readonly workspace?: WorkspaceAuthorityBootstrap;
 }
 
-export interface WorkspaceAuthorityBootstrap {
-  readonly native: NativeWorkspaceAuthority;
-  readonly attestation: WorkspaceWriteAttestation;
-  readonly production: boolean;
-  readonly profileId: string;
-  readonly deviceId: string;
-  /** Stable per-installation secret; required for restart-safe recovery. */
-  readonly journalIntegrityKey: Buffer;
-  /** Explicit development-only journal fallback; never enable in production. */
-  readonly allowPlaintextJournalFallback?: boolean;
-}
-
 export function createCapabilityService(
   config: CreateCapabilityServiceConfig,
 ): CapabilityService {
-  const workspace = config.workspace;
+  const workspace = isWorkspaceAuthorityBootstrap(config.workspace)
+    ? config.workspace
+    : undefined;
   // C2 has no path-string mutation fallback. A composition that cannot prove
   // all writable prerequisites still receives an authority object so the
   // broker disables legacy mutation endpoints, but its prepare call fails
@@ -62,46 +53,31 @@ export function createCapabilityService(
   const native = workspace?.native ?? new UnavailableNativeWorkspaceAuthority();
   const workspaceWritableBootstrap =
     workspace !== undefined &&
-    workspace.journalIntegrityKey.byteLength >= 32 &&
+    workspace.authority.writableAvailable() &&
     native.primitivesAvailable;
-  const store = new GrantStore({
-    userDataDir: config.userDataDir,
-    safeStorage: config.safeStorage,
-    allowPlaintextFallback: config.allowPlaintextFallback,
-    audit: config.audit,
-    rootIdentity: workspaceWritableBootstrap
-      ? (root) => native.rootIdentity(root)
-      : undefined,
-    profileId: workspace?.profileId,
-    deviceId: workspace?.deviceId,
-  });
-  const authority = new LocalWorkspaceAuthority({
-    grants: store,
-    native: workspaceWritableBootstrap
-      ? native
-      : new UnavailableNativeWorkspaceAuthority(),
-    journal:
-      workspaceWritableBootstrap && workspace !== undefined
-        ? new EncryptedWorkspaceJournalStore({
-            userDataDir: config.userDataDir,
-            safeStorage: config.safeStorage,
-            integrityKey: workspace.journalIntegrityKey,
-            allowPlaintextFallback:
-              !workspace.production &&
-              workspace.allowPlaintextJournalFallback === true,
-          })
-        : new InMemoryWorkspaceJournalStore(),
-    attestation:
-      workspaceWritableBootstrap && workspace !== undefined
-        ? workspace.attestation
-        : {
+  const store =
+    workspaceWritableBootstrap && workspace !== undefined
+      ? workspace.grants
+      : new GrantStore({
+          userDataDir: config.userDataDir,
+          safeStorage: config.safeStorage,
+          allowPlaintextFallback: config.allowPlaintextFallback,
+          audit: config.audit,
+        });
+  const authority =
+    workspaceWritableBootstrap && workspace !== undefined
+      ? workspace.authority
+      : new LocalWorkspaceAuthority({
+          grants: store,
+          native: new UnavailableNativeWorkspaceAuthority(),
+          journal: new InMemoryWorkspaceJournalStore(),
+          attestation: {
             workspaceWriteIsolation: "unavailable",
             nativeWorkspacePrimitives: "unavailable",
           },
-    production: workspace?.production ?? true,
-    deviceId: workspace?.deviceId ?? "workspace-authority-unbound",
-    journalTokenKey: workspace?.journalIntegrityKey,
-  });
+          production: true,
+          deviceId: "workspace-authority-unbound",
+        });
   const picker = new FolderPicker({ showOpenDialog: config.showOpenDialog });
   // The broker's FS routes execute reads through HostFs; without it they fail
   // closed. HostFs itself is stateless — it only ever touches paths under a
@@ -132,6 +108,15 @@ export {
   EncryptedWorkspaceJournalStore,
   type EncryptedWorkspaceJournalConfig,
 } from "./workspace-journal";
+export {
+  createProductionWorkspaceAuthorityBootstrap,
+  deriveWorkspaceAuthorityMaterial,
+  isWorkspaceAuthorityBootstrap,
+  type ProductionWorkspaceAuthorityBootstrapConfig,
+  type WorkspaceAuthorityBootstrap,
+  type WorkspaceAuthorityMaterial,
+  type WorkspaceConfinementProbe,
+} from "./workspace-authority-bootstrap";
 export {
   AddonNativeWorkspaceAuthority,
   UnavailableNativeWorkspaceAuthority,
