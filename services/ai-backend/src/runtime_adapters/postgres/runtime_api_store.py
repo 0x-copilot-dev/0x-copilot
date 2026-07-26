@@ -6020,11 +6020,13 @@ class PostgresRuntimeApiStore:
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
         """Append one event with the next per-run sequence number.
 
-        Lock-free: a concurrent appender that races to the same
-        ``sequence_no`` loses with ``UniqueViolation`` and we retry up to
-        :data:`_AppendEventRetry.MAX_ATTEMPTS` times. The common case is
-        one INSERT with no lock acquire/release per event; the rare
-        cancel-mid-stream race costs one retry on the loser.
+        Lock-free for ordinary stream events: a concurrent appender that races
+        to the same ``sequence_no`` loses with ``UniqueViolation`` and we retry
+        up to :data:`_AppendEventRetry.MAX_ATTEMPTS` times. The four staged-write
+        source event types deliberately acquire their run's mutation fence so
+        E2 legacy materialization can hold that same row from source proof
+        through canonical append. The common streaming path still has no row
+        lock; the rare cancel-mid-stream race costs one retry on the loser.
 
         Consolidated writes: ``agent_runs.latest_sequence_no`` advances
         inside the same transaction as the event INSERT. A monotonic guard
@@ -6074,8 +6076,13 @@ class PostgresRuntimeApiStore:
 
         async with self._tenant_connection(org_id=event.org_id) as conn:
             async with conn.transaction():
+                run_lock = (
+                    " FOR UPDATE"
+                    if self._requires_legacy_stage_run_fence(event)
+                    else ""
+                )
                 cur = await conn.execute(
-                    "SELECT org_id FROM agent_runs WHERE id = %s",
+                    f"SELECT org_id FROM agent_runs WHERE id = %s{run_lock}",
                     (event.run_id,),
                 )
                 run = await cur.fetchone()
@@ -6093,6 +6100,10 @@ class PostgresRuntimeApiStore:
                             run_id=event.run_id,
                             event_id=event.event_id,
                         )
+                materialization_fence = await self._assert_e2_legacy_materialization(
+                    conn=conn,
+                    event=event,
+                )
                 cur = await conn.execute(
                     """
                     SELECT COALESCE(MAX(sequence_no), 0) + 1 AS next_sequence
@@ -6210,6 +6221,11 @@ class PostgresRuntimeApiStore:
                         retention_until,
                     ),
                 )
+                if materialization_fence is not None:
+                    await self._mark_e2_legacy_materialization_staged(
+                        conn=conn,
+                        fence=materialization_fence,
+                    )
                 # Fold the cursor advance into the same transaction.
                 # Monotonic guard mirrors set_run_latest_sequence so a peer
                 # that has already advanced the cursor between our
@@ -6249,6 +6265,145 @@ class PostgresRuntimeApiStore:
                         ),
                     )
         return envelope
+
+    @staticmethod
+    def _requires_legacy_stage_run_fence(event: RuntimeEventDraft) -> bool:
+        """Whether this event can change a D5 legacy staged-write source.
+
+        ``StagedWriteFold`` derives the migration source digest from exactly
+        these four event kinds. Joining the run-row lock only for this set
+        closes the proof→append race without serializing model deltas, tool
+        output, or ordinary runtime progress events.
+        """
+
+        return event.event_type in {
+            RuntimeApiEventType.WRITE_STAGED,
+            RuntimeApiEventType.REVISION_ADDED,
+            RuntimeApiEventType.DECISION_RECORDED,
+            RuntimeApiEventType.WRITE_APPLIED,
+        }
+
+    async def _assert_e2_legacy_materialization(
+        self, *, conn: object, event: RuntimeEventDraft
+    ) -> object | None:
+        """Consume an E2 D5 source proof inside the event INSERT transaction."""
+
+        from agent_runtime.api.legacy_stage_migration_runtime import (
+            legacy_stage_source_digest,
+        )
+        from agent_runtime.surfaces_v2.legacy_stage_materialization import (
+            LegacyStageMaterializationRejected,
+            LegacyStageMaterializationState,
+            materialization_fence_from_metadata,
+        )
+        from agent_runtime.surfaces_v2.staging import StagedWriteFold
+
+        fence = materialization_fence_from_metadata(event.metadata)
+        if fence is None:
+            return None
+        if (
+            fence.org_id != event.org_id
+            or fence.run_id != event.run_id
+            or event.payload.get("stage_id") != fence.canonical_stage_id
+        ):
+            raise LegacyStageMaterializationRejected(
+                "legacy materialization fence does not match append"
+            )
+        # This is the actual mutation fence, not an advisory preflight. Every
+        # normal staged-write source append acquires this same row first; the
+        # lock remains held through the canonical ``effect.staged`` INSERT and
+        # reservation transition below. A source mutation either commits before
+        # this fold (then the digest fails) or waits until after the canonical
+        # append (then that append used the current source facts).
+        cursor = await conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT id
+              FROM agent_runs
+             WHERE id = %s AND org_id = %s
+             FOR UPDATE
+            """,
+            (fence.run_id, fence.org_id),
+        )
+        if await cursor.fetchone() is None:
+            raise LegacyStageMaterializationRejected("legacy source is unavailable")
+        cursor = await conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT source_digest, idempotency_key, canonical_stage_id,
+                   materialization_state
+              FROM runtime_e2_legacy_stage_reservations
+             WHERE org_id = %s AND run_id = %s AND legacy_stage_id = %s
+             FOR UPDATE
+            """,
+            (fence.org_id, fence.run_id, fence.legacy_stage_id),
+        )
+        row = await cursor.fetchone()
+        values = dict(row) if row is not None else {}
+        if (
+            values.get("source_digest") != fence.source_digest
+            or values.get("idempotency_key") != fence.idempotency_key
+            or values.get("canonical_stage_id") != fence.canonical_stage_id
+            or values.get("materialization_state")
+            != LegacyStageMaterializationState.RESERVED.value
+        ):
+            raise LegacyStageMaterializationRejected("legacy source is not reserved")
+        cursor = await conn.execute(  # type: ignore[attr-defined]
+            """
+            SELECT event_type, sequence_no, payload_json_redacted
+              FROM runtime_events
+             WHERE org_id = %s AND run_id = %s
+             ORDER BY sequence_no ASC
+            """,
+            (fence.org_id, fence.run_id),
+        )
+        rows = await cursor.fetchall()
+        source = StagedWriteFold.fold_raw(
+            tuple(
+                {
+                    "event_type": row["event_type"],
+                    "sequence_no": row["sequence_no"],
+                    "payload": dict(row["payload_json_redacted"] or {}),
+                }
+                for row in rows
+            )
+        ).get(fence.legacy_stage_id)
+        if (
+            source is None
+            or legacy_stage_source_digest(run_id=fence.run_id, state=source)
+            != fence.source_digest
+        ):
+            raise LegacyStageMaterializationRejected("legacy source changed")
+        return fence
+
+    async def _mark_e2_legacy_materialization_staged(
+        self, *, conn: object, fence: object
+    ) -> None:
+        cursor = await conn.execute(  # type: ignore[attr-defined]
+            """
+            UPDATE runtime_e2_legacy_stage_reservations
+               SET materialization_state = 'staged', revision = revision + 1,
+                   updated_at = now()
+             WHERE org_id = %s AND run_id = %s AND legacy_stage_id = %s
+               AND source_digest = %s AND idempotency_key = %s
+               AND canonical_stage_id = %s AND materialization_state = 'reserved'
+            RETURNING revision
+            """,
+            (
+                fence.org_id,
+                fence.run_id,
+                fence.legacy_stage_id,
+                fence.source_digest,
+                fence.idempotency_key,
+                fence.canonical_stage_id,
+            ),
+        )
+        if await cursor.fetchone() is None:
+            from agent_runtime.surfaces_v2.legacy_stage_materialization import (
+                LegacyStageMaterializationRejected,
+            )
+
+            raise LegacyStageMaterializationRejected(
+                "legacy materialization transition failed"
+            )
 
     @staticmethod
     def _is_event_sequence_conflict(exc: psycopg_errors.UniqueViolation) -> bool:

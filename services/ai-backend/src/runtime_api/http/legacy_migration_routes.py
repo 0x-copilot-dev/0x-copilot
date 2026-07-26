@@ -9,6 +9,12 @@ from agent_runtime.api.legacy_migration_service import (
     LegacyMigrationError,
     LegacyMigrationService,
 )
+from agent_runtime.api.legacy_stage_migration_service import (
+    LegacyStageMigrationError,
+    LegacyStageMigrationActor,
+    LegacyStageMigrationReport,
+    LegacyStageMigrationService,
+)
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.validation import ValueNormalizer
 from agent_runtime.surfaces_v2.legacy_migration import (
@@ -18,7 +24,10 @@ from agent_runtime.surfaces_v2.legacy_migration import (
 from runtime_api.auth import RuntimeServiceAuthenticator
 from runtime_api.http.errors import RuntimeApiError
 from runtime_api.rbac import public_route
-from runtime_api.schemas.legacy_migration import LegacyMigrationRunRequest
+from runtime_api.schemas.legacy_migration import (
+    LegacyMigrationRunRequest,
+    LegacyStageMigrationRunRequest,
+)
 
 
 class LegacyMigrationApiRoutes:
@@ -80,6 +89,60 @@ class LegacyMigrationApiRoutes:
                 retryable=retryable,
             ) from exc
 
+    @classmethod
+    async def run_pending_stages(
+        cls,
+        request: Request,
+        migration_id: str,
+        payload: LegacyStageMigrationRunRequest,
+    ) -> LegacyStageMigrationReport:
+        """Run the D5 stage control plane under the same trusted tenant fence."""
+
+        job_identity = (
+            RuntimeServiceAuthenticator.require_e2_legacy_stage_migration_job(request)
+        )
+        identity = job_identity.identity
+        if identity.org_id != payload.org_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="tenant identity does not match the migration request",
+            )
+        try:
+            normalized_id = ValueNormalizer.normalize_id(migration_id, "migration_id")
+        except ValueError as exc:
+            raise RuntimeApiError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "The migration request is invalid.",
+                http_status=status.HTTP_400_BAD_REQUEST,
+                retryable=False,
+            ) from exc
+        service = getattr(request.app.state, "legacy_stage_migration_service", None)
+        if not isinstance(service, LegacyStageMigrationService):
+            raise RuntimeApiError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "Legacy stage migration is not configured.",
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=False,
+            )
+        try:
+            return await service.run(
+                org_id=payload.org_id,
+                migration_id=normalized_id,
+                batch_size=payload.batch_size,
+                dry_run=payload.dry_run,
+                actor=LegacyStageMigrationActor(
+                    operator_ref=f"principal://users/{identity.user_id}",
+                    migration_job_id=job_identity.job_id,
+                ),
+            )
+        except LegacyStageMigrationError as exc:
+            raise RuntimeApiError(
+                RuntimeErrorCode.DEPENDENCY_ERROR,
+                "Legacy stage migration is unavailable.",
+                http_status=status.HTTP_503_SERVICE_UNAVAILABLE,
+                retryable=False,
+            ) from exc
+
 
 class LegacyMigrationApiRouter:
     """Build the non-facade internal E2 migration control-plane route."""
@@ -93,6 +156,14 @@ class LegacyMigrationApiRouter:
             methods=["POST"],
             response_model=LegacyMigrationReport,
             name="internal_e2_legacy_migration",
+            dependencies=[Depends(public_route())],
+        )
+        router.add_api_route(
+            "/legacy-stage-migrations/{migration_id}",
+            LegacyMigrationApiRoutes.run_pending_stages,
+            methods=["POST"],
+            response_model=LegacyStageMigrationReport,
+            name="internal_e2_legacy_stage_migration",
             dependencies=[Depends(public_route())],
         )
         return router

@@ -58,6 +58,7 @@ class RuntimeEffectLedger:
     event_producer: RuntimeEventProducer
     run: RunRecord
     owner_ref: str
+    append_metadata: Mapping[str, object] | None = None
 
     async def list_stage_events(
         self,
@@ -119,7 +120,10 @@ class RuntimeEffectLedger:
                 source=StreamEventSource.RUNTIME,
                 event_type=RuntimeApiEventType(event_type),
                 payload=safe_payload,
-                metadata={_FINGERPRINT_METADATA_KEY: request_fingerprint},
+                metadata={
+                    **(dict(self.append_metadata) if self.append_metadata else {}),
+                    _FINGERPRINT_METADATA_KEY: request_fingerprint,
+                },
                 event_id=self._event_id(idempotency_key),
             )
         except RuntimeEventIdempotencyConflict as error:

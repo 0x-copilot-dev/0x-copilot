@@ -21,6 +21,7 @@ from agent_runtime.surfaces_v2.audit_export_verification import (
 )
 from agent_runtime.surfaces_v2.legacy_migration import (
     LegacyMigrationCheckpointStore,
+    LegacyStageMigrationStore,
 )
 
 
@@ -265,6 +266,139 @@ def build_legacy_migration_checkpoint_store(
     return InMemoryLegacyMigrationCheckpointStore()
 
 
+def build_legacy_stage_migration_store(
+    *, settings: RuntimeSettings, persistence: object
+) -> LegacyStageMigrationStore:
+    """Select the durable E2 D5 mapping adapter for this runtime backend."""
+
+    backend = settings.store.backend
+    if backend == "file":
+        root = settings.store.file_store_root
+        if not root:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "RUNTIME_FILE_STORE_ROOT is required for legacy stage migration.",
+                retryable=False,
+            )
+        from runtime_adapters.file.legacy_stage_migration_store import (
+            FileLegacyStageMigrationStore,
+        )
+
+        return FileLegacyStageMigrationStore(root=root)
+    if backend == "postgres":
+        if not hasattr(persistence, "_role_connection"):
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "Postgres legacy stage migration requires the runtime worker store.",
+                retryable=False,
+            )
+        from runtime_adapters.postgres.legacy_stage_migration_store import (
+            PostgresLegacyStageMigrationStore,
+        )
+
+        return PostgresLegacyStageMigrationStore(store=persistence)
+    from runtime_adapters.in_memory.legacy_stage_migration_store import (
+        InMemoryLegacyStageMigrationStore,
+    )
+
+    return InMemoryLegacyStageMigrationStore()
+
+
+def build_legacy_stage_migration_service(
+    *, settings: RuntimeSettings, persistence: object, event_store: object
+) -> object:
+    """Compose real E2 D5 inventory/control ports for the selected adapter.
+
+    This is intentionally a control-plane-only assembly.  The writer receives
+    a no-commit outbox, while the queue port can only neutralize an old command
+    with a typed CAS result.  It cannot claim or dispatch either legacy or
+    canonical work.
+    """
+
+    from agent_runtime.api.events import RuntimeEventProducer
+    from agent_runtime.api.legacy_stage_migration_runtime import (
+        DurableLegacyStageCandidateResolver,
+        RuntimeCanonicalHeldStageWriter,
+        RuntimeLegacyFrozenReconciler,
+        RuntimeLegacyPendingStageInventory,
+        RuntimeLegacyQueueNeutralizer,
+        RuntimeLegacyStageMigrationAudit,
+        RuntimeLegacyStageSourceFence,
+    )
+    from agent_runtime.api.legacy_stage_migration_service import (
+        LegacyStageMigrationService,
+    )
+
+    backend = settings.store.backend
+    if backend == "file":
+        root = settings.store.file_store_root
+        if not root:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "RUNTIME_FILE_STORE_ROOT is required for legacy stage migration.",
+                retryable=False,
+            )
+        from runtime_adapters.file.legacy_stage_migration_control import (
+            FileLegacyStageQueueControl,
+            FileLegacyStageReservationStore,
+        )
+
+        queue_control = FileLegacyStageQueueControl(store=persistence)
+        reservations = FileLegacyStageReservationStore(store=persistence, root=root)
+    elif backend == "postgres":
+        if not hasattr(persistence, "_role_connection"):
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "Postgres legacy stage migration requires the runtime worker store.",
+                retryable=False,
+            )
+        from runtime_adapters.postgres.legacy_stage_migration_control import (
+            PostgresLegacyStageQueueControl,
+            PostgresLegacyStageReservationStore,
+        )
+
+        queue_control = PostgresLegacyStageQueueControl(store=persistence)
+        reservations = PostgresLegacyStageReservationStore(store=persistence)
+    else:
+        from runtime_adapters.in_memory.legacy_stage_migration_control import (
+            InMemoryLegacyStageQueueControl,
+            InMemoryLegacyStageReservationStore,
+        )
+
+        queue_control = InMemoryLegacyStageQueueControl(store=persistence)
+        reservations = InMemoryLegacyStageReservationStore(store=persistence)
+
+    fence = RuntimeLegacyStageSourceFence(
+        reservations=reservations,
+    )
+    return LegacyStageMigrationService(
+        inventory=RuntimeLegacyPendingStageInventory(
+            persistence=persistence,
+            event_store=event_store,
+            queue=queue_control,
+            candidates=DurableLegacyStageCandidateResolver(evidence=reservations),
+        ),
+        mappings=build_legacy_stage_migration_store(
+            settings=settings, persistence=persistence
+        ),
+        writer=RuntimeCanonicalHeldStageWriter(
+            persistence=persistence,
+            event_producer=RuntimeEventProducer(
+                persistence=persistence, event_store=event_store
+            ),
+            fence=fence,
+        ),
+        queue=RuntimeLegacyQueueNeutralizer(
+            cancel_cas=queue_control.cancel_unclaimed,
+        ),
+        reconciler=RuntimeLegacyFrozenReconciler(
+            audit=persistence,
+            checkpoints=reservations,
+        ),
+        audit=RuntimeLegacyStageMigrationAudit(audit=persistence),
+    )
+
+
 __all__ = (
     "FileRepairLegalHoldLookup",
     "PostgresRepairLegalHoldLookup",
@@ -272,6 +406,8 @@ __all__ = (
     "build_effect_claim_store",
     "build_audit_export_verification_store",
     "build_legacy_migration_checkpoint_store",
+    "build_legacy_stage_migration_service",
+    "build_legacy_stage_migration_store",
     "build_repair_legal_hold_lookup",
     "build_repair_planning_snapshot_store",
 )

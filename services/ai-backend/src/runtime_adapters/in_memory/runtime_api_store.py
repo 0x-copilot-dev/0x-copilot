@@ -161,6 +161,10 @@ class InMemoryRuntimeApiStore:
         self.approval_batch_items: dict[str, ApprovalBatchItemRecord] = {}
         self._approval_batch_locks: dict[str, asyncio.Lock] = {}
         self.events_by_run: dict[str, list[RuntimeEventEnvelope]] = {}
+        # E2 D5's materialization fence lives beside the source event stream.
+        # It is deliberately not an outbox and has no dispatch capability.
+        self._e2_legacy_stage_materializations: dict[tuple[str, str, str], object] = {}
+        self._e2_legacy_stage_materialization_lock = asyncio.Lock()
         # Exact immutable-event lookup for server-side artifact promotion.  This
         # is deliberately separate from the per-run replay list: promotion
         # never searches event history by content/call-id text.
@@ -2793,6 +2797,7 @@ class InMemoryRuntimeApiStore:
                     run_id=event.run_id,
                     event_id=event.event_id,
                 )
+        fence = self._assert_e2_legacy_materialization(event=event, events=events)
         envelope_kwargs: dict[str, object] = {}
         if event.event_id is not None:
             envelope_kwargs["event_id"] = event.event_id
@@ -2827,6 +2832,8 @@ class InMemoryRuntimeApiStore:
             **envelope_kwargs,
         )
         events.append(envelope)
+        if fence is not None:
+            self._mark_e2_legacy_materialization_staged(fence=fence)
         self._events_by_id[envelope.event_id] = envelope
         if event.run_id in self.runs:
             await self.set_run_latest_sequence(
@@ -2834,6 +2841,79 @@ class InMemoryRuntimeApiStore:
                 latest_sequence_no=envelope.sequence_no,
             )
         return envelope
+
+    def _assert_e2_legacy_materialization(
+        self, *, event: RuntimeEventDraft, events: list[RuntimeEventEnvelope]
+    ) -> object | None:
+        """Atomically consume a D5 source fence with the event append.
+
+        This method deliberately performs no await.  In-memory event append is
+        therefore one event-loop critical section: a legacy mutation can run
+        before or after this check, never between proof and append.
+        """
+
+        from agent_runtime.api.legacy_stage_migration_runtime import (
+            legacy_stage_source_digest,
+        )
+        from agent_runtime.surfaces_v2.legacy_stage_materialization import (
+            LegacyStageMaterializationRejected,
+            LegacyStageMaterializationState,
+            materialization_fence_from_metadata,
+        )
+        from agent_runtime.surfaces_v2.staging import StagedWriteFold
+
+        fence = materialization_fence_from_metadata(event.metadata)
+        if fence is None:
+            return None
+        if (
+            fence.org_id != event.org_id
+            or fence.run_id != event.run_id
+            or event.payload.get("stage_id") != fence.canonical_stage_id
+        ):
+            raise LegacyStageMaterializationRejected(
+                "legacy materialization fence does not match append"
+            )
+        key = (fence.org_id, fence.run_id, fence.legacy_stage_id)
+        record = self._e2_legacy_stage_materializations.get(key)
+        if (
+            record is None
+            or getattr(record, "state", None)
+            is not LegacyStageMaterializationState.RESERVED
+        ):
+            raise LegacyStageMaterializationRejected("legacy source is not reserved")
+        if (
+            getattr(record, "source_digest", None) != fence.source_digest
+            or getattr(record, "idempotency_key", None) != fence.idempotency_key
+            or getattr(record, "canonical_stage_id", None) != fence.canonical_stage_id
+        ):
+            raise LegacyStageMaterializationRejected(
+                "legacy source fence does not match"
+            )
+        source = StagedWriteFold.fold(events).get(fence.legacy_stage_id)
+        if (
+            source is None
+            or legacy_stage_source_digest(run_id=event.run_id, state=source)
+            != fence.source_digest
+        ):
+            raise LegacyStageMaterializationRejected("legacy source changed")
+
+        return fence
+
+    def _mark_e2_legacy_materialization_staged(self, *, fence: object) -> None:
+        """Advance only after the event is in the append-only stream."""
+
+        from agent_runtime.surfaces_v2.legacy_stage_materialization import (
+            LegacyStageMaterializationState,
+        )
+
+        key = (fence.org_id, fence.run_id, fence.legacy_stage_id)
+        record = self._e2_legacy_stage_materializations[key]
+        self._e2_legacy_stage_materializations[key] = record.model_copy(
+            update={
+                "state": LegacyStageMaterializationState.STAGED,
+                "revision": record.revision + 1,
+            }
+        )
 
     async def list_events_after(
         self,
@@ -3060,7 +3140,11 @@ class InMemoryRuntimeApiStore:
         now = datetime.now(timezone.utc)
         for command_id in self._queue_order:
             status_value = self._queue_statuses[command_id]
-            if status_value in {OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER}:
+            if status_value not in {
+                OutboxStatus.PENDING,
+                OutboxStatus.RETRY,
+                OutboxStatus.CLAIMED,
+            }:
                 continue
             if self._queue_available_at[command_id] > now:
                 continue

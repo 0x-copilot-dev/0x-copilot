@@ -13,6 +13,9 @@ class OutboxStatus(StrEnum):
     COMPLETED = "completed"
     RETRY = "retry"
     DEAD_LETTER = "dead_letter"
+    # E2 D5 control-plane neutralization. A cancelled legacy command is a
+    # deliberate terminal safety state, never an execution failure to retry.
+    CANCELLED = "cancelled"
 
 
 class AsyncTaskStatus(StrEnum):
