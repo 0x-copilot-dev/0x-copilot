@@ -89,6 +89,15 @@ from agent_runtime.capabilities.sandbox.usage_meter import (
     FileSandboxUsageMeter,
     InMemorySandboxUsageMeter,
 )
+from agent_runtime.capabilities.sandbox.session_store import (
+    FileSandboxSessionStore,
+    SandboxSessionStoreError,
+)
+from agent_runtime.capabilities.sandbox.cleanup_store import (
+    FileSandboxCleanupStore,
+    SandboxCleanupSchedule,
+    SandboxCleanupScheduleError,
+)
 from agent_runtime.capabilities.sandbox.workspace_transfer import (
     WORKSPACE_ROOT,
     RawSnapshotEntry,
@@ -104,6 +113,8 @@ __all__ = [
     "ArtifactServiceSandboxPublisher",
     "DeepAgentSandboxRuntime",
     "FileSandboxUsageMeter",
+    "FileSandboxSessionStore",
+    "FileSandboxCleanupStore",
     "InMemorySandboxSessionStore",
     "InMemorySandboxLifecycleStore",
     "FileSandboxLifecycleStore",
@@ -145,6 +156,9 @@ __all__ = [
     "SandboxRuntimePort",
     "SandboxSecretLeaseRef",
     "SandboxSessionStore",
+    "SandboxSessionStoreError",
+    "SandboxCleanupSchedule",
+    "SandboxCleanupScheduleError",
     "SandboxSnapshot",
     "SandboxSnapshotContentPort",
     "SandboxUsageAttribution",
