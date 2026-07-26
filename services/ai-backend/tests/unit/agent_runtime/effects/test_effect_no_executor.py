@@ -1,10 +1,12 @@
-from __future__ import annotations
-
-import ast
 from pathlib import Path
 
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.surfaces_v2.ledger_models import EffectDecisionKind
+from tests.unit.architecture.effect_execution_reachability import (
+    APPROVED_EXECUTION_PATHS,
+    APPROVED_HANDLER_DELEGATIONS,
+    EffectExecutionReachabilityGate,
+)
 
 from .fakes import (
     ExplodingEffectHandle,
@@ -18,40 +20,74 @@ from .fakes import (
     user,
 )
 
-_EFFECTS_ROOT = (
-    Path(__file__).resolve().parents[4] / "src" / "agent_runtime" / "effects"
-)
-_FORBIDDEN_MODULE_PREFIXES = (
-    "agent_runtime.capabilities.mcp",
-    "agent_runtime.capabilities.desktop",
-    "agent_runtime.capabilities.browser",
-    "agent_runtime.capabilities.sandbox",
-    "agent_runtime.surfaces_v2.commit_engine",
-)
+_SERVICE_ROOT = Path(__file__).resolve().parents[4]
+_SOURCE_ROOT = _SERVICE_ROOT / "src"
 
 
-def _forbidden_imports(source: str) -> set[str]:
-    tree = ast.parse(source)
-    imports: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module is not None:
-            imports.add(node.module)
-    return {
-        module for module in imports if module.startswith(_FORBIDDEN_MODULE_PREFIXES)
-    }
+def test_model_staging_and_worker_paths_reach_execution_only_via_allowlist() -> None:
+    gate = EffectExecutionReachabilityGate(_SOURCE_ROOT)
+
+    assert gate.allowlist_violations() == ()
+    assert gate.violations() == ()
+    assert gate.direct_dispatch_violations() == ()
+    assert gate.handler_delegation_violations() == ()
 
 
-def test_effect_domain_has_no_import_path_to_effect_handles() -> None:
-    for source_path in _EFFECTS_ROOT.glob("*.py"):
-        assert _forbidden_imports(source_path.read_text()) == set(), source_path
+def test_execution_allowlist_is_explicit_and_explained() -> None:
+    """A broad source-prefix exemption would weaken the execution boundary."""
+
+    assert APPROVED_EXECUTION_PATHS
+    assert APPROVED_HANDLER_DELEGATIONS
+    assert all(
+        path.reason and len(path.nodes) >= 2 for path in APPROVED_EXECUTION_PATHS
+    )
+    assert all(delegation.reason for delegation in APPROVED_HANDLER_DELEGATIONS)
 
 
-def test_import_scanner_canary_detects_a_planted_violation() -> None:
-    planted = "from agent_runtime.capabilities.mcp.client import BackendMcpHttpClient\n"
+def test_reachability_gate_rejects_planted_indirect_import_and_call(
+    tmp_path: Path,
+) -> None:
+    _write_fixture(
+        tmp_path,
+        "agent_runtime/capabilities/tools/rogue.py",
+        "class RogueTool:\n"
+        "    async def invoke(self):\n"
+        "        from agent_runtime.effects.intermediary import dispatch\n"
+        "        return await dispatch()\n",
+    )
+    _write_fixture(
+        tmp_path,
+        "agent_runtime/effects/intermediary.py",
+        "from runtime_worker.mcp_effect_executor import McpEffectExecutor\n"
+        "\n"
+        "async def dispatch():\n"
+        "    executor = McpEffectExecutor()\n"
+        "    return await executor.apply(None)\n",
+    )
+    _write_fixture(
+        tmp_path,
+        "runtime_worker/mcp_effect_executor.py",
+        "class McpEffectExecutor:\n"
+        "    async def apply(self, prepared):\n"
+        "        return prepared\n",
+    )
 
-    assert _forbidden_imports(planted) == {"agent_runtime.capabilities.mcp.client"}
+    gate = EffectExecutionReachabilityGate(tmp_path)
+
+    assert (
+        "agent_runtime.capabilities.tools.rogue:RogueTool"
+        " -> agent_runtime.effects.intermediary:dispatch"
+        " -> runtime_worker.mcp_effect_executor:McpEffectExecutor"
+    ) in gate.violations()
+    assert gate.direct_dispatch_violations() == (
+        "agent_runtime.effects.intermediary:dispatch:5",
+    )
+
+
+def _write_fixture(root: Path, relative: str, source: str) -> None:
+    path = root / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(source, encoding="utf-8")
 
 
 async def test_stager_object_graph_and_all_legal_flows_leave_exploding_handle_unused() -> (
