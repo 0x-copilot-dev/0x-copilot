@@ -4179,7 +4179,23 @@ export interface NotificationsPreferences {
  * Slice B reads it server-side at run-create to drive agent
  * suggestions; until then the field has no runtime effect.
  */
+/**
+ * How forward the agent may be about connectors the user does not have.
+ *
+ * `unblock_only` is the default rather than `always` because a suggestion is
+ * the one connector surface the user did not go looking for: interrupt when
+ * the connector would change the answer, not whenever it is merely relevant.
+ */
+export type ConnectorSuggestionMode = "off" | "unblock_only" | "always";
+
 export interface DiscoverableConnectorsPreferences {
+  /** Global appetite the per-slug `overrides` sit under. */
+  mode: ConnectorSuggestionMode;
+  /**
+   * Per-slug decisions. `false` mutes a connector — and outranks
+   * `mode: "always"`, because "show me everything" is a default while
+   * "never this one" is a decision. `mode: "off"` outranks both.
+   */
   overrides: Record<string, boolean>;
 }
 
@@ -4282,7 +4298,10 @@ export interface UpdateUserPreferencesRequest {
    *  ``{ overrides: { <slug>: <catalog default> } }`` — the merge
    *  semantics here treat ``true``/``false`` as wholesale replace
    *  per slug (no ``null`` clearing in this slice). */
-  discoverable_connectors?: { overrides?: Record<string, boolean> };
+  discoverable_connectors?: {
+    mode?: ConnectorSuggestionMode;
+    overrides?: Record<string, boolean>;
+  };
 }
 
 // ---------------------------------------------------------------------------

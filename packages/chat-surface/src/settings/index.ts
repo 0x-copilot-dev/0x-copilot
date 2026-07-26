@@ -52,6 +52,15 @@ export {
   type AppearanceSettingsPorts,
   type AppearanceSettingsController,
 } from "./useAppearanceSettings";
+// Connector-suggestion appetite — the same `/v1/me/preferences` round-trip,
+// autosaved because it is a three-option Select rather than free text. The
+// PUT sends only `mode`, so it cannot clobber the per-slug mutes the
+// suggestion card writes into the same preference block.
+export {
+  useConnectorSuggestions,
+  DEFAULT_CONNECTOR_SUGGESTIONS,
+  type ConnectorSuggestionsController,
+} from "./useConnectorSuggestions";
 // === end Phase 5 (PR-5.3) ===
 export {
   QuietHoursEditor,
@@ -268,6 +277,7 @@ export {
 export {
   ModelBehaviorPage,
   REASONING_DEPTHS,
+  CONNECTOR_SUGGESTION_MODES,
   type ModelBehaviorPageProps,
   type ModelBehaviorValue,
   type ModelBehaviorPatch,

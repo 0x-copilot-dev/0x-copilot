@@ -19,6 +19,7 @@ const BASE_VALUE: ModelBehaviorValue = {
   reasoningDepth: null,
   webAccess: false,
   toolCallsPerRun: null,
+  connectorSuggestions: "unblock_only",
   approvalPolicy: { readOnly: "auto", write: "require", danger: "require" },
   spend: { monthlyCapUsd: null, pauseAtCap: false },
 };
@@ -228,6 +229,44 @@ describe("<ModelBehaviorPage>", () => {
     // Non-numeric input is "unset", never NaN on the wire.
     fireEvent.change(input, { target: { value: "abc" } });
     expect(onChange).toHaveBeenCalledWith({ toolCallsPerRun: null });
+  });
+
+  it("reports connector-suggestion appetite changes", () => {
+    const onChange = vi.fn();
+    render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={onChange}
+        controller={makeController()}
+      />,
+    );
+    const select = getSelect("connector-suggestions-select");
+
+    // The shipped default: a suggestion is the one connector surface the user
+    // did not go looking for, so it interrupts only when it would unblock.
+    expect(select.value).toBe("unblock_only");
+    expect(
+      Array.from(select.querySelectorAll("option")).map((o) => o.value),
+    ).toEqual(["off", "unblock_only", "always"]);
+
+    fireEvent.change(select, { target: { value: "off" } });
+    expect(onChange).toHaveBeenCalledWith({ connectorSuggestions: "off" });
+  });
+
+  it("says where a single connector is muted, since that is not this control", () => {
+    // The per-connector mute lives on the suggestion card (that is where the
+    // intent forms) and is reversible in Tools. Without the pointer, a user
+    // looking to silence one vendor sets the global control to Never.
+    render(
+      <ModelBehaviorPage
+        value={BASE_VALUE}
+        onChange={vi.fn()}
+        controller={makeController()}
+      />,
+    );
+    const card = screen.getByTestId("connector-suggestions");
+    expect(card.textContent).toMatch(/from the card itself/i);
+    expect(card.textContent).toMatch(/Tools/);
   });
 
   it("reports web-access toggles", () => {

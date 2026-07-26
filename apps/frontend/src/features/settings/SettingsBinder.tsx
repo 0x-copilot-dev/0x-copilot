@@ -68,6 +68,7 @@ import {
   createProviderKeysPort,
   createSpendGuardrailPort,
   createToolUsePolicyPort,
+  useConnectorSuggestions,
   localModelInstalledTag,
   type ApprovalPolicyPort,
   type ApprovalPolicyValue,
@@ -377,6 +378,11 @@ export function SettingsBinder({
   const mbWebAccess =
     workspaceDefaults.defaults?.behavior_overrides?.web_access_default ?? true;
 
+  // Suggestion appetite. Autosaved (a three-option Select is a complete
+  // decision), and bound through the shared chat-surface controller so web
+  // and desktop cannot drift on the preferences merge semantics.
+  const connectorSuggestions = useConnectorSuggestions(transport);
+
   // Tool-call cap. Deferred behind the page SaveBar rather than autosaved like
   // its neighbours: it is a free-text number, and autosave would PUT on every
   // keystroke. `undefined` means "untouched", so the persisted value shows
@@ -673,6 +679,7 @@ export function SettingsBinder({
               reasoningDepth: mbReasoningDepth,
               webAccess: mbWebAccess,
               toolCallsPerRun: mbToolCalls,
+              connectorSuggestions: connectorSuggestions.value,
               approvalPolicy,
               spend,
             }}
@@ -700,6 +707,9 @@ export function SettingsBinder({
               if (patch.toolCallsPerRun !== undefined) {
                 // Deferred, not autosaved — see the SaveBar wiring below.
                 setToolCallsEdit(patch.toolCallsPerRun);
+              }
+              if (patch.connectorSuggestions !== undefined) {
+                connectorSuggestions.change(patch.connectorSuggestions);
               }
               if (patch.approvalPolicy !== undefined) {
                 void persistApprovalPolicy(patch.approvalPolicy, toast);
