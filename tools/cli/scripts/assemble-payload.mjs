@@ -16,6 +16,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DESKTOP_RUNTIME_FILES } from "./payload-files.mjs";
+
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PKG_ROOT = path.resolve(HERE, "..");
 const REPO_ROOT = path.resolve(PKG_ROOT, "..", "..");
@@ -129,16 +131,13 @@ fs.mkdirSync(PAYLOAD, { recursive: true });
 // --- 3. staging tool -----------------------------------------------------
 const stageDest = path.join(PAYLOAD, "tools", "desktop-runtime");
 fs.mkdirSync(stageDest, { recursive: true });
-for (const f of ["stage.mjs", "browser-runtime.mjs", "manifest.json"]) {
+for (const f of DESKTOP_RUNTIME_FILES) {
   fs.copyFileSync(
     path.join(REPO_ROOT, "tools", "desktop-runtime", f),
     path.join(stageDest, f),
   );
 }
-log(
-  "copied tools/desktop-runtime " +
-    "(stage.mjs + browser-runtime.mjs + manifest.json)",
-);
+log("copied tools/desktop-runtime " + `(${DESKTOP_RUNTIME_FILES.join(" + ")})`);
 
 // --- 4. service source + requirements ------------------------------------
 for (const svc of SERVICES) {

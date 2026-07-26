@@ -10,7 +10,10 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DESKTOP_RUNTIME_FILES } from "./payload-files.mjs";
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = path.resolve(ROOT, "..", "..");
 const pkg = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8"));
 
 const problems = [];
@@ -41,6 +44,26 @@ for (const [name, target] of Object.entries(pkg.bin ?? {})) {
 for (const entry of pkg.files ?? []) {
   if (entry === "payload") continue;
   require_(entry, "declared in package.json files[]");
+}
+
+// The published stage entry point must ship every relative module it imports.
+// This catches an install that packs successfully but fails before staging.
+const runtimeSource = path.join(REPO_ROOT, "tools", "desktop-runtime");
+const stageSource = readFileSync(path.join(runtimeSource, "stage.mjs"), "utf8");
+const relativeImports = [
+  ...stageSource.matchAll(/from\s+["']\.\/([^"']+)["']/gu),
+].map((match) => match[1]);
+for (const file of new Set(["stage.mjs", ...relativeImports])) {
+  if (!DESKTOP_RUNTIME_FILES.includes(file)) {
+    problems.push(
+      `tools/desktop-runtime/${file} is imported by stage.mjs but missing from the CLI payload file list`,
+    );
+  }
+}
+for (const file of DESKTOP_RUNTIME_FILES) {
+  if (!existsSync(path.join(runtimeSource, file))) {
+    problems.push(`missing tools/desktop-runtime/${file} (CLI payload source)`);
+  }
 }
 
 if (problems.length) {
