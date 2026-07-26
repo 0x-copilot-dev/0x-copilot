@@ -1,0 +1,86 @@
+{
+  "surface": "chat-tool-call-shell",
+  "state": "studio-write-held",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "Supplied Chat & Tool Calls walkthrough, a local write held for review. No expected divergences are declared.",
+  "elements": [
+    {
+      "label": "shell.frame",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"shell\"]",
+      "live": "#parity-frame",
+      "what": "Fixed Run cockpit frame."
+    },
+    {
+      "label": "shell.header",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"window-bar\"]",
+      "live": "#parity-frame [data-testid=\"run-header\"]",
+      "what": "Top run chrome."
+    },
+    {
+      "label": "shell.mode-switcher",
+      "group": "Cockpit shell",
+      "design": "[data-parity-anchor=\"mode-switcher\"]",
+      "live": "#parity-frame [data-testid=\"run-mode-switcher\"]",
+      "what": "Studio is selected."
+    },
+    {
+      "label": "chat.column",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"chat-column\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat\"]",
+      "what": "Shared Studio chat column."
+    },
+    {
+      "label": "chat.transcript",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"chat-transcript\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat-messages\"]",
+      "what": "Transcript viewport."
+    },
+    {
+      "label": "chat.composer",
+      "group": "Chat",
+      "design": "[data-parity-anchor=\"composer\"]",
+      "live": "#parity-frame [data-testid=\"composer\"]",
+      "what": "Shipping Composer."
+    },
+    {
+      "label": "studio.canvas",
+      "group": "Studio",
+      "design": "[data-parity-anchor=\"studio-canvas\"]",
+      "live": "#parity-frame [data-testid=\"run-canvas-slot\"]",
+      "what": "Studio canvas region."
+    },
+    {
+      "label": "tool.write.card",
+      "group": "Held write",
+      "design": "[data-parity-anchor=\"tool-card-write\"]",
+      "live": "#parity-frame [data-testid=\"tc-chat-tool-file-write\"] > details",
+      "what": "Filesystem-write proposal tool card."
+    },
+    {
+      "label": "tool.write.header",
+      "group": "Held write",
+      "design": "[data-parity-anchor=\"tool-card-write\"] .tcall__h",
+      "live": "#parity-frame [data-testid=\"tc-chat-tool-file-write\"] summary",
+      "what": "Write proposal identity and held result row."
+    },
+    {
+      "label": "write.review-surface",
+      "group": "Held write",
+      "design": "[data-parity-anchor=\"file-card\"]",
+      "live": "#parity-frame [data-testid=\"tc-workspace-stage\"]",
+      "what": "File proposal / review surface."
+    },
+    {
+      "label": "write.review-status",
+      "group": "Held write",
+      "design": "[data-parity-anchor=\"file-card\"] .pbadge",
+      "live": "#parity-frame [data-testid=\"tc-workspace-stage-status\"]",
+      "what": "Held-write state treatment."
+    }
+  ]
+}
