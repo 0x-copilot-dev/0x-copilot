@@ -52,7 +52,7 @@ exists because a merged PR proves that code reached `main`; it does not prove
 that every requirement, architectural invariant, real desktop journey, or
 design-parity requirement still holds after later merges.
 
-**Baseline:** `origin/main` at `62276d42eb548d7803c592171d9f1f2ef74861bc`
+**Baseline:** `origin/main` at `732cc672d542a13298984db64dfb272da3054ea2`
 (2026-07-26). Update this section in the same PR whenever implementation,
 verification, a finding, or a release-gate result changes.
 
@@ -86,6 +86,32 @@ verification, a finding, or a release-gate result changes.
 | D4 — browser adapter               | [#276](https://github.com/0x-copilot-dev/0x-copilot/pull/276), [#290](https://github.com/0x-copilot-dev/0x-copilot/pull/290), [#330](https://github.com/0x-copilot-dev/0x-copilot/pull/330)                                                                                                                                                                                                                                                            | Merged — evidence audit pending          | Browser adversarial/live suite, exact action binding, reconciliation.                                                                                                               |
 | E1 — accountability/lifecycle      | [#289](https://github.com/0x-copilot-dev/0x-copilot/pull/289) through [#320](https://github.com/0x-copilot-dev/0x-copilot/pull/320), plus [#337](https://github.com/0x-copilot-dev/0x-copilot/pull/337)                                                                                                                                                                                                                                                | Merged — evidence audit pending          | Cross-language receipt/source/pending folds, retention, repair, and operation evidence.                                                                                             |
 | E2 — cutover/conformance           | [#309](https://github.com/0x-copilot-dev/0x-copilot/pull/309), [#313](https://github.com/0x-copilot-dev/0x-copilot/pull/313), [#315](https://github.com/0x-copilot-dev/0x-copilot/pull/315), [#324](https://github.com/0x-copilot-dev/0x-copilot/pull/324), [#338](https://github.com/0x-copilot-dev/0x-copilot/pull/338)–[#342](https://github.com/0x-copilot-dev/0x-copilot/pull/342), [#344](https://github.com/0x-copilot-dev/0x-copilot/pull/344) | Merged — evidence audit pending          | Cohort/backout evidence and the final all-PRD release gate.                                                                                                                         |
+
+### Current-main revalidation (2026-07-26)
+
+This is a **source/evidence revalidation** at
+`732cc672d542a13298984db64dfb272da3054ea2`, not a substitute for the command
+receipts and real-product gates in the close-out record below. All historical
+Wave audit baselines remain useful implementation evidence, but none proves the
+current release candidate on its own.
+
+- Every inventory row remains `Merged — evidence audit pending` or
+  `Architecture reconciliation required`; none may advance to `DoD audit
+complete` from historical focused tests alone.
+- Current `main` still exposes the legacy sandbox construction path. It is not
+  the required file-native C1/A2 snapshot authority plus attested provider
+  composition. D3 therefore remains a release-blocking reconciliation, and its
+  draft-only snapshot findings must not be described as merged behaviour.
+- F-006 remains a correction in progress in draft
+  [#356](https://github.com/0x-copilot-dev/0x-copilot/pull/356). Its generic
+  effect decision path must fail closed for event-store errors and preserve
+  superseding-stage correlation across host-run changes before it can merge.
+- The G0–G10 Generative Workflows journey plan, artifact/canvas computed-style
+  source mapping, and current-SHA comparison reports do not yet exist as
+  executable release evidence. F-007 remains a release blocker.
+- F-008 is **current-main unverified** until the full service/workspace command
+  receipts are run at this SHA. F-009, F-010, F-011, and F-014 are code/static
+  gates only until those release commands also exercise them.
 
 ### Legacy v2 E3 clarification
 
