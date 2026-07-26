@@ -16,6 +16,7 @@ import pytest
 
 from agent_runtime.capabilities.desktop.broker_client import (
     BrokerClientConfig,
+    BrokerCapabilityRetiredError,
     BrokerGrantRequiredError,
     BrokerInvalidPathError,
     BrokerInvalidRequestError,
@@ -213,6 +214,7 @@ class TestBrokerClientErrorMapping(BrokerClientMixin):
             (400, "not_a_file", BrokerNotAFileError),
             (413, "too_large", BrokerTooLargeError),
             (404, "unsupported", BrokerUnsupportedError),
+            (410, "capability_retired", BrokerCapabilityRetiredError),
         ],
     )
     async def test_fs_code_maps_to_typed_exception(

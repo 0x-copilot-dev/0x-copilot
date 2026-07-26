@@ -22,7 +22,6 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 
-from agent_runtime.capabilities.actions.classifier import ACTION_CLASSIFIER
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.surfaces.builtin import server_slug, tool_slug
 from agent_runtime.capabilities.surfaces.generator import DotPathResolver
@@ -202,6 +201,14 @@ class WorkLedgerEmitter:
         """
 
         try:
+            # The surfaces package is also imported while the action catalog is
+            # initialized. Resolve the classifier at the execution seam to keep
+            # package initialization acyclic; classification remains synchronous
+            # and uses the same process-wide singleton for every emitted event.
+            from agent_runtime.capabilities.actions.classifier import (  # noqa: PLC0415
+                ACTION_CLASSIFIER,
+            )
+
             annotations = McpToolAnnotationsRegistry.get(server_name, tool_name)
             classified = ACTION_CLASSIFIER.classify(
                 server=server_name, tool=tool_name, annotations=annotations

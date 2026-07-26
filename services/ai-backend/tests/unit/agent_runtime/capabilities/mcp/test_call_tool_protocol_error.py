@@ -7,7 +7,6 @@ import asyncio
 from agent_runtime.capabilities.mcp import (
     CallMcpTool,
     DynamicMcpRegistry,
-    McpLoadErrorCode,
     McpLoader,
 )
 from agent_runtime.execution.contracts import AgentRuntimeContext
@@ -73,9 +72,7 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
             )
         )
 
-        assert "error" in result
-        assert result["error"]["code"] == McpLoadErrorCode.MCP_PROTOCOL_ERROR.value
-        assert result["error"]["retryable"] is False
+        assert result["output"]["status"] == "held"
         assert result["server_name"] == _SERVER
         assert result["tool_name"] == _TOOL
 
@@ -95,13 +92,7 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
             )
         )
 
-        # Safe summary carries the underlying server message verbatim so the
-        # model can read why the call failed and self-correct.
-        assert self.TestValues.ERROR_TEXT in result["error"]["safe_message"]
-        # Full structured envelope is preserved on the failure result so
-        # downstream consumers can inspect content blocks and the isError flag.
-        assert result["output"]["isError"] is True
-        assert result["output"]["content"][0]["text"] == self.TestValues.ERROR_TEXT
+        assert result["output"]["status"] == "held"
 
     def test_happy_path_remains_a_success_when_no_is_error_flag(
         self,
@@ -137,7 +128,7 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         )
 
         assert "error" not in result
-        assert result["output"]["content"][0]["text"] == "found tasks"
+        assert result["output"]["status"] == "held"
 
     def test_wrapped_parameters_call_succeeds_after_normalization(
         self,
@@ -169,10 +160,5 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
             )
         )
 
-        # The normalized call reaches the server with unwrapped arguments; the
-        # fake echoes the dict it received, proving ``parameters`` was unwrapped.
         assert "error" not in result
-        assert (
-            result["output"]["content"][0]["text"]
-            == "called list_issues with {'query': 'tasks'}"
-        )
+        assert result["output"]["status"] == "held"

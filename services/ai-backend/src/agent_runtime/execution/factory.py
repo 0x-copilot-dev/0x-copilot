@@ -26,7 +26,6 @@ from agent_runtime.execution.deep_agent_builder import (
     SANDBOX_EXECUTE_GUIDANCE,
     WORKSPACE_ACCESS_GUIDANCE,
     WORKSPACE_STAGED_WRITE_GUIDANCE,
-    WORKSPACE_WRITE_GUIDANCE,
     DeepAgentBuildRequest,
     DeepAgentsBackend,
     build_deep_agent,
@@ -336,10 +335,10 @@ async def _assemble_harness(
                 memory_paths=_deepagents_memory_paths(memory_backend),
                 skill_directories=skill_directories,
                 interrupt_on=enforced_tools.interrupt_on,
-                permissions=_workspace_write_permissions(
-                    workspace_writable,
-                    effect_staged=workspace_effect_staging,
-                ),
+                # D7: generic filesystem interrupts never authorize a host
+                # mutation. C3 stages workspace changes through its typed
+                # adapter; C2 is the only commit authority.
+                permissions=(),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
             )
@@ -501,42 +500,14 @@ def _model_visible_tools(
     return tuple(model_tools)
 
 
-#: Virtual prefix every host-folder mount lives under. A single ``interrupt``
-#: rule on ``/workspace/**`` writes gates ALL host mutations for approval,
-#: regardless of which mount/grant is addressed; the broker's per-grant
-#: mode-gate remains the final authority.
-_WORKSPACE_WRITE_GLOB: Final = "/workspace/**"
-
-
 def _workspace_write_permissions(
-    workspace_writable: bool,  # noqa: FBT001
+    _workspace_writable: bool,  # noqa: FBT001
     *,
     effect_staged: bool = False,  # noqa: FBT001, FBT002
 ) -> tuple[object, ...]:
-    """Return the host-write approval permission when the run can write to host folders.
-
-    A single Deep Agents ``FilesystemPermission`` with ``mode="interrupt"`` over
-    ``/workspace/**`` writes routes every host ``write_file`` / ``edit_file``
-    through the SAME ``HumanInTheLoopMiddleware`` that gates MCP tools: the tool
-    call pauses for human approval BEFORE the backend mutation runs. Returns an
-    empty tuple when the run has no writable host grant, so the read-only /
-    non-desktop path installs no permission and stays byte-identical.
-    """
-    if not workspace_writable or effect_staged:
-        return ()
-    # Imported lazily so the deepagents permission type is referenced in exactly
-    # one place and non-workspace runs never touch it.
-    from deepagents.middleware.filesystem import (  # noqa: PLC0415
-        FilesystemPermission,
-    )
-
-    return (
-        FilesystemPermission(
-            operations=["write"],
-            paths=[_WORKSPACE_WRITE_GLOB],
-            mode="interrupt",
-        ),
-    )
+    """Compatibility seam: D7 permanently installs no filesystem interrupt."""
+    del effect_staged
+    return ()
 
 
 def _local_tool_names(
@@ -893,8 +864,6 @@ def _instructions_with_workspace(
     guidance = (
         WORKSPACE_STAGED_WRITE_GUIDANCE
         if workspace_effect_staging
-        else WORKSPACE_WRITE_GUIDANCE
-        if workspace_writable
         else WORKSPACE_ACCESS_GUIDANCE
     )
     return "\n\n".join((instructions, guidance))

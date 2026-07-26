@@ -201,7 +201,7 @@ describe("CapabilityBroker workspace v2", () => {
     });
   });
 
-  it("consumes a verified receipt privately after prepare, commits once, and disables legacy writes", async () => {
+  it("retires legacy mutations and commits only through the prepared verified path", async () => {
     const write = vi.fn();
     await broker.stop();
     broker = new CapabilityBroker({
@@ -212,17 +212,15 @@ describe("CapabilityBroker workspace v2", () => {
     broker.installWorkspaceApprovalPermitHandoff(permits);
     baseUrl = (await broker.start()).baseUrl;
     token = broker.authToken();
-    const legacy = await fetch(`${baseUrl}/v1/fs/write`, {
-      method: "POST",
-      headers: headers({ "content-type": "application/json" }),
-      body: JSON.stringify({
-        grant_id: "grant_1",
-        path: "notes.md",
-        content_base64: "aGVsbG8=",
-      }),
-    });
-    expect(legacy.status).toBe(404);
-    expect(await legacy.json()).toEqual({ error: "unsupported" });
+    for (const suffix of ["write", "edit", "mkdir", "delete", "move"]) {
+      const legacy = await fetch(`${baseUrl}/v1/fs/${suffix}`, {
+        method: "POST",
+        headers: headers({ "content-type": "application/json" }),
+        body: JSON.stringify({ grant_id: "grant_1", path: "notes.md" }),
+      });
+      expect(legacy.status).toBe(410);
+      expect(await legacy.json()).toEqual({ error: "capability_retired" });
+    }
     expect(write).not.toHaveBeenCalled();
 
     recordVerifiedApproval(permits);

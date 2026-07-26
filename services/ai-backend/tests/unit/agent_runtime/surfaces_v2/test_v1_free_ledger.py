@@ -19,21 +19,49 @@ client via ledger events + ``payload_ref`` resolution, never ``payload.surface``
 from __future__ import annotations
 
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 
+from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.actions.policy import ConnectorWritePolicyOverrides
 from agent_runtime.capabilities.mcp import (
     CallMcpTool,
     DynamicMcpRegistry,
     McpLoader,
 )
-from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.capabilities.mcp.cards import McpAuthState
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationGatewayContext,
+    McpOperationGatewayServices,
+)
+from agent_runtime.capabilities.operations.classifier import OperationClassifier
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    VerifiedOperationIdentity,
+)
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.operations.descriptors import (
+    OperationDescriptorRegistry,
+)
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
+from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
+from agent_runtime.effects.staging import EffectStager
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from agent_runtime.settings import RuntimeSettings
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.ledger_models import EffectActor, LedgerEventType
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import RuntimeApiEventType
 from runtime_worker.handlers.run import RuntimeRunHandler
+from runtime_worker.mcp_operation_storage import RuntimeMcpOperationResultStore
 
+from tests.unit.agent_runtime.effects.fakes import (
+    FakeClock,
+    FakeLedger,
+    FakeOutbox,
+    FakeStageIds,
+)
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 from tests.unit.runtime_worker.test_runtime_worker import _TestHelpers
 
@@ -53,6 +81,20 @@ _LINEAR_ISSUE_OUTPUT: dict[str, object] = {
 _SURFACE_KEYS = ("surface", "surface_uri")
 
 
+@dataclass
+class _ArgumentStore:
+    rows: dict[str, tuple[str, bytes]] = field(default_factory=dict)
+
+    async def persist(self, *, ref: str, digest: str, canonical_bytes: bytes) -> None:
+        self.rows[ref] = (digest, canonical_bytes)
+
+    async def resolve(self, *, ref: str, digest: str) -> bytes | None:
+        stored = self.rows.get(ref)
+        if stored is None or stored[0] != digest:
+            return None
+        return stored[1]
+
+
 def _default_on_settings() -> RuntimeSettings:
     # SURFACES_V2 deliberately UNSET — proves E3's default-on flip (surfaces_v2
     # resolves True with no env flag) as well as the v1-free invariant.
@@ -65,6 +107,24 @@ def _default_on_settings() -> RuntimeSettings:
     )
 
 
+def _runtime_context_for_run(run_id: str) -> AgentRuntimeContext:
+    return AgentRuntimeContext(
+        user_id="user_123",
+        org_id="org_123",
+        roles={"employee"},
+        permission_scopes={"docs:read", "docs:write"},
+        model_profile=ModelConfig(
+            provider="openai",
+            model_name="gpt-5.4-mini",
+            max_input_tokens=4096,
+            timeout_seconds=30,
+            temperature=0.0,
+        ),
+        run_id=run_id,
+        trace_id=f"trace_{run_id}",
+    )
+
+
 class TestV1FreeLedger(DynamicMcpLoadingMixin):
     def _call_tool(
         self,
@@ -74,8 +134,11 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         tool: str,
         output: Mapping[str, object],
     ) -> CallMcpTool:
+        card = self.make_card(name=server).model_copy(
+            update={"auth_state": McpAuthState.AUTHENTICATED, "server_id": server}
+        )
         provider = self.FakeMcpProvider(
-            cards=(self.make_card(name=server),),
+            cards=(card,),
             clients={
                 server: self.FakeMcpClient(
                     tools=(self.make_tool(name=tool),),
@@ -91,8 +154,69 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
             runtime_context=runtime_context,
         )
 
+    def _bind_canonical_gateway(
+        self,
+        *,
+        handler: RuntimeRunHandler,
+        store: InMemoryRuntimeApiStore,
+        run,
+    ) -> tuple[object, object]:
+        operation_token = OperationContext.bind_for_run(
+            identity=VerifiedOperationIdentity(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                conversation_id=run.conversation_id,
+                run_id=run.run_id,
+            ),
+            policy_snapshot=ToolUsePolicySnapshot.from_response(
+                workspace=None,
+                user=None,
+            ),
+            ledger_emitter=handler._build_operation_ledger_emitter(run),
+            artifact_service=None,
+            mode=OperationGatewayMode.ENFORCE,
+            canonical_arguments_durable=True,
+        )
+        descriptors = OperationDescriptorRegistry()
+        classifier = OperationClassifier(descriptors=descriptors)
+        owner_ref = f"principal://users/{run.user_id}"
+        service_token = McpOperationGatewayContext.bind_for_run(
+            McpOperationGatewayServices(
+                gateway=OperationGateway(
+                    descriptors=descriptors,
+                    classifier=classifier,
+                ),
+                descriptors=descriptors,
+                classifier=classifier,
+                stager=EffectStager(
+                    ledger=FakeLedger(),
+                    outbox=FakeOutbox(),
+                    clock=FakeClock(),
+                    stage_ids=FakeStageIds(),
+                ),
+                stage_scope=EffectStageScope(
+                    run_id=run.run_id,
+                    owner_ref=owner_ref,
+                ),
+                stage_author=EffectActorIdentity(
+                    actor=EffectActor.SYSTEM,
+                    principal_ref="principal://system/mcp-operation-gateway",
+                ),
+                result_store=RuntimeMcpOperationResultStore(
+                    event_producer=RuntimeEventProducer(
+                        persistence=store,
+                        event_store=store,
+                    ),
+                    run=run,
+                ),
+                argument_store=_ArgumentStore(),
+                connector_overrides=ConnectorWritePolicyOverrides(),
+            )
+        )
+        return operation_token, service_token
+
     async def test_executed_read_leaves_no_v1_surface_but_full_v2_canvas(
-        self, runtime_context_admin: AgentRuntimeContext
+        self,
     ) -> None:
         store = InMemoryRuntimeApiStore()
         settings = _default_on_settings()
@@ -113,24 +237,33 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         assert emitter is not None, (
             "default-on: emitter must bind with SURFACES_V2 unset"
         )
+        runtime_context = _runtime_context_for_run(run_id)
 
         tool = self._call_tool(
-            runtime_context_admin,
+            runtime_context,
             server="linear",
             tool="get_issue",
             output=_LINEAR_ISSUE_OUTPUT,
         )
 
         token = WorkLedgerEmitter.bind_for_run(emitter)
+        operation_token, service_token = self._bind_canonical_gateway(
+            handler=handler,
+            store=store,
+            run=run,
+        )
         try:
             result = await tool.ainvoke(
                 {
                     "server_name": "linear",
                     "tool_name": "get_issue",
                     "arguments": {"query": "ENG-1421"},
+                    "tool_call_id": "call_linear_get_issue",
                 }
             )
         finally:
+            McpOperationGatewayContext.unbind(service_token)
+            OperationContext.unbind(operation_token)
             WorkLedgerEmitter.unbind(token)
 
         # The tool result itself is v1-free.
@@ -152,6 +285,8 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
 
         # (2) v2 surface events still appear.
         types = [event.event_type for event in events]
+        assert RuntimeApiEventType.ACTION_CLASSIFIED in types
+        assert RuntimeApiEventType.READ_EXECUTED in types
         assert RuntimeApiEventType.SURFACE_CREATED in types
         assert RuntimeApiEventType.VIEW_DERIVED in types
 
@@ -177,7 +312,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         assert surface.view.tier == "shaped"
 
     async def test_read_executed_event_is_present_for_the_call(
-        self, runtime_context_admin: AgentRuntimeContext
+        self,
     ) -> None:
         # Sanity: the read path itself is recorded (so a canvas title/source can
         # resolve the payload_ref), independent of the surface events.
@@ -185,28 +320,38 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
         settings = _default_on_settings()
         run_id = await _TestHelpers.create_queued_run(store, settings)
         run = await store.get_run(org_id="org_123", run_id=run_id)
+        assert run is not None
         handler = RuntimeRunHandler(
             persistence=store, event_store=store, settings=settings
         )
         emitter = handler._build_work_ledger_emitter(run)
         assert emitter is not None
+        runtime_context = _runtime_context_for_run(run_id)
 
         tool = self._call_tool(
-            runtime_context_admin,
+            runtime_context,
             server="linear",
             tool="get_issue",
             output=_LINEAR_ISSUE_OUTPUT,
         )
         token = WorkLedgerEmitter.bind_for_run(emitter)
+        operation_token, service_token = self._bind_canonical_gateway(
+            handler=handler,
+            store=store,
+            run=run,
+        )
         try:
             await tool.ainvoke(
                 {
                     "server_name": "linear",
                     "tool_name": "get_issue",
                     "arguments": {"query": "ENG-1421"},
+                    "tool_call_id": "call_linear_get_issue",
                 }
             )
         finally:
+            McpOperationGatewayContext.unbind(service_token)
+            OperationContext.unbind(operation_token)
             WorkLedgerEmitter.unbind(token)
 
         events = list(
