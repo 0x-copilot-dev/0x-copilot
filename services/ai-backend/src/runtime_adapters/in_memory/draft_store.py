@@ -77,6 +77,38 @@ class InMemoryDraftStore:
             results.sort(key=lambda record: record.created_at)
             return tuple(results)
 
+    async def list_versions_for_migration(
+        self,
+        *,
+        org_id: str,
+        after: tuple[str, int] | None,
+        limit: int,
+    ) -> Sequence[DraftRecord]:
+        """Return a bounded, stable keyset page of every historic version.
+
+        This is intentionally migration-only rather than an expansion of the
+        normal draft UI port: E2 must inspect the full append-only history,
+        never merely a draft's current version.
+        """
+
+        if limit <= 0:
+            return ()
+        with self._lock:
+            records = [
+                record
+                for (record_org_id, _), history in self.versions.items()
+                if record_org_id == org_id
+                for record in history
+            ]
+            records.sort(key=lambda record: (record.draft_id, record.version))
+            if after is not None:
+                records = [
+                    record
+                    for record in records
+                    if (record.draft_id, record.version) > after
+                ]
+            return tuple(records[:limit])
+
     async def expect_status(
         self,
         *,

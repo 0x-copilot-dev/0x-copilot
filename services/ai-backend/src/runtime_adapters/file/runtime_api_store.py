@@ -1706,6 +1706,25 @@ class FileRuntimeApiStore:
         candidates.sort(key=lambda run: run.created_at, reverse=True)
         return tuple(candidates[: max(0, limit)])
 
+    async def list_runs_for_migration(
+        self,
+        *,
+        org_id: str,
+        after_run_id: str | None,
+        limit: int,
+    ) -> tuple[RunRecord, ...]:
+        """Return one stable, tenant-wide keyset page for E2 inventory."""
+
+        if limit <= 0:
+            return ()
+        candidates = sorted(
+            (run for run in self.runs.values() if run.org_id == org_id),
+            key=lambda run: run.run_id,
+        )
+        if after_run_id is not None:
+            candidates = [run for run in candidates if run.run_id > after_run_id]
+        return tuple(candidates[:limit])
+
     async def list_runs_for_org(
         self,
         *,

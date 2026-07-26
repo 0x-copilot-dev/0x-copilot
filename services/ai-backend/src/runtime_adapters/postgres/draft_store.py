@@ -163,6 +163,41 @@ class PostgresDraftStore:
                 rows = await cur.fetchall()
         return tuple(self._row_to_record(row) for row in rows)
 
+    async def list_versions_for_migration(
+        self,
+        *,
+        org_id: str,
+        after: tuple[str, int] | None,
+        limit: int,
+    ) -> Sequence[DraftRecord]:
+        """Return a bounded, tenant-scoped keyset page of draft histories."""
+
+        if limit <= 0:
+            return ()
+        where = ""
+        params: list[object] = [org_id]
+        if after is not None:
+            where = "AND (draft_id > %s OR (draft_id = %s AND version > %s))"
+            params.extend((after[0], after[0], after[1]))
+        params.append(limit)
+        async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    SELECT id, draft_id, version, org_id, conversation_id,
+                           run_id, user_id, title, content_text,
+                           target_connector, target_metadata, citation_ids,
+                           status, encryption_version, created_at
+                      FROM {_TABLE}
+                     WHERE org_id = %s {where}
+                     ORDER BY draft_id ASC, version ASC
+                     LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = await cur.fetchall()
+        return tuple(self._row_to_record(row) for row in rows)
+
     async def expect_status(
         self,
         *,

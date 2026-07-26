@@ -258,6 +258,7 @@ class ArtifactService:
         provenance: ArtifactProvenance,
         content: bytes,
         artifact_id: str,
+        created_at: datetime | None = None,
     ) -> ArtifactMutationResult:
         """Create one canonical artifact for the internal ``/drafts`` adapter.
 
@@ -280,6 +281,7 @@ class ArtifactService:
             route=self.Routes.PUBLISH,
             promoted_source_ref=None,
             artifact_id=artifact_id,
+            created_at=created_at,
         )
 
     async def append_revision_from_stream(
@@ -290,6 +292,7 @@ class ArtifactService:
         request: ArtifactRevisionRequest,
         provenance: ArtifactProvenance,
         chunks: AsyncIterator[bytes],
+        created_at: datetime | None = None,
     ) -> ArtifactMutationResult:
         """Compare-and-append one immutable artifact revision."""
 
@@ -310,7 +313,7 @@ class ArtifactService:
             byte_limit=limit.maximum_bytes,
         )
         next_revision = request.parent_revision + 1
-        now = self._utc_now()
+        now = self._trusted_created_at(created_at)
         revision = ArtifactRevision(
             artifact_id=request.artifact_id,
             revision=next_revision,
@@ -346,6 +349,7 @@ class ArtifactService:
                 "author": provenance.author.value,
                 "source_ref": provenance.source_ref,
                 "content_digest": written.content_digest,
+                **({"created_at": now.isoformat()} if created_at is not None else {}),
             },
         )
         command = ArtifactAppendCommand(
@@ -583,6 +587,7 @@ class ArtifactService:
         route: str,
         promoted_source_ref: str | None,
         artifact_id: str | None = None,
+        created_at: datetime | None = None,
     ) -> ArtifactMutationResult:
         self._validate_title(request.title)
         kind_limit = self._limits.for_kind(request.kind)
@@ -591,7 +596,7 @@ class ArtifactService:
             chunks=chunks,
             byte_limit=kind_limit.maximum_bytes,
         )
-        now = self._utc_now()
+        now = self._trusted_created_at(created_at)
         artifact_id = artifact_id or ArtifactIdCodec.format(uuid4())
         revision = ArtifactRevision(
             artifact_id=artifact_id,
@@ -711,6 +716,7 @@ class ArtifactService:
                 "author": provenance.author.value,
                 "source_ref": provenance.source_ref,
                 "content_digest": written.content_digest,
+                **({"created_at": now.isoformat()} if created_at is not None else {}),
             },
         )
         command = ArtifactCreateCommand(
@@ -809,6 +815,20 @@ class ArtifactService:
         value = self._now()
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
+        return value.astimezone(timezone.utc)
+
+    def _trusted_created_at(self, value: datetime | None) -> datetime:
+        """Resolve an internal import timestamp without exposing it to HTTP.
+
+        Normal application calls retain the current-clock default.  E2's
+        server-side legacy importer alone passes a validated historic value so
+        canonical revisions preserve their original order and timestamp.
+        """
+
+        if value is None:
+            return self._utc_now()
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("artifact import timestamp must include a timezone")
         return value.astimezone(timezone.utc)
 
     @staticmethod

@@ -1958,6 +1958,36 @@ class PostgresRuntimeApiStore:
             rows = await cur.fetchall()
         return tuple(self._run_record(row) for row in rows)
 
+    async def list_runs_for_migration(
+        self,
+        *,
+        org_id: str,
+        after_run_id: str | None,
+        limit: int,
+    ) -> tuple[RunRecord, ...]:
+        """Return a bounded tenant-wide run page for the internal E2 scan.
+
+        This is intentionally separate from the user-facing run-history query:
+        an authorized migration must inventory the entire tenant, including
+        rows no longer visible in a user history projection.
+        """
+
+        if limit <= 0:
+            return ()
+        async with self._tenant_connection(org_id=org_id) as conn:
+            cur = await conn.execute(
+                """
+                SELECT * FROM agent_runs
+                 WHERE org_id = %s
+                   AND (%s IS NULL OR id > %s)
+                 ORDER BY id ASC
+                 LIMIT %s
+                """,
+                (org_id, after_run_id, after_run_id, limit),
+            )
+            rows = await cur.fetchall()
+        return tuple(self._run_record(row) for row in rows)
+
     async def list_runs_for_org(
         self,
         *,

@@ -18,6 +18,7 @@ from agent_runtime.api.connector_policy_client import (
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.legacy_migration_service import LegacyMigrationService
 from agent_runtime.api.membership import (
     HttpWorkspaceMembershipResolver,
     InMemoryWorkspaceMembershipResolver,
@@ -72,11 +73,15 @@ from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
     LifecycleReferenceSnapshotCollector,
 )
 from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
-from runtime_adapters.repair_planning import build_audit_export_verification_store
+from runtime_adapters.repair_planning import (
+    build_audit_export_verification_store,
+    build_legacy_migration_checkpoint_store,
+)
 from runtime_api.http.account_merge_routes import AccountMergeApiRouter
 from runtime_api.http.desktop_workspace_attestation import (
     DesktopWorkspaceAttestationRouter,
 )
+from runtime_api.http.legacy_migration_routes import LegacyMigrationApiRouter
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.retention_routes import (
     RetentionAdminRouter,
@@ -293,6 +298,21 @@ class RuntimeApiAppFactory:
             # useful for isolated non-route test composition and has no public
             # effect because no artifact path is registered.
             app.state.artifact_service = artifact_service
+        # E2 migration prerequisite — internal-only evidence/control-plane
+        # service.  It may compose the canonical repository while the public
+        # artifact feature is dark: migration evidence has to exist before a
+        # cohort can be enabled.  This does not mount an artifact route or
+        # alter any rollout/default; the only caller is the separately
+        # service-token-gated migration endpoint below.
+        migration_artifact_service = getattr(app.state, "artifact_service", None)
+        if (
+            migration_artifact_service is None
+            and _ports.require_artifact_service_storage() is not None
+        ):
+            migration_artifact_service = cls.default_artifact_service(app)
+        app.state.legacy_migration_service = cls.default_legacy_migration_service(
+            app, artifact_service=migration_artifact_service
+        )
         # E1 D4/D5 — click-time source opening is deliberately composed as a
         # separate service. It receives the canonical run/event stores plus the
         # owner artifact service, but no raw reference resolver. The route is
@@ -380,6 +400,10 @@ class RuntimeApiAppFactory:
         # Account-linking PRD §6.4 — the backend merge saga's re-key call.
         # Service-token gated, never tenant-scoped, never facade-exposed.
         app.include_router(AccountMergeApiRouter.create_router())
+        # E2 legacy inventory/import requires a service token plus matching
+        # trusted tenant identity and is intentionally absent from the
+        # product-facing facade route table.
+        app.include_router(LegacyMigrationApiRouter.create_router())
         # P7.5-A1 — internal LLM-embedding endpoint for Library
         # indexing / retrieval. Service-token gated; TU-1 invariant
         # preserved (all writes go through the canonical UsageRecorder).
@@ -689,6 +713,28 @@ class RuntimeApiAppFactory:
         if ports is None:
             return None
         return ArtifactServiceComposition.build(ports)
+
+    @classmethod
+    def default_legacy_migration_service(
+        cls, app: FastAPI, *, artifact_service: ArtifactService | None = None
+    ) -> LegacyMigrationService | None:
+        """Compose the bounded E2 evidence service from runtime-owned ports."""
+
+        ports = getattr(app.state, "runtime_ports", None)
+        settings = getattr(app.state, "runtime_settings", None)
+        if ports is None or settings is None:
+            return None
+        return LegacyMigrationService(
+            draft_store=ports.draft_store,
+            run_store=ports.persistence,
+            event_store=ports.event_store,
+            artifact_service=artifact_service,
+            checkpoints=build_legacy_migration_checkpoint_store(
+                settings=settings,
+                persistence=ports.persistence,
+            ),
+            audit=ports.persistence,
+        )
 
     @classmethod
     def default_source_open_service(cls, app: FastAPI) -> SourceOpenService | None:
