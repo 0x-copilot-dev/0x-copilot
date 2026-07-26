@@ -1,59 +1,39 @@
-# Connectors destination — available-to-install catalog (Phase 11).
+# Connectors the product advertises but cannot install yet.
 #
-# The slugs below are the canonical Atlas-vetted SaaS sources the
-# destination renders on the "Available" tab. Each row is a config-file
-# entry per connectors-prd §10 Q4 (Recommend: YAML in Phase 11; remote
-# registry in Wave 13).
+# This file used to be a second connector catalog: nine marketing slugs the
+# Tools destination rendered on its "Available" tab, overlapping the thirteen
+# real MCP servers in `mcp_catalog.DEFAULT_CATALOG` by exactly three. The two
+# lists disagreed, so the composer and the destination showed different
+# products. Six of the nine now resolve from a profile or a seed and have been
+# removed from here; what remains was never a catalog entry at all — it is a
+# promise.
 #
-# Distinct from `mcp_catalog.DEFAULT_CATALOG` (which seeds MCP connector
-# servers for the chat composer popover): this list is the destination's
-# higher-level catalog of "things Atlas knows about" — Gmail, Slack,
-# Salesforce, GitHub, Drive, Notion, Outlook, Google Calendar. New entries
-# only need a slug + display name + short description.
+# Every row here resolves `installable=False` through `ConnectorRegistry`, and
+# there is deliberately no endpoint field to fill in. A row cannot become
+# installable by editing this file. It becomes installable by gaining a seed
+# in `mcp_catalog.py` or a profile in `desktop_profiles.yaml`, at which point
+# the registry prefers that source and `superseded_announcements()` reports
+# the leftover row so this file self-cleans.
 #
-# Fields:
-#   slug          — canonical short identifier (matches `ConnectorSlug`)
-#   display_name  — what the FE renders on the card
-#   description   — short marketing copy (one line)
-#   icon_hint     — optional; FE maps to a built-in icon registry
+# `note` is shown to the user, so write it as a status, not an apology.
 #
-# When a tenant installs a connector its `seed:<slug>` is the stable id
-# the existing MCP registration path produces.
+# The rule this file exists to keep: a card may say "coming soon", but no card
+# may offer a Connect button that resolves to nothing. That is exactly what
+# these three slugs did, in every deployment, until the registry landed.
 
 entries:
-  - slug: gmail
-    display_name: Gmail
-    description: Read and triage mail.
-    icon_hint: gmail
   - slug: gcal
     display_name: Google Calendar
     description: Meetings, agendas, and availability.
     icon_hint: gcal
+    note: Not yet available. Gmail and Drive connect the same way today.
   - slug: slack
     display_name: Slack
     description: Channels, DMs, and threads.
     icon_hint: slack
+    note: Not yet available.
   - slug: salesforce
     display_name: Salesforce
     description: Accounts, contacts, and pipeline.
     icon_hint: salesforce
-  - slug: github
-    display_name: GitHub
-    description: Repos, issues, and pull requests.
-    icon_hint: github
-  - slug: gdrive
-    display_name: Google Drive
-    description: Files, folders, and Docs.
-    icon_hint: gdrive
-  - slug: notion
-    display_name: Notion
-    description: Workspace pages and databases.
-    icon_hint: notion
-  - slug: outlook
-    display_name: Outlook
-    description: Mail and calendar.
-    icon_hint: outlook
-  - slug: atlassian
-    display_name: Atlassian
-    description: Jira issues and Confluence pages.
-    icon_hint: atlassian
+    note: Not yet available.

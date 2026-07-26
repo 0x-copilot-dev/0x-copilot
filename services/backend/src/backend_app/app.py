@@ -158,7 +158,6 @@ from backend_app.connectors import (
     ConnectorsService,
     ConnectorsStore,
     InMemoryConnectorsStore,
-    load_catalog,
     register_connector_routes,
     register_connector_sse_routes,
 )
@@ -171,6 +170,7 @@ from backend_app.connectors.desktop_routes import (
 )
 from backend_app.connectors.oauth_coordinator import DesktopMcpOAuthCoordinator
 from backend_app.connectors.profile_catalog import DesktopProfileCatalog
+from backend_app.connectors.registry import ConnectorRegistry
 from backend_app.webhooks import (
     InMemoryWebhooksStore,
     WebhooksService,
@@ -1929,16 +1929,21 @@ def create_app(
     # destination-level audit rows + projects the consumer view. SSE
     # registers first so the activity bus is on
     # ``app.state.connector_activity_bus`` before the service is
-    # constructed. The catalog (Atlas-vetted SaaS slugs) is loaded once
-    # from the package-local ``catalog.yaml``; a soft-fail wraps the
-    # load so a missing file degrades to an empty Available tab rather
-    # than a boot crash.
+    # constructed. The Available tab is now projected from
+    # :class:`ConnectorRegistry` — the single reader over desktop profiles,
+    # MCP seeds, and the announced-only rows — so the destination and the
+    # chat composer render the same set instead of two catalogs that
+    # overlapped by three entries. A soft-fail wraps the load so a bad file
+    # degrades to an empty Available tab rather than a boot crash.
     # ``resolved_connectors_store`` is resolved + stashed on ``app.state``
     # earlier (beside the runtime-policies route registration) so the aggregate
     # sees the same instance; reuse it here — do NOT re-create it.
     try:
-        connector_catalog = load_catalog()
+        connector_catalog = ConnectorRegistry.load().as_catalog_entries()
     except Exception:
+        logging.getLogger(__name__).warning(
+            "connector_registry_load_failed", exc_info=True
+        )
         connector_catalog = ()
     register_connector_sse_routes(app)
     connectors_service = ConnectorsService(

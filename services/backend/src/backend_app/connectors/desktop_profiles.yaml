@@ -23,6 +23,8 @@
 profiles:
   - profile_id: google-gmail
     connector_slug: gmail
+    display_name: Gmail
+    description: Read and triage mail.
     server_id: "desktop:google:gmail"
     display_group: Google Workspace
     endpoint_template: "https://gmailmcp.googleapis.com/mcp/v1"
@@ -70,6 +72,8 @@ profiles:
 
   - profile_id: google-drive
     connector_slug: gdrive
+    display_name: Google Drive
+    description: Files, folders, and Docs.
     server_id: "desktop:google:drive"
     display_group: Google Workspace
     endpoint_template: "https://drivemcp.googleapis.com/mcp/v1"
@@ -121,6 +125,8 @@ profiles:
 
   - profile_id: microsoft-work-iq-mail
     connector_slug: outlook
+    display_name: Outlook
+    description: Mail and calendar.
     server_id: "desktop:microsoft:work-iq-mail"
     display_group: Microsoft 365
     endpoint_template: "https://agent365.svc.cloud.microsoft/agents/tenants/{tenantId}/servers/mcp_MailTools"
@@ -161,6 +167,8 @@ profiles:
 
   - profile_id: atlassian-rovo
     connector_slug: atlassian
+    display_name: Atlassian
+    description: Jira issues and Confluence pages.
     server_id: "seed:atlassian"
     display_group: Atlassian/Jira
     endpoint_template: "https://mcp.atlassian.com/v1/mcp/authv2"

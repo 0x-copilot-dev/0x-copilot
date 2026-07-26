@@ -1,105 +1,113 @@
-"""Every advertised connector must be installable.
+"""Invariants the connector registry must hold.
 
-`DesktopProfileCatalog.reconcile` already checks one direction — a profile
-may not reference a marketing slug the catalog does not advertise, so there
-are no orphan *profiles*. Nothing checks the inverse, and the inverse is the
-one a user sees: the "Available" tab renders every row of `catalog.yaml`
-with no cross-check that anything can install it.
+The defect this file was written for — a card offering Connect for a slug
+nothing could install — is now **structurally impossible**. `installable` is
+derived (`server_id is not None`), and only a profile or an MCP seed can set
+a server id; an announced row has no endpoint field to fill in. There is no
+longer a way to express the bug.
 
-Today three slugs advertise a connector that resolves to nothing. Clicking
-Connect on one of them cannot succeed, because `install_from_catalog` raises
-`Unknown catalog entry` for a slug with no MCP seed and no desktop profile.
-The card is a promise the product cannot keep.
+That is the outcome worth having, so what remains here is not a re-check of
+the same thing in another form. These are the invariants the *registry* can
+still violate, which the type system cannot catch:
 
-This module is the check in the missing direction. It is deliberately
-separate from the profile reconciler: that one protects the profile author
-("you referenced a card that doesn't exist"), this one protects the user
-("we advertised a connector we can't deliver").
+* an announced row that a real implementation has overtaken (dead copy the
+  file should shed);
+* a slug resolving from more than one source (precedence silently dropping a
+  row rather than choosing);
+* an installable row with no display name (a card that renders blank).
 
-A slug is **installable** when either source can produce a server record:
-
-* a desktop profile declares it — the profile carries its own verified
-  endpoint and auth metadata; or
-* `mcp_catalog.DEFAULT_CATALOG` seeds it — `install_from_catalog` mints
-  `seed:<slug>` from that entry.
-
-Neither is a "nice to have": both are the only two code paths that turn a
-slug into something with a URL.
+`DesktopProfileCatalog.reconcile` guards the direction *into* profiles — no
+profile may reference a card that does not exist. This guards the registry
+that consumes it.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
-from backend_app.connectors.service import ConnectorCatalogEntry, load_catalog
-from backend_app.mcp_catalog import DEFAULT_CATALOG
+from backend_app.connectors.registry import (
+    AnnouncedConnector,
+    ConnectorRegistry,
+    ConnectorSource,
+)
 
 
 class ConnectorCatalogConformanceError(ValueError):
-    """An advertised connector slug resolves to nothing installable."""
+    """The resolved connector registry violates an invariant."""
 
 
 class ConnectorCatalogConformance:
-    """Checks that the advertised catalog and the installable sources agree."""
-
-    @staticmethod
-    def installable_slugs(profile_slugs: Iterable[str] | None = None) -> frozenset[str]:
-        """Return every slug some source can turn into a server record.
-
-        ``profile_slugs`` is injectable so a caller that has already loaded
-        the desktop profiles does not pay for a second YAML read; omitted, it
-        is loaded here.
-        """
-
-        if profile_slugs is None:
-            # Imported lazily: the profile catalog imports this module's
-            # siblings, and a module-level import would make the two files
-            # circular for no benefit.
-            from backend_app.connectors.profile_catalog import (  # noqa: PLC0415
-                DesktopProfileCatalog,
-            )
-
-            profile_slugs = [
-                profile.connector_slug
-                for profile in DesktopProfileCatalog.load().profiles
-            ]
-        return frozenset(profile_slugs) | {entry.slug for entry in DEFAULT_CATALOG}
+    """Checks the resolved registry against the invariants above."""
 
     @classmethod
     def unresolvable_slugs(
-        cls,
-        *,
-        marketing: Iterable[ConnectorCatalogEntry] | None = None,
-        profile_slugs: Iterable[str] | None = None,
+        cls, registry: ConnectorRegistry | None = None
     ) -> tuple[str, ...]:
-        """Return advertised slugs nothing can install, sorted for stable output."""
+        """Advertised connectors that neither install nor say they cannot.
 
-        advertised = marketing if marketing is not None else load_catalog()
-        installable = cls.installable_slugs(profile_slugs)
+        Structurally empty now: every row is installable or explicitly
+        `coming_soon`. Kept as an executable statement of that property, so
+        a future source that forgets to declare one is caught here rather
+        than by a user meeting a dead Connect button.
+        """
+
+        resolved = registry if registry is not None else ConnectorRegistry.load()
         return tuple(
-            sorted(entry.slug for entry in advertised if entry.slug not in installable)
+            sorted(
+                row.slug
+                for row in resolved
+                if not row.installable and row.source is not ConnectorSource.ANNOUNCED
+            )
         )
 
     @classmethod
-    def assert_installable(
-        cls,
-        *,
-        marketing: Iterable[ConnectorCatalogEntry] | None = None,
-        profile_slugs: Iterable[str] | None = None,
-    ) -> None:
-        """Raise when the catalog advertises something that cannot be installed."""
+    def blank_display_names(
+        cls, registry: ConnectorRegistry | None = None
+    ) -> tuple[str, ...]:
+        """Installable rows that would render as an unlabelled card."""
 
-        orphans = cls.unresolvable_slugs(
-            marketing=marketing, profile_slugs=profile_slugs
+        resolved = registry if registry is not None else ConnectorRegistry.load()
+        return tuple(
+            sorted(row.slug for row in resolved if not row.display_name.strip())
         )
-        if not orphans:
-            return
-        raise ConnectorCatalogConformanceError(
-            "connectors/catalog.yaml advertises "
-            f"{', '.join(orphans)} but no desktop profile or MCP catalog seed "
-            "can install them — a Connect button on those cards cannot succeed. "
-            "Give each one a verified endpoint or stop advertising it."
+
+    @classmethod
+    def assert_conformant(
+        cls,
+        registry: ConnectorRegistry | None = None,
+        announced: Iterable[AnnouncedConnector] | None = None,
+    ) -> None:
+        """Raise on any registry invariant violation, naming what to do."""
+
+        resolved = registry if registry is not None else ConnectorRegistry.load()
+
+        orphans = cls.unresolvable_slugs(resolved)
+        if orphans:
+            raise ConnectorCatalogConformanceError(
+                f"{', '.join(orphans)} resolve to no installable server and are "
+                "not declared coming_soon — a Connect button on those cards "
+                "cannot succeed. Give each a seed or profile, or move it to "
+                "catalog.yaml with a note."
+            )
+
+        blank = cls.blank_display_names(resolved)
+        if blank:
+            raise ConnectorCatalogConformanceError(
+                f"{', '.join(blank)} resolve with no display name and would "
+                "render as a blank card. Set display_name on the profile, or "
+                "let it fall through to a seed that has one."
+            )
+
+        rows = (
+            announced if announced is not None else ConnectorRegistry.load_announced()
         )
+        superseded = resolved.superseded_announcements(rows)
+        if superseded:
+            raise ConnectorCatalogConformanceError(
+                f"{', '.join(superseded)} are announced in catalog.yaml but now "
+                "resolve from a real profile or seed. Delete those rows — the "
+                "announcement is dead copy the registry already ignores."
+            )
 
 
 __all__ = (

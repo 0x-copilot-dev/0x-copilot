@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend_app.connectors.registry import ConnectorRegistry
 from backend_app.connectors.service import (
     ConnectorCatalogEntry,
     ConnectorForbidden,
@@ -239,21 +240,27 @@ class TestConsumerProjection:
 
 
 class TestCatalogLoad:
-    def test_real_catalog_yaml_loads(self) -> None:
-        entries = load_catalog()
-        slugs = {e.slug for e in entries}
-        # Sanity: every slug we claim to support shows up.
-        for required in {
-            "gmail",
-            "gcal",
-            "slack",
-            "salesforce",
-            "github",
-            "gdrive",
-            "notion",
-            "outlook",
-        }:
-            assert required in slugs, f"missing {required} from catalog.yaml"
+    def test_catalog_yaml_now_holds_only_unimplemented_promises(self) -> None:
+        """`catalog.yaml` stopped being a second connector catalog.
+
+        It used to advertise nine slugs — six of which are really described
+        by a profile or an MCP seed, and three of which were described by
+        nothing at all. `ConnectorRegistry` is the one reader now, so this
+        file keeps only the part that was never a catalog entry: connectors
+        the product announces with no implementation behind them.
+        """
+
+        slugs = {e.slug for e in load_catalog()}
+        assert slugs == {"gcal", "slack", "salesforce"}
+
+    def test_the_implemented_slugs_resolve_from_the_registry(self) -> None:
+        """The six that left this file are still advertised — from elsewhere."""
+
+        registry = ConnectorRegistry.load()
+        for slug in ("gmail", "gdrive", "outlook", "atlassian", "github", "notion"):
+            row = registry.get(slug)
+            assert row is not None, slug
+            assert row.installable, slug
 
 
 class TestAuditListing:
