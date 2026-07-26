@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import AsyncIterator
 from datetime import timedelta
 
@@ -193,6 +194,38 @@ class TestArtifactRetentionAndGlobalGc:
             org_id="org_artifacts",
             candidate=candidates[0],
             grace_before=NOW + timedelta(days=1),
+        )
+
+    async def test_file_gc_uses_durable_candidate_clock_not_object_mtime(
+        self, artifact_bundle
+    ) -> None:
+        _, blob, _, metadata, gc = artifact_bundle
+        if not isinstance(gc, FileArtifactGarbageCollector):
+            pytest.skip("file adapter only")
+
+        await _publish(blob)
+        await metadata.create_artifact(make_create_command(body=_BODY))
+        await metadata.soft_delete(make_delete_command())
+        purged = await metadata.purge_tombstones(
+            scope=ArtifactRetentionScope(org_id="org_artifacts"),
+            deleted_before=NOW + timedelta(days=1),
+            limit=10,
+        )
+        candidate = purged.eligible_candidates[0]
+        grace_before = NOW + timedelta(days=1)
+        active = gc.layout.object_path(candidate.blob_key)
+        newer_than_grace = grace_before + timedelta(seconds=1)
+        os.utime(active, (newer_than_grace.timestamp(),) * 2)
+
+        assert await gc.collect_if_unreferenced(
+            org_id="org_artifacts",
+            candidate=candidate,
+            grace_before=grace_before,
+        )
+        assert await gc.collect_if_unreferenced(
+            org_id="org_artifacts",
+            candidate=candidate,
+            grace_before=grace_before,
         )
 
     async def test_two_org_digest_is_global_and_reaped_in_two_phases(

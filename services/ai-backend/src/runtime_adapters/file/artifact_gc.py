@@ -58,20 +58,12 @@ class FileArtifactGarbageCollector:
                 or durable_candidate.candidate_since > grace_before
             ):
                 return False
-            active = self.layout.object_path(candidate.blob_key)
-            try:
-                modified = datetime.fromtimestamp(
-                    active.stat().st_mtime, tz=timezone.utc
-                )
-            except FileNotFoundError:
-                return False
-            if modified > grace_before:
-                return False
             if self.reference_store.has_reference_locked(blob_key=candidate.blob_key):
                 return False
             quarantine = self.coordinator.quarantine_path(candidate.blob_key)
             if quarantine.exists():
                 return candidate.blob_key in self.coordinator.quarantine
+            active = self.layout.object_path(candidate.blob_key)
             FileStoreLayout.ensure_dir(quarantine.parent)
             try:
                 os.replace(active, quarantine)
