@@ -190,7 +190,7 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
         # Curated tool ⇒ shaped/registry view.
         assert recorded[3]["payload"]["tier"] == "shaped"
 
-    def test_uncurated_tool_records_read_and_generic_view(
+    def test_uncurated_tool_is_held_before_legacy_dispatch(
         self, runtime_context_admin: AgentRuntimeContext
     ) -> None:
         tool = self.make_call_tool(
@@ -200,20 +200,12 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
             output=_UNCURATED_OUTPUT,
         )
 
-        _result, recorded = self.bind_and_invoke(
+        result, recorded = self.bind_and_invoke(
             tool, server="customsvc", tool_name="do_thing"
         )
 
-        assert [row["event_type"] for row in recorded] == [
-            LedgerEventType.ACTION_CLASSIFIED.value,
-            LedgerEventType.READ_EXECUTED.value,
-            LedgerEventType.SURFACE_CREATED.value,
-            LedgerEventType.VIEW_DERIVED.value,
-        ]
-        assert recorded[2]["payload"]["surface_id"] == "record://customsvc/do_thing/w-9"
-        # No builtin spec ⇒ generic/schema view.
-        assert recorded[3]["payload"]["tier"] == "generic"
-        assert recorded[3]["payload"]["basis"] == "schema"
+        assert result["error"]["code"] == "permission_denied"
+        assert recorded == []
 
     def test_is_error_result_emits_no_surface_events(
         self, runtime_context_admin: AgentRuntimeContext

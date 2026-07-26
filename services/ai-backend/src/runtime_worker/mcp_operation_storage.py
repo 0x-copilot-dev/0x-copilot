@@ -42,6 +42,10 @@ from runtime_adapters.artifact_references import (
 )
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_worker.mcp_effect_executor import McpEffectExecutor
+from runtime_worker.builtin_effect_executor import (
+    BuiltinRowSetEffectExecutor,
+    RuntimeBuiltinRowSetMaterialResolver,
+)
 from runtime_worker.browser_operation_storage import RuntimeBrowserActionPlanStore
 from runtime_worker.workspace_effect_storage import (
     RuntimeWorkspaceProposalStore,
@@ -262,7 +266,23 @@ class RuntimeMcpEffectCoordinatorFactory:
                     arguments=arguments
                 ),
                 enabled=True,
-            )
+            ),
+            # This is intentionally a dedicated executor, not a generic
+            # builtin callable bridge. It accepts only the typed, retained
+            # row-set proposal and reuses the approved MCP commit transport.
+            EffectExecutorKind.BUILTIN: lambda active_scope: (
+                BuiltinRowSetEffectExecutor(
+                    scope=active_scope,
+                    connector=McpStageCommitConnector(
+                        runtime_context=run.runtime_context,
+                        dependencies_factory=self.dependencies_factory,  # type: ignore[arg-type]
+                        timeout_seconds=self.timeout_seconds,
+                    ),
+                    material_resolver=RuntimeBuiltinRowSetMaterialResolver(
+                        arguments=arguments
+                    ),
+                )
+            ),
         }
         if (
             self.workspace_sessions is not None

@@ -65,6 +65,9 @@ from agent_runtime.capabilities.operations.contracts import (
 from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorRegistry,
 )
+from agent_runtime.capabilities.operations.catalog import (
+    DEFAULT_OPERATION_DESCRIPTORS,
+)
 from agent_runtime.capabilities.operations.errors import (
     OperationGatewayError,
     OperationGatewayErrorCode,
@@ -276,6 +279,35 @@ class McpOperationGatewayContext:
         ):
             return None
         return services
+
+    @staticmethod
+    def legacy_direct_read_allowed(*, capability: str, op: str) -> bool:
+        """Allow the D7 compatibility branch to dispatch only reviewed reads.
+
+        The branch is intentionally transitional and remains a D9 release
+        blocker until D7 deletes it.  Its safety property is nevertheless
+        immediate: an unbound/default-off model tool cannot create an MCP
+        client for a write, destructive, or unknown operation.  Those calls
+        must be retried in the fully composed gateway, where canonical
+        arguments are retained, a stage is recorded, and the worker
+        coordinator claims the approved effect before dispatch.
+        """
+
+        descriptor = DEFAULT_OPERATION_DESCRIPTORS.resolve(capability, op)
+        annotations = McpToolAnnotationsRegistry.get(capability, op)
+        # The legacy branch has no canonical stage to preserve a tightened
+        # intent, so it must be stricter than the gateway's catalog-first
+        # classification. A provider hint can never grant a read here; either
+        # write-tightening hint vetoes direct dispatch, including a conflicting
+        # ``readOnlyHint=true`` / ``destructiveHint=true`` pair.
+        if annotations is not None and (
+            annotations.destructive_hint is True or annotations.read_only_hint is False
+        ):
+            return False
+        return descriptor is not None and descriptor.effect_class in {
+            EffectClass.NONE,
+            EffectClass.INTERNAL_REVERSIBLE,
+        }
 
 
 class McpOperationAdapter(OperationAdapter):

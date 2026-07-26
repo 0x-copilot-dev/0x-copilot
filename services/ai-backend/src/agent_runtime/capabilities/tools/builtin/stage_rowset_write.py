@@ -49,8 +49,15 @@ from agent_runtime.surfaces_v2.ledger_models import (
 from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec, ProposalUriCodec
 from agent_runtime.surfaces_v2.rowset import AgentHold, StagedRow
 from agent_runtime.surfaces_v2.staging import StagedWriteError, WriteStager
+from agent_runtime.capabilities.surfaces.builtin import server_slug, tool_slug
 
 _OPERATION = BuiltinOperationAdapter(tool_name=Values.Tool.STAGE_ROWSET_WRITE)
+
+# The builtin executor is deliberately not a generic MCP bridge.  Adding a
+# target here is a product/security review: the target must have a stable
+# connector contract, a reviewed staging flow, and adversarial executor tests.
+# All other connector operations use the canonical MCP effect adapter instead.
+REVIEWED_ROWSET_TARGETS = frozenset({("linear", "update_issue")})
 
 
 class _Fields:
@@ -80,7 +87,17 @@ class _Messages:
     """Safe public messages returned to the agent on a rejected proposal."""
 
     MALFORMED = "The row-set proposal is malformed and was not staged."
+    TARGET_NOT_REVIEWED = "This row-set target is not enabled for staged execution."
     UNAVAILABLE = "Bulk staging is not available in this run."
+
+
+def reviewed_rowset_target(
+    *, target_connector: str, target_op: str
+) -> tuple[str, str] | None:
+    """Return one explicit builtin target, never a model-selected connector path."""
+
+    normalized = (server_slug(target_connector), tool_slug(target_op))
+    return normalized if normalized in REVIEWED_ROWSET_TARGETS else None
 
 
 class StageRowsetWriteInput(RuntimeContract):
@@ -245,6 +262,15 @@ class StageRowsetWriteTool:
     async def _stage(self, proposal: RowSetEffectProposal) -> RowSetProposalReceipt:
         """Stage through the authoritative gateway in enforce mode only."""
 
+        if (
+            reviewed_rowset_target(
+                target_connector=proposal.target_connector,
+                target_op=proposal.target_op,
+            )
+            is None
+        ):
+            raise StagedWriteError(_Messages.TARGET_NOT_REVIEWED)
+
         # Construction validates this callable, but repeat the catalogue lookup
         # at the model-facing seam so a future mutable/test catalogue cannot
         # leave an unreviewed staging path live.
@@ -330,6 +356,8 @@ __all__ = [
     "RowSetEffectProposal",
     "RowSetEffectProposalPort",
     "RowSetProposalReceipt",
+    "REVIEWED_ROWSET_TARGETS",
     "StageRowsetWriteInput",
     "StageRowsetWriteTool",
+    "reviewed_rowset_target",
 ]

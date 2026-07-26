@@ -10,7 +10,9 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.capabilities.desktop.workspace_authority import (
     WorkspaceEffectExecutor,
 )
+from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.effects.composition import validate_effect_descriptor_staging
 from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.effects.executor_registry import EffectExecutorRegistryError
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
@@ -34,6 +36,7 @@ from runtime_worker.mcp_operation_storage import (
     RuntimeMcpOperationArgumentStore,
     RuntimeMcpOperationResultStore,
 )
+from runtime_worker.builtin_effect_executor import BuiltinRowSetEffectExecutor
 from runtime_worker.workspace_effect_storage import (
     InMemoryWorkspaceHostSessionRegistry,
 )
@@ -149,6 +152,79 @@ def test_worker_registry_resolves_the_typed_workspace_executor() -> None:
     )
 
     assert isinstance(executor, WorkspaceEffectExecutor)
+
+
+def test_worker_registry_resolves_only_the_closed_builtin_rowset_executor() -> None:
+    """The builtin registry entry cannot become a generic tool dispatcher."""
+
+    store = InMemoryRuntimeApiStore()
+    publication = InMemoryArtifactPublicationCoordinator()
+    run = _run()
+    scope = EffectExecutionScope(
+        org_id=run.org_id,
+        user_id=run.user_id,
+        conversation_id=run.conversation_id,
+        run_id=run.run_id,
+        owner_ref=f"principal://users/{run.user_id}",
+    )
+    factory = RuntimeMcpEffectCoordinatorFactory(
+        event_producer=RuntimeEventProducer(
+            persistence=store,
+            event_store=store,
+        ),
+        claims=InMemoryEffectClaimStore(),
+        blobs=InMemoryArtifactBlobStore(publication),
+        references=InMemoryArtifactReferenceStore(publication),
+        dependencies_factory=object(),
+        timeout_seconds=30,
+    )
+
+    executor = factory.for_run(run=run)._executors.resolve(  # noqa: SLF001
+        kind=EffectExecutorKind.BUILTIN,
+        scope=scope,
+    )
+
+    assert isinstance(executor, BuiltinRowSetEffectExecutor)
+
+
+def test_every_effect_descriptor_has_a_stager_mapping_and_real_worker_executor() -> (
+    None
+):
+    """D9 P1: descriptors cannot pass on a source-text executor mention."""
+
+    store = InMemoryRuntimeApiStore()
+    publication = InMemoryArtifactPublicationCoordinator()
+    run = _run()
+    scope = EffectExecutionScope(
+        org_id=run.org_id,
+        user_id=run.user_id,
+        conversation_id=run.conversation_id,
+        run_id=run.run_id,
+        owner_ref=f"principal://users/{run.user_id}",
+    )
+    factory = RuntimeMcpEffectCoordinatorFactory(
+        event_producer=RuntimeEventProducer(
+            persistence=store,
+            event_store=store,
+        ),
+        claims=InMemoryEffectClaimStore(),
+        blobs=InMemoryArtifactBlobStore(publication),
+        references=InMemoryArtifactReferenceStore(publication),
+        dependencies_factory=object(),
+        timeout_seconds=30,
+        workspace_sessions=InMemoryWorkspaceHostSessionRegistry(),
+        workspace_overlay_store=InMemoryWorkspaceOverlayStore(),
+        browser_bridge=object(),  # type: ignore[arg-type] -- resolution only.
+    )
+    executors = factory.for_run(run=run)._executors  # noqa: SLF001 - composition proof.
+
+    mappings = validate_effect_descriptor_staging(DEFAULT_OPERATION_DESCRIPTORS)
+
+    assert mappings
+    for mapping in mappings:
+        executor = executors.resolve(kind=mapping.executor, scope=scope)
+        assert executor.kind is mapping.executor
+        assert executor.capabilities.supports_prepare is True
 
 
 def test_worker_registry_refuses_workspace_without_overlay_authority() -> None:

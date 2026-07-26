@@ -308,6 +308,9 @@ class Messages:
         """Safe error and warning messages emitted by the MCP loader."""
 
         AUTH_FAILED = "MCP server authentication failed."
+        CANONICAL_EFFECT_PIPELINE_REQUIRED = (
+            "This connector change requires the canonical review pipeline."
+        )
         CONNECTION_FAILED = "The MCP server could not be reached."
         DESCRIPTORS_INVALID = "The MCP server returned invalid descriptors."
         DESCRIPTORS_LOAD_FAILED = (

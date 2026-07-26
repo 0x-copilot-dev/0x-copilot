@@ -106,6 +106,25 @@ class CallMcpTool:
         if services is not None:
             return await self._ainvoke_operation_gateway(parsed_input, services)
 
+        # D9 P0 transitional guard.  D7 has not yet removed the legacy read
+        # compatibility branch below, but that branch must never turn a
+        # model-originated write, destructive request, or unknown operation
+        # into ``create_client``/``call_tool`` traffic.  Such work is safe only
+        # in the enforced gateway, after descriptor classification, durable
+        # staging, user/policy decision, claim, and coordinator dispatch.
+        if not McpOperationGatewayContext.legacy_direct_read_allowed(
+            capability=parsed_input.server_name,
+            op=parsed_input.tool_name,
+        ):
+            return McpToolCallResult.fail(
+                McpLoadErrorCode.PERMISSION_DENIED,
+                Messages.Loader.CANONICAL_EFFECT_PIPELINE_REQUIRED,
+                retryable=True,
+                server_name=parsed_input.server_name,
+                tool_name=parsed_input.tool_name,
+                correlation_id=self.runtime_context.trace_id,
+            ).model_dump(mode="json", exclude_none=True)
+
         resolution = await self.registry.resolve_server(parsed_input.server_name)
         if isinstance(resolution, McpLoadError):
             return McpToolCallResult.fail(

@@ -31,6 +31,7 @@ from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
     RowSetEffectProposal,
     RowSetEffectProposalPort,
     RowSetProposalReceipt,
+    reviewed_rowset_target,
 )
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
@@ -88,6 +89,14 @@ class RuntimeRowSetEffectProposalPort(RowSetEffectProposalPort):
     ) -> RowSetProposalReceipt:
         if operation_id is None:
             raise StagedWriteError("The row-set proposal is missing its operation id.")
+        target = reviewed_rowset_target(
+            target_connector=proposal.target_connector,
+            target_op=proposal.target_op,
+        )
+        if target is None:
+            raise StagedWriteError(
+                "This row-set target is not enabled for staged execution."
+            )
         try:
             RowsetValidator.validate(
                 rows=proposal.rows,
@@ -123,11 +132,11 @@ class RuntimeRowSetEffectProposalPort(RowSetEffectProposalPort):
             ) from exc
 
         classified = ACTION_CLASSIFIER.classify(
-            server=proposal.target_connector,
-            tool=proposal.target_op,
+            server=target[0],
+            tool=target[1],
             annotations=McpToolAnnotationsRegistry.get(
-                proposal.target_connector,
-                proposal.target_op,
+                target[0],
+                target[1],
             ),
         )
         effect_class = _effect_class(classified)
