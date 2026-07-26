@@ -57,6 +57,19 @@ export class EncryptedWorkspaceJournalStore implements WorkspaceJournalStore {
     this.#allowPlaintext = config.allowPlaintextFallback ?? false;
   }
 
+  /**
+   * Load and integrity-check prior state, then ensure the private journal
+   * directory exists before any authority advertises writable capability.
+   *
+   * This intentionally does not create an empty journal file: an empty boot
+   * must not manufacture recovery state. It does prove that recovery data is
+   * readable and that the main-owned persistence directory is usable.
+   */
+  async initialize(): Promise<void> {
+    await this.#ensureLoaded();
+    await mkdir(dirname(this.#path), { recursive: true, mode: 0o700 });
+  }
+
   async get(preparedRef: string): Promise<WorkspaceJournalRecord | null> {
     await this.#ensureLoaded();
     return this.#records.get(preparedRef) ?? null;

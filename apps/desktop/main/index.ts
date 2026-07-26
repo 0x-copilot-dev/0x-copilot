@@ -65,6 +65,7 @@ import {
 } from "./app-protocol";
 import {
   createCapabilityService,
+  createProductionWorkspaceAuthorityBootstrap,
   DesktopWorkspaceAttestationPublisher,
   isDesktopFilesystemEnabled,
   type CapabilityService,
@@ -89,6 +90,7 @@ import { isDesktopBrowserEnabled } from "./browser/feature-gate";
 import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
 import {
+  loadOrCreateBootSecrets,
   setBootSecretsEncryption,
   type BootSecretsFs,
 } from "./services/boot-secrets";
@@ -150,6 +152,10 @@ let supervisorStopped = false;
 let browserSubsystem: ProductionDesktopBrowserSubsystem | null = null;
 let browserSubsystemStopped = false;
 let capabilityService: CapabilityService | null = null;
+// Set only by the main-process transport composition. It is never selected by
+// renderer IPC and is used solely to bind future native grants to a verified
+// bearer identity.
+let activeFacadeBaseUrl: string | null = null;
 // C3 decision reservations are main-only. The private broker handoff consumes
 // this typed source after C2 prepare; it is never installed in preload or
 // renderer globals.
@@ -292,6 +298,43 @@ function startAutoUpdate(): void {
   }
 }
 
+/**
+ * Resolve the profile used to bind a newly picked folder to C2. The renderer
+ * can choose an advisory workspace id during sign-in, but it cannot choose
+ * this value: Electron main obtains a bearer from the persisted AuthService,
+ * fetches the fixed facade profile endpoint, and validates the returned id.
+ */
+async function resolveVerifiedWorkspaceProfileId(): Promise<string | null> {
+  const auth = activeAuthService;
+  const facadeBaseUrl = activeFacadeBaseUrl;
+  const workspaceId = auth?.activeWorkspace();
+  if (auth === null || facadeBaseUrl === null || workspaceId == null) {
+    return null;
+  }
+  try {
+    const bearer = await auth.getBearer(workspaceId);
+    if (bearer === null) return null;
+    const response = await fetch(
+      `${facadeBaseUrl.replace(/\/+$/u, "")}/v1/me/profile`,
+      {
+        method: "GET",
+        headers: {
+          accept: "application/json",
+          authorization: `Bearer ${bearer}`,
+        },
+      },
+    );
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { readonly user_id?: unknown };
+    return typeof payload.user_id === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(payload.user_id)
+      ? payload.user_id
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // Builds the capability service (grant store + native picker + loopback
 // broker) and starts the broker. The broker token is minted per boot and is
 // delivered OUT OF BAND to intended children (slice 2 wiring); it is never
@@ -314,6 +357,36 @@ async function startCapabilitySubsystem(): Promise<{
       process.env.BACKEND_ENVIRONMENT === "development" ||
       process.env.COPILOT_AUTH_MODE === "dev-mint" ||
       secureStorageMode === "file";
+    let workspaceBootstrap: Awaited<
+      ReturnType<typeof createProductionWorkspaceAuthorityBootstrap>
+    > = null;
+    try {
+      const secrets = await loadOrCreateBootSecrets({
+        userDataDir: app.getPath("userData"),
+        safeStorage,
+        fs: bootSecretsFs,
+        mode: secureStorageMode,
+      });
+      workspaceBootstrap = await createProductionWorkspaceAuthorityBootstrap({
+        userDataDir: app.getPath("userData"),
+        safeStorage: storesSafeStorage,
+        installationSecret: secrets.vaultSecret,
+        production: resolveAuthPosture({
+          isPackaged: app.isPackaged,
+          env: process.env,
+        }).productionPosture,
+        profileIdResolver: resolveVerifiedWorkspaceProfileId,
+        // A future platform launcher must pass a main-owned confinement probe
+        // only after it has sandboxed the supervised Python children and proved
+        // they cannot reach an ungranted host file. Omission is intentional:
+        // C2 remains unavailable rather than issuing an optimistic attestation.
+      });
+    } catch {
+      // Boot secrets and journal state are authority material. A failure keeps
+      // regular capability boot alive, but it never regenerates a C2 key or
+      // upgrades the signed workspace statement.
+      workspaceBootstrap = null;
+    }
     capabilityService = createCapabilityService({
       userDataDir: app.getPath("userData"),
       safeStorage: storesSafeStorage,
@@ -332,6 +405,7 @@ async function startCapabilitySubsystem(): Promise<{
         return { canceled: result.canceled, filePaths: result.filePaths };
       },
       allowPlaintextFallback: allowPlaintext,
+      workspace: workspaceBootstrap ?? undefined,
     });
     // C2 launch evidence is created from main-owned authority facts before
     // services start. It contains no path/grant/renderer input and is signed
@@ -342,9 +416,11 @@ async function startCapabilitySubsystem(): Promise<{
     // A disabled native/C2 authority does not even register an approval host:
     // recording an approval without a possible main-only permit path would
     // strand a stage and weaken the fail-closed launch gate.
-    workspaceApprovalPermitSource = capabilityService.workspaceWritesAvailable()
-      ? new WorkspaceApprovalPermitSource(capabilityService)
-      : null;
+    workspaceApprovalPermitSource =
+      workspaceBootstrap !== null &&
+      capabilityService.workspaceWritesAvailable()
+        ? workspaceBootstrap.permitSource
+        : null;
     if (workspaceApprovalPermitSource !== null) {
       // D6/D7 private handoff: only Electron main retains the verified
       // approval reservation. The broker exposes no renderer-visible permit
@@ -698,6 +774,7 @@ function wireTransportAndIpc(
   facadeUrl: string | undefined,
   hostToken?: string,
 ): void {
+  activeFacadeBaseUrl = facadeUrl ?? null;
   const auditLog = createFileAuthAuditLog({
     filePath: join(app.getPath("userData"), "audit", "auth.log"),
   });
