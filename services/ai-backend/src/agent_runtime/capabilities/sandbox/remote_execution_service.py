@@ -23,7 +23,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime
 
 from agent_runtime.capabilities.sandbox.config import RemoteSandboxConfig
 from agent_runtime.capabilities.sandbox.contracts import (
@@ -37,11 +37,13 @@ from agent_runtime.capabilities.sandbox.policy_backend import (
     PolicyEnforcedSandboxBackend,
 )
 from agent_runtime.capabilities.sandbox.ports import (
+    SandboxCleanupStorePort,
     SandboxEvent,
     SandboxEventSink,
     SandboxHandle,
     SandboxSessionStore,
 )
+from agent_runtime.capabilities.sandbox.cleanup_store import SandboxCleanupSchedule
 from agent_runtime.capabilities.sandbox.provider_registry import (
     SandboxProviderRegistry,
 )
@@ -99,11 +101,13 @@ class RemoteExecutionService:
         registry: SandboxProviderRegistry,
         config: RemoteSandboxConfig,
         session_store: SandboxSessionStore,
+        cleanup_store: SandboxCleanupStorePort | None = None,
         event_sink: SandboxEventSink | None = None,
     ) -> None:
         self._registry = registry
         self._config = config
         self._store = session_store
+        self._cleanup_store = cleanup_store
         self._events = event_sink or _NullEventSink()
 
     async def create(self, request: SandboxCreateRequest) -> ActiveSandbox:
@@ -130,7 +134,19 @@ class RemoteExecutionService:
                 "The sandbox provider could not provision a session.",
             ) from exc
 
-        await self._store.upsert(handle.session)
+        # Persist a provider-teardown duty *before* the session projection. If
+        # the latter write crashes/fails, a later worker can still terminate an
+        # otherwise unreachable provider session. No in-memory duty is used on
+        # the file-native worker path.
+        await self._schedule_cleanup(request=request, session=handle.session)
+        try:
+            await self._store.upsert(handle.session)
+        except Exception as exc:  # noqa: BLE001 - persistence boundary is unsafe
+            self._emit(SandboxEventName.CLEANUP_PENDING, request.run_id)
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_PROVISION_FAILED,
+                "The sandbox session could not be recorded safely.",
+            ) from exc
         self._emit(
             SandboxEventName.PROVISIONED,
             request.run_id,
@@ -139,7 +155,9 @@ class RemoteExecutionService:
         backend = PolicyEnforcedSandboxBackend(delegate=handle.backend, limits=limits)
         return ActiveSandbox(session=handle.session, backend=backend)
 
-    async def teardown(self, session_id: str) -> ManagedSandboxSession | None:
+    async def teardown(
+        self, session_id: str, *, operation_id: str | None = None
+    ) -> ManagedSandboxSession | None:
         """Terminate a session and mark it deleted. Idempotent.
 
         Records ``cleanup_pending`` if the provider terminate fails so a reaper
@@ -168,13 +186,14 @@ class RemoteExecutionService:
             return pending
         deleted = session.with_state("deleted")
         await self._store.upsert(deleted)
+        await self._mark_cleanup_cleaned(operation_id)
         self._emit(
             SandboxEventName.CLEANUP_CONFIRMED, session.session_id, session=deleted
         )
         return deleted
 
     async def cleanup_provider_ref(
-        self, *, run_id: str, provider_session_ref: str
+        self, *, run_id: str, provider_session_ref: str, operation_id: str | None = None
     ) -> bool:
         """Best-effort recovery cleanup when only durable lifecycle state remains.
 
@@ -191,6 +210,7 @@ class RemoteExecutionService:
             self._emit(SandboxEventName.CLEANUP_PENDING, run_id)
             return False
         self._emit(SandboxEventName.CLEANUP_CONFIRMED, run_id)
+        await self._mark_cleanup_cleaned(operation_id)
         return True
 
     @asynccontextmanager
@@ -235,6 +255,65 @@ class RemoteExecutionService:
             await self.teardown(session.session_id)
             swept.append(session.session_id)
         return tuple(swept)
+
+    async def _schedule_cleanup(
+        self, *, request: SandboxCreateRequest, session: ManagedSandboxSession
+    ) -> None:
+        if self._cleanup_store is None:
+            return
+        schedule = SandboxCleanupSchedule(
+            operation_id=request.operation_id,
+            run_id=request.run_id,
+            provider_session_ref=session.provider_session_ref,
+            snapshot_digest=request.snapshot.manifest_sha256,
+        )
+        try:
+            await self._cleanup_store.schedule(schedule)
+        except Exception as exc:  # noqa: BLE001 - never leave untracked provider state
+            cleaned = await self._terminate_untracked(
+                run_id=request.run_id,
+                provider_session_ref=session.provider_session_ref,
+            )
+            if cleaned:
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_PROVISION_FAILED,
+                    "The sandbox session could not be recorded safely.",
+                ) from exc
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_EXECUTION_INDETERMINATE,
+                "The sandbox session cleanup could not be recorded safely.",
+            ) from exc
+
+    async def _terminate_untracked(
+        self, *, run_id: str, provider_session_ref: str
+    ) -> bool:
+        self._emit(SandboxEventName.CLEANUP_STARTED, run_id)
+        try:
+            await self._registry.provider.terminate(provider_session_ref)
+        except Exception:  # noqa: BLE001 - the caller reports indeterminate
+            self._emit(SandboxEventName.CLEANUP_PENDING, run_id)
+            return False
+        self._emit(SandboxEventName.CLEANUP_CONFIRMED, run_id)
+        return True
+
+    async def _mark_cleanup_cleaned(self, operation_id: str | None) -> None:
+        if self._cleanup_store is None or operation_id is None:
+            return
+        record = await self._cleanup_store.get(operation_id)
+        if record is None or record.state == "cleaned":
+            return
+        await self._cleanup_store.transition(
+            record=record.model_copy(
+                update={
+                    "state": "cleaned",
+                    "transition_no": record.transition_no + 1,
+                    "updated_at": datetime.now(UTC),
+                    "attempts": record.attempts + 1,
+                    "error_summary": None,
+                }
+            ),
+            expected_transition_no=record.transition_no,
+        )
 
     def _emit(
         self,

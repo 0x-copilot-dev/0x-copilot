@@ -168,3 +168,20 @@ async def test_file_overlay_retains_exact_version_after_later_edits(
     assert retained_entry is not None
     assert retained_entry.content_digest == "a" * 64
     assert await reopened.get_manifest_version(run_id=run_id, version=99) is None
+
+
+async def test_file_overlay_pointer_loss_with_retained_history_fails_closed(
+    tmp_path: Path,
+) -> None:
+    """A crash/deletion may not reinterpret an existing overlay as empty."""
+
+    run_id = "run_workspace_pointer_loss"
+    store = FileWorkspaceOverlayStore(root=tmp_path)
+    await store.append_revision(run_id=run_id, expected_version=0, mutations=())
+    # Model the exact bad state: the immutable version survived, but the
+    # current pointer disappeared before a later reader opened the store.
+    store._path(run_id).unlink()  # noqa: SLF001 - crash-state fixture
+
+    reopened = FileWorkspaceOverlayStore(root=tmp_path)
+    with pytest.raises(WorkspaceOverlayConflictError, match="overlay changed"):
+        await reopened.get_manifest(run_id=run_id)

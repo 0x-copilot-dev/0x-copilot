@@ -101,6 +101,13 @@ class FileWorkspaceOverlayStore:
     def _read(self, run_id: str) -> OverlayManifest:
         path = self._path(run_id)
         if not path.exists():
+            # A missing current pointer means an empty overlay only when this
+            # run has never committed a retained version.  Treating a pointer
+            # loss as version zero would silently authorize an empty D3
+            # snapshot after a crash or accidental deletion, discarding
+            # immutable C1 history.  The caller must repair the state instead.
+            if self._has_retained_history(run_id):
+                raise WorkspaceOverlayConflictError()
             return OverlayManifest(run_id=run_id)
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -114,6 +121,20 @@ class FileWorkspaceOverlayStore:
                 "Workspace overlay scope does not match."
             )
         return manifest
+
+    def _has_retained_history(self, run_id: str) -> bool:
+        """Whether a missing pointer would conceal an immutable run history."""
+
+        directory = self._version_path(run_id, 1).parent
+        try:
+            return any(
+                candidate.is_file() and candidate.suffix == ".json"
+                for candidate in directory.iterdir()
+            )
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise WorkspaceOverlayConflictError() from exc
 
     def _read_version(self, run_id: str, version: int) -> OverlayManifest | None:
         path = self._version_path(run_id, version)

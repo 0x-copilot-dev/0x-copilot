@@ -258,6 +258,7 @@ class SandboxLifecycleCoordinator:
             cleaned = await self._service.cleanup_provider_ref(
                 run_id=current.run_id,
                 provider_session_ref=current.provider_session_ref,
+                operation_id=current.operation_id,
             )
             if cleaned:
                 current = await self._transition(current, SandboxLifecycleState.CLEANED)
@@ -376,7 +377,9 @@ class SandboxLifecycleCoordinator:
     async def _cleanup_active(
         self, *, active: ActiveSandbox, lifecycle: SandboxLifecycleRecord
     ) -> SandboxLifecycleRecord:
-        result = await self._service.teardown(active.session.session_id)
+        result = await self._service.teardown(
+            active.session.session_id, operation_id=lifecycle.operation_id
+        )
         if result is not None and result.cleanup_state == "deleted":
             if lifecycle.state is SandboxLifecycleState.CLEANED:
                 return lifecycle

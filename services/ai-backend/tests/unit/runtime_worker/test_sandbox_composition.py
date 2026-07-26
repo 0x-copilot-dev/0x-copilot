@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 import hashlib
 import inspect
 import json
@@ -17,6 +18,7 @@ from agent_runtime.capabilities.operations.context import (
 )
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.sandbox.contracts import SandboxProviderId
+from agent_runtime.capabilities.sandbox.cleanup_store import SandboxCleanupSchedule
 from agent_runtime.capabilities.sandbox.ports import (
     SandboxPatchCollection,
     SandboxPatchCollectorPort,
@@ -35,14 +37,25 @@ from agent_runtime.capabilities.workspace.contracts import (
 )
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from runtime_adapters.in_memory.artifact_blob_store import InMemoryArtifactBlobStore
 from runtime_adapters.in_memory.workspace_overlay_store import (
     InMemoryWorkspaceOverlayStore,
 )
 from runtime_worker.capability_tool_wiring import CapabilityToolWiring
 from runtime_worker.handlers.run import RuntimeRunHandler
-from runtime_worker.sandbox_composition import SandboxWorkerBundle
-from tests.unit.agent_runtime.capabilities.sandbox.fakes import FakeSandboxProvider
+from runtime_worker.loop import RuntimeWorker
+from runtime_api.schemas import RuntimeRunCommand
+from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.settings import RuntimeSettings
+from runtime_worker.sandbox_composition import (
+    FileSandboxRecoveryReaper,
+    SandboxWorkerBundle,
+)
+from tests.unit.agent_runtime.capabilities.sandbox.fakes import (
+    FakeSandboxProvider,
+    make_request,
+)
 
 
 _ENV = {
@@ -77,6 +90,29 @@ class _FileStore:
     object_store: object
 
 
+@dataclass
+class _RunStore:
+    run: object
+
+    async def get_run(self, *, org_id: str, run_id: str) -> object | None:
+        if (
+            getattr(self.run, "org_id", None) == org_id
+            and getattr(self.run, "run_id", None) == run_id
+        ):
+            return self.run
+        return None
+
+
+def _persisted_run(context: AgentRuntimeContext) -> object:
+    return SimpleNamespace(
+        run_id=context.run_id,
+        org_id=context.org_id,
+        user_id=context.user_id,
+        conversation_id="conv_a",
+        runtime_context=context,
+    )
+
+
 class _ArtifactService:
     """Minimal A2-shaped publisher fake; records no source bytes externally."""
 
@@ -88,6 +124,7 @@ class _ArtifactService:
         assert hashlib.sha256(body).hexdigest() == request.expected_digest
         self.published.append(body)
         revision = SimpleNamespace(
+            artifact_id="art_550e8400-e29b-41d4-a716-446655440000",
             content_digest=request.expected_digest,
             byte_size=len(body),
             content_ref=(
@@ -140,6 +177,19 @@ class _UnattestedProvider(_RecordingProvider):
     @property
     def isolation_ready(self) -> bool:
         return False
+
+
+class _TransientTeardownProvider(_RecordingProvider):
+    """Fails one recovery pass, then permits the restarted worker to drain it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_teardown = True
+
+    async def terminate(self, provider_session_ref: str) -> None:
+        if self.fail_teardown:
+            raise OSError("simulated provider outage")
+        await super().terminate(provider_session_ref)
 
 
 class _ChangedAfterStatBlobStore:
@@ -224,19 +274,17 @@ def _bundle(
     artifacts=None,
     collector: SandboxPatchCollectorPort | None = None,
     provider: FakeSandboxProvider | None = None,
+    run_store: _RunStore | None = None,
     env=None,
 ):
     return SandboxWorkerBundle.compose(
         runtime_context=context,
-        file_store=_FileStore(
-            layout=FileStoreLayout(tmp_path / "agent-data"), object_store=object()
-        ),
+        file_store=FileRuntimeApiStore(tmp_path / "agent-data"),
         artifact_service=artifacts or _ArtifactService(),  # type: ignore[arg-type]
         artifact_blob_store=blobs or InMemoryArtifactBlobStore(),
         workspace_overlay_store=overlays or InMemoryWorkspaceOverlayStore(),
-        patch_collector=collector
-        if collector is not None
-        else _CompletePatchCollector(),
+        run_store=run_store or _RunStore(_persisted_run(context)),
+        patch_collector=collector,
         env=env or _ENV,
         provider_overrides={
             SandboxProviderId.LANGSMITH: provider or _RecordingProvider()
@@ -321,10 +369,60 @@ class TestSandboxWorkerBundle:
         finally:
             OperationContext.unbind(token)
 
-        assert payload["status"] == "completed"
+        assert payload["status"] == "completed", payload
         assert provider.received_bytes == len(b"allowed")
         assert provider.received_paths == ["/workspace/project/report.csv"]
         assert provider.create_requests[0].run_id == "run_a"
+
+    async def test_file_native_collector_publishes_patch_but_never_imports_it(
+        self, tmp_path
+    ) -> None:
+        """Normal D3 composition produces a review-only artifact-backed patch."""
+
+        context = _context()
+        blobs = InMemoryArtifactBlobStore()
+        overlays = InMemoryWorkspaceOverlayStore()
+        await _seed_overlay(
+            overlays=overlays, blobs=blobs, run_id="run_a", content=b"before"
+        )
+        before_manifest = await overlays.get_manifest(run_id="run_a")
+        artifacts = _ArtifactService()
+        provider = _RecordingProvider()
+        bundle = _bundle(
+            tmp_path=tmp_path,
+            context=context,
+            blobs=blobs,
+            overlays=overlays,
+            artifacts=artifacts,
+            provider=provider,
+        )
+        assert bundle is not None
+        tool = bundle.build_tool(
+            identity_provider=lambda: SimpleNamespace(
+                run_id="run_a", org_id="org_a", user_id="user_a"
+            )
+        )
+        assert tool is not None
+        token = _bind_context(context)
+        try:
+            payload = json.loads(
+                await tool.ainvoke(
+                    {"command": "write:/workspace/project/report.csv:after"}
+                )
+            )
+        finally:
+            OperationContext.unbind(token)
+
+        assert payload["status"] == "completed", payload
+        result = bundle._adapter.result_for(  # noqa: SLF001 - composition proof
+            provider.create_requests[0].operation_id
+        )
+        assert result is not None and result.patch is not None
+        assert result.patch.patch_ref.startswith("artifact://")
+        # One result artifact plus a separately immutable changed-file artifact;
+        # no C1 importer is present anywhere in this composed path.
+        assert b"after" in artifacts.published
+        assert await overlays.get_manifest(run_id="run_a") == before_manifest
 
     async def test_changed_blob_is_sealed_and_rejected_before_provider_receives_bytes(
         self, tmp_path
@@ -447,25 +545,23 @@ class TestSandboxWorkerBundle:
 
     @pytest.mark.parametrize(
         "missing",
-        ("file_store", "artifacts", "blobs", "overlays", "collector"),
+        ("file_store", "artifacts", "blobs", "overlays", "run_store"),
     )
     def test_missing_required_authority_omits_the_tool(self, tmp_path, missing) -> None:
         context = _context()
         values = {
-            "file_store": _FileStore(
-                layout=FileStoreLayout(tmp_path / "agent-data"), object_store=object()
-            ),
+            "file_store": FileRuntimeApiStore(tmp_path / "agent-data"),
             "artifact_service": _ArtifactService(),
             "artifact_blob_store": InMemoryArtifactBlobStore(),
             "workspace_overlay_store": InMemoryWorkspaceOverlayStore(),
-            "patch_collector": _CompletePatchCollector(),
+            "run_store": _RunStore(_persisted_run(context)),
         }
         parameter = {
             "file_store": "file_store",
             "artifacts": "artifact_service",
             "blobs": "artifact_blob_store",
             "overlays": "workspace_overlay_store",
-            "collector": "patch_collector",
+            "run_store": "run_store",
         }[missing]
         values[parameter] = None
 
@@ -492,7 +588,25 @@ class TestSandboxWorkerBundle:
                 artifact_service=_ArtifactService(),  # type: ignore[arg-type]
                 artifact_blob_store=InMemoryArtifactBlobStore(),
                 workspace_overlay_store=InMemoryWorkspaceOverlayStore(),
-                patch_collector=_CompletePatchCollector(),
+                run_store=_RunStore(_persisted_run(context)),
+                env=_ENV,
+                provider_overrides={SandboxProviderId.LANGSMITH: _RecordingProvider()},
+            )
+            is None
+        )
+        # A lookalike that exposes ``layout``/``object_store`` is not a trusted
+        # desktop runtime store. D3 rejects it by concrete adapter identity.
+        assert (
+            SandboxWorkerBundle.compose(
+                runtime_context=context,
+                file_store=_FileStore(
+                    layout=FileStoreLayout(tmp_path / "lookalike"),
+                    object_store=object(),
+                ),
+                artifact_service=_ArtifactService(),  # type: ignore[arg-type]
+                artifact_blob_store=InMemoryArtifactBlobStore(),
+                workspace_overlay_store=InMemoryWorkspaceOverlayStore(),
+                run_store=_RunStore(_persisted_run(context)),
                 env=_ENV,
                 provider_overrides={SandboxProviderId.LANGSMITH: _RecordingProvider()},
             )
@@ -517,15 +631,150 @@ class TestSandboxWorkerBundle:
             is None
         )
 
+    async def test_worker_restart_reaps_durable_cleanup_duty(self, tmp_path) -> None:
+        """A new worker process drains a duty written before an earlier crash."""
+
+        store = FileRuntimeApiStore(tmp_path / "agent-data")
+        provider = _TransientTeardownProvider()
+        # The provider receives a normal immutable request; only its opaque
+        # session ref is copied into the durable duty.
+        handle = await provider.create(
+            make_request(run_id="run_cleanup", idempotency_key="cleanup-idem")
+        )
+        first = FileSandboxRecoveryReaper.compose(
+            file_store=store,
+            env=_ENV,
+            provider_overrides={SandboxProviderId.LANGSMITH: provider},
+        )
+        assert first is not None
+        await first.runtime.cleanup_store.schedule(
+            SandboxCleanupSchedule(
+                operation_id="sandbox:run_cleanup",
+                run_id="run_cleanup",
+                provider_session_ref=handle.session.provider_session_ref,
+                snapshot_digest="a" * 64,
+            )
+        )
+
+        # Reconstruct from the same filesystem root: no in-memory schedule
+        # shares state across this restart boundary.
+        restarted_store = FileRuntimeApiStore(tmp_path / "agent-data")
+        failed_worker = RuntimeWorker(
+            persistence=restarted_store,
+            event_store=restarted_store,
+            queue=restarted_store,
+            settings=RuntimeSettings.load(environ={"SURFACES_V2": "false"}),
+            artifact_service=_ArtifactService(),
+            artifact_blob_store=InMemoryArtifactBlobStore(),
+            workspace_overlay_store=InMemoryWorkspaceOverlayStore(),
+            sandbox_provider_overrides={SandboxProviderId.LANGSMITH: provider},
+            capability_env=_ENV,
+        )
+        # The worker performs the durable cleanup pass before polling the
+        # queue, including when there is no user command to claim. The first
+        # provider failure stays durable; it is not converted into a false
+        # success or an in-memory retry.
+        assert await failed_worker.run_once() is False
+        pending = await first.runtime.cleanup_store.get("sandbox:run_cleanup")
+        assert pending is not None and pending.state == "cleanup_pending"
+        await first.runtime.cleanup_store.transition(
+            record=pending.model_copy(
+                update={
+                    "transition_no": pending.transition_no + 1,
+                    "updated_at": datetime.now(UTC),
+                    "retry_not_before": datetime.now(UTC) - timedelta(seconds=1),
+                }
+            ),
+            expected_transition_no=pending.transition_no,
+        )
+        provider.fail_teardown = False
+        recovered_store = FileRuntimeApiStore(tmp_path / "agent-data")
+        recovered_worker = RuntimeWorker(
+            persistence=recovered_store,
+            event_store=recovered_store,
+            queue=recovered_store,
+            settings=RuntimeSettings.load(environ={"SURFACES_V2": "false"}),
+            artifact_service=_ArtifactService(),
+            artifact_blob_store=InMemoryArtifactBlobStore(),
+            workspace_overlay_store=InMemoryWorkspaceOverlayStore(),
+            sandbox_provider_overrides={SandboxProviderId.LANGSMITH: provider},
+            capability_env=_ENV,
+        )
+        assert await recovered_worker.run_once() is False
+        duty = await first.runtime.cleanup_store.get("sandbox:run_cleanup")
+        assert duty is not None and duty.state == "cleaned"
+        assert provider.terminated_refs == [handle.session.provider_session_ref]
+
+    async def test_queued_context_mismatch_stops_before_snapshot_or_provider(
+        self, tmp_path
+    ) -> None:
+        context = _context()
+        provider = _RecordingProvider()
+        handler = RuntimeRunHandler(
+            persistence=_RunStore(_persisted_run(context)),  # type: ignore[arg-type]
+            event_store=FileRuntimeApiStore(tmp_path / "agent-data"),  # type: ignore[arg-type]
+            artifact_service=_ArtifactService(),  # type: ignore[arg-type]
+            artifact_blob_store=InMemoryArtifactBlobStore(),  # type: ignore[arg-type]
+            workspace_overlay_store=InMemoryWorkspaceOverlayStore(),  # type: ignore[arg-type]
+            sandbox_provider_overrides={SandboxProviderId.LANGSMITH: provider},
+            capability_env=_ENV,
+        )
+        command = RuntimeRunCommand(
+            run_id=context.run_id,
+            conversation_id="conv_a",
+            org_id=context.org_id,
+            user_id=context.user_id,
+            trace_id="trace_a",
+            runtime_context=context.model_copy(update={"user_id": "user_other"}),
+        )
+
+        with pytest.raises(AgentRuntimeError, match="runtime context"):
+            await handler.handle(command)
+
+        assert provider.create_calls == 0
+
+    def test_default_file_worker_can_compose_only_with_test_attested_provider(
+        self, tmp_path
+    ) -> None:
+        """Production wiring reaches the factory, but real deployment stays dark.
+
+        The fake provider is injected only in this hermetic proof. Without it
+        the repo's hard-false LangSmith adapter leaves the descriptor absent.
+        """
+
+        store = FileRuntimeApiStore(tmp_path / "agent-data")
+        settings = RuntimeSettings.load(environ={"SURFACES_V2": "false"})
+        common = {
+            "persistence": store,
+            "event_store": store,
+            "queue": store,
+            "settings": settings,
+            "artifact_service": _ArtifactService(),
+            "artifact_blob_store": InMemoryArtifactBlobStore(),
+            "workspace_overlay_store": InMemoryWorkspaceOverlayStore(),
+            "capability_env": _ENV,
+        }
+        unavailable_worker = RuntimeWorker(**common)  # type: ignore[arg-type]
+        assert unavailable_worker.run_handler._sandbox_worker_bundle(_context()) is None  # noqa: SLF001
+
+        worker = RuntimeWorker(
+            **common,
+            sandbox_provider_overrides={
+                SandboxProviderId.LANGSMITH: _RecordingProvider()
+            },
+        )  # type: ignore[arg-type]
+        assert isinstance(
+            worker.run_handler._sandbox_worker_bundle(_context()),  # noqa: SLF001
+            SandboxWorkerBundle,
+        )
+
     def test_runtime_handler_passes_only_the_composed_bundle_to_wiring(
         self, tmp_path, monkeypatch
     ) -> None:
         """The handler is a caller of the bundle, never a direct provider seam."""
 
         context = _context()
-        file_store = _FileStore(
-            layout=FileStoreLayout(tmp_path / "agent-data"), object_store=object()
-        )
+        file_store = FileRuntimeApiStore(tmp_path / "agent-data")
         captured: dict[str, object] = {}
 
         class _Wiring:
@@ -539,13 +788,12 @@ class TestSandboxWorkerBundle:
                 return None
 
         handler = RuntimeRunHandler(
-            persistence=object(),  # type: ignore[arg-type]
+            persistence=_RunStore(_persisted_run(context)),  # type: ignore[arg-type]
             event_store=file_store,  # type: ignore[arg-type]
             dependencies_factory=lambda _context: _Dependencies(),  # type: ignore[arg-type]
             artifact_service=_ArtifactService(),  # type: ignore[arg-type]
             artifact_blob_store=InMemoryArtifactBlobStore(),  # type: ignore[arg-type]
             workspace_overlay_store=InMemoryWorkspaceOverlayStore(),  # type: ignore[arg-type]
-            sandbox_patch_collector=_CompletePatchCollector(),
             sandbox_provider_overrides={
                 SandboxProviderId.LANGSMITH: _RecordingProvider()
             },

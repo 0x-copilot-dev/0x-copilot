@@ -85,6 +85,9 @@ from agent_runtime.capabilities.sandbox.runtime_adapter import DeepAgentSandboxR
 from agent_runtime.capabilities.sandbox.artifact_publisher import (
     ArtifactServiceSandboxPublisher,
 )
+from agent_runtime.capabilities.sandbox.patch_collector import (
+    DeepAgentArtifactPatchCollector,
+)
 from agent_runtime.capabilities.sandbox.operation_runner import (
     SandboxLifecycleCoordinatorPort,
     SandboxLifecycleOperationRunner,
@@ -126,6 +129,7 @@ __all__ = [
     "ArtifactServiceSandboxPublisher",
     "ArtifactServiceSandboxResultPublisher",
     "DeepAgentSandboxRuntime",
+    "DeepAgentArtifactPatchCollector",
     "FileSandboxUsageMeter",
     "FileSandboxSessionStore",
     "FileSandboxCleanupStore",

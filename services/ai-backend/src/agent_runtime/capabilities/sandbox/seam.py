@@ -19,6 +19,7 @@ from collections.abc import Mapping
 from agent_runtime.capabilities.sandbox.config import RemoteSandboxConfig
 from agent_runtime.capabilities.sandbox.contracts import SandboxProviderId
 from agent_runtime.capabilities.sandbox.ports import (
+    SandboxCleanupStorePort,
     SandboxEventSink,
     SandboxProviderPort,
     SandboxSessionStore,
@@ -38,6 +39,7 @@ def build_sandbox_backend(
     *,
     provider_overrides: Mapping[SandboxProviderId, SandboxProviderPort] | None = None,
     session_store: SandboxSessionStore | None = None,
+    cleanup_store: SandboxCleanupStorePort | None = None,
     event_sink: SandboxEventSink | None = None,
 ) -> RemoteExecutionService | None:
     """Return a wired :class:`RemoteExecutionService`, or ``None`` when disabled.
@@ -72,5 +74,6 @@ def build_sandbox_backend(
         registry=registry,
         config=resolved,
         session_store=session_store or InMemorySandboxSessionStore(),
+        cleanup_store=cleanup_store,
         event_sink=event_sink,
     )
