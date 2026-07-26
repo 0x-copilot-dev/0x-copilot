@@ -38,6 +38,7 @@ from agent_runtime.capabilities.sandbox.snapshot import (
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 
 _ARTIFACT = "artifact://art_550e8400-e29b-41d4-a716-446655440000/revisions/1"
+_RESULT_ARTIFACT = "artifact://art_550e8400-e29b-41d4-a716-446655440001/revisions/1"
 
 
 @dataclass
@@ -96,7 +97,7 @@ class _Runner(SandboxOperationRunnerPort):
         return SandboxOperationRunResult(
             run_id=request.run_id,
             operation_id=request.operation_id,
-            result_ref=f"sandbox-result://operations/{request.operation_id}",
+            result_ref=_RESULT_ARTIFACT,
             safe_summary="Sandbox command completed.",
         )
 
@@ -152,7 +153,7 @@ class TestRunInSandbox:
             OperationContext.unbind(token)
 
         assert payload["status"] == "completed"
-        assert payload["result_ref"].startswith("sandbox-result://")
+        assert payload["result_ref"] == _RESULT_ARTIFACT
         assert "output" not in payload
         assert len(runner.calls) == 1
         assert runner.calls[0].command == "echo hi"

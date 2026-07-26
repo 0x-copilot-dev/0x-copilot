@@ -165,9 +165,14 @@ class SandboxOperationRunResult(RuntimeContract):
     @field_validator("result_ref")
     @classmethod
     def _stored_result_ref(cls, value: str) -> str:
-        return _logical_ref(
-            value, label="sandbox result reference", prefix="sandbox-result://"
-        )
+        _logical_ref(value, label="sandbox result reference", prefix="artifact://")
+        try:
+            ArtifactContentRefCodec.parse(value)
+        except Exception as exc:
+            raise ValueError(
+                "sandbox result reference must be an immutable artifact revision"
+            ) from exc
+        return value
 
     @field_validator("activity_ref")
     @classmethod
