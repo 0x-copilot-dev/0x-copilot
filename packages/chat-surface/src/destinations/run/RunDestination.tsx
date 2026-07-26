@@ -177,6 +177,7 @@ import type { McpAuthPort } from "./mcpAuthPort";
 // PR-3.11: the empty/idle goal composer (FR-3.25) mounts inside this shell (no
 // separate host remount) and binds a freshly-started run via the `runId` seam.
 import { RunEmptyState, type StartRunError } from "./RunEmptyState";
+import { RunMultiSelect } from "./RunMultiSelect";
 // PRD-04: pure selector projecting proposed surface diffs off the SAME single
 // canonical event stream (FR-3.3). Feeds the on-surface Approve/Reject controls
 // in TcSurfaceMount (via ThreadCanvas.pendingDiff); no second subscription.
@@ -2937,6 +2938,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // pulses; terminal / null → absent.
         runStatus={session.runStatus}
         status={v2HeaderStatus}
+      />
+
+      {/* The selector owns the multiple-run case only. It returns null for zero
+          or one run, so the idle and single-run cockpits stay chrome-free while
+          every barrel-exported selector has a real in-package mount. */}
+      <RunMultiSelect
+        runs={session.runs}
+        selectedRunId={session.runId}
+        onSelectRun={handleSelectRun}
       />
 
       {session.error !== null ? (

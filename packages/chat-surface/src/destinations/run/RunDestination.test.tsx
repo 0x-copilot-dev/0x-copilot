@@ -1001,14 +1001,11 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
 // Integration: with no run the shell mounts the empty-state goal composer
 // (FR-3.25); submitting a goal POSTs a run and binds it via the `runId` seam, so
 // the live cockpit mounts IN PLACE (the shell root node is unchanged). A
-// conversation can contain many runs, but the cockpit deliberately does not
-// spend vertical space on a run-history pill strip; direct run rebinding still
-// preserves the session/canvas invariants below.
+// multiple-run conversation renders the selector; choosing a run rebinds the
+// same canvas/session rather than remounting the cockpit.
 
-// A conversation head whose current (live) run is run-a. `runs` is carried for
-// readability only — the source binds run-a from `latest_run_id` and keeps
-// `session.runs` empty this phase (the runs-list + RunMultiSelect data source
-// lands in Phase 6).
+// A conversation head whose current (live) run is run-a plus the multi-run list
+// consumed by RunMultiSelect.
 const TWO_RUNS = {
   latest_run_id: "run-a",
   latest_run_id_any_status: "run-a",
@@ -1438,7 +1435,7 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     );
   });
 
-  it("auto-binds the conversation's head run without rendering a multi-run strip", async () => {
+  it("auto-binds the conversation's head run and exposes the multi-run selector", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
@@ -1451,16 +1448,40 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
       expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
     );
     expect(screen.queryByTestId("run-empty-state")).toBeNull();
-    expect(screen.queryByTestId("run-multi-select")).toBeNull();
+    expect(screen.getByTestId("run-multi-select")).not.toBeNull();
+    expect(screen.getByTestId("run-select-run-a")).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
   });
 
-  it("rebinds the session's SSE tail to another run via the runId seam without remounting the canvas (FR-3.26)", async () => {
-    // The runs-list-backed RunMultiSelect UI is inert this phase (session.runs is
-    // empty), so multi-run selection is exercised through the ONE `boundRunId`
-    // sink directly — here the `runId` deep-link seam, the same setter
-    // `selectRun`/`bindRun`/head all funnel through (§D3). This protects the
-    // shell-level invariant: rebinding the active run rebinds the stream WITHOUT
-    // remounting the ThreadCanvas.
+  it("rebinds to the selected run without remounting the canvas", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : TWO_RUNS;
+    renderRun(transport, makeStore());
+
+    await screen.findByTestId("thread-canvas");
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-a/stream"),
+    );
+    const canvasBefore = screen.getByTestId("thread-canvas");
+    const runASub = transport.sessionSub;
+
+    fireEvent.click(screen.getByTestId("run-select-run-b"));
+
+    await waitFor(() =>
+      expect(transport.sessionSub?.path).toBe("/v1/agent/runs/run-b/stream"),
+    );
+    expect(runASub?.closed).toBe(true);
+    expect(screen.getByTestId("thread-canvas")).toBe(canvasBefore);
+    expect(screen.getByTestId("run-select-run-b")).toHaveAttribute(
+      "data-selected",
+      "true",
+    );
+  });
+
+  it("rebinds the session's SSE tail through the runId seam without remounting the canvas (FR-3.26)", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages") ? { messages: [] } : { runs: [] };
