@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
+    EffectProjectionBinding,
     EffectStageDecision,
     EffectStageRevision,
     EffectStageScope,
@@ -38,6 +39,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
 _EVENT_STAGED = LedgerEventType.EFFECT_STAGED.value
 _EVENT_REVISED = LedgerEventType.EFFECT_REVISED.value
 _EVENT_DECISION = LedgerEventType.EFFECT_DECISION_RECORDED.value
+_EVENT_PROJECTION_BOUND = LedgerEventType.EFFECT_PROJECTION_BOUND.value
 
 
 class EffectStageFold:
@@ -66,6 +68,8 @@ class EffectStageFold:
                 continue
             if event.event_type == _EVENT_REVISED:
                 state = cls._apply_revision(state, event)
+            elif event.event_type == _EVENT_PROJECTION_BOUND:
+                state = cls._apply_projection_binding(state, event)
             elif event.event_type == _EVENT_DECISION:
                 state = cls._apply_decision(state, event)
         if state is None:
@@ -133,6 +137,7 @@ class EffectStageFold:
                     if policy is EffectPolicy.AUTO
                     else EffectStageStatus.HELD
                 ),
+                projection_required=bool(payload.get("projection_required", False)),
                 decision=None,
                 created_at=created_at,
                 updated_at=created_at,
@@ -197,9 +202,49 @@ class EffectStageFold:
                     else EffectStageStatus.REVISED
                 ),
                 "decision": None,
+                "projection_binding": None,
                 "superseded_revision": approved_revision,
                 "updated_at": event.created_at,
             }
+        )
+
+    @classmethod
+    def _apply_projection_binding(
+        cls,
+        state: EffectStageState,
+        event: StructuralEvent,
+    ) -> EffectStageState:
+        """Accept only an exact binding for the current required revision."""
+
+        if not state.projection_required or state.status is EffectStageStatus.CANCELLED:
+            return state
+        payload = event.payload
+        try:
+            _validate_payload_version(payload)
+            binding = EffectProjectionBinding(
+                revision=_integer(payload, "revision"),
+                projection_ref=_string(payload, "projection_ref"),
+                proposal_digest=_string(payload, "proposal_digest"),
+                target_digest=_string(payload, "target_digest"),
+                bound_at=_string(payload, "bound_at"),
+                ledger_id=event.ledger_id,
+            )
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return state
+        current = state.current_revision
+        if (
+            binding.revision != current.revision
+            or binding.proposal_digest != current.proposal_digest
+            or binding.target_digest != state.target_digest
+        ):
+            return state
+        existing = state.projection_binding
+        if existing is not None:
+            if existing == binding:
+                return state
+            return state
+        return state.model_copy(
+            update={"projection_binding": binding, "updated_at": event.created_at}
         )
 
     @classmethod
@@ -248,6 +293,8 @@ class EffectStageFold:
                 and state.policy is not EffectPolicy.AUTO
             )
         ):
+            return state
+        if decision.decision is EffectDecisionKind.APPROVE and not state.approval_ready:
             return state
         status_by_decision = {
             EffectDecisionKind.APPROVE: EffectStageStatus.APPROVED,

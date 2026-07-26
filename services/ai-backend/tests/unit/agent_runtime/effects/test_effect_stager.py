@@ -9,6 +9,7 @@ from agent_runtime.effects.errors import (
     EffectStageIdempotencyConflict,
     EffectStageImmutableTarget,
     EffectStageInvalidTransition,
+    EffectStageProjectionUnbound,
     EffectStageStaleRevision,
 )
 from agent_runtime.effects.staging import EffectStager
@@ -92,7 +93,10 @@ async def test_approve_pins_exact_digests_and_enqueues_one_body_free_command() -
     assert emitted_payload["proposal_ref"] == f"proposal://{state.stage_id}/revisions/1"
     assert emitted_payload["proposal_content_ref"] == proposed.proposal_content_ref
     assert state.current_revision.proposal_ref == emitted_payload["proposal_ref"]
-    assert state.current_revision.proposal_content_ref == proposed.proposal_content_ref
+    assert (
+        state.current_revision.proposal_content_ref
+        == emitted_payload["proposal_content_ref"]
+    )
     assert state.current_revision.is_executable
     assert "body" not in emitted_payload
     assert "raw_args" not in emitted_payload
@@ -113,6 +117,107 @@ async def test_approve_pins_exact_digests_and_enqueues_one_body_free_command() -
     )
     assert replay == approved
     assert outbox.enqueue_calls == 1
+
+
+async def test_projection_required_stage_cannot_approve_until_exact_binding_exists() -> (
+    None
+):
+    stager, ledger, outbox = _stager()
+    proposed = proposal(projection_required=True)
+    state = await stager.stage(
+        scope=scope(),
+        proposed_effect=proposed,
+        policy_snapshot=policy_snapshot(),
+        actor=user(),
+        idempotency_key="workspace-stage",
+    )
+
+    with pytest.raises(EffectStageProjectionUnbound):
+        await stager.decide(
+            scope=scope(),
+            stage_id=state.stage_id,
+            revision=1,
+            decision=EffectDecisionKind.APPROVE,
+            proposal_digest=proposed.proposal_digest,
+            target_digest=proposed.target_digest,
+            actor=user(),
+            idempotency_key="unbound-approve",
+        )
+    assert ledger.append_calls == 1
+    assert outbox.enqueue_calls == 0
+
+    bound = await stager.bind_projection(
+        scope=scope(),
+        stage_id=state.stage_id,
+        revision=1,
+        projection_ref="workspace-overlay://runs/run_a4_test/versions/1",
+        proposal_digest=proposed.proposal_digest,
+        target_digest=proposed.target_digest,
+        actor=user(),
+        idempotency_key="workspace-projection-bind",
+    )
+    assert bound.approval_ready
+    assert ledger.events_by_stage[state.stage_id][-1].event_type == (
+        "effect.projection_bound"
+    )
+
+    approved = await stager.decide(
+        scope=scope(),
+        stage_id=state.stage_id,
+        revision=1,
+        decision=EffectDecisionKind.APPROVE,
+        proposal_digest=proposed.proposal_digest,
+        target_digest=proposed.target_digest,
+        actor=user(),
+        idempotency_key="bound-approve",
+    )
+    assert approved.status is EffectStageStatus.APPROVED
+    assert outbox.enqueue_calls == 1
+
+
+async def test_revision_invalidates_a_previous_projection_binding() -> None:
+    stager, ledger, outbox = _stager()
+    proposed = proposal(projection_required=True)
+    state = await stager.stage(
+        scope=scope(),
+        proposed_effect=proposed,
+        policy_snapshot=policy_snapshot(),
+        actor=user(),
+        idempotency_key="workspace-stage",
+    )
+    await stager.bind_projection(
+        scope=scope(),
+        stage_id=state.stage_id,
+        revision=1,
+        projection_ref="workspace-overlay://runs/run_a4_test/versions/1",
+        proposal_digest=proposed.proposal_digest,
+        target_digest=proposed.target_digest,
+        actor=user(),
+        idempotency_key="bind-r1",
+    )
+    revised = await stager.revise(
+        scope=scope(),
+        stage_id=state.stage_id,
+        expected_revision=1,
+        proposal=revision_from(proposed),
+        actor=user(),
+        idempotency_key="revise-r2",
+    )
+    assert revised.current_revision.revision == 2
+    assert not revised.approval_ready
+    with pytest.raises(EffectStageProjectionUnbound):
+        await stager.decide(
+            scope=scope(),
+            stage_id=state.stage_id,
+            revision=2,
+            decision=EffectDecisionKind.APPROVE,
+            proposal_digest=revised.current_revision.proposal_digest,
+            target_digest=revised.target_digest,
+            actor=user(),
+            idempotency_key="unbound-r2",
+        )
+    assert outbox.enqueue_calls == 0
+    assert ledger.append_calls == 3
 
 
 async def test_invalid_or_stale_mutations_emit_nothing() -> None:

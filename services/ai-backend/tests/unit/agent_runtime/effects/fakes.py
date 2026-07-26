@@ -205,6 +205,7 @@ def proposal(
     proposal_digest: str = "a" * 64,
     target_digest: str = "b" * 64,
     agent_hold: bool = False,
+    projection_required: bool = False,
 ) -> ProposedEffect:
     target_ref = (
         "workspace-target://grant-token/path-token"
@@ -234,6 +235,7 @@ def proposal(
         policy_snapshot_ref="policy://runs/a4-test/snapshot-1",
         agent_hold=agent_hold,
         safe_summary_ref="summary://stages/a4-test/1",
+        projection_required=projection_required,
     )
 
 

@@ -57,7 +57,10 @@ from agent_runtime.effects.contracts import (
     EffectStageScope,
     EffectStageStatus,
 )
-from agent_runtime.effects.errors import EffectStageStaleRevision
+from agent_runtime.effects.errors import (
+    EffectStageProjectionUnbound,
+    EffectStageStaleRevision,
+)
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
 from agent_runtime.surfaces_v2.entities import OperationRequest
@@ -246,6 +249,23 @@ class ExplodingStageLedger(FakeLedger):
     async def append_stage_event(self, **kwargs: object) -> object:
         self.append_calls += 1
         raise RuntimeError("stage ledger unavailable")
+
+
+class FailOnceProjectionBindingLedger(FakeLedger):
+    """Leaves a visible overlay with an unbound stage once, then permits recovery."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.binding_failed = False
+
+    async def append_stage_event(self, **kwargs: object) -> object:
+        if (
+            kwargs.get("event_type") == LedgerEventType.EFFECT_PROJECTION_BOUND.value
+            and not self.binding_failed
+        ):
+            self.binding_failed = True
+            raise RuntimeError("projection binding unavailable")
+        return await super().append_stage_event(**kwargs)  # type: ignore[arg-type]
 
 
 class ExplodingOutbox(FakeOutbox):
@@ -447,7 +467,16 @@ async def test_every_workspace_mutation_stages_and_never_touches_base(
     assert harness.base.mutation_calls == []
     assert harness.proposals.calls
     assert harness.outbox.enqueue_calls == 0
-    assert harness.ledger.append_calls == 1
+    assert harness.ledger.append_calls == 2
+    assert [
+        event.event_type
+        for event in harness.ledger.events_by_stage[
+            next(iter(harness.ledger.events_by_stage))
+        ]
+    ] == [
+        "effect.staged",
+        "effect.projection_bound",
+    ]
     event = next(iter(harness.ledger.events_by_stage.values()))[0]
     assert event.event_type == LedgerEventType.EFFECT_STAGED.value
     assert event.payload["executor"] == "workspace"
@@ -479,7 +508,7 @@ async def test_model_cannot_use_the_read_facade_to_mutate_without_a_stage() -> N
     manifest = await harness.overlays.get_manifest(run_id=RUN_ID)
     entry = manifest.entry_at(path)
     assert entry is not None and entry.stage_id is not None
-    assert harness.ledger.append_calls == 1
+    assert harness.ledger.append_calls == 2
     assert harness.outbox.enqueue_calls == 0
     assert harness.base.mutation_calls == []
 
@@ -569,7 +598,7 @@ async def test_preapproval_workspace_stage_cannot_reach_an_exploding_outbox() ->
     assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entry_at(
         path
     ) is not None
-    assert harness.ledger.append_calls == 1
+    assert harness.ledger.append_calls == 2
     assert outbox.enqueue_calls == 0
     assert harness.base.mutation_calls == []
 
@@ -609,6 +638,71 @@ async def test_failed_overlay_projection_never_exposes_content_or_an_approvable_
     )
     assert harness.base.files[path] == original
     assert harness.base.mutation_calls == []
+
+
+async def test_retry_recovers_an_overlay_after_its_projection_binding_append_failed() -> (
+    None
+):
+    """A retry completes the exact existing stage; it never creates a second one."""
+
+    path = f"/workspace/{MOUNT}/binding-retry.csv"
+    ledger = FailOnceProjectionBindingLedger()
+    harness = _harness(ledger=ledger)
+    token = harness.bind()
+    try:
+        request = OperationRequestFactory.create(
+            capability="workspace",
+            op="create",
+            arguments={
+                "virtual_path": path,
+                "content": "account,total\\nAcme,20\\n",
+            },
+        )
+        first = await harness.backend._operations.invoke(request)
+        assert first.stage_ids == ()
+        assert ledger.binding_failed
+
+        manifest = await harness.overlays.get_manifest(run_id=RUN_ID)
+        entry = manifest.entry_at(path)
+        assert entry is not None and entry.stage_id is not None
+        unbound = await harness.stager.get_state(
+            scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER),
+            stage_id=entry.stage_id,
+        )
+        assert unbound.projection_required and not unbound.approval_ready
+        assert unbound.target.op == "create"
+        with pytest.raises(EffectStageProjectionUnbound):
+            await harness.stager.decide(
+                scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER),
+                stage_id=entry.stage_id,
+                revision=unbound.current_revision.revision,
+                decision=EffectDecisionKind.APPROVE,
+                proposal_digest=unbound.current_revision.proposal_digest,
+                target_digest=unbound.target_digest,
+                actor=EffectActorIdentity(actor=EffectActor.USER, principal_ref=OWNER),
+                idempotency_key="must-stay-unbound",
+            )
+        assert harness.outbox.enqueue_calls == 0
+
+        recovered_effect = await harness.adapter._recover_unbound_projection(
+            request=request,
+            paths=(path,),
+        )
+        assert recovered_effect is not None
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert recovered_effect.stage_id == entry.stage_id
+    repaired = await harness.stager.get_state(
+        scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER),
+        stage_id=entry.stage_id,
+    )
+    assert repaired.approval_ready
+    assert list(ledger.events_by_stage) == [entry.stage_id]
+    assert [event.event_type for event in ledger.events_by_stage[entry.stage_id]] == [
+        "effect.staged",
+        "effect.projection_bound",
+    ]
 
 
 async def test_forged_scope_dynamic_activation_and_reflection_cannot_stage_mutation() -> (
@@ -739,7 +833,7 @@ async def test_valid_gateway_capability_stages_once_and_cannot_be_replayed() -> 
 
     manifest = await harness.overlays.get_manifest(run_id=RUN_ID)
     assert manifest.entry_at(path) is not None
-    assert harness.ledger.append_calls == 1
+    assert harness.ledger.append_calls == 2
     assert harness.outbox.enqueue_calls == 0
     assert harness.base.mutation_calls == []
 

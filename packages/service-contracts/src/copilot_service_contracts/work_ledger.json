@@ -451,6 +451,7 @@
         "policy_snapshot_ref",
         "agent_hold",
         "safe_summary_ref",
+        "projection_required",
         "owner_ref",
         "author_actor",
         "author_ref",
@@ -463,6 +464,19 @@
         "effect_class": "effect_class",
         "author_actor": "effect_actor"
       }
+    },
+    "effect.projection_bound": {
+      "required": [
+        "v",
+        "stage_id",
+        "revision",
+        "projection_ref",
+        "proposal_digest",
+        "target_digest",
+        "bound_at"
+      ],
+      "optional": [],
+      "enum_fields": {}
     },
     "effect.revised": {
       "required": [

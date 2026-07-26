@@ -42,6 +42,7 @@ export type LedgerEventType =
   | "artifact.promoted"
   | "artifact.presentation_decided"
   | "effect.staged"
+  | "effect.projection_bound"
   | "effect.revised"
   | "effect.decision_recorded"
   | "effect.claimed"
@@ -79,6 +80,7 @@ export const LEDGER_EVENT_TYPES = [
   "artifact.promoted",
   "artifact.presentation_decided",
   "effect.staged",
+  "effect.projection_bound",
   "effect.revised",
   "effect.decision_recorded",
   "effect.claimed",
@@ -110,6 +112,7 @@ export const OPERATION_EVENT_TYPES = [
 /** Canonical universal-effect lifecycle events. */
 export const EFFECT_EVENT_TYPES = [
   "effect.staged",
+  "effect.projection_bound",
   "effect.revised",
   "effect.decision_recorded",
   "effect.claimed",
@@ -593,10 +596,21 @@ export interface EffectStagedPayload {
   policy_snapshot_ref?: string;
   agent_hold?: boolean;
   safe_summary_ref?: string;
+  projection_required?: boolean;
   owner_ref?: string;
   author_actor?: EffectActor;
   author_ref?: string;
   created_at?: string;
+}
+
+export interface EffectProjectionBoundPayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  projection_ref: string;
+  proposal_digest: string;
+  target_digest: string;
+  bound_at: string;
 }
 
 export interface EffectRevisedPayload {
@@ -716,6 +730,7 @@ export interface LedgerEventPayloadMap extends ArtifactRuntimeEventPayloadMap {
   "operation.failed": OperationFailedPayload;
   "artifact.presentation_decided": ArtifactPresentationDecidedPayload;
   "effect.staged": EffectStagedPayload;
+  "effect.projection_bound": EffectProjectionBoundPayload;
   "effect.revised": EffectRevisedPayload;
   "effect.decision_recorded": EffectDecisionRecordedPayload;
   "effect.claimed": EffectClaimedPayload;
@@ -1796,6 +1811,15 @@ function _isV21PayloadForWrite(
         _validEffectRevisionMetadata(value)
       );
     }
+    case "effect.projection_bound":
+      return (
+        stageId() &&
+        revision() &&
+        _isNonPhysicalReference(value.projection_ref) &&
+        _isSha256(value.proposal_digest) &&
+        _isSha256(value.target_digest) &&
+        _isBoundedString(value.bound_at, 1, 128)
+      );
     case "effect.decision_recorded":
       return (
         stageId() &&
@@ -2067,6 +2091,8 @@ function _validEffectStageMetadata(value: Record<string, unknown>): boolean {
       _EFFECT_CLASSES.has(value.effect_class as EffectClass)) &&
     _optionalSafeOpaqueUriReference(value, "policy_snapshot_ref") &&
     (!("agent_hold" in value) || typeof value.agent_hold === "boolean") &&
+    (!("projection_required" in value) ||
+      typeof value.projection_required === "boolean") &&
     _optionalSafeOpaqueUriReference(value, "safe_summary_ref") &&
     _optionalSafeOpaqueUriReference(value, "owner_ref") &&
     (!("author_actor" in value) ||

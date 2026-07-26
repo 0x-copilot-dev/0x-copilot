@@ -134,6 +134,10 @@ class ProposedEffect(RuntimeContract):
     policy_snapshot_ref: str
     agent_hold: bool = False
     safe_summary_ref: str | None = None
+    # A workspace overlay is a separate durable projection.  When this is set,
+    # the stage cannot be approved until its exact current revision has a
+    # matching ``effect.projection_bound`` ledger row.
+    projection_required: bool = False
 
     @field_validator("display_target")
     @classmethod
@@ -319,6 +323,27 @@ class EffectStageDecision(RuntimeContract):
     ledger_id: str
 
 
+class EffectProjectionBinding(RuntimeContract):
+    """One immutable visible-projection binding for a stage revision.
+
+    The reference names a retained projection version, never a mutable latest
+    view or a physical path.  The fold compares both digests before treating
+    this as approval readiness.
+    """
+
+    revision: int = Field(ge=1)
+    projection_ref: str
+    proposal_digest: Sha256Hex
+    target_digest: Sha256Hex
+    bound_at: str
+    ledger_id: str
+
+    @field_validator("projection_ref")
+    @classmethod
+    def _projection_ref_is_safe(cls, value: str) -> str:
+        return _safe_reference(value, "projection_ref")
+
+
 class EffectStageState(RuntimeContract):
     """Pure fold result for one stage; it contains no ability to cause an effect."""
 
@@ -335,6 +360,8 @@ class EffectStageState(RuntimeContract):
     agent_hold: bool
     revisions: tuple[EffectStageRevision, ...]
     status: EffectStageStatus
+    projection_required: bool = False
+    projection_binding: EffectProjectionBinding | None = None
     decision: EffectStageDecision | None = None
     superseded_revision: int | None = None
     created_at: str
@@ -378,11 +405,36 @@ class EffectStageState(RuntimeContract):
                 )
         if self.decision is not None and self.decision.revision != latest.revision:
             raise ValueError("decision must bind the current revision")
+        if self.projection_binding is not None:
+            binding = self.projection_binding
+            if (
+                binding.revision != latest.revision
+                or binding.proposal_digest != latest.proposal_digest
+                or binding.target_digest != self.target_digest
+            ):
+                raise ValueError(
+                    "projection binding must identify the current revision"
+                )
         return self
 
     @property
     def current_revision(self) -> EffectStageRevision:
         return self.revisions[-1]
+
+    @property
+    def approval_ready(self) -> bool:
+        """Whether the current revision can receive an approval decision."""
+
+        if not self.projection_required:
+            return True
+        binding = self.projection_binding
+        current = self.current_revision
+        return bool(
+            binding is not None
+            and binding.revision == current.revision
+            and binding.proposal_digest == current.proposal_digest
+            and binding.target_digest == self.target_digest
+        )
 
 
 class EffectCommitCommand(RuntimeContract):

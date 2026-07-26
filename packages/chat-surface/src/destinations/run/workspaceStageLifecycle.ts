@@ -25,6 +25,7 @@ import {
 const [ARTIFACT_CREATED, ARTIFACT_REVISED] = ARTIFACT_EVENT_TYPES;
 const [
   EFFECT_STAGED,
+  EFFECT_PROJECTION_BOUND,
   EFFECT_REVISED,
   EFFECT_DECISION_RECORDED,
   EFFECT_CLAIMED,
@@ -68,6 +69,8 @@ interface StageAccumulator {
   readonly mountLabel: string;
   readonly policy: "auto" | "ask" | "require" | "block" | null;
   readonly agentHold: boolean;
+  readonly projectionRequired: boolean;
+  projectionReady: boolean;
   revision: number | null;
   proposalDigest: string | null;
   targetDigest: string | null;
@@ -116,6 +119,9 @@ export function projectWorkspaceStageLifecycle(
     if (stage === undefined || stage.runId !== event.run_id) continue;
 
     switch (eventType) {
+      case EFFECT_PROJECTION_BOUND:
+        applyProjectionBinding(stage, payload);
+        break;
       case EFFECT_REVISED:
         applyRevision(stage, payload);
         break;
@@ -208,8 +214,12 @@ function stageFromStaged(
     sha256(payload.proposal_digest) === null ||
     sha256(payload.target_digest) === null;
   const agentHold = payload.agent_hold === true;
+  const projectionRequired = payload.projection_required === true;
   const decisionAvailable =
-    !corrupted && !agentHold && (policy === "ask" || policy === "require");
+    !corrupted &&
+    !agentHold &&
+    !projectionRequired &&
+    (policy === "ask" || policy === "require");
   const heldByPolicy = agentHold || policy === "block";
 
   stages.set(stageId, {
@@ -220,6 +230,8 @@ function stageFromStaged(
     mountLabel: mountLabel(payload.display_target),
     policy,
     agentHold,
+    projectionRequired,
+    projectionReady: !projectionRequired,
     revision: 1,
     proposalDigest: sha256(payload.proposal_digest),
     targetDigest: sha256(payload.target_digest),
@@ -269,6 +281,7 @@ function applyRevision(
 
   stage.revision = revision;
   stage.proposalDigest = proposalDigest;
+  stage.projectionReady = !stage.projectionRequired;
   stage.proposalContentRef =
     payload.proposal_content_ref === undefined
       ? stage.proposalContentRef
@@ -278,7 +291,28 @@ function applyRevision(
     stage.agentHold || stage.policy === "block" ? "held" : "staged";
   stage.resolution = null;
   stage.decisionAvailable =
-    stage.policy === "ask" || stage.policy === "require";
+    !stage.projectionRequired &&
+    (stage.policy === "ask" || stage.policy === "require");
+}
+
+function applyProjectionBinding(
+  stage: StageAccumulator,
+  payload: Record<string, unknown>,
+): void {
+  if (!stage.projectionRequired || !matchesDecisionSnapshot(stage, payload)) {
+    markDetailsUnavailable(stage);
+    return;
+  }
+  const projectionRef = text(payload.projection_ref);
+  if (projectionRef === null || !isProjectionRef(projectionRef)) {
+    markDetailsUnavailable(stage);
+    return;
+  }
+  stage.projectionReady = true;
+  stage.decisionAvailable =
+    !stage.agentHold &&
+    (stage.policy === "ask" || stage.policy === "require") &&
+    stage.status === "staged";
 }
 
 function applyDecision(
@@ -384,6 +418,7 @@ function snapshotFor(
 ): WorkspaceApprovalSnapshot | null {
   if (
     stage.corrupted ||
+    !stage.projectionReady ||
     !stage.decisionAvailable ||
     stage.status !== "staged" ||
     stage.revision === null ||
@@ -559,6 +594,12 @@ function sequence(event: RuntimeEventEnvelope): number {
 
 function looksUnsafeDisplay(value: string): boolean {
   return /(?:file:|~[\\/]|[A-Za-z]:[\\/]|\\\\|\/(?:Users|home|private|var|tmp|Volumes|etc|usr|opt|root|mnt|Library|System)\/|(?:permit(?:[_\s-]?token|Token)?|prepared(?:[_\s-]?ref|Ref)|(?:target|proposal|content|precondition)(?:[_\s-]?(?:ref|id)|Ref|Id)|physical(?:[_\s-]?path|Path)?)\s*[:=])/i.test(
+    value,
+  );
+}
+
+function isProjectionRef(value: string): boolean {
+  return /^workspace-overlay:\/\/runs\/[A-Za-z0-9][A-Za-z0-9._:-]{0,255}\/versions\/[1-9][0-9]*$/u.test(
     value,
   );
 }

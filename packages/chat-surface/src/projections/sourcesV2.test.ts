@@ -24,7 +24,7 @@ const CANONICAL_EVENT = {
   artifactCreated: ARTIFACT_EVENT_TYPES[0],
   artifactPromoted: ARTIFACT_EVENT_TYPES[2],
   effectStaged: EFFECT_EVENT_TYPES[0],
-  effectApplied: EFFECT_EVENT_TYPES[4],
+  effectApplied: EFFECT_EVENT_TYPES[5],
 } as const;
 
 function event(

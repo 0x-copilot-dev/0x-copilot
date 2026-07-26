@@ -112,6 +112,7 @@ class LifecycleReferenceScheme(StrEnum):
     TABLE_SURFACE = "table"
     TIMELINE_SURFACE = "timeline"
     WORKSPACE_MATERIAL = "workspace-material"
+    WORKSPACE_OVERLAY = "workspace-overlay"
     WORKSPACE_PRECONDITION = "workspace-precondition"
     WORKSPACE_PREPARED = "workspace-prepared"
     WORKSPACE_RECEIPT = "workspace-receipt"
@@ -154,6 +155,7 @@ class LifecycleReferenceField(StrEnum):
     PAYLOAD_REF = "payload_ref"
     POLICY_SNAPSHOT_REF = "policy_snapshot_ref"
     PRECONDITION_REF = "precondition_ref"
+    PROJECTION_REF = "projection_ref"
     PROPOSAL_CONTENT_REF = "proposal_content_ref"
     PROPOSAL_REF = "proposal_ref"
     RECEIPT_REF = "receipt_ref"
@@ -578,6 +580,12 @@ class LifecycleReferenceRegistry:
                 "workspace-material://sha256/" + "f" * 64,
             ),
             cls._registration(
+                LifecycleReferenceScheme.WORKSPACE_OVERLAY,
+                LifecycleReferenceOwner.WORKSPACE_AUTHORITY,
+                LifecycleNodeKind.REFERENCE,
+                "workspace-overlay://runs/run_01/versions/1",
+            ),
+            cls._registration(
                 LifecycleReferenceScheme.WORKSPACE_PRECONDITION,
                 LifecycleReferenceOwner.WORKSPACE_AUTHORITY,
                 LifecycleNodeKind.REFERENCE,
@@ -871,6 +879,8 @@ class LifecycleReferenceRegistry:
                 self._validate_receipt_reference(value, parts)
             elif scheme is LifecycleReferenceScheme.WORKSPACE_TARGET:
                 WorkspaceTargetRefCodec.parse(value)
+            elif scheme is LifecycleReferenceScheme.WORKSPACE_OVERLAY:
+                self._validate_workspace_overlay(parts, scheme)
             elif scheme in {
                 LifecycleReferenceScheme.ARTIFACT_BLOB,
                 LifecycleReferenceScheme.WORKSPACE_MATERIAL,
@@ -1141,6 +1151,14 @@ class LifecycleReferenceRegistry:
         if _Patterns.STAGE_REVISION.fullmatch("/".join(parts)) is None:
             self._raise(LifecycleDiagnosticCode.MALFORMED_REFERENCE, scheme=scheme)
 
+    def _validate_workspace_overlay(
+        self, parts: tuple[str, ...], scheme: LifecycleReferenceScheme
+    ) -> None:
+        self._validate_exact_parts(parts, 4)
+        if parts[0] != "runs" or parts[2] != "versions":
+            self._raise(LifecycleDiagnosticCode.MALFORMED_REFERENCE, scheme=scheme)
+        self._validate_positive_part(parts[3], scheme)
+
     def _validate_positive_part(
         self, value: str, scheme: LifecycleReferenceScheme
     ) -> None:
@@ -1200,6 +1218,9 @@ class LifecycleReferenceEnumerator:
             LifecycleReferenceField.SAFE_SUMMARY_REF,
             LifecycleReferenceField.OWNER_REF,
             LifecycleReferenceField.AUTHOR_REF,
+        ),
+        LedgerEventType.EFFECT_PROJECTION_BOUND: (
+            LifecycleReferenceField.PROJECTION_REF,
         ),
         LedgerEventType.EFFECT_REVISED: (
             LifecycleReferenceField.PROPOSAL_REF,

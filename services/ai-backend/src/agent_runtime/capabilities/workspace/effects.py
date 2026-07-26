@@ -28,6 +28,7 @@ from agent_runtime.capabilities.operations.contracts import (
 )
 from agent_runtime.capabilities.workspace.contracts import (
     OverlayEntry,
+    WorkspaceOverlayVersionRef,
     mount_id_for_path,
     normalize_virtual_path,
 )
@@ -265,8 +266,17 @@ class WorkspaceOperationAdapter(OperationAdapter):
             raise OperationStageCapabilityError()
         capability._consume_for(request)
         arguments = _request_arguments(request)
-        plan = await self._mutations._plan(op=request.op, arguments=arguments)
         paths = _operation_paths(request.op, arguments)
+        # Runtime replay keeps the operation id stable. Repair the binding
+        # before compiling a second plan, so a replay neither duplicates nor
+        # cancels the already-visible overlay.
+        recovered = await self._recover_unbound_projection(
+            request=request,
+            paths=paths,
+        )
+        if recovered is not None:
+            return recovered
+        plan = await self._mutations._plan(op=request.op, arguments=arguments)
 
         if not _plan_entries(plan, paths):
             prior = next(
@@ -344,7 +354,7 @@ class WorkspaceOperationAdapter(OperationAdapter):
         )
         revision = state.current_revision
         try:
-            await self._mutations._project(
+            projected = await self._mutations._project(
                 plan,
                 stage_id=state.stage_id,
                 stage_revision=revision.revision,
@@ -360,6 +370,21 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 reason="workspace-project-failed",
             )
             raise
+        state = await self._services.stager.bind_projection(
+            scope=self._services.scope,
+            stage_id=state.stage_id,
+            revision=revision.revision,
+            projection_ref=WorkspaceOverlayVersionRef.format(
+                run_id=request.run_id,
+                version=projected.manifest.version,
+            ),
+            proposal_digest=revision.proposal_digest,
+            target_digest=state.target_digest,
+            actor=self._services.actor,
+            idempotency_key=(
+                f"workspace-projection-bind:{request.operation_id}:{revision.revision}"
+            ),
+        )
         return GatewayProposedEffect(
             stage_id=state.stage_id,
             proposal_ref=revision.proposal_ref,
@@ -448,10 +473,78 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 precondition_digest=stored.precondition_digest,
                 effect_class=effect_class,
                 policy_snapshot_ref=snapshot.snapshot_ref,
+                projection_required=True,
             ),
             policy_snapshot=snapshot,
             actor=self._services.actor,
             idempotency_key=f"workspace-stage:{request.operation_id}",
+        )
+
+    async def _recover_unbound_projection(
+        self,
+        *,
+        request: OperationRequest,
+        paths: tuple[str, ...],
+    ) -> GatewayProposedEffect | None:
+        """Finish a previously projected workspace stage on an idempotent retry."""
+
+        manifest = await self._mutations._manifest()
+        entries = tuple(manifest.entry_at(path) for path in paths)
+        if not entries or any(entry is None for entry in entries):
+            return None
+        present = tuple(entry for entry in entries if entry is not None)
+        stage_ids = {entry.stage_id for entry in present}
+        revisions = {entry.stage_revision for entry in present}
+        if len(stage_ids) != 1 or len(revisions) != 1:
+            return None
+        stage_id = next(iter(stage_ids))
+        revision = next(iter(revisions))
+        if stage_id is None or revision is None:
+            return None
+        state = await self._services.stager.get_state(
+            scope=self._services.scope,
+            stage_id=stage_id,
+        )
+        if (
+            state.operation_id != request.operation_id
+            or state.target.op != request.op
+            or not state.projection_required
+            or state.approval_ready
+            or state.current_revision.revision != revision
+            or state.status
+            in {
+                EffectStageStatus.APPROVED,
+                EffectStageStatus.REJECTED,
+                EffectStageStatus.CANCELLED,
+            }
+        ):
+            return None
+        current = state.current_revision
+        bound = await self._services.stager.bind_projection(
+            scope=self._services.scope,
+            stage_id=state.stage_id,
+            revision=revision,
+            projection_ref=WorkspaceOverlayVersionRef.format(
+                run_id=request.run_id,
+                version=manifest.version,
+            ),
+            proposal_digest=current.proposal_digest,
+            target_digest=state.target_digest,
+            actor=self._services.actor,
+            idempotency_key=(
+                f"workspace-projection-bind:{request.operation_id}:{revision}"
+            ),
+        )
+        return GatewayProposedEffect(
+            stage_id=bound.stage_id,
+            proposal_ref=bound.current_revision.proposal_ref,
+            safe_summary=_STAGED_SUMMARY,
+            activity_ref=bound.current_revision.proposal_ref,
+            artifact_source_ref=(
+                present[0].content_ref
+                if len(present) == 1 and present[0].content_ref is not None
+                else None
+            ),
         )
 
     async def _cancel_safely(

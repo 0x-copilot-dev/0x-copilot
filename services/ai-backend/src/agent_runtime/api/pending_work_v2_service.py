@@ -137,6 +137,7 @@ class PendingWorkV2Cursor:
 _PENDING_LEDGER_EVENT_TYPES = frozenset(
     {
         LedgerEventType.EFFECT_STAGED.value,
+        LedgerEventType.EFFECT_PROJECTION_BOUND.value,
         LedgerEventType.EFFECT_REVISED.value,
         LedgerEventType.EFFECT_DECISION_RECORDED.value,
         LedgerEventType.EFFECT_CLAIMED.value,
