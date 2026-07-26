@@ -242,11 +242,16 @@ describe("renderer bootstrap", () => {
       settingsButton?.click();
     });
 
-    // Gear opens the (stub) Settings surface without a destination-outlet.
+    // Settings owns the visible surface, while the Run outlet remains mounted
+    // but hidden. Keeping it alive preserves an in-progress composer draft for
+    // the Settings → Provider keys → Run round trip.
     expect(
       root.querySelector("[data-testid='settings-surface']"),
     ).not.toBeNull();
-    expect(root.querySelector("[data-testid='destination-outlet']")).toBeNull();
+    const outlet = root.querySelector("[data-testid='destination-outlet']");
+    expect(outlet).not.toBeNull();
+    expect(outlet?.parentElement?.hidden).toBe(true);
+    expect(outlet?.parentElement?.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("stamps :root[data-accent] from the boot-load preferences, before Settings opens (PRD-12 D9 / DoD 24d)", async () => {
@@ -395,7 +400,10 @@ describe("renderer bootstrap", () => {
     expect(
       root.querySelector("[data-testid='settings-surface']"),
     ).not.toBeNull();
-    expect(root.querySelector("[data-testid='destination-outlet']")).toBeNull();
+    const outlet = root.querySelector("[data-testid='destination-outlet']");
+    expect(outlet).not.toBeNull();
+    expect(outlet?.parentElement?.hidden).toBe(true);
+    expect(outlet?.parentElement?.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("opens Settings at the local-models section on ⌘⇧M", async () => {
