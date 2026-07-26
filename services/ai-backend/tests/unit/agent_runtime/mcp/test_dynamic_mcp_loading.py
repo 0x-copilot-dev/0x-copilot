@@ -404,13 +404,13 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
         provider = self.FakeMcpProvider(
-            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            cards=(self.make_card(name="linear"),),
             clients={
-                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
-                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                "linear": self.FakeMcpClient(
+                    tools=(self.make_tool(name="list_issues"),),
                     resources=(),
                     tool_outputs={
-                        self.TestValues.Names.DRIVE_SEARCH: {
+                        "list_issues": {
                             "content": [{"type": "text", "text": "found tasks"}]
                         }
                     },
@@ -419,13 +419,7 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         )
         registry = DynamicMcpRegistry(providers=(provider,))
         context_with_grant = runtime_context_admin.model_copy(
-            update={
-                "trace_metadata": {
-                    "mcp_approval_grants": [
-                        f"{self.TestValues.Names.DRIVE_MCP}:{self.TestValues.Names.DRIVE_SEARCH}"
-                    ]
-                }
-            }
+            update={"trace_metadata": {"mcp_approval_grants": ["linear:list_issues"]}}
         )
         tool = CallMcpTool(
             registry=registry,
@@ -436,27 +430,27 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         result = asyncio.run(
             tool.ainvoke(
                 {
-                    "server_name": self.TestValues.Names.DRIVE_MCP,
-                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "server_name": "linear",
+                    "tool_name": "list_issues",
                     "arguments": {"query": "tasks"},
                 }
             )
         )
 
-        assert result["server_name"] == self.TestValues.Names.DRIVE_MCP
-        assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
+        assert result["server_name"] == "linear"
+        assert result["tool_name"] == "list_issues"
         assert result["output"]["content"][0]["text"] == "found tasks"
-        assert self.TestValues.Names.DRIVE_MCP in provider.created_clients
+        assert "linear" in provider.created_clients
 
     def test_call_mcp_tool_executes_after_native_approval(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
         provider = self.FakeMcpProvider(
-            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            cards=(self.make_card(name="linear"),),
             clients={
-                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
-                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                "linear": self.FakeMcpClient(
+                    tools=(self.make_tool(name="list_issues"),),
                     resources=(),
                 )
             },
@@ -471,17 +465,17 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         result = asyncio.run(
             tool.ainvoke(
                 {
-                    "server_name": self.TestValues.Names.DRIVE_MCP,
-                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "server_name": "linear",
+                    "tool_name": "list_issues",
                     "arguments": {"query": "tasks"},
                 }
             )
         )
 
-        assert result["server_name"] == self.TestValues.Names.DRIVE_MCP
-        assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
+        assert result["server_name"] == "linear"
+        assert result["tool_name"] == "list_issues"
         assert result["output"]["content"][0]["text"] == (
-            "called drive_search with {'query': 'tasks'}"
+            "called list_issues with {'query': 'tasks'}"
         )
 
     def test_call_mcp_tool_collects_misplaced_tool_arguments(
@@ -489,10 +483,10 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
         provider = self.FakeMcpProvider(
-            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            cards=(self.make_card(name="linear"),),
             clients={
-                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
-                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                "linear": self.FakeMcpClient(
+                    tools=(self.make_tool(name="list_issues"),),
                     resources=(),
                 )
             },
@@ -507,8 +501,8 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         result = asyncio.run(
             tool.ainvoke(
                 {
-                    "server_name": self.TestValues.Names.DRIVE_MCP,
-                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "server_name": "linear",
+                    "tool_name": "list_issues",
                     "query": "tasks",
                     "assignees": ["me"],
                 }
@@ -516,7 +510,7 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
         )
 
         assert result["output"]["content"][0]["text"] == (
-            "called drive_search with {'query': 'tasks', 'assignees': ['me']}"
+            "called list_issues with {'query': 'tasks', 'assignees': ['me']}"
         )
 
     def test_call_mcp_tool_rejects_tool_not_returned_by_loaded_server(

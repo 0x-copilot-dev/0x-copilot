@@ -406,6 +406,33 @@ def test_explicit_flag_off_keeps_the_legacy_mcp_result_even_if_services_are_boun
     assert result_store.calls == []
 
 
+def test_legacy_gateway_cannot_dispatch_model_originated_write_or_unknown_operation(
+    monkeypatch,
+) -> None:
+    """D9 P0 canary: default-off has no direct effect escape hatch.
+
+    A compatibility read is still present until D7 retirement.  A write or an
+    unknown operation is instead rejected before registry resolution, so it
+    cannot reach ``create_client`` / ``call_tool`` without the canonical
+    descriptor → stage → decision/claim → coordinator route.
+    """
+
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    monkeypatch.setenv("SURFACES_V2", "false")
+
+    write = _invoke(tool, "update_issue", {"id": "L-1"})
+    unknown = _invoke(tool, "unlisted_operation", {"id": "L-2"})
+
+    assert provider.created_clients == []
+    assert write["error"]["code"] == "permission_denied"
+    assert unknown["error"]["code"] == "permission_denied"
+    assert write["error"]["safe_message"] == (
+        "This connector change requires the canonical review pipeline."
+    )
+    assert unknown["error"]["safe_message"] == write["error"]["safe_message"]
+
+
 def test_material_resolver_returns_only_the_exact_canonical_stage_arguments() -> None:
     fixture = _Fixture()
     _context, _events, _ledger, _result_store, operation_token, service_token = (

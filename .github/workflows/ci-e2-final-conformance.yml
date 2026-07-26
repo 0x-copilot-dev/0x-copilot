@@ -11,8 +11,12 @@ on:
       - "services/backend/**"
       - "services/backend-facade/**"
       - "packages/api-types/**"
+      - "packages/chat-surface/**"
+      - "packages/chat-transport/**"
+      - "packages/design-system/**"
       - "packages/service-contracts/**"
       - "packages/surface-renderers/**"
+      - "apps/desktop/**"
       - "tools/check_e2_final_conformance.py"
       - "tools/check_service_boundaries.py"
       - ".github/workflows/ci-e2-final-conformance.yml"
@@ -23,8 +27,12 @@ on:
       - "services/backend/**"
       - "services/backend-facade/**"
       - "packages/api-types/**"
+      - "packages/chat-surface/**"
+      - "packages/chat-transport/**"
+      - "packages/design-system/**"
       - "packages/service-contracts/**"
       - "packages/surface-renderers/**"
+      - "apps/desktop/**"
       - "tools/check_e2_final_conformance.py"
       - "tools/check_service_boundaries.py"
       - ".github/workflows/ci-e2-final-conformance.yml"
@@ -59,6 +67,10 @@ jobs:
           cd services/ai-backend
           PYTHONPATH="../../packages/service-contracts/src:src" python -m pytest \
             tests/unit/agent_runtime/release/test_e2_final_conformance.py \
+            tests/unit/agent_runtime/capabilities/mcp/test_operation_gateway_adapter.py \
+            tests/unit/runtime_worker/test_mcp_operation_composition.py \
+            tests/unit/runtime_worker/test_builtin_rowset_effect_executor.py \
+            tests/unit/runtime_worker/test_rowset_effect_staging.py \
             ../../tools/test_check_service_boundaries.py -q
       - name: Publish D9 conformance report
         run: |

@@ -14,12 +14,16 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 
+_SERVER = "linear"
+_TOOL = "list_issues"
+
+
 class CallMcpToolProtocolErrorMixin(DynamicMcpLoadingMixin):
     """Helpers for asserting on the failure shape returned by the dispatcher."""
 
     class TestValues(DynamicMcpLoadingMixin.TestValues):
         ERROR_TEXT = (
-            "MCP error -32602: Invalid arguments for tool drive_search: "
+            "MCP error -32602: Invalid arguments for tool list_issues: "
             "unrecognized_keys: ['parameters']"
         )
 
@@ -28,13 +32,13 @@ class CallMcpToolProtocolErrorMixin(DynamicMcpLoadingMixin):
         runtime_context: AgentRuntimeContext,
     ) -> CallMcpTool:
         provider = self.FakeMcpProvider(
-            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            cards=(self.make_card(name=_SERVER),),
             clients={
-                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
-                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                _SERVER: self.FakeMcpClient(
+                    tools=(self.make_tool(name=_TOOL),),
                     resources=(),
                     tool_outputs={
-                        self.TestValues.Names.DRIVE_SEARCH: {
+                        _TOOL: {
                             "content": [
                                 {"type": "text", "text": self.TestValues.ERROR_TEXT}
                             ],
@@ -62,8 +66,8 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         result = asyncio.run(
             tool.ainvoke(
                 {
-                    "server_name": self.TestValues.Names.DRIVE_MCP,
-                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "server_name": _SERVER,
+                    "tool_name": _TOOL,
                     "arguments": {"query": "tasks"},
                 }
             )
@@ -72,8 +76,8 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         assert "error" in result
         assert result["error"]["code"] == McpLoadErrorCode.MCP_PROTOCOL_ERROR.value
         assert result["error"]["retryable"] is False
-        assert result["server_name"] == self.TestValues.Names.DRIVE_MCP
-        assert result["tool_name"] == self.TestValues.Names.DRIVE_SEARCH
+        assert result["server_name"] == _SERVER
+        assert result["tool_name"] == _TOOL
 
     def test_inner_error_text_reaches_failure_result(
         self,
@@ -84,8 +88,8 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         result = asyncio.run(
             tool.ainvoke(
                 {
-                    "server_name": self.TestValues.Names.DRIVE_MCP,
-                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "server_name": _SERVER,
+                    "tool_name": _TOOL,
                     "arguments": {"query": "tasks"},
                 }
             )
@@ -104,15 +108,13 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
         provider = self.FakeMcpProvider(
-            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            cards=(self.make_card(name=_SERVER),),
             clients={
-                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
-                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                _SERVER: self.FakeMcpClient(
+                    tools=(self.make_tool(name=_TOOL),),
                     resources=(),
                     tool_outputs={
-                        self.TestValues.Names.DRIVE_SEARCH: {
-                            "content": [{"type": "text", "text": "found tasks"}]
-                        }
+                        _TOOL: {"content": [{"type": "text", "text": "found tasks"}]}
                     },
                 )
             },
@@ -127,8 +129,8 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         result = asyncio.run(
             tool.ainvoke(
                 {
-                    "server_name": self.TestValues.Names.DRIVE_MCP,
-                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "server_name": _SERVER,
+                    "tool_name": _TOOL,
                     "arguments": {"query": "tasks"},
                 }
             )
@@ -142,10 +144,10 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
         provider = self.FakeMcpProvider(
-            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            cards=(self.make_card(name=_SERVER),),
             clients={
-                self.TestValues.Names.DRIVE_MCP: self.FakeMcpClient(
-                    tools=(self.make_tool(name=self.TestValues.Names.DRIVE_SEARCH),),
+                _SERVER: self.FakeMcpClient(
+                    tools=(self.make_tool(name=_TOOL),),
                     resources=(),
                 )
             },
@@ -160,8 +162,8 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         result = asyncio.run(
             tool.ainvoke(
                 {
-                    "server_name": self.TestValues.Names.DRIVE_MCP,
-                    "tool_name": self.TestValues.Names.DRIVE_SEARCH,
+                    "server_name": _SERVER,
+                    "tool_name": _TOOL,
                     "parameters": {"query": "tasks"},
                 }
             )
@@ -172,5 +174,5 @@ class TestCallMcpToolProtocolError(CallMcpToolProtocolErrorMixin):
         assert "error" not in result
         assert (
             result["output"]["content"][0]["text"]
-            == "called drive_search with {'query': 'tasks'}"
+            == "called list_issues with {'query': 'tasks'}"
         )

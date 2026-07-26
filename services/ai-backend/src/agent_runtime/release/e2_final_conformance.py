@@ -23,6 +23,10 @@ from copilot_service_contracts.work_ledger import (
 
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.conformance import OperationConformanceGate
+from agent_runtime.effects.composition import (
+    EffectDescriptorCompositionError,
+    validate_effect_descriptor_staging,
+)
 from agent_runtime.effects.conformance import (
     canonical_effect_result_producer_present,
     canonical_workspace_executor_constructor_present,
@@ -48,7 +52,6 @@ from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
     LifecycleReferenceConformanceGate,
 )
 from agent_runtime.surfaces_v2.lifecycle_refs import LifecycleReferenceEnumerator
-from agent_runtime.surfaces_v2.ledger_models import EffectClass, EffectExecutorKind
 
 
 class ConformanceStatus(StrEnum):
@@ -162,51 +165,17 @@ class E2FinalConformanceRunner:
 
     def _effect_descriptor_execution_path(self) -> ConformanceCondition:
         try:
-            factory_source = self._paths.descriptor_factory.read_text(encoding="utf-8")
-        except OSError:
-            return _fail(
-                2,
-                "effect descriptors map to stager and executor",
-                "missing canonical worker factory",
-            )
-        effect_entries = [
-            entry.descriptor
-            for entry in DEFAULT_OPERATION_DESCRIPTORS.all_entries()
-            if entry.descriptor.effect_class
-            in {
-                EffectClass.UNKNOWN,
-                EffectClass.EXTERNAL_REVERSIBLE,
-                EffectClass.EXTERNAL_DESTRUCTIVE,
-            }
-        ]
-        missing_prepare = sorted(
-            f"{item.capability}.{item.op}"
-            for item in effect_entries
-            if not item.supports_prepare
-        )
-        declared = {
-            kind
-            for kind in EffectExecutorKind
-            if f"EffectExecutorKind.{kind.name}" in factory_source
-        }
-        required = {item.executor for item in effect_entries}
-        unavailable = sorted(kind.value for kind in required - declared)
-        if missing_prepare:
-            return _fail(
-                2,
-                "effect descriptors map to stager and executor",
-                "missing stager: " + ", ".join(missing_prepare),
-            )
-        if unavailable:
+            mappings = validate_effect_descriptor_staging(DEFAULT_OPERATION_DESCRIPTORS)
+        except EffectDescriptorCompositionError as exc:
             return _blocked(
                 2,
                 "effect descriptors map to stager and executor",
-                "uncomposed executor kinds: " + ", ".join(unavailable),
+                str(exc),
             )
         return _pass(
             2,
             "effect descriptors map to stager and executor",
-            "all effect descriptors support prepare; worker factory declares all required executor kinds",
+            f"{len(mappings)} reviewed descriptor→stager mappings; CI resolves each executor from the worker registry",
         )
 
     def _no_direct_effect_client(self) -> ConformanceCondition:
@@ -214,14 +183,18 @@ class E2FinalConformanceRunner:
             *effect_applied_producer_violations(self._paths.source_root),
             *workspace_executor_constructor_violations(self._paths.source_root),
         )
-        return (
-            _pass(
+        if violations:
+            return _fail(3, "no direct effect client upstream", *violations)
+        if _legacy_mcp_direct_dispatch_present(self._paths.source_root):
+            return _blocked(
                 3,
                 "no direct effect client upstream",
-                "sole-producer and sole-workspace-constructor AST guards",
+                "D7 prerequisite: CallMcpTool legacy direct-read compatibility path remains; default-off writes and unknown operations are fail-closed",
             )
-            if not violations
-            else _fail(3, "no direct effect client upstream", *violations)
+        return _pass(
+            3,
+            "no direct effect client upstream",
+            "sole-producer and sole-workspace-constructor AST guards; D7 legacy path retired",
         )
 
     def _canonical_effect_result_producer(self) -> ConformanceCondition:
@@ -493,7 +466,7 @@ def _service_boundary_violations() -> tuple[str, ...]:
     )
     if module is None:
         return ("cannot load service-boundary scanner",)
-    return module.boundary_violations()
+    return (*module.boundary_violations(), *module.desktop_ipc_boundary_violations())
 
 
 def _load_tool_module(name: str, filename: str) -> Any | None:
@@ -510,6 +483,29 @@ def _load_tool_module(name: str, filename: str) -> Any | None:
     sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _legacy_mcp_direct_dispatch_present(source_root: Path) -> bool:
+    """Detect the D7-owned direct model-tool client construction structurally."""
+
+    import ast
+
+    path = source_root / "agent_runtime/capabilities/mcp/middleware/call_tool.py"
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    except (OSError, SyntaxError):
+        # Missing/unparseable safety evidence must never be a release pass.
+        return True
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.AsyncFunctionDef) or node.name != "ainvoke":
+            continue
+        if any(
+            isinstance(call.func, ast.Attribute) and call.func.attr == "create_client"
+            for call in ast.walk(node)
+            if isinstance(call, ast.Call)
+        ):
+            return True
+    return False
 
 
 __all__ = (

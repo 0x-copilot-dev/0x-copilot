@@ -202,3 +202,26 @@ async def test_non_rowset_or_mismatched_material_fails_before_connector_access()
         await executor.prepare(_request(material))
 
     assert connector.requests == []
+
+
+@pytest.mark.asyncio
+async def test_unreviewed_connector_target_is_refused_after_approval_without_dispatch() -> (
+    None
+):
+    """A generic builtin proposal must never become a connector tunnel."""
+
+    material = _material()
+    unreviewed = BuiltinRowSetEffectMaterial(
+        **{
+            **material.__dict__,
+            "target_connector": "asana",
+            "target_op": "create_task",
+        }
+    )
+    connector = _Connector()
+    executor = _executor(resolver=_Resolver([unreviewed]), connector=connector)
+
+    with pytest.raises(BuiltinRowSetMaterialError):
+        await executor.prepare(_request(unreviewed))
+
+    assert connector.requests == []

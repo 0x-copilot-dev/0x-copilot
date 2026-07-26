@@ -17,9 +17,9 @@ from typing import Protocol
 from agent_runtime.capabilities.mcp.operation_adapter import (
     McpOperationArgumentStorePort,
 )
-from agent_runtime.capabilities.surfaces.builtin import server_slug, tool_slug
 from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
     RowSetEffectProposal,
+    reviewed_rowset_target,
 )
 from agent_runtime.effects.claims import EffectClaim
 from agent_runtime.effects.executor import (
@@ -114,8 +114,13 @@ class RuntimeBuiltinRowSetMaterialResolver:
             RowsetValidator.validate(
                 rows=proposal.rows, agent_holds=proposal.agent_holds
             )
-            connector = server_slug(proposal.target_connector)
-            op = tool_slug(proposal.target_op)
+            target = reviewed_rowset_target(
+                target_connector=proposal.target_connector,
+                target_op=proposal.target_op,
+            )
+            if target is None:
+                return None
+            connector, op = target
             expected_target_digest = sha256_hex(
                 canonical_json_bytes({"capability": connector, "op": op})
             )
@@ -255,7 +260,12 @@ class BuiltinRowSetEffectExecutor:
         request: EffectExecutionRequest, material: BuiltinRowSetEffectMaterial
     ) -> bool:
         return (
-            material.target_ref == request.target_ref
+            reviewed_rowset_target(
+                target_connector=material.target_connector,
+                target_op=material.target_op,
+            )
+            == (material.target_connector, material.target_op)
+            and material.target_ref == request.target_ref
             and material.target_digest == request.target_digest
             and material.proposal_ref == request.proposal_ref
             and material.proposal_content_ref == request.proposal_content_ref
