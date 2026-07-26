@@ -337,6 +337,28 @@ describe("<FirstRunSurface>", () => {
     expect(lastWebSearch).toBe(false);
   });
 
+  it("keeps the Tools panel above its fixed click-out scrim", () => {
+    render(
+      <FirstRunSurface
+        providerKeys={fakePort()}
+        onSkip={() => undefined}
+        onComplete={() => undefined}
+        initialStage="ready"
+        connectorsPort={fakeConnectorsPort()}
+        renderComposer={(ctx) => (
+          <div data-testid="p3-composer">{ctx.toolsTrigger}</div>
+        )}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    const panel = screen.getByTestId("first-run-tools-popover");
+    // An ancestor z-index creates a separate stacking context. The fixed
+    // scrim then sits above this inline panel, making the mounted popover look
+    // like a dead Tools button in Electron. `.ui-pop` itself owns z-index 71.
+    expect(panel.parentElement?.style.zIndex).toBe("");
+  });
+
   it("footer-right is engine-keyed: key engine → keychain line, else → 'nothing leaves this machine' (P4)", async () => {
     renderSurface();
     const foot = () => screen.getByTestId("first-run-footer").textContent;

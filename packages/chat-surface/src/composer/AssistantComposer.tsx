@@ -431,7 +431,13 @@ export const AssistantComposer = forwardRef<
       }
       bottomBarRender={({ text, running: isRunning, attachmentsCount }) => (
         <div className="aui-composer-action-wrapper">
-          <div className="aui-composer-tools">
+          <div
+            className={
+              toolsTrigger !== undefined
+                ? "aui-composer-tools aui-composer-tools--tools-popover"
+                : "aui-composer-tools"
+            }
+          >
             <div className="aui-plus-menu-root" ref={menuRef}>
               {/* Owner ruling: the affordance stays a PLUS (not the design's
                * paperclip) — but drawn, at the design's `.cmp-ic` metrics

@@ -1606,6 +1606,16 @@ p {
   overflow: hidden;
 }
 
+/* Mirrors chat-surface's composer recipe. The Tools panel must escape this
+ * narrow flex group or its fixed click-out scrim becomes the only hit target. */
+.aui-composer-tools--tools-popover {
+  overflow: visible;
+  /* Match chat-surface: this host layer keeps the shared 70/71 scrim/panel
+   * pair above ancestor stacking contexts without changing their recipe. */
+  position: relative;
+  z-index: 72;
+}
+
 .atlas-composer-mic {
   height: 28px;
   width: 28px;

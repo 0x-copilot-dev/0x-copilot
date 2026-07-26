@@ -692,5 +692,8 @@ const floatWrapStyle: CSSProperties = {
   position: "absolute",
   bottom: "calc(100% + 8px)",
   right: 0,
-  zIndex: 50,
+  // Do not add a z-index here. A non-auto z-index creates a stacking context,
+  // trapping the panel at this wrapper's level while the fixed `.ui-pop-scrim`
+  // escapes above it (70). The panel's own 71 must compete with that scrim at
+  // the same level or the scrim swallows every Tools interaction.
 };

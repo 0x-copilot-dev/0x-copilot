@@ -289,7 +289,14 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onAttachSkill={handleAttachSkill}
         onRemoveSkill={handleRemoveSkill}
         onClearSkills={handleClearSkills}
-        connectorsTrigger={connectorsTrigger}
+        // Preserve the legacy connector button in its original slot only when
+        // no inline Tools popover is available. The popover must use the
+        // dedicated `toolsTrigger` slot so AssistantComposer can release its
+        // clipping container while it is open.
+        connectorsTrigger={
+          toolsTrigger === undefined ? connectorsTrigger : undefined
+        }
+        toolsTrigger={toolsTrigger}
         // "Add a provider key" navigates to Settings → Provider keys (the one
         // surface); takes precedence over the inline port below.
         onAddProviderKey={onOpenModelSettings}

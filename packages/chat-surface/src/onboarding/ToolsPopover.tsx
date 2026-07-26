@@ -23,8 +23,8 @@
 // third private idiom next to the model popover's `.ui-pop` and the composer
 // plus-menu's `.aui-plus-menu`. It now renders the SHARED `.ui-pop*` recipe
 // from `@0x-copilot/design-system` (the design's `.pop` family in
-// `tools/design-parity/design-kit/copilot-v3.css`), at the design's 318px tools
-// width, mapped 1:1:
+// `tools/design-parity/design-kit/copilot-v3.css`), aligned to the Model
+// popover's 300px width, mapped 1:1:
 //
 //   .ui-pop / .ui-pop__h / .ui-pop__h-meta   panel + header + `{n} on` meta
 //   .ui-pop__list                            the one scroll region (264px cap)
@@ -493,11 +493,11 @@ function ToggleGlyph(props: { readonly on: boolean }): ReactNode {
  * no raw hex, no hard-coded type sizes.
  */
 
-/** The design's `.pop` width for the tools popover (copilot-composer2 renders
- *  `<Pop width={318}>`). `position: relative` pairs with `.ui-pop`'s z-index 71
- *  so the panel sits above the scrim (70) instead of under it. */
+/** Match the Model popover's 300px frame. `position: relative` pairs with
+ * `.ui-pop`'s z-index 71 so the panel sits above the scrim (70) instead of
+ * under it. */
 const panelStyle: CSSProperties = {
-  width: 318,
+  width: 300,
   maxWidth: "calc(100vw - 2rem)",
   position: "relative",
 };

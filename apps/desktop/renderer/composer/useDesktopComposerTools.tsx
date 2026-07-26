@@ -251,5 +251,7 @@ const floatWrapStyle: CSSProperties = {
   position: "absolute",
   bottom: "calc(100% + 8px)",
   right: 0,
-  zIndex: 50,
+  // Deliberately no z-index: it would create a stacking context below the
+  // fixed `.ui-pop-scrim` (70), leaving the visible panel untouchable. The
+  // panel's `.ui-pop` z-index (71) must share the scrim's stacking context.
 };

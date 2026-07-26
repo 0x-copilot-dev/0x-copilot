@@ -78,5 +78,7 @@ const floatWrapStyle: CSSProperties = {
   position: "absolute",
   bottom: "calc(100% + 8px)",
   right: 0,
-  zIndex: 50,
+  // Keep this wrapper out of a new stacking context. The panel's own
+  // z-index 71 needs to sit above the fixed z-index-70 click-out scrim;
+  // a wrapper z-index makes the panel mount but impossible to interact with.
 };

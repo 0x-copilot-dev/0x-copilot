@@ -288,11 +288,11 @@ describe("<ToolsPopover> — click-out scrim + Escape (row 46)", () => {
   it("renders the shared `.ui-pop` panel with a `.ui-pop-scrim` sibling", () => {
     const { container } = renderWithContainer();
     expect(container.querySelector(".ui-pop-scrim")).not.toBeNull();
-    expect(
-      screen
-        .getByTestId("first-run-tools-popover")
-        .classList.contains("ui-pop"),
-    ).toBe(true);
+    const panel = screen.getByTestId("first-run-tools-popover");
+    expect(panel.classList.contains("ui-pop")).toBe(true);
+    // Tools and Model use the same fixed frame width, so changing one cannot
+    // silently recreate the 18px panel-size drift.
+    expect((panel as HTMLElement).style.width).toBe("300px");
   });
 
   it("closes on mousedown on the scrim", () => {

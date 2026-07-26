@@ -359,6 +359,36 @@ describe("RunComposer inline Tools popover", () => {
     ).not.toBeNull();
   });
 
+  it("does not trap the inline Tools panel below its click-out scrim", async () => {
+    const { container } = renderComposer({
+      connectorsPort: fakeConnectorsPort(),
+    });
+    await waitFor(() => {
+      expect(textarea(container)).not.toBeNull();
+    });
+
+    fireEvent.click(
+      container.querySelector(
+        "[data-testid='first-run-tools-button']",
+      ) as HTMLButtonElement,
+    );
+    const panel = await waitFor(() => {
+      const element = container.querySelector<HTMLElement>(
+        "[data-testid='first-run-tools-popover']",
+      );
+      expect(element).not.toBeNull();
+      return element as HTMLElement;
+    });
+    // `.ui-pop` owns z-index 71. Its inline anchoring wrapper must not create
+    // a lower stacking context or the fixed z-index-70 scrim wins every click.
+    expect(panel.parentElement?.style.zIndex).toBe("");
+    expect(
+      container
+        .querySelector(".aui-composer-tools")
+        ?.classList.contains("aui-composer-tools--tools-popover"),
+    ).toBe(true);
+  });
+
   it("falls back to the flat connectors button when no connectorsPort is provided", async () => {
     const { container } = renderComposer();
     await waitFor(() => {
