@@ -37,7 +37,6 @@ import {
   useEffect,
   useMemo,
   useState,
-  type CSSProperties,
   type ReactElement,
   type ReactNode,
 } from "react";
@@ -62,8 +61,7 @@ import {
   type FirstRunKeyProvider,
   type FirstRunStage,
 } from "./firstRun";
-import { ComposerToolsButton } from "./ComposerToolsButton";
-import { ToolsPopover } from "./ToolsPopover";
+import { ToolsPopoverContent } from "./ToolsPopover";
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 import type { FirstRunProfilePort } from "./ports/FirstRunProfilePort";
 import type { FirstRunInstallableConnector } from "./projectFirstRunConnectors";
@@ -97,13 +95,10 @@ export interface FirstRunComposerCtx {
   /** The composer calls this after run-create → surface renders the ack. */
   readonly onSent: () => void;
   // --- P4 tools wiring (present only when a `connectorsPort` is injected) ---
-  /**
-   * The connector-aware Tools trigger (`ComposerToolsButton` + its
-   * `ToolsPopover`) the host mounts into `AssistantComposer`'s `toolsTrigger`
-   * slot. `undefined` when no `connectorsPort` was injected (the composer's
-   * bottom bar then stays byte-identical to pre-P4).
-   */
-  readonly toolsTrigger?: ReactNode;
+  /** Per-run tools body rendered inside the shared composer's `+` menu. */
+  readonly renderToolsMenu?: (args: {
+    readonly onBack: () => void;
+  }) => ReactNode;
   /**
    * Per-run web-search toggle at render time (SPEC `webOn`, default true). The
    * host threads this into `createFirstRun` on send.
@@ -156,9 +151,9 @@ export interface FirstRunSurfaceProps {
   readonly profilePort?: FirstRunProfilePort;
   /**
    * P4 — host-injected MCP connector surface for the composer Tools popover.
-   * When provided, the surface owns `webOn` + `activeConnectorIds` and mounts
-   * the `ComposerToolsButton` + `ToolsPopover` into the composer via the
-   * composer ctx's `toolsTrigger`. Absent ⇒ no tools pill (pre-P4 composer).
+   * When provided, the surface owns `webOn` + `activeConnectorIds` and exposes
+   * the controls through the composer's one `+` menu. Absent ⇒ no per-run
+   * tools view.
    */
   readonly connectorsPort?: FirstRunConnectorsPort;
   /**
@@ -174,12 +169,6 @@ export interface FirstRunSurfaceProps {
    * target for `requiresPreRegisteredClient` catalog rows.
    */
   readonly onAddCustom?: () => void;
-  /**
-   * P4 — host-owned portal root for the Tools popover (the package has no
-   * `document`). When omitted the popover renders inline, floated above the
-   * trigger.
-   */
-  readonly toolsPortalTarget?: HTMLElement;
   /** Footer left; default `FIRST_RUN_COPY.footer.left`. */
   readonly appVersion?: string;
   readonly keyProviders?: readonly FirstRunKeyProvider[];
@@ -315,7 +304,6 @@ export function FirstRunSurface({
   connectorsPort,
   onConnectCatalog,
   onAddCustom,
-  toolsPortalTarget,
   appVersion,
   keyProviders,
   onStartLocalDownload,
@@ -338,7 +326,6 @@ export function FirstRunSurface({
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
   >([]);
-  const [toolsOpen, setToolsOpen] = useState(false);
 
   const handleToggleConnector = useCallback(
     (serverId: string, active: boolean): void => {
@@ -402,36 +389,36 @@ export function FirstRunSurface({
     return scopes;
   }, [activeConnectorIds]);
 
-  // The Tools trigger (button + popover) — built only when a connectors port is
-  // injected, then handed to the composer via the composer ctx's `toolsTrigger`.
-  const toolsTrigger = useMemo<ReactNode>(() => {
-    if (!connectorsPort) {
-      return undefined;
-    }
-    return (
-      <FirstRunToolsTrigger
-        port={connectorsPort}
-        open={toolsOpen}
-        onOpenChange={setToolsOpen}
-        webSearchEnabled={webOn}
-        onToggleWebSearch={setWebOn}
-        activeConnectorIds={activeConnectorIds}
-        onToggleConnector={handleToggleConnector}
-        onConnectCatalog={handleConnectCatalog}
-        onAddCustom={handleAddCustom}
-        portalTarget={toolsPortalTarget}
-      />
-    );
-  }, [
-    connectorsPort,
-    toolsOpen,
-    webOn,
-    activeConnectorIds,
-    handleToggleConnector,
-    handleConnectCatalog,
-    handleAddCustom,
-    toolsPortalTarget,
-  ]);
+  // Tools render inside the one composer `+` menu. This avoids a duplicate
+  // bottom-bar pill and lets the host's existing anchored menu portal own the
+  // desktop clipping boundary.
+  const renderToolsMenu = useCallback(
+    ({ onBack }: { readonly onBack: () => void }): ReactNode => {
+      if (!connectorsPort) {
+        return null;
+      }
+      return (
+        <ToolsPopoverContent
+          port={connectorsPort}
+          webSearchEnabled={webOn}
+          onToggleWebSearch={setWebOn}
+          activeConnectorIds={activeConnectorIds}
+          onToggleConnector={handleToggleConnector}
+          onConnectCatalog={handleConnectCatalog}
+          onAddCustom={handleAddCustom}
+          onBack={onBack}
+        />
+      );
+    },
+    [
+      connectorsPort,
+      webOn,
+      activeConnectorIds,
+      handleToggleConnector,
+      handleConnectCatalog,
+      handleAddCustom,
+    ],
+  );
 
   // A local engine is usable once the pull reaches 100% — or immediately when
   // the preset was already installed (P8 §6's short-circuit issues no pull, so
@@ -482,7 +469,8 @@ export function FirstRunSurface({
       modelReady,
       modelBlocked: localModelBlocked,
       onSent: () => setSent(true),
-      toolsTrigger,
+      renderToolsMenu:
+        connectorsPort === undefined ? undefined : renderToolsMenu,
       webSearchEnabled: webOn,
       connectorScopes,
     }),
@@ -493,7 +481,8 @@ export function FirstRunSurface({
       localModelPct,
       modelReady,
       localModelBlocked,
-      toolsTrigger,
+      connectorsPort,
+      renderToolsMenu,
       webOn,
       connectorScopes,
     ],
@@ -612,88 +601,3 @@ export function FirstRunSurface({
     surface
   );
 }
-
-// ---------------------------------------------------------------------------
-// P4 Tools trigger — `ComposerToolsButton` + its `ToolsPopover`, floated above
-// the button when no host portal target is supplied.
-// ---------------------------------------------------------------------------
-
-interface FirstRunToolsTriggerProps {
-  readonly port: FirstRunConnectorsPort;
-  readonly open: boolean;
-  readonly onOpenChange: (open: boolean) => void;
-  readonly webSearchEnabled: boolean;
-  readonly onToggleWebSearch: (next: boolean) => void;
-  readonly activeConnectorIds: readonly string[];
-  readonly onToggleConnector: (serverId: string, active: boolean) => void;
-  readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
-  readonly onAddCustom: () => void;
-  readonly portalTarget?: HTMLElement;
-}
-
-function FirstRunToolsTrigger(props: FirstRunToolsTriggerProps): ReactElement {
-  const {
-    port,
-    open,
-    onOpenChange,
-    webSearchEnabled,
-    onToggleWebSearch,
-    activeConnectorIds,
-    onToggleConnector,
-    onConnectCatalog,
-    onAddCustom,
-    portalTarget,
-  } = props;
-
-  // Badge count from surface state alone (web search + toggled connectors —
-  // each active id is by construction a connected row); the popover header
-  // recomputes the exact count against the loaded projection.
-  const activeCount = (webSearchEnabled ? 1 : 0) + activeConnectorIds.length;
-
-  const popover = (
-    <ToolsPopover
-      open={open}
-      onClose={() => onOpenChange(false)}
-      port={port}
-      webSearchEnabled={webSearchEnabled}
-      onToggleWebSearch={onToggleWebSearch}
-      activeConnectorIds={activeConnectorIds}
-      onToggleConnector={onToggleConnector}
-      onConnectCatalog={onConnectCatalog}
-      onAddCustom={onAddCustom}
-      portalTarget={portalTarget}
-    />
-  );
-
-  return (
-    <span style={triggerWrapStyle}>
-      <ComposerToolsButton
-        open={open}
-        onClick={() => onOpenChange(!open)}
-        activeCount={activeCount}
-      />
-      {portalTarget !== undefined ? (
-        popover
-      ) : (
-        <span style={floatWrapStyle}>{popover}</span>
-      )}
-    </span>
-  );
-}
-
-const triggerWrapStyle: CSSProperties = {
-  position: "relative",
-  display: "inline-flex",
-};
-
-// Inline (non-portaled) popover floats above the trigger, right-aligned, so it
-// never widens the composer bottom bar.
-const floatWrapStyle: CSSProperties = {
-  position: "absolute",
-  bottom: "calc(100% + 8px)",
-  right: 0,
-  // Do not add a z-index here. A non-auto z-index creates a stacking context,
-  // trapping the panel at this wrapper's level while the fixed `.ui-pop-scrim`
-  // escapes above it (70). The panel's own 71 must compete with that scrim at
-  // the same level or the scrim swallows every Tools interaction.
-};

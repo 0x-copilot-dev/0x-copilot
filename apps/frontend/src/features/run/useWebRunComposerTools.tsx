@@ -16,7 +16,7 @@
 // connectors port + provider-keys port). No `@0x-copilot/chat-surface` internals,
 // no `apps/desktop` import, no raw fetch.
 
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
   type ComposerConnectorsPort,
@@ -27,7 +27,7 @@ import {
 import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
-import { ChatToolsTrigger } from "../chat/components/composer/ChatToolsTrigger";
+import { ChatToolsMenu } from "../chat/components/composer/ChatToolsTrigger";
 import { createComposerConnectorsPort } from "../connectors/composerConnectorsPort";
 import { createFirstRunProviderKeysPort } from "../onboarding/firstRunProviderKeysPort";
 import { toReadableRunAttachments } from "../onboarding/firstRunAttachments";
@@ -48,8 +48,10 @@ export interface WebRunComposerTools {
   readonly onModelChange: (id: string) => void;
   /** Host provider-keys port — the model pill's inline "Add a provider key" form. */
   readonly providerKeysPort: ProviderKeysPort;
-  /** The inline Tools popover trigger (web-search toggle + per-run connectors). */
-  readonly toolsTrigger: ReactElement;
+  /** Body rendered by the shared composer's `+ → Tools` view. */
+  readonly renderToolsMenu: (args: {
+    readonly onBack: () => void;
+  }) => ReactNode;
   /**
    * Build the run-start body from the composer submit (goal + resolved model +
    * attachments + web-search + connector scopes). The ONE place both web
@@ -72,12 +74,11 @@ export function useWebRunComposerTools(
     modelName: null,
   });
 
-  // Inline Tools popover state (web-search default on + per-run active connectors).
+  // `+ → Tools` state (web-search default on + per-run active connectors).
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
   >([]);
-  const [toolsOpen, setToolsOpen] = useState(false);
 
   const connectorsPort = useMemo<ComposerConnectorsPort>(
     () => createComposerConnectorsPort(identity),
@@ -133,23 +134,21 @@ export function useWebRunComposerTools(
     return scopes;
   }, [activeConnectorIds]);
 
-  const toolsTrigger = useMemo(
-    () => (
-      <ChatToolsTrigger
+  const renderToolsMenu = useCallback(
+    ({ onBack }: { readonly onBack: () => void }): ReactNode => (
+      <ChatToolsMenu
         port={connectorsPort}
-        open={toolsOpen}
-        onOpenChange={setToolsOpen}
         webSearchEnabled={webSearchEnabled}
         onToggleWebSearch={setWebSearchEnabled}
         activeConnectorIds={activeConnectorIds}
         onToggleConnector={onToggleConnector}
         onConnectCatalog={onConnectCatalog}
         onAddCustom={noop}
+        onBack={onBack}
       />
     ),
     [
       connectorsPort,
-      toolsOpen,
       webSearchEnabled,
       activeConnectorIds,
       onToggleConnector,
@@ -179,7 +178,7 @@ export function useWebRunComposerTools(
     selectedModel,
     onModelChange,
     providerKeysPort,
-    toolsTrigger,
+    renderToolsMenu,
     buildRunStartRequest,
   };
 }

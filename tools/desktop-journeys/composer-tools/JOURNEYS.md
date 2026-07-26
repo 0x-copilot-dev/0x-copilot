@@ -1,10 +1,10 @@
 # Composer Tools journeys
 
 This matrix covers every supported Tools outcome across the desktop user journey.
-Rows marked **fixture** need a configured provider/connector or a local test
-fixture; they must not be simulated as a successful real integration. The
-no-provider-key smoke is deliberately enough to prove that the popover itself is
-interactive.
+The composer has one entry point: **`+` → Tools**. There is no standalone
+`Tools N` pill or independently positioned Tools dialog. Rows marked **fixture**
+need a configured provider/connector or a local test fixture; they must not be
+simulated as a successful real integration.
 
 Run the executable safe smoke from this worktree after staging the desktop
 runtime:
@@ -17,23 +17,23 @@ python3 tools/desktop-journeys/composer-tools/tools_popover.py
 
 ## Core navigation and interaction
 
-| ID    | Entry state                   | Actions                                       | Expected outcome                                                             | Automation         |
-| ----- | ----------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------- | ------------------ |
-| CT-01 | First run, composer available | Open Tools                                    | Dialog is visible, focused, and its Web search row is the hit target.        | `tools_popover.py` |
-| CT-02 | Empty Run                     | Open Tools                                    | Same interaction/layout as CT-01; panel is not clipped by composer chrome.   | `tools_popover.py` |
-| CT-03 | Active Run                    | Open Tools while live; open while scrubbed    | Live allows permitted selection; scrubbed composer is disabled.              | fixture            |
-| CT-04 | Web chat                      | Open Tools                                    | Same descriptors, semantics and a11y as desktop for the same workspace.      | web E2E            |
-| CT-05 | Any panel                     | Escape, close button, click outside           | Each closes; focus returns to the trigger.                                   | `tools_popover.py` |
-| CT-06 | Keyboard-only                 | Tab through, Space/Enter a switch             | Logical order, visible focus, truthful roles and `aria-checked`.             | component + E2E    |
-| CT-07 | Narrow window / long names    | Resize to 320px and use long connector labels | Panel stays within viewport, scrolls internally, and rows remain actionable. | visual fixture     |
-| CT-08 | Reduced motion                | Open/close with reduced motion preference     | No disruptive animation; menu is immediately usable.                         | visual fixture     |
+| ID    | Entry state                 | Actions                                       | Expected outcome                                                             | Automation         |
+| ----- | --------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------- | ------------------ |
+| CT-01 | First-run composer          | `+` → Tools                                   | No standalone pill; Tools view is visible and Web Search is the hit target.  | `tools_popover.py` |
+| CT-02 | New Chat, Studio            | `+` → Tools                                   | View stays inside the correctly anchored `+` menu, never clipped.            | `tools_popover.py` |
+| CT-03 | New Chat, Focus             | `+` → Tools                                   | Same disclosure and hit-target contract as Studio.                           | `tools_popover.py` |
+| CT-04 | Bound Run, Studio and Focus | `+` → Tools                                   | Same menu in both modes; Web Search selection persists per composer.         | `tools_popover.py` |
+| CT-05 | Any panel                   | Back, Escape, click outside                   | Back returns to `+` root; Escape and click-out close the menu.               | `tools_popover.py` |
+| CT-06 | Keyboard-only               | Tab through, Space/Enter a switch             | Logical order, visible focus, truthful roles and `aria-checked`.             | component + E2E    |
+| CT-07 | Narrow window / long names  | Resize to 320px and use long connector labels | Panel stays within viewport, scrolls internally, and rows remain actionable. | visual fixture     |
+| CT-08 | Reduced motion              | Open/close with reduced motion preference     | No disruptive animation; menu is immediately usable.                         | visual fixture     |
 
 ## Built-ins and selection
 
 | ID    | Entry state                          | Actions                                            | Expected outcome                                                                                     | Automation                        |
 | ----- | ------------------------------------ | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------- |
 | CT-09 | Default policy permits Web search    | Send without touching Tools                        | Default run enables Web search; request does not send a contradictory opt-out.                       | API/E2E fixture                   |
-| CT-10 | Web search on                        | Toggle it off, then send                           | Trigger count/meta changes and run sends `web_search_enabled: false`.                                | `tools_popover.py` + payload test |
+| CT-10 | Web search on                        | Toggle it off, then send                           | The Tools header updates and the run sends `web_search_enabled: false`.                              | `tools_popover.py` + payload test |
 | CT-11 | Web search policy blocked            | Open Tools                                         | Disabled row explains the policy state; it cannot be enabled client-side.                            | policy fixture                    |
 | CT-12 | Research request with Web search     | Run a cited search task                            | Activity/citation card identifies Web search, has source links and handles no-result/provider error. | reuse `chat-rich-cards` fixture   |
 | CT-13 | Local file/CSV available             | Attach/select approved CSV and ask for explanation | File read provenance is visible; no arbitrary path becomes selectable from the mock alone.           | local fixture                     |

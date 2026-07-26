@@ -1,9 +1,9 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ComposerConnectorsPort } from "@0x-copilot/chat-surface";
 
-import { ChatToolsTrigger } from "./ChatToolsTrigger";
+import { ChatToolsMenu } from "./ChatToolsTrigger";
 
 function fakeConnectorsPort(): ComposerConnectorsPort {
   return {
@@ -15,43 +15,24 @@ function fakeConnectorsPort(): ComposerConnectorsPort {
   };
 }
 
-describe("ChatToolsTrigger", () => {
-  it("does not trap the Tools panel below its click-out scrim", () => {
-    const onOpenChange = vi.fn();
-    const { rerender } = render(
-      <ChatToolsTrigger
+describe("ChatToolsMenu", () => {
+  it("renders only the shared + menu body, with an explicit Back control", () => {
+    render(
+      <ChatToolsMenu
         port={fakeConnectorsPort()}
-        open={false}
-        onOpenChange={onOpenChange}
         webSearchEnabled
         onToggleWebSearch={vi.fn()}
         activeConnectorIds={[]}
         onToggleConnector={vi.fn()}
         onConnectCatalog={vi.fn()}
         onAddCustom={vi.fn()}
+        onBack={vi.fn()}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("first-run-tools-button"));
-    expect(onOpenChange).toHaveBeenCalledWith(true);
-
-    rerender(
-      <ChatToolsTrigger
-        port={fakeConnectorsPort()}
-        open
-        onOpenChange={onOpenChange}
-        webSearchEnabled
-        onToggleWebSearch={vi.fn()}
-        activeConnectorIds={[]}
-        onToggleConnector={vi.fn()}
-        onConnectCatalog={vi.fn()}
-        onAddCustom={vi.fn()}
-      />,
-    );
-
-    const panel = screen.getByTestId("first-run-tools-popover");
-    // `.ui-pop` owns z-index 71; an ancestor z-index would create a lower
-    // stacking context and leave the fixed z-index-70 scrim over the panel.
-    expect(panel.parentElement?.style.zIndex).toBe("");
+    expect(screen.getByTestId("first-run-tools-websearch")).toBeTruthy();
+    expect(screen.getByTestId("first-run-tools-back")).toBeTruthy();
+    expect(screen.queryByTestId("first-run-tools-button")).toBeNull();
+    expect(screen.queryByTestId("first-run-tools-popover")).toBeNull();
   });
 });

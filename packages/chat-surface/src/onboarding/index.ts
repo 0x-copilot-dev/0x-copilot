@@ -100,13 +100,15 @@ export type {
 // === end Phase FTUE-P3 ===
 
 // === First-Run onboarding (P4 — tools popover) ===
-export { ToolsPopover, TOOLS_POPOVER_COPY } from "./ToolsPopover";
-export type { ToolsPopoverProps } from "./ToolsPopover";
 export {
-  ComposerToolsButton,
-  COMPOSER_TOOLS_BUTTON_COPY,
-} from "./ComposerToolsButton";
-export type { ComposerToolsButtonProps } from "./ComposerToolsButton";
+  ToolsPopover,
+  ToolsPopoverContent,
+  TOOLS_POPOVER_COPY,
+} from "./ToolsPopover";
+export type {
+  ToolsPopoverProps,
+  ToolsPopoverContentProps,
+} from "./ToolsPopover";
 export {
   projectFirstRunConnectors,
   firstRunActiveToolCount,

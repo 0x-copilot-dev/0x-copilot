@@ -7,10 +7,9 @@
  * reads the exact computed styles the app produces.
  *
  * Two states:
- *   surfaces/composer/live/closed.html — the full bottom row: `+` button,
- *       Tools trigger (a real <ComposerToolsButton open={false} activeCount={1}/>,
- *       wrapped in the same relative/inline-flex span the web host's
- *       `ChatToolsTrigger` mounts), mic, model pill, send button, hint row.
+ *   surfaces/composer/live/closed.html — the full bottom row: one `+` button
+ *       (attachments, skills, connectors, and per-run Tools live behind it),
+ *       mic, model pill, send button, hint row.
  *   surfaces/composer/live/model.html — the SAME composer with the ModelPill
  *       popover OPEN: "Your keys" (2 cloud models) + "Local · on-device"
  *       (1 ollama model) + the footer.
@@ -47,7 +46,6 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 import {
-  ComposerToolsButton,
   OnboardingComposer,
   TransportProvider,
 } from "@0x-copilot/chat-surface";
@@ -193,18 +191,6 @@ const MODELS = [
 ];
 const SELECTED = "anthropic/claude-sonnet-4-5";
 
-/* The web host mounts the tools pill as `ChatToolsTrigger`: a
- * position:relative / display:inline-flex span wrapping <ComposerToolsButton>
- * plus a floated <ToolsPopover>. The popover returns null while closed
- * (ToolsPopover.tsx:130), so the closed-state DOM is exactly this. */
-function toolsTrigger() {
-  return h(
-    "span",
-    { style: { position: "relative", display: "inline-flex" } },
-    h(ComposerToolsButton, { open: false, onClick: noop, activeCount: 1 }),
-  );
-}
-
 function mountComposer() {
   return render(
     h(
@@ -224,7 +210,6 @@ function mountComposer() {
         selectedModel: SELECTED,
         onModelChange: noop,
         providerKeysPort: fakeProviderKeys,
-        toolsTrigger: toolsTrigger(),
         onSubmit: noop,
       }),
     ),
@@ -268,11 +253,11 @@ it("renders the live composer bottom row (popover closed) to static HTML", () =>
   ).not.toBeNull();
   expect(
     container.querySelector('[data-testid="first-run-tools-button"]'),
-  ).not.toBeNull();
+  ).toBeNull();
   expect(container.querySelector(".atlas-composer-mic")).not.toBeNull();
   expect(container.querySelector(".atlas-model-pill")).not.toBeNull();
   expect(container.querySelector(".aui-send-button")).not.toBeNull();
-  expect(container.querySelector(".aui-composer__hint")).not.toBeNull();
+  expect(container.querySelector(".aui-composer__hint")).toBeNull();
 
   writeFileSync(
     LIVE("closed.html"),
@@ -326,7 +311,7 @@ it("renders the live model picker popover (open) to static HTML", () => {
   // The popover portals to <body>; assert it exists and is fully populated.
   const menu = document.body.querySelector(".atlas-model-pill__menu");
   expect(menu).not.toBeNull();
-  expect(menu.querySelectorAll(".atlas-model-pill__group-head").length).toBe(2);
+  expect(menu.querySelectorAll(".ui-pop__grp").length).toBe(2);
   expect(menu.querySelectorAll(".atlas-model-pill__item").length).toBe(3);
   expect(menu.querySelector(".atlas-model-pill__badge-lg")).not.toBeNull();
   expect(menu.querySelector(".atlas-model-pill__nm")).not.toBeNull();

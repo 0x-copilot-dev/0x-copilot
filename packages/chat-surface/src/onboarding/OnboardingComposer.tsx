@@ -8,7 +8,8 @@
 // host's TEXT-adapter path so the rows are model-visible).
 //
 // Substrate-clean: all I/O is host-injected (attachmentAdapter / filePicker /
-// resolveAttachment / onSubmit). The tools pill is a P4 slot (`toolsTrigger`).
+// resolveAttachment / onSubmit). Per-run tools render inside the shared `+`
+// menu rather than as a second composer pill.
 
 import {
   forwardRef,
@@ -119,8 +120,12 @@ export interface OnboardingComposerProps {
   /** Route to the gate's KeyForm on a configuration_error CTA (not Settings). */
   readonly onAddKey?: () => void;
   readonly onDismissError?: () => void;
-  /** P4 tools pill slot; omitted until P4 wires the tools popover. */
-  readonly toolsTrigger?: ReactNode;
+  /** Legacy connector-only trigger for hosts without the richer tools adapter. */
+  readonly connectorsTrigger?: ReactNode;
+  /** Per-run tools body rendered inside AssistantComposer's `+` menu. */
+  readonly renderToolsMenu?: (args: {
+    readonly onBack: () => void;
+  }) => ReactNode;
   readonly disabled?: boolean;
 }
 
@@ -158,7 +163,8 @@ function OnboardingComposerInner(
     startError = null,
     onAddKey,
     onDismissError,
-    toolsTrigger,
+    connectorsTrigger,
+    renderToolsMenu,
     disabled = false,
   } = props;
 
@@ -263,7 +269,8 @@ function OnboardingComposerInner(
         onAttachSkill={onAttachSkill}
         onRemoveSkill={onRemoveSkill}
         onClearSkills={onClearSkills}
-        connectorsTrigger={toolsTrigger}
+        connectorsTrigger={connectorsTrigger}
+        renderToolsMenu={renderToolsMenu}
         models={models}
         selectedModel={selectedModel}
         onModelChange={onModelChange}

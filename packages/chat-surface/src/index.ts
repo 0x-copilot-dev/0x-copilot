@@ -1881,17 +1881,16 @@ export {
 // `FirstRunConnectorsPort` (the existing `/v1/mcp/*` facade routes — NOT
 // rebuilt) and is classified by the pure `projectFirstRunConnectors` (a
 // chat-surface copy of the web app's `projectChatConnectors`, since `apps/*`
-// can't be imported). `ComposerToolsButton` is the composer trigger.
+// can't be imported). The composer `+` menu is the trigger.
 // Design: docs/plan/first-run-onboarding/design-source/SPEC.md.
 export {
   ToolsPopover,
+  ToolsPopoverContent,
   TOOLS_POPOVER_COPY,
-  ComposerToolsButton,
-  COMPOSER_TOOLS_BUTTON_COPY,
   projectFirstRunConnectors,
   firstRunActiveToolCount,
   type ToolsPopoverProps,
-  type ComposerToolsButtonProps,
+  type ToolsPopoverContentProps,
   type FirstRunConnectorProjection,
   type FirstRunConnectedConnector,
   type FirstRunInstallableConnector,

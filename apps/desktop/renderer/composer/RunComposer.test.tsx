@@ -346,8 +346,8 @@ function fakeConnectorsPort(): ComposerConnectorsPort {
   };
 }
 
-describe("RunComposer inline Tools popover", () => {
-  it("renders the connector-aware Tools button (not the flat connectors button) when a connectorsPort is provided", async () => {
+describe("RunComposer + menu Tools", () => {
+  it("uses + as the only entry point when a connectorsPort is provided", async () => {
     const { container } = renderComposer({
       connectorsPort: fakeConnectorsPort(),
     });
@@ -356,10 +356,26 @@ describe("RunComposer inline Tools popover", () => {
     });
     expect(
       container.querySelector("[data-testid='first-run-tools-button']"),
+    ).toBeNull();
+    fireEvent.click(
+      container.querySelector(
+        "button[aria-label='Open attachment and tools menu']",
+      ) as HTMLButtonElement,
+    );
+    const tools = await waitFor(() => {
+      const element = document.querySelector<HTMLButtonElement>(
+        "[data-testid='composer-plus-menu-tools']",
+      );
+      expect(element).not.toBeNull();
+      return element as HTMLButtonElement;
+    });
+    fireEvent.click(tools);
+    expect(
+      document.querySelector("[data-testid='first-run-tools-websearch']"),
     ).not.toBeNull();
   });
 
-  it("does not trap the inline Tools panel below its click-out scrim", async () => {
+  it("does not mount the formerly clipped standalone Tools dialog", async () => {
     const { container } = renderComposer({
       connectorsPort: fakeConnectorsPort(),
     });
@@ -367,26 +383,12 @@ describe("RunComposer inline Tools popover", () => {
       expect(textarea(container)).not.toBeNull();
     });
 
-    fireEvent.click(
-      container.querySelector(
-        "[data-testid='first-run-tools-button']",
-      ) as HTMLButtonElement,
-    );
-    const panel = await waitFor(() => {
-      const element = container.querySelector<HTMLElement>(
-        "[data-testid='first-run-tools-popover']",
-      );
-      expect(element).not.toBeNull();
-      return element as HTMLElement;
-    });
-    // `.ui-pop` owns z-index 71. Its inline anchoring wrapper must not create
-    // a lower stacking context or the fixed z-index-70 scrim wins every click.
-    expect(panel.parentElement?.style.zIndex).toBe("");
     expect(
-      container
-        .querySelector(".aui-composer-tools")
-        ?.classList.contains("aui-composer-tools--tools-popover"),
-    ).toBe(true);
+      container.querySelector("[data-testid='first-run-tools-button']"),
+    ).toBeNull();
+    expect(
+      document.querySelector("[data-testid='first-run-tools-popover']"),
+    ).toBeNull();
   });
 
   it("falls back to the flat connectors button when no connectorsPort is provided", async () => {
@@ -407,14 +409,23 @@ describe("RunComposer inline Tools popover", () => {
       expect(textarea(container)).not.toBeNull();
     });
 
-    // Open the popover, then turn the default-on web-search toggle OFF.
+    // Open + → Tools, then turn the default-on web-search toggle OFF.
     fireEvent.click(
       container.querySelector(
-        "[data-testid='first-run-tools-button']",
+        "button[aria-label='Open attachment and tools menu']",
       ) as HTMLButtonElement,
     );
+    fireEvent.click(
+      await waitFor(() => {
+        const element = document.querySelector<HTMLButtonElement>(
+          "[data-testid='composer-plus-menu-tools']",
+        );
+        expect(element).not.toBeNull();
+        return element as HTMLButtonElement;
+      }),
+    );
     const toggle = await waitFor(() => {
-      const t = container.querySelector(
+      const t = document.querySelector(
         "[data-testid='first-run-tools-websearch']",
       );
       expect(t).not.toBeNull();

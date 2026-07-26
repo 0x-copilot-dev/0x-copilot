@@ -46,6 +46,7 @@ const handlers = () => ({
   onAttachFile: vi.fn(),
   onOpenMcp: vi.fn(),
   onOpenSkills: vi.fn(),
+  onOpenTools: vi.fn(),
   onOpenMcpSettings: vi.fn(),
   onOpenSkillsSettings: vi.fn(),
   onShowConnectors: vi.fn(),

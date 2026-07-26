@@ -3,7 +3,7 @@
 // When there is no active run, the cockpit renders the design's "What should we
 // run first?" surface (0xCopilot First Run) instead of the plain goal card. This
 // binder mounts the shared `OnboardingComposer` (hero + starter chips +
-// AssistantComposer: model pill · Tools · attach · send) bound to the SAME
+// AssistantComposer: model pill · `+ → Tools` · attach · send) bound to the SAME
 // desktop composer data the in-chat `RunComposer` uses (`useRunComposerBindings`
 // — real skills, MCP servers, model catalog), so the empty→live transition never
 // swaps the model/tools out from under the user.
@@ -56,10 +56,9 @@ export interface RunEmptyComposerProps {
   /** Navigate to the Skills surface. */
   readonly onOpenSkills?: () => void;
   /**
-   * MCP connector surface for the inline Tools popover. When provided, the
-   * composer's Tools trigger becomes the connector-aware popover (web-search
-   * toggle + connected rows + 1-click connect + Custom MCP). Omitted ⇒ the plain
-   * "open the Tools surface" button.
+   * MCP connector surface for the `+ → Tools` view. When provided, it supplies
+   * web-search, connected rows, one-click connect, and Custom MCP. Omitted ⇒
+   * the legacy flat "open the Tools surface" button is retained.
    */
   readonly connectorsPort?: ComposerConnectorsPort;
   /**
@@ -136,19 +135,18 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     [],
   );
 
-  // Inline Tools popover (when a connectors port is injected): owns the per-run
-  // web-search toggle + active connector ids, and yields the trigger node + the
-  // values threaded into the start-run payload. Disabled while a run is starting.
-  const { toolsTrigger, webSearchEnabled, connectorScopes } =
+  // The `+ → Tools` view (when a connectors port is injected) owns the per-run
+  // web-search toggle + active connector ids, and yields the values threaded
+  // into the start-run payload.
+  const { renderToolsMenu, webSearchEnabled, connectorScopes } =
     useDesktopComposerTools({
       connectorsPort,
-      disabled: ctx.submitting,
       onAddCustom: onShowConnectors,
     });
 
   // Send → start the first run through the cockpit seam. The model pill's
-  // selection and the composer attachments become the run body; the Tools
-  // popover threads the per-run web-search toggle + active connector scopes
+  // selection and the composer attachments become the run body; `+ → Tools`
+  // threads the per-run web-search toggle + active connector scopes
   // (RunStartRequest already carries them). The cockpit owns the empty→live
   // binding + the submitting/error state (surfaced back through `ctx`).
   const { onStartRun } = ctx;
@@ -173,16 +171,15 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     [models, selectedModel, onStartRun, webSearchEnabled, connectorScopes],
   );
 
-  // With a connectors port → the connector-aware Tools popover; without one →
-  // the historical flat button that opens the Tools destination.
-  const connectorsTrigger = toolsTrigger ?? (
-    <ComposerConnectorsButton
-      activeCount={activeConnectorCount}
-      open={false}
-      onClick={() => onShowConnectors?.()}
-      disabled={ctx.submitting}
-    />
-  );
+  const connectorsTrigger =
+    renderToolsMenu === undefined ? (
+      <ComposerConnectorsButton
+        activeCount={activeConnectorCount}
+        open={false}
+        onClick={() => onShowConnectors?.()}
+        disabled={ctx.submitting}
+      />
+    ) : undefined;
 
   return (
     <OnboardingComposer
@@ -200,7 +197,8 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       onAttachSkill={onAttachSkill}
       onRemoveSkill={onRemoveSkill}
       onClearSkills={onClearSkills}
-      toolsTrigger={connectorsTrigger}
+      connectorsTrigger={connectorsTrigger}
+      renderToolsMenu={renderToolsMenu}
       // Settings is the one provider-key setup surface. Keep the inline port as
       // a defensive fallback for a host that does not implement navigation, but
       // the supplied deep-link below always wins in the desktop app.

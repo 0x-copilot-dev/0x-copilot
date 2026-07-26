@@ -3,7 +3,8 @@
 // These lock the owner's rulings against the design-parity findings for
 // tools/design-parity/surfaces/composer:
 //
-//   row 4  bottom-row order is [+] [tools] [model] … [mic] [send]
+//   row 4  bottom-row order is [+] [model] … [mic] [send]; per-run tools live
+//          inside the `+` menu rather than as a second composer control
 //   row 5  no divider between the icon cluster and the pill cluster
 //   row 6+7 NO static hint row at all (neither the host's nor Composer's
 //          built-in fallback), while the transient "/" slash cue survives
@@ -82,7 +83,6 @@ function renderComposer(
     models,
     selectedModel: "openai/gpt-5.4",
     onModelChange: vi.fn(),
-    toolsTrigger: <button data-testid="tools-trigger">Tools</button>,
     ...overrides,
   };
   const { container } = render(
@@ -99,18 +99,17 @@ function orderOf(container: HTMLElement, el: Element): number {
 }
 
 describe("AssistantComposer bottom row (v3 parity)", () => {
-  it("orders the row [+] → tools → model … mic → send (row 4)", () => {
+  it("orders the row [+] → model … mic → send (row 4)", () => {
     const container = renderComposer();
 
     const plus = screen.getByRole("button", {
       name: /Open attachment and tools menu/i,
     });
-    const tools = screen.getByTestId("tools-trigger");
     const model = screen.getByRole("button", { name: /Model: GPT-5\.4/ });
     const mic = screen.getByRole("button", { name: /Voice input/i });
     const send = screen.getByRole("button", { name: /Send message/i });
 
-    const positions = [plus, tools, model, mic, send].map((el) =>
+    const positions = [plus, model, mic, send].map((el) =>
       orderOf(container, el),
     );
     expect(positions).toEqual([...positions].sort((a, b) => a - b));

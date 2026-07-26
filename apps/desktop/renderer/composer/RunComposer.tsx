@@ -71,10 +71,9 @@ export interface RunComposerProps {
    */
   readonly onGetLocalModels?: () => void;
   /**
-   * MCP connector surface for the inline Tools popover. When provided, the
-   * composer's connectors trigger becomes the connector-aware Tools popover
-   * (web-search toggle + connected rows + 1-click connect + Custom MCP) instead
-   * of the flat "open the Tools surface" button. Omitted ⇒ the plain button.
+   * MCP connector surface for the composer's `+ → Tools` view. When provided,
+   * it supplies web-search, connected rows, one-click connect, and Custom MCP.
+   * Omitted ⇒ the legacy flat "open the Tools surface" button is retained.
    */
   readonly connectorsPort?: ComposerConnectorsPort;
   /**
@@ -95,7 +94,7 @@ export interface RunComposerProps {
  *   - attachments   → `filePicker` + single-stage `attachmentAdapter`
  *   - `/` commands  → skills (`GET /v1/skills`) drive the `/`-menu + skill pills
  *   - connections   → MCP servers (`GET /v1/mcp/servers`) list in the `+` menu;
- *                     the connectors trigger opens the full Tools surface
+ *                     `+ → Tools` opens the fuller run-scoped controls
  *                     (MCP + non-MCP)
  *   - model select  → curated cloud + local models, `depthVisible={false}`
  *
@@ -169,27 +168,27 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     };
   }, [providerKeysPort, refreshCatalog]);
 
-  // Inline Tools popover (when a connectors port is injected): owns the per-run
-  // web-search toggle + active connector ids, and yields the trigger node + the
-  // run-body values (`webSearchEnabled` / `connectorScopes`) threaded on submit.
-  // The popover's "Custom MCP" / pre-registered rows route to the Tools surface.
-  const { toolsTrigger, webSearchEnabled, connectorScopes } =
+  // The `+ → Tools` view (when a connectors port is injected) owns per-run
+  // web-search + active connector ids and yields the run-body values
+  // (`webSearchEnabled` / `connectorScopes`) threaded on submit. Its Custom MCP
+  // and pre-registered rows route to the Tools surface.
+  const { renderToolsMenu, webSearchEnabled, connectorScopes } =
     useDesktopComposerTools({
       connectorsPort,
-      disabled,
       onAddCustom: onShowConnectors,
     });
 
-  // With a connectors port → the connector-aware Tools popover; without one →
-  // the historical flat button that opens the Tools destination.
-  const connectorsTrigger = toolsTrigger ?? (
-    <ComposerConnectorsButton
-      activeCount={activeConnectorCount}
-      open={false}
-      onClick={() => onShowConnectors?.()}
-      disabled={disabled}
-    />
-  );
+  // Older hosts without the connector adapter keep their single flat link.
+  // Normal desktop runs render the richer controls inside the `+` menu.
+  const connectorsTrigger =
+    renderToolsMenu === undefined ? (
+      <ComposerConnectorsButton
+        activeCount={activeConnectorCount}
+        open={false}
+        onClick={() => onShowConnectors?.()}
+        disabled={disabled}
+      />
+    ) : undefined;
 
   const handleSubmit = useCallback(
     async ({
@@ -216,7 +215,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
                 toRunAttachment,
               ) as unknown as RunStartRequest["attachments"])
             : undefined,
-        // Tools popover selections: web_search defaults on at the runtime, so
+        // `+ → Tools` selections: web_search defaults on at the runtime, so
         // only an explicit opt-OUT is meaningful; active connector ids become
         // request_context.connector_scopes (buildRunCreateBody applies both).
         webSearchEnabled,
@@ -289,14 +288,8 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onAttachSkill={handleAttachSkill}
         onRemoveSkill={handleRemoveSkill}
         onClearSkills={handleClearSkills}
-        // Preserve the legacy connector button in its original slot only when
-        // no inline Tools popover is available. The popover must use the
-        // dedicated `toolsTrigger` slot so AssistantComposer can release its
-        // clipping container while it is open.
-        connectorsTrigger={
-          toolsTrigger === undefined ? connectorsTrigger : undefined
-        }
-        toolsTrigger={toolsTrigger}
+        connectorsTrigger={connectorsTrigger}
+        renderToolsMenu={renderToolsMenu}
         // "Add a provider key" navigates to Settings → Provider keys (the one
         // surface); takes precedence over the inline port below.
         onAddProviderKey={onOpenModelSettings}

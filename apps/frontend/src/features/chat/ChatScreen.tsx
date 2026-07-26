@@ -109,7 +109,7 @@ import {
   type FirstRunInstallableConnector,
   type ProviderKeysPort,
 } from "@0x-copilot/chat-surface";
-import { ChatToolsTrigger } from "./components/composer/ChatToolsTrigger";
+import { ChatToolsMenu } from "./components/composer/ChatToolsTrigger";
 import { createComposerConnectorsPort } from "../connectors/composerConnectorsPort";
 import { createFirstRunProviderKeysPort } from "../onboarding/firstRunProviderKeysPort";
 import {
@@ -977,7 +977,7 @@ export function ChatScreen({
     ],
   );
 
-  // Composer Tools popover per-run state (SPEC `webOn`, default true; connectors
+  // Composer `+ → Tools` per-run state (SPEC `webOn`, default true; connectors
   // held as active ids since a toggle is per-turn intent, threaded into the
   // run-create body — no per-toggle PATCH, the FTUE model). Declared before
   // `submitUserMessage` so the send closure can read the current selection.
@@ -985,11 +985,9 @@ export function ChatScreen({
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
   >([]);
-  const [toolsOpen, setToolsOpen] = useState(false);
-  // Close the popover + reset the per-run tool selection when the conversation
-  // switches (active connectors / web-search default are per-turn intent).
+  // Reset per-run tool selection when the conversation switches (active
+  // connectors / web-search default are per-turn intent).
   useEffect(() => {
-    setToolsOpen(false);
     setActiveConnectorIds([]);
     setWebSearchEnabled(true);
   }, [conversationId]);
@@ -1746,23 +1744,21 @@ export function ChatScreen({
     [composerConnectorsPort],
   );
 
-  const toolsTrigger = useMemo(
-    () => (
-      <ChatToolsTrigger
+  const renderToolsMenu = useCallback(
+    ({ onBack }: { readonly onBack: () => void }) => (
+      <ChatToolsMenu
         port={composerConnectorsPort}
-        open={toolsOpen}
-        onOpenChange={setToolsOpen}
         webSearchEnabled={webSearchEnabled}
         onToggleWebSearch={setWebSearchEnabled}
         activeConnectorIds={activeConnectorIds}
         onToggleConnector={onToggleToolConnector}
         onConnectCatalog={onToolConnectCatalog}
         onAddCustom={() => onOpenSettings("connectors")}
+        onBack={onBack}
       />
     ),
     [
       composerConnectorsPort,
-      toolsOpen,
       webSearchEnabled,
       activeConnectorIds,
       onToggleToolConnector,
@@ -2135,7 +2131,7 @@ export function ChatScreen({
                       })
                     }
                     runIndicator={runIndicator}
-                    toolsTrigger={toolsTrigger}
+                    renderToolsMenu={renderToolsMenu}
                     providerKeysPort={providerKeysPort}
                     activeModelLabel={selectedModel?.name}
                     models={allModels}

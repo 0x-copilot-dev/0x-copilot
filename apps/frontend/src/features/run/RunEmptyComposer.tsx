@@ -63,7 +63,7 @@ export function RunEmptyComposer({
     selectedModel,
     onModelChange,
     providerKeysPort,
-    toolsTrigger,
+    renderToolsMenu,
     buildRunStartRequest,
   } = useWebRunComposerTools(identity);
 
@@ -104,7 +104,7 @@ export function RunEmptyComposer({
       onModelChange={onModelChange}
       suggestions={FIRST_RUN_SUGGESTIONS}
       resolveAttachment={resolveAttachment}
-      toolsTrigger={toolsTrigger}
+      renderToolsMenu={renderToolsMenu}
       providerKeysPort={providerKeysPort}
       onSubmit={handleSubmit}
       startError={ctx.startError}

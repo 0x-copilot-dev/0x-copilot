@@ -102,12 +102,11 @@ export interface AssistantComposerProps {
    */
   connectorsTrigger?: ReactNode;
   /**
-   * FTUE P4 — additive slot for the connector-aware Tools trigger + its
-   * popover, rendered next to `connectorsTrigger` in the bottom bar. The host
-   * owns the DOM-bound portal (the package has no `document`). Additive: when
-   * unset the bottom bar is byte-identical to before.
+   * Host-owned body for the per-run Tools view inside the composer `+` menu.
+   * This is deliberately a body renderer, not a trigger: the `+` button is
+   * the single entry point for attachments, skills, connectors, and tools.
    */
-  toolsTrigger?: ReactNode;
+  renderToolsMenu?: (args: { readonly onBack: () => void }) => ReactNode;
   /** PR 8.0.1 — display name of the active model, surfaced in the
    *  composer footer hint row. */
   activeModelLabel?: string;
@@ -234,7 +233,7 @@ export const AssistantComposer = forwardRef<
     onRemoveSkill,
     onClearSkills,
     connectorsTrigger,
-    toolsTrigger,
+    renderToolsMenu,
     // activeModelLabel is still typed on the prop surface (callers haven't
     // been migrated) but the composer no longer surfaces it — the model
     // name lives in <ModelPill> only (Phase 9 dedup).
@@ -431,13 +430,7 @@ export const AssistantComposer = forwardRef<
       }
       bottomBarRender={({ text, running: isRunning, attachmentsCount }) => (
         <div className="aui-composer-action-wrapper">
-          <div
-            className={
-              toolsTrigger !== undefined
-                ? "aui-composer-tools aui-composer-tools--tools-popover"
-                : "aui-composer-tools"
-            }
-          >
+          <div className="aui-composer-tools">
             <div className="aui-plus-menu-root" ref={menuRef}>
               {/* Owner ruling: the affordance stays a PLUS (not the design's
                * paperclip) — but drawn, at the design's `.cmp-ic` metrics
@@ -474,6 +467,9 @@ export const AssistantComposer = forwardRef<
                     }
                     onOpenMcp={() => setMenuView("mcp")}
                     onOpenSkills={() => setMenuView("skills")}
+                    onOpenTools={() => setMenuView("tools")}
+                    renderToolsMenu={renderToolsMenu}
+                    onEscape={dismissMenu}
                     onOpenMcpSettings={onOpenMcpSettings}
                     onOpenSkillsSettings={onOpenSkillsSettings}
                     onShowConnectors={() => {
@@ -491,11 +487,10 @@ export const AssistantComposer = forwardRef<
               })}
             </div>
             {connectorsTrigger ?? null}
-            {toolsTrigger ?? null}
-            {/* v3 bottom-row order (owner ruling): [+] → tools → model → depth
-             * on the left; mic + send flush right. The old `+ · tools · mic ·
-             * divider · model` grouping and the divider itself have no
-             * counterpart in the design's single-rhythm `.cmp-row`. */}
+            {/* The `+` menu owns run-scoped tools when the host supplies
+             * `renderToolsMenu`; a legacy connector-only trigger may still be
+             * rendered here by hosts that do not expose the per-run tool
+             * controls. */}
             {models && selectedModel !== undefined && onModelChange ? (
               <ModelPill
                 models={models}

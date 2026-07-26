@@ -1,6 +1,6 @@
 {
   "surface": "composer",
-  "note": "design↔live element correspondence for the SHARED composer chrome — the bottom control row (attach · model pill · tools pill · hint · send) and the model-picker popover. Design side = copilot-composer2.jsx `.cmp*` / `.pop*` (design-kit/copilot-v3.css). Live side = the shipping @0x-copilot/chat-surface OnboardingComposer → Composer → AssistantComposer → ModelPill, rendered by lib/render-live-composer.test.tsx with the four real stylesheets inlined (design-system, apps/frontend/src/styles.css, onboarding.css, composer.css — composer.css LAST, so the DESKTOP copy of every forked rule wins in this snapshot). NOTHING is marked expectDivergence: the product owner has ruled the shared composer chrome IN SCOPE and required to match the design, so every delta below is a real finding. Labels are the DESIGN labels; the live profiles are re-keyed onto them by lib/align-live.mjs (raw extractor output preserved as out/live-*.raw.json). Live-only elements keep their own live label and surface as `extra-in-live`.",
+  "note": "design↔live element correspondence for the SHARED composer chrome — the bottom control row (attach · model pill · hint · send) and the model-picker popover. Design side = copilot-composer2.jsx `.cmp*` / `.pop*` (design-kit/copilot-v3.css). Live side = the shipping @0x-copilot/chat-surface OnboardingComposer → Composer → AssistantComposer → ModelPill, rendered by lib/render-live-composer.test.tsx with the four real stylesheets inlined (design-system, apps/frontend/src/styles.css, onboarding.css, composer.css — composer.css LAST, so the DESKTOP copy of every forked rule wins in this snapshot). The mock's separate Tools pill is an explicit product divergence: tools now live behind the one `+` entry point, exercised by the desktop composer-tools journey. Labels are the DESIGN labels; the live profiles are re-keyed onto them by lib/align-live.mjs (raw extractor output preserved as out/live-*.raw.json). Live-only elements keep their own live label and surface as `extra-in-live`.",
   "states": ["closed", "model"],
   "elements": [
     {
@@ -87,41 +87,46 @@
       "label": "cmp.tools.pill",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3)",
-      "live": "[data-testid=\"first-run-tools-button\"]",
-      "liveLabel": "tools-trigger",
-      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:58 (INLINE CSSProperties — no class, unstylable from CSS)"
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "Retired: tools are selected through the composer's one `+` menu.",
+      "expectDivergence": "Product decision: remove the duplicate bottom-row Tools pill. The desktop interaction audit covers `+ → Tools` in first-run, bound Studio/Focus, and New Chat Studio/Focus."
     },
     {
       "label": "cmp.tools.icon",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3) > svg",
-      "live": "[data-testid=\"first-run-tools-button\"] > span:nth-child(1)",
-      "liveLabel": "tools-trigger-glyph",
-      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:44 (literal \"⚙\" text) + :76 glyphStyle"
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "Retired with the duplicate bottom-row Tools pill.",
+      "expectDivergence": "Product decision: tools are now reached through the `+` menu instead of a second composer pill."
     },
     {
       "label": "cmp.tools.label",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3) > .lb",
-      "live": "[data-testid=\"first-run-tools-button\"] > span:nth-child(2)",
-      "liveLabel": "tools-trigger-label",
-      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:45 (inherits triggerStyle:58)"
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "Retired with the duplicate bottom-row Tools pill.",
+      "expectDivergence": "Product decision: tools are now reached through the `+` menu instead of a second composer pill."
     },
     {
       "label": "cmp.tools.count",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3) > .n",
-      "live": "[data-testid=\"first-run-tools-button-badge\"]",
-      "liveLabel": "tools-trigger-badge",
-      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx:81 (INLINE badgeStyle)"
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "Retired with the duplicate bottom-row Tools pill.",
+      "expectDivergence": "Product decision: tools are now reached through the `+` menu instead of a second composer pill."
     },
     {
       "label": "cmp.hint",
       "group": "A · Hint",
       "design": ".cmp-row > .cmp-hint",
-      "live": ".aui-composer__hint",
-      "liveLabel": "hint-row",
-      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:776 (+ DOM at AssistantComposer.tsx:543, outside the bottom row)"
+      "live": null,
+      "liveLabel": null,
+      "liveAuthoredAt": "Retired by product decision: no static composer hint row.",
+      "expectDivergence": "Product decision: omit the static send/newline hint from the desktop composer."
     },
     {
       "label": "cmp.send.btn",
@@ -184,17 +189,17 @@
       "label": "pop.group.keys",
       "group": "B · Group headings",
       "design": ".pop__list > .pop__grp:nth-of-type(1)",
-      "live": ".atlas-model-pill__group:nth-of-type(1) > .atlas-model-pill__group-head",
+      "live": ".atlas-model-pill__group:nth-of-type(1) > .ui-pop__grp",
       "liveLabel": "group-head-cloud",
-      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:480 (padding) + packages/design-system/src/styles.css:1089 .ui-section-label (all type)"
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:316 + design-system `.ui-pop__grp`"
     },
     {
       "label": "pop.group.local",
       "group": "B · Group headings",
       "design": ".pop__list > .pop__grp:nth-of-type(2)",
-      "live": ".atlas-model-pill__group:nth-of-type(2) > .atlas-model-pill__group-head",
+      "live": ".atlas-model-pill__group:nth-of-type(2) > .ui-pop__grp",
       "liveLabel": "group-head-local",
-      "liveAuthoredAt": "packages/chat-surface/src/composer/composer.css:480 + packages/design-system/src/styles.css:1089"
+      "liveAuthoredAt": "packages/chat-surface/src/composer/ModelPill.tsx:324 + design-system `.ui-pop__grp`"
     },
     {
       "label": "pop.row",
@@ -412,14 +417,6 @@
       "live": ".aui-composer-tools",
       "liveLabel": "tools-cluster",
       "liveAuthoredAt": "packages/chat-surface/src/composer/AssistantComposer.tsx:408 + composer.css:314"
-    },
-    {
-      "label": "tools-trigger-wrap",
-      "group": "C · Live-only wrappers",
-      "design": null,
-      "live": ".aui-composer-tools > span:has([data-testid=\"first-run-tools-button\"])",
-      "liveLabel": "tools-trigger-wrap",
-      "liveAuthoredAt": "apps/frontend ChatToolsTrigger / lib/render-live-composer.test.tsx:200 host wrapper"
     },
     {
       "label": "model-pill-root",

@@ -111,12 +111,8 @@ export const ThreadBody = forwardRef<
     onClearSkills?: () => void;
     onOpenSources?: (citationId: string) => void;
     connectorsTrigger?: ReactNode;
-    /**
-     * Composer-chrome parity — the inline Tools popover trigger
-     * (`ComposerToolsButton` + `ToolsPopover`) that supersedes `connectorsTrigger`.
-     * Rendered in the composer bottom bar next to the model pill.
-     */
-    toolsTrigger?: ReactNode;
+    /** Host body for the composer's single `+ → Tools` view. */
+    renderToolsMenu?: (args: { readonly onBack: () => void }) => ReactNode;
     /**
      * When set, the model pill's "Add a provider key" opens an inline
      * `<KeyForm>` sub-view inside the popover (saved via the port) instead of the
@@ -177,7 +173,7 @@ export const ThreadBody = forwardRef<
     onClearSkills,
     onOpenSources,
     connectorsTrigger,
-    toolsTrigger,
+    renderToolsMenu,
     providerKeysPort,
     onProviderKeyAdded,
     activeModelLabel,
@@ -301,7 +297,7 @@ export const ThreadBody = forwardRef<
           onRemoveSkill={onRemoveSkill}
           onClearSkills={onClearSkills}
           connectorsTrigger={connectorsTrigger}
-          toolsTrigger={toolsTrigger}
+          renderToolsMenu={renderToolsMenu}
           providerKeysPort={providerKeysPort}
           onProviderKeyAdded={onProviderKeyAdded}
           activeModelLabel={activeModelLabel}

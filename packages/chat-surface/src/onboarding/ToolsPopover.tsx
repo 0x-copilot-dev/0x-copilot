@@ -1,6 +1,6 @@
-// ToolsPopover — the connector-aware first-run Tools popover (PRD-P4).
+// ToolsPopover — the connector-aware run-scoped Tools content (PRD-P4).
 //
-// Replaces the flat `composer/ToolPicker` toggle list FOR the FTUE. Sections,
+// This content replaces the flat `composer/ToolPicker` toggle list. Sections,
 // top-to-bottom, byte-verbatim vs SPEC §"Tools popover":
 //   • Header      — "Tools" + meta `{n} on · none required` + close
 //   • Web search  — built-in toggle, default on (host owns the default;
@@ -115,6 +115,25 @@ export interface ToolsPopoverProps {
   readonly portalTarget?: HTMLElement;
 }
 
+/**
+ * The run-scoped Tools body without its own trigger, overlay, or scrim.
+ * `AssistantComposer` mounts this inside the one composer `+` menu; the
+ * standalone `ToolsPopover` below remains for callers that need a dialog.
+ */
+export interface ToolsPopoverContentProps {
+  readonly port: FirstRunConnectorsPort;
+  readonly webSearchEnabled: boolean;
+  readonly onToggleWebSearch: (next: boolean) => void;
+  readonly activeConnectorIds: readonly string[];
+  readonly onToggleConnector: (serverId: string, active: boolean) => void;
+  readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
+  readonly onAddCustom: () => void;
+  /** Return to the parent composer menu. */
+  readonly onBack?: () => void;
+  /** Close a standalone dialog. Mutually exclusive with `onBack`. */
+  readonly onClose?: () => void;
+}
+
 type LoadState =
   | { readonly status: "idle" }
   | { readonly status: "loading" }
@@ -126,47 +145,8 @@ type LoadState =
   | { readonly status: "error" };
 
 export function ToolsPopover(props: ToolsPopoverProps): ReactNode {
-  const {
-    open,
-    onClose,
-    port,
-    webSearchEnabled,
-    onToggleWebSearch,
-    activeConnectorIds,
-    onToggleConnector,
-    onConnectCatalog,
-    onAddCustom,
-    portalTarget,
-  } = props;
-
-  const [state, setState] = useState<LoadState>({ status: "idle" });
-  const loadedRef = useRef(false);
+  const { open, onClose, portalTarget } = props;
   const panelRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!open || loadedRef.current) {
-      return;
-    }
-    loadedRef.current = true;
-    let cancelled = false;
-    setState({ status: "loading" });
-    Promise.all([port.listServers(), port.listCatalog()])
-      .then(([servers, catalog]) => {
-        if (cancelled) {
-          return;
-        }
-        setState({ status: "ready", servers, catalog });
-      })
-      .catch(() => {
-        if (cancelled) {
-          return;
-        }
-        setState({ status: "error" });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, port]);
 
   // Escape-to-close needs the keydown to land inside the panel — this package
   // cannot attach a `window`/`document` listener. Taking focus on open is the
@@ -182,16 +162,6 @@ export function ToolsPopover(props: ToolsPopoverProps): ReactNode {
   if (!open) {
     return null;
   }
-
-  const projection =
-    state.status === "ready"
-      ? projectFirstRunConnectors(state.servers, state.catalog)
-      : { connected: [], installable: [] };
-  const activeCount = firstRunActiveToolCount(
-    webSearchEnabled,
-    projection.connected,
-    activeConnectorIds,
-  );
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>): void => {
     if (event.key === "Escape") {
@@ -215,14 +185,94 @@ export function ToolsPopover(props: ToolsPopoverProps): ReactNode {
         style={portalTarget !== undefined ? portaledStyle : panelStyle}
         onKeyDown={onKeyDown}
       >
-        <div className="ui-pop__h">
-          {TOOLS_POPOVER_COPY.title}
-          <span className="ui-pop__h-meta" data-testid="first-run-tools-meta">
-            {activeCount} on · {TOOLS_POPOVER_COPY.metaSuffix}
-          </span>
-          {/* The one control the `.ui-pop*` family does not name — the design's
-              popovers close on the scrim, ours also keeps an explicit ✕ (the
-              FTUE + both hosts wire `first-run-tools-close`). */}
+        <ToolsPopoverContent
+          port={props.port}
+          webSearchEnabled={props.webSearchEnabled}
+          onToggleWebSearch={props.onToggleWebSearch}
+          activeConnectorIds={props.activeConnectorIds}
+          onToggleConnector={props.onToggleConnector}
+          onConnectCatalog={props.onConnectCatalog}
+          onAddCustom={props.onAddCustom}
+          onClose={onClose}
+        />
+      </div>
+    </>
+  );
+
+  if (portalTarget !== undefined) {
+    return createPortal(panel, portalTarget);
+  }
+  return panel;
+}
+
+export function ToolsPopoverContent(
+  props: ToolsPopoverContentProps,
+): ReactNode {
+  const {
+    port,
+    webSearchEnabled,
+    onToggleWebSearch,
+    activeConnectorIds,
+    onToggleConnector,
+    onConnectCatalog,
+    onAddCustom,
+    onBack,
+    onClose,
+  } = props;
+  const [state, setState] = useState<LoadState>({ status: "idle" });
+  const loadedRef = useRef(false);
+
+  useEffect(() => {
+    if (loadedRef.current) {
+      return;
+    }
+    loadedRef.current = true;
+    let cancelled = false;
+    setState({ status: "loading" });
+    Promise.all([port.listServers(), port.listCatalog()])
+      .then(([servers, catalog]) => {
+        if (!cancelled) {
+          setState({ status: "ready", servers, catalog });
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setState({ status: "error" });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [port]);
+
+  const projection =
+    state.status === "ready"
+      ? projectFirstRunConnectors(state.servers, state.catalog)
+      : { connected: [], installable: [] };
+  const activeCount = firstRunActiveToolCount(
+    webSearchEnabled,
+    projection.connected,
+    activeConnectorIds,
+  );
+
+  return (
+    <>
+      <div className="ui-pop__h">
+        {TOOLS_POPOVER_COPY.title}
+        <span className="ui-pop__h-meta" data-testid="first-run-tools-meta">
+          {activeCount} on · {TOOLS_POPOVER_COPY.metaSuffix}
+        </span>
+        {onBack !== undefined ? (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to attachment and tools menu"
+            style={closeButtonStyle}
+            data-testid="first-run-tools-back"
+          >
+            ←
+          </button>
+        ) : onClose !== undefined ? (
           <button
             type="button"
             onClick={onClose}
@@ -232,33 +282,25 @@ export function ToolsPopover(props: ToolsPopoverProps): ReactNode {
           >
             ×
           </button>
-        </div>
-
-        <div className="ui-pop__list">
-          <WebSearchRow
-            enabled={webSearchEnabled}
-            onToggle={onToggleWebSearch}
-          />
-          <div className="ui-pop__div" />
-          <PopoverBody
-            state={state}
-            connected={projection.connected}
-            installable={projection.installable}
-            activeConnectorIds={activeConnectorIds}
-            onToggleConnector={onToggleConnector}
-            onConnectCatalog={onConnectCatalog}
-          />
-        </div>
-
-        <CustomRow onAddCustom={onAddCustom} />
+        ) : null}
       </div>
+
+      <div className="ui-pop__list">
+        <WebSearchRow enabled={webSearchEnabled} onToggle={onToggleWebSearch} />
+        <div className="ui-pop__div" />
+        <PopoverBody
+          state={state}
+          connected={projection.connected}
+          installable={projection.installable}
+          activeConnectorIds={activeConnectorIds}
+          onToggleConnector={onToggleConnector}
+          onConnectCatalog={onConnectCatalog}
+        />
+      </div>
+
+      <CustomRow onAddCustom={onAddCustom} />
     </>
   );
-
-  if (portalTarget !== undefined) {
-    return createPortal(panel, portalTarget);
-  }
-  return panel;
 }
 
 function WebSearchRow(props: {

@@ -335,17 +335,6 @@
  * target in the viewport — a mounted but unusable popover. Other cramped
  * control groups keep their historical clipping; only a supplied Tools
  * popover opts out. */
-.aui-composer-tools--tools-popover {
-  overflow: visible;
-  /* This cluster is the popover's local overlay layer. The fixed click-out
-   * scrim is at 70 and the shared panel is at 71; raising their common host by
-   * one level prevents an ancestor stacking context from placing that scrim
-   * above a visible-but-unclickable panel. Keep the pair's own 70/71 contract
-   * in the design-system recipe — this is only the host layer. */
-  position: relative;
-  z-index: 72;
-}
-
 .aui-plus-menu-root {
   display: inline-flex;
   position: relative;

@@ -275,8 +275,8 @@ describe("<FirstRunSurface>", () => {
     expect(screen.queryByTestId("first-run-wallet-chip")).toBeNull();
   });
 
-  it("mounts the Tools trigger into the composer ctx when connectorsPort is set (P4)", () => {
-    let sawTrigger = false;
+  it("provides a Tools menu body to the composer ctx when connectorsPort is set (P4)", () => {
+    let sawToolsMenu = false;
     let ctxWebSearch: boolean | undefined;
     render(
       <FirstRunSurface
@@ -286,21 +286,25 @@ describe("<FirstRunSurface>", () => {
         initialStage="ready"
         connectorsPort={fakeConnectorsPort()}
         renderComposer={(ctx) => {
-          sawTrigger = ctx.toolsTrigger !== undefined;
+          sawToolsMenu = ctx.renderToolsMenu !== undefined;
           ctxWebSearch = ctx.webSearchEnabled;
-          return <div data-testid="p3-composer">{ctx.toolsTrigger}</div>;
+          return (
+            <div data-testid="p3-composer">
+              {ctx.renderToolsMenu?.({ onBack: () => undefined })}
+            </div>
+          );
         }}
       />,
     );
-    expect(sawTrigger).toBe(true);
+    expect(sawToolsMenu).toBe(true);
     // Web search defaults ON in the surface state.
     expect(ctxWebSearch).toBe(true);
-    // The composer trigger button rendered.
-    expect(screen.getByTestId("first-run-tools-button")).not.toBeNull();
+    expect(screen.getByTestId("first-run-tools-websearch")).not.toBeNull();
+    expect(screen.queryByTestId("first-run-tools-button")).toBeNull();
   });
 
-  it("no connectorsPort ⇒ composer ctx toolsTrigger is undefined (pre-P4 shape)", () => {
-    let trigger: unknown = "sentinel";
+  it("no connectorsPort ⇒ composer ctx has no Tools menu (pre-P4 shape)", () => {
+    let toolsMenu: unknown = "sentinel";
     render(
       <FirstRunSurface
         providerKeys={fakePort()}
@@ -308,12 +312,12 @@ describe("<FirstRunSurface>", () => {
         onComplete={() => undefined}
         initialStage="ready"
         renderComposer={(ctx) => {
-          trigger = ctx.toolsTrigger;
+          toolsMenu = ctx.renderToolsMenu;
           return <div data-testid="p3-composer">composer</div>;
         }}
       />,
     );
-    expect(trigger).toBeUndefined();
+    expect(toolsMenu).toBeUndefined();
   });
 
   it("web-search toggle flips the composer ctx webSearchEnabled (P4)", () => {
@@ -327,17 +331,20 @@ describe("<FirstRunSurface>", () => {
         connectorsPort={fakeConnectorsPort()}
         renderComposer={(ctx) => {
           lastWebSearch = ctx.webSearchEnabled;
-          return <div data-testid="p3-composer">{ctx.toolsTrigger}</div>;
+          return (
+            <div data-testid="p3-composer">
+              {ctx.renderToolsMenu?.({ onBack: () => undefined })}
+            </div>
+          );
         }}
       />,
     );
-    // Open the popover, then toggle web search OFF.
-    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    // Toggle web search OFF through the body that the `+` menu mounts.
     fireEvent.click(screen.getByTestId("first-run-tools-websearch"));
     expect(lastWebSearch).toBe(false);
   });
 
-  it("keeps the Tools panel above its fixed click-out scrim", () => {
+  it("does not mount a separate Tools pill or independently positioned dialog", () => {
     render(
       <FirstRunSurface
         providerKeys={fakePort()}
@@ -346,17 +353,15 @@ describe("<FirstRunSurface>", () => {
         initialStage="ready"
         connectorsPort={fakeConnectorsPort()}
         renderComposer={(ctx) => (
-          <div data-testid="p3-composer">{ctx.toolsTrigger}</div>
+          <div data-testid="p3-composer">
+            {ctx.renderToolsMenu?.({ onBack: () => undefined })}
+          </div>
         )}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("first-run-tools-button"));
-    const panel = screen.getByTestId("first-run-tools-popover");
-    // An ancestor z-index creates a separate stacking context. The fixed
-    // scrim then sits above this inline panel, making the mounted popover look
-    // like a dead Tools button in Electron. `.ui-pop` itself owns z-index 71.
-    expect(panel.parentElement?.style.zIndex).toBe("");
+    expect(screen.queryByTestId("first-run-tools-button")).toBeNull();
+    expect(screen.queryByTestId("first-run-tools-popover")).toBeNull();
   });
 
   it("footer-right is engine-keyed: key engine → keychain line, else → 'nothing leaves this machine' (P4)", async () => {

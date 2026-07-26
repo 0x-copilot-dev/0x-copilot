@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -47,6 +48,7 @@ export function AnchoredPlusMenu({
   children: ReactNode;
 }): ReactElement | null {
   const [style, setStyle] = useState<CSSProperties>({});
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -55,10 +57,14 @@ export function AnchoredPlusMenu({
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
       const SPACE = 8;
+      const MAX_PANEL_WIDTH = 300;
       setStyle({
         position: "fixed",
         bottom: window.innerHeight - rect.top + SPACE,
-        left: rect.left,
+        left: Math.min(
+          Math.max(SPACE, rect.left),
+          Math.max(SPACE, window.innerWidth - MAX_PANEL_WIDTH - SPACE),
+        ),
         zIndex: 50,
       });
     };
@@ -75,7 +81,12 @@ export function AnchoredPlusMenu({
     if (!open) return;
     function onPointerDown(event: PointerEvent): void {
       const anchor = anchorRef.current;
-      if (anchor && !anchor.contains(event.target as Node)) {
+      const target = event.target as Node;
+      if (
+        anchor &&
+        !anchor.contains(target) &&
+        !panelRef.current?.contains(target)
+      ) {
         onDismiss();
       }
     }
@@ -85,5 +96,10 @@ export function AnchoredPlusMenu({
 
   if (!open) return null;
   if (typeof document === "undefined") return null;
-  return createPortal(<div style={style}>{children}</div>, document.body);
+  return createPortal(
+    <div ref={panelRef} style={style} data-testid="web-anchored-plus-menu">
+      {children}
+    </div>,
+    document.body,
+  );
 }

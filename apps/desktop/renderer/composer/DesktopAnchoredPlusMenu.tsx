@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useRef,
   useState,
   type CSSProperties,
   type ReactElement,
@@ -34,6 +35,7 @@ export function DesktopAnchoredPlusMenu({
   children: ReactNode;
 }): ReactElement | null {
   const [style, setStyle] = useState<CSSProperties>({});
+  const panelRef = useRef<HTMLDivElement | null>(null);
 
   useLayoutEffect(() => {
     if (!open) return;
@@ -42,10 +44,17 @@ export function DesktopAnchoredPlusMenu({
       if (!anchor) return;
       const rect = anchor.getBoundingClientRect();
       const SPACE = 8;
+      const MAX_PANEL_WIDTH = 300;
       setStyle({
         position: "fixed",
         bottom: window.innerHeight - rect.top + SPACE,
-        left: rect.left,
+        // The original left-only position could place a 300px menu beyond a
+        // narrow cockpit's edge. Keep the `+` alignment where it fits, then
+        // clamp to the visible desktop viewport.
+        left: Math.min(
+          Math.max(SPACE, rect.left),
+          Math.max(SPACE, window.innerWidth - MAX_PANEL_WIDTH - SPACE),
+        ),
         zIndex: 50,
       });
     };
@@ -62,7 +71,15 @@ export function DesktopAnchoredPlusMenu({
     if (!open) return;
     function onPointerDown(event: PointerEvent): void {
       const anchor = anchorRef.current;
-      if (anchor && !anchor.contains(event.target as Node)) {
+      const target = event.target as Node;
+      // The menu is portaled to document.body, so it is not a descendant of
+      // its anchor. Treating every panel click as outside dismissed the menu
+      // on pointerdown before its row's click handler could run.
+      if (
+        anchor &&
+        !anchor.contains(target) &&
+        !panelRef.current?.contains(target)
+      ) {
         onDismiss();
       }
     }
@@ -72,5 +89,10 @@ export function DesktopAnchoredPlusMenu({
 
   if (!open) return null;
   if (typeof document === "undefined") return null;
-  return createPortal(<div style={style}>{children}</div>, document.body);
+  return createPortal(
+    <div ref={panelRef} style={style} data-testid="desktop-anchored-plus-menu">
+      {children}
+    </div>,
+    document.body,
+  );
 }

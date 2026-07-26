@@ -86,7 +86,7 @@ export function RunComposer({
     selectedModel,
     onModelChange,
     providerKeysPort,
-    toolsTrigger,
+    renderToolsMenu,
     buildRunStartRequest,
   } = useWebRunComposerTools(identity);
 
@@ -167,7 +167,7 @@ export function RunComposer({
         onShowConnectors={noop}
         onOpenSkillsSettings={noop}
         onOpenMcpSettings={noop}
-        toolsTrigger={toolsTrigger}
+        renderToolsMenu={renderToolsMenu}
         models={models}
         selectedModel={selectedModel}
         onModelChange={onModelChange}
