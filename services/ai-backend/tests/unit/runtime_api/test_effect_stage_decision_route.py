@@ -79,8 +79,8 @@ def _run() -> RunRecord:
     )
 
 
-def _headers(*, user_id: str = _USER) -> dict[str, str]:
-    return {"x-enterprise-org-id": _ORG, "x-enterprise-user-id": user_id}
+def _headers(*, org_id: str = _ORG, user_id: str = _USER) -> dict[str, str]:
+    return {"x-enterprise-org-id": org_id, "x-enterprise-user-id": user_id}
 
 
 class _Bundle:
@@ -116,6 +116,7 @@ class _Bundle:
                 queue=self.ports.queue,
                 blobs=self.ports.artifact_blob_store,
                 references=self.ports.artifact_reference_provider,
+                supersessions=self.ports.draft_store,
             ),
         )
         self.client = TestClient(self.app)
@@ -221,6 +222,27 @@ class TestEffectStageDecisionRoute:
         )
 
         assert response.status_code == 404
+        assert [
+            event.event_type.value for event in bundle.store.events_by_run[_RUN]
+        ] == ["effect.staged"]
+        assert bundle.store.effect_commit_commands == []
+
+    def test_cross_org_request_is_an_opaque_404_without_a_decision_or_command(
+        self,
+    ) -> None:
+        bundle = _Bundle()
+        staged = bundle.stage_artifact_draft()
+        stage_id = str(staged["stage_id"])
+        body = _decision_body(bundle.store.events_by_run[_RUN][-1])
+
+        response = bundle.client.post(
+            f"/v1/agent/effect-stages/{stage_id}/decision?run_id={_RUN}",
+            headers=_headers(org_id="org_effect_other", user_id=_USER),
+            json=body,
+        )
+
+        assert response.status_code == 404
+        assert response.json() == {"detail": "resource not found"}
         assert [
             event.event_type.value for event in bundle.store.events_by_run[_RUN]
         ] == ["effect.staged"]

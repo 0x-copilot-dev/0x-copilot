@@ -6,7 +6,11 @@ from collections.abc import Sequence
 from threading import RLock
 
 from agent_runtime.persistence.ports import OptimisticConflict
-from agent_runtime.persistence.records import DraftRecord, DraftStatus
+from agent_runtime.persistence.records import (
+    DraftEffectSupersession,
+    DraftRecord,
+    DraftStatus,
+)
 
 
 class InMemoryDraftStore:
@@ -21,6 +25,13 @@ class InMemoryDraftStore:
         self._lock = RLock()
         # (org_id, draft_id) → list of DraftRecord ordered by version asc.
         self.versions: dict[tuple[str, str], list[DraftRecord]] = {}
+        # The immutable stage correlation is deliberately indexed without a
+        # host run. A legacy DraftRecord may be re-homed after an older v1
+        # approval was issued; that must not make an F-006 supersession vanish.
+        self.effect_supersessions: dict[
+            tuple[str, str, str, str], DraftEffectSupersession
+        ] = {}
+        self._effect_stage_ids_by_draft: dict[tuple[str, str, str], set[str]] = {}
 
     async def insert_version(self, record: DraftRecord) -> DraftRecord:
         """Append a new version to the draft's history; raise :class:`OptimisticConflict` on duplicate version."""
@@ -136,3 +147,59 @@ class InMemoryDraftStore:
                     actual_version=latest.version,
                 )
             return latest
+
+    async def record_effect_supersession(
+        self, record: DraftEffectSupersession
+    ) -> DraftEffectSupersession:
+        """Persist/replay one immutable F-006 correlation."""
+
+        key = (record.org_id, record.user_id, record.draft_id, record.stage_id)
+        with self._lock:
+            existing = self.effect_supersessions.get(key)
+            if existing is not None:
+                if _same_effect_supersession(existing, record):
+                    return existing
+                raise ValueError(
+                    "effect stage conflicts with an existing draft binding"
+                )
+            self.effect_supersessions[key] = record
+            self._effect_stage_ids_by_draft.setdefault(key[:3], set()).add(
+                record.stage_id
+            )
+            return record
+
+    async def has_effect_supersession(
+        self, *, org_id: str, user_id: str, draft_id: str
+    ) -> bool:
+        """Answer the direct owner-scoped F-006 safety lookup."""
+
+        with self._lock:
+            return bool(
+                self._effect_stage_ids_by_draft.get((org_id, user_id, draft_id))
+            )
+
+
+def _same_effect_supersession(
+    left: DraftEffectSupersession, right: DraftEffectSupersession
+) -> bool:
+    """Compare immutable facts while ignoring persisted write timestamp."""
+
+    return (
+        left.org_id,
+        left.user_id,
+        left.draft_id,
+        left.stage_id,
+        left.host_run_id,
+        left.artifact_id,
+        left.proposal_digest,
+        left.target_digest,
+    ) == (
+        right.org_id,
+        right.user_id,
+        right.draft_id,
+        right.stage_id,
+        right.host_run_id,
+        right.artifact_id,
+        right.proposal_digest,
+        right.target_digest,
+    )

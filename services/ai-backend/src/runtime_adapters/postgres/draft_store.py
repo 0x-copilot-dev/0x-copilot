@@ -8,9 +8,14 @@ from datetime import datetime, timezone
 
 from agent_runtime.persistence.encryption import FieldCodec
 from agent_runtime.persistence.ports import OptimisticConflict
-from agent_runtime.persistence.records import DraftRecord, DraftStatus
+from agent_runtime.persistence.records import (
+    DraftEffectSupersession,
+    DraftRecord,
+    DraftStatus,
+)
 
 _TABLE = "runtime_drafts"
+_EFFECT_SUPERSESSIONS_TABLE = "runtime_draft_effect_supersessions"
 
 
 class PostgresDraftStore:
@@ -220,6 +225,131 @@ class PostgresDraftStore:
             )
         return latest
 
+    async def record_effect_supersession(
+        self, record: DraftEffectSupersession
+    ) -> DraftEffectSupersession:
+        """Persist a portable owner-scoped F-006 safety correlation.
+
+        The durable key intentionally excludes ``host_run_id``: a legacy draft
+        can move between host runs, but a v1 approval for that owner/draft must
+        remain blocked once an immutable Artifact effect is staged.
+        """
+
+        async with self._parent._tenant_connection(org_id=record.org_id) as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    INSERT INTO {_EFFECT_SUPERSESSIONS_TABLE}
+                        (org_id, user_id, draft_id, stage_id, host_run_id,
+                         artifact_id, proposal_digest, target_digest, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (org_id, user_id, draft_id, stage_id)
+                    DO NOTHING
+                    RETURNING org_id, user_id, draft_id, stage_id, host_run_id,
+                              artifact_id, proposal_digest, target_digest, created_at
+                    """,
+                    (
+                        record.org_id,
+                        record.user_id,
+                        record.draft_id,
+                        record.stage_id,
+                        record.host_run_id,
+                        record.artifact_id,
+                        record.proposal_digest,
+                        record.target_digest,
+                        record.created_at,
+                    ),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    await cur.execute(
+                        f"""
+                        SELECT org_id, user_id, draft_id, stage_id, host_run_id,
+                               artifact_id, proposal_digest, target_digest, created_at
+                          FROM {_EFFECT_SUPERSESSIONS_TABLE}
+                         WHERE org_id = %s AND user_id = %s AND draft_id = %s
+                           AND stage_id = %s
+                        """,
+                        (
+                            record.org_id,
+                            record.user_id,
+                            record.draft_id,
+                            record.stage_id,
+                        ),
+                    )
+                    row = await cur.fetchone()
+        if row is None:
+            raise RuntimeError("effect stage supersession write did not persist")
+        persisted = self._row_to_effect_supersession(row)
+        if not _same_effect_supersession(persisted, record):
+            raise ValueError("effect stage conflicts with an existing draft binding")
+        return persisted
+
+    async def has_effect_supersession(
+        self, *, org_id: str, user_id: str, draft_id: str
+    ) -> bool:
+        """Perform the canonical owner-scoped F-006 safety lookup."""
+
+        async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    SELECT EXISTS(
+                        SELECT 1
+                          FROM {_EFFECT_SUPERSESSIONS_TABLE}
+                         WHERE org_id = %s AND user_id = %s AND draft_id = %s
+                    ) AS exists
+                    """,
+                    (org_id, user_id, draft_id),
+                )
+                row = await cur.fetchone()
+        if isinstance(row, Mapping):
+            return bool(row["exists"])
+        return bool(row[0]) if row is not None else False
+
+    @staticmethod
+    def _row_to_effect_supersession(
+        row: Mapping[str, object] | tuple[object, ...],
+    ) -> DraftEffectSupersession:
+        if isinstance(row, Mapping):
+            values = (
+                row["org_id"],
+                row["user_id"],
+                row["draft_id"],
+                row["stage_id"],
+                row["host_run_id"],
+                row["artifact_id"],
+                row["proposal_digest"],
+                row["target_digest"],
+                row["created_at"],
+            )
+        else:
+            values = row
+        (
+            org_id,
+            user_id,
+            draft_id,
+            stage_id,
+            host_run_id,
+            artifact_id,
+            proposal_digest,
+            target_digest,
+            created_at,
+        ) = values
+        return DraftEffectSupersession(
+            org_id=str(org_id),
+            user_id=str(user_id),
+            draft_id=str(draft_id),
+            stage_id=str(stage_id),
+            host_run_id=str(host_run_id),
+            artifact_id=str(artifact_id),
+            proposal_digest=str(proposal_digest),
+            target_digest=str(target_digest),
+            created_at=created_at
+            if isinstance(created_at, datetime)
+            else datetime.now(timezone.utc),
+        )
+
     def _row_to_record(
         self, row: Mapping[str, object] | tuple[object, ...]
     ) -> DraftRecord:
@@ -324,3 +454,27 @@ class PostgresDraftStore:
             if isinstance(created_at, datetime)
             else datetime.now(timezone.utc),
         )
+
+
+def _same_effect_supersession(
+    left: DraftEffectSupersession, right: DraftEffectSupersession
+) -> bool:
+    return (
+        left.org_id,
+        left.user_id,
+        left.draft_id,
+        left.stage_id,
+        left.host_run_id,
+        left.artifact_id,
+        left.proposal_digest,
+        left.target_digest,
+    ) == (
+        right.org_id,
+        right.user_id,
+        right.draft_id,
+        right.stage_id,
+        right.host_run_id,
+        right.artifact_id,
+        right.proposal_digest,
+        right.target_digest,
+    )

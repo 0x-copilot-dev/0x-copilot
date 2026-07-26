@@ -58,6 +58,7 @@ from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, DraftSendRequest, RunRecord
 from runtime_api.schemas import ApprovalDecision
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
+from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
 from runtime_worker.mcp_effect_executor import McpEffectExecutor
 from runtime_worker.mcp_operation_storage import RuntimeMcpEffectCoordinatorFactory
 
@@ -75,17 +76,15 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@dataclass
 class _Scopes:
+    by_run: dict[str, ArtifactScope]
+
     async def resolve_run(self, *, org_id: str, user_id: str, run_id: str):
-        if (org_id, user_id, run_id) != (_ORG, _USER, _RUN):
+        scope = self.by_run.get(run_id)
+        if scope is None or (org_id, user_id) != (scope.org_id, scope.user_id):
             return None
-        return ArtifactScope(
-            org_id=_ORG,
-            user_id=_USER,
-            conversation_id=_CONVERSATION,
-            run_id=_RUN,
-            trace_id="trace_1",
-        )
+        return scope
 
 
 class _Authenticated:
@@ -110,6 +109,20 @@ class _ScopeResolver:
 
     async def resolve(self, *, run_id: str) -> EffectExecutionScope | None:
         return self.scope if run_id == self.scope.run_id else None
+
+
+@dataclass(frozen=True)
+class _CoordinatorFactory:
+    coordinator: EffectCoordinator
+
+    def for_run(self, *, run: RunRecord) -> EffectCoordinator:
+        assert run.run_id == _RUN
+        return self.coordinator
+
+
+class _FailingStageLookup:
+    async def list_events_after(self, **_kwargs: object) -> tuple[object, ...]:
+        raise RuntimeError("simulated event-store outage")
 
 
 @dataclass(frozen=True)
@@ -142,10 +155,21 @@ class _Harness:
         publication = InMemoryArtifactPublicationCoordinator()
         self.blobs = InMemoryArtifactBlobStore(publication)
         self.references = InMemoryArtifactReferenceStore(publication)
+        self.scopes = _Scopes(
+            {
+                _RUN: ArtifactScope(
+                    org_id=_ORG,
+                    user_id=_USER,
+                    conversation_id=_CONVERSATION,
+                    run_id=_RUN,
+                    trace_id="trace_1",
+                )
+            }
+        )
         self.artifacts = ArtifactService(
             metadata=InMemoryArtifactMetadataStore(publication),
             blobs=self.blobs,
-            run_scopes=_Scopes(),
+            run_scopes=self.scopes,
         )
         self.runtime = InMemoryRuntimeApiStore()
         self.drafts = InMemoryDraftStore()
@@ -186,6 +210,7 @@ class _Harness:
             queue=self.runtime,
             blobs=self.blobs,
             references=self.references,
+            supersessions=self.drafts,
         )
         self.service = DraftService(
             store=self.drafts,
@@ -233,6 +258,41 @@ class _Harness:
                 target_connector="gmail",
                 target_metadata={"op": "send_email", "recipient": "team@example.test"},
             ),
+        )
+
+    def add_host_run(self, *, run_id: str) -> RunRecord:
+        """Add another trusted host run for the same draft owner/conversation."""
+
+        context = self.run.runtime_context.model_copy(
+            update={"run_id": run_id, "trace_id": f"trace_{run_id}"}
+        )
+        run = self.run.model_copy(
+            update={
+                "run_id": run_id,
+                "user_message_id": f"msg_{run_id}",
+                "trace_id": f"trace_{run_id}",
+                "runtime_context": context,
+            }
+        )
+        self.runtime.runs[run_id] = run
+        self.runtime.events_by_run[run_id] = []
+        self.scopes.by_run[run_id] = ArtifactScope(
+            org_id=_ORG,
+            user_id=_USER,
+            conversation_id=_CONVERSATION,
+            run_id=run_id,
+            trace_id=f"trace_{run_id}",
+        )
+        return run
+
+    def artifact_backend_for(self, run: RunRecord) -> ArtifactDraftBackend:
+        return ArtifactDraftBackend(
+            artifacts=self.artifacts,
+            org_id=_ORG,
+            conversation_id=_CONVERSATION,
+            run_id=run.run_id,
+            user_id=_USER,
+            legacy_store=self.drafts,
         )
 
     def effect_stager(self) -> EffectStager:
@@ -383,18 +443,62 @@ async def test_changes_after_stage_cannot_alter_approved_payload_and_retry_is_id
     command = await _approved_command(h, stage_id=response.stage_id)
     connector = _RecordingConnector(requests=[])
     coordinator, _ = await _coordinator(h, connector)
+    # Exercise the production worker boundary, not an alternate direct send
+    # path. The queued command remains body-free and the A5 coordinator is the
+    # only component that reopens the pinned Artifact revision.
+    queued = h.runtime.effect_commit_commands[0]
+    handler = RuntimeEffectCommitHandler(
+        persistence=h.runtime,
+        coordinator_factory=_CoordinatorFactory(coordinator),
+    )
+    first = await handler.handle(queued)
+    replay = await handler.handle(queued)
 
-    first = await coordinator.handle(command)
-    replay = await coordinator.handle(command)
-
-    assert first.status.value == "applied"
-    assert replay.status.value == "replayed"
+    assert first is None
+    assert replay is None
+    assert command.proposal_digest == queued.proposal_digest
     assert len(connector.requests) == 1
     assert connector.requests[0].tool_arguments() == {
         "body": "Approved revision",
         "title": "Launch message",
         "target_metadata": {"recipient": "team@example.test"},
     }
+
+
+async def test_stale_v1_approval_fails_closed_when_effect_stage_lookup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A replay outage cannot authorize a legacy latest-body send."""
+
+    monkeypatch.setenv("SURFACES_V2", "false")
+    h = _Harness()
+    await h.seed_and_import(content="Legacy body under review")
+    v1 = await h.stage()
+    assert v1.approval_id is not None
+    approval = await h.runtime.get_approval_request(
+        org_id=_ORG, approval_id=v1.approval_id
+    )
+    assert approval is not None
+
+    worker = RuntimeApprovalHandler(
+        persistence=h.runtime,
+        event_store=_FailingStageLookup(),
+        draft_store=h.drafts,
+    )
+    await worker._resolve_draft_send_approval(  # noqa: SLF001 - adversarial seam.
+        run=h.run,
+        approval=approval,
+        decision=ApprovalDecision.APPROVED,
+        decided_by_user_id=_USER,
+    )
+
+    latest = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert latest is not None
+    assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
+    assert not any(
+        version.status is DraftStatus.SENT
+        for version in h.drafts.versions[(_ORG, _DRAFT_ID)]
+    )
 
 
 async def test_stale_v1_draft_approval_cannot_send_after_f006_effect_stage(
@@ -448,6 +552,82 @@ async def test_stale_v1_draft_approval_cannot_send_after_f006_effect_stage(
 
     latest = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
     assert latest is not None
+    assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
+    assert not any(
+        version.status is DraftStatus.SENT
+        for version in h.drafts.versions[(_ORG, _DRAFT_ID)]
+    )
+
+
+async def test_stale_v1_approval_is_blocked_by_f006_stage_on_a_different_host_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The owner-scoped correlation survives a legacy draft host-run move."""
+
+    h = _Harness()
+    await h.seed_and_import(content="Original v1 approval content")
+    monkeypatch.setenv("SURFACES_V2", "false")
+    v1 = await h.stage()
+    assert v1.approval_id is not None
+    pending = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert pending is not None
+
+    # Simulate an old client/migration patch that re-homes a mutable legacy row
+    # while preserving its pending state. The prior run's event ledger cannot
+    # see the later host-run event, so only the canonical direct correlation is
+    # permitted to decide whether this old approval is safe.
+    moved = pending.model_copy(
+        update={
+            "version": pending.version + 1,
+            "run_id": None,
+            "content_text": "Mutated legacy bytes that v1 never reviewed",
+        }
+    )
+    await h.drafts.insert_version(moved)
+    host_run = h.add_host_run(run_id="run_f006_rehost")
+    host_backend = h.artifact_backend_for(host_run)
+    authored = await host_backend.awrite(
+        f"/drafts/{_DRAFT_ID}.md", "Pinned Artifact revision on later host run"
+    )
+    assert authored.error is None
+
+    stage = await h.artifact_stager.stage(
+        org_id=_ORG,
+        user_id=_USER,
+        run=host_run,
+        draft_id=_DRAFT_ID,
+        target_connector="gmail",
+        target_op="send_email",
+        target_metadata={"recipient": "team@example.test"},
+    )
+    assert stage is not None
+    assert await h.drafts.has_effect_supersession(
+        org_id=_ORG, user_id=_USER, draft_id=_DRAFT_ID
+    )
+    assert not any(
+        event.event_type.value == "effect.staged"
+        for event in h.runtime.events_by_run[_RUN]
+    )
+
+    approval = await h.runtime.get_approval_request(
+        org_id=_ORG, approval_id=v1.approval_id
+    )
+    assert approval is not None
+    worker = RuntimeApprovalHandler(
+        persistence=h.runtime,
+        event_store=h.runtime,
+        draft_store=h.drafts,
+    )
+    await worker._resolve_draft_send_approval(  # noqa: SLF001 - adversarial seam.
+        run=h.run,
+        approval=approval,
+        decision=ApprovalDecision.APPROVED,
+        decided_by_user_id=_USER,
+    )
+
+    latest = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert latest is not None
+    assert latest.content_text == "Mutated legacy bytes that v1 never reviewed"
     assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
     assert not any(
         version.status is DraftStatus.SENT

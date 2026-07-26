@@ -39,6 +39,8 @@ from agent_runtime.effects.errors import (
 from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.execution.contracts import JsonObject
+from agent_runtime.persistence.ports import DraftEffectSupersessionStorePort
+from agent_runtime.persistence.records import DraftEffectSupersession
 from agent_runtime.surfaces_v2.entities import EffectTarget
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
@@ -88,6 +90,7 @@ class ArtifactDraftSendStager(ArtifactDraftSendStagerPort):
     queue: RuntimeQueuePort
     blobs: ArtifactBlobStorePort
     references: ArtifactReferenceRepositoryPort
+    supersessions: DraftEffectSupersessionStorePort
     revisions: ArtifactDraftRevisionResolverPort | None = None
 
     async def stage(
@@ -156,6 +159,16 @@ class ArtifactDraftSendStager(ArtifactDraftSendStagerPort):
         )
         display_target = f"{target.op} on {target.connector}"
         stage_id = draft_send_stage_id(artifact=revision, target_digest=target.digest)
+        supersession = DraftEffectSupersession(
+            org_id=org_id,
+            user_id=user_id,
+            draft_id=draft_id,
+            stage_id=stage_id,
+            host_run_id=run_id,
+            artifact_id=revision.artifact_id,
+            proposal_digest=revision.content_digest,
+            target_digest=target.digest,
+        )
         effect_stager = EffectStager(
             ledger=RuntimeEffectLedger(
                 event_producer=self.event_producer,
@@ -173,8 +186,16 @@ class ArtifactDraftSendStager(ArtifactDraftSendStagerPort):
             if _matches_exact_artifact_stage(
                 existing, revision, target_ref, target.digest
             ):
+                # Complete a retry after a prior process wrote the stage but
+                # died before recording its global draft supersession. This is
+                # still safe: the exact stage facts were re-folded above.
+                await self.supersessions.record_effect_supersession(supersession)
                 return existing
             raise EffectStageIdempotencyConflict()
+        # Persist the owner-scoped correlation before exposing ``effect.staged``.
+        # If a crash follows, stale v1 approvals fail closed; retrying stages the
+        # same deterministic revision rather than ever reviving mutable bytes.
+        await self.supersessions.record_effect_supersession(supersession)
         try:
             stage = await effect_stager.stage(
                 scope=scope,

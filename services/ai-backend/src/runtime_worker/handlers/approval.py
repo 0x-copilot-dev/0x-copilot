@@ -952,40 +952,56 @@ class RuntimeApprovalHandler:
 
         A ``write.staged`` for this draft means the write was re-homed onto the v2
         staged-write engine (the WYSIWYG-guarded path); a stale v1 approval must
-        NOT independently send. F-006 has the same consequence when an
-        ``effect.staged`` row binds the deterministic Artifact for this virtual
-        draft: the approval must not fall through to ``DraftRecord.latest`` and
-        send content changed after the old v1 review. Best-effort: any read
-        failure returns ``False`` (the v1 send proceeds unchanged — the guard
-        never breaks the existing flow, it only refuses a proven-superseded send).
+        NOT independently send. F-006 persists a canonical owner-scoped
+        draft→effect-stage binding before the effect is exposed. That lookup is
+        intentionally independent of mutable ``DraftRecord.run_id`` and is the
+        authority for cross-host-run supersession. Every safety read fails
+        closed: an unavailable proof of safety must never send mutable bytes.
         """
 
-        from agent_runtime.capabilities.backends.artifact_draft_backend import (  # noqa: PLC0415
-            ArtifactDraftPathBinding,
-        )
-        from agent_runtime.surfaces_v2.ledger_ids import (  # noqa: PLC0415
-            ArtifactContentRefCodec,
-        )
         from agent_runtime.surfaces_v2.ledger_models import (  # noqa: PLC0415
             LedgerEventType,
         )
         from agent_runtime.surfaces_v2.staging import DraftRef  # noqa: PLC0415
 
+        supersessions = getattr(self._draft_store, "has_effect_supersession", None)
+        if not callable(supersessions):
+            _LOGGER.error(
+                "draft_send.supersession_lookup_unavailable draft_id=%s run_id=%s",
+                draft_id,
+                run.run_id,
+            )
+            return True
+        try:
+            if await supersessions(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                draft_id=draft_id,
+            ):
+                return True
+        except Exception:  # noqa: BLE001 - approval safety must fail closed.
+            _LOGGER.exception(
+                "draft_send.supersession_lookup_failed draft_id=%s run_id=%s",
+                draft_id,
+                run.run_id,
+            )
+            return True
+
+        # The prior D1 staged-write guard remains run-scoped because D1's
+        # legacy stage facts predate the canonical F-006 correlation. It too
+        # is fail-closed: replay failure cannot authorize a stale v1 send.
         try:
             events = await self.event_store.list_events_after(
                 org_id=run.org_id, run_id=run.run_id, after_sequence=0
             )
-        except Exception:  # noqa: BLE001 — never break the v1 flow on a read error.
-            return False
+        except Exception:  # noqa: BLE001 - approval safety must fail closed.
+            _LOGGER.exception(
+                "draft_send.stage_lookup_failed draft_id=%s run_id=%s",
+                draft_id,
+                run.run_id,
+            )
+            return True
         staged_value = LedgerEventType.WRITE_STAGED.value
-        effect_staged_value = LedgerEventType.EFFECT_STAGED.value
-        artifact_id = ArtifactDraftPathBinding(
-            org_id=run.org_id,
-            user_id=run.user_id,
-            conversation_id=run.conversation_id,
-            run_id=run.run_id,
-            draft_id=draft_id,
-        ).artifact_id
         for event in events:
             event_type = getattr(getattr(event, "event_type", None), "value", None)
             payload = getattr(event, "payload", None)
@@ -995,22 +1011,6 @@ class RuntimeApprovalHandler:
                 parsed = DraftRef.parse_proposal(payload.get("proposal_ref"))
                 if parsed is not None and parsed[0] == draft_id:
                     return True
-                continue
-            if (
-                event_type != effect_staged_value
-                or payload.get("executor") != "mcp"
-                or payload.get("proposal_kind") != "artifact_revision"
-            ):
-                continue
-            content_ref = payload.get("proposal_content_ref")
-            if not isinstance(content_ref, str):
-                continue
-            try:
-                parsed_artifact = ArtifactContentRefCodec.parse(content_ref)
-            except ValueError:
-                continue
-            if parsed_artifact.artifact_id == artifact_id:
-                return True
         return False
 
     @staticmethod

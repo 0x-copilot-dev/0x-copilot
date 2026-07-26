@@ -51,6 +51,11 @@ class _StubEventStore:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
+    async def list_events_after(self, **_kwargs: object) -> tuple[object, ...]:
+        """A healthy empty replay explicitly establishes no v2 stage."""
+
+        return ()
+
 
 # Duck-typed RunRecord stand-in. The handler reads only ``org_id``,
 # ``run_id``, ``user_id``, and ``conversation_id`` off the run; full

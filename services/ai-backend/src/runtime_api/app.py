@@ -887,6 +887,7 @@ class RuntimeApiAppFactory:
             queue=ports.queue,
             blobs=ports.artifact_blob_store,
             references=ports.artifact_reference_provider,
+            supersessions=ports.draft_store,
         )
 
     @classmethod

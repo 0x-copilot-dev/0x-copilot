@@ -60,6 +60,11 @@ class _StubEventStore:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
+    async def list_events_after(self, **_kwargs: object) -> tuple[object, ...]:
+        """A healthy empty replay explicitly establishes no v2 stage."""
+
+        return ()
+
 
 def _approval(*, draft_id: str, draft_version: int) -> ApprovalRequestRecord:
     return ApprovalRequestRecord(

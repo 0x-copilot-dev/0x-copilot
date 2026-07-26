@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 
 from agent_runtime.persistence.records import (
     CitationRecord,
+    DraftEffectSupersession,
     DraftRecord,
     DraftStatus,
     ShareRecipientRecord,
@@ -104,7 +105,35 @@ class RuntimeEventIdempotencyConflict(RuntimeError):
 
 
 @runtime_checkable
-class DraftStorePort(Protocol):
+class DraftEffectSupersessionStorePort(Protocol):
+    """Durable owner-scoped correlation for immutable draft effect stages.
+
+    This intentionally small port keeps F-006's safety boundary portable: the
+    stage adapter needs no mutable DraftRecord body and no particular database.
+    """
+
+    async def record_effect_supersession(
+        self, record: DraftEffectSupersession
+    ) -> DraftEffectSupersession:
+        """Persist immutable F-006 stage binding for one owner-scoped draft.
+
+        Implementations must be idempotent for the same immutable facts and
+        reject a conflicting reuse of the same ``(org, user, draft, stage)``.
+        This record intentionally outlives a mutable draft host-run binding.
+        """
+
+    async def has_effect_supersession(
+        self, *, org_id: str, user_id: str, draft_id: str
+    ) -> bool:
+        """Return whether this principal's draft has any immutable effect stage.
+
+        This is an authorization-sensitive safety lookup.  Callers fail closed
+        if an adapter cannot establish the answer.
+        """
+
+
+@runtime_checkable
+class DraftStorePort(DraftEffectSupersessionStorePort, Protocol):
     """Versioned, append-only draft artifact persistence boundary.
 
     Each successful write inserts one new ``DraftRecord`` row sharing the same
