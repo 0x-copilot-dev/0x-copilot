@@ -80,6 +80,23 @@ class ArtifactRetentionScope:
 
 
 @dataclass(frozen=True, slots=True)
+class ArtifactGcCandidateScope:
+    """Durable ownership needed to re-check a hold after metadata purge.
+
+    Artifact metadata and revisions are intentionally removed before the
+    expensive physical reclamation phase.  Retaining this tiny, identifier-only
+    ownership tuple is what keeps a legal hold created *after* that purge from
+    becoming invisible to the final byte-delete decision.  ``None`` means the
+    source did not have a trustworthy owner for that dimension; callers must
+    fail closed rather than infer one.
+    """
+
+    org_id: str
+    user_id: str | None = None
+    conversation_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ArtifactRetentionPurgeResult:
     """Metadata removed by retention and newly durable GC eligibility."""
 
@@ -135,6 +152,9 @@ class ArtifactQuarantineReapResult:
 
     reaped_blob_keys: tuple[str, ...] = ()
     restored_blob_keys: tuple[str, ...] = ()
+    # A hold never restores a logically deleted artifact to product callers.
+    # It leaves the bytes in quarantine until the hold is released.
+    withheld_blob_keys: tuple[str, ...] = ()
 
 
 class ArtifactQuarantineReaper(Protocol):
@@ -143,6 +163,7 @@ class ArtifactQuarantineReaper(Protocol):
         *,
         older_than: datetime,
         limit: int,
+        provenance_org_id: str | None = None,
     ) -> ArtifactQuarantineReapResult: ...
 
 
@@ -234,6 +255,7 @@ __all__ = (
     "ArtifactRetentionPurger",
     "ArtifactRetentionPurgeResult",
     "ArtifactRetentionScope",
+    "ArtifactGcCandidateScope",
     "decode_cursor",
     "encode_cursor",
     "is_after_cursor",

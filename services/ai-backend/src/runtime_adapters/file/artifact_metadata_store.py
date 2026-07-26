@@ -17,6 +17,7 @@ from agent_runtime.artifacts.contracts import (
 )
 from agent_runtime.persistence.records import OutboxStatus
 from runtime_adapters._artifact_repository import (
+    ArtifactGcCandidateScope,
     ArtifactRetentionPurgeResult,
     ArtifactRetentionScope,
     artifact_event_outbox_row,
@@ -158,6 +159,7 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                         blob_key=command.record.current_revision.blob_key,
                         provenance_org_id=candidate_before.provenance_org_id,
                         candidate_since=candidate_before.candidate_since,
+                        scopes=candidate_before.scopes,
                     )
                 raise
 
@@ -210,6 +212,7 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                         blob_key=command.revision.blob_key,
                         provenance_org_id=candidate_before.provenance_org_id,
                         candidate_since=candidate_before.candidate_since,
+                        scopes=candidate_before.scopes,
                     )
                 raise
 
@@ -305,6 +308,24 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                         blob_key=blob_key,
                         provenance_org_id=org_id,
                         candidate_since=candidate_since,
+                        scopes=tuple(
+                            ArtifactGcCandidateScope(
+                                org_id=str(scope_json["org_id"]),
+                                user_id=(
+                                    str(scope_json["user_id"])
+                                    if scope_json.get("user_id") is not None
+                                    else None
+                                ),
+                                conversation_id=(
+                                    str(scope_json["conversation_id"])
+                                    if scope_json.get("conversation_id") is not None
+                                    else None
+                                ),
+                            )
+                            for scope_json in candidate_json.get("scopes", ())
+                            if isinstance(scope_json, dict)
+                            and isinstance(scope_json.get("org_id"), str)
+                        ),
                     )
                 continue
             if row.get("op") == "outbox_status":
@@ -467,18 +488,23 @@ class FileArtifactMetadataStore(InMemoryArtifactMetadataStore):
                         "conversation_id": scope.conversation_id,
                         "artifact_ids": list(result.purged_artifact_ids),
                         "candidates": [
-                            candidate.model_dump(mode="json")
+                            {
+                                **candidate.model_dump(mode="json"),
+                                "scopes": [
+                                    {
+                                        "org_id": candidate_scope.org_id,
+                                        "user_id": candidate_scope.user_id,
+                                        "conversation_id": candidate_scope.conversation_id,
+                                    }
+                                    for candidate_scope in self.coordinator.candidate_scopes_locked(
+                                        blob_key=candidate.blob_key
+                                    )
+                                ],
+                            }
                             for candidate in result.eligible_candidates
                         ],
                     },
                 )
-                for candidate in result.eligible_candidates:
-                    self.coordinator.candidates.pop(candidate.blob_key, None)
-                    self.coordinator.record_candidate_locked(
-                        blob_key=candidate.blob_key,
-                        provenance_org_id=scope.org_id,
-                        candidate_since=candidate.unreferenced_since,
-                    )
                 return result
             except BaseException:
                 self._restore(snapshot)

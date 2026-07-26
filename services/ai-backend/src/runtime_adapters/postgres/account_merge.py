@@ -661,6 +661,34 @@ class PostgresAccountMergeRekeyer:
             self._count(table, moved)
         await conn.execute(
             """
+            INSERT INTO runtime_artifact_gc_candidate_scopes (
+                provenance_org_id, blob_key, user_id, conversation_id
+            )
+            SELECT
+                %s,
+                absorbed.blob_key,
+                CASE
+                    WHEN absorbed.user_id = %s THEN %s
+                    ELSE absorbed.user_id
+                END,
+                absorbed.conversation_id
+              FROM runtime_artifact_gc_candidate_scopes AS absorbed
+              JOIN runtime_artifact_gc_candidates AS survivor
+                ON survivor.provenance_org_id = %s
+               AND survivor.blob_key = absorbed.blob_key
+             WHERE absorbed.provenance_org_id = %s
+            ON CONFLICT DO NOTHING
+            """,
+            (
+                self._survivor_org,
+                self._absorbed_user,
+                self._survivor_user,
+                self._survivor_org,
+                self._absorbed_org,
+            ),
+        )
+        await conn.execute(
+            """
             UPDATE runtime_artifact_gc_candidates AS survivor
                SET candidate_since = LEAST(
                        survivor.candidate_since,
@@ -696,6 +724,22 @@ class PostgresAccountMergeRekeyer:
             (self._survivor_org, self._absorbed_org),
         )
         self._count("runtime_artifact_gc_candidates", moved_candidates)
+        moved_candidate_scopes = await self._execute(
+            conn,
+            """
+            UPDATE runtime_artifact_gc_candidate_scopes
+               SET user_id = CASE
+                       WHEN user_id = %s THEN %s ELSE user_id
+                   END
+             WHERE provenance_org_id = %s
+            """,
+            (
+                self._absorbed_user,
+                self._survivor_user,
+                self._survivor_org,
+            ),
+        )
+        self._count("runtime_artifact_gc_candidate_scopes", moved_candidate_scopes)
         moved_quarantine = await self._execute(
             conn,
             """

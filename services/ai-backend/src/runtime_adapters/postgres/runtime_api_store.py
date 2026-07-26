@@ -94,7 +94,10 @@ from runtime_adapters.base import (
     StatusTransition,
     _Fields,
 )
-from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
+from runtime_adapters.artifact_lifecycle import (
+    ArtifactLifecycleJobs,
+    ArtifactPhysicalCleanupOutcome,
+)
 from runtime_adapters.postgres.artifact_hold_fence import (
     acquire_artifact_hold_fences,
     active_hold_for_conversation_predicate,
@@ -4843,6 +4846,34 @@ class PostgresRuntimeApiStore:
                     org_id=org_id, ttl_seconds=ttl_seconds, dry_run=dry_run
                 )
         raise ValueError(f"unknown retention kind: {kind!r}")
+
+    async def execute_artifact_cleanup(
+        self,
+        *,
+        org_id: str,
+        now: datetime,
+        limit: int,
+    ) -> ArtifactPhysicalCleanupOutcome:
+        """Run the physical lifecycle only through the trusted tenant seam.
+
+        The caller receives aggregate counts; legal-hold ownership is resolved
+        by this persistence adapter and revalidated again by the
+        digest-locked Postgres collector immediately before movement/unlink.
+        """
+
+        jobs = self._artifact_lifecycle_jobs
+        if jobs is None:
+            return ArtifactPhysicalCleanupOutcome(org_id=org_id)
+        result = await jobs.run_scheduled_retention(
+            org_id=org_id,
+            now=now,
+            limit=limit,
+            protected_conversation_ids=await self._held_conversation_ids(org_id=org_id),
+        )
+        return ArtifactPhysicalCleanupOutcome.from_result(
+            org_id=org_id,
+            result=result,
+        )
 
     async def _sweep_messages(
         self, *, org_id: str, ttl_seconds: int, dry_run: bool

@@ -96,7 +96,11 @@ from agent_runtime.persistence.records import (
     UsageDailyUserRow,
 )
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
-from runtime_adapters.artifact_lifecycle import ArtifactLifecycleJobs
+from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
+from runtime_adapters.artifact_lifecycle import (
+    ArtifactLifecycleJobs,
+    ArtifactPhysicalCleanupOutcome,
+)
 from runtime_adapters.file._audit_manifest import (
     AuditManifest,
     AuditManifestVerifier,
@@ -236,6 +240,7 @@ class FileRuntimeApiStore:
         """Attach the gated repository lifecycle to existing store operations."""
 
         self._artifact_lifecycle_jobs = jobs
+        jobs.configure_hold_revalidator(self._artifact_candidate_scope_is_held)
 
     async def tombstone_artifacts_for_org_deletion(
         self,
@@ -1281,6 +1286,37 @@ class FileRuntimeApiStore:
             )
             for hold in self.legal_holds.values()
         )
+
+    def _artifact_candidate_scope_is_held(
+        self, scopes: tuple[ArtifactGcCandidateScope, ...]
+    ) -> bool:
+        """Fail closed for a live hold added after artifact metadata purge."""
+
+        for scope in scopes:
+            for hold in self.legal_holds.values():
+                if hold.org_id != scope.org_id or hold.released_at is not None:
+                    continue
+                if hold.scope.value == "org" and hold.resource_id == scope.org_id:
+                    return True
+                if (
+                    hold.scope.value == "user"
+                    and scope.user_id is not None
+                    and hold.subject_user_id == scope.user_id
+                ):
+                    return True
+                if (
+                    hold.scope.value == "conversation"
+                    and scope.conversation_id is not None
+                    and hold.resource_id == scope.conversation_id
+                ):
+                    return True
+                if (
+                    hold.scope.value == "conversation"
+                    and scope.conversation_id is None
+                    and (scope.user_id is None or hold.subject_user_id == scope.user_id)
+                ):
+                    return True
+        return False
 
     # PRD-09 D3 — the desktop catalog is single-user and bounded; the bucket +
     # keyset path fetches a generous slice from the index and scopes/pages in
@@ -3726,6 +3762,37 @@ class FileRuntimeApiStore:
             tombstoned=0,
             deleted=outcome.conversations,
             skipped_legal_hold=outcome.skipped_legal_hold,
+        )
+
+    async def execute_artifact_cleanup(
+        self,
+        *,
+        org_id: str,
+        now: datetime,
+        limit: int,
+    ) -> ArtifactPhysicalCleanupOutcome:
+        """Execute one bounded cleanup under the desktop legal-hold fence."""
+
+        async with self._state_lock:
+            jobs = self._artifact_lifecycle_jobs
+            if jobs is None:
+                return ArtifactPhysicalCleanupOutcome(org_id=org_id)
+            result = await jobs.run_scheduled_retention(
+                org_id=org_id,
+                now=now,
+                limit=limit,
+                protected_conversation_ids=tuple(
+                    sorted(
+                        conversation.conversation_id
+                        for conversation in self.conversations.values()
+                        if conversation.org_id == org_id
+                        and self._conversation_is_held(conversation)
+                    )
+                ),
+            )
+        return ArtifactPhysicalCleanupOutcome.from_result(
+            org_id=org_id,
+            result=result,
         )
 
     async def insert_retention_deletion_evidence(self, record) -> None:

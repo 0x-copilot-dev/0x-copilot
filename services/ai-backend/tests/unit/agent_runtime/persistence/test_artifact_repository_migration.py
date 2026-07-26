@@ -13,6 +13,12 @@ _FORWARD = (_MIGRATIONS / "0007_artifact_repository.sql").read_text()
 _ROLLBACK = (_MIGRATIONS / "0007_artifact_repository.rollback.sql").read_text()
 _DO_RLS = (_MIGRATIONS / "staged" / "do_rls.sql").read_text()
 _UNDO_RLS = (_MIGRATIONS / "staged" / "undo_rls.sql").read_text()
+_PHYSICAL_CLEANUP_FORWARD = next(
+    _MIGRATIONS.glob("*_artifact_physical_cleanup_scopes.sql")
+).read_text()
+_PHYSICAL_CLEANUP_ROLLBACK = next(
+    _MIGRATIONS.glob("*_artifact_physical_cleanup_scopes.rollback.sql")
+).read_text()
 
 
 class TestArtifactRepositoryMigration:
@@ -77,3 +83,25 @@ class TestArtifactRepositoryMigration:
 
         assert "0007_artifact_repository" in actual
         assert actual == expected
+
+    def test_physical_cleanup_scopes_preserve_hold_ownership_after_purge(self) -> None:
+        """The later cleanup migration is intentionally additive to 0007."""
+
+        migration_id = next(
+            _MIGRATIONS.glob("*_artifact_physical_cleanup_scopes.sql")
+        ).stem
+        assert "CREATE TABLE runtime_artifact_gc_candidate_scopes" in (
+            _PHYSICAL_CLEANUP_FORWARD
+        )
+        assert "FOREIGN KEY (provenance_org_id, blob_key)" in (
+            _PHYSICAL_CLEANUP_FORWARD
+        )
+        assert "ON DELETE CASCADE" in _PHYSICAL_CLEANUP_FORWARD
+        assert "ENABLE ROW LEVEL SECURITY" in _PHYSICAL_CLEANUP_FORWARD
+        assert "FORCE ROW LEVEL SECURITY" in _PHYSICAL_CLEANUP_FORWARD
+        assert "artifact-gc-hold:" in _PHYSICAL_CLEANUP_FORWARD
+        assert "runtime_artifact_hold_pin_or_release" in _PHYSICAL_CLEANUP_FORWARD
+        assert "DROP TABLE IF EXISTS runtime_artifact_gc_candidate_scopes" in (
+            _PHYSICAL_CLEANUP_ROLLBACK
+        )
+        assert migration_id in MigrationRunner.actual_manifest()

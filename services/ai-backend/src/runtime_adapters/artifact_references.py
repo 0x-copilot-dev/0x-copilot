@@ -9,6 +9,8 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
+
 if TYPE_CHECKING:
     from runtime_adapters.file.artifact_publication import (
         FileArtifactPublicationCoordinator,
@@ -133,10 +135,6 @@ class InMemoryArtifactReferenceStore:
         edge_id: str,
         released_at: datetime | None = None,
     ) -> ArtifactReferenceEdge | None:
-        from runtime_adapters.in_memory.artifact_publication import (
-            InMemoryArtifactCandidateState,
-        )
-
         with self._lock:
             existing = self._edges.get((org_id, edge_id))
             if existing is None:
@@ -147,14 +145,17 @@ class InMemoryArtifactReferenceStore:
                 )
                 self._edges[(org_id, edge_id)] = existing
                 if not self.has_reference_locked(blob_key=existing.blob_key):
-                    candidate = self.coordinator.candidates.get(existing.blob_key)
-                    if candidate is None:
-                        self.coordinator.candidates[existing.blob_key] = (
-                            InMemoryArtifactCandidateState(
-                                provenance_org_id=org_id,
-                                candidate_since=existing.released_at,
-                            )
-                        )
+                    self.coordinator.record_candidate_locked(
+                        blob_key=existing.blob_key,
+                        provenance_org_id=org_id,
+                        candidate_since=existing.released_at,
+                        scopes=(
+                            ArtifactGcCandidateScope(
+                                org_id=org_id,
+                                user_id=existing.user_id,
+                            ),
+                        ),
+                    )
             return existing
 
     async def has_reference(self, *, org_id: str, blob_key: str) -> bool:
@@ -304,6 +305,12 @@ class FileArtifactReferenceStore:
                     blob_key=updated.blob_key,
                     provenance_org_id=org_id,
                     candidate_since=updated.released_at,
+                    scopes=(
+                        ArtifactGcCandidateScope(
+                            org_id=org_id,
+                            user_id=updated.user_id,
+                        ),
+                    ),
                 )
             return updated
 
@@ -486,6 +493,15 @@ class PostgresArtifactReferenceStore:
                                 )
                             """,
                             (org_id, row["blob_key"], timestamp),
+                        )
+                        await conn.execute(
+                            """
+                            INSERT INTO runtime_artifact_gc_candidate_scopes (
+                                provenance_org_id, blob_key, user_id, conversation_id
+                            ) VALUES (%s, %s, %s, '')
+                            ON CONFLICT DO NOTHING
+                            """,
+                            (org_id, row["blob_key"], row["user_id"] or ""),
                         )
         return ArtifactReferenceEdge.model_validate(row) if row is not None else None
 

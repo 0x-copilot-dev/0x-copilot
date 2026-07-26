@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from datetime import datetime, timezone
 
 from agent_runtime.artifacts.contracts import ArtifactGcCandidate
-from runtime_adapters._artifact_repository import ArtifactQuarantineReapResult
+from runtime_adapters._artifact_repository import (
+    ArtifactGcCandidateScope,
+    ArtifactQuarantineReapResult,
+)
 from runtime_adapters.artifact_lifecycle import ORPHAN_PUBLICATION_RECOVERY_ORG_ID
 from runtime_adapters.artifact_references import FileArtifactReferenceStore
 from runtime_adapters.file._paths import FileStoreLayout
@@ -31,6 +35,31 @@ class FileArtifactGarbageCollector:
         self.layout = layout
         self.coordinator = coordinator
         self.reference_store = reference_store
+        self._hold_revalidator: (
+            Callable[[tuple[ArtifactGcCandidateScope, ...]], bool] | None
+        ) = None
+
+    def set_hold_revalidator(
+        self,
+        revalidator: Callable[[tuple[ArtifactGcCandidateScope, ...]], bool],
+    ) -> None:
+        """Install the runtime-owned live-hold checker at composition time."""
+
+        self._hold_revalidator = revalidator
+
+    def has_active_hold_locked(self, *, blob_key: str) -> bool:
+        revalidator = self._hold_revalidator
+        if revalidator is None:
+            return False
+        scopes = self.coordinator.candidate_scopes_locked(blob_key=blob_key)
+        # A legacy candidate without persisted ownership cannot be reconciled
+        # against a hold added after its metadata disappeared.  The safe
+        # recovery is to withhold rather than make a deletion guess.
+        return not scopes or bool(revalidator(scopes))
+
+    def has_active_hold(self, *, blob_key: str) -> bool:
+        with self.coordinator.locked():
+            return self.has_active_hold_locked(blob_key=blob_key)
 
     def has_pending_publications(self) -> bool:
         """Report only durable manifest work, never by walking object shards."""
@@ -60,6 +89,8 @@ class FileArtifactGarbageCollector:
                 return False
             if self.reference_store.has_reference_locked(blob_key=candidate.blob_key):
                 return False
+            if self.has_active_hold_locked(blob_key=candidate.blob_key):
+                return False
             quarantine = self.coordinator.quarantine_path(candidate.blob_key)
             if quarantine.exists():
                 return candidate.blob_key in self.coordinator.quarantine
@@ -82,23 +113,36 @@ class FileArtifactGarbageCollector:
         *,
         older_than: datetime,
         limit: int,
+        provenance_org_id: str | None = None,
     ) -> ArtifactQuarantineReapResult:
         reaped: list[str] = []
         restored: list[str] = []
+        withheld: list[str] = []
         with self.coordinator.locked():
             ordered = sorted(
                 self.coordinator.quarantine.items(),
                 key=lambda item: (item[1].quarantined_at, item[0]),
             )
+            attempted = 0
             for blob_key, state in ordered:
-                if len(reaped) + len(restored) >= limit:
+                if attempted >= limit:
                     break
+                candidate = self.coordinator.candidates.get(blob_key)
+                if provenance_org_id is not None and (
+                    candidate is None
+                    or candidate.provenance_org_id != provenance_org_id
+                ):
+                    continue
                 if state.quarantined_at >= older_than:
                     continue
+                attempted += 1
                 if self.reference_store.has_reference_locked(blob_key=blob_key):
                     self.coordinator.restore_locked(blob_key)
                     self.coordinator.cancel_candidate_locked(blob_key)
                     restored.append(blob_key)
+                    continue
+                if self.has_active_hold_locked(blob_key=blob_key):
+                    withheld.append(blob_key)
                     continue
                 quarantine = self.coordinator.quarantine_path(blob_key)
                 reaping = self.coordinator.reaping_path(blob_key)
@@ -132,6 +176,7 @@ class FileArtifactGarbageCollector:
         return ArtifactQuarantineReapResult(
             reaped_blob_keys=tuple(reaped),
             restored_blob_keys=tuple(restored),
+            withheld_blob_keys=tuple(withheld),
         )
 
 

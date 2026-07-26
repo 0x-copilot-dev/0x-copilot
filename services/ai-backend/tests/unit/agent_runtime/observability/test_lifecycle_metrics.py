@@ -125,6 +125,7 @@ def test_metric_registry_is_low_cardinality_and_safe() -> None:
         LifecycleMetricName.RECONCILE_BACKLOG_SNAPSHOT_ITEMS,
         LifecycleMetricName.RETENTION_EXECUTION_FAILURES_TOTAL,
         LifecycleMetricName.REPAIR_EXECUTION_TOTAL,
+        LifecycleMetricName.ARTIFACT_CLEANUP_EXECUTION_TOTAL,
         LifecycleMetricName.AUDIT_VERIFICATION_TOTAL,
         LifecycleMetricName.AUTHORIZATION_DENIALS_TOTAL,
     }
@@ -162,6 +163,7 @@ def test_untrusted_metric_inputs_are_collapsed_to_closed_labels(
     metrics.record_reconcile_backlog_snapshot(candidate_count=4, withheld_count=2)
     metrics.record_retention_execution_failure(kind=unsafe)
     metrics.record_repair_execution(action=unsafe, outcome=unsafe)
+    metrics.record_artifact_cleanup_execution(outcome=unsafe)
     metrics.record_audit_verification(format=unsafe, succeeded=False)
     metrics.record_authorization_denial(
         boundary=unsafe,

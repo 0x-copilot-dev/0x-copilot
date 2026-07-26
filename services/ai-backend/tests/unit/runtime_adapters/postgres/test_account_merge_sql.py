@@ -34,6 +34,7 @@ _MIGRATION_TABLES = {
     "runtime_artifact_idempotency",
     "runtime_artifact_reference_edges",
     "runtime_artifact_gc_candidates",
+    "runtime_artifact_gc_candidate_scopes",
     "runtime_artifact_gc_quarantine",
     "runtime_async_tasks",
     "runtime_subagent_results",
@@ -200,6 +201,7 @@ class TestPostgresAccountMergeSql:
             "runtime_artifact_idempotency",
             "runtime_artifact_reference_edges",
             "runtime_artifact_gc_candidates",
+            "runtime_artifact_gc_candidate_scopes",
             "runtime_artifact_gc_quarantine",
         }
 

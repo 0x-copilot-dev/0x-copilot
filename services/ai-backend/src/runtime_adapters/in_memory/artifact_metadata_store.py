@@ -22,6 +22,7 @@ from agent_runtime.artifacts.errors import (
 )
 from agent_runtime.persistence.records import OutboxStatus
 from runtime_adapters._artifact_repository import (
+    ArtifactGcCandidateScope,
     ArtifactRetentionPurgeResult,
     ArtifactRetentionScope,
     artifact_event_outbox_row,
@@ -42,7 +43,6 @@ from runtime_adapters.artifact_references import (
     artifact_revision_reference_edge,
 )
 from runtime_adapters.in_memory.artifact_publication import (
-    InMemoryArtifactCandidateState,
     InMemoryArtifactPublicationCoordinator,
 )
 from runtime_api.schemas.commands import RuntimeArtifactEventCommand
@@ -385,6 +385,7 @@ class InMemoryArtifactMetadataStore:
             victims = victims[:limit]
             artifact_ids = {key[1] for key, _ in victims}
             digest_since: dict[str, datetime] = {}
+            digest_scopes: dict[str, set[ArtifactGcCandidateScope]] = {}
             for (
                 revision_org,
                 revision_artifact,
@@ -402,6 +403,14 @@ class InMemoryArtifactMetadataStore:
                 digest_since[revision.blob_key] = min(
                     digest_since.get(revision.blob_key, deleted_at),
                     deleted_at,
+                )
+                record = self._records[(revision_org, revision_artifact)]
+                digest_scopes.setdefault(revision.blob_key, set()).add(
+                    ArtifactGcCandidateScope(
+                        org_id=record.artifact.org_id,
+                        user_id=record.artifact.user_id,
+                        conversation_id=record.artifact.conversation_id,
+                    )
                 )
             for key, _ in victims:
                 self._records.pop(key, None)
@@ -423,14 +432,12 @@ class InMemoryArtifactMetadataStore:
                 self._idempotency.pop(key, None)
                 self._idempotency_artifact.pop(key, None)
             for blob_key, candidate_since in digest_since.items():
-                current = self.coordinator.candidates.get(blob_key)
-                if current is None or candidate_since < current.candidate_since:
-                    self.coordinator.candidates[blob_key] = (
-                        InMemoryArtifactCandidateState(
-                            provenance_org_id=scope.org_id,
-                            candidate_since=candidate_since,
-                        )
-                    )
+                self.coordinator.record_candidate_locked(
+                    blob_key=blob_key,
+                    provenance_org_id=scope.org_id,
+                    candidate_since=candidate_since,
+                    scopes=tuple(digest_scopes.get(blob_key, ())),
+                )
             candidates = tuple(
                 ArtifactGcCandidate(
                     blob_key=blob_key,

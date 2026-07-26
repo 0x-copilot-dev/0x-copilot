@@ -45,6 +45,11 @@ from runtime_worker.jobs.repair_execution import (
     RepairExecutionEnv,
     RepairReconciliationExecutor,
 )
+from runtime_worker.jobs.artifact_cleanup_execution import (
+    ArtifactCleanupExecutionEnv,
+    ArtifactCleanupExecutionLoop,
+    ArtifactCleanupExecutionRunner,
+)
 from runtime_worker.jobs.audit_export_verification import (
     AuditExportVerificationSampler,
     AuditExportVerificationSamplingEnv,
@@ -90,6 +95,7 @@ class RuntimeWorkerEntrypoint:
         await async_ports.lifecycle.migrate()
         rollup_loop: UsageRollupLoop | None = None
         retention_loop: RetentionSweeperLoop | None = None
+        artifact_cleanup_execution_loop: ArtifactCleanupExecutionLoop | None = None
         repair_planning_loop: RepairPlanningLoop | None = None
         audit_export_verification_loop: AuditExportVerificationSamplingLoop | None = (
             None
@@ -154,6 +160,15 @@ class RuntimeWorkerEntrypoint:
                     "poll_interval_seconds": settings.execution.worker_poll_interval_seconds,
                 },
             )
+            artifact_cleanup_execution_enabled = ArtifactCleanupExecutionEnv.enabled()
+            if artifact_cleanup_execution_enabled and (
+                not settings.execution.artifact_effects_v2
+                or async_ports.artifact_lifecycle_jobs is None
+            ):
+                raise RuntimeError(
+                    "ARTIFACT_CLEANUP_EXECUTION_ENABLED requires "
+                    "ARTIFACT_EFFECTS_V2 and a configured artifact repository."
+                )
             if UsageRollupLoopEnv.env_bool(UsageRollupLoopEnv.ENABLED, default=True):
                 rollup_loop = UsageRollupLoop(persistence=async_ports.persistence)
                 await rollup_loop.start()
@@ -170,7 +185,13 @@ class RuntimeWorkerEntrypoint:
             ):
                 retention_loop = RetentionSweeperLoop(
                     persistence=async_ports.persistence,
-                    artifact_effects_v2=async_ports.artifact_effects_v2,
+                    # Dedicated cleanup owns this retention kind when its
+                    # explicit flag is on. Generic retention stays unchanged
+                    # otherwise, avoiding duplicate scheduling/audit rows.
+                    artifact_effects_v2=(
+                        async_ports.artifact_effects_v2
+                        and not artifact_cleanup_execution_enabled
+                    ),
                 )
                 await retention_loop.start()
                 logger.info(
@@ -180,11 +201,39 @@ class RuntimeWorkerEntrypoint:
                         "dry_run": retention_loop._dry_run,
                     },
                 )
+            if artifact_cleanup_execution_enabled:
+                max_orgs = ArtifactCleanupExecutionEnv.env_int(
+                    ArtifactCleanupExecutionEnv.MAX_ORGS,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_MAX_ORGS,
+                    maximum=500,
+                )
+                limit_per_org = ArtifactCleanupExecutionEnv.env_int(
+                    ArtifactCleanupExecutionEnv.LIMIT_PER_ORG,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_LIMIT_PER_ORG,
+                    maximum=500,
+                )
+                artifact_cleanup_execution_loop = ArtifactCleanupExecutionLoop(
+                    runner=ArtifactCleanupExecutionRunner(
+                        persistence=async_ports.persistence,  # type: ignore[arg-type]
+                        max_orgs=max_orgs,
+                        limit_per_org=limit_per_org,
+                    )
+                )
+                await artifact_cleanup_execution_loop.start()
+                logger.info(
+                    "artifact_cleanup_execution_loop_started",
+                    metadata={
+                        "interval_seconds": artifact_cleanup_execution_loop._interval,
+                        "max_orgs": max_orgs,
+                        "limit_per_org": limit_per_org,
+                    },
+                )
             # D12 planning is opt-in.  Execution is a second explicit switch:
             # it consumes only persisted candidate rows, freshly revalidates
             # them, and can enqueue only body-free reconciliation commands.
-            # Physical artifact cleanup remains owned by the retention sweeper
-            # and its hold/reference-locked lifecycle jobs.
+            # Physical artifact cleanup has its own opt-in scheduler above;
+            # both lanes still execute only through hold/reference-locked
+            # lifecycle jobs, never through repair planning.
             repair_planning_enabled = RepairPlanningLoopEnv.env_bool(
                 RepairPlanningLoopEnv.ENABLED, default=False
             )
@@ -353,6 +402,8 @@ class RuntimeWorkerEntrypoint:
                 poll_interval_seconds=settings.execution.worker_poll_interval_seconds,
             )
         finally:
+            if artifact_cleanup_execution_loop is not None:
+                await artifact_cleanup_execution_loop.stop()
             if audit_export_verification_loop is not None:
                 await audit_export_verification_loop.stop()
             if repair_planning_loop is not None:

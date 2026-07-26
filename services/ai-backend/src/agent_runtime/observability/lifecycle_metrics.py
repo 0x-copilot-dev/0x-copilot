@@ -6,6 +6,7 @@ the lifecycle seams that exist today:
 
 * D10/D11 retention planning and retention-sweeper failures;
 * D12 repair/reconciliation planning backlog snapshots;
+* opt-in physical artifact-cleanup execution;
 * D7 receipt-export verification; and
 * concrete runtime authorization-denial boundaries.
 
@@ -16,9 +17,9 @@ they never become a new time series.  Metric publication is best-effort and
 cannot change a planner, verifier, request, or worker outcome.
 
 The repair and retention planner metrics are emitted only when their existing
-in-process planning APIs are invoked.  This module does *not* imply that a
-scheduled planner, durable backlog store, cleanup executor, or alerting
-backend has been deployed.
+in-process planning APIs are invoked. The physical-cleanup counter is emitted
+only by its explicit opt-in worker. This module does *not* imply that an
+alerting backend has been deployed.
 """
 
 from __future__ import annotations
@@ -51,6 +52,9 @@ class LifecycleMetricName:
         "surfaces_lifecycle_retention_execution_failures_total"
     )
     REPAIR_EXECUTION_TOTAL = "surfaces_lifecycle_repair_execution_total"
+    ARTIFACT_CLEANUP_EXECUTION_TOTAL = (
+        "surfaces_lifecycle_artifact_cleanup_execution_total"
+    )
     AUDIT_VERIFICATION_TOTAL = "surfaces_lifecycle_audit_verification_total"
     AUTHORIZATION_DENIALS_TOTAL = "surfaces_lifecycle_authorization_denials_total"
 
@@ -108,6 +112,19 @@ class RepairExecutionOutcomeLabel:
     WITHHELD = "withheld"
     UNSUPPORTED = "unsupported"
     FAILED = "failed"
+
+
+class ArtifactCleanupExecutionOutcomeLabel:
+    """Closed outcomes for one physical artifact-cleanup tenant pass."""
+
+    PURGED = "purged"
+    QUARANTINED = "quarantined"
+    REAPED = "reaped"
+    RESTORED = "restored"
+    WITHHELD = "withheld"
+    ALREADY_CLEAN = "already_clean"
+    FAILED = "failed"
+    AUDIT_FAILED = "audit_failed"
 
 
 class AuditVerificationFormatLabel:
@@ -230,6 +247,18 @@ _REPAIR_EXECUTION_OUTCOMES: Final[frozenset[str]] = frozenset(
         RepairExecutionOutcomeLabel.FAILED,
     }
 )
+_ARTIFACT_CLEANUP_EXECUTION_OUTCOMES: Final[frozenset[str]] = frozenset(
+    {
+        ArtifactCleanupExecutionOutcomeLabel.PURGED,
+        ArtifactCleanupExecutionOutcomeLabel.QUARANTINED,
+        ArtifactCleanupExecutionOutcomeLabel.REAPED,
+        ArtifactCleanupExecutionOutcomeLabel.RESTORED,
+        ArtifactCleanupExecutionOutcomeLabel.WITHHELD,
+        ArtifactCleanupExecutionOutcomeLabel.ALREADY_CLEAN,
+        ArtifactCleanupExecutionOutcomeLabel.FAILED,
+        ArtifactCleanupExecutionOutcomeLabel.AUDIT_FAILED,
+    }
+)
 _AUDIT_FORMATS: Final[frozenset[str]] = frozenset(
     {
         AuditVerificationFormatLabel.RECEIPT_V1,
@@ -307,6 +336,16 @@ LIFECYCLE_METRIC_REGISTRY: Final[tuple[LifecycleMetricDefinition, ...]] = (
         ),
     ),
     LifecycleMetricDefinition(
+        name=LifecycleMetricName.ARTIFACT_CLEANUP_EXECUTION_TOTAL,
+        instrument="counter",
+        labels=(
+            (
+                "outcome",
+                tuple(sorted((*_ARTIFACT_CLEANUP_EXECUTION_OUTCOMES, _OTHER))),
+            ),
+        ),
+    ),
+    LifecycleMetricDefinition(
         name=LifecycleMetricName.AUDIT_VERIFICATION_TOTAL,
         instrument="counter",
         labels=(
@@ -374,6 +413,7 @@ class LifecycleOperationalMetrics:
         self._retention_lag_seconds: Any | None = None
         self._retention_execution_failures_total: Any | None = None
         self._repair_execution_total: Any | None = None
+        self._artifact_cleanup_execution_total: Any | None = None
         self._audit_verification_total: Any | None = None
         self._authorization_denials_total: Any | None = None
         self._reconcile_backlog = {
@@ -623,6 +663,32 @@ class LifecycleOperationalMetrics:
                 "lifecycle_metrics.repair_execution.record_failed", exc_info=True
             )
 
+    def record_artifact_cleanup_execution(self, *, outcome: str) -> None:
+        """Count a redacted physical-cleanup result without tenant labels."""
+
+        if self._artifact_cleanup_execution_total is None:
+            self._artifact_cleanup_execution_total = self._counter(
+                LifecycleMetricName.ARTIFACT_CLEANUP_EXECUTION_TOTAL
+            )
+        if self._artifact_cleanup_execution_total is None:
+            return
+        try:
+            self._artifact_cleanup_execution_total.add(
+                1,
+                {
+                    "outcome": self._closed(
+                        outcome,
+                        _ARTIFACT_CLEANUP_EXECUTION_OUTCOMES,
+                        _OTHER,
+                    )
+                },
+            )
+        except Exception:
+            logger.debug(
+                "lifecycle_metrics.artifact_cleanup.record_failed",
+                exc_info=True,
+            )
+
     def record_audit_verification(self, *, format: str, succeeded: bool) -> None:
         """Count receipt verification attempts and failures with a closed format label."""
 
@@ -708,6 +774,7 @@ def reset_lifecycle_operational_metrics_for_tests() -> None:
 
 __all__ = (
     "AuditVerificationFormatLabel",
+    "ArtifactCleanupExecutionOutcomeLabel",
     "AuthorizationBoundaryLabel",
     "AuthorizationDenyReasonLabel",
     "AuthorizationEnforcementLabel",

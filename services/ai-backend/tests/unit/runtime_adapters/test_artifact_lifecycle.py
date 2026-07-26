@@ -9,7 +9,12 @@ import pytest
 
 from agent_runtime.artifacts.contracts import ArtifactScope
 from agent_runtime.artifacts.errors import ArtifactBlobUnavailableError
-from agent_runtime.persistence.records import RetentionKind
+from agent_runtime.persistence.records import (
+    LegalHoldReasonCode,
+    LegalHoldRecord,
+    LegalHoldScope,
+    RetentionKind,
+)
 from agent_runtime.settings import RuntimeSettings
 from copilot_service_contracts.deployment_profile import (
     ENV_DEPLOYMENT_PROFILE,
@@ -172,6 +177,36 @@ _ORG_B = _ORG_A_CONV_A.model_copy(
         "trace_id": "lifecycle_trace_org_b",
     }
 )
+
+
+async def _create_late_hold(store, *, scope: ArtifactScope, hold_id: str) -> None:
+    """Create a real runtime hold after artifact metadata has been purged."""
+
+    hold = LegalHoldRecord(
+        id=hold_id,
+        org_id=scope.org_id,
+        scope=LegalHoldScope.CONVERSATION,
+        resource_id=scope.conversation_id,
+        subject_user_id=scope.user_id,
+        reason_code=LegalHoldReasonCode.LEGAL_REQUEST,
+        created_by_user_id="cleanup_retention_admin",
+        create_idempotency_key=f"cleanup-hold-{hold_id}",
+        create_request_digest=digest(hold_id.encode()),
+    )
+    await store.create_legal_hold(
+        record=hold,
+        audit_event={
+            "org_id": scope.org_id,
+            "user_id": "cleanup_retention_admin",
+            "actor_type": "user",
+            "action": "legal_hold.created",
+            "resource_type": "legal_hold",
+            "resource_id": hold.id,
+            "outcome": "success",
+            "metadata": {"scope": "conversation"},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
 
 
 class TestArtifactLifecycleJobs:
@@ -671,6 +706,257 @@ class TestConfiguredArtifactLifecycle:
         )
         assert final_inventory.gc_candidate_rows == 0
         assert final_inventory.quarantined_digest_rows == 0
+
+    async def test_physical_cleanup_withholds_a_hold_added_after_planning(
+        self,
+        configured_runtime_ports,
+    ) -> None:
+        """A post-purge legal hold wins before the physical reaper unlinks."""
+
+        ports = configured_runtime_ports
+        body = b"cleanup-late-hold-body"
+        now = datetime.now(timezone.utc) + timedelta(minutes=5)
+        await _seed(
+            ports.artifact_blob_store,
+            ports.artifact_metadata_store,
+            31,
+            body,
+            _ORG_A_CONV_A,
+            created_at=now - timedelta(days=41),
+        )
+        await ports.artifact_lifecycle_jobs.on_conversation_deleted(
+            org_id=_ORG_A_CONV_A.org_id,
+            user_id=_ORG_A_CONV_A.user_id,
+            conversation_id=_ORG_A_CONV_A.conversation_id,
+            deleted_at=now - timedelta(days=40),
+        )
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(days=1),
+            limit=10,
+        )
+
+        planned = await ports.persistence.execute_artifact_cleanup(
+            org_id=_ORG_A_CONV_A.org_id,
+            now=now,
+            limit=10,
+        )
+        assert planned.purged_artifacts == 1
+        assert planned.quarantined_blobs == 1
+        assert planned.reaped_blobs == 0
+        with pytest.raises(ArtifactBlobUnavailableError):
+            await ports.artifact_blob_store.stat(digest(body))
+
+        # This uses the runtime legal-hold control plane, not an artifact
+        # reference shortcut.  The artifact/revision rows are already gone,
+        # so only the new durable candidate scope can make this hold visible.
+        await _create_late_hold(
+            ports.persistence,
+            scope=_ORG_A_CONV_A,
+            hold_id="lh_cleanup_late_hold",
+        )
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(0),
+            limit=10,
+        )
+        withheld = await ports.persistence.execute_artifact_cleanup(
+            org_id=_ORG_A_CONV_A.org_id,
+            now=now,
+            limit=10,
+        )
+
+        assert withheld.reaped_blobs == 0
+        assert withheld.withheld_blobs == 1
+        inventory = await ports.artifact_metadata_store.deletion_inventory(
+            scope=ArtifactRetentionScope(org_id=_ORG_A_CONV_A.org_id)
+        )
+        assert inventory.gc_candidate_rows == 1
+        assert inventory.quarantined_digest_rows == 1
+
+    async def test_physical_cleanup_cancels_a_candidate_when_referenced_again(
+        self,
+        configured_runtime_ports,
+    ) -> None:
+        """A post-plan reference restores bytes and blocks a redelivery."""
+
+        ports = configured_runtime_ports
+        body = b"cleanup-rereference-body"
+        now = datetime.now(timezone.utc) + timedelta(minutes=5)
+        await _seed(
+            ports.artifact_blob_store,
+            ports.artifact_metadata_store,
+            32,
+            body,
+            _ORG_A_CONV_A,
+            created_at=now - timedelta(days=41),
+        )
+        await ports.artifact_lifecycle_jobs.on_conversation_deleted(
+            org_id=_ORG_A_CONV_A.org_id,
+            user_id=_ORG_A_CONV_A.user_id,
+            conversation_id=_ORG_A_CONV_A.conversation_id,
+            deleted_at=now - timedelta(days=40),
+        )
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(days=1),
+            limit=10,
+        )
+        planned = await ports.persistence.execute_artifact_cleanup(
+            org_id=_ORG_A_CONV_A.org_id,
+            now=now,
+            limit=10,
+        )
+        assert planned.quarantined_blobs == 1
+
+        await ports.artifact_reference_provider.acquire(
+            ArtifactReferenceEdge(
+                org_id=_ORG_A_CONV_A.org_id,
+                edge_id="receipt-rereferences-cleanup-candidate",
+                user_id=_ORG_A_CONV_A.user_id,
+                blob_key=digest(body),
+                reference_kind=ArtifactReferenceKind.RECEIPT,
+                reference_id="receipt:cleanup-rereference",
+                created_at=now,
+            )
+        )
+        assert (
+            await _read(await ports.artifact_blob_store.open_stream(digest(body)))
+            == body
+        )
+
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(0),
+            limit=10,
+        )
+        redelivery = await ports.persistence.execute_artifact_cleanup(
+            org_id=_ORG_A_CONV_A.org_id,
+            now=now,
+            limit=10,
+        )
+        assert redelivery.reaped_blobs == 0
+        inventory = await ports.artifact_metadata_store.deletion_inventory(
+            scope=ArtifactRetentionScope(org_id=_ORG_A_CONV_A.org_id)
+        )
+        # Candidate provenance remains durable across a temporary reference;
+        # the live edge wins every revalidation.  If that edge is later
+        # released, the original retention policy can evaluate it again.
+        assert inventory.gc_candidate_rows == 1
+        assert inventory.quarantined_digest_rows == 0
+
+    async def test_physical_cleanup_duplicate_delivery_reaps_once(
+        self,
+        configured_runtime_ports,
+    ) -> None:
+        """The durable candidate/quarantine fold makes duplicate jobs inert."""
+
+        ports = configured_runtime_ports
+        body = b"cleanup-duplicate-delivery"
+        now = datetime.now(timezone.utc) + timedelta(minutes=5)
+        await _seed(
+            ports.artifact_blob_store,
+            ports.artifact_metadata_store,
+            33,
+            body,
+            _ORG_A_CONV_A,
+            created_at=now - timedelta(days=41),
+        )
+        await ports.artifact_lifecycle_jobs.on_conversation_deleted(
+            org_id=_ORG_A_CONV_A.org_id,
+            user_id=_ORG_A_CONV_A.user_id,
+            conversation_id=_ORG_A_CONV_A.conversation_id,
+            deleted_at=now - timedelta(days=40),
+        )
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(0),
+            limit=10,
+        )
+
+        first = await ports.persistence.execute_artifact_cleanup(
+            org_id=_ORG_A_CONV_A.org_id,
+            now=now,
+            limit=10,
+        )
+        second = await ports.persistence.execute_artifact_cleanup(
+            org_id=_ORG_A_CONV_A.org_id,
+            now=now,
+            limit=10,
+        )
+
+        assert first.reaped_blobs == 1
+        assert second.reaped_blobs == 0
+        assert second.purged_artifacts == 0
+        with pytest.raises(ArtifactBlobUnavailableError):
+            await ports.artifact_blob_store.stat(digest(body))
+
+    async def test_physical_cleanup_reaps_only_the_requested_tenant(
+        self,
+        configured_runtime_ports,
+    ) -> None:
+        """One tenant's executor pass cannot advance another's quarantine."""
+
+        ports = configured_runtime_ports
+        body_a = b"cleanup-tenant-a"
+        body_b = b"cleanup-tenant-b"
+        now = datetime.now(timezone.utc) + timedelta(minutes=5)
+        for ordinal, body, scope in (
+            (34, body_a, _ORG_A_CONV_A),
+            (35, body_b, _ORG_B),
+        ):
+            await _seed(
+                ports.artifact_blob_store,
+                ports.artifact_metadata_store,
+                ordinal,
+                body,
+                scope,
+                created_at=now - timedelta(days=41),
+            )
+            await ports.artifact_lifecycle_jobs.on_conversation_deleted(
+                org_id=scope.org_id,
+                user_id=scope.user_id,
+                conversation_id=scope.conversation_id,
+                deleted_at=now - timedelta(days=40),
+            )
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(days=1),
+            limit=10,
+        )
+        for org_id in (_ORG_A_CONV_A.org_id, _ORG_B.org_id):
+            planned = await ports.persistence.execute_artifact_cleanup(
+                org_id=org_id,
+                now=now,
+                limit=10,
+            )
+            assert planned.quarantined_blobs == 1
+
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(0),
+            limit=10,
+        )
+        reaped_a = await ports.persistence.execute_artifact_cleanup(
+            org_id=_ORG_A_CONV_A.org_id,
+            now=now,
+            limit=10,
+        )
+
+        assert reaped_a.reaped_blobs == 1
+        inventory_b = await ports.artifact_metadata_store.deletion_inventory(
+            scope=ArtifactRetentionScope(org_id=_ORG_B.org_id)
+        )
+        assert inventory_b.quarantined_digest_rows == 1
+        with pytest.raises(ArtifactBlobUnavailableError):
+            await ports.artifact_blob_store.stat(digest(body_b))
 
     async def test_rollout_off_has_no_artifact_org_or_org_delete_hook(self) -> None:
         store = InMemoryRuntimeApiStore()
