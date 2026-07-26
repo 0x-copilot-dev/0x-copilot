@@ -294,6 +294,7 @@ class RuntimeWorker:
                 workspace_sessions=workspace_host_sessions,  # type: ignore[arg-type]
                 workspace_overlay_store=self.workspace_overlay_store,  # type: ignore[arg-type]
                 browser_bridge=browser_bridge,
+                artifact_service=artifact_service,  # type: ignore[arg-type]
             )
             self.effect_commit_handler = RuntimeEffectCommitHandler(
                 persistence=self.persistence,

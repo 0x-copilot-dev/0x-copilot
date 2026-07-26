@@ -696,9 +696,16 @@ class McpOperationAdapter(OperationAdapter):
 
 @dataclass(frozen=True)
 class McpOperationArgumentMaterialResolver:
-    """Resolve only immutable canonical MCP arguments for ``McpEffectExecutor``."""
+    """Resolve immutable MCP material for ``McpEffectExecutor``.
+
+    Canonical operation arguments remain the default.  Additive resolvers can
+    reconstruct material from another immutable proposal kind (for example an
+    Artifact revision) without changing the A5 coordinator or introducing a
+    separate connector path.
+    """
 
     arguments: object
+    additional_material_resolvers: tuple[object, ...] = ()
 
     async def resolve(self, request: object) -> object | None:
         """Return validated material for the worker-owned MCP executor.
@@ -708,6 +715,14 @@ class McpOperationArgumentMaterialResolver:
         contract structurally; neither side imports across a deployable-service
         boundary.
         """
+
+        for resolver in self.additional_material_resolvers:
+            resolve = getattr(resolver, "resolve", None)
+            if resolve is None:
+                continue
+            material = await resolve(request)
+            if material is not None:
+                return material
 
         proposal_content_ref = getattr(request, "proposal_content_ref", None)
         proposal_digest = getattr(request, "proposal_digest", None)

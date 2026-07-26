@@ -835,6 +835,44 @@ class RuntimeApiAppFactory:
             auth_gate=cls._draft_auth_gate(app),
             event_producer=event_producer,
             write_stager=cls._default_write_stager(app),
+            artifact_draft_send_stager=cls._default_artifact_draft_send_stager(app),
+        )
+
+    @classmethod
+    def _default_artifact_draft_send_stager(cls, app):  # type: ignore[no-untyped-def]
+        """Compose F-006 only for the explicit Artifact-drafts cohort.
+
+        The stager is intentionally absent outside that cohort.  That retains
+        the legacy DraftRecord + WriteStager behaviour byte-for-byte and lets
+        a read-through imported row choose the Artifact path without changing
+        historical rows that have not yet migrated.
+        """
+
+        from agent_runtime.api.artifact_draft_send import ArtifactDraftSendStager
+        from agent_runtime.api.events import RuntimeEventProducer
+
+        settings = getattr(app.state, "runtime_settings", None)
+        ports = getattr(app.state, "runtime_ports", None)
+        artifacts = getattr(app.state, "artifact_service", None)
+        if (
+            settings is None
+            or not settings.execution.artifact_drafts_v2
+            or ports is None
+            or artifacts is None
+            or getattr(ports, "queue", None) is None
+            or getattr(ports, "artifact_blob_store", None) is None
+            or getattr(ports, "artifact_reference_provider", None) is None
+        ):
+            return None
+        return ArtifactDraftSendStager(
+            artifacts=artifacts,
+            event_producer=RuntimeEventProducer(
+                persistence=ports.persistence,
+                event_store=ports.event_store,
+            ),
+            queue=ports.queue,
+            blobs=ports.artifact_blob_store,
+            references=ports.artifact_reference_provider,
         )
 
     @classmethod

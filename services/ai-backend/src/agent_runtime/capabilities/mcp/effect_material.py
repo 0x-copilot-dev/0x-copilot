@@ -21,7 +21,15 @@ from agent_runtime.surfaces_v2.ledger_models import (
 
 
 class McpEffectMaterial(RuntimeContract):
-    """Canonical connector arguments bound to one immutable proposal revision."""
+    """Canonical connector arguments bound to one immutable proposal revision.
+
+    ``proposal_digest`` is normally the digest of ``arguments`` for operation
+    argument proposals.  Artifact-backed proposals deliberately differ: their
+    proposal digest names the immutable Artifact revision, while
+    ``arguments_digest`` proves the connector argument object reconstructed from
+    that revision.  Keeping those two facts distinct prevents a transport-only
+    body copy from becoming the approval truth.
+    """
 
     target_connector: str = Field(min_length=1, max_length=255)
     target_op: str = Field(min_length=1, max_length=255)
@@ -31,6 +39,9 @@ class McpEffectMaterial(RuntimeContract):
     proposal_ref: str = Field(min_length=1, max_length=2048)
     proposal_content_ref: str = Field(min_length=1, max_length=2048)
     proposal_digest: Sha256Hex
+    # Optional for wire/backward compatibility with existing canonical-args
+    # material, where the proposal itself is the argument object.
+    arguments_digest: Sha256Hex | None = None
 
     @field_validator("target_connector", "target_op")
     @classmethod
@@ -50,8 +61,9 @@ class McpEffectMaterial(RuntimeContract):
             digest = canonical_json_sha256(self.arguments)
         except CanonicalJsonError as exc:
             raise ValueError("canonical MCP arguments are invalid") from exc
-        if digest != self.proposal_digest:
-            raise ValueError("canonical MCP arguments do not match proposal digest")
+        expected = self.arguments_digest or self.proposal_digest
+        if digest != expected:
+            raise ValueError("canonical MCP arguments do not match their digest")
         return self
 
 

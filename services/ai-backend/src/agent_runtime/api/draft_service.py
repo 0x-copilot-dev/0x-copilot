@@ -68,6 +68,7 @@ class DraftService:
         auth_gate: CapabilityAuthGate | None = None,
         event_producer: object | None = None,
         write_stager: object | None = None,
+        artifact_draft_send_stager: object | None = None,
     ) -> None:
         self._store = store
         self._persistence = persistence
@@ -78,6 +79,10 @@ class DraftService:
         # instead of the v1 approval row. ``None`` ⇒ the v1 path regardless of
         # the flag (mirrors the ``event_producer is None`` degrade-open pattern).
         self._write_stager = write_stager
+        # B1/F-006: optionally stages an Artifact revision through the universal
+        # effect path. It returns ``None`` for an unimported legacy row, which
+        # preserves the existing WriteStager migration fallback below.
+        self._artifact_draft_send_stager = artifact_draft_send_stager
 
     # -- read paths ----------------------------------------------------------
 
@@ -166,7 +171,22 @@ class DraftService:
             org_id=org_id, conversation_id=latest.conversation_id, draft=latest
         )
 
-        # 3. Insert the next draft version (status=send_pending_approval).
+        # 3. Prefer the canonical Artifact revision when the B1 cohort has
+        # imported this draft. This happens before a copied ``DraftRecord`` is
+        # created: approval/execution must bind the Artifact ref + digest, not
+        # mutable row bytes. ``None`` signals a legacy row and falls through.
+        if self._artifact_draft_send_stager is not None and SurfacesV2Flag.enabled():
+            artifact_response = await self._stage_send_v2(
+                org_id=org_id,
+                user_id=user_id,
+                host_run_id=host_run_id,
+                draft=latest,
+                request=request,
+            )
+            if artifact_response is not None:
+                return artifact_response
+
+        # 4. Insert the next draft version (status=send_pending_approval).
         next_record = self._next_version(
             previous=latest,
             run_id=host_run_id,
@@ -178,13 +198,15 @@ class DraftService:
         )
         persisted = await self._store.insert_version(next_record)
 
-        # 3b. PRD-D1 branch — when v2 staging is wired AND the flag is on, the
+        # 4b. Legacy PRD-D1 branch — retained only for a row that has not yet
+        # acquired a canonical Artifact revision. New Artifact drafts never
+        # reach this compatibility bridge.
         # write stages on the ledger (write.staged + revision.added rev 1); no
         # v1 approval row, no APPROVAL_REQUESTED event. Nothing executes here.
         # The v1 path (steps 4-6) is byte-identical when the flag is off or the
         # stager is unwired.
         if self._write_stager is not None and SurfacesV2Flag.enabled():
-            return await self._stage_send_v2(
+            return await self._stage_legacy_send_v2(
                 org_id=org_id,
                 user_id=user_id,
                 host_run_id=host_run_id,
@@ -276,14 +298,12 @@ class DraftService:
         host_run_id: str,
         draft: DraftRecord,
         request: DraftSendRequest,
-    ) -> DraftSendResponse:
-        """Stage a v2 write instead of the v1 approval row (flag on + stager wired).
+    ) -> DraftSendResponse | None:
+        """Stage an Artifact-backed send through the standard effect ledger.
 
-        Resolves the host run, delegates to ``WriteStager.stage`` (emits
-        write.staged + revision.added rev 1), keeps the existing
-        ``draft.send.proposed`` audit, and returns the ``stage_id`` so the FE can
-        bind the staged-draft surface. NOTHING executes: no approval row, no
-        APPROVAL_REQUESTED event, no connector call.
+        The injected stager resolves the scope-bound ``draft://`` Artifact
+        binding. ``None`` is the deliberately narrow legacy-migration signal;
+        it is not an approval or execution failure.
         """
 
         run = await self._get_run(org_id=org_id, run_id=host_run_id)
@@ -294,14 +314,66 @@ class DraftService:
                 http_status=status.HTTP_409_CONFLICT,
                 details={"error_code": "no_host_run"},
             )
-        target_op = self._target_op_for(request)
+        state = await self._artifact_draft_send_stager.stage(  # type: ignore[union-attr]
+            run=run,
+            org_id=org_id,
+            user_id=user_id,
+            draft_id=draft.draft_id,
+            target_connector=request.target_connector,
+            target_op=self._target_op_for(request),
+            target_metadata=dict(request.target_metadata or {}),
+        )
+        if state is None:
+            return None
+        await self._audit(
+            org_id=org_id,
+            user_id=user_id,
+            event_type=_AUDIT_DRAFT_SEND_PROPOSED,
+            record=draft,
+            extra_metadata={
+                "stage_id": state.stage_id,
+                "host_run_id": host_run_id,
+                "target_connector": request.target_connector,
+                "artifact_content_ref": state.current_revision.proposal_content_ref,
+                "artifact_content_digest": state.current_revision.proposal_digest,
+                "effect_target_ref": state.target.target_ref,
+                "effect_target_digest": state.target_digest,
+                "artifact_draft_effects_v2": True,
+            },
+        )
+        return DraftSendResponse(
+            draft=_to_draft(draft),
+            approval_id=None,
+            run_id=host_run_id,
+            stage_id=state.stage_id,
+        )
+
+    async def _stage_legacy_send_v2(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        host_run_id: str,
+        draft: DraftRecord,
+        request: DraftSendRequest,
+    ) -> DraftSendResponse:
+        """Stage an unmigrated legacy row through the historical v2 bridge."""
+
+        run = await self._get_run(org_id=org_id, run_id=host_run_id)
+        if run is None:
+            raise RuntimeApiError(
+                code=RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                safe_message=_NO_HOST_RUN,
+                http_status=status.HTTP_409_CONFLICT,
+                details={"error_code": "no_host_run"},
+            )
         state = await self._write_stager.stage(  # type: ignore[union-attr]
             run=run,
             org_id=org_id,
             run_id=host_run_id,
             draft=draft,
             target_connector=request.target_connector,
-            target_op=target_op,
+            target_op=self._target_op_for(request),
         )
         await self._audit(
             org_id=org_id,
@@ -314,6 +386,7 @@ class DraftService:
                 "host_run_id": host_run_id,
                 "target_connector": request.target_connector,
                 "surfaces_v2": True,
+                "legacy_draft_migration": True,
             },
         )
         return DraftSendResponse(
