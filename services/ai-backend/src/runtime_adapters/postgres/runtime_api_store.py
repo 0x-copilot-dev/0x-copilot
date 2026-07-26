@@ -95,6 +95,7 @@ from runtime_adapters.base import (
     _Fields,
 )
 from runtime_adapters.artifact_lifecycle import (
+    ArtifactCleanupExecutionFence,
     ArtifactLifecycleJobs,
     ArtifactPhysicalCleanupOutcome,
 )
@@ -4853,6 +4854,7 @@ class PostgresRuntimeApiStore:
         org_id: str,
         now: datetime,
         limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactPhysicalCleanupOutcome:
         """Run the physical lifecycle only through the trusted tenant seam.
 
@@ -4869,6 +4871,7 @@ class PostgresRuntimeApiStore:
             now=now,
             limit=limit,
             protected_conversation_ids=await self._held_conversation_ids(org_id=org_id),
+            execution_fence=execution_fence,
         )
         return ArtifactPhysicalCleanupOutcome.from_result(
             org_id=org_id,

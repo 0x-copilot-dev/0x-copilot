@@ -11,6 +11,7 @@ import logging
 import pytest
 
 from runtime_adapters.artifact_lifecycle import ArtifactPhysicalCleanupOutcome
+from runtime_adapters.artifact_lifecycle import ArtifactCleanupExecutionFence
 from runtime_adapters.file.artifact_cleanup_schedule_store import (
     FileArtifactCleanupScheduleStore,
 )
@@ -58,7 +59,9 @@ class _Persistence:
         org_id: str,
         now: datetime,
         limit: int,
+        execution_fence: object | None = None,
     ) -> ArtifactPhysicalCleanupOutcome:
+        del execution_fence
         assert now.tzinfo is not None
         assert limit == 7
         self.calls.append(org_id)
@@ -91,8 +94,9 @@ class _SlowPersistence:
         org_id: str,
         now: datetime,
         limit: int,
+        execution_fence: object | None = None,
     ) -> ArtifactPhysicalCleanupOutcome:
-        del now, limit
+        del now, limit, execution_fence
         self.calls.append(org_id)
         self.started.set()
         await self.release.wait()
@@ -105,6 +109,66 @@ class _SlowPersistence:
         record: dict[str, object],
     ) -> None:
         del event_type, record
+
+
+@dataclass
+class _FenceAwareStallingPersistence:
+    started: asyncio.Event
+    release: asyncio.Event
+    destructive_calls: list[str] = field(default_factory=list)
+
+    async def list_retention_orgs(self) -> Sequence[str]:
+        return ("org_a",)
+
+    async def execute_artifact_cleanup(
+        self,
+        *,
+        org_id: str,
+        now: datetime,
+        limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
+    ) -> ArtifactPhysicalCleanupOutcome:
+        del now, limit
+        assert execution_fence is not None
+        await execution_fence.assert_active()
+        self.destructive_calls.append(org_id)
+        if len(self.destructive_calls) == 1:
+            self.started.set()
+            await self.release.wait()
+            # The generation expired while this lifecycle pass was stalled.
+            # It must not transition through another destructive phase after
+            # a successor has claimed the global scheduler lease.
+            await execution_fence.assert_active()
+        return _outcome(org_id)
+
+    async def write_audit_log(
+        self,
+        *,
+        event_type: str,
+        record: dict[str, object],
+    ) -> None:
+        del event_type, record
+
+
+@dataclass
+class _MutableClock:
+    value: datetime
+
+    def __call__(self) -> datetime:
+        return self.value
+
+
+class _FirstHeartbeatStopsSchedule(InMemoryArtifactCleanupScheduleStore):
+    """Model a paused worker whose lease heartbeat no longer reaches storage."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.stalled_owner: str | None = None
+
+    async def renew_lease(self, **kwargs):  # noqa: ANN003
+        if kwargs["owner_id"] == self.stalled_owner:
+            return None
+        return await super().renew_lease(**kwargs)
 
 
 def _outcome(org_id: str, **changes: int) -> ArtifactPhysicalCleanupOutcome:
@@ -321,6 +385,7 @@ async def test_concurrent_runner_cannot_take_or_advance_another_lease() -> None:
     await schedule.release_lease(
         owner_id=first._owner_id,
         fence_token=lease.fence_token,  # noqa: SLF001
+        now=NOW,
     )
 
 
@@ -358,6 +423,56 @@ async def test_renewing_lease_prevents_long_running_cleanup_overlap() -> None:
     persistence.release.set()
     first_result = await asyncio.wait_for(first_task, timeout=1)
     assert first_result.tenants_scanned == 1
+
+
+async def test_stalled_tenant_pass_blocks_successor_destructive_cleanup_after_expiry() -> (
+    None
+):
+    """A global lease takeover never overlaps a paused tenant lifecycle pass."""
+
+    clock = _MutableClock(NOW)
+    schedule = _FirstHeartbeatStopsSchedule()
+    persistence = _FenceAwareStallingPersistence(
+        started=asyncio.Event(), release=asyncio.Event()
+    )
+    first = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        lease_seconds=0.05,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+        clock=clock,
+    )
+    second = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        lease_seconds=0.05,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+        clock=clock,
+    )
+
+    first_task = asyncio.create_task(first.run_once())
+    await asyncio.wait_for(persistence.started.wait(), timeout=1)
+    schedule.stalled_owner = first._owner_id  # noqa: SLF001 - adversarial probe
+    clock.value = NOW + timedelta(seconds=1)
+    await asyncio.sleep(0.1)
+
+    # B owns the new scheduler generation but finds A's durable tenant lock
+    # busy, so it performs no concurrent destructive lifecycle call.
+    blocked = await second.run_once()
+    assert blocked.tenants_scanned == 0
+    assert persistence.destructive_calls == ["org_a"]
+
+    persistence.release.set()
+    first_result = await asyncio.wait_for(first_task, timeout=1)
+    assert first_result.failures == 1
+    # Once A exits, the successor can safely perform the later retry.
+    resumed = await second.run_once()
+    assert resumed.tenants_scanned == 1
+    assert persistence.destructive_calls == ["org_a", "org_a"]
 
 
 async def test_restart_uses_durable_cursor_contract_after_prior_success() -> None:

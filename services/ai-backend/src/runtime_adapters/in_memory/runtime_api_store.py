@@ -61,6 +61,7 @@ from runtime_adapters.base import (
 )
 from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
 from runtime_adapters.artifact_lifecycle import (
+    ArtifactCleanupExecutionFence,
     ArtifactLifecycleJobs,
     ArtifactPhysicalCleanupOutcome,
 )
@@ -1651,6 +1652,7 @@ class InMemoryRuntimeApiStore:
         org_id: str,
         now: datetime,
         limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactPhysicalCleanupOutcome:
         """Run one trusted tenant cleanup under the same legal-hold fence.
 
@@ -1674,6 +1676,7 @@ class InMemoryRuntimeApiStore:
                     if conversation.org_id == org_id
                     and self._conversation_is_held(conversation)
                 ),
+                execution_fence=execution_fence,
             )
         return ArtifactPhysicalCleanupOutcome.from_result(
             org_id=org_id,

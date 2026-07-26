@@ -4,11 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
+import hashlib
+from typing import Any
+from uuid import uuid4
+
+import psycopg
 
 from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupDeferredTenant,
     ArtifactCleanupLease,
     ArtifactCleanupScheduleStateError,
+    ArtifactCleanupTenantExecutionLease,
 )
 
 
@@ -23,6 +29,9 @@ class PostgresArtifactCleanupScheduleStore:
 
     def __init__(self, *, store: object) -> None:
         self._store = store
+        self._tenant_execution_handles: dict[
+            str, tuple[ArtifactCleanupTenantExecutionLease, Any]
+        ] = {}
 
     async def load_cursor(self) -> str | None:
         try:
@@ -288,7 +297,10 @@ class PostgresArtifactCleanupScheduleStore:
         except Exception as exc:  # pragma: no cover - database driver failure
             raise ArtifactCleanupScheduleStateError() from exc
 
-    async def release_lease(self, *, owner_id: str, fence_token: int) -> None:
+    async def release_lease(
+        self, *, owner_id: str, fence_token: int, now: datetime
+    ) -> None:
+        del now  # PostgreSQL release is also governed by clock_timestamp().
         _validate_id(owner_id)
         _validate_fence(fence_token)
         try:
@@ -301,10 +313,119 @@ class PostgresArtifactCleanupScheduleStore:
                      WHERE source = %s
                        AND lease_owner_id = %s
                        AND lease_fence_token = %s
+                       AND lease_expires_at > clock_timestamp()
                     """,
                     (_SOURCE, owner_id, fence_token),
                 )
         except Exception as exc:  # pragma: no cover - best-effort release
+            raise ArtifactCleanupScheduleStateError() from exc
+
+    async def acquire_tenant_execution(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        org_id: str,
+        now: datetime,
+    ) -> ArtifactCleanupTenantExecutionLease | None:
+        """Hold a server-owned tenant advisory lock across the lifecycle pass.
+
+        The connection is deliberately dedicated rather than borrowed from the
+        runtime pool: the pass itself uses that pool for its existing
+        transactional legal-hold/reference fences, so retaining a pool slot
+        here could deadlock a single-slot deployment. PostgreSQL releases this
+        session lock automatically if a stalled worker process dies.
+        """
+
+        del now  # PostgreSQL eligibility is always determined by DB time.
+        _validate_id(owner_id)
+        _validate_id(org_id)
+        _validate_fence(fence_token)
+        connection = await self._open_execution_connection()
+        key = _tenant_execution_advisory_lock_key(org_id)
+        try:
+            cursor = await connection.execute(
+                "SELECT pg_try_advisory_lock(%s) AS acquired", (key,)
+            )
+            row = await cursor.fetchone()
+            if not _row_bool(row, "acquired"):
+                await connection.close()
+                return None
+            if not await _global_fence_active(
+                connection,
+                owner_id=owner_id,
+                fence_token=fence_token,
+            ):
+                await connection.execute("SELECT pg_advisory_unlock(%s)", (key,))
+                await connection.close()
+                return None
+            execution = ArtifactCleanupTenantExecutionLease(
+                org_id=org_id,
+                owner_id=owner_id,
+                fence_token=fence_token,
+                execution_token=uuid4().hex,
+            )
+            self._tenant_execution_handles[execution.execution_token] = (
+                execution,
+                connection,
+            )
+            return execution
+        except Exception as exc:
+            await connection.close()
+            raise ArtifactCleanupScheduleStateError() from exc
+
+    async def validate_tenant_execution(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+    ) -> bool:
+        del now  # PostgreSQL eligibility is always determined by DB time.
+        handle = self._tenant_execution_handles.get(execution.execution_token)
+        if handle is None or handle[0] != execution:
+            return False
+        try:
+            return await _global_fence_active(
+                handle[1],
+                owner_id=execution.owner_id,
+                fence_token=execution.fence_token,
+            )
+        except Exception:
+            return False
+
+    async def release_tenant_execution(
+        self, *, execution: ArtifactCleanupTenantExecutionLease
+    ) -> None:
+        handle = self._tenant_execution_handles.get(execution.execution_token)
+        if handle is None or handle[0] != execution:
+            return
+        self._tenant_execution_handles.pop(execution.execution_token, None)
+        connection = handle[1]
+        try:
+            await connection.execute(
+                "SELECT pg_advisory_unlock(%s)",
+                (_tenant_execution_advisory_lock_key(execution.org_id),),
+            )
+        finally:
+            await connection.close()
+
+    async def _open_execution_connection(self) -> Any:
+        database_url = getattr(self._store, "database_url", None)
+        if not isinstance(database_url, str) or not database_url:
+            raise ArtifactCleanupScheduleStateError(
+                "Postgres cleanup execution fencing requires a database URL"
+            )
+        try:
+            connection = await psycopg.AsyncConnection.connect(
+                database_url,
+                autocommit=True,
+            )
+            await connection.execute(
+                "SELECT set_config('app.role', %s, false)",
+                (_WORKER_ROLE,),
+            )
+            return connection
+        except Exception as exc:  # pragma: no cover - database driver failure
             raise ArtifactCleanupScheduleStateError() from exc
 
 
@@ -336,6 +457,38 @@ async def _locked_state_row(conn: object) -> Mapping[str, object]:
     if row is None:
         raise ArtifactCleanupScheduleStateError()
     return row
+
+
+async def _global_fence_active(
+    conn: object, *, owner_id: str, fence_token: int
+) -> bool:
+    cursor = await conn.execute(
+        f"""
+        SELECT 1
+          FROM {_TABLE}
+         WHERE source = %s
+           AND lease_owner_id = %s
+           AND lease_fence_token = %s
+           AND lease_expires_at > clock_timestamp()
+        """,
+        (_SOURCE, owner_id, fence_token),
+    )
+    return await cursor.fetchone() is not None
+
+
+def _tenant_execution_advisory_lock_key(org_id: str) -> int:
+    raw = hashlib.sha256(
+        f"artifact-cleanup-execution:{_SOURCE}:{org_id}".encode("utf-8")
+    ).digest()[:8]
+    return int.from_bytes(raw, byteorder="big", signed=True)
+
+
+def _row_bool(row: object, key: str) -> bool:
+    if isinstance(row, Mapping):
+        return bool(row.get(key))
+    if isinstance(row, tuple) and row:
+        return bool(row[0])
+    return False
 
 
 def _row_lease_active(row: Mapping[str, object]) -> bool:

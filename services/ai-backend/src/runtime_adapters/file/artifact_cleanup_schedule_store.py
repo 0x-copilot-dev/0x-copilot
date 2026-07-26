@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 from contextlib import contextmanager
@@ -15,8 +16,13 @@ from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupDeferredTenant,
     ArtifactCleanupLease,
     ArtifactCleanupScheduleStateError,
+    ArtifactCleanupTenantExecutionLease,
 )
-from runtime_adapters.file._advisory_lock import acquire_exclusive, release_exclusive
+from runtime_adapters.file._advisory_lock import (
+    acquire_exclusive,
+    release_exclusive,
+    try_acquire_exclusive,
+)
 
 
 class FileArtifactCleanupScheduleStore:
@@ -40,6 +46,9 @@ class FileArtifactCleanupScheduleStore:
         self._path = self._dir / self._STATE_FILENAME
         self._lock_path = self._dir / self._LOCK_FILENAME
         self._lock = asyncio.Lock()
+        self._tenant_execution_handles: dict[
+            str, tuple[ArtifactCleanupTenantExecutionLease, int]
+        ] = {}
 
     async def load_cursor(self) -> str | None:
         async with self._lock:
@@ -197,19 +206,116 @@ class FileArtifactCleanupScheduleStore:
                 self._write(state)
                 return _lease_from_state(state)
 
-    async def release_lease(self, *, owner_id: str, fence_token: int) -> None:
+    async def release_lease(
+        self, *, owner_id: str, fence_token: int, now: datetime
+    ) -> None:
         _validate_id(owner_id)
+        _validate_time(now)
         async with self._lock:
             with self._exclusive_lock():
                 state = self._read()
-                if (
-                    state["lease_owner"] != owner_id
-                    or state["lease_fence_token"] != fence_token
+                if not _active_fence_matches(
+                    state=state,
+                    owner_id=owner_id,
+                    fence_token=fence_token,
+                    now=now,
                 ):
                     return
                 state["lease_owner"] = None
                 state["lease_expires_at"] = None
                 self._write(state)
+
+    async def acquire_tenant_execution(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        org_id: str,
+        now: datetime,
+    ) -> ArtifactCleanupTenantExecutionLease | None:
+        _validate_id(owner_id)
+        _validate_id(org_id)
+        _validate_time(now)
+        async with self._lock:
+            with self._exclusive_lock():
+                state = self._read()
+                if not _active_fence_matches(
+                    state=state,
+                    owner_id=owner_id,
+                    fence_token=fence_token,
+                    now=now,
+                ):
+                    return None
+            descriptor = os.open(
+                self._tenant_execution_lock_path(org_id),
+                os.O_CREAT | os.O_RDWR,
+                self._FILE_MODE,
+            )
+            try:
+                if not try_acquire_exclusive(descriptor):
+                    os.close(descriptor)
+                    return None
+                with self._exclusive_lock():
+                    state = self._read()
+                    if not _active_fence_matches(
+                        state=state,
+                        owner_id=owner_id,
+                        fence_token=fence_token,
+                        now=now,
+                    ):
+                        release_exclusive(descriptor)
+                        os.close(descriptor)
+                        return None
+                execution = ArtifactCleanupTenantExecutionLease(
+                    org_id=org_id,
+                    owner_id=owner_id,
+                    fence_token=fence_token,
+                    execution_token=uuid4().hex,
+                )
+                self._tenant_execution_handles[execution.execution_token] = (
+                    execution,
+                    descriptor,
+                )
+                return execution
+            except OSError as exc:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+                raise ArtifactCleanupScheduleStateError() from exc
+
+    async def validate_tenant_execution(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+    ) -> bool:
+        _validate_time(now)
+        async with self._lock:
+            handle = self._tenant_execution_handles.get(execution.execution_token)
+            if handle is None or handle[0] != execution:
+                return False
+            with self._exclusive_lock():
+                state = self._read()
+                return _active_fence_matches(
+                    state=state,
+                    owner_id=execution.owner_id,
+                    fence_token=execution.fence_token,
+                    now=now,
+                )
+
+    async def release_tenant_execution(
+        self, *, execution: ArtifactCleanupTenantExecutionLease
+    ) -> None:
+        async with self._lock:
+            handle = self._tenant_execution_handles.get(execution.execution_token)
+            if handle is None or handle[0] != execution:
+                return
+            self._tenant_execution_handles.pop(execution.execution_token, None)
+            try:
+                release_exclusive(handle[1])
+            finally:
+                os.close(handle[1])
 
     def _read(self) -> dict[str, Any]:
         if not self._path.exists():
@@ -337,6 +443,10 @@ class FileArtifactCleanupScheduleStore:
             pass
         finally:
             os.close(descriptor)
+
+    def _tenant_execution_lock_path(self, org_id: str) -> Path:
+        digest = hashlib.sha256(org_id.encode("utf-8")).hexdigest()
+        return self._dir / f".artifact-cleanup-tenant-{digest}.lock"
 
 
 def _empty_state() -> dict[str, Any]:

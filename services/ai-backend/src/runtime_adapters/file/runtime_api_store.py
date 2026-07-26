@@ -98,6 +98,7 @@ from agent_runtime.persistence.records import (
 from runtime_adapters.base import RuntimeAdapterHelpers, StatusTransition, _Fields
 from runtime_adapters._artifact_repository import ArtifactGcCandidateScope
 from runtime_adapters.artifact_lifecycle import (
+    ArtifactCleanupExecutionFence,
     ArtifactLifecycleJobs,
     ArtifactPhysicalCleanupOutcome,
 )
@@ -3770,6 +3771,7 @@ class FileRuntimeApiStore:
         org_id: str,
         now: datetime,
         limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactPhysicalCleanupOutcome:
         """Execute one bounded cleanup under the desktop legal-hold fence."""
 
@@ -3789,6 +3791,7 @@ class FileRuntimeApiStore:
                         and self._conversation_is_held(conversation)
                     )
                 ),
+                execution_fence=execution_fence,
             )
         return ArtifactPhysicalCleanupOutcome.from_result(
             org_id=org_id,

@@ -104,7 +104,9 @@ async def test_postgres_uses_db_time_and_fences_expiry_takeover(
     )
     assert await store.load_cursor() == "org_cleanup_a"
     await store.release_lease(
-        owner_id="cleanup_worker_two", fence_token=second.fence_token
+        owner_id="cleanup_worker_two",
+        fence_token=second.fence_token,
+        now=datetime.now(UTC),
     )
 
 
@@ -173,3 +175,66 @@ async def test_postgres_defer_is_bounded_persistent_and_cleared_on_completion(
         )
         is None
     )
+
+
+async def test_postgres_tenant_execution_lock_outlives_global_lease_expiry(
+    runtime_store: PostgresRuntimeApiStore,
+) -> None:
+    store = PostgresArtifactCleanupScheduleStore(store=runtime_store)
+    first = await store.acquire_lease(
+        owner_id="cleanup_worker_stalled",
+        now=datetime(1970, 1, 1, tzinfo=UTC),
+        duration_seconds=0.05,
+    )
+    assert first is not None
+    stalled = await store.acquire_tenant_execution(
+        owner_id="cleanup_worker_stalled",
+        fence_token=first.fence_token,
+        org_id="org_cleanup_stalled",
+        now=datetime(1970, 1, 1, tzinfo=UTC),
+    )
+    assert stalled is not None
+
+    await asyncio.sleep(0.08)
+    second = await store.acquire_lease(
+        owner_id="cleanup_worker_successor",
+        now=datetime(2099, 1, 1, tzinfo=UTC),
+        duration_seconds=30,
+    )
+    assert second is not None
+    assert not await store.validate_tenant_execution(
+        execution=stalled, now=datetime(2099, 1, 1, tzinfo=UTC)
+    )
+    assert (
+        await store.acquire_tenant_execution(
+            owner_id="cleanup_worker_successor",
+            fence_token=second.fence_token,
+            org_id="org_cleanup_stalled",
+            now=datetime(1970, 1, 1, tzinfo=UTC),
+        )
+        is None
+    )
+
+    await store.release_lease(
+        owner_id="cleanup_worker_stalled",
+        fence_token=first.fence_token,
+        now=datetime(2099, 1, 1, tzinfo=UTC),
+    )
+    assert (
+        await store.renew_lease(
+            owner_id="cleanup_worker_successor",
+            fence_token=second.fence_token,
+            now=datetime(1970, 1, 1, tzinfo=UTC),
+            duration_seconds=30,
+        )
+        is not None
+    )
+    await store.release_tenant_execution(execution=stalled)
+    successor = await store.acquire_tenant_execution(
+        owner_id="cleanup_worker_successor",
+        fence_token=second.fence_token,
+        org_id="org_cleanup_stalled",
+        now=datetime(1970, 1, 1, tzinfo=UTC),
+    )
+    assert successor is not None
+    await store.release_tenant_execution(execution=successor)

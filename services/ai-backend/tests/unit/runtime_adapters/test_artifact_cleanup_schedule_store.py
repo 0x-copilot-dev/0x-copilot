@@ -92,7 +92,9 @@ async def test_expiry_takeover_fences_stale_owner_and_renews_exclusively(
         )
         is None
     )
-    await store.release_lease(owner_id="worker_a", fence_token=first.fence_token)
+    await store.release_lease(
+        owner_id="worker_a", fence_token=first.fence_token, now=NOW
+    )
     assert (
         await store.renew_lease(
             owner_id="worker_b",
@@ -103,6 +105,84 @@ async def test_expiry_takeover_fences_stale_owner_and_renews_exclusively(
         is not None
     )
     assert await store.load_cursor() is None
+
+
+@pytest.mark.parametrize(
+    "store_factory",
+    [
+        pytest.param(
+            lambda path: InMemoryArtifactCleanupScheduleStore(), id="in-memory"
+        ),
+        pytest.param(
+            lambda path: FileArtifactCleanupScheduleStore(root=path), id="file"
+        ),
+    ],
+)
+async def test_expired_pass_cannot_overlap_successor_or_release_its_lease(
+    tmp_path, store_factory
+) -> None:  # noqa: ANN001
+    """A paused destructive pass holds its tenant fence beyond scheduler TTL."""
+
+    store = store_factory(tmp_path)
+    first = await store.acquire_lease(owner_id="worker_a", now=NOW, duration_seconds=5)
+    assert first is not None
+    stalled = await store.acquire_tenant_execution(
+        owner_id="worker_a",
+        fence_token=first.fence_token,
+        org_id="org_a",
+        now=NOW,
+    )
+    assert stalled is not None
+
+    # The global lease can be taken over after expiry, but the tenant pass
+    # remains exclusive until the stalled owner releases it (or its process
+    # dies, which releases the OS/DB lock in durable adapters).
+    second = await store.acquire_lease(
+        owner_id="worker_b", now=NOW + timedelta(seconds=6), duration_seconds=30
+    )
+    assert second is not None
+    assert second.fence_token > first.fence_token
+    assert not await store.validate_tenant_execution(
+        execution=stalled, now=NOW + timedelta(seconds=6)
+    )
+    assert (
+        await store.acquire_tenant_execution(
+            owner_id="worker_b",
+            fence_token=second.fence_token,
+            org_id="org_a",
+            now=NOW + timedelta(seconds=6),
+        )
+        is None
+    )
+
+    # Expired A is inert: it cannot clear B's current generation.
+    await store.release_lease(
+        owner_id="worker_a",
+        fence_token=first.fence_token,
+        now=NOW + timedelta(seconds=6),
+    )
+    assert (
+        await store.renew_lease(
+            owner_id="worker_b",
+            fence_token=second.fence_token,
+            now=NOW + timedelta(seconds=7),
+            duration_seconds=30,
+        )
+        is not None
+    )
+
+    await store.release_tenant_execution(execution=stalled)
+    successor = await store.acquire_tenant_execution(
+        owner_id="worker_b",
+        fence_token=second.fence_token,
+        org_id="org_a",
+        now=NOW + timedelta(seconds=7),
+    )
+    assert successor is not None
+    assert await store.validate_tenant_execution(
+        execution=successor, now=NOW + timedelta(seconds=7)
+    )
+    await store.release_tenant_execution(execution=successor)
 
 
 @pytest.mark.parametrize(
@@ -203,7 +283,9 @@ async def test_file_schedule_restart_preserves_defer_but_not_cross_tenant_state(
         retry_max_seconds=20,
     )
     assert deferred is not None
-    await first.release_lease(owner_id="worker_one", fence_token=lease.fence_token)
+    await first.release_lease(
+        owner_id="worker_one", fence_token=lease.fence_token, now=NOW
+    )
 
     restarted = FileArtifactCleanupScheduleStore(root=tmp_path)
     resumed = await restarted.acquire_lease(

@@ -22,13 +22,18 @@ from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupDeferredTenant,
     ArtifactCleanupLease,
     ArtifactCleanupScheduleStore,
+    ArtifactCleanupTenantExecutionLease,
 )
 
 from agent_runtime.observability.lifecycle_metrics import (
     LifecycleOperationalMetrics,
     get_lifecycle_operational_metrics,
 )
-from runtime_adapters.artifact_lifecycle import ArtifactPhysicalCleanupOutcome
+from runtime_adapters.artifact_lifecycle import (
+    ArtifactCleanupExecutionFence,
+    ArtifactCleanupExecutionFenceLostError,
+    ArtifactPhysicalCleanupOutcome,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -98,6 +103,7 @@ class ArtifactCleanupExecutionPort(Protocol):
         org_id: str,
         now: datetime,
         limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactPhysicalCleanupOutcome: ...
 
     async def write_audit_log(
@@ -214,6 +220,7 @@ class ArtifactCleanupExecutionRunner:
                 await self._schedule.release_lease(
                     owner_id=self._owner_id,
                     fence_token=lease.fence_token,
+                    now=current_time(),
                 )
             except Exception:
                 _LOGGER.warning("artifact_cleanup_execution_schedule_release_failed")
@@ -260,11 +267,38 @@ class ArtifactCleanupExecutionRunner:
             if deferred is not None:
                 continue
             try:
+                execution = await self._schedule.acquire_tenant_execution(
+                    owner_id=self._owner_id,
+                    fence_token=keeper.fence_token,
+                    org_id=org_id,
+                    now=current_time(),
+                )
+            except Exception:
+                self._record_metric(outcome="failed")
+                _LOGGER.warning("artifact_cleanup_execution_fence_unavailable")
+                return _replace(result, failures=result.failures + 1)
+            if execution is None:
+                # A paused predecessor still owns this tenant's durable
+                # execution fence. Leave its cursor position untouched and
+                # continue the fair page; starting a second destructive pass
+                # would be less safe than a later retry.
+                _LOGGER.warning("artifact_cleanup_execution_tenant_busy")
+                continue
+            try:
                 outcome = await self._persistence.execute_artifact_cleanup(
                     org_id=org_id,
                     now=reference_now,
                     limit=self._limit_per_org,
+                    execution_fence=_ArtifactCleanupLifecycleFence(
+                        schedule=self._schedule,
+                        execution=execution,
+                        current_time=current_time,
+                    ),
                 )
+            except ArtifactCleanupExecutionFenceLostError:
+                self._record_metric(outcome="failed")
+                _LOGGER.warning("artifact_cleanup_execution_fence_lost")
+                return _replace(result, failures=result.failures + 1)
             except Exception:
                 self._record_metric(outcome="failed")
                 # Exception text can include a backend path or body-derived
@@ -304,51 +338,56 @@ class ArtifactCleanupExecutionRunner:
                 # later tenants can continue without silently losing it.
                 cursor = org_id
                 continue
-
-            # A long-running lifecycle call may span a heartbeat failure or a
-            # takeover.  Revalidate the exact generation before recording an
-            # audit outcome or changing the fair cursor; the lifecycle
-            # adapter's own idempotent/reference-safe state machine handles a
-            # conservative later retry if ownership was lost mid-call.
-            if not await keeper.renew_now():
-                self._record_metric(outcome="failed")
-                _LOGGER.warning("artifact_cleanup_execution_lease_lost")
-                return _replace(result, failures=result.failures + 1)
-            self._record_outcome_metrics(outcome)
-            audit_failed = not await self._write_audit(outcome=outcome)
-            if audit_failed:
-                self._record_metric(outcome="audit_failed")
-            result = _replace(
-                result,
-                tenants_scanned=result.tenants_scanned + 1,
-                purged_artifacts=result.purged_artifacts + outcome.purged_artifacts,
-                quarantined_blobs=result.quarantined_blobs + outcome.quarantined_blobs,
-                reaped_blobs=result.reaped_blobs + outcome.reaped_blobs,
-                restored_blobs=result.restored_blobs + outcome.restored_blobs,
-                withheld_blobs=result.withheld_blobs + outcome.withheld_blobs,
-                already_clean_tenants=result.already_clean_tenants
-                + int(_is_already_clean(outcome)),
-                audit_failures=result.audit_failures + int(audit_failed),
-            )
-            try:
-                advanced = await self._schedule.complete_tenant(
-                    owner_id=self._owner_id,
-                    fence_token=keeper.fence_token,
-                    expected_cursor=cursor,
-                    org_id=org_id,
-                    now=current_time(),
+            else:
+                # A long-running lifecycle call may span a heartbeat failure
+                # or takeover. The lifecycle guard already fenced every
+                # destructive phase; recheck the global generation before
+                # recording outcome evidence or moving the fair cursor.
+                if not await keeper.renew_now():
+                    self._record_metric(outcome="failed")
+                    _LOGGER.warning("artifact_cleanup_execution_lease_lost")
+                    return _replace(result, failures=result.failures + 1)
+                self._record_outcome_metrics(outcome)
+                audit_failed = not await self._write_audit(outcome=outcome)
+                if audit_failed:
+                    self._record_metric(outcome="audit_failed")
+                result = _replace(
+                    result,
+                    tenants_scanned=result.tenants_scanned + 1,
+                    purged_artifacts=result.purged_artifacts + outcome.purged_artifacts,
+                    quarantined_blobs=result.quarantined_blobs
+                    + outcome.quarantined_blobs,
+                    reaped_blobs=result.reaped_blobs + outcome.reaped_blobs,
+                    restored_blobs=result.restored_blobs + outcome.restored_blobs,
+                    withheld_blobs=result.withheld_blobs + outcome.withheld_blobs,
+                    already_clean_tenants=result.already_clean_tenants
+                    + int(_is_already_clean(outcome)),
+                    audit_failures=result.audit_failures + int(audit_failed),
                 )
-            except Exception:
-                self._record_metric(outcome="failed")
-                _LOGGER.warning("artifact_cleanup_execution_cursor_unavailable")
-                return _replace(result, failures=result.failures + 1)
-            if not advanced:
-                # A lost lease or concurrent successor means the physical
-                # lifecycle may be retried, which is safe; do not speculate
-                # about later cursor positions in this cycle.
-                _LOGGER.warning("artifact_cleanup_execution_cursor_not_advanced")
-                return _replace(result, failures=result.failures + 1)
-            cursor = org_id
+                try:
+                    advanced = await self._schedule.complete_tenant(
+                        owner_id=self._owner_id,
+                        fence_token=keeper.fence_token,
+                        expected_cursor=cursor,
+                        org_id=org_id,
+                        now=current_time(),
+                    )
+                except Exception:
+                    self._record_metric(outcome="failed")
+                    _LOGGER.warning("artifact_cleanup_execution_cursor_unavailable")
+                    return _replace(result, failures=result.failures + 1)
+                if not advanced:
+                    # A lost lease or concurrent successor means the physical
+                    # lifecycle may be retried, which is safe; do not
+                    # speculate about later cursor positions in this cycle.
+                    _LOGGER.warning("artifact_cleanup_execution_cursor_not_advanced")
+                    return _replace(result, failures=result.failures + 1)
+                cursor = org_id
+            finally:
+                try:
+                    await self._schedule.release_tenant_execution(execution=execution)
+                except Exception:
+                    _LOGGER.warning("artifact_cleanup_execution_fence_release_failed")
         return result
 
     async def _write_audit(
@@ -420,6 +459,32 @@ class ArtifactCleanupExecutionRunner:
             self._metrics.record_artifact_cleanup_execution(outcome=outcome)
         except Exception:
             return
+
+
+class _ArtifactCleanupLifecycleFence:
+    """Bridge the scheduler's durable tenant lock into lifecycle phases."""
+
+    def __init__(
+        self,
+        *,
+        schedule: ArtifactCleanupScheduleStore,
+        execution: ArtifactCleanupTenantExecutionLease,
+        current_time: Callable[[], datetime],
+    ) -> None:
+        self._schedule = schedule
+        self._execution = execution
+        self._current_time = current_time
+
+    async def assert_active(self) -> None:
+        try:
+            active = await self._schedule.validate_tenant_execution(
+                execution=self._execution,
+                now=self._current_time(),
+            )
+        except Exception as exc:
+            raise ArtifactCleanupExecutionFenceLostError() from exc
+        if not active:
+            raise ArtifactCleanupExecutionFenceLostError()
 
 
 class _ArtifactCleanupLeaseKeeper:

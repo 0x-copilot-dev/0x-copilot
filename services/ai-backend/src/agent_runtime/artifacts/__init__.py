@@ -42,6 +42,7 @@ from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupLease,
     ArtifactCleanupScheduleStateError,
     ArtifactCleanupScheduleStore,
+    ArtifactCleanupTenantExecutionLease,
 )
 from agent_runtime.artifacts.ports import (
     ArtifactBlobStorePort,
@@ -68,6 +69,7 @@ __all__ = (
     "ArtifactCleanupScheduleStore",
     "ArtifactCleanupDeferredTenant",
     "ArtifactCleanupLease",
+    "ArtifactCleanupTenantExecutionLease",
     "ArtifactBlobUnavailableError",
     "ArtifactBlobWriteResult",
     "ArtifactConflictError",

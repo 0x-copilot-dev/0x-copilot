@@ -22,6 +22,7 @@ from copilot_service_contracts.deployment_profile import (
 )
 from runtime_adapters._artifact_repository import ArtifactRetentionScope
 from runtime_adapters.artifact_lifecycle import (
+    ArtifactCleanupExecutionFenceLostError,
     ArtifactLifecycleJobs,
     ArtifactLifecycleSchedule,
     ORPHAN_PUBLICATION_RECOVERY_ORG_ID,
@@ -67,6 +68,11 @@ async def _chunks(body: bytes) -> AsyncIterator[bytes]:
 
 async def _read(stream: AsyncIterator[bytes]) -> bytes:
     return b"".join([chunk async for chunk in stream])
+
+
+class _LostCleanupFence:
+    async def assert_active(self) -> None:
+        raise ArtifactCleanupExecutionFenceLostError()
 
 
 @pytest.fixture(params=("in_memory", "file"))
@@ -430,6 +436,52 @@ class TestArtifactLifecycleJobs:
 
 
 class TestConfiguredArtifactLifecycle:
+    async def test_cleanup_fence_blocks_lifecycle_before_any_destructive_phase(
+        self,
+        configured_runtime_ports,
+    ) -> None:
+        ports = configured_runtime_ports
+        body = b"fenced-cleanup-never-transitions"
+        now = datetime.now(timezone.utc) + timedelta(minutes=5)
+        await _seed(
+            ports.artifact_blob_store,
+            ports.artifact_metadata_store,
+            30,
+            body,
+            _ORG_A_CONV_A,
+            created_at=now - timedelta(days=41),
+        )
+        await ports.artifact_lifecycle_jobs.on_conversation_deleted(
+            org_id=_ORG_A_CONV_A.org_id,
+            user_id=_ORG_A_CONV_A.user_id,
+            conversation_id=_ORG_A_CONV_A.conversation_id,
+            deleted_at=now - timedelta(days=40),
+        )
+        ports.artifact_lifecycle_jobs.schedule = ArtifactLifecycleSchedule(
+            metadata_retention_grace=timedelta(0),
+            candidate_grace=timedelta(0),
+            quarantine_grace=timedelta(0),
+            limit=10,
+        )
+
+        with pytest.raises(ArtifactCleanupExecutionFenceLostError):
+            await ports.persistence.execute_artifact_cleanup(
+                org_id=_ORG_A_CONV_A.org_id,
+                now=now,
+                limit=10,
+                execution_fence=_LostCleanupFence(),
+            )
+
+        assert (
+            await _read(await ports.artifact_blob_store.open_stream(digest(body)))
+            == body
+        )
+        inventory = await ports.artifact_metadata_store.deletion_inventory(
+            scope=ArtifactRetentionScope(org_id=_ORG_A_CONV_A.org_id)
+        )
+        assert inventory.artifact_rows == 1
+        assert inventory.quarantined_digest_rows == 0
+
     async def test_file_user_delete_keeps_artifacts_for_held_conversation(
         self,
         configured_runtime_ports,

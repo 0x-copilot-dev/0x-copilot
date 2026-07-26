@@ -41,6 +41,21 @@ class ArtifactCleanupDeferredTenant:
         return self.retry_not_before <= now
 
 
+@dataclass(frozen=True, slots=True)
+class ArtifactCleanupTenantExecutionLease:
+    """Exclusive tenant execution handle bound to one scheduler generation.
+
+    This is deliberately identifier-only.  It carries no artifact, blob,
+    reference, hold, or content data, and exists solely to keep a successor
+    from running the same tenant's destructive lifecycle pass concurrently.
+    """
+
+    org_id: str
+    owner_id: str
+    fence_token: int
+    execution_token: str
+
+
 @runtime_checkable
 class ArtifactCleanupScheduleStore(Protocol):
     """CAS cursor, deferred retry, and renewable fenced-lease state.
@@ -113,13 +128,39 @@ class ArtifactCleanupScheduleStore(Protocol):
     ) -> ArtifactCleanupLease | None:
         """Extend only the exact active lease generation."""
 
-    async def release_lease(self, *, owner_id: str, fence_token: int) -> None:
-        """Release only the exact active generation; stale owners are inert."""
+    async def release_lease(
+        self, *, owner_id: str, fence_token: int, now: datetime
+    ) -> None:
+        """Release only the exact unexpired generation; stale owners are inert."""
+
+    async def acquire_tenant_execution(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        org_id: str,
+        now: datetime,
+    ) -> ArtifactCleanupTenantExecutionLease | None:
+        """Acquire the tenant-exclusive lifecycle execution lock if available."""
+
+    async def validate_tenant_execution(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+    ) -> bool:
+        """Return whether the held tenant lock and global fence are still active."""
+
+    async def release_tenant_execution(
+        self, *, execution: ArtifactCleanupTenantExecutionLease
+    ) -> None:
+        """Release only this execution handle after its lifecycle pass ends."""
 
 
 __all__ = (
     "ArtifactCleanupDeferredTenant",
     "ArtifactCleanupLease",
+    "ArtifactCleanupTenantExecutionLease",
     "ArtifactCleanupScheduleStateError",
     "ArtifactCleanupScheduleStore",
 )

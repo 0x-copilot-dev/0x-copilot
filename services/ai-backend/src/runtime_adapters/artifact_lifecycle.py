@@ -94,6 +94,18 @@ class ArtifactPhysicalCleanupOutcome:
         )
 
 
+class ArtifactCleanupExecutionFenceLostError(RuntimeError):
+    """A scheduler generation lost authority during a lifecycle pass."""
+
+
+@runtime_checkable
+class ArtifactCleanupExecutionFence(Protocol):
+    """Fence checked inside the lifecycle pass before destructive phases."""
+
+    async def assert_active(self) -> None:
+        """Raise if this tenant pass no longer owns its execution fence."""
+
+
 @dataclass(frozen=True, slots=True)
 class ArtifactLifecycleSchedule:
     """Conservative phases used by the existing runtime retention sweeper."""
@@ -380,7 +392,9 @@ class ArtifactLifecycleJobs:
         candidate_grace_before: datetime,
         quarantine_older_than: datetime,
         limit: int,
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactRetentionJobResult:
+        await _require_execution_fence(execution_fence)
         discover = getattr(
             self.garbage_collector, "discover_orphaned_publications", None
         )
@@ -391,6 +405,7 @@ class ArtifactLifecycleJobs:
                 older_than=candidate_grace_before,
                 limit=limit,
             )
+        await _require_execution_fence(execution_fence)
         purge = await self.retention_purger.purge_tombstones(
             scope=scope,
             deleted_before=deleted_before,
@@ -415,6 +430,7 @@ class ArtifactLifecycleJobs:
             candidates.values(),
             key=lambda value: (value.unreferenced_since, value.blob_key),
         )[:limit]:
+            await _require_execution_fence(execution_fence)
             if self._has_active_hold(candidate.blob_key):
                 withheld.append(candidate.blob_key)
                 continue
@@ -425,6 +441,7 @@ class ArtifactLifecycleJobs:
             )
             if collected:
                 quarantined.append(candidate.blob_key)
+        await _require_execution_fence(execution_fence)
         reap = await self.quarantine_reaper.reap_quarantine(
             older_than=quarantine_older_than,
             limit=limit,
@@ -452,6 +469,7 @@ class ArtifactLifecycleJobs:
         now: datetime,
         limit: int | None = None,
         protected_conversation_ids: tuple[str, ...] = (),
+        execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactRetentionJobResult:
         """Run all three durable phases for one org from the live sweeper."""
 
@@ -467,12 +485,22 @@ class ArtifactLifecycleJobs:
             candidate_grace_before=now - schedule.candidate_grace,
             quarantine_older_than=now - schedule.quarantine_grace,
             limit=max(1, limit or schedule.limit),
+            execution_fence=execution_fence,
         )
+
+
+async def _require_execution_fence(
+    fence: ArtifactCleanupExecutionFence | None,
+) -> None:
+    if fence is not None:
+        await fence.assert_active()
 
 
 __all__ = (
     "ArtifactDeletionInventory",
     "ArtifactLifecycleEvidence",
+    "ArtifactCleanupExecutionFence",
+    "ArtifactCleanupExecutionFenceLostError",
     "ArtifactPhysicalCleanupOutcome",
     "ArtifactLifecycleJobs",
     "ArtifactLifecycleSchedule",
