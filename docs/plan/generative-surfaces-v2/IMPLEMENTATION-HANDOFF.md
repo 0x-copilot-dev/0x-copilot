@@ -113,48 +113,45 @@ journal/receipt evidence.
 
 ## 4. Unmerged defects and required designs
 
-### 4.1 PR #371 — F012 workspace mutation boundary (BLOCKED)
+### 4.1 PR #371 — F012 workspace mutation boundary (REDESIGN SPECIFIED)
 
-The current branch must not merge. Independent review demonstrated:
+The current branch must not merge as written. Independent review demonstrated
+two product-reachable assembly failures:
 
-- a model-reachable operation port exposes an `asyncio.Queue`; reflection can
-  reach a waiting task/coroutine frame, then the gateway adapter and raw overlay
-  mutation store;
-- this permits a visible overlay write with no stage, ledger append, or outbox;
 - a cancellation append failure after projection failure leaves a durable held
   stage approvable; and
 - an effect-stage read failure after append can also leave an unbound,
   approvable stage.
 
-**Required correction:** remove privileged objects from the model process rather
-than extending import/attribute deny lists. The model-facing workspace client
-must communicate with a separate authority process over a narrow, validated RPC
-contract. The authority process owns overlay mutation, stage binding, and
-outbox-facing capability. Persist a terminal execution-denying compensation
-state (or make stage and overlay binding atomic) before a stage can be exposed
-for approval. An unavailable cancellation audit must never leave the prior stage
-approvable.
+The earlier handoff overstated a Python-reflection proof. The model does not
+receive the backend, operation port, queue, adapter, overlay store, or outbox as
+a Python object. Model tools and Monty cross typed JSON boundaries. An
+in-process queue is containment rather than a security boundary, but a new
+authority process is not required for the reachable defect. Actual host writes
+already cross the Electron main-process capability broker.
+
+**Required correction:** implement
+`prds/PRD-371-workspace-projection-binding.md`. Persist an additive
+`effect.projection_bound` readiness event after the exact stage revision is
+projected to an immutable workspace-overlay version. The stage fold, decision
+service, and commit worker must all deny approval/execution until that binding
+matches the current proposal and target digests. Revision clears the binding.
+`EffectStager.stage()` must fold the canonical event returned by append instead
+of requiring a second fallible read. Projection/binding retry must recover the
+same operation and stage idempotently.
 
 Acceptance tests must cover: failed stage binding; failed compensation;
-post-append state-read failure; replay; stale approval; and zero host/overlay
-effect without a durable bound stage. Do not claim an in-process queue, closure,
-or private attribute is a capability boundary.
+post-append state-read failure; replay; stale approval; zero host effect; and
+zero approvable/executable stage without a durable current-revision binding. Add
+canaries at the real model-tool and Monty JSON seams; do not treat direct trusted
+Python access to a private object as model reachability.
 
-### 4.2 PR #374 — F013 neutral operation boundary (BLOCKED)
+### 4.2 PR #374 — F013 neutral operation boundary (MERGED)
 
-The presentation-boundary repair correctly moved presentation ownership out of
-the operation adapter, but CI found a real regression:
-
-`test_changes_after_stage_cannot_alter_approved_payload_and_retry_is_idempotent`
-creates a valid approved immutable artifact and expects exactly one connector
-dispatch. The branch produced zero dispatches.
-
-**Required correction:** retain a gateway-owned re-authorization result that
-expressly permits the exact approved artifact revision to proceed through the
-shared effect coordinator. Do not restore adapter access to a presenter, surface
-emitter, projector, scheduler, or raw connector. The worker must re-open the
-pinned immutable revision, re-check authorization immediately before client
-creation, dispatch once, and persist the receipt/idempotency claim.
+Merged to `main` by PR #374. The repair retained neutral presentation ownership,
+added gateway-owned post-approval authorization for the exact immutable
+revision, and routes dispatch through the shared effect coordinator without
+restoring presenter/projector/raw-connector authority to adapters.
 
 ## 5. Required process for every implementation PR
 
@@ -181,16 +178,16 @@ creation, dispatch once, and persist the receipt/idempotency claim.
 
 ## 6. Remaining release evidence
 
-| ID  | Gate                | Completion evidence                                                                   |
-| --- | ------------------- | ------------------------------------------------------------------------------------- |
-| R1  | Repair/merge F012   | Process/RPC authority boundary + fail-closed binding/compensation proof               |
-| R2  | Repair/merge F013   | Valid approved immutable revision dispatches exactly once through neutral coordinator |
-| R3  | D3 C1/A2 handoff    | Snapshot export, durable deliverables, explicit patch import                          |
-| R4  | Real G0/G1/G2 runs  | Supervised desktop, actual BYOK, main-process local-file write, exact receipts        |
-| R5  | Remaining journeys  | Code, Markdown, CSV, docs, local fake email/X/Discord, multi-step revisions           |
-| R6  | Design parity       | Computed-style audit using `tools/design-parity`, not screenshot comparison           |
-| R7  | Regression          | Current-main full service/app regression after all merges                             |
-| R8  | Final release smoke | Web plus supervised desktop smoke and requirement-by-requirement release decision     |
+| ID  | Gate                | Completion evidence                                                               |
+| --- | ------------------- | --------------------------------------------------------------------------------- |
+| R1  | Repair/merge F012   | Durable projection binding + fail-closed approval/execution + retry proof         |
+| R2  | Repair/merge F013   | **Done:** PR #374 merged on `main`                                                |
+| R3  | D3 C1/A2 handoff    | Snapshot export, durable deliverables, explicit patch import                      |
+| R4  | Real G0/G1/G2 runs  | Supervised desktop, actual BYOK, main-process local-file write, exact receipts    |
+| R5  | Remaining journeys  | Code, Markdown, CSV, docs, local fake email/X/Discord, multi-step revisions       |
+| R6  | Design parity       | Computed-style audit using `tools/design-parity`, not screenshot comparison       |
+| R7  | Regression          | Current-main full service/app regression after all merges                         |
+| R8  | Final release smoke | Web plus supervised desktop smoke and requirement-by-requirement release decision |
 
 ## 7. Operational safety
 
