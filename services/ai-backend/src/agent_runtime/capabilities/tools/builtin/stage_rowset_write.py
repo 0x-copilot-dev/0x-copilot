@@ -11,7 +11,7 @@ the durable effect surface.
 Fail-closed: tool input is untrusted until ``RowsetValidator`` runs inside the
 stager. A validation / domain error becomes a safe tool-result error dict (the
 run keeps going), never an exception into the graph. The tool NEVER touches an
-MCP client — only the CommitEngine path dispatches.
+MCP client — only the shared effect-dispatch path dispatches.
 """
 
 from __future__ import annotations

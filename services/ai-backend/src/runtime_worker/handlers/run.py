@@ -1674,7 +1674,7 @@ class RuntimeRunHandler:
         Wired to the same event producer every emission uses (via
         ``RuntimeStageLedger``), the durable queue (for an allow-always
         auto-apply), and the C1 policy resolver. The stager never touches an MCP
-        client — only the CommitEngine path dispatches.
+        client — only the shared effect-dispatch path dispatches.
         """
 
         if not self.settings.execution.surfaces_v2 or run is None:

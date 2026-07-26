@@ -17,7 +17,6 @@ reason to replay a possibly-sent mutation.
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -34,24 +33,25 @@ from agent_runtime.effects.claims import (
 )
 from agent_runtime.effects.contracts import (
     EffectCommitCommand,
+    EffectDispatchRequest,
     EffectStageScope,
     EffectStageState,
     EffectStageStatus,
 )
+from agent_runtime.effects.dispatch import (
+    EffectDispatchCoordinator,
+    EffectDispatchObserver,
+    EffectDispatchResult,
+    EffectDispatchStatus,
+)
 from agent_runtime.effects.executor import (
-    EffectExecutionAuthorization,
     EffectExecutionScope,
-    EffectExecutor,
-    PreparedEffect,
 )
 from agent_runtime.effects.executor_registry import EffectExecutorRegistry
 from agent_runtime.effects.fold import EffectStageFold
 from agent_runtime.effects.ports import EffectStageLedgerPort
 from agent_runtime.execution.contracts import RuntimeContract
-from agent_runtime.surfaces_v2.entities import (
-    EffectExecutionRequest,
-    EffectExecutionResult,
-)
+from agent_runtime.surfaces_v2.entities import EffectExecutionResult
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectDecisionKind,
     EffectOutcome,
@@ -315,6 +315,7 @@ class EffectCoordinator:
         self._cancellation = cancellation
         self._audit = audit or _NoopAudit()
         self._recorder = EffectResultRecorder(ledger=ledger)
+        self._dispatch = EffectDispatchCoordinator(claims=claims)
 
     async def handle(self, command: EffectCommitCommand) -> EffectCoordinatorResult:
         """Validate, prepare, claim, apply and complete exactly one approved effect."""
@@ -332,40 +333,34 @@ class EffectCoordinator:
         if not await self._references_match(scope=execution_scope, state=state):
             return await self._refuse(command=command, code="immutable_ref_mismatch")
 
-        request = _execution_request(state=state, command=command)
-        existing = await self._claims.get(
-            org_id=execution_scope.org_id,
-            executor=state.executor,
-            idempotency_key=command.idempotency_key,
-        )
-        if existing is not None:
-            candidate = _claim_from(
-                scope=execution_scope,
-                state=state,
-                command=command,
-                prepared=PreparedEffect(
-                    request=request,
-                    prepared_ref=existing.prepared_ref,
-                ),
-            )
-            if not existing.same_request_as(candidate):
-                return await self._refuse(
-                    command=command,
-                    code="effect_claim_conflict",
-                )
-            return await self._existing_claim_result(
-                scope=stage_scope,
-                claim=existing,
-            )
+        request = _dispatch_request(state=state, command=command)
         executor = self._executors.resolve(kind=state.executor, scope=execution_scope)
-        prepared = await self._prepare(executor=executor, request=request)
-        if prepared is None:
-            return await self._refuse(command=command, code="prepare_failed")
-        if prepared.request != request:
-            await _abort_safely(executor, prepared)
-            return await self._refuse(command=command, code="prepare_request_mismatch")
-        if _precondition_drift(state=state, prepared=prepared):
-            await _abort_safely(executor, prepared)
+        observer = _CoordinatorDispatchObserver(
+            coordinator=self,
+            stage_scope=stage_scope,
+            state=state,
+            command=command,
+        )
+
+        async def _cancelled(
+            active_scope: EffectExecutionScope, _: EffectDispatchRequest
+        ) -> bool:
+            if self._cancellation is None:
+                return False
+            return await self._cancellation.is_cancelled(
+                scope=active_scope,
+                command=command,
+            )
+
+        dispatched = await self._dispatch.dispatch(
+            scope=execution_scope,
+            request=request,
+            executor=executor,
+            expected_precondition_digest=state.current_revision.precondition_digest,
+            cancellation=_cancelled if self._cancellation is not None else None,
+            observer=observer,
+        )
+        if dispatched.status is EffectDispatchStatus.PRECONDITION_DRIFT:
             await self._recorder.record_preclaim_drift(
                 scope=stage_scope, command=command
             )
@@ -380,119 +375,68 @@ class EffectCoordinator:
                 outcome=EffectOutcome.PRECONDITION_DRIFT,
                 safe_code="precondition_drift",
             )
-
-        proposed_claim = _claim_from(
-            scope=execution_scope,
+        return await self._result_from_dispatch(
+            dispatched=dispatched,
+            scope=stage_scope,
             state=state,
             command=command,
-            prepared=prepared,
-        )
-        acquisition = await self._claims.claim(claim=proposed_claim)
-        if not acquisition.created:
-            if acquisition.claim.prepared_ref != prepared.prepared_ref:
-                await _abort_safely(executor, prepared)
-            return await self._existing_claim_result(
-                scope=stage_scope, claim=acquisition.claim
-            )
-        claim = acquisition.claim
-        # A failed ledger append leaves a durable claim but never reaches apply.
-        await self._recorder.record_claimed(scope=stage_scope, claim=claim)
-        await self._audit.record(
-            action="effect.commit.claimed",
-            facts=_audit_facts(command=command, state=state, claim_id=claim.claim_id),
         )
 
-        if self._cancellation is not None and await self._cancellation.is_cancelled(
-            scope=execution_scope, command=command
-        ):
-            await _abort_safely(executor, prepared)
-            cancelled = _completed_claim(
-                claim=claim,
-                result=EffectExecutionResult(
-                    outcome=EffectOutcome.CANCELLED,
-                    retryable=False,
-                    safe_message=_PUBLIC_CANCELLED,
-                ),
-                state=EffectClaimState.CANCELLED,
-            )
-            stored = await self._claims.update(claim=cancelled)
-            await self._recorder.record_completion(scope=stage_scope, claim=stored)
-            return _result_from_claim(stored, status=EffectCoordinatorStatus.CANCELLED)
+    async def _result_from_dispatch(
+        self,
+        *,
+        dispatched: EffectDispatchResult,
+        scope: EffectStageScope,
+        state: EffectStageState,
+        command: EffectCommitCommand,
+    ) -> EffectCoordinatorResult:
+        """Project the shared dispatcher result onto the A4 ledger/audit seam."""
 
-        authorization = await self._authorize(executor=executor, prepared=prepared)
-        if not authorization.allowed:
-            await _abort_safely(executor, prepared)
-            denied = _completed_claim(
-                claim=claim,
-                result=EffectExecutionResult(
-                    outcome=EffectOutcome.FAILED,
-                    retryable=False,
-                    safe_message=_PUBLIC_AUTHORIZATION_REVOKED,
-                ),
-                state=EffectClaimState.COMPLETED,
-            )
-            stored = await self._claims.update(claim=denied)
-            await self._recorder.record_completion(scope=stage_scope, claim=stored)
+        claim = dispatched.claim
+        if claim is not None:
+            if dispatched.status is EffectDispatchStatus.CLAIMED:
+                await self._recorder.record_claimed(scope=scope, claim=claim)
+            else:
+                await self._recorder.record_completion(scope=scope, claim=claim)
+
+        if claim is not None and dispatched.status is EffectDispatchStatus.REFUSED:
             await self._audit.record(
                 action="effect.commit.authorization_denied",
                 facts={
                     **_audit_facts(
-                        command=command, state=state, claim_id=stored.claim_id
+                        command=command, state=state, claim_id=claim.claim_id
                     ),
-                    "authorization_code": authorization.safe_code,
+                    "authorization_code": dispatched.safe_code,
                 },
             )
-            return EffectCoordinatorResult(
-                status=EffectCoordinatorStatus.REFUSED,
-                stage_id=command.stage_id,
-                revision=command.revision,
-                claim_id=stored.claim_id,
-                outcome=EffectOutcome.FAILED,
-                safe_code=authorization.safe_code,
-            )
-
-        try:
-            result = await executor.apply(prepared)
-        except (asyncio.TimeoutError, TimeoutError):
-            return await self._mark_indeterminate(
-                scope=stage_scope,
-                claim=claim,
-                state=state,
-                command=command,
-                safe_message=_PUBLIC_UNKNOWN_OUTCOME,
-            )
-        except Exception:  # noqa: BLE001 - after a durable claim, fail honestly.
-            return await self._mark_indeterminate(
-                scope=stage_scope,
-                claim=claim,
-                state=state,
-                command=command,
-                safe_message=_PUBLIC_UNKNOWN_OUTCOME,
-            )
-
-        if result.outcome is EffectOutcome.INDETERMINATE:
-            return await self._mark_indeterminate(
-                scope=stage_scope,
-                claim=claim,
-                state=state,
-                command=command,
-                safe_message=_safe_message(
-                    result.safe_message, _PUBLIC_UNKNOWN_OUTCOME
+        elif claim is not None and dispatched.status is EffectDispatchStatus.APPLIED:
+            await self._audit.record(
+                action="effect.commit.completed",
+                facts=_audit_facts(
+                    command=command, state=state, claim_id=claim.claim_id
                 ),
-                result=result,
             )
-        completed = _completed_claim(
-            claim=claim,
-            result=result,
-            state=EffectClaimState.COMPLETED,
-        )
-        stored = await self._claims.update(claim=completed)
-        await self._recorder.record_completion(scope=stage_scope, claim=stored)
-        await self._audit.record(
-            action="effect.commit.completed",
-            facts=_audit_facts(command=command, state=state, claim_id=stored.claim_id),
-        )
-        return _result_from_claim(stored, status=EffectCoordinatorStatus.APPLIED)
+        elif (
+            claim is not None
+            and dispatched.status is EffectDispatchStatus.INDETERMINATE
+        ):
+            await self._audit.record(
+                action="effect.commit.indeterminate",
+                facts=_audit_facts(
+                    command=command, state=state, claim_id=claim.claim_id
+                ),
+            )
+
+        if claim is not None:
+            return EffectCoordinatorResult(
+                status=EffectCoordinatorStatus(dispatched.status.value),
+                stage_id=claim.stage_id,
+                revision=claim.revision,
+                claim_id=claim.claim_id,
+                outcome=claim.outcome,
+                safe_code=dispatched.safe_code,
+            )
+        return await self._refuse(command=command, code=dispatched.safe_code)
 
     async def reconcile(
         self, command: EffectReconcileCommand
@@ -594,83 +538,6 @@ class EffectCoordinator:
             and target_digest == state.target_digest
         )
 
-    @staticmethod
-    async def _prepare(
-        *, executor: EffectExecutor, request: EffectExecutionRequest
-    ) -> PreparedEffect | None:
-        if not executor.capabilities.supports_prepare:
-            return PreparedEffect(request=request)
-        try:
-            return await executor.prepare(request)
-        except Exception:  # noqa: BLE001 - no claim means no external effect.
-            return None
-
-    @staticmethod
-    async def _authorize(
-        *, executor: EffectExecutor, prepared: PreparedEffect
-    ) -> EffectExecutionAuthorization:
-        """Contain a live authorization check before the sole ``apply`` call.
-
-        The stage fold proves the historical approval.  This second contract
-        lets a transport observe revocation that happened after approval but
-        before worker dispatch, without creating another dispatcher path.
-        Exceptions deny by default so a broken authority lookup cannot become
-        permission to send.
-        """
-
-        try:
-            decision = await executor.authorize(prepared)
-        except asyncio.CancelledError:
-            raise
-        except Exception:  # noqa: BLE001 - authorization is fail closed.
-            return EffectExecutionAuthorization(
-                allowed=False,
-                safe_code="authorization_unavailable",
-            )
-        if not isinstance(decision, EffectExecutionAuthorization):
-            return EffectExecutionAuthorization(
-                allowed=False,
-                safe_code="authorization_invalid",
-            )
-        return decision
-
-    async def _existing_claim_result(
-        self, *, scope: EffectStageScope, claim: EffectClaim
-    ) -> EffectCoordinatorResult:
-        """Repair idempotent ledger publication but never invoke ``apply``."""
-
-        if claim.state is EffectClaimState.CLAIMED:
-            await self._recorder.record_claimed(scope=scope, claim=claim)
-            return _result_from_claim(claim, status=EffectCoordinatorStatus.CLAIMED)
-        await self._recorder.record_completion(scope=scope, claim=claim)
-        status = (
-            EffectCoordinatorStatus.INDETERMINATE
-            if claim.state is EffectClaimState.INDETERMINATE
-            else EffectCoordinatorStatus.REPLAYED
-        )
-        return _result_from_claim(claim, status=status)
-
-    async def _mark_indeterminate(
-        self,
-        *,
-        scope: EffectStageScope,
-        claim: EffectClaim,
-        state: EffectStageState,
-        command: EffectCommitCommand,
-        safe_message: str,
-        result: EffectExecutionResult | None = None,
-    ) -> EffectCoordinatorResult:
-        indeterminate = _indeterminate_claim(
-            claim=claim, safe_message=safe_message, result=result
-        )
-        stored = await self._claims.update(claim=indeterminate)
-        await self._recorder.record_completion(scope=scope, claim=stored)
-        await self._audit.record(
-            action="effect.commit.indeterminate",
-            facts=_audit_facts(command=command, state=state, claim_id=stored.claim_id),
-        )
-        return _result_from_claim(stored, status=EffectCoordinatorStatus.INDETERMINATE)
-
     async def _mark_reconcile_indeterminate(
         self,
         *,
@@ -734,70 +601,61 @@ async def _digest_reference(
     return digest.hexdigest()
 
 
-async def _abort_safely(executor: EffectExecutor, prepared: PreparedEffect) -> None:
-    try:
-        await executor.abort(prepared)
-    except Exception:  # noqa: BLE001 - abort is a best-effort reservation release.
-        return
-
-
-def _execution_request(
+def _dispatch_request(
     *, state: EffectStageState, command: EffectCommitCommand
-) -> EffectExecutionRequest:
+) -> EffectDispatchRequest:
     decision = state.decision
     if decision is None:  # defensive; caller passed the approval gate.
         raise ValueError("an approved effect stage requires an approval decision")
     proposal_content_ref = state.current_revision.proposal_content_ref
     if proposal_content_ref is None:
         raise ValueError("an executable effect stage requires proposal content")
-    return EffectExecutionRequest(
-        stage_id=state.stage_id,
-        revision=command.revision,
-        idempotency_key=command.idempotency_key,
-        target_ref=state.target.target_ref,
-        target_digest=state.target_digest,
-        proposal_ref=state.current_revision.proposal_ref,
-        proposal_content_ref=proposal_content_ref,
-        proposal_digest=state.current_revision.proposal_digest,
-        actor=decision.actor.actor,
-        decision_ledger_id=decision.ledger_id,
-    )
-
-
-def _claim_from(
-    *,
-    scope: EffectExecutionScope,
-    state: EffectStageState,
-    command: EffectCommitCommand,
-    prepared: PreparedEffect,
-) -> EffectClaim:
-    decision = state.decision
-    if decision is None:  # defensive; approval is checked before this call.
-        raise ValueError("an approved effect stage requires an approval decision")
-    proposal_content_ref = state.current_revision.proposal_content_ref
-    if proposal_content_ref is None:
-        raise ValueError("an executable effect stage requires proposal content")
-    return EffectClaim(
-        org_id=scope.org_id,
-        run_id=scope.run_id,
+    return EffectDispatchRequest(
         stage_id=state.stage_id,
         revision=command.revision,
         idempotency_key=command.idempotency_key,
         executor=state.executor,
-        proposal_digest=state.current_revision.proposal_digest,
-        target_digest=state.target_digest,
-        prepared_ref=prepared.prepared_ref,
         target_ref=state.target.target_ref,
+        target_digest=state.target_digest,
         proposal_ref=state.current_revision.proposal_ref,
         proposal_content_ref=proposal_content_ref,
+        proposal_digest=state.current_revision.proposal_digest,
         actor=decision.actor.actor,
         decision_ledger_id=decision.ledger_id,
     )
 
 
-def _precondition_drift(*, state: EffectStageState, prepared: PreparedEffect) -> bool:
-    expected = state.current_revision.precondition_digest
-    return expected is not None and prepared.observed_precondition_digest != expected
+class _CoordinatorDispatchObserver(EffectDispatchObserver):
+    """Record the shared durable claim before its executor can apply."""
+
+    def __init__(
+        self,
+        *,
+        coordinator: EffectCoordinator,
+        stage_scope: EffectStageScope,
+        state: EffectStageState,
+        command: EffectCommitCommand,
+    ) -> None:
+        self._coordinator = coordinator
+        self._stage_scope = stage_scope
+        self._state = state
+        self._command = command
+
+    async def claimed(self, *, scope: EffectExecutionScope, claim: EffectClaim) -> None:
+        if scope.run_id != self._stage_scope.run_id:
+            raise ValueError("effect dispatch scope changed before apply")
+        await self._coordinator._recorder.record_claimed(
+            scope=self._stage_scope,
+            claim=claim,
+        )
+        await self._coordinator._audit.record(
+            action="effect.commit.claimed",
+            facts=_audit_facts(
+                command=self._command,
+                state=self._state,
+                claim_id=claim.claim_id,
+            ),
+        )
 
 
 def _completed_claim(

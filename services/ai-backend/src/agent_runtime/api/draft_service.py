@@ -295,7 +295,7 @@ class DraftService:
     # -- PRD-D1 staged-write branch ------------------------------------------
 
     # Wire op for a draft-send target when the caller supplies none. The op is
-    # presentation-only here (D1 never executes); D2's CommitEngine resolves the
+    # presentation-only here (D1 never executes); D2's shared dispatcher resolves the
     # real connector operation.
     _DEFAULT_SEND_OP = "send"
 

@@ -14,6 +14,7 @@ from typing import Protocol, cast
 
 from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
 from agent_runtime.effects.claims import EffectClaim
+from agent_runtime.effects.contracts import EffectDispatchRequest
 from agent_runtime.effects.executor import (
     EffectExecutionAuthorization,
     EffectExecutionScope,
@@ -27,10 +28,7 @@ from agent_runtime.surfaces_v2.commit_engine import (
     StageCommitRequest,
     StageCommitTimeout,
 )
-from agent_runtime.surfaces_v2.entities import (
-    EffectExecutionRequest,
-    EffectExecutionResult,
-)
+from agent_runtime.surfaces_v2.entities import EffectExecutionResult
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind, EffectOutcome
 from agent_runtime.surfaces_v2.mcp_connector import McpStageCommitConnector
 
@@ -66,9 +64,7 @@ class McpEffectMaterialError(RuntimeError):
 class McpEffectMaterialResolver(Protocol):
     """Resolve immutable, server-held canonical arguments for one request."""
 
-    async def resolve(
-        self, request: EffectExecutionRequest
-    ) -> McpEffectMaterial | None:
+    async def resolve(self, request: EffectDispatchRequest) -> McpEffectMaterial | None:
         """Return exact approved material, or ``None`` when unavailable."""
 
 
@@ -97,7 +93,7 @@ class McpEffectExecutor:
         self._connector = connector
         self._material_resolver = material_resolver
 
-    async def prepare(self, request: EffectExecutionRequest) -> PreparedEffect:
+    async def prepare(self, request: EffectDispatchRequest) -> PreparedEffect:
         """Validate immutable canonical material without touching a connector."""
 
         await self._resolve_exact_material(request)
@@ -194,7 +190,7 @@ class McpEffectExecutor:
         del prepared
 
     async def _resolve_exact_material(
-        self, request: EffectExecutionRequest
+        self, request: EffectDispatchRequest
     ) -> McpEffectMaterial:
         try:
             material = await self._material_resolver.resolve(request)
@@ -208,7 +204,7 @@ class McpEffectExecutor:
 
     @staticmethod
     def _material_matches(
-        request: EffectExecutionRequest, material: McpEffectMaterial
+        request: EffectDispatchRequest, material: McpEffectMaterial
     ) -> bool:
         return (
             material.target_ref == request.target_ref
@@ -221,7 +217,7 @@ class McpEffectExecutor:
     def _stage_commit_request(
         self,
         *,
-        request: EffectExecutionRequest,
+        request: EffectDispatchRequest,
         material: McpEffectMaterial,
     ) -> StageCommitRequest:
         """Pass an independently re-canonicalized object through unchanged."""
@@ -245,6 +241,7 @@ class McpEffectExecutor:
             target_connector=material.target_connector,
             target_op=material.target_op,
             body="",
+            row_key=material.row_key,
             row_args=cast(JsonObject, copied_arguments),
         )
 

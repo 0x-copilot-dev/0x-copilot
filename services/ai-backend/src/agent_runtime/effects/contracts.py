@@ -425,6 +425,40 @@ class EffectCommitCommand(RuntimeContract):
         return value
 
 
+class EffectDispatchRequest(RuntimeContract):
+    """Exact server-derived facts consumed by the shared effect dispatcher.
+
+    A4 stages use ``proposal://`` references while the older staged-write
+    ledger uses ``draft://`` / ``stage://`` references.  Both are accepted only
+    here, after their respective approval folds have proved the exact revision.
+    Executors receive this one contract, never a mutable stage or queue body.
+    """
+
+    stage_id: str = Field(min_length=1, max_length=255)
+    revision: int = Field(ge=1)
+    idempotency_key: str = Field(min_length=1, max_length=255)
+    executor: EffectExecutorKind
+    target_ref: str = Field(min_length=1, max_length=_REF_MAX_LENGTH)
+    target_digest: Sha256Hex
+    proposal_ref: str = Field(min_length=1, max_length=_REF_MAX_LENGTH)
+    proposal_content_ref: str = Field(min_length=1, max_length=_REF_MAX_LENGTH)
+    proposal_digest: Sha256Hex
+    actor: EffectActor
+    decision_ledger_id: str = Field(min_length=1, max_length=255)
+
+    @field_validator("stage_id", "idempotency_key", "decision_ledger_id")
+    @classmethod
+    def _identifier_is_safe(cls, value: str) -> str:
+        if value != value.strip() or "/" in value or "\\" in value:
+            raise ValueError("effect dispatch identifier must be an opaque token")
+        return value
+
+    @field_validator("target_ref", "proposal_ref", "proposal_content_ref")
+    @classmethod
+    def _reference_is_safe(cls, value: str) -> str:
+        return _safe_reference(value, "effect dispatch reference")
+
+
 def validate_idempotency_key(value: str) -> str:
     """Validate a mutation key before passing it to a persistence port."""
 
@@ -508,6 +542,7 @@ def validate_proposal_executor_pair(
 __all__ = [
     "EffectActorIdentity",
     "EffectCommitCommand",
+    "EffectDispatchRequest",
     "EffectPolicyResolution",
     "EffectPolicySnapshot",
     "EffectProposalKind",

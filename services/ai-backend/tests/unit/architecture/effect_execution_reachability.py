@@ -90,6 +90,7 @@ EFFECT_STAGING_EXCLUDED_MODULES = frozenset(
     {
         "agent_runtime.effects.claims",
         "agent_runtime.effects.coordinator",
+        "agent_runtime.effects.dispatch",
         "agent_runtime.effects.executor",
         "agent_runtime.effects.executor_registry",
     }
@@ -113,6 +114,7 @@ PROTECTED_EXECUTION_NODES = frozenset(
         "agent_runtime.capabilities.browser.effect_adapter:BrowserEffectExecutor",
         "agent_runtime.capabilities.desktop.workspace_authority:WorkspaceEffectExecutor",
         "agent_runtime.effects.coordinator:EffectCoordinator",
+        "agent_runtime.effects.dispatch:EffectDispatchCoordinator",
         "agent_runtime.effects.executor_registry:EffectExecutorRegistry",
         "runtime_worker.builtin_effect_executor:BuiltinRowSetEffectExecutor",
         "runtime_worker.mcp_effect_executor:McpEffectExecutor",
@@ -125,6 +127,20 @@ PROTECTED_EXECUTION_NODES = frozenset(
 # path to a protected node, the graph reports it even when an allowed path also
 # exists.
 APPROVED_EXECUTION_PATHS = (
+    ApprovedExecutionPath(
+        nodes=(
+            "runtime_worker.staged_write_effect_dispatch:RuntimeStagedWriteEffectDispatcher",
+            "agent_runtime.effects.dispatch:EffectDispatchCoordinator",
+        ),
+        reason="The staged-write bridge may enter the same canonical claim/authorize/apply coordinator.",
+    ),
+    ApprovedExecutionPath(
+        nodes=(
+            "runtime_worker.staged_write_effect_dispatch:RuntimeStagedWriteEffectDispatcher",
+            "runtime_worker.mcp_effect_executor:McpEffectExecutor",
+        ),
+        reason="The staged-write bridge may bind the MCP transport only through that shared coordinator.",
+    ),
     ApprovedExecutionPath(
         nodes=(
             "runtime_worker.mcp_operation_storage:RuntimeMcpEffectCoordinatorFactory",

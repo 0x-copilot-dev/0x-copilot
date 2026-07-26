@@ -1,8 +1,8 @@
-"""Production ``StageCommitConnector`` — the CallMcpTool seam outside the agent loop.
+"""Production MCP transport used only by the canonical effect executor.
 
-The :class:`CommitEngine` (``commit_engine.py``) is pure and fully fakeable; this
-is the one place that touches a real external system in the v2 write path. It
-replicates ``CallMcpTool.ainvoke``'s MCP dispatch seam
+``runtime_worker.mcp_effect_executor.McpEffectExecutor`` is the one worker-owned
+owner of this transport's ``execute`` call. It replicates
+``CallMcpTool.ainvoke``'s MCP dispatch seam
 (``registry.resolve_server`` → ``resolution.provider.create_client`` →
 ``client.call_tool`` under ``asyncio.wait_for``) with the same typed-exception
 mapping, but driven by an approved :class:`StageCommitRequest` from the worker

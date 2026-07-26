@@ -20,6 +20,7 @@ import time
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Protocol
 
 from pydantic import Field, field_validator
@@ -70,6 +71,9 @@ from agent_runtime.capabilities.operations.errors import (
     OperationGatewayErrorCode,
 )
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.operations.presentation_boundary import (
+    assert_transport_adapter_presentation_boundary,
+)
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicyMode
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
@@ -288,6 +292,10 @@ class McpOperationAdapter(OperationAdapter):
         services: McpOperationGatewayServices,
         tool_call_id: str | None,
     ) -> None:
+        # Python permits local and dynamic imports, so a test-only import
+        # convention is insufficient.  Verify this provider module's source
+        # before it gains any registry/client capability.
+        assert_transport_adapter_presentation_boundary(Path(__file__))
         self._registry = registry
         self._runtime_context = runtime_context
         self._timeout_seconds = timeout_seconds

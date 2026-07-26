@@ -6,7 +6,7 @@ foreign user ⇒ 403, no ledger event) and delegates the revision/decision/read 
 the stager. The stager alone owns the fail-closed matrix; this layer owns tenancy.
 
 Nothing here executes a write. ``record_decision{approve}`` records intent on the
-ledger and returns — no CommitEngine, no MCP client (PRD-D2 owns execution).
+ledger and returns — no effect executor or MCP client (PRD-D2 owns execution).
 """
 
 from __future__ import annotations

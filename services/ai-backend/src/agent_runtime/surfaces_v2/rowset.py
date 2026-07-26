@@ -5,7 +5,7 @@ decidable. The agent proposes it (per row: a stable ``row_key``, a human
 ``title``, the EXACT connector-op args for that row, and old→new field diffs)
 and may **pre-hold** risky rows with a visible reason that survives a user
 override (FR-C7). The fold turns the ledger into per-row :class:`RowState` +
-:class:`RowCounts`; the D2 CommitEngine executes ONLY the approved rows.
+:class:`RowCounts`; the shared D2 dispatcher executes ONLY the approved rows.
 
 Pure domain: these are ``RuntimeContract`` models + a total validator. Tool
 input (rows, reasons, target args) is untrusted until :class:`RowsetValidator`
@@ -44,7 +44,7 @@ class RowFieldChange(RuntimeContract):
 class StagedRow(RuntimeContract):
     """One proposed row change — the WYSIWYG unit a user approves/holds.
 
-    ``target_args`` are the EXACT connector-op args the CommitEngine dispatches
+    ``target_args`` are the EXACT connector-op args the shared dispatcher sends
     for THIS row, verbatim (FR-C3). ``changes`` are display diffs only.
     """
 

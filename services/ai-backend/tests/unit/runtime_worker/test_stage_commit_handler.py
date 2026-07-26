@@ -1,6 +1,6 @@
-"""End-to-end tests for the PRD-D2 worker CommitEngine handler (``handlers/stage_commit.py``).
+"""End-to-end tests for the shared staged-write effect dispatcher.
 
-Drives the REAL enqueue → command → handler → CommitEngine path over in-memory
+Drives the REAL enqueue → command → handler → shared claim/authorize/apply path over in-memory
 stores with a SPY connector as the only side-effecting boundary. Proves: the exact
 approved body is dispatched (FR-C3), duplicate commands are inert, precondition
 drift refuses + ledgers failed, the stale/ungated command no-ops without an event,
@@ -13,23 +13,26 @@ from __future__ import annotations
 from uuid import uuid4
 
 import pytest
-
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.stage_commit_queue import RuntimeStageCommitQueue
 from agent_runtime.api.stage_ledger import RuntimeStageLedger
 from agent_runtime.capabilities.surfaces.commit import ConnectorCommitResult
+from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
 from agent_runtime.surfaces_v2.commit_engine import (
-    InMemoryStageCommitLedger,
     StageCommitConnectorError,
     StageCommitRequest,
 )
 from agent_runtime.surfaces_v2.staging import WriteStager
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
+from runtime_adapters.in_memory.effect_claim_store import InMemoryEffectClaimStore
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
+from runtime_worker.staged_write_effect_dispatch import (
+    RuntimeStagedWriteEffectDispatcher,
+)
 from tests.unit.rollout_testkit import legacy_staged_write_gate
 
 pytestmark = pytest.mark.anyio
@@ -48,11 +51,18 @@ def anyio_backend() -> str:
 class _SpyConnector:
     """Records the exact request dispatched; performs NO real side effect."""
 
-    def __init__(self, *, raise_on_execute: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        raise_on_execute: Exception | None = None,
+        raise_on_authorize: Exception | None = None,
+    ) -> None:
         self._raise = raise_on_execute
+        self._raise_on_authorize = raise_on_authorize
         self.execute_calls: list[StageCommitRequest] = []
+        self.authorize_calls: list[StageCommitRequest] = []
 
-    async def read_remote_state(self, request: StageCommitRequest):  # noqa: ANN201
+    async def read_remote_state(self, request: StageCommitRequest):
         return None
 
     async def execute(self, request: StageCommitRequest) -> ConnectorCommitResult:
@@ -60,6 +70,31 @@ class _SpyConnector:
         if self._raise is not None:
             raise self._raise
         return ConnectorCommitResult(status="sent", external_ref="ext-1")
+
+    async def authorize(self, request: StageCommitRequest) -> object:
+        self.authorize_calls.append(request)
+        if self._raise_on_authorize is not None:
+            raise self._raise_on_authorize
+        return object()
+
+
+class _DispatcherFactory:
+    def __init__(self, connector: _SpyConnector) -> None:
+        self._connector = connector
+        self._claims = InMemoryEffectClaimStore()
+
+    def for_run(self, *, run: RunRecord) -> RuntimeStagedWriteEffectDispatcher:
+        return RuntimeStagedWriteEffectDispatcher(
+            scope=EffectExecutionScope(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                conversation_id=run.conversation_id,
+                run_id=run.run_id,
+                owner_ref=f"principal://users/{run.user_id}",
+            ),
+            claims=self._claims,
+            connector=self._connector,  # type: ignore[arg-type]
+        )
 
 
 class Harness:
@@ -106,8 +141,7 @@ class Harness:
             persistence=self.store,
             event_store=self.store,
             draft_store=self.drafts,
-            connector=self.connector,
-            ledger=InMemoryStageCommitLedger(),
+            dispatcher_factory=_DispatcherFactory(self.connector),
         )
         self.draft_id = uuid4().hex
 
@@ -161,7 +195,7 @@ class Harness:
         return state
 
     @property
-    def command(self):  # noqa: ANN201
+    def command(self):
         return self.store.stage_commit_commands[0]
 
     def event_types(self) -> list[str]:
@@ -341,3 +375,25 @@ class TestFailureRetryable:
         assert await h.any_draft_sent() is False
         actions = [event_type for event_type, _record in h.store.audit_log]
         assert "surface.commit.failed" in actions
+
+
+class TestPostApprovalAuthorization:
+    async def test_revoked_connector_after_approval_is_claimed_but_never_sent(
+        self,
+    ) -> None:
+        connector = _SpyConnector(
+            raise_on_authorize=StageCommitConnectorError("authorization revoked")
+        )
+        h = Harness(connector=connector)
+        await h.seed_draft()
+        await h.stage_edit_approve()
+
+        await h.handler.handle(h.command)
+
+        # The legacy approval is valid, but live authorization is evaluated by
+        # the shared coordinator after its durable claim and before apply.
+        assert len(connector.authorize_calls) == 1
+        assert connector.execute_calls == []
+        applied = h.write_applied_events()
+        assert len(applied) == 1
+        assert applied[0].payload["failure"]["code"] == "connector_error"

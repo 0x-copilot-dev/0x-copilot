@@ -22,6 +22,7 @@ from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
     reviewed_rowset_target,
 )
 from agent_runtime.effects.claims import EffectClaim
+from agent_runtime.effects.contracts import EffectDispatchRequest
 from agent_runtime.effects.executor import (
     EffectExecutionAuthorization,
     EffectExecutionScope,
@@ -39,10 +40,7 @@ from agent_runtime.surfaces_v2.commit_engine import (
     StageCommitRequest,
     StageCommitTimeout,
 )
-from agent_runtime.surfaces_v2.entities import (
-    EffectExecutionRequest,
-    EffectExecutionResult,
-)
+from agent_runtime.surfaces_v2.entities import EffectExecutionResult
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind, EffectOutcome
 from agent_runtime.surfaces_v2.rowset import (
     RowsetValidationError,
@@ -85,7 +83,7 @@ class BuiltinRowSetMaterialResolver(Protocol):
     """Resolve only the one row-set proposal shape this executor understands."""
 
     async def resolve(
-        self, request: EffectExecutionRequest
+        self, request: EffectDispatchRequest
     ) -> BuiltinRowSetEffectMaterial | None:
         """Return digest-pinned material or ``None`` without leaking its body."""
 
@@ -97,7 +95,7 @@ class RuntimeBuiltinRowSetMaterialResolver:
     arguments: McpOperationArgumentStorePort
 
     async def resolve(
-        self, request: EffectExecutionRequest
+        self, request: EffectDispatchRequest
     ) -> BuiltinRowSetEffectMaterial | None:
         try:
             body = await self.arguments.resolve(
@@ -177,7 +175,7 @@ class BuiltinRowSetEffectExecutor:
         self._connector = connector
         self._material_resolver = material_resolver
 
-    async def prepare(self, request: EffectExecutionRequest) -> PreparedEffect:
+    async def prepare(self, request: EffectDispatchRequest) -> PreparedEffect:
         await self._resolve_exact_material(request)
         return PreparedEffect(
             request=request,
@@ -277,7 +275,7 @@ class BuiltinRowSetEffectExecutor:
         del prepared
 
     async def _resolve_exact_material(
-        self, request: EffectExecutionRequest
+        self, request: EffectDispatchRequest
     ) -> BuiltinRowSetEffectMaterial:
         try:
             material = await self._material_resolver.resolve(request)
@@ -291,7 +289,7 @@ class BuiltinRowSetEffectExecutor:
 
     @staticmethod
     def _material_matches(
-        request: EffectExecutionRequest, material: BuiltinRowSetEffectMaterial
+        request: EffectDispatchRequest, material: BuiltinRowSetEffectMaterial
     ) -> bool:
         return (
             reviewed_rowset_target(
@@ -309,7 +307,7 @@ class BuiltinRowSetEffectExecutor:
     def _request_for_row(
         self,
         *,
-        request: EffectExecutionRequest,
+        request: EffectDispatchRequest,
         material: BuiltinRowSetEffectMaterial,
         row: StagedRow,
     ) -> StageCommitRequest:
