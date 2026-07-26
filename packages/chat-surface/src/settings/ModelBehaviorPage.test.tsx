@@ -255,8 +255,8 @@ describe("<ModelBehaviorPage>", () => {
 
   it("says where a single connector is muted, since that is not this control", () => {
     // The per-connector mute lives on the suggestion card (that is where the
-    // intent forms) and is reversible in Tools. Without the pointer, a user
-    // looking to silence one vendor sets the global control to Never.
+    // intent forms) and is undone in the list below. Without the pointer, a
+    // user looking to silence one vendor sets the global control to Never.
     render(
       <ModelBehaviorPage
         value={BASE_VALUE}
@@ -265,8 +265,59 @@ describe("<ModelBehaviorPage>", () => {
       />,
     );
     const card = screen.getByTestId("connector-suggestions");
-    expect(card.textContent).toMatch(/from the card itself/i);
-    expect(card.textContent).toMatch(/Tools/);
+    expect(card.textContent).toMatch(/from its suggestion card/i);
+    expect(card.textContent).toMatch(/listed below/i);
+  });
+
+  // The reversal. A card's Deny persists, which is only defensible because the
+  // decision is visible and undoable — otherwise one misclick removes a
+  // connector from every future run's suggestions with no way to notice.
+  describe("muted connectors", () => {
+    it("lists them under the appetite control", () => {
+      render(
+        <ModelBehaviorPage
+          value={BASE_VALUE}
+          onChange={vi.fn()}
+          controller={makeController()}
+          mutedConnectors={[
+            { slug: "linear", displayName: "Linear" },
+            { slug: "google-drive", displayName: "Google Drive" },
+          ]}
+        />,
+      );
+      const list = screen.getByTestId("muted-connectors");
+      expect(list.textContent).toMatch(/Linear/);
+      expect(list.textContent).toMatch(/Google Drive/);
+    });
+
+    it("unmutes by slug", () => {
+      const onUnmute = vi.fn();
+      render(
+        <ModelBehaviorPage
+          value={BASE_VALUE}
+          onChange={vi.fn()}
+          controller={makeController()}
+          mutedConnectors={[
+            { slug: "google-drive", displayName: "Google Drive" },
+          ]}
+          onUnmuteConnector={onUnmute}
+        />,
+      );
+      fireEvent.click(screen.getByTestId("unmute-google-drive"));
+      expect(onUnmute).toHaveBeenCalledWith("google-drive");
+    });
+
+    it("renders nothing when there is nothing to undo", () => {
+      // The card stays a single row for the many users who never mute.
+      render(
+        <ModelBehaviorPage
+          value={BASE_VALUE}
+          onChange={vi.fn()}
+          controller={makeController()}
+        />,
+      );
+      expect(screen.queryByTestId("muted-connectors")).toBeNull();
+    });
   });
 
   it("reports web-access toggles", () => {

@@ -169,6 +169,65 @@ describe("projectApprovals", () => {
     const projection = projectApprovals([requested("a-1")]);
     expect(projection.pending[0].serverId).toBeNull();
   });
+
+  // `catalog_slug` is stamped only when the discovery lookup fell through to the
+  // catalog, and it is what separates the two things this card does: a gate is a
+  // connector the user HAS and the run is blocked on, while a slugged suggestion
+  // is one they do not have and did not ask for. Only the latter can be muted.
+  it("carries catalogSlug for an uninstalled catalog suggestion", () => {
+    seq = 0;
+    const projection = projectApprovals([
+      envelope({
+        event_type: "mcp_auth_required" as RuntimeEventEnvelope["event_type"],
+        payload: {
+          approval_id: "mcp_discovery:run-1:seed:linear",
+          approval_kind: "mcp_auth",
+          server_id: "seed:linear",
+          display_name: "Linear",
+          catalog_slug: "linear",
+        },
+      }),
+    ]);
+    expect(projection.pending[0].catalogSlug).toBe("linear");
+  });
+
+  it("leaves catalogSlug null for a gate on an installed connector", () => {
+    seq = 0;
+    const projection = projectApprovals([
+      mcpAuthRequired("mcp_auth:run-1:linear", "linear"),
+    ]);
+    // No slug → nothing to mute. "Never suggest this again" is meaningless for
+    // a connector the user installed on purpose.
+    expect(projection.pending[0].catalogSlug).toBeNull();
+  });
+
+  it("does not let a redelivered frame erase the slug", () => {
+    // Same replay rule as `presentation`: losing the slug would silently demote
+    // a muteable suggestion to a card the user can only decline for this run.
+    seq = 0;
+    const withSlug = envelope({
+      event_type: "mcp_auth_required" as RuntimeEventEnvelope["event_type"],
+      payload: {
+        approval_id: "mcp_discovery:run-1:seed:linear",
+        approval_kind: "mcp_auth",
+        server_id: "seed:linear",
+        display_name: "Linear",
+        catalog_slug: "linear",
+      },
+    });
+    const withoutSlug = envelope({
+      event_type: "mcp_auth_required" as RuntimeEventEnvelope["event_type"],
+      payload: {
+        approval_id: "mcp_discovery:run-1:seed:linear",
+        approval_kind: "mcp_auth",
+        server_id: "seed:linear",
+        display_name: "Linear",
+      },
+    });
+    const projection = projectApprovals([withSlug, withoutSlug]);
+    expect(projection.pending).toHaveLength(1);
+    expect(projection.pending[0].catalogSlug).toBe("linear");
+  });
 });
 
 describe("overlayApprovalDecisions", () => {

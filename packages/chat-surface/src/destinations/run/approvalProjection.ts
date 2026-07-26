@@ -67,6 +67,17 @@ export interface RunApproval {
    * suggestions (both `mcp_auth_required` events); null on plain tool approvals.
    */
   readonly serverId: string | null;
+  /**
+   * The catalog slug an uninstalled suggestion refers to (`payload.catalog_slug`,
+   * stamped only when the discovery lookup fell through to the catalog). It is
+   * what separates the two things this card does: an `mcp_auth` gate is a
+   * connector the user HAS and the run is blocked on, while a suggestion with a
+   * slug is a connector they do not have and did not ask for. Only the latter
+   * can be muted — "never suggest this again" is meaningless for something
+   * already installed — and the mute is keyed by slug, not `server_id`, because
+   * no server row exists yet.
+   */
+  readonly catalogSlug: string | null;
   /** Vendor·access pill ({ vendor: "SLACK", access: "ACTION" }); null when unknown. */
   readonly category: {
     readonly vendor: string;
@@ -146,6 +157,7 @@ interface MutableApproval {
   summary: string | null;
   approvalKind: RunApprovalKind;
   serverId: string | null;
+  catalogSlug: string | null;
   category: { vendor: string; access: string } | null;
   params: ActivityParam[];
   target: string | null;
@@ -277,6 +289,11 @@ function reduceRequested(
     // WC-P5a (AD-7): the connector target of an `mcp_auth` gate / `mcp_discovery`
     // suggestion — the arg the Connect card hands to `McpAuthPort.beginAuth`.
     serverId: stringField(payload.server_id) ?? existing?.serverId ?? null,
+    // Same replay rule as `presentation`: a redelivered frame that omits the
+    // slug must not erase it, or a muteable suggestion silently becomes a
+    // gate the user can only decline for this one run.
+    catalogSlug:
+      stringField(payload.catalog_slug) ?? existing?.catalogSlug ?? null,
     category: buildCategory(event),
     params: buildParams(payload.arguments),
     target: buildTarget(payload.arguments),
@@ -336,6 +353,7 @@ function freeze(m: MutableApproval): RunApproval {
     summary: m.summary,
     approvalKind: m.approvalKind,
     serverId: m.serverId,
+    catalogSlug: m.catalogSlug,
     category: m.category,
     params: m.params,
     target: m.target,

@@ -38,11 +38,12 @@ import type {
   ConnectorSuggestionMode,
   ReasoningDepth,
 } from "@0x-copilot/api-types";
-import { Select, TextInput, Toggle } from "@0x-copilot/design-system";
+import { Button, Select, TextInput, Toggle } from "@0x-copilot/design-system";
 
 import { ApprovalPolicy, type ApprovalPolicyValue } from "./ApprovalPolicy";
 import { Frow, SecTitle, SetCard, SetNote } from "./SettingsChrome";
 import type { SettingsSurfaceController } from "./SettingsSurface";
+import type { MutedConnector } from "./useConnectorSuggestions";
 
 // ---------------------------------------------------------------------------
 // Vocabulary.
@@ -175,6 +176,15 @@ export interface ModelBehaviorPageProps {
   /** Load error — surfaced as a role="alert" with a Retry affordance. */
   readonly error?: string | null;
   readonly onRetry?: () => void;
+  /**
+   * Connectors the user muted from a suggestion card. Rendered under the
+   * appetite control so the decision is reversible where it is governed —
+   * without this the mute is a one-way door, and one misclick would remove a
+   * connector from every future run's suggestions with no way to notice.
+   */
+  readonly mutedConnectors?: readonly MutedConnector[];
+  /** Un-mute a slug; omitted → the rows render inert. */
+  readonly onUnmuteConnector?: (slug: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +259,8 @@ export function ModelBehaviorPage({
   loading = false,
   error = null,
   onRetry,
+  mutedConnectors = [],
+  onUnmuteConnector,
 }: ModelBehaviorPageProps): ReactElement {
   const reactId = useId();
   const defaultModelId = `${reactId}-default-model`;
@@ -492,8 +504,8 @@ export function ModelBehaviorPage({
         <Frow
           label="Suggest connectors"
           hint={
-            "You can also dismiss a single suggestion from the card itself; " +
-            "muted connectors stay listed in Tools."
+            "You can also mute a single connector from its suggestion card; " +
+            "muted ones are listed below."
           }
           htmlFor={suggestionsId}
         >
@@ -516,6 +528,35 @@ export function ModelBehaviorPage({
             ))}
           </Select>
         </Frow>
+
+        {/* The reversal. Denying a suggestion is deliberately decisive — it
+            persists — which is only defensible because the decision is visible
+            and undoable here. Rendered only when there is something to undo, so
+            the card stays a single row for the many users who never mute. */}
+        {mutedConnectors.length > 0 ? (
+          <div data-testid="muted-connectors">
+            <p className="ui-section-label">Muted</p>
+            <ul className="lrows">
+              {mutedConnectors.map((connector) => (
+                <li className="lrow" key={connector.slug}>
+                  <span className="lrow__main">
+                    <span className="lrow__title">{connector.displayName}</span>
+                    <span className="lrow__sub">
+                      Never suggested for this workspace.
+                    </span>
+                  </span>
+                  <Button
+                    variant="ghost"
+                    data-testid={`unmute-${connector.slug}`}
+                    onClick={() => onUnmuteConnector?.(connector.slug)}
+                  >
+                    Unmute
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </SetCard>
 
       {/* Spend guardrail (FR-5.18). */}
