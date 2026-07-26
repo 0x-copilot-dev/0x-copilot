@@ -57,6 +57,10 @@ import {
   type ReactNode,
 } from "react";
 
+// The answer payload an `ask_a_question` card emits. Type-only — the card
+// itself is mounted by TcChat; this shell only owns the POST that resumes the run.
+import type { QuestionAnswer } from "../../approvals";
+
 import {
   isSourceOpenResultV2,
   type AgentRunStatus,
@@ -1685,6 +1689,34 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [resolveApproval],
   );
 
+  // `ask_a_question` resumes the harness with the ANSWER, not a bare approval:
+  // the worker threads `answer` into the LangGraph resume payload, and an
+  // approve with no answer resolves the interrupt as declined. An empty answer
+  // is therefore a reject (the card's "Skip"), never a silent approve.
+  const handleAnswer = useCallback(
+    (approvalId: string, answer: QuestionAnswer): void => {
+      if (answer.answer.trim() === "") {
+        resolveApproval(approvalId, "rejected");
+        return;
+      }
+      setLocalDecisions((prev) => {
+        const next = new Map(prev);
+        next.set(approvalId, "approved");
+        return next;
+      });
+      void transport
+        .request({
+          method: "POST",
+          path: `/v1/agent/approvals/${approvalId}/decision`,
+          body: { decision: "approved", answer: answer.answer },
+        })
+        .catch(() => {
+          /* optimistic: SSE `approval_resolved` reconciles the truth */
+        });
+    },
+    [resolveApproval, transport],
+  );
+
   // PRD-B3: the two view-lifecycle mutations. Both ride the Transport port (no
   // bare fetch/window) and are keyed on `surface_id` + the owning `run_id`
   // (SDR §4 query param). The resulting `view.derived` / `view.preference`
@@ -3169,6 +3201,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         approvals={chatApprovals}
         onApprove={handleApprove}
         onReject={handleReject}
+        onAnswer={handleAnswer}
         // WC-P5a (AD-6/AD-7): the MCP-OAuth launcher. TcChat renders the Connect
         // card (→ this port) for `mcp_auth` gates / `mcp_discovery:` suggestions
         // instead of Approve/Reject, keeping them off the `/decision` POST. Absent

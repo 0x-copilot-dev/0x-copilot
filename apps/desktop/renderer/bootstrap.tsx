@@ -20,6 +20,11 @@ import "@0x-copilot/chat-surface/src/messages/markdown.css";
 // Subagent cards, fleet rows, and the Agents tab's nested timeline are shared
 // with the web host; load their presentation alongside the other surface CSS.
 import "@0x-copilot/chat-surface/src/subagents/subagents.css";
+// Consent cards (approval shapes + connector card). These rules used to live
+// only in the web app's styles.css, which this renderer never imports — the
+// cockpit's approval card rendered as a bare frame. Shipping them from the
+// package is what keeps both hosts on one copy.
+import "@0x-copilot/chat-surface/src/approvals/approvals.css";
 import "./desktop.css";
 
 import {

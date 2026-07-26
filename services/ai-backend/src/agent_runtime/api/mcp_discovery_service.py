@@ -16,7 +16,8 @@ from __future__ import annotations
 from contextvars import ContextVar
 from typing import TYPE_CHECKING, Protocol
 
-from agent_runtime.api.constants import Keys, Messages
+from agent_runtime.api.connector_trust import ConnectorTrustLine
+from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.capabilities.mcp.cards import (
     McpAuthMode,
     McpAuthState,
@@ -410,6 +411,10 @@ class McpDiscoveryService:
             Keys.Payload.MESSAGE: message,
             Keys.Field.DISCOVERY_REASON: reason,
             Keys.Field.EXPECTED_VALUE: expected_value,
+            # Trust line, all server-derived (see ``Keys.Field.ACCESS_MODE``).
+            Keys.Field.ACCESS_MODE: card.access_mode.value,
+            Keys.Field.AUTH_HOST: ConnectorTrustLine.auth_host(auth_url),
+            Keys.Field.SOURCE_TOOL: Values.Tool.SUGGEST_MCP_CONNECTOR,
         }
         # Flag uninstalled catalog suggestions so the FE deep-links the
         # Connect button to the catalog install flow instead of starting

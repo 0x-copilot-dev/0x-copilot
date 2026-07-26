@@ -3,6 +3,42 @@
 // useApprovalsQueue, ApprovalFocusContext, forward/undo POST plumbing)
 // stays host-owned. The host renders these behind its own callbacks.
 export { ApprovalCard, type ApprovalCardProps } from "./ApprovalCard";
+// The design-accurate consent surfaces: one approval frame with three shapes,
+// and the four-state connector card. Their CSS ships from this package
+// (`approvals.css`) so both hosts get it — the previous card's rules lived only
+// in the web app and never reached desktop.
+export { ConsentCard, type ConsentCardProps } from "./ConsentCard";
+// `ask_a_question` is an interrupt, not an approval: it blocks the run, it can
+// outlive the screen you are on, and its answer is an answer — not a consent.
+export {
+  QuestionCard,
+  type QuestionCardProps,
+  type QuestionAnswer,
+} from "./QuestionCard";
+export {
+  parseQuestion,
+  composeAnswer,
+  isAnswerable,
+  type QuestionSpec,
+  type QuestionOption,
+} from "./question";
+export {
+  ConnectorConsentCard,
+  type ConnectorConsentCardProps,
+  type ConnectorConsentState,
+} from "./ConnectorConsentCard";
+export {
+  accessLabel,
+  parseApprovalPresentation,
+  parseConnectorTrust,
+  EMPTY_CONNECTOR_TRUST,
+  type ApprovalLayout,
+  type ApprovalPresentation,
+  type ApprovalPreview,
+  type ApprovalRow,
+  type ApprovalRowStatus,
+  type ConnectorTrust,
+} from "./presentation";
 export {
   ApprovalReceipt,
   type ApprovalReceiptProps,

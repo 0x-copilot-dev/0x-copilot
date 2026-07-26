@@ -25,6 +25,13 @@
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import type { ActivityParam } from "../../approvals";
+import { parseQuestion, type QuestionSpec } from "../../approvals/question";
+import {
+  parseApprovalPresentation,
+  parseConnectorTrust,
+  type ApprovalPresentation,
+  type ConnectorTrust,
+} from "../../approvals/presentation";
 import type {
   ApprovalsQueueItem,
   ApprovalsQueueProjection,
@@ -69,6 +76,23 @@ export interface RunApproval {
   readonly params: readonly ActivityParam[];
   /** Connector / target preview ("#launch-aurora"); null when absent. */
   readonly target: string | null;
+  /**
+   * The design's card shape — a batch of decidable rows, the draft about to be
+   * sent, or the key/value frame. Null keeps the params frame, which is what
+   * every approval rendered before shapes existed.
+   */
+  readonly presentation: ApprovalPresentation | null;
+  /**
+   * Connector consent card's server-derived trust clauses. Only meaningful on
+   * `mcp_auth` approvals; a null field means the clause has no trustworthy
+   * source and the card must omit it rather than guess.
+   */
+  readonly connectorTrust: ConnectorTrust;
+  /**
+   * The parsed `ask_a_question` payload. Non-null only for that kind — it is
+   * the difference between a card you answer and a card you approve.
+   */
+  readonly question: QuestionSpec | null;
   readonly runId: string | null;
   /** Anchor for the rail's jump-to-card (the requesting event's id). */
   readonly messageId: string;
@@ -125,6 +149,9 @@ interface MutableApproval {
   category: { vendor: string; access: string } | null;
   params: ActivityParam[];
   target: string | null;
+  presentation: ApprovalPresentation | null;
+  connectorTrust: ConnectorTrust;
+  question: QuestionSpec | null;
   runId: string | null;
   messageId: string;
   sequenceNo: number;
@@ -253,6 +280,25 @@ function reduceRequested(
     category: buildCategory(event),
     params: buildParams(payload.arguments),
     target: buildTarget(payload.arguments),
+    // A redelivered event carrying no shape must not erase a shape an earlier
+    // frame established — replay would otherwise flatten a rows card to params.
+    presentation:
+      parseApprovalPresentation(payload.presentation) ??
+      existing?.presentation ??
+      null,
+    connectorTrust: mergeConnectorTrust(
+      parseConnectorTrust(payload),
+      existing?.connectorTrust,
+    ),
+    // Gated on the KIND, not on the payload's shape. `parseQuestion` falls
+    // back to `payload.message` (the tool mirrors the question there), and
+    // every approval carries a `message` — so without this gate every
+    // approval would render as a question card. Same replay rule as
+    // `presentation`: a later frame that omits it must not erase it.
+    question:
+      resolveApprovalKind(event) === "ask_a_question"
+        ? (parseQuestion(payload) ?? existing?.question ?? null)
+        : null,
     runId: event.run_id,
     messageId: event.event_id,
     sequenceNo: existing?.sequenceNo ?? event.sequence_no,
@@ -293,6 +339,9 @@ function freeze(m: MutableApproval): RunApproval {
     category: m.category,
     params: m.params,
     target: m.target,
+    presentation: m.presentation,
+    connectorTrust: m.connectorTrust,
+    question: m.question,
     runId: m.runId,
     messageId: m.messageId,
     sequenceNo: m.sequenceNo,
@@ -415,6 +464,29 @@ function buildTarget(value: unknown): string | null {
     stringField(args.recipient) ??
     null
   );
+}
+
+/**
+ * Keep any trust clause an earlier frame established.
+ *
+ * The blocking gate and the discovery suggestion can both touch one approval id,
+ * and a later frame that omits `auth_host` means "this frame didn't carry it",
+ * not "there is no host". Dropping to null there would silently retract a clause
+ * the user already read. Nothing is ever *invented* here — an absent clause on
+ * both sides stays absent.
+ */
+function mergeConnectorTrust(
+  next: ConnectorTrust,
+  existing: ConnectorTrust | undefined,
+): ConnectorTrust {
+  if (existing === undefined) {
+    return next;
+  }
+  return {
+    accessMode: next.accessMode ?? existing.accessMode,
+    authHost: next.authHost ?? existing.authHost,
+    sourceTool: next.sourceTool ?? existing.sourceTool,
+  };
 }
 
 function stringField(value: unknown): string | null {

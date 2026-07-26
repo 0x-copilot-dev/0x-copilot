@@ -421,3 +421,33 @@ class ApprovalReversible(StrEnum):
     YES = "yes"
     NO = "no"
     NOT_APPLICABLE = "n/a"
+
+
+class ApprovalLayout(StrEnum):
+    """Which consent-card shape the approval renders as.
+
+    The design draws three distinct approval cards, and the shape is a
+    property of *what is being approved*, not of the vendor:
+
+    - ``PARAMS``  — a key/value frame (the default; a Linear issue, a Slack post).
+    - ``ROWS``    — a batch of individually decidable line items (a payout run).
+    - ``PREVIEW`` — the literal content about to leave the workspace (a draft
+      thread, an email body), because a params table cannot answer "is this the
+      right text".
+
+    Open-ended on purpose: an unrecognised value falls back to ``PARAMS`` on the
+    client, so a server can ship a new shape ahead of a bundle.
+    """
+
+    PARAMS = "params"
+    ROWS = "rows"
+    PREVIEW = "preview"
+
+
+class ApprovalRowStatus(StrEnum):
+    """Per-line-item state inside an ``ApprovalLayout.ROWS`` card."""
+
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    QUEUED = "queued"

@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     NonNegativeInt,
     PositiveInt,
+    ValidationError,
     ValidationInfo,
     field_validator,
 )
@@ -54,6 +55,7 @@ class _Fields:
 
     TITLE = "title"
     SUBTITLE = "subtitle"
+    PRESENTATION = "presentation"
     URL = "url"
     BADGE = "badge"
     SUMMARY = "summary"
@@ -695,6 +697,16 @@ class RuntimeEventPresentationProjector:
             Keys.Field.SOURCE_TOOL_CALL_ID,
             Keys.Field.DISCOVERY_REASON,
             Keys.Field.EXPECTED_VALUE,
+            # The consent card's trust line — the scope the connector is being
+            # granted, the host the sign-in will actually open, and which of the
+            # two connector surfaces raised the card. All three are derived
+            # server-side (see ``agent_runtime.api.connector_trust``); they ride
+            # the same allow-list so a blocking gate and a suggestion make
+            # identical promises. ``AUTH_HOST`` is legitimately empty when no
+            # auth session was issued, so it is emitted via ``_text_or_empty``
+            # below rather than dropped by the non-empty filter here.
+            Keys.Field.ACCESS_MODE,
+            Keys.Field.SOURCE_TOOL,
             # PR 4.4.7 Phase 2 (Slice C) — present iff the suggestion
             # came from the catalog (uninstalled connector). The FE
             # branches Connect on this so it routes to the install
@@ -705,6 +717,14 @@ class RuntimeEventPresentationProjector:
             value = cls._text(payload.get(key))
             if value is not None:
                 safe_payload[key] = value
+        # ``auth_host`` carries meaning when EMPTY: no auth session was issued,
+        # so the card has no sign-in host it can honestly name and drops that
+        # clause. The non-empty filter above would erase that signal and let the
+        # client fall back to guessing, so the key is projected explicitly
+        # whenever the emitter set it at all.
+        auth_host = payload.get(Keys.Field.AUTH_HOST)
+        if isinstance(auth_host, str):
+            safe_payload[Keys.Field.AUTH_HOST] = auth_host
         # PR 4.4.7 follow-up — boolean flag (string-only ``_text``
         # would coerce False to None). Pass through bool values
         # verbatim; absent/non-bool keys are dropped.
@@ -1649,6 +1669,27 @@ class RuntimeEventPresentationProjector:
             safe_payload["grant_options"] = [
                 option for option in grant_options if isinstance(option, str)
             ]
+        # Consent-card shape (rows / preview / params). Re-validated here rather
+        # than passed through as a dict: this block reaches the client and drives
+        # what the user reads before consenting, so it must satisfy the same
+        # contract on the way out as it did on the way in. A malformed block is
+        # dropped and the card falls back to its params frame — never rendered
+        # half-built.
+        presentation = payload.get(_Fields.PRESENTATION)
+        if isinstance(presentation, dict):
+            # Lazy import for the same circularity reason documented at the top
+            # of this module: ``schemas.approvals`` pulls in the surfaces domain,
+            # which loads back through this package during init.
+            from runtime_api.schemas.approvals import ApprovalPresentation
+
+            try:
+                safe_payload[_Fields.PRESENTATION] = (
+                    ApprovalPresentation.model_validate(presentation).model_dump(
+                        mode="json"
+                    )
+                )
+            except ValidationError:
+                pass
         return safe_payload
 
     @classmethod
