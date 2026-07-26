@@ -21,8 +21,10 @@ from agent_runtime.validation import ValueNormalizer
 from runtime_api.schemas.common import (
     ApprovalCategory,
     ApprovalDecision,
+    ApprovalLayout,
     ApprovalReasonCode,
     ApprovalReversible,
+    ApprovalRowStatus,
     ApprovalStatus,
 )
 
@@ -311,6 +313,119 @@ class ApprovalParam(RuntimeContract):
     hint: _PARAM_HINT | None = None
 
 
+# --------------------------------------------------------------------------
+# Consent-card presentation (the design's three approval shapes).
+#
+# THE TRUST SPLIT. Everything in ``ApprovalPresentation`` is *narrative* — what
+# is about to happen, in the model's own words, because the model is the thing
+# that drafted the post and assembled the payout batch. Everything the user
+# relies on to decide *whether it is safe* stays server-derived and lives on
+# ``McpApprovalMetadata`` proper: ``vendor``, ``category`` (read/write/action),
+# ``reason_code`` (which drives the reassurance line), and ``reversible``.
+#
+# A model must never be able to write "Read-only" onto a card that writes, or
+# put a reassuring sentence under an irreversible action. So the model may
+# author labels and content; it may not author the claims. Every field here is
+# length-capped, and clients MUST render these as plain text — never markdown,
+# never HTML — because this text originates in an untrusted completion and may
+# itself have come from tool output.
+# --------------------------------------------------------------------------
+
+_ROW_LABEL = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+_ROW_NOTE = Annotated[str, StringConstraints(min_length=1, max_length=40)]
+_ROW_VALUE = Annotated[str, StringConstraints(min_length=1, max_length=48)]
+_ROW_INITIALS = Annotated[str, StringConstraints(min_length=1, max_length=3)]
+_ROW_ID = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+_ACTION_LABEL = Annotated[str, StringConstraints(min_length=1, max_length=32)]
+_PROVENANCE = Annotated[str, StringConstraints(min_length=1, max_length=72)]
+_PREVIEW_TEXT = Annotated[str, StringConstraints(min_length=1, max_length=2000)]
+_PREVIEW_META = Annotated[str, StringConstraints(min_length=1, max_length=96)]
+
+# Caps stop a model from turning one consent card into an unbounded surface.
+APPROVAL_MAX_ROWS = 12
+
+
+class ApprovalRow(RuntimeContract):
+    """One line item in an ``ApprovalLayout.ROWS`` card (a payout, a recipient).
+
+    ``decidable`` rows carry their own Approve/Reject pair, so the user can
+    reject one payee without killing the batch. ``row_id`` is what a per-row
+    decision is keyed on; a row without one is display-only regardless of
+    ``decidable`` (enforced below rather than trusted).
+    """
+
+    label: _ROW_LABEL
+    value: _ROW_VALUE
+    note: _ROW_NOTE | None = None
+    initials: _ROW_INITIALS | None = None
+    row_id: _ROW_ID | None = None
+    status: ApprovalRowStatus = ApprovalRowStatus.PENDING
+    decidable: bool = False
+
+    @model_validator(mode="after")
+    def _decidable_requires_row_id(self) -> "ApprovalRow":
+        """Downgrade a decidable row with no id to display-only.
+
+        Fail *soft* rather than raising: a malformed row should cost the user a
+        per-row button, not the whole consent card. Raising here would drop the
+        entire presentation to the params fallback and hide the batch.
+        """
+        if self.decidable and self.row_id is None:
+            object.__setattr__(self, "decidable", False)
+        return self
+
+
+class ApprovalPreview(RuntimeContract):
+    """The literal content about to leave the workspace, plus a metadata line.
+
+    ``text`` is the draft itself ("Launch Week is here…"); ``meta`` is the
+    volumetric note the design sets under it ("9 posts · draft completes ~11:46").
+    """
+
+    text: _PREVIEW_TEXT
+    meta: _PREVIEW_META | None = None
+
+
+class ApprovalPresentation(RuntimeContract):
+    """Model-authored narrative layer for the consent card. Never carries trust claims.
+
+    ``approve_label`` exists because the design uses a different verb per shape —
+    "Approve", "Approve post", "Approve & sign" — and a signature promise on an
+    action that never touches a wallet is its own small lie. When absent the
+    client falls back to the neutral "Approve".
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    layout: ApprovalLayout = ApprovalLayout.PARAMS
+    approve_label: _ACTION_LABEL | None = None
+    reject_label: _ACTION_LABEL | None = None
+    # "Launch Week ops · Safe 3-of-5" — which run, and against which account.
+    provenance: _PROVENANCE | None = None
+    rows: tuple[ApprovalRow, ...] = ()
+    preview: ApprovalPreview | None = None
+
+    @field_validator("rows")
+    @classmethod
+    def _cap_rows(cls, value: tuple[ApprovalRow, ...]) -> tuple[ApprovalRow, ...]:
+        """Truncate rather than reject — a 40-row batch should still be approvable."""
+        return value[:APPROVAL_MAX_ROWS]
+
+    @model_validator(mode="after")
+    def _layout_matches_content(self) -> "ApprovalPresentation":
+        """Fall back to ``PARAMS`` when the declared layout has nothing to draw.
+
+        A ``ROWS`` card with no rows or a ``PREVIEW`` card with no preview would
+        render as an empty box. Correcting the layout keeps the card useful
+        instead of trusting a mislabelled declaration.
+        """
+        if self.layout is ApprovalLayout.ROWS and not self.rows:
+            object.__setattr__(self, "layout", ApprovalLayout.PARAMS)
+        if self.layout is ApprovalLayout.PREVIEW and self.preview is None:
+            object.__setattr__(self, "layout", ApprovalLayout.PARAMS)
+        return self
+
+
 class McpApprovalMetadata(RuntimeContract):
     """Structured consent-card payload nested inside ``ApprovalRequestRecord.metadata`` for MCP tool approvals."""
 
@@ -321,6 +436,9 @@ class McpApprovalMetadata(RuntimeContract):
     reason_code: ApprovalReasonCode
     reversible: ApprovalReversible = ApprovalReversible.NOT_APPLICABLE
     params: tuple[ApprovalParam, ...] = ()
+    # Optional narrative layer. Absent → the client renders the params frame it
+    # renders today, so every existing approval is unchanged on the wire.
+    presentation: ApprovalPresentation | None = None
 
     @field_validator("params")
     @classmethod

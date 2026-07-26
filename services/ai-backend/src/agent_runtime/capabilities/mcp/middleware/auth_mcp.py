@@ -11,6 +11,12 @@ from pydantic import Field, ValidationError
 from langgraph.types import interrupt as langgraph_interrupt
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
+from agent_runtime.api.connector_trust import ConnectorTrustLine
+
+# Aliased: this module's ``Keys`` is the MCP-local key set, while the consent
+# card's trust-line fields live on the API event key set shared with the
+# non-blocking discovery payload.
+from agent_runtime.api.constants import Keys as ApiKeys
 from agent_runtime.capabilities.mcp.cards import McpLoadErrorCode, McpLoadResult
 from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
 from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
@@ -90,6 +96,13 @@ class AuthMcpTool:
             "auth_url": session.auth_url,
             "expires_at": session.expires_at.isoformat(),
             "message": f"Authenticate {session.display_name} to continue using this MCP server.",
+            # Same server-derived trust line the non-blocking suggestion carries,
+            # so the two connector cards make identical promises. The auth
+            # session has no connector row to read a scope off, so ``access_mode``
+            # is absent here and the client drops that clause rather than
+            # inventing one.
+            ApiKeys.Field.AUTH_HOST: ConnectorTrustLine.auth_host(session.auth_url),
+            ApiKeys.Field.SOURCE_TOOL: Values.ToolName.AUTH_MCP,
         }
         resume = self.interrupt_handler(payload)
         result = self._resume_result(session, resume)

@@ -27,7 +27,9 @@ import asyncio
 from datetime import datetime, timezone
 from typing import Any
 
-from agent_runtime.api.constants import Keys, Messages
+from urllib.parse import urlparse
+
+from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.mcp_discovery_service import McpDiscoveryService
 from agent_runtime.capabilities.mcp.cards import (
@@ -269,6 +271,43 @@ class TestSuggestEmits(DiscoveryFixtureMixin):
         assert action == Messages.Audit.MCP_DISCOVERY_SUGGESTED
         assert record["resource_id"] == "linear"
         assert record["outcome"] == "success"
+
+    def test_emits_server_derived_trust_line(self) -> None:
+        # The card's "Read-only · OAuth on <host> · revoke anytime" clauses.
+        # These are promises about scope and destination, so they come from the
+        # connector row and the issued auth URL — never from the model's reason.
+        service, events, _ = self._build()
+
+        asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims about progress",
+            )
+        )
+
+        payload = events.drafts[0].payload
+        assert payload[Keys.Field.ACCESS_MODE] == "read"
+        assert (
+            payload[Keys.Field.AUTH_HOST]
+            == urlparse(payload[Keys.Field.AUTH_URL]).hostname
+        )
+        assert payload[Keys.Field.SOURCE_TOOL] == Values.Tool.SUGGEST_MCP_CONNECTOR
+
+    def test_auth_host_is_empty_when_no_session_was_issued(self) -> None:
+        # No redirect issued → no host to promise. The client drops the clause
+        # rather than deriving "linear.app" from the slug.
+        service, events, _ = self._build(with_auth_creator=False)
+
+        asyncio.run(
+            service.suggest(
+                server_id="linear",
+                reason="fetch ticket statuses",
+                expected_value="ground claims about progress",
+            )
+        )
+
+        assert events.drafts[0].payload[Keys.Field.AUTH_HOST] == ""
 
 
 class TestSuggestIdempotent(DiscoveryFixtureMixin):

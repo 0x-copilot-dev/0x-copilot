@@ -36,6 +36,15 @@ class Keys:
         # flips the event from a blocking auth gate to a Connect/Skip suggestion.
         DISCOVERY_REASON = "discovery_reason"
         EXPECTED_VALUE = "expected_value"
+        # Connector-card trust line ("Read-only · OAuth on linear.app · revoke
+        # anytime"). Every field here is SERVER-derived on purpose: the card asks
+        # the user to grant access, so the scope it claims and the host it names
+        # must come from the connector row and the issued auth URL, never from
+        # model-authored text. The scope clause reuses ``ACCESS_MODE`` above;
+        # ``SOURCE_TOOL`` distinguishes the non-blocking suggestion from the
+        # blocking gate so the card can print its provenance.
+        AUTH_HOST = "auth_host"
+        SOURCE_TOOL = "source_tool"
         ARGS = "args"
         ASSISTANT_ID = "assistant_id"
         AUTH_URL = "auth_url"

@@ -31,6 +31,7 @@ from runtime_api.schemas.common import (
     ApprovalReasonCode,
     ApprovalReversible,
 )
+from runtime_worker.approval_presentation import ApprovalPresentationProjector
 from runtime_worker.approval_recognisers import ApprovalParamRecogniserRegistry
 from runtime_worker.stream_messages import StreamMessageParser, StreamTextHelper
 from runtime_worker.stream_parts import StreamNamespace, StreamPartParser
@@ -62,6 +63,7 @@ class _Fields:
     SERVER_NAME = "server_name"
     TOOL_NAME = "tool_name"
     ARGUMENTS = "arguments"
+    PRESENTATION = "presentation"
     DISPLAY_NAME = "display_name"
     READ_ONLY = "read_only"
     RISK_LEVEL = "risk_level"
@@ -1020,6 +1022,13 @@ class StreamOrchestrator:
         params = (
             recognised if recognised is not None else cls._approval_params(arguments)
         )
+        # Card SHAPE, projected from the same arguments the connector will
+        # receive (never from a parallel model-authored description — see
+        # ``approval_presentation``). ``None`` keeps today's params frame.
+        presentation = ApprovalPresentationProjector.project(
+            tool_name=tool_name,
+            arguments=arguments,
+        )
         try:
             metadata = McpApprovalMetadata(
                 vendor=cls._approval_vendor(display_name),
@@ -1029,6 +1038,7 @@ class StreamOrchestrator:
                     read_only, tool_name, server_name=server_name
                 ),
                 params=params,
+                presentation=presentation,
             )
         except ValidationError as exc:
             _logger.warning(
@@ -1037,7 +1047,13 @@ class StreamOrchestrator:
                 exc_info=exc,
             )
             return {}
-        return metadata.model_dump(mode="json")
+        dumped = metadata.model_dump(mode="json")
+        # An approval with no recognised shape must stay byte-identical on the
+        # wire to what it was before presentations existed — a null key would
+        # otherwise appear on every legacy approval event and every replayed one.
+        if dumped.get(_Fields.PRESENTATION) is None:
+            dumped.pop(_Fields.PRESENTATION, None)
+        return dumped
 
     @classmethod
     def _approval_vendor(cls, display_name: str) -> str:
