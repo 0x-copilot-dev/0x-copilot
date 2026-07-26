@@ -30,12 +30,6 @@ import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
 import { RunDestination } from "./RunDestination";
-import { STUDIO_ENABLED } from "./useRunMode";
-
-// The Studio↔Focus visibility gate is driven by the mode switcher, which is
-// hidden while Studio is disabled. Gate the switcher-driven test behind the
-// flag so it runs again on re-enable.
-const studioIt = STUDIO_ENABLED ? it : it.skip;
 
 const CONV = "conv-1" as ConversationId;
 
@@ -189,49 +183,43 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     expect(transport.surfacesRequests).toHaveLength(0);
   });
 
-  studioIt(
-    "flag ON: seeded v2 events render named tabs, newest first",
-    async () => {
-      seq = 0;
-      const transport = new FakeTransport();
-      renderRun(transport, makeStore(), true);
-      await screen.findByTestId("thread-canvas");
-      stream(transport, [
-        created("s_issue", "record", "ENG-142 Fix reconnect"),
-        created("s_list", "table", "Sprint backlog"),
-      ]);
+  it("flag ON: seeded v2 events render named tabs, newest first", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [
+      created("s_issue", "record", "ENG-142 Fix reconnect"),
+      created("s_list", "table", "Sprint backlog"),
+    ]);
 
-      await waitFor(() => {
-        // Tab textContent is `<title>×` (title span + close button) — strip the ×.
-        expect(
-          surfaceTabs().map((t) => t.textContent?.replace(/×$/, "")),
-        ).toEqual(["Sprint backlog", "ENG-142 Fix reconnect"]);
-      });
-    },
-  );
+    await waitFor(() => {
+      // Tab textContent is `<title>×` (title span + close button) — strip the ×.
+      expect(
+        surfaceTabs().map((t) => t.textContent?.replace(/×$/, "")),
+      ).toEqual(["Sprint backlog", "ENG-142 Fix reconnect"]);
+    });
+  });
 
-  studioIt(
-    "flag ON: activating a tab switches the active surface",
-    async () => {
-      seq = 0;
-      const transport = new FakeTransport();
-      renderRun(transport, makeStore(), true);
-      await screen.findByTestId("thread-canvas");
-      stream(transport, [
-        created("s_issue", "record", "ENG-142"),
-        created("s_list", "table", "Backlog"),
-      ]);
+  it("flag ON: activating a tab switches the active surface", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [
+      created("s_issue", "record", "ENG-142"),
+      created("s_list", "table", "Backlog"),
+    ]);
 
-      const strip = await screen.findByTestId("tc-tabs");
-      const issueTab = within(strip).getByText("ENG-142");
-      // Newest ("Backlog") is active by default; click the issue tab to pin it.
-      fireEvent.click(issueTab);
-      await waitFor(() => {
-        const tab = issueTab.closest('[role="tab"]');
-        expect(tab?.getAttribute("aria-selected")).toBe("true");
-      });
-    },
-  );
+    const strip = await screen.findByTestId("tc-tabs");
+    const issueTab = within(strip).getByText("ENG-142");
+    // Newest ("Backlog") is active by default; click the issue tab to pin it.
+    fireEvent.click(issueTab);
+    await waitFor(() => {
+      const tab = issueTab.closest('[role="tab"]');
+      expect(tab?.getAttribute("aria-selected")).toBe("true");
+    });
+  });
 
   it("flag ON: a historic envelope replays through read-only renderer state", async () => {
     seq = 0;
@@ -241,7 +229,7 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     // The compatibility reader is selective: only an explicit historic surface
     // envelope becomes fixed-renderer state, preserving its old URI/state
     // rather than upgrading it into a v2 stage or writable surface. The
-    // harness defaults to Focus mode, which deliberately hides the tab strip.
+    // production default is Studio, so the tab strip remains available.
     stream(transport, [
       {
         event_id: "v1-1",
@@ -316,7 +304,7 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     ).toBe(false);
   });
 
-  it("E1 D4: a terminal zero-op run shows its receipt in Focus without opening a canvas tab", async () => {
+  it("E1 D4: a terminal zero-op run presents its receipt in Studio and opens it only on request", async () => {
     seq = 0;
     const transport = new FakeTransport();
     renderRun(transport, makeStore(), true);
@@ -335,19 +323,60 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
       },
     ]);
 
-    await waitFor(() =>
-      expect(screen.getByTestId("receipt-v2-surface")).toBeInTheDocument(),
-    );
+    await screen.findByTestId("receipt-v2-launch");
     expect(screen.getByTestId("run-destination")).toHaveAttribute(
       "data-mode",
-      "focus",
+      "studio",
     );
-    // The zero-op receipt is available but must never become a lifecycle tab.
+    // The zero-op receipt stays out of the lifecycle tabs until explicitly opened.
     expect(surfaceTabs()).toHaveLength(0);
+    expect(screen.queryByTestId("receipt-v2-surface")).toBeNull();
+
+    fireEvent.click(screen.getByTestId("receipt-v2-open"));
+    await screen.findByTestId("receipt-v2-surface");
     expect(screen.queryByTestId("receipt-v2-launch")).toBeNull();
-    // Studio is product-dark; the Focus receipt remains readable but does not
-    // expose a route around the product-level Studio gate.
-    expect(screen.queryByTestId("receipt-v2-open-studio")).toBeNull();
+  });
+
+  it("E1 D4: opening a receipt from Focus returns to Studio", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+
+    stream(transport, [
+      {
+        event_id: "terminal-focus-receipt",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 1,
+        event_type: "run_completed",
+        activity_kind: "run",
+        payload: { status: "completed" },
+        created_at: new Date(1_700_000_002_000).toISOString(),
+      },
+    ]);
+
+    await screen.findByTestId("receipt-v2-launch");
+    fireEvent.click(screen.getByTestId("run-mode-focus"));
+    await waitFor(() =>
+      expect(screen.getByTestId("run-destination")).toHaveAttribute(
+        "data-mode",
+        "focus",
+      ),
+    );
+    await screen.findByTestId("receipt-v2-surface");
+
+    fireEvent.click(screen.getByTestId("receipt-v2-open-studio"));
+    await waitFor(() =>
+      expect(screen.getByTestId("run-destination")).toHaveAttribute(
+        "data-mode",
+        "studio",
+      ),
+    );
+    expect(screen.getByTestId("tc-surface-slot")).toHaveAttribute(
+      "data-visible",
+      "true",
+    );
   });
 
   it("flag ON: a hostile title renders as text, not markup (no injection)", async () => {
@@ -365,37 +394,34 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
 
   // --- Studio shell & posture DoD -----------------------------------------
 
-  studioIt(
-    "FR-F1: Studio mounts the canvas; Focus hides it (mode → visibility gate)",
-    async () => {
-      seq = 0;
-      const transport = new FakeTransport();
-      const store = makeStore();
-      renderRun(transport, store, true);
-      await screen.findByTestId("thread-canvas");
-      stream(transport, [created("s_issue", "record", "ENG-142")]);
+  it("FR-F1: Studio mounts the canvas; Focus hides it (mode → visibility gate)", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    const store = makeStore();
+    renderRun(transport, store, true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [created("s_issue", "record", "ENG-142")]);
 
-      // Studio (default): the surface column is visible → canvas mounted.
-      const slot = screen.getByTestId("tc-surface-slot");
-      expect(slot.getAttribute("data-visible")).toBe("true");
+    // Studio (default): the surface column is visible → canvas mounted.
+    const slot = screen.getByTestId("tc-surface-slot");
+    expect(slot.getAttribute("data-visible")).toBe("true");
 
-      // Switch to Focus: the surface column is hidden → no generative surfaces.
-      fireEvent.click(screen.getByTestId("run-mode-focus"));
-      await waitFor(() =>
-        expect(
-          screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
-        ).toBe("false"),
-      );
+    // Switch to Focus: the surface column is hidden → no generative surfaces.
+    fireEvent.click(screen.getByTestId("run-mode-focus"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
+      ).toBe("false"),
+    );
 
-      // Back to Studio: canvas re-shown.
-      fireEvent.click(screen.getByTestId("run-mode-studio"));
-      await waitFor(() =>
-        expect(
-          screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
-        ).toBe("true"),
-      );
-    },
-  );
+    // Back to Studio: canvas re-shown.
+    fireEvent.click(screen.getByTestId("run-mode-studio"));
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
+      ).toBe("true"),
+    );
+  });
 
   it("FR-A7: a v2 gate surface renders no approval/decision control in the chat rail", async () => {
     seq = 0;

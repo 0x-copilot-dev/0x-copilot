@@ -28,35 +28,6 @@ import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
 import { RunDestination } from "./RunDestination";
 
-// C3 must not enable Studio globally. Exercise the full Studio-only mount with
-// the existing rollout gate enabled solely within this integration test.
-vi.mock("./useRunMode", async (importOriginal) => {
-  const [actual, react] = await Promise.all([
-    importOriginal<typeof import("./useRunMode")>(),
-    import("react"),
-  ]);
-  return {
-    ...actual,
-    STUDIO_ENABLED: true,
-    DEFAULT_RUN_MODE: "studio",
-    useRunMode: () => {
-      const [mode, setModeState] = react.useState<"studio" | "focus">("studio");
-      const setMode = react.useCallback(
-        (next: "studio" | "focus") => setModeState(next),
-        [],
-      );
-      const toggle = react.useCallback(
-        () =>
-          setModeState((current) =>
-            current === "studio" ? "focus" : "studio",
-          ),
-        [],
-      );
-      return { mode, setMode, toggle };
-    },
-  };
-});
-
 const CONVERSATION_ID = "conv_workspace_1" as ConversationId;
 const RUN_ID = "run_workspace_1";
 const STAGE_ID = "stage_workspace_1";
