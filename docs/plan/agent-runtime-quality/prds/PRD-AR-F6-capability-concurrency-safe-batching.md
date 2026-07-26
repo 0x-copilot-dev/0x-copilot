@@ -28,6 +28,16 @@ Read:
 Existing concurrent registry bootstrap is not the execution contract. This PRD covers
 model-emitted and program-emitted operation batches after descriptor resolution.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current strengths
 
 Three independent connector reads or file inspections should not necessarily wait for
@@ -44,7 +54,7 @@ explicit descriptor and scheduler policy at that boundary, not a model assumptio
 
 1. Add side-effect, idempotency, concurrency, resource-key, and rate-limit metadata.
 2. Convert an ordered operation batch into deterministic serial/parallel segments.
-3. Bound concurrency globally and by org/user/connector/capability.
+3. Bound concurrency globally and by profile/user/connector/capability.
 4. Recheck each operation independently through A3/D1/D2.
 5. Preserve stable result/event ordering while exposing actual completion order.
 6. Cancel queued/in-flight work safely and report partial outcomes honestly.
@@ -75,7 +85,7 @@ ConcurrencyPolicy
   idempotency: none | keyed | natural
   resource_key_template?
   max_parallelism?
-  rate_limit_scope: capability | connector | user | org | global
+  rate_limit_scope: capability | connector | user | installation | global
   ordering_requirement: none | input_order | completion_order
   policy_source: product_catalog | trusted_provider | conservative_default
 
@@ -120,7 +130,7 @@ Events:
 Precedence:
 
 1. checked-in product capability catalog;
-2. administrator-approved connector override;
+2. user-approved connector override;
 3. trusted provider metadata that can only tighten policy;
 4. default `serial`, `unknown`, `idempotency=none`.
 
@@ -176,17 +186,17 @@ and waits a bounded drain period. Non-cancellable or possibly applied operations
 `in_flight`/`indeterminate` for reconciliation. The batch is `partial`, not rolled back
 by fiction.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
-- Effective limits and policies derive from verified tenant/runtime context.
-- Permits are keyed with tenant/org/connector scope to prevent noisy-neighbor bypass.
+- Effective limits and policies derive from verified local profile/runtime context.
+- Permits are keyed with profile/user/connector scope to prevent noisy-neighbor bypass.
 - Raw resource keys are stored as keyed digests unless user-visible identity is needed
   and authorized.
 - Every child retains its own authorization, approval, budget, redaction, citation, and
   audit records.
 - Parallel execution cannot reuse one user's connector client/credential in another
   user's context.
-- Policy changes and administrator overrides are audited.
+- Policy changes and user overrides are audited.
 
 ## Performance and complexity budgets
 
@@ -194,7 +204,7 @@ For `k` operations, planning is `O(k log k)` at worst and `O(k)` for ordered gro
 Execution work remains `O(k)`.
 
 - Default batch cap: 16 operations.
-- Default worker cap: 8 globally, further limited per connector/org.
+- Default worker cap: 8 globally, further limited per connector/installation.
 - Planner p95 below 5 ms for 100 operations.
 - Ideal balanced read latency target approaches `ceil(k/p) × L`; production target is
   at least 30% p95 improvement on three independent 500 ms reads.
@@ -226,7 +236,7 @@ Measure:
 - operation/event ordering violations;
 - total work/cost and end-to-end task success.
 
-Safety gate: zero improper parallel writes and zero authorization/tenant-context reuse.
+Safety gate: zero improper parallel writes and zero authorization/profile-context reuse.
 
 ## Rollout and backout
 
@@ -259,8 +269,8 @@ does not alter operation results or effect stages.
 - One child failure preserves successful siblings and produces `partial`.
 - Cancellation stops queued work and reports non-cancellable state honestly.
 - Worker crash resumes never-started reads but never retries started writes.
-- Rate-limit permits isolate org/user/connector scopes.
-- Cross-tenant client/session reuse canary fails.
+- Rate-limit permits isolate profile/user/connector scopes.
+- Cross-profile client/session reuse canary fails.
 - Event sequence numbers remain monotonic under out-of-order completion.
 
 ## Definition of done
@@ -284,6 +294,6 @@ Guardrails:
 Open decisions:
 
 1. Which connector metadata is trusted to declare parallel safety?
-2. Do distributed workers require a shared permit service in the first release?
+2. For a future hosted adapter, when do multiple workers justify a shared permit service?
 3. Which failure policy should model-emitted batches default to?
 4. How should provider-specific batch APIs integrate without changing child records?

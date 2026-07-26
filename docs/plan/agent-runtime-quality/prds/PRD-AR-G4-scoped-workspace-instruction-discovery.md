@@ -34,6 +34,16 @@ Read before implementation:
 Do not add host-path access to Python. Discovery operates only on virtual paths exposed
 by the current grant-backed workspace backend.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 Projects frequently carry local guidance about architecture, commands, style, and
@@ -78,7 +88,7 @@ repository prose as higher-priority product policy.
 
 - Crawling every directory for arbitrary documentation.
 - Executing commands found in an instruction file.
-- Treating repository instructions as organization policy or approval.
+- Treating repository instructions as user profile policy or approval.
 - Discovering files outside active mounts, following symlinks, or resolving physical
   paths.
 - Editing instruction files outside the C1/C3 staged workspace flow.
@@ -205,7 +215,7 @@ Effective priority is:
 
 ```text
 platform/system policy
-→ organization/admin policy
+→ app and user policy
 → agent definition and explicit user request
 → applicable workspace instruction layers root→leaf
 → retrieved/document/page content
@@ -292,8 +302,9 @@ enforcement remains authoritative even if detection misses.
   payload ref subject to run retention for deterministic replay.
 - Cached bodies are run-scoped and deleted with the run/history or grant revocation.
 - Workspace source files remain governed by C1–C3 and host ownership.
-- Legal hold on a run may retain the exact loaded instruction payload needed for audit;
-  it does not retain or restore the host file itself.
+- An explicitly enabled local backup or future sync-retention lock may retain the exact
+  loaded instruction payload needed for a receipt; it does not retain or restore the
+  host file itself.
 - Receipt exports list instruction digests/virtual paths only under E1 redaction rules.
 
 ## Authorization, privacy, and security
@@ -301,7 +312,7 @@ enforcement remains authoritative even if detection misses.
 - Only active run-snapshotted grants provide mounts.
 - Physical paths, root handles, broker tokens, and native identities never reach the
   model or persistence.
-- Every stat/read goes through the broker-backed workspace port with tenant/user/device
+- Every stat/read goes through the broker-backed workspace port with profile/user/device
   binding.
 - Instruction bodies never enter logs, metric labels, audit metadata, or exceptions.
 - A file cannot grant tools, permissions, network, workspace access, or approval.
@@ -389,7 +400,7 @@ Workspace grants, overlays, stages, and host files are unchanged.
 ### Recovery and lifecycle
 
 - Broker timeout, identity drift during read, repeated workspace mutation, app/worker
-  restart, replay, history deletion, legal hold.
+  restart, replay, history deletion, and optional retained-backup behavior.
 
 ### Quality and performance
 

@@ -10,7 +10,7 @@
 ## Goal
 
 Create a deterministic, provider-aware prompt assembly contract that preserves a large
-stable prefix across ordinary turns, isolates tenant- and authorization-sensitive
+stable prefix across ordinary turns, isolates profile- and authorization-sensitive
 material, and makes every prompt fragment attributable without logging prompt bodies.
 
 ## Implementer brief
@@ -28,6 +28,16 @@ Read:
 Keep current conditional capability guidance, permission-filtered tools, and provider
 adapters. Do not make prompt caching a requirement for a model/provider that does not
 support it.
+
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
 
 ## Problem and current strengths
 
@@ -47,13 +57,13 @@ semantic equivalence does not produce a hit.
 2. Separate stable, scoped-context, volatile, and current-turn material.
 3. Generate deterministic canonical bytes for identical assembly inputs.
 4. Apply cache controls only through explicit provider adapters.
-5. Bind cache eligibility to model, tenant-safe policy, capability, and prompt revisions.
+5. Bind cache eligibility to model, profile-safe policy, capability, and prompt revisions.
 6. Emit body-free cache and fragment metrics through UsageMeter.
 7. Preserve current authorization and instruction precedence.
 
 ## Non-goals
 
-- Sharing user-specific prompt content across tenants.
+- Sharing user-specific prompt content across user profiles.
 - Caching model outputs or tool results.
 - Selecting relevant skills/tools/memories; other PRDs own retrieval.
 - Guaranteeing latency or billing savings from a provider.
@@ -77,7 +87,7 @@ PromptFragment
   precedence
   content
   content_digest
-  scope: global | tenant | org | user | conversation | run
+  scope: global | installation | profile | user | project | conversation | run
   sensitivity
   cache_eligibility
   source_revision
@@ -150,7 +160,7 @@ valid for the cache key. Its digest input includes:
 - provider/model family;
 - static capability bridge schema revision;
 - fixed harness profile revision;
-- tenant-safe localization revision.
+- profile-safe localization revision.
 
 For a profile-locked conversation, the digest also includes task family, task-family
 profile revision, and the lock revision. An unlocked task-family fragment never
@@ -160,7 +170,7 @@ contributes to `stable_prefix_digest`; it always contributes to
 Do not include time, run IDs, credentials, approval state, user messages, retrieved
 content, or live authorization decisions.
 
-Org/user-specific stable material may be cached only under an equivalently scoped
+Installation/user-specific stable material may be cached only under an equivalently scoped
 provider request and never reused as a global prefix.
 
 ### 3. Provider adapters
@@ -186,11 +196,11 @@ Privileged development inspection can show fragment IDs, sizes, source revisions
 scope, cache eligibility, and digests. Body access follows the source data's
 authorization and is never available through normal telemetry.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
 - Scope is derived from verified runtime context, never model or caller labels.
 - A fragment cannot declare a broader cache scope than its source.
-- A runtime assertion rejects global-cache eligibility for tenant/user/conversation
+- A runtime assertion rejects global-cache eligibility for profile/user/conversation
   content.
 - Secrets and credential material are forbidden prompt fragments.
 - Retrieved skill, memory, connector, and workspace content is labelled untrusted and
@@ -233,7 +243,7 @@ Measure by provider/model/task family:
 - assembly failures and fallback reasons;
 - task success and instruction-following versus control.
 
-F1 promotion requires no protected-task regression and no tenant-scope violation. A
+F1 promotion requires no protected-task regression and no local-profile-scope violation. A
 lower input bill alone is not sufficient.
 
 ## Rollout and backout
@@ -241,7 +251,7 @@ lower input bill alone is not sufficient.
 1. Shadow-build plans alongside current prompt construction; compare semantic sections
    and token counts without sending.
 2. Enforce deterministic assembly while leaving cache decoration off.
-3. Enable decoration for one supported provider/model and internal tenants.
+3. Enable decoration for one supported provider/model and local dogfood profiles.
 4. Expand by provider after cache-read telemetry and F1 results.
 5. Make typed assembly the only prompt construction path.
 
@@ -265,7 +275,7 @@ cutover. Backout never changes persisted conversation content.
 - Tool/policy revision invalidates the appropriate prefix.
 - Switching an unlocked request from one F4 task family to another cannot reuse the
   first family's guidance; a locked-family revision change invalidates its prefix.
-- Cross-tenant fragment cannot receive global cache eligibility.
+- Cross-profile fragment cannot receive global cache eligibility.
 - Prompt injection in retrieved content cannot precede safety/tool protocol.
 - Unsupported provider receives semantically identical undecorated messages.
 - Decorator deep-copy test proves persisted messages are unchanged.
@@ -278,7 +288,7 @@ cutover. Backout never changes persisted conversation content.
 - Stable/contextual/volatile/current-turn ordering is deterministic.
 - Supported provider adapters report real cache outcomes; unsupported models work
   unchanged.
-- No cross-tenant or stale-authorization reuse is possible by construction and test.
+- No cross-profile or stale-authorization reuse is possible by construction and test.
 - F1 shows acceptable answer quality and a measurable prefix-reuse benefit.
 - Feature flags, dashboards, runbook, and backout are shipped.
 
@@ -294,6 +304,6 @@ Guardrails:
 Open decisions:
 
 1. Which provider/model combinations are supported in the first release?
-2. Should org-scoped static context be a separate cacheable prefix or always contextual?
+2. Should installation-scoped static context be a separate cacheable prefix or always contextual?
 3. Which tokenizer is authoritative for activation and observability?
 4. How long should plan metadata be retained relative to source conversations?

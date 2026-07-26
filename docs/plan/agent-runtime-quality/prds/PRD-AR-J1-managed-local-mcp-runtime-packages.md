@@ -33,15 +33,25 @@ Read:
 
 The MCP transport enum recognizes stdio, but server records and creation APIs are URL-oriented and there is no governed local process launcher. Package launchers such as `npx` and `uvx` execute software; they are not skill installers and must never be reachable as generic shell tools. The desktop main process or a dedicated local broker owns process execution. AI backend receives a normal MCP connection and tool cards only.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
-Many useful MCP servers are distributed as npm or Python packages and expect stdio transport. Requiring every user to run and secure those processes manually makes local connectors hard to adopt. Naively accepting command strings, `npx` arguments, or package names from a model creates remote-code-execution, supply-chain, persistence, secret-exfiltration, and cross-tenant risks.
+Many useful MCP servers are distributed as npm or Python packages and expect stdio transport. Requiring every user to run and secure those processes manually makes local connectors hard to adopt. Naively accepting command strings, `npx` arguments, or package names from a model creates remote-code-execution, supply-chain, persistence, secret-exfiltration, and cross-profile risks.
 
 The product needs a managed local runtime with signed catalog metadata, exact package resolution, content-addressed installation, sandboxed process execution, explicit capabilities, secret references, health management, updates, rollback, and an MCP-only data plane.
 
 ## Current state and strengths to preserve
 
-- Backend owns MCP registration, OAuth state, token vault, catalog, and tenant policy.
+- Backend owns MCP registration, OAuth state, token vault, catalog, and user policy.
 - AI backend dynamically loads MCP tools through policy middleware and permission checks.
 - Desktop already supervises an embedded database and service runtime with explicit staging and boot contracts.
 - F3/F4 define capability discovery and tool-use controls.
@@ -55,7 +65,7 @@ The product needs a managed local runtime with signed catalog metadata, exact pa
 4. Bind filesystem, network, environment, secrets, and resource limits to an approved manifest.
 5. Cache installations safely and reuse healthy processes without changing package identity.
 6. Detect, quarantine, update, and roll back vulnerable or unhealthy packages.
-7. Give users and administrators clear consent, status, logs, and removal controls.
+7. Give users and users clear consent, status, logs, and removal controls.
 
 ## Scope
 
@@ -75,13 +85,14 @@ The product needs a managed local runtime with signed catalog metadata, exact pa
 - Granting package-requested permissions automatically
 - Promising isolation stronger than the host OS primitives actually configured and tested
 - Replacing remote HTTP/SSE MCP servers
-- Letting a model install, update, start, or configure packages without a user/admin decision
+- Letting a model install, update, start, or configure packages without an
+  explicit user decision
 
 ## Interfaces consumed
 
 - D1 canonical MCP catalog, naming, permissions, and client contracts
 - F8 catalog-revision invalidation, schema fingerprinting, and safe MCP session reuse
-- Backend connector profiles, MCP OAuth, token-vault references, tenant policy, and audit
+- Backend connector profiles, MCP OAuth, token-vault references, user policy, and audit
 - Desktop supervisor, native-host, secure-storage, preload, and renderer host boundaries
 - F3/F4 capability discovery and tool-use policy
 - A3 operation classification for consequential tools exposed by a local server
@@ -144,7 +155,7 @@ LocalMcpPackageManifest
 LocalMcpInstall
   install_id
   device_id
-  tenant_id
+  profile_id
   user_id
   manifest_digest
   resolved_lock_digest
@@ -161,7 +172,7 @@ LocalMcpInstall
 LocalMcpRuntimeGrant
   install_id
   manifest_digest
-  tenant_id
+  profile_id
   user_id
   allowed_mount_handles[]
   allowed_network_destinations[]
@@ -178,9 +189,9 @@ No contract contains a free-form command, shell string, arbitrary environment ma
 
 ### 1. Catalog and trust
 
-Packages enter a curated or tenant-managed catalog through a review pipeline. The catalog record pins registry, name, exact version, integrity, transitive lock digest, entrypoint, publisher identity, license, vulnerability assessment, expected permissions, and signed manifest.
+Packages enter a curated or user-added catalog through a review pipeline. The catalog record pins registry, name, exact version, integrity, transitive lock digest, entrypoint, publisher identity, license, vulnerability assessment, expected permissions, and signed manifest.
 
-Tenant-managed entries require an administrator and display a higher-risk label. Revoked manifests cannot start, even if cached.
+User profile-managed entries require an user and display a higher-risk label. Revoked manifests cannot start, even if cached.
 
 ### 2. Resolution
 
@@ -223,7 +234,7 @@ Unexpected tool additions or materially changed schemas place the install in `de
 
 ### 7. Process pool and cache
 
-Package bytes are shared by digest across eligible installs; tenant/user configuration, scratch storage, secrets, and processes are isolated. The broker may keep a bounded warm process only when the manifest declares reset semantics and tests prove no cross-session state leakage.
+Package bytes are shared by digest across eligible installs; profile/user configuration, scratch storage, secrets, and processes are isolated. The broker may keep a bounded warm process only when the manifest declares reset semantics and tests prove no cross-session state leakage.
 
 LRU eviction removes stopped runtime environments only after confirming no active connection. Package content remains until no install references it and retention policy permits collection.
 
@@ -231,17 +242,17 @@ LRU eviction removes stopped runtime environments only after confirming no activ
 
 Crash policy is bounded restart with exponential backoff and a circuit breaker. Repeated protocol violations or resource abuse quarantine the install.
 
-Updates are explicit and install side-by-side. The new version passes health and schema checks before traffic switches. Rollback selects the last approved immutable version and issues new runtime grants. Security policy may force stop or require an update, with auditable administrator override where allowed.
+Updates are explicit and install side-by-side. The new version passes health and schema checks before traffic switches. Rollback selects the last approved immutable version and issues new runtime grants. Security policy may force stop or require an update, with auditable user override where allowed.
 
 ### 9. Removal
 
-Stop revokes secret leases, closes MCP connections, terminates the process tree, and seals scratch data. Removal deletes install configuration and eligible scratch/cache references. Shared content is garbage-collected only when reference count reaches zero. The user is told what remains under audit, retention, or legal hold.
+Stop revokes secret leases, closes MCP connections, terminates the process tree, and seals scratch data. Removal deletes install configuration and eligible scratch/cache references. Shared content is garbage-collected only when reference count reaches zero. The user is told what remains under local audit, retention, or backup policy.
 
 ## Ownership and service boundaries
 
 | Responsibility                                                  | Owner                                               |
 | --------------------------------------------------------------- | --------------------------------------------------- |
-| Catalog, tenant policy, approvals, secret vault, audit          | Backend                                             |
+| Catalog, user policy, approvals, secret vault, audit            | Backend                                             |
 | Package resolution, installation, sandbox, processes, local IPC | Desktop main/broker                                 |
 | MCP discovery and tool invocation                               | AI backend                                          |
 | Product API aggregation                                         | Backend facade                                      |
@@ -254,13 +265,15 @@ The renderer cannot launch processes. AI backend cannot invoke package managers.
 - Backend stores catalog metadata, approvals, install identity, policy, and audit.
 - Desktop stores signed lock records, content digests, package bytes, encrypted nonsecret configuration, health, and bounded logs.
 - Plaintext secrets are not persisted by the broker.
-- Scratch retention is manifest- and tenant-governed with secure deletion where supported.
-- Removal and tenant/user deletion traverse installs, secret leases, scratch, local logs, and backend records.
-- SBOM, manifest, approval, and security-event records follow compliance retention and legal hold.
+- Scratch retention is manifest- and local-profile-governed with secure deletion where supported.
+- Removal and profile/user deletion traverse installs, secret leases, scratch, local logs, and backend records.
+- SBOM, manifest, approval, and security-event records follow the user's local
+  retention/export policy and any explicit backup setting.
 
 ## Authentication, authorization, security, and audit
 
-- Device registration binds local install actions to a verified desktop instance, user, and tenant.
+- The local capability grant binds install actions to the verified desktop
+  instance and signed-in user.
 - Install, permission expansion, update, rollback to vulnerable versions, and sensitive mount changes require explicit authorized decisions.
 - Runtime grants are signed, short-lived, nonce-bound, and manifest-bound.
 - Every package digest is verified before install and before start.
@@ -280,7 +293,7 @@ The renderer cannot launch processes. AI backend cannot invoke package managers.
 
 ## Failure, idempotency, and recovery
 
-- Install is idempotent by device, tenant, user, and manifest digest.
+- Install is idempotent by device, profile, user, and manifest digest.
 - Interrupted install leaves no published partial environment.
 - Start uses a process-instance nonce; lost responses reconcile through health before another launch.
 - Broker crash revokes leases and reconstructs state from signed lock records; it does not auto-start packages unless policy permits.
@@ -319,15 +332,15 @@ Release gates:
 1. Ship catalog and broker in audit-only developer mode.
 2. Enable one first-party read-only server on one desktop platform.
 3. Add signed curated packages with no secrets or writable mounts.
-4. Enable scoped secrets and mounts for allowlisted tenants.
+4. Enable scoped secrets and mounts for explicit local-user approvals.
 5. Add the second package ecosystem and additional operating systems after isolation gates.
-6. Open tenant-managed catalog entries behind administrator policy.
+6. Open user-added catalog entries behind user policy.
 
 Backout revokes affected manifests, stops processes, removes tool advertisements, preserves signed records, and leaves remote MCP unaffected. Package bytes may remain quarantined until incident review or retention cleanup.
 
 ## Implementation slices
 
-1. Manifest/signature/catalog and tenant policy
+1. Manifest/signature/catalog and user policy
 2. Desktop broker IPC and device binding
 3. npm resolver, lock/SBOM/provenance, and content store
 4. OS sandbox, mounts, network proxy, resources, and secret leases
@@ -345,7 +358,7 @@ Backout revokes affected manifests, stops processes, removes tool advertisements
 - Integration: catalog approval through MCP tool call and governed effect
 - Fault injection: crash during resolve/install/start/update/remove
 - Security: renderer compromise, forged grant, stale device, DNS rebinding, symlink escape
-- Retention: scratch cleanup, shared cache references, user deletion, legal hold
+- Retention: scratch cleanup, shared cache references, user deletion, and local backup policy
 - Performance: cold/warm starts, cache pressure, concurrent servers
 
 ## Definition of done

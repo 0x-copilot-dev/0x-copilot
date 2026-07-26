@@ -34,6 +34,16 @@ Read before implementation:
 Do not move authenticated browsing, file upload, form submit, or click automation into
 this broker. D4 owns those capabilities and their external-effect protocol.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 The runtime currently exposes a retry-wrapped DuckDuckGo results tool. It is useful but
@@ -94,7 +104,7 @@ URLs reach private networks or authenticated endpoints.
 
 - A3 Gateway, operation descriptors, and result disposition.
 - Existing run-level `web_search_enabled` policy and tool budget.
-- Backend-owned, versioned tenant web-research policy snapshot.
+- Backend-owned, versioned local-user web-research policy snapshot.
 - Citation ledger/source projection and large-result offload.
 - Shared bounded HTTP pool and provider-key resolution.
 - D4 browser adapter for explicit handoff when a page requires browser context.
@@ -103,9 +113,9 @@ URLs reach private networks or authenticated endpoints.
 
 ### Backend policy snapshot
 
-`backend` remains the canonical owner of tenant policy, credential assignment, data
-residency, and product administration. `ai-backend` consumes it over authenticated
-internal HTTP:
+The locally supervised `backend` remains the canonical owner of user settings,
+credential assignment, provider disclosure, and policy revisions. `ai-backend`
+consumes the snapshot over authenticated loopback HTTP:
 
 ```text
 GET /internal/v1/web-research/policy-snapshot
@@ -139,14 +149,14 @@ WebResearchPolicySnapshot
   issued_at, expires_at
 ```
 
-The endpoint derives org/user from verified service headers; the request body carries no
+The endpoint derives profile/user from verified service headers; the request body carries no
 identity or policy override. The response is signed or transported over the existing
 trusted service channel and validated against a closed schema. A missing, expired, or
 unknown policy revision fails closed and removes web tools from the run.
 Apps access the public settings routes only through the facade. Mutation requires the
-tenant's settings-admin role, expected policy revision, idempotency key, immutable audit
-record, and secret-free diff; provider credentials remain token-vault references rather
-than policy-body values.
+signed-in user, expected policy revision, idempotency key, a local audit record, and a
+secret-free diff; provider credentials remain token-vault references rather than
+policy-body values.
 
 ### Domain ports
 
@@ -249,7 +259,7 @@ credential class, region, disclosure posture, egress rules, or cache policy. Eme
 disable and credential revocation take effect immediately through a generation check.
 
 Provider routing considers configured credentials, locale/recency support, health,
-price, and tenant allowlist. It does not silently broaden domain filters. A fallback
+price, and the user's allowlist. It does not silently broaden domain filters. A fallback
 provider receives the same normalized request and only runs when the first attempt is
 known not to have produced a result.
 
@@ -284,7 +294,8 @@ duplicated snippets.
 
 ### D4. Extraction
 
-Extraction prefers a configured provider, then bounded server-side HTML/text parsing.
+Extraction prefers a configured provider, then bounded parsing inside the local
+ai-backend process.
 It drops scripts, styles, navigation repetition, hidden nodes, and forms. It never
 executes JavaScript. PDF/office/media extraction is not performed by this initial
 broker; such sources return a typed unsupported-media result or flow to an approved
@@ -328,7 +339,7 @@ and relabels new content as old evidence.
 - Extract cache: content-addressed, maximum one hour by default; disabled for responses
   marked private/no-store or requests with user-specific URL tokens.
 - Direct URL query strings are treated as sensitive and never used as metric labels.
-- Cross-tenant cache sharing is disabled initially. It may be revisited only with a
+- Cross-profile cache sharing is disabled initially. It may be revisited only with a
   privacy review and proof that stored material is public and credential-free.
 
 ### D9. Browser handoff
@@ -343,9 +354,10 @@ its HTTP client.
 - Run-scoped evidence stores normalized metadata, bounded extracted text, digest, and
   retrieval timestamp behind a payload ref.
 - Public runtime events carry refs/digests only.
-- Evidence follows run/event retention and is deleted with user history unless a legal
-  hold applies.
-- Search/extraction caches expire independently and are not legal-hold records.
+- Evidence follows run/event retention and is deleted with user history. An optional
+  backup/sync adapter may retain an inaccessible encrypted copy under its separate
+  user-visible policy.
+- Search/extraction caches expire independently and are never backup-retention records.
 - Provider request ids may be retained in restricted operational records, never public
   receipts.
 - Run records retain only the policy revision and safe provider class needed for
@@ -356,23 +368,23 @@ its HTTP client.
 
 ## Authorization, privacy, supply chain, and compliance
 
-- The run's verified tenant/user and policy select provider credentials; request bodies
-  cannot choose another tenant's pool.
+- The run's verified profile/user and policy select provider credentials; request
+  bodies cannot choose another saved credential.
 - Provider adapters are allowlisted, pinned dependencies with license/terms review.
 - Search queries may contain confidential intent. They are sent only to the selected
-  provider, not logged, and subject to tenant policy disclosure.
+  provider, not logged, and subject to user policy disclosure.
 - Egress allow/deny policy is deployment-controlled and immutable from model content.
 - Page content is untrusted; it cannot change runtime/tool/approval policy.
 - Secrets, full URLs, queries, and extracted text are redacted from telemetry and audit.
-- A provider-disabled or web-disabled tenant sees no web tools.
-- Policy cache keys include org, user-policy visibility, policy revision, and expiry.
-  Cache reuse across tenants or credential-pool classes is forbidden.
+- A user who disables web research sees no web tools.
+- Policy cache keys include local profile, user-policy visibility, policy revision, and
+  expiry. Cache reuse across profiles or credential-pool classes is forbidden.
 
 ## Performance and capacity
 
 - Queries per call: 3; results per query: 10; extracted sources per call: 6.
 - Search deadline 8 seconds; extraction per source 10 seconds; batch deadline 15
-  seconds; all configurable downward by tenant.
+  seconds; all configurable downward by local profile.
 - Compressed response max 5 MiB, expanded response max 10 MiB, extracted text max
   32 KiB/source, model-visible batch max 48 KiB.
 - Per-run extraction concurrency 3; process concurrency controlled by a shared
@@ -413,7 +425,7 @@ and citation resolution regression. Labels must be low-cardinality and content-f
 1. Land contracts, providers, network-policy tests, and fake adapters with tools absent.
 2. Shadow normalized search beside the existing helper without additional provider
    calls; compare shaping against captured test fixtures.
-3. Enable broker search for internal tenants while extraction remains off.
+3. Enable broker search for local dogfood profiles while extraction remains off.
 4. Enable extraction for an allowlisted set of public domains.
 5. Expand domain/provider coverage and retire the old registry path.
 
@@ -485,5 +497,5 @@ effect or migration requires undo.
 
 ## Open decisions
 
-- Initial provider set and tenant-facing data-processing disclosure.
+- Initial provider set and user-facing data-processing disclosure.
 - Whether `http` is disabled globally or allowed only for an explicit domain allowlist.

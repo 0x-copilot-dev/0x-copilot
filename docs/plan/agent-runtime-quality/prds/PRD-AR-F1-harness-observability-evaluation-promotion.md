@@ -32,6 +32,16 @@ Preserve the existing durable run/event/usage model. This PRD adds a redacted
 evaluation projection and offline runner; it does not create a second production event
 store or put raw transcripts in metrics.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current state
 
 The runtime already persists ordered run events, tool/subagent records, citations,
@@ -73,7 +83,7 @@ They hide long-tail failures, task-family regressions, and unauthorized-tool dis
 - `RuntimeEventEnvelope`, operation trees, usage records, citations, artifacts, stages,
   decisions, receipts, and model/provider metadata.
 - A2 immutable blobs/refs for large redacted fixtures and expected outputs.
-- E1 retention, deletion, legal hold, audit export, and redaction services.
+- E1 local retention, user-controlled deletion, audit export, and redaction services.
 - Capability descriptors and policy revisions from A3/D1/D2.
 
 ## Interfaces exposed
@@ -145,16 +155,17 @@ All IDs are opaque. Digests cover canonical JSON and referenced fixture revision
 - `harness.evaluation.completed.v1`
 - `harness.promotion.decided.v1`
 
-Public/facade APIs are deferred until an operator UI is approved. Event payloads carry
-IDs, revisions, scores, and refs—never raw prompts, tool results, credentials, or
-artifact bodies.
+Public/facade APIs are deferred until a user-facing local diagnostics UI is approved.
+Developer evaluation may run through an authenticated loopback-only internal route or
+offline CLI. Event payloads carry IDs, revisions, scores, and refs—never raw prompts,
+tool results, credentials, or artifact bodies.
 
 ## Detailed design
 
 ### 1. Online projection
 
-Production execution emits its normal records. An asynchronous projector reads eligible
-runs from an outbox and creates a minimal manifest:
+Production execution emits its normal local records. A low-priority in-process
+projector reads eligible runs through `RuntimePorts` and creates a minimal manifest:
 
 - normalized model and tool steps;
 - canonical capability IDs, not display names;
@@ -163,7 +174,10 @@ runs from an outbox and creates a minimal manifest:
 - usage and timing aggregates;
 - policy, prompt, model, tool-catalog, and code revisions.
 
-Projection failure never fails the user run. It is retryable and observable.
+Projection failure never fails the user run. It is retryable and observable. The
+desktop default keeps manifests and reports on-device; uploading telemetry or invoking
+an external model grader requires a separate, explicit user opt-in. Offline evaluation
+and synthetic fixtures remain fully usable without telemetry consent.
 
 ### 2. Case and fixture model
 
@@ -185,7 +199,7 @@ Expected assertions support:
 
 Deterministic scorers run first and own hard gates. Optional model graders receive
 redacted bounded inputs and must record model/prompt revision and rationale. A model
-grader cannot override a tenant-isolation, unauthorized-call, unsupported-claim, or
+grader cannot override a profile-isolation, unauthorized-call, unsupported-claim, or
 effect-safety failure.
 
 Reports show distributions and confidence intervals, not only averages. Median and p95
@@ -195,7 +209,7 @@ are mandatory for latency, cost, and call counts.
 
 Online experiments are off by default. When enabled, assignment is deterministic from
 an opaque stable subject key and experiment revision. Eligibility is evaluated
-server-side. Effectful or high-sensitivity tasks remain control-only until explicitly
+inside the local runtime. Effectful or high-sensitivity tasks remain control-only until explicitly
 approved. The run persists its assigned variant before the first model call.
 
 ### 5. Promotion
@@ -211,17 +225,19 @@ A candidate is promotable only when:
 Promotion changes a versioned configuration pointer. Rollback restores the preceding
 pointer without data migration.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
-- Projection starts only after org/user eligibility, consent, retention, and legal-hold
-  checks.
+- Projection starts only after profile/user eligibility, consent, retention, and legal-hold
+  checks. In `single_user_desktop`, eligibility defaults to local-only collection and
+  uses the signed-in user plus the deployment profile rather than a team role.
 - Redaction happens before evaluation persistence or model judging.
-- Tenant-derived fixture content remains tenant-scoped and encrypted; cross-tenant
+- User profile-derived fixture content remains profile-scoped and encrypted; cross-profile
   aggregation contains only approved statistics.
 - Secrets, cookies, raw connector arguments, physical paths, and provider keys are
   prohibited fields.
-- Deletion cascades from source runs to derived manifests/embeddings unless legal hold
-  requires a tombstoned retained record.
+- Deletion cascades from source runs to derived manifests/embeddings. An optional
+  user-enabled backup or future hosted retention lock may retain only a tombstoned,
+  non-runnable record.
 - Every case mutation, evaluation start, report publication, and promotion decision is
   audited.
 
@@ -232,7 +248,8 @@ pointer without data migration.
 - Manifest size: at most 256 KiB inline; larger material is referenced through A2.
 - Projection work is `O(E)` in eligible run events and single-pass.
 - Fixture lookup is `O(1)` by canonical request digest.
-- Evaluation concurrency is bounded by provider, org, and global semaphores.
+- Evaluation concurrency is bounded by provider, local installation, and process
+  semaphores so background scoring cannot make the desktop unresponsive.
 - The runner enforces per-case model-turn, tool-call, token, wall-time, and dollar caps.
 
 ## Failure, idempotency, and recovery
@@ -248,7 +265,7 @@ pointer without data migration.
 
 ## Observability and quality gates
 
-Required dashboards:
+Required local diagnostic views and exportable reports:
 
 - eligible/projected/skipped runs by reason;
 - redaction failures and prohibited-field detections;
@@ -258,14 +275,16 @@ Required dashboards:
 - input/schema/output tokens, cache metrics, model turns, cost, and latency;
 - promotion and rollback history.
 
-Alerts cover hard-gate regression, cross-tenant access attempts, missing policy
-revisions, projection backlog, and evaluation spend anomalies.
+Local health notices and development CI gates cover hard-gate regression,
+cross-profile access attempts, missing policy revisions, projection backlog, and
+evaluation spend anomalies. A future hosted deployment may project the same metrics to
+a centralized dashboard only under its own privacy contract.
 
 ## Rollout and backout
 
 1. Land contracts, ports, and synthetic fixtures with production projection disabled.
 2. Project only synthetic/dev runs.
-3. Enable opt-in redacted production projection for internal tenants.
+3. Enable opt-in redacted production projection for local dogfood profiles.
 4. Run shadow candidate evaluations; no online assignment.
 5. Enable read-only task-family experiments.
 6. Require promotion reports for selected harness flags.
@@ -287,7 +306,7 @@ Existing reports remain readable under their schema versions.
 ## Test plan
 
 - Golden manifest for model/tool/subagent/approval/artifact journeys.
-- Cross-tenant read and case-enumeration negatives.
+- Cross-profile read and case-enumeration negatives.
 - Secret, PII, path, and connector-argument redaction adversarial suite.
 - Fixture executor canary proving zero live network/effect calls.
 - Same-key replay and changed-digest conflict.
@@ -321,6 +340,6 @@ Guardrails:
 Open decisions:
 
 1. Which synthetic suites are mandatory for the first promotion gate?
-2. Is tenant-derived evaluation material ever allowed outside its tenant boundary?
+2. Is user-derived evaluation material ever allowed outside its local profile boundary?
 3. Which model-graded dimensions provide enough value to justify cost and variance?
 4. What statistical threshold and minimum sample size govern online promotion?

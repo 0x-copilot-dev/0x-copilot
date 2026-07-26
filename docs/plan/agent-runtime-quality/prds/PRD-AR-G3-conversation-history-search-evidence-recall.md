@@ -1,6 +1,6 @@
 # PRD-AR-G3 — Conversation-history search and evidence recall
 
-**Goal.** Give the agent a precise, tenant-safe way to search the caller's prior
+**Goal.** Give the agent a precise, profile-safe way to search the caller's prior
 conversations and reopen exact message evidence, with dates and citations, without
 loading entire transcripts or turning conversation history into durable memory.
 
@@ -35,12 +35,22 @@ Read before implementation:
 The file adapter's existing FTS is an optimization, not the domain contract. All
 production adapters must implement the same authorization and evidence semantics.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 Users expect the agent to find decisions, preferences, links, and prior work they
 explicitly discussed. Today the desktop file adapter can rank conversation title and
 redacted-message matches internally, but there is no runtime-wide service/tool for
-evidence recall, no Postgres/in-memory adapter contract, and no exact message/span
+evidence recall, no cross-adapter port contract, and no exact message/span
 reference returned to the model.
 
 Returning whole transcripts would create high token cost, expose irrelevant sensitive
@@ -50,10 +60,10 @@ only conversation rows cannot support verifiable claims.
 ## Current implementation and predecessor contracts
 
 - **[shipped]** Conversations, messages, runs, events, soft deletion, history deletion, retention,
-  and tenant-scoped ports already exist.
+  and profile-scoped ports already exist.
 - **[shipped]** The file store maintains a disposable SQLite FTS5 catalog over titles and redacted
   user/assistant message text; raw tool payloads and system turns are excluded.
-- **[shipped]** Conversation/message reads already enforce org/user membership.
+- **[shipped]** Conversation/message reads already enforce profile/user membership.
 - **[shipped]** Citation ordinals, source locators, payload refs, and replayable events are available.
 - **[shipped]** The memory domain is separate; recall must not silently create or mutate memory.
 
@@ -63,8 +73,8 @@ only conversation rows cannot support verifiable claims.
 2. Return exact message/span evidence with conversation title and timestamp.
 3. Use a search→open flow to bound context contribution.
 4. Clearly label recalled statements as historical conversation evidence.
-5. Honor soft deletion, retention expiry, project membership, legal hold, and account
-   deletion.
+5. Honor soft deletion, local retention expiry, project access, account deletion, and
+   any explicitly enabled backup/sync retention lock.
 6. Provide deterministic replay and citation opening.
 
 ### Success measures
@@ -73,7 +83,7 @@ only conversation rows cannot support verifiable claims.
 - At least 95% of answer claims derived from history carry a resolvable citation.
 - Zero cross-principal/project hits in conformance and adversarial tests.
 - p95 search below 750 ms at 100,000 messages/user and below 1.5 seconds at the
-  documented large-tenant profile.
+  documented large local-history profile.
 - Search summaries at or below 10 KiB and opened evidence at or below 24 KiB per call.
 
 ## Non-goals
@@ -83,7 +93,7 @@ only conversation rows cannot support verifiable claims.
 - Treating prior assistant statements as authoritative external facts.
 - Indexing raw tool results, system prompts, secrets, hidden reasoning, deleted text,
   or attachment bytes.
-- Rebuilding a global enterprise search product inside `ai-backend`.
+- Rebuilding broad file, mail, and connector search inside `ai-backend`.
 
 ## Interfaces consumed
 
@@ -200,15 +210,16 @@ summary contract and cannot be cited or hydrated as message evidence.
 
 ### D2. Adapter implementations
 
-- **Postgres:** a tenant-leading message-search table/generated `tsvector` with GIN,
-  joined to authorized conversations and filtered before ranking. Store normalized
-  visible text or an index projection with source digest; do not duplicate raw
-  transcripts in an unmanaged table.
-- **File:** extend the existing disposable FTS5 catalog to return message id, role,
+- **File (desktop launch):** extend the existing disposable FTS5 catalog to return message id, role,
   timestamp, safe span, and content digest. The catalog remains rebuildable.
 - **In-memory:** bounded tokenized scan for tests/dev with the same ordering and
   authorization semantics. It must refuse scans above a configured ceiling rather than
   consume unbounded CPU.
+- **Postgres (future hosted deployment):** use a profile-leading message-search
+  table/generated `tsvector` with GIN, joined to readable conversations and filtered
+  before ranking. Store normalized visible text or an index projection with source
+  digest; do not duplicate raw transcripts in an unmanaged table. This adapter is not
+  required to launch desktop recall.
 
 Golden fixtures require equivalent hit membership and deterministic tie-breaking; raw
 scores may remain adapter-specific and are normalized to `[0,1]` at the service layer.
@@ -242,7 +253,7 @@ identity so it can describe evolution.
 
 ### D5. Evidence refs and citations
 
-Refs authenticate tenant/user visibility fingerprint, conversation/message ids, content
+Refs authenticate profile/user visibility fingerprint, conversation/message ids, content
 digest, normalized span, and expiry. They are not bearer authorization.
 
 Opened blocks register:
@@ -283,24 +294,24 @@ conversation.
 Subagents inherit the parent's conversation/search scope intersection and cannot search
 additional projects or users.
 
-## Persistence, retention, deletion, and legal hold
+## Persistence, retention, deletion, and optional sync retention
 
-- Authoritative text remains in message storage; Postgres index projections and file
-  FTS rows are derivative.
+- Authoritative text remains in the selected runtime store. Desktop FTS rows and future
+  hosted Postgres index projections are derivative.
 - Deletion and retention remove derivative index rows in the same lifecycle operation
   or a durable retryable outbox.
 - Evidence refs and opened payloads follow run/event retention; they do not preserve
-  source bodies beyond source retention unless legal hold explicitly governs both.
-- Legal hold prevents canonical deletion but does not broaden search authorization.
+  source bodies beyond source retention. An optional backup/sync retention lock is a
+  separate adapter concern and never broadens search authorization.
 - `DELETE /v1/agent/history` removes searchable rows and invalidates refs.
 - Adapter conformance tests verify conversations, messages, indexes, citation payloads,
   and caches.
 
 ## Authorization, privacy, and security
 
-- Scope derives from verified run identity; tool arguments contain no org/user id.
-- Search filters org, user visibility, conversation ownership/membership, project, and
-  deletion before text ranking is returned.
+- Scope derives from verified run identity; tool arguments contain no profile/user id.
+- Search filters local profile, user visibility, conversation ownership, project grant,
+  and deletion before text ranking is returned.
 - Unauthorized and absent resources return the same result.
 - Query/message/excerpt text is excluded from logs, audit metadata, traces, and metrics.
 - Recalled text is untrusted data and cannot change capabilities or policy.
@@ -315,9 +326,10 @@ additional projects or users.
 - Query max 2,000 chars; top-k max 20; open max 8; excerpt 500 chars; open context
   3 KiB/ref and 24 KiB total.
 - Search deadline 2 seconds; open deadline 1 second.
-- Postgres query plan must lead with tenant/user visibility predicates and use the
-  search index at launch scale.
-- File FTS search remains indexed; no catalog-wide Python scan.
+- Desktop file FTS search remains indexed; no catalog-wide Python scan, and catalog
+  rebuild runs at low priority.
+- A future Postgres query plan must lead with profile/user visibility predicates and use
+  the search index at hosted scale.
 - In-memory scan ceiling defaults to 20,000 visible messages.
 - Concurrent search uses existing store pool limits; no model-call or embedding is
   required for initial lexical launch.
@@ -348,9 +360,10 @@ No content or resource identifiers appear in labels.
 ## Rollout and backout
 
 1. Land port/contracts and adapter conformance fixtures.
-2. Add Postgres and file exact-evidence implementations; in-memory test implementation.
+2. Upgrade the desktop file exact-evidence implementation and add the in-memory
+   conformance implementation.
 3. Run shadow queries against checked-in evaluation tasks with no model exposure.
-4. Enable search/open for internal users and then tenant cohorts.
+4. Enable search/open for internal users and then desktop cohorts.
 5. Add optional product route only after runtime quality/security gates.
 
 Backout removes model tools and stops index jobs. Authoritative conversations remain
@@ -360,9 +373,10 @@ old citation refs degrade to unavailable safely.
 ## Implementation slices
 
 1. Define contracts, errors, ports, operation descriptors, and fixtures.
-2. Add schema/index migrations and Postgres implementation.
-3. Upgrade file FTS and catalog rebuild.
-4. Add bounded in-memory implementation and cross-adapter conformance.
+2. Upgrade file FTS and catalog rebuild.
+3. Add bounded in-memory implementation and cross-adapter conformance.
+4. Add the hosted Postgres implementation when the consumer web deployment needs it;
+   it is not a desktop launch gate.
 5. Add query/open application service and optional routes.
 6. Add the search tool, register the internal resolver behind F5's evidence reader,
    and wire citation/source-open integration and prompt guidance.
@@ -380,7 +394,7 @@ old citation refs degrade to unavailable safely.
 
 ### Authorization and lifecycle
 
-- Cross-org/user/project, archived, soft-deleted, retained, expired, legal-held,
+- Cross-profile/user/project, archived, soft-deleted, retained, expired, legal-held,
   account-deleted, forged/expired refs.
 - Delete/history-delete removes index rows and invalidates source opening.
 - No system/tool/hidden/redacted content indexed.
@@ -399,7 +413,7 @@ old citation refs degrade to unavailable safely.
 
 ## Definition of done
 
-- [ ] All adapters implement exact, tenant-safe conversation evidence search and the
+- [ ] All adapters implement exact, profile-safe conversation evidence search and the
       internal resolver consumed by F5's evidence reader.
 - [ ] Only visible user/final-assistant text is indexed.
 - [ ] Results are bounded, dated, digest-pinned, and citation-resolvable.

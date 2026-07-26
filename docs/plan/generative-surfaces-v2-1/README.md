@@ -26,6 +26,16 @@ orchestration, and governed extensibility.
 That program's README is the source of truth for scope, PRD ownership, dependency
 order, launch gates, and the complete implementation checklist.
 
+## Deployment posture
+
+The current product target is the `single_user_desktop` profile: Electron
+supervises the local services, ai-backend defaults to its file-native store
+under the user's application-data directory, and Electron main retains native
+workspace/browser authority. The related runtime program must optimize for
+that local-first B2C path. A future hosted consumer sync offering may implement
+the same ports, but is not a prerequisite or a source of authority for the
+desktop product.
+
 ## Shared rule
 
 The second program must not create a parallel execution or approval path.

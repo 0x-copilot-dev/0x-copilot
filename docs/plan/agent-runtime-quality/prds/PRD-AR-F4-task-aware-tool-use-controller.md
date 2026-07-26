@@ -30,6 +30,16 @@ Keep the existing research discipline: distinct queries, limited duplicate searc
 progress checkpoints, per-tool caps, and citations. Generalize it by task family
 without weakening hard operation budgets or approval policy.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current strengths
 
 The web profile already instructs the agent to plan a few distinct searches, stop after
@@ -157,7 +167,7 @@ as authorization.
 Effective budgets are the minimum of:
 
 - platform safety maximum;
-- org/user plan and administrator policy;
+- profile/user plan and user policy;
 - run/task profile;
 - capability/connector limit;
 - model-declared smaller budget.
@@ -197,15 +207,15 @@ Project plan state into existing typed run/activity events. Show step labels, st
 evidence count, blocking approval, and budget state. Do not display hidden reasoning or
 raw connector arguments.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
-- Profile and budget selection derive from verified org/user/runtime context.
-- The model cannot request a higher budget or different tenant profile.
+- Profile and budget selection derive from verified profile/user/runtime context.
+- The model cannot request a higher budget or different local profile.
 - Intent and feedback text are treated as model-generated untrusted data and size
   bounded.
-- Canonical fingerprints use keyed digests when arguments could reveal tenant data.
+- Canonical fingerprints use keyed digests when arguments could reveal private user data.
 - Tool results and arguments remain behind protected operation refs.
-- Profile changes, overrides, hard-stop events, and administrator budget changes are
+- Profile changes, overrides, hard-stop events, and user budget changes are
   audited.
 - Effect authorization and approval always remain A3/A4/A5/D1 responsibilities.
 
@@ -278,7 +288,7 @@ middleware. Profile revision is recorded per run for diagnosis.
 - Model cannot increase its budget or change profile.
 - Worker crash/rebuild yields identical state and remaining budget.
 - Approval pause does not duplicate a pending operation.
-- Cross-tenant fingerprints and plan records cannot be read.
+- Cross-profile fingerprints and plan records cannot be read.
 - F1 regression suite covers premature stop and runaway loops.
 
 ## Definition of done
@@ -288,7 +298,7 @@ middleware. Profile revision is recorded per run for diagnosis.
 - Exact duplicate and unchanged-error loops are mechanically controlled.
 - Policies are versioned, auditable, reconstructable, and evaluated by task family.
 - Existing effect, approval, citation, and usage semantics remain intact.
-- Feature flags, dashboards, backout, and operator documentation are complete.
+- Feature flags, local diagnostics, backout, and user-facing documentation are complete.
 
 ## Guardrails and open decisions
 

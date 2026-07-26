@@ -31,6 +31,16 @@ Reuse the composed backend routes for memory, drafts, subagent output, workspace
 large results. This PRD defines one selection/compression policy over those sources; it
 does not create another blob store.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current strengths
 
 The runtime already has token-budget helpers, continuity summaries, large-result
@@ -204,7 +214,7 @@ other artifacts or bypass deleted/expired source state.
 The resolver registry treats the ref type as routing metadata, not authority. Each
 source resolver reauthorizes the current subject, pins source revision/digest, applies
 its retention/deletion state, and returns a common evidence envelope. Unknown,
-cross-tenant, stale, superseded, or deleted refs fail with typed results. A batch may
+cross-profile, stale, superseded, or deleted refs fail with typed results. A batch may
 contain multiple source types, but per-source limits and aggregate byte/token caps
 still apply.
 
@@ -215,9 +225,9 @@ Active constraints, pending approvals, uncertain side effects, citations, and
 unresolved user questions are structured fields, not left solely to prose
 summarization.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
-- Candidate providers derive org/user/project scope from verified runtime context.
+- Candidate providers derive profile/user/project scope from verified runtime context.
 - Every read and summary rechecks the underlying source ACL and retention state.
 - Prompt-injection screening and untrusted labels survive compression.
 - Summarizers receive the minimum source content and no connector credentials.
@@ -299,7 +309,7 @@ readable and deletable.
 - Pending/uncertain effect state survives conversation compression.
 - Library and conversation refs hydrate through the same `read_evidence` schema while
   retaining source-specific ACL, revision, deletion, and citation behavior.
-- Cross-tenant and legal-hold/deletion matrix.
+- Cross-profile and legal-hold/deletion matrix.
 
 ## Definition of done
 
@@ -309,7 +319,7 @@ readable and deletable.
 - Evidence recall cannot bypass source ACL, retention, or deletion.
 - Exactly one model-facing evidence hydration tool is registered.
 - F1 demonstrates acceptable constraint retention, groundedness, latency, and cost.
-- Feature flags, dashboards, backout, and operator runbook are complete.
+- Feature flags, local diagnostics, backout, and troubleshooting guide are complete.
 
 ## Guardrails and open decisions
 

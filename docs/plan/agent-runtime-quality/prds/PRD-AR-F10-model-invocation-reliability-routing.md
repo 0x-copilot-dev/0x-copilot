@@ -31,6 +31,16 @@ request/default resolution, reasoning-depth budgets, user-key availability check
 BYOK precedence, custom-endpoint handling, training opt-out, region pinning that fails
 closed, provider stream adapters, and per-call usage records.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current strengths
 
 Provider errors are not equivalent. A pre-dispatch timeout may be safe to retry; a
@@ -46,7 +56,7 @@ recovery from run/effect recovery and records why any alternate route was eligib
 ## Objectives
 
 1. Define model capability and deployment metadata as a versioned catalog.
-2. Resolve an ordered eligible route set under user/org/privacy/region/BYOK policy.
+2. Resolve an ordered eligible route set under user/provider-privacy/region/BYOK policy.
 3. Classify provider failures into safe retry, safe fallback, terminal, and ambiguous.
 4. Bound attempts, deadline, tokens, and spend across the route set.
 5. Persist an invocation and attempt ledger before each call.
@@ -148,7 +158,7 @@ Resolve deployments by intersection:
 - BYOK/deployment credential availability;
 - privacy/training opt-out support and workspace/user policy;
 - configured data region;
-- org allow/deny policy and budget;
+- user allow/deny policy and budget;
 - current health/circuit state.
 
 An explicit model defaults to no cross-model fallback unless product policy and the
@@ -208,9 +218,9 @@ that durable observation and cannot replay the operation.
 
 ### 6. Circuit breaking
 
-Provider health tracks bounded rolling outcomes per deployment/region, without tenant
-payloads. Open circuits exclude new automatic routes for a cooldown while allowing
-operator probes. BYOK auth failure is user-key-specific and must not open a global
+Provider health tracks bounded rolling outcomes per installation/provider endpoint,
+without user payloads. Open circuits exclude new automatic routes for a cooldown while allowing
+local diagnostic probes. BYOK auth failure is user-key-specific and must not open a global
 provider circuit.
 
 ### 7. Context recovery
@@ -219,7 +229,7 @@ Context-limit errors may request one F5 replan if protected content remains inta
 the model route still qualifies. They are not solved by silently selecting a
 larger-context model unless fallback policy permits it.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
 - Keys remain ephemeral runtime values sourced from TokenVault; records store key
   source class/hint at most.
@@ -227,7 +237,7 @@ larger-context model unless fallback policy permits it.
 - User opt-out and region are one-way constraints; fallback cannot weaken them.
 - Health metrics distinguish global deployment from user-specific credential failure.
 - Invocation/attempt/route/policy decisions are audited without prompt bodies or keys.
-- Tenant-level budgets and route policies derive from verified identity.
+- User profile-level budgets and route policies derive from verified identity.
 - Provider request IDs are protected refs where they may reveal account information.
 
 ## Performance and complexity budgets
@@ -273,7 +283,7 @@ state, missing usage finalization, and provider degradation.
 ## Rollout and backout
 
 1. Record descriptors, route plan, and attempt ledger while using current single route.
-2. Classify failures in shadow; compare operator diagnoses.
+2. Classify failures in shadow; compare developer diagnoses.
 3. Enable same-deployment safe retries for pre-content transient failures.
 4. Enable same-model/same-policy alternate deployment routes.
 5. Qualify limited equivalent-model fallback with F1 and explicit product policy.

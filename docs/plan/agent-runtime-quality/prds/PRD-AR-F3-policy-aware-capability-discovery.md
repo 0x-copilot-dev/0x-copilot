@@ -30,10 +30,20 @@ The current server-level `load MCP server` and generic call path is a useful dis
 boundary. Retain it as direct/server mode. This PRD introduces a tool-level discovery
 mode for large authorized catalogs; it does not replace the Operation Gateway.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current strengths
 
 The model initially sees compact connector/server cards and can load one authorized
-server before calling its tools. This prevents an enterprise-wide tool dump and keeps
+server before calling its tools. This prevents an install-wide tool dump and keeps
 live permission checks in the loader. A single server can nevertheless expose hundreds
 of verbose, similarly named schemas. Loading all of them consumes context and impairs
 selection.
@@ -41,7 +51,7 @@ selection.
 The runtime needs an authorized catalog protocol that can search compact metadata,
 describe one capability, and invoke it through the existing execution plane. Generic
 LLM tool selection is insufficient because catalog membership and invocation authority
-must be tenant- and run-specific.
+must be profile- and run-specific.
 
 ## Objectives
 
@@ -56,7 +66,7 @@ must be tenant- and run-specific.
 
 ## Non-goals
 
-- Indexing unauthorized or enterprise-global capabilities for the model.
+- Indexing unauthorized or install-global capabilities for the model.
 - Granting access because search returned a capability.
 - Replacing MCP discovery/session caching; F8 owns control-plane lifecycle.
 - Selecting skills, documents, or conversations.
@@ -78,7 +88,7 @@ must be tenant- and run-specific.
 
 ```text
 CapabilityCatalogRevision
-  catalog_id, revision, org_id, user_id
+  catalog_id, revision, profile_id, user_id
   policy_revision, connector_scope_revision
   descriptor_count, deferred_schema_tokens
   expires_at
@@ -136,7 +146,7 @@ capability before A3/D1/D2 classification and event emission.
 
 Build only after verified identity, connector scope, role, permissions, and feature
 gates are resolved. Each entry is derived from a trusted descriptor, not arbitrary MCP
-result text. Remove secrets, examples containing tenant data, and verbose schema bodies.
+result text. Remove secrets, examples containing private user data, and verbose schema bodies.
 
 Catalog construction is deterministic for a descriptor/policy revision. Catalog
 references are opaque, unguessable, and scoped to the run subject.
@@ -194,7 +204,7 @@ filters.
 - descriptor and catalog revision.
 
 Oversized descriptions reference a retrievable schema artifact. The model never
-receives credentials or tenant examples.
+receives credentials or private examples.
 
 ### 5. Invoke and revalidation
 
@@ -209,12 +219,12 @@ Invocation does not trust the earlier search/describe result. It:
 
 Bridge invocation cannot call another bridge recursively.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
 - Catalog builders accept only server-derived `RuntimeContext` identity.
 - Search results cannot reveal unauthorized tool names, servers, descriptions, or
   existence.
-- Catalog and descriptor caches are keyed by org, user, policy, connector scope, and
+- Catalog and descriptor caches are keyed by profile, user, policy, connector scope, and
   revision; entries are defensive copies.
 - Call-time permission checks are mandatory even after a catalog hit.
 - Effectful/unknown capabilities retain exact staging and approval behavior.
@@ -283,7 +293,7 @@ readable; no connector or authorization state changes.
 
 ## Implementation slices
 
-1. Contracts, canonical compact records, and tenant-scope tests.
+1. Contracts, canonical compact records, and local-profile-scope tests.
 2. Catalog builder over built-ins, compact authorized server cards, and cached MCP
    descriptors.
 3. Lexical ranker and shadow telemetry.

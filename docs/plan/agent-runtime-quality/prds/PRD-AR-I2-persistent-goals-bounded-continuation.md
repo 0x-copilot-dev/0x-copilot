@@ -29,6 +29,16 @@ Read:
 
 There is no first-class durable goal aggregate today. Do not model a goal as a long-running HTTP request, a conversation flag, a recurring prompt, or a recursively self-spawning agent. The backend owns the product record and authorization; the AI backend executes finite attempts using ordinary runs and checkpoints.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 Some objectives cannot be completed in one conversation or one run: investigate a changing issue, gather evidence over several days, coordinate a staged migration, or work through a large corpus. Conversations and runs provide durable history, but they do not define a persistent objective with measurable success criteria, approved resource limits, scheduled continuation, progress checkpoints, and an explicit terminal state.
@@ -74,11 +84,11 @@ Without a first-class contract, continuation tends toward one of two unsafe form
 
 ## Interfaces consumed
 
-- Verified backend identity, membership, roles, tenant policy, and budget policy
+- Verified backend identity, membership, roles, user policy, and budget policy
 - Backend connector registrations and vault-backed credential references
 - Existing AI-backend run creation, queued execution, checkpoints, cancellation, and persisted events
 - A3–A5 classification, approvals, commit, and reconciliation for consequential actions
-- E1 retention, deletion, legal hold, audit export, and lifecycle controls
+- E1 retention, deletion, optional retained backup, audit export, and lifecycle controls
 - I3 only when a goal explicitly creates product-visible child items or dependencies
 
 ## Interfaces exposed
@@ -117,7 +127,7 @@ POST /internal/v1/agent/runs
 ```text
 Goal
   goal_id
-  tenant_id
+  profile_id
   owner_id
   revision
   title
@@ -168,7 +178,7 @@ GoalCheckpoint
   created_at
 ```
 
-Budgets include wall-clock duration, model tokens or cost, tool calls, subagent count, external-operation count, and attempt count. Tenant policy may impose stricter values.
+Budgets include wall-clock duration, model tokens or cost, tool calls, subagent count, external-operation count, and attempt count. User policy may impose stricter values.
 
 ## State machine and invariants
 
@@ -257,16 +267,17 @@ Cross-service messages use authenticated internal HTTP and transactional outboxe
 
 - PostgreSQL stores goals, revisions, attempts, checkpoints, decisions, budgets, and audit linkage.
 - Large artifacts and evidence remain in the governed artifact repository; goals retain typed references and digests.
-- User and tenant deletion cascade through attempts, run references, notifications, and derived summaries.
-- Legal hold preserves immutable revisions and evidence links while disabling further execution.
+- User and local-profile deletion cascade through attempts, run references, notifications, and derived summaries.
+- An optional backup/sync retention lock may preserve immutable revisions and evidence links while disabling further execution.
 - Archive removes a goal from active views but does not change retention.
 - Checkpoint compression may create a new summary record; it never destroys source checkpoint lineage before policy permits.
 
 ## Authentication, authorization, security, and audit
 
-- Verified identity determines tenant and actor; request fields cannot override them.
+- Verified local session determines the active profile and actor; request fields
+  cannot override them.
 - Owner and delegated roles are explicit per action.
-- Attempt grants are signed, short-lived, revision-bound, and narrower than current user and tenant policy.
+- Attempt grants are signed, short-lived, revision-bound, and narrower than current user and user policy.
 - Permissions, connector access, destination allowlists, and budgets are re-resolved before run dispatch and before consequential operations.
 - Goal text and retrieved evidence are untrusted data subject to prompt-injection defenses.
 - Audit events cover create, confirm, amend, wake, dispatch, checkpoint, block, approval, budget request/decision, pause, resume, cancel, achieve, archive, export, and delete.
@@ -281,7 +292,7 @@ Cross-service messages use authenticated internal HTTP and transactional outboxe
 - Scheduler wake lag: p95 under 30 seconds.
 - Revocation visible to the runtime: p95 under 5 seconds.
 - Dossier selection is `O(C log E)` or better for `C` checkpoint/evidence candidates, with a hard selected-item and token cap; attempt startup must not be `O(total conversation history)`.
-- Tenant concurrency and daily cost are enforced before model invocation.
+- User profile concurrency and daily cost are enforced before model invocation.
 
 ## Failure, idempotency, and recovery
 
@@ -314,11 +325,12 @@ Quality evaluation uses scenario suites for long-horizon research, multi-stage i
 ## Rollout and backout
 
 1. Ship schema, APIs, and read-only UI with execution disabled.
-2. Enable manual-only goals for internal tenants.
+2. Enable manual-only goals for local dogfood profiles.
 3. Add one-attempt execution with strict low budgets.
-4. Enable scheduled continuation for allowlisted tenants.
+4. Enable scheduled continuation for opt-in desktop profiles.
 5. Add dependency wakeups and optional I3 decomposition after their reliability gates.
-6. Expand tenant limits based on completion quality and safety data.
+6. Expand local profile limits based on completion quality, device resource,
+   and safety data.
 
 Backout globally prevents new attempt dispatches, preserves goal records and checkpoints, and exposes pause/cancel/export. Active runs are cancelled or allowed to checkpoint according to incident policy.
 
@@ -331,16 +343,16 @@ Backout globally prevents new attempt dispatches, preserves goal records and che
 5. Checkpoint/evidence ledger and criterion evaluators
 6. Scheduler wake integration and block notifications
 7. Budget extension, amendment, retention, and audit
-8. Evaluation suites, dashboards, and tenant rollout
+8. Evaluation suites, dashboards, and local rollout
 
 ## Test plan
 
 - Unit: state transitions, policy narrowing, budgets, evaluator outcomes, dossier selection
-- Store contract: revision conflicts, unique active attempt, deletion, legal hold
+- Store contract: revision conflicts, unique active attempt, deletion, optional retained backup
 - Integration: create through multi-attempt achievement
 - Concurrency: scheduler replicas, duplicate wake delivery, and duplicate outbox dispatch
 - Fault injection: lost dispatch response, checkpoint timeout, and worker crash
-- Security: cross-tenant access, stale membership, connector revocation, forged grant
+- Security: cross-profile access, stale membership, connector revocation, forged grant
 - Governance: budget exhaustion, extension rejection, approval timeout, effect reconciliation
 - Quality: no-progress detection, contradiction retention, evidence-backed completion
 - Load: many dormant goals and indexed due-wake scans
@@ -352,7 +364,7 @@ Backout globally prevents new attempt dispatches, preserves goal records and che
 - Continuation survives restart but stops on revocation, exhausted limits, or blocking ambiguity.
 - Progress and completion claims link to reviewable evidence.
 - No goal can self-expand its authority, budget, success criteria, or continuation policy.
-- Retention, deletion, audit export, tenant isolation, and legal-hold tests pass.
+- Retention, deletion, audit export, profile isolation, and legal-hold tests pass.
 
 ## Guardrails
 
@@ -361,12 +373,12 @@ Backout globally prevents new attempt dispatches, preserves goal records and che
 - Silence is never approval of a budget, scope, deadline, or effect.
 - No recursive self-replication or unbounded subagent spawning.
 - No completion based solely on a narrative assertion.
-- No execution while the goal, owner, tenant, connector, policy, audit, or store is invalid.
+- No execution while the goal, owner, local profile, connector, policy, audit, or store is invalid.
 
 ## Open decisions
 
 1. Which success-criterion evaluators ship in the first release.
 2. Default maximum attempts, attempt duration, and minimum wake interval.
-3. Whether shared goals support multiple approvers or only an owner plus administrators.
+3. Whether shared goals support multiple approvers or only an owner plus users.
 4. Whether deadline extension is always material or can be policy-preapproved.
 5. Which goal state and evidence fields are exportable to external project systems.

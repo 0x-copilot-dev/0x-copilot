@@ -32,6 +32,16 @@ stages, cancellation lineage, and usage attribution. This PRD adds the admission
 context-packet, scheduling-budget, result, and supervisor-verification contract for
 in-run delegation.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current strengths
 
 The runtime compiles Deep Agents subagents and adds task-call correlation, typed
@@ -43,7 +53,7 @@ Parallel children can still make a task worse when:
 - the work is dependent or too small to amortize another model session;
 - the parent sends vague/incomplete context;
 - every child receives irrelevant or sensitive transcript material;
-- fan-out exceeds org/provider budget;
+- fan-out exceeds installation/provider budget;
 - summaries conflict or cite unsupported claims;
 - child cancellation/partial completion is hidden by the parent.
 
@@ -54,8 +64,8 @@ of a task tool.
 
 1. Admit delegation only for explicit, sufficiently independent work units.
 2. Require a bounded structured context/evidence packet.
-3. Intersect child authority with parent, definition, org policy, and task need.
-4. Enforce run/org/user concurrency, token, cost, call, and wall-time budgets.
+3. Intersect child authority with parent, definition, local user policy, and task need.
+4. Enforce run/profile/user concurrency, token, cost, call, and wall-time budgets.
 5. Return a typed result with claim-to-evidence links and uncertainty.
 6. Verify required evidence, contradictions, and output schema before synthesis.
 7. Make child progress, partial results, artifacts, and cancellation inspectable.
@@ -64,7 +74,7 @@ of a task tool.
 
 - Persistent work across runs/restarts as a multi-day job board.
 - Giving children the full parent transcript by default.
-- Allowing children to widen connector, workspace, approval, or tenant scope.
+- Allowing children to widen connector, workspace, approval, or profile scope.
 - Automatically resolving conflicting child conclusions with another unbounded model.
 - Delegating effectful tasks merely to increase throughput.
 - Replacing D2 operation trees or F6 capability-call scheduling.
@@ -74,7 +84,7 @@ of a task tool.
 - D2 `SubagentDefinition`, authority intersection, task/call identity, operation tree,
   artifacts, stages, and usage attribution.
 - Parent plan/evidence refs and F5-style bounded context representations.
-- Provider/org/run budgets and cancellation.
+- Provider/installation/run budgets and cancellation.
 - F1 evaluator and existing stream/activity events.
 
 ## Interfaces exposed
@@ -172,17 +182,17 @@ trust. The packet digest is persisted and visible in trace metadata.
 
 Effective child authority is:
 
-`parent grant ∩ subagent definition ∩ org/user policy ∩ task request`.
+`parent grant ∩ subagent definition ∩ profile/user policy ∩ task request`.
 
-Effective budget is the minimum of parent remaining budget, definition limits, org
+Effective budget is the minimum of parent remaining budget, definition limits, installation
 limits, and requested limits. Budget is reserved before scheduling and charged from
 actual usage; unused reservation returns.
 
 ### 4. Parallel scheduling
 
 Batch requests declare dependencies. Only independent admitted children run together.
-Default maximum is three active children per parent, further bounded by org/provider
-limits. Scheduling is fair across tenants and cancellation-aware.
+Default maximum is three active children per parent, further bounded by installation/provider
+limits. Scheduling is fair across user profiles and cancellation-aware.
 
 Subagents do not share mutable conversation state. Shared workspace/effect targets
 remain serialized through their designated operation/effect contracts.
@@ -217,15 +227,15 @@ Retry requires a reason code and revised request/packet. It consumes reserved bu
 and receives a new child task ID linked to the prior attempt. No automatic retry after
 an uncertain effect or policy violation.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
 - Parent identity does not become transferable credentials; child context is
   server-derived.
 - Authority subset is asserted at construction and before every child operation.
-- Context/evidence refs are reauthorized; the parent cannot smuggle another tenant's
+- Context/evidence refs are reauthorized; the parent cannot smuggle another profile's
   ref.
 - Packets, summaries, and claim text are untrusted and size limited.
-- Cost/concurrency quotas are tenant-aware and cannot be changed by a model.
+- Cost/concurrency quotas are profile-aware and cannot be changed by a model.
 - Delegation admission, authority, packet digest, budget, cancellation, result, and
   verification are audited.
 - Retention/deletion covers child conversations, operations, artifacts, summaries,
@@ -298,7 +308,7 @@ D2 records/artifacts and direct supervisor execution.
 - Tiny/dependent task is rejected with a useful reason.
 - Three independent tasks run within cap and return stable result order.
 - Child receives only packet content, not full parent transcript.
-- Authority/tool/workspace/tenant widening attempts fail.
+- Authority/tool/workspace/profile widening attempts fail.
 - Forged/expired evidence refs fail in child context.
 - Budget reservation prevents oversubscription and reconciles once.
 - Contradictory child claims are surfaced to the supervisor.

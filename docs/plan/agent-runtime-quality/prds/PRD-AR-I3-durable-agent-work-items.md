@@ -35,6 +35,16 @@ The backend owns product records, readiness, dependency state, authorization, an
 
 The asynchronous subagent lifecycle and persistent subagent records are execution internals. They may satisfy a run's item but are not the canonical product work-item store.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 Longer objectives need visible decomposition: what work exists, which items depend on others, what is ready, what is blocked, who owns a decision, and which result satisfied an item. A model-visible todo list or in-process subagent is not sufficient because it may disappear with a process, cannot serve as the product record, and does not provide durable authorization or retention.
@@ -47,7 +57,7 @@ The product therefore needs a backend-owned work-item DAG that records intent an
 
 - AI backend already has a durable queued-run lifecycle, runtime workers, checkpoints, events, replay, and cancellation.
 - Subagent execution already models authority attenuation, concurrency, persistent lineage, and streamed outcomes.
-- Backend already owns tenant authorization, connector records, audit, and target product persistence.
+- Backend already owns local profile authorization, connector records, audit, and target product persistence.
 - The facade and shared chat surface already expose pending activity without apps calling internal services.
 - A3–A5 already govern consequential operations and ambiguous external outcomes.
 
@@ -60,7 +70,8 @@ The product therefore needs a backend-owned work-item DAG that records intent an
 5. Project run and subagent progress back onto the item.
 6. Pause on dependencies, approvals, missing input, policy denial, or budget exhaustion without occupying a worker.
 7. Propagate cancellation and revocation to dispatched runs and dependent items.
-8. Provide a governed work board with human or agent assignees, handoff, comments, visibility, and blocked/approval projections.
+8. Provide a personal work board with agent-role selection, user notes, and
+   blocked/approval projections without introducing team collaboration.
 
 ## Scope
 
@@ -71,7 +82,8 @@ The product therefore needs a backend-owned work-item DAG that records intent an
 - Run/subagent event projection to item status
 - Cancellation, retry intent, replacement, retention, deletion, and audit
 - User-safe item and graph presentation
-- Human and agent assignment, board/inbox views, handoff records, comments, watchers, and visibility policy
+- Personal board/inbox views, user notes, agent-role selection, and visibility
+  limited to the local profile and linked conversations
 
 ## Non-goals
 
@@ -94,8 +106,6 @@ POST   /v1/work-items/{work_item_id}/pause
 POST   /v1/work-items/{work_item_id}/resume
 POST   /v1/work-items/{work_item_id}/cancel
 POST   /v1/work-items/{work_item_id}/retry
-POST   /v1/work-items/{work_item_id}/assign
-POST   /v1/work-items/{work_item_id}/handoffs
 POST   /v1/work-items/{work_item_id}/comments
 GET    /v1/work-items/{work_item_id}/comments
 POST   /v1/work-items/{work_item_id}/decisions/{decision_id}
@@ -121,7 +131,7 @@ AI-backend-to-backend projection consumes persisted lifecycle events or a dedica
 
 ## Interfaces consumed
 
-- Verified backend identity, tenant membership, role, team, and resource visibility
+- Verified backend identity, signed-in local user, device grant, project, and resource visibility
 - Backend connector registrations, credential references, audit, and durable approvals
 - Existing AI-backend run create/read/cancel APIs and persisted lifecycle-event replay
 - Existing AI-backend run queue, worker claims, leases, checkpoints, and subagent records
@@ -133,14 +143,13 @@ AI-backend-to-backend projection consumes persisted lifecycle events or a dedica
 ```text
 AgentWorkItem
   work_item_id
-  tenant_id
+  profile_id
   owner_id
-  assignee_type: human | agent | unassigned
-  assignee_ref
-  visibility: private | participants | team | tenant
+  executor_role: primary | delegated_agent | unassigned
+  visibility: private | linked_conversations | local_profile
   parent_id
   root_id
-  origin: conversation | goal | routine | administrator
+  origin: conversation | goal | routine | user
   origin_ref
   revision
   kind
@@ -211,7 +220,7 @@ The work item is product intent. The run is execution. `WorkItemDispatch` is a r
 
 ## Invariants
 
-- The dependency graph is acyclic and tenant-local.
+- The dependency graph is acyclic and profile-local.
 - Scope, authority, dependencies, and budget are immutable within a revision.
 - Child authority and allocated budget are strict subsets of the parent.
 - At most one active dispatch exists per work-item revision.
@@ -230,7 +239,7 @@ An assistant may propose a bounded decomposition, but trusted backend applicatio
 - known item kind and version;
 - explicit completion criteria;
 - durable input references;
-- authorized owner and tenant;
+- authorized owner and local profile;
 - bounded depth, fan-out, total nodes, and total allocated budget;
 - authority and connector attenuation;
 - valid deadlines and dependencies; and
@@ -242,7 +251,7 @@ Material changes create an immutable revision or replacement item. The model can
 
 Implement PostgreSQL stores for items, immutable revisions, dependencies, decisions, dispatches, outcome projections, and outbox rows. The backend transaction that makes an item `ready` also records the pending dispatch intent when policy permits automatic dispatch.
 
-Required indexes cover tenant/status, root/parent, ready time, deadline, active run, dispatch idempotency key, and predecessor/successor edges.
+Required indexes cover profile/status, root/parent, ready time, deadline, active run, dispatch idempotency key, and predecessor/successor edges.
 
 ### 3. Readiness engine
 
@@ -252,7 +261,7 @@ Readiness is deterministic:
 2. `not_before` has passed and deadline has not;
 3. required dependencies are satisfied;
 4. required user decisions are resolved;
-5. current owner, tenant policy, connector bindings, and budget remain valid; and
+5. current owner, user policy, connector bindings, and budget remain valid; and
 6. no active dispatch exists.
 
 The engine reacts incrementally to dependency terminal events and policy changes. It does not rescan the complete graph after every update. Cycles are rejected on mutation using bounded reachability checks.
@@ -283,13 +292,13 @@ On terminal projection, the backend evaluates direct successors in `O(out-degree
 
 User decisions use A4. The item references the durable approval; waiting releases all compute. Approval can authorize the already-scoped action but cannot widen item authority or mutate future siblings.
 
-### 8. Work board, assignment, handoff, and comments
+### 8. Personal work board, user reordering, agent-role selection, and notes
 
-The shared work board presents items by `ready`, `running`, `waiting_approval`, `blocked`, and terminal state. Filters cover assignee, owner, goal/routine origin, deadline, and visibility. Agent assignees are stable governed profiles or runtime roles, never free-form model identities.
+The shared work board presents items by `ready`, `running`, `waiting_approval`, `blocked`, and terminal state. Filters cover executor role, goal/routine origin, deadline, and linked conversation. Agent roles are stable governed runtime roles, never free-form model identities.
 
-Assignment does not grant data or tool authority. The proposed assignee must already be allowed to view and perform the item's scope. A handoff is a durable request with a bounded context bundle, reason, and explicit accept/decline state. Until accepted, the prior assignee remains accountable unless policy explicitly transfers responsibility.
+Choosing an agent role does not grant data or tool authority. The selected role must already be allowed to view and perform the item's scope. A handoff is only a durable transition between ordinary runs with a bounded context bundle and reason; it is not a human/team assignment feature.
 
-Comments are collaboration records, not harness instructions. Agent-authored comments contain safe summaries and evidence references, never hidden reasoning. Edits preserve revision history. Mentions and watchers create notifications but do not change authority. Approval and blocked states project onto the board with a direct path to the underlying durable decision or missing dependency.
+Notes are user-local records, not harness instructions. Agent-authored notes contain safe summaries and evidence references, never hidden reasoning. Edits preserve revision history. Approval and blocked states project onto the board with a direct path to the underlying durable decision or missing dependency.
 
 Visibility is checked independently for the item, each comment, referenced artifacts, run detail, and approval. A broad item view must not disclose a restricted artifact or private comment.
 
@@ -309,14 +318,14 @@ If a consequential operation may already have committed, A5 reconciliation deter
 
 ## Ownership and service boundaries
 
-| Responsibility                                                                          | Owner                 |
-| --------------------------------------------------------------------------------------- | --------------------- |
-| Work-item DAG, board, assignment, handoff, comments, readiness, dispatch, authorization | Backend               |
-| Public product API aggregation                                                          | Backend facade        |
-| Run queue, claims, leases, checkpoints, model execution, cancellation, events           | AI backend            |
-| Runtime subagent lifecycle and records                                                  | AI backend            |
-| Item/graph/pending-decision presentation                                                | Shared chat surface   |
-| Consequential operations                                                                | Existing A3–A5 owners |
+| Responsibility                                                                                              | Owner                 |
+| ----------------------------------------------------------------------------------------------------------- | --------------------- |
+| Work-item DAG, personal board, agent-role selection, run handoff, notes, readiness, dispatch, authorization | Backend               |
+| Public product API aggregation                                                                              | Backend facade        |
+| Run queue, claims, leases, checkpoints, model execution, cancellation, events                               | AI backend            |
+| Runtime subagent lifecycle and records                                                                      | AI backend            |
+| Item/graph/pending-decision presentation                                                                    | Shared chat surface   |
+| Consequential operations                                                                                    | Existing A3–A5 owners |
 
 No deployable imports another service's source. Backend does not implement run leasing. AI backend does not become the canonical product work-item store.
 
@@ -327,16 +336,18 @@ No deployable imports another service's source. Backend does not implement run l
 - Large inputs and results use governed artifact references and digests.
 - Deletion traverses graph edges, dispatch/outbox rows, run linkage, approvals, result references, notifications, and derived summaries.
 - Cross-store deletion is idempotent and reports partial failure until reconciled.
-- Legal hold preserves required records while disabling further dispatch.
+- Optional retained backup preserves required records while disabling further dispatch.
 
 ## Authentication, authorization, security, and audit
 
-- Verified identity determines tenant and actor; no body-supplied identity is trusted.
+- Verified local session determines the profile and actor; no body-supplied identity is trusted.
 - Backend checks graph visibility, ownership, delegation, connector scope, policy, and budget.
 - Dispatch grants are signed, short-lived, item/revision/run-purpose-bound, and narrower than current actor authority.
 - AI backend verifies the grant before queue admission and again through runtime middleware.
 - Item text and upstream artifacts remain untrusted model input.
-- Audit covers propose, create, revise, assign, handoff, comment, visibility change, dependency change, ready, dispatch, reconcile, decision, block, retry, cancel, supersede, complete, export, and delete.
+- Audit covers propose, create, revise, agent-role selection, run handoff, note,
+  visibility change, dependency change, ready, dispatch, reconcile, decision,
+  block, retry, cancel, supersede, complete, export, and delete.
 - Per-root node, depth, fan-out, cost, deadline, and dispatch-attempt limits are mandatory.
 
 ## Performance and capacity budgets
@@ -357,7 +368,7 @@ AI-backend claim, lease, checkpoint, and execution SLOs remain defined by the ex
 
 - Item creation, graph mutation, decisions, dispatch, cancel, and retry require idempotency keys.
 - Ready-state and dispatch-outbox creation are atomic in the backend.
-- Run creation is idempotent on tenant plus dispatch ID.
+- Run creation is idempotent on profile plus dispatch ID.
 - Outbox delivery is at-least-once; AI backend returns the existing run on duplicate dispatch.
 - Lifecycle projections deduplicate on run ID and event sequence.
 - Lost events recover through AI-backend replay from the last projected sequence.
@@ -368,7 +379,7 @@ AI-backend claim, lease, checkpoint, and execution SLOs remain defined by the ex
 
 Metrics:
 
-- items by status, root, origin, and tenant;
+- items by status, root, origin, and local profile;
 - ready age and dispatch latency;
 - dispatch duplicates, retries, and indeterminate duration;
 - lifecycle projection lag and replay count;
@@ -389,16 +400,17 @@ Release gates:
 - stale or forged grants cannot queue runs;
 - dependency and cancellation projections recover from replay;
 - every visible item has owner, origin, budget, criteria, and terminal reason; and
-- tenant isolation, retention, deletion, audit, and legal-hold tests pass.
+- local-profile isolation, retention, deletion, backup/restore, and audit tests pass.
 
 ## Rollout and backout
 
 1. Ship backend schema and read-only item projections.
 2. Create work items from one internal goal flow with dispatch disabled.
-3. Enable idempotent run dispatch for allowlisted tenants.
+3. Enable idempotent run dispatch for opt-in desktop profiles.
 4. Project run lifecycle from replayable events and validate against run state.
 5. Add dependencies, decisions, cancellation, and bounded decomposition.
-6. Add board views, assignment, handoff, comments, watchers, and approval/block projection.
+6. Add personal board views, agent-role selection, run-to-run handoff, user
+   notes, and approval/block projection.
 7. Allow I1/I2 to reference items only where visible decomposition is useful.
 
 Backout stops new dispatch outbox delivery, preserves the DAG and status history, and leaves existing AI-backend runs governed by their ordinary lifecycle. Active runs may be cancelled explicitly. No run queue migration is needed.
@@ -410,20 +422,21 @@ Backout stops new dispatch outbox delivery, preserves the DAG and status history
 3. Transactional dispatch outbox and idempotent AI-backend run creation
 4. Run lifecycle relay, projection, replay, and reconciliation
 5. Decisions, retry, cancellation, replacement, and dependent updates
-6. Facade contracts, board/item/graph UI, assignment, handoff, and comments
+6. Facade contracts, personal list/item/graph UI, user reordering, handoff between runs, and notes
 7. Retention, deletion, audit export, and operator diagnostics
 8. Fault-injection, quality evaluation, and staged producer adoption
 
 ## Test plan
 
 - Unit: DAG cycles, readiness, attenuation, budget allocation, dependency policies
-- Store contract: revisions, unique active dispatch, indexes, deletion, legal hold
+- Store contract: revisions, unique active dispatch, indexes, deletion, optional retained backup
 - Integration: ready item through queued run and terminal projection
 - Concurrency: duplicate readiness events and outbox dispatchers
 - Fault injection: timeout before/after run acceptance and event projection
-- Security: cross-tenant edges, forged grant, stale policy, excessive fan-out
+- Security: cross-profile edges, forged grant, stale policy, excessive fan-out
 - Governance: approval wait, effect reconciliation, owner revocation
-- Collaboration: assignment authorization, handoff races, comment revision, visibility boundaries
+- Personal work board: agent-role authorization, handoff races, note revision,
+  and visibility boundaries
 - Recovery: event replay after projection outage and cancel retry
 - Load: large bounded graphs, many ready items, incremental successor evaluation
 
@@ -433,7 +446,8 @@ Backout stops new dispatch outbox delivery, preserves the DAG and status history
 - A ready item creates one ordinary queued run through an idempotent internal contract.
 - AI backend remains the sole owner of execution claims, leases, checkpoints, and runtime events.
 - Product status recovers from persisted event replay and survives either service restarting.
-- Human and agent assignees can hand off work, collaborate through governed comments, and see blocked/approval state without widening access.
+- The user can select governed agent roles, add notes, and see blocked/approval
+  state without widening access or creating a team-collaboration surface.
 - Cancellation and revocation prevent new dispatch and reach active runs.
 - No item can expand authority, budget, scope, depth, or fan-out without validated revision.
 - Security, retention, deletion, audit, load, and fault-injection gates pass.
@@ -453,5 +467,5 @@ Backout stops new dispatch outbox delivery, preserves the DAG and status history
 1. Which owning product first creates product-visible work items.
 2. Whether a failed item retry is a new dispatch or always a new item revision for user visibility.
 3. Which run progress events are safe and useful to project at item level.
-4. Maximum DAG nodes, depth, fan-out, and concurrent ready items by tenant tier.
+4. Maximum DAG nodes, depth, fan-out, and concurrent ready items by consumer plan.
 5. Whether cross-goal dependency references are supported after the first release.

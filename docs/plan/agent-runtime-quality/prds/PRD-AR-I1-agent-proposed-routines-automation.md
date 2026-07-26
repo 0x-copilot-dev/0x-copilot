@@ -30,6 +30,16 @@ Read these code paths before implementation:
 
 Preserve the existing routine API, trigger model, pre-fire policy evaluation, and typed audit/event conventions where they satisfy this contract. Replace the in-memory-only production path and connect the scheduler through service APIs; do not move backend-owned routine records into the AI backend.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 Users frequently repeat research, reporting, monitoring, and administrative workflows. The runtime can recognize routine-shaped learning candidates, and the backend already models routines, triggers, fires, audit rows, and webhook entry points. However, routine persistence defaults to an in-memory adapter, the worker scheduler is not composed into the production worker lifecycle, and post-run routine candidates do not yet flow through a user review and activation path.
@@ -41,12 +51,12 @@ The product therefore cannot promise that an accepted recurring workflow will su
 - Backend-owned routine CRUD, trigger, fire, webhook, and audit concepts establish the correct service boundary.
 - The AI backend scheduler includes cron/recurrence handling, missed-fire behavior, and a pre-fire permission gate.
 - The H5 proposal pipeline defines evidence-backed, consent-aware routine candidates rather than immediately active automation.
-- Run events, resumable streams, cancellation, approvals, and tenant-scoped identity already provide execution primitives.
+- Run events, resumable streams, cancellation, approvals, and profile-scoped identity already provide execution primitives.
 - The operation gateway and governed-effects protocol remain the authority for consequential actions performed inside a routine run.
 
 ## Objectives and outcomes
 
-1. Present evidence-backed routine proposals for explicit user or administrator review.
+1. Present evidence-backed routine proposals for explicit user or user review.
 2. Compile an accepted proposal into a versioned routine with a bounded authority envelope.
 3. Persist routine definitions, revisions, schedules, fire claims, and outcomes durably.
 4. Start the scheduler as a supported worker responsibility with leases and health signals.
@@ -57,7 +67,8 @@ The product therefore cannot promise that an accepted recurring workflow will su
 ## Scope
 
 - Candidate-to-routine review and activation
-- Cron, supported recurrence-rule, and authenticated webhook triggers
+- Cron, supported recurrence-rule, and explicit user-triggered runs; inbound
+  internet webhooks are deferred to a future hosted/sync product
 - Durable PostgreSQL routine and fire adapters
 - Scheduler composition, leasing, misfire policy, and recovery
 - Routine revisioning and effective-policy snapshots
@@ -76,11 +87,11 @@ The product therefore cannot promise that an accepted recurring workflow will su
 ## Interfaces consumed
 
 - H5 `LearningCandidate` records of kind `routine`
-- Verified backend identity, tenant, role, and policy context
+- Verified signed-in user, local profile, and policy context
 - Backend connector registrations and credential references
 - AI backend run creation, cancellation, events, and final outcomes
 - A3–A5 operation classification, approval, prepare/commit, and reconciliation
-- E1 audit, retention, export, legal-hold, and deletion requirements
+- E1 local audit, retention, export, and deletion requirements
 
 ## Interfaces exposed
 
@@ -110,7 +121,7 @@ POST /internal/v1/routine-fires/{fire_id}/complete
 POST /internal/v1/routine-fires/{fire_id}/release
 ```
 
-Internal calls require the enterprise service token plus explicit organization and user identity headers. They are not proxied by the facade.
+Internal calls require the per-boot internal service token plus explicit profile and user identity headers. They are not proxied by the facade.
 
 ## Core contracts
 
@@ -163,7 +174,7 @@ RoutineFire
   outcome_ref
 ```
 
-`dedupe_key` is unique per tenant, routine, active revision, and logical trigger occurrence. The create-fire transaction must use a unique constraint, not a read-before-write check.
+`dedupe_key` is unique per profile, routine, active revision, and logical trigger occurrence. The create-fire transaction must use a unique constraint, not a read-before-write check.
 
 ## Detailed design
 
@@ -179,10 +190,10 @@ The backend compiles the accepted proposal into a closed routine schema. It reje
 
 - unbounded or ambiguous recurrence;
 - shell text, executable code, or arbitrary expressions;
-- connectors not installed for the tenant;
+- connectors not installed for the user;
 - secret values instead of credential references;
 - authority wider than the reviewer possesses;
-- budgets above tenant policy; and
+- budgets above user policy; and
 - webhook triggers without a signing configuration and replay window.
 
 The schedule preview must show at least the next three occurrences and daylight-saving behavior before activation.
@@ -203,20 +214,27 @@ Compose `RoutineSchedulerLoop` into the runtime worker entry point behind a feat
 4. releases claims on transient failure; and
 5. records terminal skip reasons for permanent policy failures.
 
-Horizontal replicas may scan concurrently. Correctness comes from transactional claims and unique dedupe keys, not leader election.
+The desktop has one in-process scheduler while the app is running. A durable
+claim and unique dedupe key still protect restart/recovery, but no launch path
+assumes a leader election service, a second worker, or 24/7 execution.
+
+On app launch the scheduler evaluates missed work using the user-selected
+misfire policy (skip, ask, or run once); it never catches up a large backlog
+silently. On suspend, battery saver, thermal pressure, or quit it checkpoints
+and releases work for next-boot evaluation.
 
 ### 5. Pre-fire revalidation
 
 Immediately before dispatch, the backend re-resolves:
 
 - routine and owner status;
-- current tenant membership;
-- current role and policy revision;
+- current signed-in user/profile;
+- current local policy revision;
 - connector installation, scope, and credential availability;
 - destination allowlists;
 - remaining daily/monthly budget;
 - concurrent-fire limits; and
-- any required administrator hold.
+- any required user hold.
 
 The runtime receives a signed, short-lived execution grant referencing the routine revision and policy snapshot. It must not infer authority from the original conversation.
 
@@ -234,35 +252,35 @@ Retry creates a new attempt under the same fire and dedupe key. It may not creat
 
 ### 8. Editing, pause, revoke, and deletion
 
-Edits create a new immutable revision. Existing in-flight fires retain their original revision and policy snapshot unless revoked by an administrator. Pause prevents new claims. Revoke cancels unstarted fires and requests cancellation of active runs. Deletion follows E1 cascade and legal-hold rules.
+Edits create a new immutable revision. Existing in-flight fires retain their original revision and policy snapshot unless revoked by an user. Pause prevents new claims. Revoke cancels unstarted fires and requests cancellation of active runs. Deletion follows E1 cascade and legal-hold rules.
 
 ## Ownership and service boundaries
 
-| Responsibility                                                          | Owner                                 |
-| ----------------------------------------------------------------------- | ------------------------------------- |
-| Proposal review, routine records, schedules, tenant policy, credentials | Backend                               |
-| Public API aggregation                                                  | Backend facade                        |
-| Scheduler scan, run dispatch, model execution                           | AI backend                            |
-| Fire and run presentation                                               | Chat surface through facade contracts |
-| Operation approvals and external commit                                 | Existing A3–A5 owners                 |
+| Responsibility                                                        | Owner                                 |
+| --------------------------------------------------------------------- | ------------------------------------- |
+| Proposal review, routine records, schedules, user policy, credentials | Backend                               |
+| Public API aggregation                                                | Backend facade                        |
+| Scheduler scan, run dispatch, model execution                         | AI backend                            |
+| Fire and run presentation                                             | Chat surface through facade contracts |
+| Operation approvals and external commit                               | Existing A3–A5 owners                 |
 
 No deployable imports another service's source. Cross-service integration is authenticated HTTP with versioned contracts.
 
 ## Persistence, retention, and deletion
 
-- Retain immutable revisions and decision audit metadata according to tenant policy.
+- Retain immutable revisions and decision audit metadata according to user policy.
 - Store prompt-sized routine inputs separately from large evidence and results, using durable references.
-- Cascade user/tenant deletion through proposal decisions, routines, pending fires, run linkage, and notification rows.
-- Legal hold blocks physical deletion while hiding revoked routines from scheduling.
+- Cascade user/local-profile deletion through proposal decisions, routines, pending fires, run linkage, and notification rows.
+- An optional backup/sync retention lock may defer physical deletion while hiding revoked routines from scheduling.
 - Audit export must include revision, reviewer, policy snapshot, fire state changes, run ID, approvals, and terminal outcome.
 
 ## Authentication, authorization, security, and audit
 
-- Derive tenant and actor only from verified tokens.
-- Require owner or delegated administrator authority for activation and material edits.
+- Derive local profile and actor only from verified tokens.
+- Require owner or delegated user authority for activation and material edits.
 - Never persist plaintext connector credentials in a routine.
-- Verify webhook signatures, timestamp windows, nonce replay protection, body-size limits, and tenant routing.
-- Treat proposal evidence and webhook content as untrusted data, not harness instructions.
+- Treat proposal evidence and any future event content as untrusted data, not
+  harness instructions.
 - Emit append-oriented audit events for propose, view-sensitive-evidence, accept, reject, activate, edit, pause, resume, fire, skip, retry, revoke, and delete.
 - Rate-limit proposals, webhook delivery, manual retry, and per-routine concurrent fires.
 
@@ -308,16 +326,17 @@ Release gates:
 - 100% of fires carry a current policy snapshot and authority envelope;
 - no production startup with the in-memory routine store;
 - deterministic DST and missed-fire fixtures; and
-- tenant-isolation, revocation, deletion, and audit-export tests pass.
+- profile-isolation, revocation, deletion, and audit-export tests pass.
 
 ## Rollout and backout
 
 1. Ship PostgreSQL tables and adapter with scheduler disabled.
 2. Dual-write or migration-import existing durable routine records where applicable.
-3. Enable proposal review for internal tenants without activation.
+3. Enable proposal review for local dogfood profiles without activation.
 4. Enable scheduler shadow mode and compare due calculations.
-5. Enable real fires for allowlisted tenants with low concurrency.
-6. Expand recurrence and webhook support after reliability gates hold.
+5. Enable real fires for opt-in desktop profiles with low concurrency.
+6. Consider outbound/inbound integration triggers only as a separately approved
+   hosted-B2C extension after desktop reliability gates hold.
 
 Backout pauses claiming globally, leaves definitions and audit history intact, cancels undispatched claims, and allows active runs to finish or be explicitly cancelled. Schema rollback is not required for feature backout.
 
@@ -330,18 +349,20 @@ Backout pauses claiming globally, leaves definitions and audit history intact, c
 5. Worker scheduler composition and health checks
 6. Pre-fire grant issuance and AI backend verification
 7. Misfire, overlap, retry, revoke, retention, and audit completion
-8. Evaluation dashboard and tenant rollout controls
+8. Evaluation dashboard and local rollout controls
 
 ## Test plan
 
 - Unit: schedule parsing, timezone/DST, compiler validation, dedupe keys, policy narrowing
 - Store contract: equivalent behavior across in-memory and PostgreSQL adapters
 - Integration: accepted proposal through first completed fire
-- Concurrency: multiple schedulers claim the same due batch
+- Lifecycle: quit/suspend/battery/thermal pressure releases or checkpoints a
+  due batch for next-boot evaluation
 - Fault injection: crash before/after claim, run dispatch, heartbeat, and completion
-- Security: cross-tenant IDs, stale role, revoked connector, forged webhook, replayed nonce
+- Security: cross-profile IDs, stale local grant, revoked connector, and
+  untrusted future-event payloads
 - Governance: approval does not widen later fires; A5 reconciliation after timeout
-- Retention: user deletion, tenant deletion, legal hold, audit export
+- Retention: user deletion, local-profile deletion, optional retained backup, audit export
 - Load: large pending-fire set with bounded indexed scans
 
 ## Definition of done
@@ -365,8 +386,9 @@ Backout pauses claiming globally, leaves definitions and audit history intact, c
 
 ## Open decisions
 
-1. Whether material schedule-only edits require the original owner or any tenant automation administrator.
-2. Maximum catch-up occurrences and default daily cost budget by tenant tier.
+1. Whether material schedule-only edits require the original owner or any user.
+2. Maximum catch-up occurrences and default daily cost budget by consumer plan.
 3. Whether ownership transfers are supported or require clone-and-reapprove.
 4. Which recurrence-rule subset is committed for the first public release.
-5. Whether webhook routines require a separate tenant administrator enablement.
+5. Whether a future hosted B2C product should support inbound integration
+   triggers at all.

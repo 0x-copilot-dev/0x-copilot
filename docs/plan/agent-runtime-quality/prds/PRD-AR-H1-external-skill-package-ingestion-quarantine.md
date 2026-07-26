@@ -56,14 +56,19 @@ active revision.
 
 ## Current implementation and predecessor contracts
 
-- **[shipped]** Backend skills are tenant/user scoped, versioned, enable/disable capable, audited, and
-  available to `ai-backend` through private cards/bundle endpoints.
+- **[shipped]** Backend skills are account scoped, versioned, enable/disable capable,
+  locally audited, and available to `ai-backend` through loopback-only
+  cards/bundle endpoints.
 - **[shipped]** Runtime manifest parsing validates frontmatter, names, descriptions, compatibility,
   allowed tools, size, and safe relative asset references.
 - **[shipped]** Preloaded/system skills are distinguishable from user skills.
 - **[shipped]** The backend already has opaque blob storage and signed upload patterns.
 - **[shipped]** The facade derives identity from the verified session.
-- **[depends on]** E1 provides audit, retention, deletion, and legal-hold requirements.
+- **[shipped]** The packaged desktop already supervises a loopback backend with an
+  embedded PostgreSQL product database, while large local assets use filesystem-backed
+  blob ports.
+- **[depends on]** E1 provides local audit, retention, export, deletion, and repair
+  requirements.
 
 ## Critical package-class boundary
 
@@ -126,10 +131,10 @@ Therefore:
 
 ## Interfaces consumed
 
-- Existing verified identity and facade routing.
+- Existing verified local-account identity and facade routing.
 - Backend blob-store/signing patterns for bounded direct upload.
 - Existing skill manifest semantics and runtime allowed-tool policy.
-- E1 audit, retention, deletion, and legal-hold behavior.
+- E1 local audit, retention, export, and deletion behavior.
 
 ## Interfaces exposed
 
@@ -143,8 +148,10 @@ GET  /v1/skills/packages/{package_id}/report
 DELETE /v1/skills/packages/imports/{import_id}
 ```
 
-Apps call these only through the facade. The backend body never trusts caller-supplied
-org/user ids.
+Apps call these only through the facade. In the packaged desktop all three services run
+locally, but the facade boundary remains valuable for the future consumer service. The
+backend derives the active account/device profile from the verified session and never
+trusts caller-supplied identity.
 
 ```text
 SkillPackageImportRequest
@@ -153,7 +160,7 @@ SkillPackageImportRequest
     kind: upload
     blob_ref: string
     expected_sha256: string
-  requested_scope: user | org
+  requested_scope: personal | project
   expected_root?: string
 
 SkillPackageImportResponse
@@ -201,21 +208,22 @@ expected_sha256
 locator_hint_digest?                  # original command/URL text is not executed
 ```
 
-The server resolves only configured registries/hosts through an SSRF-safe fetcher. A
+The local backend resolves only configured registries/hosts through an SSRF-safe
+fetcher. A
 branch, floating tag, arbitrary URL, or embedded credential is invalid.
 An already-installed directory must arrive as an immutable, grant-backed snapshot/blob;
-backend never accepts or dereferences a caller-supplied host path.
+backend never accepts or dereferences a renderer-supplied host path.
 
 ### Persistence
 
 ```text
 skill_packages
-  package_id, org_id, content_digest, blob_ref, format, byte_count, file_count
+  package_id, local_account_id, content_digest, blob_ref, format, byte_count, file_count
   manifest_digest, scanner_policy_version, scan_status
   created_at, scanned_at, revoked_at?
 
 skill_package_imports
-  import_id, package_id, org_id, user_id, source_kind
+  import_id, package_id, local_account_id, device_profile_id, source_kind
   source_locator_ref, immutable_revision?, requested_scope
   status, failure_code?, created_at, updated_at
 
@@ -227,6 +235,16 @@ skill_package_findings
   finding_id, package_id, scanner_id, severity, code
   file_path_digest?, safe_message, blocking, created_at
 ```
+
+Structured metadata, state transitions, and ref counts live in the existing embedded
+PostgreSQL product database because the desktop already boots and migrates it for
+skills. Original archives, normalized package trees, and large reports live below the
+OS-owned app-data directory through a filesystem blob port, addressed by digest and
+written with temp-file + fsync + atomic-rename semantics. Introducing SQLite only for
+this feature would create a second canonical product database and a new migration,
+backup, and recovery path, so it is not part of H1. The domain ports must remain
+database-neutral so a later lightweight desktop runtime or consumer sync service can
+provide another adapter.
 
 Bodies/source credentials remain behind refs. Findings never store discovered secret
 plaintext.
@@ -311,9 +329,9 @@ uploaded|scanning|quarantined → cancelled
 ready_for_review → revoked
 ```
 
-`quarantined` means the immutable package and report exist but scanner/admin/user
-resolution is pending. `ready_for_review` means the content passed ingestion checks; it
-is still not published or enabled. H2 consumes only `ready_for_review`.
+`quarantined` means the immutable package and report exist but scanner/user resolution
+is pending. `ready_for_review` means the content passed ingestion checks; it is still
+not published or enabled. H2 consumes only `ready_for_review`.
 
 Transitions use compare-and-set versioning and append audit in the same transaction.
 
@@ -333,23 +351,22 @@ separately reviewed J1 flow is available. H1 never forwards bytes, creates an
 executable-package record, installs a dependency, or starts a process on the caller's
 behalf.
 
-An admin policy may be stricter by tenant. A user cannot suppress a blocking
-organization finding. Non-blocking warnings remain visible through H2 review.
+Built-in product policy may be stricter for signed/registry sources. The local user
+cannot suppress structural or secret findings merely to complete an import.
+Non-blocking warnings remain visible through H2 review.
 
 ### D7. De-duplication and idempotency
 
 Package metadata, scan status, findings, source linkage, report IDs, and package IDs are
-strictly tenant scoped. The visible uniqueness constraint is
-`(org_id, content_digest)`; authorization and row-level tests always lead with
-`org_id`. A lower storage layer may deduplicate encrypted blob bytes by digest, but that
-deduplication sits below authorization and exposes no cross-tenant package id,
-existence/status, timing distinction, finding reuse, reference count, or deletion
-behavior.
+scoped to the active local account. The visible uniqueness constraint is
+`(local_account_id, content_digest)`. A lower storage layer may deduplicate blob bytes
+by digest within one desktop data root, but that deduplication sits below account
+authorization and exposes no package id, existence/status, reference count, or
+deletion behavior to another signed-in account on the device.
 
 Same caller/idempotency key and request digest returns the same import. Same key with a
-different digest returns conflict. Visible scanner output is keyed by org, package
-digest, and scanner policy version; any content-safe scanner computation reused below
-that layer is copied into a new tenant-owned report without observable linkage.
+different digest returns conflict. Visible scanner output is keyed by local account,
+package digest, and scanner policy version.
 
 ### D8. No runtime visibility
 
@@ -360,29 +377,31 @@ completion calls `create_skill`, sets `enabled`, or writes a runtime virtual pat
 An architecture test fails if the ingestion service imports/obtains the runtime skill
 provider, MCP launcher, subprocess API, or executor registry.
 
-## Persistence, retention, deletion, and legal hold
+## Persistence, retention, deletion, backup, and future sync
 
 - Original package bytes and normalized released files are content-addressed refs.
-- Cancelled/rejected imports retain reports for the configured security/audit period,
+- Cancelled/rejected imports retain reports for the user-selected local history period,
   then delete unreferenced package bodies.
 - Deleting an import removes caller linkage; shared content is collected only when no
   imports/drafts/revisions/holds reference it.
 - H2 publication creates immutable references that prevent collection.
 - Revocation prevents new draft/publication and marks descendants for review; it does
   not silently rewrite active skill history.
-- Legal hold retains package/report/audit linkage for the held tenant without making the
-  package runtime-visible.
-- Account/org deletion removes import links, source locators, package refs, findings,
-  and scan jobs subject to hold.
-- Physical blob collection uses an internal unobservable reference count; deleting one
-  tenant's package metadata can neither delete another tenant's authorized bytes nor
-  reveal that another reference exists.
+- “Delete local data” removes import links, source locators, package refs, findings, and
+  scan jobs after reference-safe collection. Uninstall behavior must clearly offer
+  keep-data versus delete-data.
+- Export includes manifests, provenance, and user-authored content, but never decrypted
+  source credentials. Optional OS backup may copy a closed/snapshotted database and
+  referenced blobs consistently.
+- Future consumer sync is an outbox/change-feed adapter over stable IDs, revisions, and
+  content digests. H1 does not require a cloud account, persistent network connection,
+  or cloud copy, and local operation remains authoritative when sync is absent.
 
 ## Authorization, supply chain, privacy, and security
 
-- User imports target user scope; org scope requires the existing/admin-defined role and
-  explicit policy.
-- Identity comes from verified session/service headers, never payload.
+- Imports target the signed-in local account; project publication is an explicit H2
+  choice and cannot make the package available to other accounts.
+- Identity comes from the verified local session/service channel, never payload.
 - Source credentials live in the token vault and are never stored in locators/events.
 - Fetchers use strict SSRF/DNS/redirect policy and an allowlist of source adapters.
 - Scanners run with no network, no secrets, read-only package input, bounded resources,
@@ -399,7 +418,8 @@ provider, MCP launcher, subprocess API, or executor registry.
   file 10 MiB, `SKILL.md` 1 MiB, referenced-assets total 25 MiB.
 - Upload finalize p95 under 1 second after bytes arrive.
 - Scan p95 under 10 seconds at maximum normal package; hard deadline 60 seconds.
-- Tenant concurrent scans default 2; process pool bounded globally.
+- Per-device concurrent scans default 2; process pool is bounded for laptop CPU,
+  memory, thermals, and battery.
 - Extraction/scanning is `O(total archive entries + expanded bytes)`.
 - Reports list at most 200 findings; overflow is summarized by code/severity.
 
@@ -431,11 +451,13 @@ Labels contain no package/source/name/path/user identifiers.
 ## Rollout and backout
 
 1. Land tables/contracts/scanner fakes with public routes disabled.
-2. Enable upload-only import for internal users; all results remain quarantined.
+2. Enable upload-only import for opt-in desktop beta users; all results remain
+   quarantined.
 3. Enable `ready_for_review` output into H2 after its review UI/API exists.
 4. Add approved registry metadata/Git/pinned-URL/directory-snapshot adapters separately
    by source kind; command-shaped hints remain parser-only.
-5. Enable org-scoped intake only after admin policy and audit export are complete.
+5. Add project-scoped publication only after H2 project controls and local export are
+   complete.
 
 Backout disables new grants/imports and drains or cancels scan jobs. Existing reports
 and package refs remain readable for review/audit; no active skill is changed.
@@ -473,10 +495,11 @@ and package refs remain readable for review/audit; no active skill is changed.
 
 ### Authorization and lifecycle
 
-- User/org role, cross-tenant ids/digests, enumeration timing, duplicate idempotency,
-  cancellation, account deletion, legal hold, ref-count collection.
-- Cross-tenant scan reuse, physical-blob reference count, report status, timing, and
-  deletion behavior expose no existence oracle.
+- Signed-in-account ownership, renderer identity forgery, ids/digests from a second
+  local account, duplicate idempotency, cancellation, account deletion, and ref-count
+  collection.
+- Physical-blob reference count, report status, and deletion behavior expose no
+  cross-account existence oracle.
 
 ### Recovery and capacity
 
@@ -494,8 +517,8 @@ and package refs remain readable for review/audit; no active skill is changed.
       `wrong_package_class`; only actual MCP-server products may show a J1 UI hint, with
       no automatic routing/copying/execution.
 - [ ] Only `ready_for_review` packages can reach H2, and none are runtime-visible.
-- [ ] Idempotency, tenant isolation, audit, deletion, hold, recovery, and capacity gates
-      pass.
+- [ ] Idempotency, local-account isolation, audit, export/deletion, recovery, and
+      capacity gates pass.
 - [ ] Architecture tests prove ingestion cannot launch code or publish/enable a skill.
 
 ## Guardrails
@@ -509,4 +532,4 @@ and package refs remain readable for review/audit; no active skill is changed.
 ## Open decisions
 
 - Initial upload archive formats: ZIP only or ZIP plus restricted tar.
-- Signature/transparency providers required for organization-scoped registry packages.
+- Signature/transparency providers required for curated registry packages.

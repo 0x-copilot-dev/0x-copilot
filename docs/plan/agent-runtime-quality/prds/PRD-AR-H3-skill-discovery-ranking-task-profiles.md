@@ -77,8 +77,8 @@ authorization, publication, compatibility, or tool access.
 - At least 95% top-5 recall for tasks with a relevant skill in the checked-in suite.
 - Fewer than 2% irrelevant full-skill loads on tasks where no skill is needed.
 - At least 60% reduction in skill-card prompt tokens at 100 visible skills.
-- Selection service p95 below 150 ms lexical/filter-only and 400 ms hybrid at 10,000
-  tenant skills.
+- Selection service p95 below 100 ms lexical/filter-only and 300 ms hybrid at 10,000
+  local skills, with no required network hop beyond the supervised loopback service.
 - Zero unpublished/disabled/incompatible/unauthorized candidate in runtime tests.
 
 ## Non-goals
@@ -86,7 +86,7 @@ authorization, publication, compatibility, or tool access.
 - Publishing, editing, importing, enabling, or granting skills.
 - Letting rank score override policy or requested explicit deny.
 - Auto-running a skill merely because it ranked highly.
-- Training provider models on tenant task/skill text.
+- Sending task or skill text for provider training.
 - Replacing the MCP/tool catalog; skills remain instruction workflows, not executable
   tool providers.
 
@@ -96,8 +96,9 @@ authorization, publication, compatibility, or tool access.
 - Existing skill access policy and agent definitions.
 - A3 operation descriptors and D2 runtime/subagent capability snapshots.
 - F5 context allocation for compact card and loaded-bundle budgets.
-- Existing embeddings provider only when tenant policy enables semantic ranking.
-- E1 usage, audit, retention, and metrics.
+- Existing embeddings provider only when the user enables semantic ranking; local
+  embeddings are preferred when available.
+- E1 local usage, audit, retention, export, and metrics.
 
 ## Interfaces exposed
 
@@ -106,8 +107,8 @@ authorization, publication, compatibility, or tool access.
 ```text
 SkillTaskProfile
   profile_id: string
-  org_id: string
-  owner_kind: org_default | agent | routine | project | user
+  local_account_id: string
+  owner_kind: device_default | agent | routine | project | user
   owner_id?: string
   version: int
   allowed_skill_ids?: string[]
@@ -123,7 +124,7 @@ SkillTaskProfile
 
 Profiles narrow the verified runtime capability snapshot. Profile composition is
 intersection for allowlists/permissions, union for denies, and most restrictive for
-budgets. A user/task cannot widen an org/agent profile.
+budgets. A task or generated profile cannot widen a device/user/agent profile.
 
 ### Selection request/response
 
@@ -163,8 +164,8 @@ POST /internal/v1/skills/select
 GET  /internal/v1/skills/revisions/{revision_id}/bundle
 ```
 
-They require service token and verified org/user headers. Selection body contains no
-tenant/user authority.
+They require the per-install service token and verified local-account headers over the
+loopback-only channel. Selection body contains no identity authority.
 
 ### Public profile APIs
 
@@ -211,7 +212,7 @@ and token estimates. Task text, descriptions, markdown, and raw scores are absen
 Candidate eligibility is evaluated in this order:
 
 1. canonical H2 lifecycle state is `active` with an active published revision;
-2. tenant/user/org visibility;
+2. local-account and project visibility;
 3. composed task-profile allow/deny policy;
 4. agent/subagent allowed skill ids;
 5. compatibility with runtime/provider/platform;
@@ -234,20 +235,20 @@ Initial score combines deterministic features:
 - required/preferred tag match;
 - BM25/lexical match over name, description, reviewed tags, compatibility, and a
   bounded publisher-authored search synopsis;
-- optional semantic similarity when tenant policy and embedding availability permit;
+- optional semantic similarity when user preference and embedding availability permit;
 - recent successful-use prior with bounded weight and minimum sample size;
 - penalties for repeated irrelevant loads or incompatible tool requirements.
 
 Explicit selection receives highest ranking but still passes every eligibility gate.
-No feature uses secret content, review comments, full markdown, or another tenant's
-behavior.
+No feature uses secret content, review comments, full markdown, or another local
+account's behavior.
 
 The service returns reason codes and score buckets, not a misleading exact probability.
 Tie-breaking is deterministic by stable name/revision id.
 
 ### D3. Index
 
-Backend owns a tenant-scoped `skill_search_documents` projection:
+Backend owns a local-account-scoped `skill_search_documents` projection:
 
 ```text
 skill_id, active_revision_id, catalog_generation
@@ -255,9 +256,12 @@ name, display_name, description, tags, compatibility, allowed_tools
 search_text, search_tsv, embedding_ref?, updated_at
 ```
 
-H2 publication/rollback/disable updates the projection through a durable outbox. Search
-filters scope/profile/tool constraints before ranking. In-memory adapter uses a bounded
-scan for tests; Postgres uses GIN and optional vector index.
+H2 publication/rollback/disable updates the projection through a durable local outbox.
+Search filters account/project/profile/tool constraints before ranking. The in-memory
+adapter uses a bounded scan for tests; the packaged desktop reuses its existing
+embedded PostgreSQL backend database with GIN and an optional vector index. A new
+SQLite database is deliberately avoided because it would duplicate the shipped skill
+catalog, migrations, backup, and recovery path.
 
 Index is derivative and rebuildable from active revisions. It never stores full
 markdown.
@@ -286,9 +290,11 @@ with bounded `k`; optional full bundle cost is paid only for selected skills.
 definition, project/routine context, and requested output—not retrieved page/tool text.
 It does not use an extra model call in the default path.
 
-The task summary is sent to backend over private HTTP, never logged, and discarded
-after selection. Dynamic task changes may refresh once when the agent can articulate a
-new query; refresh is budgeted and cannot widen profile/capability scope.
+The task summary is sent to the supervised local backend over loopback HTTP, never
+logged, and discarded after selection. Dynamic task changes may refresh once when the
+agent can articulate a new query; refresh is budgeted and cannot widen
+profile/capability scope. A future hosted B2C deployment can keep the same contract
+without making cloud connectivity a desktop prerequisite.
 
 ### D6. Bundle pinning
 
@@ -297,8 +303,9 @@ Publication after run start changes future selections but not this run. Disabled
 skills fail new loads; already loaded text cannot confer authority, and external tool
 operations continue to recheck policy.
 
-Bundle cache key is `(org,user visibility,skill_id,revision_id,content_digest)`, never
-name alone.
+Bundle cache key is
+`(local_account,project visibility,skill_id,revision_id,content_digest)`, never name
+alone.
 
 ### D7. Subagents
 
@@ -323,41 +330,47 @@ selected, loaded, completed, user_rejected?, evaluator_outcome?
 
 These signals support offline evaluation and a bounded successful-use feature. They do
 not rewrite skill content or publish changes. Sparse/negative feedback cannot
-immediately suppress an org-admin-required skill.
+immediately suppress an explicitly pinned skill.
 
 ### D9. Cache and freshness
 
-- Selection cache key: org/user visibility, normalized task digest, composed profile
-  versions, tool-set digest, agent type, catalog generation, ranking version.
+- Selection cache key: local-account/project visibility, normalized task digest,
+  composed profile versions, tool-set digest, agent type, catalog generation, ranking
+  version.
 - TTL maximum five minutes; catalog/profile generation invalidates immediately.
 - Negative results are cached for the same generation.
 - `ai-backend` keeps only run-scoped pinned selections and bundle cache.
 - Shadow ranking uses the same catalog query and does not add an embedding/model call
   unless explicitly enabled for evaluation.
 
-## Persistence, retention, and deletion
+## Persistence, retention, deletion, and future sync
 
 - Task profiles are canonical backend product records with soft delete, audit, and
   owner lifecycle.
 - Search documents/embeddings and selection caches are derivative and rebuildable.
 - Run selection/load events follow run retention and user-history deletion.
 - Outcome edges retain ids/reason codes, not request text/skill markdown; they follow
-  usage retention and legal hold.
+  the user's local history retention setting.
 - Skill deletion/disable/revocation invalidates index/cache; old run attribution remains
   digest-pinned but cannot reopen deleted content without authorization/retention.
-- Account/org deletion covers profiles, search projection, embeddings, caches, and
-  outcome edges subject to hold.
+- “Delete local data” covers profiles, search projection, embeddings, caches, and
+  outcome edges.
+- Canonical profile/index rows use the existing embedded PostgreSQL backend database;
+  any large local embedding payload may use a filesystem ref. Optional future sync
+  replicates profile revisions and skill IDs through an outbox, while indexes and
+  caches rebuild per device and never require cloud availability.
 
 ## Authorization, privacy, and security
 
-- Backend derives tenant/user from service/session identity.
-- Org/default/agent/routine/project profile mutation uses owner-specific authorization.
+- Backend derives the active local account from verified service/session identity.
+- Device-default/user/agent/routine/project profile mutation uses owner-specific
+  authorization.
 - Selection eligibility is fail-closed; unknown compatibility/tool ids are excluded.
 - Skill descriptions/search text are untrusted publisher content and cannot change
   rank policy, prompt priority, or tool grants.
 - Task text, skill markdown, ids, and raw scores never enter logs/metric labels.
-- Embeddings use the configured tenant data policy/provider; semantic ranking disables
-  cleanly when unavailable or disallowed.
+- Embeddings use the user's configured local or BYOK provider preference; semantic
+  ranking disables cleanly when offline, unavailable, or disabled.
 - Cache keys include visibility/profile/tool/catalog generations to prevent scope reuse.
 
 ## Performance and capacity
@@ -366,8 +379,11 @@ immediately suppress an org-admin-required skill.
   hard 2,500.
 - Backend selection deadline 750 ms, target p95 150 ms lexical and 400 ms hybrid.
 - Bundle load deadline 2 seconds and body limits from H2/H1.
-- At 10,000 active skills/tenant, Postgres must use tenant-leading filter/index plans;
-  no Python full scan.
+- At 10,000 active skills/account, embedded PostgreSQL must use account-leading
+  filter/index plans; no Python full scan.
+- Normal steady-state selection must not wake an external network dependency. Lexical
+  ranking works offline; hybrid ranking has a local embedding option or degrades
+  immediately.
 - Per-run selection refresh maximum 2; bundle loads remain under tool budget.
 - Process card/bundle caches are bounded LRU by bytes and generation.
 
@@ -396,7 +412,7 @@ immediately suppress an org-admin-required skill.
 - `skill_selection_task_success_delta`
 - `skill_selection_index_lag_seconds`
 
-Metrics are low-cardinality and contain no tenant/user/skill/task identifiers.
+Metrics are local and low-cardinality and contain no user/skill/task identifiers.
 
 ## Rollout and backout
 
@@ -404,8 +420,8 @@ Metrics are low-cardinality and contain no tenant/user/skill/task identifiers.
 2. Backfill search projection from H2 active revisions.
 3. Run `shadow_ranked` while injecting all cards; compare chosen/loaded skills and
    offline task results without changing prompts.
-4. Enable ranked cards for internal tenants with lexical-only strategy.
-5. Enable semantic ranking and outcome prior independently by tenant policy.
+4. Enable ranked cards for opt-in desktop beta users with lexical-only strategy.
+5. Enable semantic ranking and outcome prior independently by user preference.
 6. Retire all-card injection after token/quality/authorization gates.
 
 Backout returns to `all_cards` while H2 active revisions remain the source of truth.
@@ -426,9 +442,10 @@ budget, safe backout is “no inferred cards plus explicit load,” not unbounde
 
 ### Eligibility and profiles
 
-- User/org visibility, active/draft/disabled/revoked state, tool subset, compatibility,
-  agent ids, profile intersection/deny precedence, explicit selection.
-- Cross-tenant/profile forgery and generation-aware cache isolation.
+- Local-account/project visibility, active/draft/disabled/revoked state, tool subset,
+  compatibility, agent ids, profile intersection/deny precedence, explicit selection.
+- Renderer identity/profile forgery, second-local-account access, and generation-aware
+  cache isolation.
 
 ### Ranking and prompt
 
@@ -444,8 +461,8 @@ budget, safe backout is “no inferred cards plus explicit load,” not unbounde
 
 ### Lifecycle and recovery
 
-- Projection outbox retry/rebuild/index lag, profile/skill deletion, account/org
-  deletion, hold, cache invalidation, backend failure.
+- Projection outbox retry/rebuild/index lag, profile/skill deletion, local-account data
+  deletion, backup/restore, cache invalidation, and backend restart.
 
 ### Evaluation and performance
 
@@ -460,7 +477,7 @@ budget, safe backout is “no inferred cards plus explicit load,” not unbounde
       only on demand.
 - [ ] Task profiles compose by least privilege and cannot widen capabilities.
 - [ ] Subagents inherit a strict subset of parent skill eligibility.
-- [ ] Search/index/cache/lifecycle behavior is deterministic, tenant-safe, and
+- [ ] Search/index/cache/lifecycle behavior is deterministic, local-account-safe, and
       recoverable.
 - [ ] Ranked mode meets recall, irrelevant-load, token, latency, and task-quality gates.
 - [ ] All-card injection is retired or retained only as a bounded emergency mode.
@@ -470,11 +487,11 @@ budget, safe backout is “no inferred cards plus explicit load,” not unbounde
 - Ranking never grants visibility, publication, compatibility, or tools.
 - No draft/disabled/revoked skill in candidates.
 - No full catalog or full skill bodies in the system prompt.
-- No cross-tenant behavioral ranking features.
+- No cross-account behavioral ranking features.
 - No automatic execution solely from a rank score.
 
 ## Open decisions
 
-- Initial semantic embedding provider/model and tenant disclosure.
-- Whether project profiles ship in the first release or follow org/agent/routine
+- Initial local/BYOK semantic embedding provider and offline disclosure.
+- Whether project profiles ship in the first release or follow device/agent/routine
   profiles.

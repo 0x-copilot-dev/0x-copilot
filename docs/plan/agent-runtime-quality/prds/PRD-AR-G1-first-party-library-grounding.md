@@ -1,6 +1,6 @@
 # PRD-AR-G1 — First-party Library grounding
 
-**Goal.** Let the agent retrieve tenant-authorized Library content as bounded,
+**Goal.** Let the agent retrieve the signed-in user's readable Library content as bounded,
 version-pinned evidence and cite it in answers without copying whole documents into the
 prompt, bypassing Library ACLs, or conflating retrieved text with instructions.
 
@@ -36,12 +36,22 @@ Read before implementation:
 The Library remains owned by `backend`. `ai-backend` consumes a private HTTP contract;
 it must not import `backend_app` or duplicate Library ACL logic.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 The product already stores files, pages, and datasets and supports hybrid Library
 search. The agent runtime does not have a first-party evidence contract for that
 content. It can therefore overlook the user's durable knowledge, ask for material the
-user has already saved, or rely on a connector/web result when a tenant-controlled
+user has already saved, or rely on a connector/web result when a local first-party
 source is available.
 
 Exposing the existing UI search response directly to the model would be insufficient:
@@ -66,7 +76,8 @@ them.
 ## Objectives
 
 1. Retrieve the most relevant readable Library chunks for a task.
-2. Bind each evidence unit to tenant, item, revision/content digest, and chunk ordinal.
+2. Bind each evidence unit to local profile, user, item, revision/content digest, and
+   chunk ordinal.
 3. Support progressive retrieval: search summaries first, open selected evidence next.
 4. Make citations resolvable after reconnect and replay.
 5. Keep Library policy, deletion, and indexing truth in `backend`.
@@ -87,7 +98,7 @@ them.
 - Automatically saving connector/web content into Library.
 - Treating prior user-authored Library text as a system instruction.
 - Answering from deleted, superseded, unindexed, or unauthorized bytes.
-- Cross-tenant organizational search or admin e-discovery.
+- Cross-profile search, shared-team administration, or e-discovery.
 
 ## Interfaces consumed
 
@@ -108,9 +119,10 @@ POST /internal/v1/library/evidence/search
 POST /internal/v1/library/evidence/open
 ```
 
-Both require the enterprise service token plus trusted
-`x-enterprise-org-id`/`x-enterprise-user-id`. Caller-supplied identity in the body is
-forbidden.
+Both require the per-boot internal service token. The currently implemented
+`x-enterprise-org-id`/`x-enterprise-user-id` headers remain wire-compatible context:
+under `single_user_desktop`, the organization value is the local profile partition and
+does not imply a team tenancy model. Caller-supplied identity in the body is forbidden.
 
 ```text
 LibraryEvidenceSearchRequest
@@ -149,7 +161,7 @@ LibraryEvidenceBlock
   byte_range?: {start, end}
 ```
 
-`evidence_ref` is an opaque authenticated reference over tenant, user visibility
+`evidence_ref` is an opaque authenticated reference over profile, user visibility
 context, item id, version/digest, chunk ordinal, and expiry. Opening rechecks current
 ACL and deletion state; the signature is not authorization.
 
@@ -202,7 +214,7 @@ signed URLs.
 
 `ai-backend` calls the private backend API through a narrow
 `LibraryEvidenceProvider` port. `backend` authenticates the service caller, derives the
-tenant/user scope from headers, applies current Library ACLs, and invokes the existing
+profile/user scope from headers, applies current Library ACLs, and invokes the existing
 hybrid engine.
 
 The runtime does not call the public facade and does not receive raw object-store
@@ -273,7 +285,7 @@ separate bounded query/compute capability and is outside this PRD.
 
 ### D7. Cache and freshness
 
-`backend` may cache normalized search results for at most 60 seconds keyed by tenant,
+`backend` may cache normalized search results for at most 60 seconds keyed by local profile,
 user visibility fingerprint, project, query digest, filters, index generation, and
 embedding/reranker version. The cache stores opaque refs and rankings, not authorization
 decisions. Any item/index mutation advances the generation.
@@ -289,30 +301,31 @@ cross-run evidence cache.
   protected derivative governed through the E1 reference graph above.
 - Events and citation rows retain opaque item/version/chunk references only.
 - Library deletion or access revocation makes future opens fail immediately.
-- Source deletion, account deletion, project-membership loss, or retention expiry
+- Source deletion, account deletion, project access loss, or retention expiry
   traverses protected derivative refs: unauthorized copies are redacted or deleted,
-  payload/open resolvers return tombstones, and caches are invalidated. A legal hold
-  may retain exact bytes only in the held, access-controlled record and never keeps
-  ordinary source opening available.
+  payload/open resolvers return tombstones, and caches are invalidated. An explicitly
+  enabled backup or future sync-retention lock may retain exact bytes only in its
+  inaccessible retained record and never keeps ordinary source opening available.
 - Citation history may retain title/digest metadata under E1, but source opening must
   return unavailable after deletion.
-- Search cache entries expire or are generation-invalidated and are excluded from legal
-  hold; canonical Library rows remain governed by existing hold policy.
-- Account/org deletion tests cover index rows, cache keys, citations, and pending jobs.
+- Search cache entries expire or are generation-invalidated and are excluded from
+  backup retention; canonical Library rows follow the user's local deletion policy.
+- Account/local-profile deletion tests cover index rows, cache keys, citations, and
+  pending jobs.
 - Reconciliation continuously detects derivative payloads containing Library text
   without a source edge and fails the rollout gate if any are found.
 
 ## Authorization, privacy, and security
 
 - Scope derives only from verified service identity.
-- Search applies item, project membership, owner, and org-admin rules before ranking is
-  returned; post-ranking filtering alone is forbidden.
+- Search applies item, project grant, and owner rules before ranking is returned;
+  post-ranking filtering alone is forbidden.
 - Unauthorized and absent items are indistinguishable.
 - Queries, excerpts, and evidence bodies do not enter logs, metrics labels, audit
   metadata, or traces.
 - Evidence blocks are untrusted data; embedded instructions cannot widen capabilities.
 - Blob refs and signed URLs never enter runtime events or model-visible output.
-- Rate and token budgets are enforced per tenant/user/run.
+- Rate and token budgets are enforced per profile/user/run.
 
 ## Failure, idempotency, and recovery
 
@@ -333,8 +346,9 @@ cross-run evidence cache.
 - One embedding request per unique query/run, with a 3-second deadline.
 - No more than two backend HTTP calls for a normal search→batch-open sequence.
 - Search p95 and index freshness lag are launch gates, segmented by strategy.
-- Capacity tests cover 1 million chunks/tenant and 100 concurrent searches without
-  unbounded connection or memory growth.
+- Desktop capacity tests cover one million local chunks and bounded concurrent searches
+  without unbounded connection, CPU, or memory growth; background indexing yields to
+  interactive runs.
 
 ## Metrics
 
@@ -352,9 +366,9 @@ No metric contains query, title, item id, project id, or evidence text.
 
 1. Ship private contracts, fakes, and authorization tests dark.
 2. Shadow search on an evaluation-only cohort; do not expose results to the model.
-3. Enable the tools for internal tenants with BM25-only fallback.
+3. Enable the tools for local dogfood profiles with BM25-only fallback.
 4. Enable hybrid retrieval and re-ranking independently.
-5. Expand by tenant policy after quality/security gates pass.
+5. Expand by user policy after quality/security gates pass.
 
 Backout removes the tools from model assembly and stops shadow calls. Library data,
 indexes, public routes, and existing citations remain readable; no data migration must
@@ -382,13 +396,13 @@ be reversed.
 
 ### Authorization and lifecycle
 
-- Cross-org, cross-user, non-member project, revoked membership, deleted item, legal
-  hold, and account deletion.
+- Cross-profile, cross-user, ungranted project, revoked access, deleted item, backup
+  retention, and account deletion.
 - Forged/expired evidence refs and current-ACL recheck.
 - Query/excerpt/blob/signed-URL log and trace redaction.
 - Every text-bearing result/checkpoint/replay/citation payload registers an E1
   derivative edge; source/account/project deletion traverses it and removes ordinary
-  access, while legal hold remains isolated.
+  access, while optional retained backups remain isolated.
 
 ### Runtime quality
 
@@ -412,7 +426,7 @@ be reversed.
 - [ ] `backend` remains the sole Library ACL and data owner.
 - [ ] Search/open payloads and prompt contribution are bounded.
 - [ ] Deletion/revocation makes evidence unavailable without stale disclosure.
-- [ ] Shadow and enforced modes meet quality, latency, privacy, and tenant-isolation
+- [ ] Shadow and enforced modes meet quality, latency, privacy, and profile-isolation
       launch gates.
 - [ ] Standard A3 and E1 definitions of done pass.
 
@@ -426,7 +440,7 @@ be reversed.
 
 ## Open decisions
 
-- Whether org-shared Library items require an explicit `share_version` in the evidence
-  reference or whether the existing ACL generation is sufficient.
-- Whether the first release exposes re-ranking per tenant or uses one deployment-wide
+- Whether a future consumer sharing/sync adapter requires an explicit `share_version`
+  in the evidence reference or whether the existing ACL generation is sufficient.
+- Whether the first release exposes re-ranking per local profile or uses one deployment-wide
   switch.

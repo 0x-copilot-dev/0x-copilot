@@ -59,8 +59,9 @@ untrusted learned text into high-priority instructions.
 
 Launch gates:
 
-- no cross-tenant/project/private-memory leakage;
-- p95 recall adds under 300 ms when enabled and backend is healthy;
+- no cross-account/project/private-memory leakage;
+- p95 recall adds under 150 ms when enabled and the supervised local backend is
+  healthy;
 - injected memory stays below configured token/item limits;
 - recall precision meets AR-F1 threshold on a reviewed corpus;
 - every recalled item has a visible explanation and deletion path.
@@ -78,7 +79,7 @@ Launch gates:
 - AR-H6 internal memory search/get/touch.
 - AR-F2 typed prompt fragments/cacheability.
 - AR-F5 context budget and evidence refs.
-- Runtime verified org/user/project identity.
+- Runtime verified local-account/project identity.
 - Explicit user profile/settings owned by backend.
 
 ## Interfaces exposed
@@ -116,9 +117,11 @@ MemoryRecallManifest
   degraded_reason?
 ```
 
-Tenant and user never appear in the request body. Backend derives them exclusively from
-the verified service token and `x-enterprise-org-id`/`x-enterprise-user-id` headers and
-reauthorizes `project_id`; caller-supplied identity/scope authority is rejected.
+Account identity never appears in the request body. Backend derives it from the
+per-install service token and verified local session headers over loopback, then
+reauthorizes `project_id`; renderer-supplied identity/scope authority is rejected.
+Existing legacy-named headers may remain as an internal compatibility detail during
+the B2C migration, but are not the product authorization model.
 
 Model-visible context uses a clearly delimited `recalled_memory` fragment with
 stable opaque refs, not raw database metadata.
@@ -145,7 +148,7 @@ ExplicitAgentProfileSnapshot
 OpenRecalledMemoryRequest
   recalled_refs[]                      # max 8, issued in this run
   expected_revision_ids[]
-  max_bytes                            # server-clamped
+  max_bytes                            # local-service-clamped
 
 OpenRecalledMemoryBlock
   recalled_ref
@@ -184,7 +187,7 @@ Precedence:
 ```text
 system/security/product policy
   > explicit current request
-  > explicit user/workspace settings
+  > explicit user/project settings
   > accepted recalled memory
   > unaccepted conversation inference
 ```
@@ -245,21 +248,23 @@ After prompt assembly commits the selected fragment, ai-backend calls backend
 metrics to recalled versions. Merely appearing in a candidate set does not mark
 use.
 
-## Persistence, retention, and deletion
+## Persistence, retention, deletion, and future sync
 
-Backend retains memories/profile. ai-backend persists only the bounded recall
-manifest required for run replay/audit, using opaque refs and prompt fragment
-digest; do not duplicate bodies. If a source/item is deleted, H6's normative deletion
+The local backend retains canonical memories/profile in H6's embedded database.
+ai-backend persists only the bounded recall manifest required for run replay in its
+desktop-default `FileRuntimeApiStore`, using opaque refs and prompt-fragment digest; it
+never duplicates memory bodies. If a source/item is deleted, H6's normative deletion
 matrix applies: review-required or source-deleted memories are excluded from automatic
-recall and historical runs show a tombstone. Legal hold does not restore ordinary
-recall. Caches are tenant/user/project/revision/digest keyed and invalidated on
-update/delete/scope or source-state change.
+recall and historical runs show a tombstone. Caches are
+account/project/revision/digest keyed and invalidated on update/delete/scope or
+source-state change.
 
-Profile updates create a new backend revision and invalidate F2 fragments/caches.
-Profile export and field-level deletion use the existing settings facade; account
-deletion removes profile snapshots and recall manifests subject to E1 legal hold.
-Historical runs retain only the profile revision/digest, never a duplicate profile
-body, and show a tombstone when the canonical snapshot is no longer authorized.
+Profile updates create a new local backend revision and invalidate F2
+fragments/caches. Profile export and field-level deletion use the existing settings
+facade; “Delete local data” removes profile snapshots and recall manifests. Historical
+runs retain only revision/digest, never a duplicate profile body. A future consumer
+sync service may replicate accepted memory/profile revisions, but recall remains
+offline-capable and local deletion immediately wins on this device.
 
 ## Authorization, privacy, and audit
 
@@ -268,7 +273,8 @@ body, and show a tombstone when the canonical snapshot is no longer authorized.
 - Private user memory is never available to subagents unless the parent
   context packet explicitly includes an allowed excerpt; children cannot query
   a broader scope.
-- Sensitivity policy can exclude records from model providers by region/BYOK.
+- Sensitivity policy can exclude records from cloud providers or require an enabled
+  local model/BYOK path.
 - Audit recall manifest IDs/revisions/reasons/policy, not titles, excerpts, or bodies.
 - User opt-out disables retrieval and future touches immediately.
 
@@ -276,7 +282,7 @@ body, and show a tombstone when the canonical snapshot is no longer authorized.
 
 - Recall budget defaults to a small number of items and less than 5% of model
   context; exact values are policy-configurable.
-- Backend search p95 target under 250 ms; full assembly overhead under 300 ms.
+- Loopback backend search p95 target under 100 ms; full assembly overhead under 150 ms.
 - Cache only authorized result IDs/excerpts with short TTL and revision/digest key.
 - Failure/open circuit skips recall; never retry enough to delay the response.
 - Search/rerank is O(log/index retrieval + k log k) on a bounded candidate set.
@@ -304,7 +310,7 @@ records, and adversarial memory content.
 ## Rollout and backout
 
 1. Build internal search client and manifest in shadow; inject nothing.
-2. Evaluate offline/employee tenants and tune precision.
+2. Evaluate with checked-in offline fixtures and opt-in desktop dogfood; tune precision.
 3. Show recall previews in UI without model injection.
 4. Enable injection for explicit user-selected/pinned memories.
 5. Enable ranked automatic recall for opt-in cohorts.
@@ -325,9 +331,9 @@ canonical memory and manifests. Existing runs replay with tombstones/refs.
 
 ## Test plan
 
-- Full tenant/user/workspace/project/sensitivity ACL matrix.
-- Forged body identity is rejected; verified service headers and project membership are
-  authoritative.
+- Full local-account/personal/project/sensitivity authorization matrix.
+- Forged renderer/body identity is rejected; verified loopback service/session identity
+  and project selection are authoritative.
 - Explicit profile/current request conflicts with learned memory.
 - Prompt injection/invisible Unicode/malicious tool instruction fixtures.
 - Token/item budget and diversity selection.
@@ -344,7 +350,7 @@ canonical memory and manifests. Existing runs replay with tombstones/refs.
 - [ ] Runs recall a bounded, authorized, accepted set or degrade cleanly.
 - [ ] Explicit profile/request precedence is deterministic.
 - [ ] Every recall is explainable, correctable, and deletable.
-- [ ] Memory never widens tools, policy, or tenant scope.
+- [ ] Memory never widens tools, policy, account, or project scope.
 - [ ] Run replay and deletion semantics are defined and tested.
 - [ ] AR-F1 quality, latency, safety, and cache gates pass.
 - [ ] Shared program DoD passes.
@@ -360,5 +366,5 @@ canonical memory and manifests. Existing runs replay with tombstones/refs.
 ## Open decisions
 
 1. Which explicit profile fields are allowed in every run versus task-specific.
-2. Default automatic recall opt-in by deployment profile.
-3. Whether org-shared memories require a minimum review role before recall.
+2. Default automatic recall opt-in during desktop onboarding.
+3. Whether project memories are recalled outside their project by explicit user action.

@@ -1,15 +1,16 @@
 # PRD-AR-H6 — Durable memory store, review, and index
 
-**Goal.** Complete the product memory domain with a production Postgres adapter,
-durable proposal decisions, scoped search indexing, retention/deletion, and a
-reviewable user experience. Backend remains the only source of truth for
-learned facts, preferences, user capabilities, and project conventions.
+**Goal.** Complete the product memory domain with a desktop-first adapter for the
+already bundled local PostgreSQL database, durable proposal decisions, local search
+indexing, retention/deletion, and a reviewable user experience. The local backend
+remains the only source of truth for learned facts, preferences, user capabilities,
+and project conventions.
 
 ## Metadata
 
 | Field        | Value                                                                                                  |
 | ------------ | ------------------------------------------------------------------------------------------------------ |
-| Status       | Proposed; production completion                                                                        |
+| Status       | Proposed; desktop durability completion                                                                |
 | Priority     | P0                                                                                                     |
 | Owners       | `services/backend`, facade, `packages/api-types`, `packages/chat-surface`; ai-backend is a client only |
 | Depends on   | Generative Surfaces A2 and E1; AR-H5 for automatic proposals                                           |
@@ -34,20 +35,27 @@ Read:
 
 ## Problem statement
 
-The memory API, schema, service, proposal state machine, audit, SSE, and UI
-contracts are extensive, but the application defaults to
-`InMemoryMemoryStore`; no production `PostgresMemoryStore` is implemented or
-injected. Search is an in-memory lexical implementation with a no-op vector
-path. Process restart or horizontal deployment therefore invalidates the
-durability implied by the product surface.
+The memory API, schema, service, proposal state machine, audit, SSE, and UI contracts
+are extensive, but the packaged desktop composition still leaves
+`InMemoryMemoryStore` as an accepted gap. Search is an in-memory lexical implementation
+with a no-op vector path, so a local service restart loses memory.
+
+The desktop already bundles and supervises PostgreSQL for backend-owned product records
+such as identity, OAuth, token-vault metadata, projects, connectors, and skills. H6
+should add the missing memory adapter to that same local database rather than introduce
+a second canonical SQLite/file ledger. This does not change ai-backend's shipped
+desktop default: runs, events, queues, artifacts, and checkpoints remain in
+`FileRuntimeApiStore` below `<userData>/agent-data/v1`, with content-addressed objects
+and disposable SQLite indexes.
 
 ## Current implementation and predecessor contracts
 
 - **[shipped]** Typed kinds `fact | preference | skill`; `skill` means a user
   capability such as “can program in Python,” not a reusable procedure.
 - **[shipped]** Scopes `user | workspace`, with optional `project_id` narrowing a
-  workspace item; `project` is not a third scope enum.
-- **[shipped]** Owner/project/admin ACL logic with cross-tenant not-found behavior.
+  workspace item; for the B2C product these project existing wire values as
+  `personal | project` without inventing a third persisted enum during migration.
+- **[shipped]** Owner/project ACL logic and not-found behavior already exist.
 - **[shipped]** Pending proposal → accepted/rejected/snoozed lifecycle.
 - **[shipped]** Soft deletion, last-used timestamp, audit events, and SSE contracts.
 - **[depends on]** A single intended embedding/indexing plane through Library jobs rather than a
@@ -59,18 +67,21 @@ never be materialized as memory `kind=skill`.
 
 ## Objectives and outcomes
 
-1. Persist items, proposals, and audit rows transactionally in Postgres.
-2. Provide cursor-stable, ACL-safe lexical/vector/hybrid search.
+1. Persist items, proposals, revisions, and audit rows transactionally in the existing
+   embedded local PostgreSQL backend database.
+2. Provide cursor-stable, account/project-safe lexical/vector/hybrid local search.
 3. Make proposal accept/reject atomic and idempotent.
-4. Complete soft-delete, retention, embedding cleanup, export, and legal hold.
-5. Preserve behavioral equivalence in the in-memory adapter for tests/local use.
+4. Complete soft-delete, retention, embedding cleanup, local export, and delete-all.
+5. Preserve behavioral equivalence in the in-memory adapter for tests and keep the
+   store port reusable by a future hosted B2C deployment.
 6. Expose user-facing provenance, confidence, sensitivity, expiry/review date,
    and source state.
 
 Launch gates:
 
-- restart and multi-instance tests preserve records and proposal decisions;
-- zero cross-tenant/project ACL leaks in CRUD/search/SSE/export;
+- restart, crash-tail-recovery, backup, and restore tests preserve records and proposal
+  decisions;
+- zero cross-account/project leaks in CRUD/search/SSE/export;
 - deletion removes searchability and embeddings within the declared SLA;
 - accepted proposal plus memory creation is atomic;
 - every migration/backfill is restartable and idempotent.
@@ -85,9 +96,9 @@ Launch gates:
 
 ## Interfaces consumed
 
-- Verified identity and project membership.
+- Verified local-account identity and project selection.
 - Existing Library indexing jobs and embedding store.
-- E1 audit, retention, legal hold, and SIEM export.
+- E1 local audit, retention, export, deletion, and repair.
 - AR-H5 internal proposal ingestion.
 
 ## Interfaces exposed
@@ -97,8 +108,7 @@ Extend the canonical record:
 ```text
 MemoryItem
   id
-  tenant_id
-  owner_user_id
+  local_account_id
   scope: user | workspace
   project_id?
   kind: fact | preference | skill
@@ -141,9 +151,9 @@ Every edit, accepted proposal, correction, scope change, and supersession append
 immutable `MemoryItemRevision` and atomically advances `active_revision_id`. Historical
 revisions are never overwritten. Search, export, audit, H7 recall, and touch attribution
 name the exact `revision_id` and `content_digest`, not a mutable integer version.
-Content lives behind an access-controlled payload ref so a deletion/legal obligation
-can make exact bytes unavailable while preserving immutable decision metadata and
-non-content digests.
+Content lives behind a local payload ref so deletion can make exact bytes unavailable
+while preserving immutable decision metadata and non-content digests during the chosen
+undo window.
 
 Add internal, service-authenticated endpoints:
 
@@ -157,35 +167,46 @@ Apps continue to call facade public routes only.
 
 ## Detailed design
 
-### 1. Postgres adapter
+### 1. Embedded local PostgreSQL adapter
 
-Implement `PostgresMemoryStore` against `memory/schema.sql` with:
+Implement `PostgresMemoryStore` behind the existing `MemoryStore` port and add its
+tables through the backend migration mechanism. In `single_user_desktop`, this is the
+PostgreSQL 17 process already staged and lifecycle-managed by Electron under the OS app
+data directory; it is not a remote service or new runtime dependency.
+
+The adapter provides:
 
 - transaction-context equivalence with the in-memory adapter;
-- optimistic version check on updates;
-- stable cursor ordering with `(sort_field, id)` tie-break;
+- optimistic row-version checks and stable `(sort_field,id)` cursors;
 - soft-delete filtering by default;
-- atomic proposal decision and accepted-memory link;
-- append-only audit within the same transaction;
-- database constraints for tenant/scope/kind/status invariants.
+- atomic proposal decision, accepted item/revision link, audit append, and index-outbox
+  append in one database transaction;
+- constraints for account/scope/kind/status invariants;
+- bounded connection pool and queries tuned for one desktop user;
+- no ai-backend database writes or sibling-service source imports.
 
-Schema migrations use the service's canonical migration mechanism; importing
-SQL at runtime is not a substitute.
+Small structured memory bodies may live in PostgreSQL. Large evidence excerpts,
+attachments, exports, or copied source payloads use content-addressed filesystem refs
+below the OS-owned app-data directory, written with temp + fsync + digest verification
+and atomic rename. Introducing a canonical SQLite database for H6 would create a third
+truth alongside the existing backend database and ai-backend file store, so it is out
+of scope.
 
 ### 2. Composition
 
-Backend chooses the adapter from the service's normal store configuration.
-Production/Postgres configuration fails closed if it cannot construct the
-Postgres adapter; it must not silently fall back to memory. Tests explicitly
-choose in-memory. Health exposes adapter kind and migration readiness without
-record content.
+For `single_user_desktop`, `backend_app.desktop_app` must explicitly inject
+`PostgresMemoryStore` using its existing shared local connection pool; it may never
+silently fall back to `InMemoryMemoryStore`. Tests explicitly choose in-memory or
+Postgres. A future hosted consumer composition can reuse the same port/schema without
+changing local behavior. Health exposes adapter kind and migration/index readiness
+without record content.
 
 ### 3. Proposal ingestion and decisions
 
 AR-H5 sends batches with an idempotency key and source/policy revisions.
 Backend validates:
 
-- authenticated service and matching tenant/user headers;
+- authenticated per-install service and matching local-account header;
 - supported type/size/scope hint;
 - evidence-ref format and candidate uniqueness;
 - sensitivity/expiry policy.
@@ -204,7 +225,7 @@ MemoryProposalDecisionRequest
   expected_proposal_row_version
   reviewer_edit
     title, body, tags
-    scope: user | workspace
+    scope: personal | project           # translated at the current wire boundary
     project_id?
   reviewer_edit_digest
   idempotency_key
@@ -221,12 +242,13 @@ transactional outbox. Repeated same decision replays; contradictory decisions co
 
 ### 4. Search and index
 
-Memory embeddings live in the existing Library embedding table with
-`target_kind=memory`. Implement the missing memory handler in the index worker.
-Search flow:
+Memory lexical/search metadata stays in the same embedded local PostgreSQL database,
+using indexed account/scope/state columns and text search. Optional embedding bytes may
+remain behind filesystem refs through the existing Library indexing contract; desktop
+launch must not depend on a network vector database. Search flow:
 
-1. derive readable scope/project set from verified identity;
-2. apply tenant/deleted/expiry/sensitivity filters before ranking;
+1. derive readable personal/project set from verified local identity;
+2. apply account/deleted/expiry/sensitivity filters before ranking;
 3. obtain lexical and optional vector candidates;
 4. fuse deterministically;
 5. hydrate and reauthorize final records;
@@ -253,17 +275,22 @@ proposal accept/edit/reject/snooze, manual create/edit, scope change, export,
 soft delete, and “forget all learned from this conversation/source.” UI copy
 distinguishes user-authored from agent-proposed/accepted state.
 
-## Persistence, retention, and deletion
+## Persistence, retention, deletion, backup, and future sync
 
-- Backend Postgres is canonical.
-- Soft deletion immediately hides records and queues embedding deletion.
-- Retention sweep hard-deletes after policy unless legal hold applies.
+- The backend's embedded local PostgreSQL memory rows are canonical on desktop;
+  filesystem objects hold large payloads and are reachable only through database refs.
+- Soft deletion immediately hides records and removes them from the rebuilt/search
+  index.
+- Retention sweep hard-deletes after the user's chosen undo/history window.
 - Source conversation or trajectory deletion updates source state and executes the
   normative derivative-state matrix below.
-- Account/tenant deletion cascades items, proposals, outbox rows, embeddings,
-  audit per legal policy, and cached search material.
-- Export includes content, scope, sources, versions, and decisions the caller
-  is entitled to see.
+- “Delete local data” cascades items, proposals, pending outbox work, embedding objects,
+  local audit records, and cached search material.
+- Export includes content, scope, sources, versions, and decisions for the active local
+  account. Backup takes a consistent PostgreSQL/object snapshot.
+- A future hosted B2C sync adapter consumes immutable event IDs/revisions and
+  emits remote acknowledgements into a separate sync cursor. It is optional,
+  conflict-aware, and never changes the local canonical format or blocks offline CRUD.
 
 ### Normative source-deletion matrix
 
@@ -280,21 +307,20 @@ retain or auto-use more data than specified:
 
 A user's independent manual authorship or explicit post-deletion reconfirmation may
 create a new revision with new provenance; it does not resurrect deleted evidence.
-Legal hold can retain exact bytes only in the held access-controlled source/derivative
-record. It never restores search, source opening, memory recall, skill selection, or
-ordinary reviewer access. Source-deletion events are idempotent, tenant-scoped, and
-propagated through a durable backend outbox to indexes, H7 caches, H8 drafts, and H2
+An explicit user reconfirmation can preserve the remembered fact after deleting its
+original chat, but it creates a new revision with manual provenance and never restores
+the deleted evidence. Source-deletion events are idempotent, account-scoped, and
+propagated through a durable local outbox to indexes, H7 caches, H8 drafts, and H2
 lifecycle commands.
 
 ## Authorization, privacy, and audit
 
-- User-scoped rows: owner read/write.
-- Workspace rows: tenant read; owner or designated admin write.
-- Project rows: project membership read; owner/project role write.
-- `scope=workspace, project_id=NULL` means tenant workspace visibility;
-  `scope=workspace, project_id=<id>` narrows visibility to that project. The database
-  rejects `scope=user` with a project id and rejects any invented `scope=project`.
-- Admin compliance read does not imply write to private user memory.
+- Personal rows: active local account read/write.
+- Project rows: active local account read/write within the selected local project.
+- During wire compatibility, `scope=user` means personal and
+  `scope=workspace,project_id=<id>` means project. The store rejects `scope=user` with a
+  project id and rejects `scope=workspace,project_id=NULL` for newly created
+  desktop-B2C content.
 - Every list/search route applies post-rank reauthorization.
 - Audit records lifecycle and scope changes without placing body text in
   general log metadata.
@@ -302,14 +328,16 @@ lifecycle commands.
 
 ## Performance and capacity
 
-- CRUD p95 under 150 ms in-region.
-- Search p95 under 500 ms for indexed tenants; hard result and excerpt limits.
-- Indexed queries use tenant/deleted/scope filters; no full-table app scan.
-- Index enqueue is asynchronous but transactional; searchable-state lag SLO is
-  60 seconds.
+- CRUD p95 under 40 ms on a reference laptop after warm open.
+- Lexical search p95 under 100 ms for 100,000 memories; optional hybrid search p95
+  under 300 ms, with hard result/excerpt limits.
+- Indexed queries use account/deleted/scope filters; no full-table application scan.
+- Index updates are local and asynchronous from the committed database transaction;
+  searchable-state lag target is under 2 seconds.
 - Per-record body remains bounded; supporting large content belongs in
   artifacts/Library with refs.
-- Rate-limit proposal ingestion and user search per tenant.
+- Bound proposal ingestion, compaction, and embedding work per device; pause optional
+  embedding/compaction work on battery or thermal pressure.
 
 ## Failure, retry, and recovery
 
@@ -320,63 +348,67 @@ lifecycle commands.
 - Duplicate batch/decision IDs replay safely.
 - Cursor invalidation after deletion returns a valid next page, not leaked
   tombstones.
-- Migration jobs use checkpoints and can be restarted.
+- Import/migration jobs use checkpoints and digests; the previous schema/data stays
+  readable until verification succeeds.
 
 ## Observability
 
-Track adapter kind, CRUD/search latency, Postgres errors, proposal backlog and
-decision rate, index queue age/failures, vector degradation, soft-delete to
-embedding-delete lag, source-deleted records, ACL denials, and export/legal-hold
-jobs. Health checks verify schema and worker support for `target_kind=memory`.
+Track adapter kind, CRUD/search latency, local database/repair errors, database/object
+bytes, proposal backlog and decision rate, index queue age/failures, vector degradation,
+soft-delete-to-object-collection lag, source-deleted records, authorization denials, and
+export jobs. Telemetry remains on-device unless the user separately opts in. Health
+checks verify migrations, database readiness, free-space quota, and index generation.
 
 ## Rollout and backout
 
-1. Land Postgres adapter and migrations dark.
-2. Run adapter contract suite against in-memory/Postgres.
-3. Dual-read/shadow compare an internal fixture dataset; do not dual-write
-   user content without a reviewed migration.
+1. Land `PostgresMemoryStore`, migrations, filesystem payload refs, and recovery
+   fixtures dark.
+2. Run the store contract suite against in-memory/Postgres.
+3. Shadow-read a generated fixture dataset; do not dual-write personal content.
 4. Enable new proposal ingestion.
-5. Enable tenant cohorts and verify restart/horizontal behavior.
+5. Enable opt-in desktop cohorts and verify restart/crash/backup/restore behavior.
 6. Enable index/vector path after lexical correctness.
 
-Backout stops new traffic to the Postgres feature surface only through a
-documented maintenance posture; it must not fall back to an empty in-memory
-store. Preserve data and provide a forward-fix/export path.
+Backout stops new mutations through a documented read-only maintenance posture; it must
+not fall back to an empty in-memory store. Preserve the local database/object root and
+provide a forward-fix/export path.
 
 ## Implementation slices
 
-1. Schema migration and `PostgresMemoryStore`.
+1. Schema migration, object-ref contracts, and `PostgresMemoryStore`.
 2. Cross-adapter behavior, transaction, and concurrency tests.
-3. Production composition and health.
+3. Desktop composition, migration health, object-root provisioning, repair, and backup.
 4. Internal proposal batch API/idempotency.
 5. Index worker memory handler and hybrid search adapter.
 6. Source/sensitivity/version contract extensions.
 7. Shared review/control UX.
-8. Retention/deletion/export/legal-hold integration.
+8. Retention/deletion/export/backup/future-sync outbox integration.
 
 ## Test plan
 
 - Full store contract suite across adapters.
-- Restart, two-process concurrency, and optimistic conflict tests.
-- Tenant/user/workspace/project/admin ACL matrices.
+- Restart, database-unavailable/disk-full, concurrent-request, and optimistic-conflict
+  tests.
+- Local-account/personal/project authorization matrices and renderer identity forgery.
 - Search prefilter and post-rank authorization.
 - Atomic accept and duplicate/contradictory decision replay.
 - Candidate/evidence/scope-ceiling/row-version drift invalidates acceptance; exact
   reviewer edit digest and immutable revision are auditable.
-- User-private evidence cannot be widened to workspace/project visibility through
+- Personal evidence cannot be widened to project visibility through
   proposal editing.
 - Index outage/degradation and recovery.
-- Source/account/tenant deletion cascades and legal hold.
+- Source/account/delete-all cascades, backup/restore, and consent withdrawal.
 - SSE/outbox duplicate and reconnect behavior.
-- Migration forward/backward compatibility and large tenant pagination.
+- Migration forward/backward compatibility and 100,000-record pagination.
 
 ## Definition of done
 
-- [ ] Production uses Postgres memory persistence with no silent fallback.
+- [ ] Packaged desktop uses its embedded local PostgreSQL memory adapter with no silent
+      in-memory fallback.
 - [ ] Proposal decisions are atomic, idempotent, and audited.
 - [ ] Lexical/hybrid search is ACL-safe and operationally monitored.
 - [ ] User controls cover inspect/edit/delete/export/provenance.
-- [ ] Retention, deletion, source deletion, and legal hold are tested.
+- [ ] Retention, deletion, source deletion, export, and backup/restore are tested.
 - [ ] AR-H7 can consume a stable internal search contract.
 - [ ] Shared program DoD passes.
 
@@ -387,9 +419,10 @@ store. Preserve data and provide a forward-fix/export path.
 - Never treat memory `kind=skill` as a procedure or executable skill; it remains a user
   capability fact.
 - Never use embeddings as an authorization filter.
-- Never silently fall back to process memory in a durable deployment.
+- Never silently fall back to process memory in a packaged desktop deployment.
+- Never make cloud availability a prerequisite for memory recall.
 
 ## Open decisions
 
 1. Default review/expiry policy by memory kind.
-2. Which deployment profiles enable vector search by default.
+2. Whether local vector search ships by default or remains an opt-in download.

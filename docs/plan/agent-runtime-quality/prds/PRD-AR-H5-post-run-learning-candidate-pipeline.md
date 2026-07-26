@@ -13,7 +13,7 @@ behavior or activates automation.
 | Priority     | P0                                                                                                                             |
 | Owners       | `services/ai-backend` (eligibility, extraction, usage), `services/backend` (proposal persistence), facade/UI (review delivery) |
 | Depends on   | AR-F1, AR-G3, Generative Surfaces A2 and E1                                                                                    |
-| Rollout flag | `POST_RUN_LEARNING_CANDIDATES_ENABLED`, explicit tenant/user opt-in                                                            |
+| Rollout flag | `POST_RUN_LEARNING_CANDIDATES_ENABLED`, explicit desktop-user opt-in                                                           |
 | UI impact    | Proposal inbox/toasts; no automatic mutation                                                                                   |
 
 ## Implementer brief
@@ -81,19 +81,18 @@ Launch gates:
 ## Interfaces consumed
 
 - Completed run/message/event snapshots and conversation retention policy.
-- E1 usage meter, audit, redaction, legal hold, and outbox patterns.
+- E1 usage meter, local audit, redaction, deletion, and outbox patterns.
 - AR-G3 stable conversation-message evidence references.
 - Exact operation, tool-result, citation, artifact, and approval record resolvers owned
   by their respective runtime domains.
-- Tenant/user learning policy from backend.
+- User learning/privacy preference from the local backend.
 
 ## Interfaces exposed
 
 ```text
 LearningExtractionJob
   job_id
-  tenant_id
-  user_id
+  local_account_id
   conversation_id
   run_id
   run_terminal_sequence
@@ -172,12 +171,12 @@ Kinds are semantically closed:
 
 Before enqueue and again before model invocation:
 
-- user/tenant learning feature is enabled;
+- user learning feature is enabled;
 - run source/type is eligible;
 - conversation is not ephemeral, private-excluded, deleted, or beyond
   retention;
 - connector/tool classes are permitted for learning;
-- no pending account deletion or policy revocation;
+- no pending local-data deletion or consent revocation;
 - cost and rate quotas permit extraction.
 
 Policy is backend-owned and fetched over authenticated internal HTTP. A stale
@@ -190,7 +189,7 @@ or outbox boundary as the terminal run event. Worker consumers claim with a
 lease. Idempotency key:
 
 ```text
-(tenant_id, run_id, run_terminal_sequence, extractor_policy_revision)
+(local_account_id, run_id, run_terminal_sequence, extractor_policy_revision)
 ```
 
 Re-extraction under a newer policy or prompt is an explicit replay with a new
@@ -239,8 +238,8 @@ shows “supports,” “updates,” or “contradicts” an existing record.
 
 ### 6. Backend ingestion and routing
 
-Add authenticated internal batch ingestion to backend. It validates service
-identity and tenant/user headers, revalidates size/kind/evidence envelope, and
+Add authenticated internal batch ingestion to backend. It validates the per-install
+service identity and local-account header, revalidates size/kind/evidence envelope, and
 atomically stores the batch plus proposal rows.
 
 Routing:
@@ -255,16 +254,16 @@ sensitivity, and caller authority:
 
 ```text
 EvidenceScopeCeiling
-  maximum_scope: user | workspace
+  maximum_scope: personal | project
   allowed_project_id?
   sensitivity_ceiling[]
   source_acl_digest
   derived_at
 ```
 
-Reviewers may narrow this ceiling. Widening requires an explicit, separately authorized
-republishing action with suitable non-private evidence; editing a proposal cannot
-silently turn user-private evidence into workspace memory or an org-shared procedure.
+The user may narrow this ceiling. Widening requires an explicit republishing action
+with suitable non-private project evidence; editing a proposal cannot silently turn
+personal evidence into a project-visible memory or procedure.
 
 Backend returns durable proposal IDs; ai-backend records only IDs/counts in the
 job result.
@@ -275,36 +274,43 @@ After persistence, backend emits proposal-available SSE/activity events.
 Notification payloads contain a safe gist and proposal ID; full evidence/body
 requires an authorized fetch. Notification failure does not repeat extraction.
 
-## Persistence, retention, and deletion
+## Persistence, retention, deletion, and future sync
 
-ai-backend owns job state, source digest, and model usage. Backend owns
-candidates/proposals and decisions. Raw extracted text exists only in protected
-proposal bodies/evidence sources. Conversation or exact trajectory-source deletion
-invalidates evidence and deletes or withdraws pending candidates; accepted downstream
-records follow H6/H8's normative source-deletion matrix. A non-content provenance
-tombstone may remain when policy requires it. Legal hold applies to both stores.
+ai-backend owns job state, source digest, and model usage in its shipped desktop-default
+file-native store below `<userData>/agent-data/v1`; no embedded PostgreSQL round trip is
+required for run completion or job claiming. Backend owns candidates/proposals and
+decisions through H6's adapter in the already bundled local backend database. Raw extracted text
+exists only in protected proposal bodies/evidence sources. Conversation or exact
+trajectory-source deletion invalidates evidence and deletes or withdraws pending
+candidates; accepted downstream records follow H6/H8's normative source-deletion
+matrix.
+
+Large evidence payloads use content-addressed filesystem refs. Stable IDs, revisions,
+and an optional local outbox form the future consumer-sync seam, but extraction,
+review, and deletion work fully offline and do not require a cloud account.
 
 ## Security, privacy, and audit
 
 - Derive identity from verified run state, never job payload fields alone.
 - Classify/redact before external model calls.
-- Tenant/user scope is carried through service-auth headers and rechecked.
+- Local-account scope is carried through the loopback service-auth channel and
+  rechecked.
 - Never learn credentials, authentication tokens, private keys, biometric,
-  health, political, or other restricted traits without an explicit
-  organization policy and lawful purpose.
+  health, political, or other highly sensitive traits.
 - Audit eligibility result, model/prompt/policy revision, candidate IDs, route,
   and reviewer decisions; do not audit proposal body.
-- BYOK, data residency, training opt-out, and model eligibility apply to the
-  auxiliary call.
+- BYOK/local-model selection, training opt-out, and model eligibility apply to the
+  auxiliary call. Offline mode skips cloud extraction or uses an enabled local model.
 
 ## Performance and cost
 
 - User run completion path: outbox append only, p95 under 20 ms incremental.
 - Default job input remains bounded by policy; record actual estimated and provider
   tokens for every model attempt.
-- Per-run and per-tenant daily dollar caps are hard pre-call gates.
-- Jobs have bounded concurrency by tenant/provider and backpressure.
-- Dedup uses indexed candidates/memories; no full-tenant O(N) scan.
+- Per-run and per-device daily dollar caps are hard pre-call gates.
+- Jobs have laptop-aware bounded concurrency by provider, with battery/thermal
+  backpressure.
+- Dedup uses indexed candidates/memories; no full-history O(N) scan.
 - Candidate delivery target: p95 within 30 seconds of run completion, not a
   synchronous guarantee.
 
@@ -350,14 +356,15 @@ expired by policy. Never auto-delete accepted downstream state.
 4. Structured extractor revision with source refs.
 5. Backend internal batch ingestion/idempotency.
 6. Proposal routing and notification projection.
-7. Retention/deletion/legal-hold integration.
+7. Local retention/export/deletion integration.
 8. Evaluation corpus, dashboards, and rollout tooling.
 
 ## Test plan
 
 - Exactly one job for duplicate terminal events.
 - Current-policy deny overrides enqueue-time allow.
-- Cross-tenant/internal-service spoofing denied.
+- Renderer identity and loopback service-token spoofing denied; second-account records
+  are not visible.
 - Source-ref validation and source deletion races.
 - Secret/PII/prompt-injection fixtures.
 - Malformed/oversize/unsupported structured output.
@@ -368,11 +375,12 @@ expired by policy. Never auto-delete accepted downstream state.
 - Crash before/after provider response accounts each attempted invocation once while
   persisting one logical candidate batch.
 - Duplicate/contradictory candidate behavior.
-- Deletion cascade, legal hold, export, and DLQ recovery.
+- Deletion cascade, local export/restore, consent withdrawal, offline mode, and DLQ
+  recovery.
 
 ## Definition of done
 
-- [ ] Production worker lifecycle constructs and consumes the extractor job.
+- [ ] Packaged desktop worker lifecycle constructs and consumes the extractor job.
 - [ ] Backend persists idempotent evidence-backed proposals.
 - [ ] Every accepted candidate path requires a separate owning decision.
 - [ ] Consent, redaction, cost, and retention gates are enforced and tested.
@@ -390,6 +398,5 @@ expired by policy. Never auto-delete accepted downstream state.
 
 ## Open decisions
 
-1. Default eligible conversation classes by deployment profile.
-2. Which restricted data categories are always blocked versus tenant
-   configurable.
+1. Default eligible conversation classes for desktop users.
+2. Which restricted data categories are always blocked versus user configurable.

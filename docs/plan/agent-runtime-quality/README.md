@@ -10,6 +10,27 @@ work. It defines 29 core feature PRDs and two optional product-expansion PRDs.
 Each PRD owns one independently reviewable capability and must preserve the
 existing Generative Surfaces v2.1 safety/execution architecture.
 
+## Deployment posture
+
+This program is **desktop-first B2C**. The shipped target is the
+`single_user_desktop` profile: Electron supervises loopback `backend`,
+`ai-backend`, and facade services; Electron main retains native workspace and
+browser authority; and ai-backend defaults to the file-native store beneath
+the user's application-data directory. The local service boundary remains
+valuable for fault isolation and capability brokering, but it is not evidence
+of a required hosted, multi-tenant deployment.
+
+Canonical user state is local by default, but storage follows the shipped
+split: ai-backend run/event/artifact state uses the file-native JSONL/CAS store
+under `userData`, while durable backend-owned product records may reuse the
+already-bundled local Postgres cluster. Filesystem payloads remain the right
+home for large artifacts, skill packages, exports, and human-inspectable
+views; the file store's SQLite catalog is a disposable derived index, never a
+second source of truth. The desktop must work without an account, network,
+remote database, or automatic sync. A future consumer sync service is an
+opt-in adapter with explicit backup/restore and conflict semantics, never a
+hidden prerequisite or authority source.
+
 ## Outcome
 
 The completed program should produce an agent runtime that:
@@ -52,6 +73,21 @@ Big-O describes local work only. F1 launch reports must separately measure p50,
 p95, model turns, tool calls, uncached/cached tokens, provider/network tail,
 rate limits, retries, and end-to-end task success.
 
+## Desktop resource and lifecycle constraints
+
+The supervised app has one in-process ai worker, may be closed at any time,
+and must not become an always-on daemon. Every PRD that introduces a cache,
+index, job, routine, or background task must define its cold-start, peak-RAM,
+disk-growth, battery/thermal, suspend, quit, and next-boot-resume behavior.
+Renderer code remains unable to contact the network directly; all remote I/O
+flows through the local service boundary or the Electron capability broker.
+
+Desktop launch gates include a supervised packaged-app smoke, offline/degraded
+truthfulness, bounded local-store recovery/replay, and no duplicate work after
+restart. Network-backed models, web research, and optional future sync must
+pause or explain their unavailable state rather than secretly queue work in a
+background daemon.
+
 ## Non-goals
 
 - Replacing the current Deep Agents/LangGraph run loop.
@@ -60,9 +96,9 @@ rate limits, retries, and end-to-end task success.
 - Running arbitrary third-party Python/shell inside trusted workers.
 - Treating `npx`, `uvx`, or package execution as skill installation.
 - Automatically publishing skills, accepting memory, activating routines, or
-  deleting organizational knowledge.
-- Training on customer content without a separately reviewed consent,
-  isolation, and governance program.
+  deleting learned user data.
+- Uploading user content, training on it, or enabling cross-device sync without
+  a separately reviewed, explicit opt-in program.
 
 ## Existing foundations to preserve
 
@@ -79,9 +115,9 @@ These are current/planned strengths, not work to reimplement:
 | Built-in descriptors, constrained code mode, subagent operation lineage  | Existing D2         | Preserve capability intersection and usage attribution.                  |
 | Isolated sandbox snapshots/declarative patch handoff                     | Existing D3         | No raw sandbox-to-host mutation.                                         |
 | Brokered browser reads/artifacts and staged consequential actions        | Existing D4         | Public-web research remains distinct from interactive browser authority. |
-| Audit, receipts, retention/deletion/legal hold, repair, conformance      | Existing E1–E2      | All new durable records join these controls before launch.               |
+| Audit, receipts, retention/deletion, repair, conformance                 | Existing E1–E2      | All new durable records join local lifecycle controls before launch.     |
 | Monotonic event replay, citation ordinals, authority intersection        | Shipped ai-backend  | Preserve deterministic replay and inspectable evidence.                  |
-| Tenant-scoped MCP descriptor cache and shared backend HTTP pool          | Shipped ai-backend  | Improve freshness/session reuse; do not replace a working cache.         |
+| Local-profile MCP descriptor cache and shared backend HTTP pool          | Shipped ai-backend  | Improve freshness/session reuse; do not replace a working cache.         |
 
 ## Current implementation truth
 
@@ -91,12 +127,12 @@ The PRDs must use these classifications:
 | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------- |
 | Skill Markdown CRUD and progressive loading    | Shipped: backend CRUD/version/audit, compact cards, explicit `load_skill`, local/built-in roots.                                                                                                       | Build supply chain, draft publication, ranking, curation, and distillation around it.     |
 | External skill install and model-authored save | Missing. Backend accepts one Markdown string, not a package; runtime has load only.                                                                                                                    | H1, H2, H8.                                                                               |
-| Product memory                                 | API/schema/service/UI/proposals exist, but only an in-memory store is composed; production Postgres/vector path is absent.                                                                             | H6 completes durability/index/review.                                                     |
+| Product memory                                 | API/schema/service/UI/proposals exist, but only an in-memory store is composed; no adapter persists reviewed product memory in the bundled local backend store.                                        | H6 completes local durability/index/review.                                               |
 | Runtime memory recall                          | Missing. ai-backend does not call backend memory search; old local route plans are not a product memory substitute.                                                                                    | H7.                                                                                       |
 | Post-run proposal extraction                   | Typed and tested, cost-capped, but not constructed, scheduled, or persisted in production.                                                                                                             | H5 wires the lifecycle.                                                                   |
 | Skill distillation from prior work             | Missing. A `kind=skill` memory proposal is only a short note.                                                                                                                                          | H8 reconstructs, validates, and drafts a real skill package.                              |
 | Historical memory/routine learning             | Missing. History search and live post-run extraction do not provide an authorized, resumable old-chat backfill.                                                                                        | H9 adds dry-run, consent, scope/cost bounds, evidence ceilings, and propose-only routing. |
-| MCP progressive discovery                      | Shipped at server-card level with 15-minute tenant/user descriptor cache.                                                                                                                              | F3 adds capability-level selection; F8 adds revisions/invalidation/warm sessions.         |
+| MCP progressive discovery                      | Shipped at server-card level with a 15-minute local-profile descriptor cache.                                                                                                                          | F3 adds capability-level selection; F8 adds revisions/invalidation/warm sessions.         |
 | Web research                                   | Retry-wrapped DuckDuckGo snippets exist; extraction/provider/fallback/evidence pipeline is absent.                                                                                                     | G2.                                                                                       |
 | Browser, sandbox, workspace, subagents         | Substantial governed implementations exist, often desktop/flag gated; some background lifecycle seams are dark.                                                                                        | Reference D2–D4; F9/I3 improve quality and durability without replacing authority.        |
 | Multi-file edit optimization                   | C1–C3 define the safe overlay/stage/commit path, but there is no repository-wide target planner, atomic structured patch-set tool, or bounded validation/repair controller.                            | F11 extends the existing path.                                                            |
@@ -117,8 +153,8 @@ evaluation. The three dispositions below are normative:
   primitive; do not fork it.
 - **Library integration** — adopt a maintained LangChain/LangGraph primitive
   behind a product-owned adapter and conformance tests.
-- **Product build** — implement the enterprise-specific control plane,
-  persistence, policy, UX, or evaluation logic in this repository.
+- **Product build** — implement the desktop-specific persistence, policy, UX,
+  evaluation, or future-sync seam in this repository.
 
 | PRD | Direct composition                                               | Library integration                                                                                          | Product-specific work that remains                                                                                                                |
 | --- | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -140,17 +176,17 @@ evaluation. The three dispositions below are normative:
 | G4  | Deep Agents filesystem tools and permission rules                | Reuse filesystem search primitives only over the granted workspace view                                      | Hierarchical discovery, precedence, visibility, prompt-injection treatment, and revision-aware caching                                            |
 | H1  | Deep Agents skill file format is the accepted runtime target     | Archive/parsing/scanning libraries behind quarantine adapters                                                | Source allowlists, fetch/quarantine pipeline, provenance, licenses, trust states, and disabled drafts                                             |
 | H2  | Runtime keeps loading immutable skill versions                   | Markdown/diff libraries for review rendering                                                                 | Draft/review/publish/rollback domain, approvals, audit, API contracts, and shared UI                                                              |
-| H3  | Deep Agents on-demand skill loading and subagent skill isolation | Optional semantic ranker behind deterministic/policy filters                                                 | Tenant/user/task profiles, pinning, precision-first ranking, explanations, and quality evaluation                                                 |
+| H3  | Deep Agents on-demand skill loading and subagent skill isolation | Optional semantic ranker behind deterministic/policy filters                                                 | Local user/task profiles, pinning, precision-first ranking, explanations, and quality evaluation                                                  |
 | H4  | No new harness primitive required                                | Analytics/statistics libraries may support scoring                                                           | Usage attribution, staleness/conflict signals, curator proposals, disable/restore, and governance                                                 |
 | H5  | Existing auxiliary-model construction path                       | LangGraph background job primitives may be used by the worker                                                | Production trigger, durable extraction jobs, evidence binding, quotas, dedupe, and proposal routing                                               |
-| H6  | Do not use writable prompt files as canonical product memory     | Storage/vector libraries behind backend ports                                                                | Postgres canonical store, atomic review, ACL-first index, retention/deletion/export, and repair                                                   |
+| H6  | Do not use writable prompt files as canonical product memory     | Local storage/index libraries behind backend ports                                                           | Existing local-Postgres records plus file payload refs, atomic review, local-first index, deletion/export, repair, and future sync seam           |
 | H7  | Deep Agents memory injection/backend seams                       | Reuse store/retrieval interfaces behind backend HTTP                                                         | Accepted-memory retrieval, explicit-profile precedence, bounded prompt fragment, correction, and explanations                                     |
 | H8  | Published drafts later use the normal skill loader               | Structured-output/evaluator helpers                                                                          | Trajectory reconstruction, recurrence/evidence thresholding, synthesis, sandbox tests, and unpublished backfill                                   |
 | H9  | Existing history search and durable job/checkpoint seams         | Batch/structured-output helpers behind the H5 extraction contract                                            | Consent, dry run, bounded historical scan, resumability, evidence ceilings, dedupe, deletion, and propose-only memory/routine routing             |
 | I1  | Existing run dispatch/checkpoint path                            | Scheduler libraries may implement timing, not authority                                                      | Durable routine store/claimer, proposal review, activation, per-fire reauthorization, overlap, and misfires                                       |
 | I2  | LangGraph checkpoints and interrupts                             | Graph primitives may implement finite attempt workflows                                                      | Goal contract, verifier, progress ledger, budgets, wake policy, circuit breakers, and terminal rationale                                          |
 | I3  | Async-subagent lifecycle can be an execution adapter             | Agent Protocol clients may provide start/check/update/cancel transport                                       | Backend-owned work-item DAG/board, assignment, handoff, dependency admission, dispatch reconciliation, and projection over the existing run queue |
-| I4  | Existing typed runtime event stream is the source                | Standard signing/webhook clients behind an outbox                                                            | Subscription registry, redaction, signing, delivery/DLQ/replay, secret rotation, and tenant controls                                              |
+| I4  | Existing typed runtime event stream is the source                | Standard signing/webhook clients behind a local outbox                                                       | User-controlled subscriptions, redaction, signing, delivery/DLQ/replay, secret rotation, and local network controls                               |
 | J1  | MCP remains the only model-facing tool contract                  | MCP client/server and package-manager protocols inside isolation                                             | Curated catalog, lockfiles, sandboxed install/run, trust policy, lifecycle, updates, and desktop supervision                                      |
 | J2  | Existing provider/model and artifact seams                       | Maintained multimodal model adapters where policy-compatible                                                 | Capability registry, consent/safety policy, media storage/provenance, cost controls, and safe renderers                                           |
 
@@ -187,8 +223,8 @@ dependency decision.
 - Reuse protocols and transport primitives, not their default control planes:
   MCP adapters can load tools and hold explicit sessions; async subagents can
   supply start/check/update/cancel transport. F8 and I3 retain product-owned
-  tenant scoping, revisions, warm-session limits, queue reconciliation, audit,
-  and lifecycle semantics. Async subagents remain preview-gated.
+  local-profile scoping, revisions, warm-session limits, queue reconciliation,
+  audit, and lifecycle semantics. Async subagents remain preview-gated.
 - Build the irreducibly product-specific parts: approved skill supply chain,
   immutable publishing/review, ACL-first Library/history/memory, durable
   learning workflows, workspace commit safety, evidence verification,
@@ -215,7 +251,7 @@ capabilities:
   delegation, lineage, permissions, and budget intersection. F9 improves when
   and how delegation occurs; I3 adds product-visible durable work without
   replacing the run queue.
-- **MCP tool-list caching:** the shipped tenant/user TTL/LRU cache remains.
+- **MCP tool-list caching:** the shipped local-profile TTL/LRU cache remains.
   F8 adds descriptor revisions, invalidation, freshness observability, and
   warm-session reuse; it does not restart the MCP integration.
 
@@ -227,12 +263,12 @@ subagent authority intersection.
 
 ## Architectural invariants
 
-1. **Service boundaries remain hard.** Backend owns product persistence,
-   registries, permissions, OAuth/token state, admin workflows, routines,
-   goals, skills, memory, and subscriptions. ai-backend owns orchestration,
-   runtime retrieval, prompt assembly, model/tool execution, evaluations, and
-   delegation. Integration is authenticated HTTP/contracts, never sibling
-   imports.
+1. **Service boundaries remain hard.** In the local supervised stack, backend
+   owns user product records, registries, permissions, OAuth/token state,
+   routines, goals, skills, and reviewed memory in the embedded local Postgres
+   store. ai-backend owns file-native runtime state, orchestration, retrieval,
+   prompt assembly, model/tool execution, evaluations, and delegation.
+   Integration is authenticated loopback HTTP/contracts, never sibling imports.
 2. **Apps call facade only.** Public TypeScript contracts live in
    `packages/api-types`; shared interaction UI lives in `packages/chat-surface`.
 3. **Authority is computed, never learned.** Memory, skills, workspace files,
@@ -291,7 +327,7 @@ subagent authority intersection.
 | [ ]  | [H3 — Skill discovery, ranking, and task profiles](prds/PRD-AR-H3-skill-discovery-ranking-task-profiles.md)           |    P1    | ai-backend, backend | H2, A3, D2, E1, F1, F5                           | Precision-first cards, pinned skills, bundles, on-demand load.                               |
 | [ ]  | [H4 — Skill usage, staleness, and curation](prds/PRD-AR-H4-skill-usage-staleness-curation.md)                         |    P2    | backend, ai-backend | H2, H3, F1                                       | Explainable, recoverable lifecycle proposals; no silent mutation.                            |
 | [ ]  | [H5 — Post-run learning candidate pipeline](prds/PRD-AR-H5-post-run-learning-candidate-pipeline.md)                   |    P0    | ai-backend, backend | F1, G3, E1                                       | Wire bounded extraction jobs and evidence-backed proposal routing.                           |
-| [ ]  | [H6 — Durable memory store, review, and index](prds/PRD-AR-H6-durable-memory-store-review-index.md)                   |    P0    | backend, facade/UI  | A2, E1; H5 for auto proposals                    | Production Postgres memory, atomic review, ACL-safe index, controls.                         |
+| [ ]  | [H6 — Durable memory store, review, and index](prds/PRD-AR-H6-durable-memory-store-review-index.md)                   |    P0    | backend, desktop UI | A2, E1; H5 for auto proposals                    | Bundled-local-Postgres memory, atomic review, local-first index, and controls.               |
 | [ ]  | [H7 — Runtime memory recall and user profile](prds/PRD-AR-H7-runtime-memory-recall-and-profile.md)                    |    P1    | ai-backend, backend | H6, G3, F2, F5, E1                               | Bounded, explainable, correctable recall with explicit-profile precedence.                   |
 | [ ]  | [H8 — Evidence-backed skill distillation and backfill](prds/PRD-AR-H8-evidence-backed-skill-distillation.md)          |    P2    | ai-backend, backend | F1, G3, H1, H2, H5; H3 optional; H6 for deletion | Repeated verified trajectories become scanned, tested, unpublished drafts.                   |
 | [ ]  | [H9 — Governed historical learning backfill](prds/PRD-AR-H9-governed-historical-learning-backfill.md)                 |    P2    | backend, ai-backend | G3, H5, H6, I1, E1                               | Consented, resumable old-chat memory/routine proposals with dry-run cost and scope ceilings. |
@@ -425,7 +461,7 @@ Run in parallel:
 
 - F1 evaluation/telemetry contracts and baseline corpus.
 - H5 durable job/evidence wiring.
-- H6 Postgres memory adapter and adapter contract tests.
+- H6 bundled-local-Postgres memory adapter and desktop composition/contract tests.
 
 Do not enable learned context yet.
 
@@ -490,7 +526,7 @@ for the core runtime-quality launch.
 - F3 does not replace D1 MCP load/call or A3 classification.
 - F7 external function calls remain child operations through A3/A5; no
   arbitrary Python, ambient network, or shared credentials.
-- F8 reuses the shipped tenant/user descriptor cache and adds revision/session
+- F8 reuses the shipped local-profile descriptor cache and adds revision/session
   semantics; it does not introduce a second source of tool truth.
 - F11 produces C1 overlay patch sets and C3 stages; it cannot write the host,
   approve itself, or create a second commit protocol.
@@ -504,8 +540,9 @@ for the core runtime-quality launch.
   approved, applies only when the package product is a running MCP server.
 - H5/H9 create proposals only. H6 accepts memory, H8 drafts skills, and I1
   activates routines.
-- H6 backend Postgres is canonical. Do not revive an ai-backend product-memory
-  table or silently use in-memory production state.
+- H6 uses the already-bundled local backend Postgres store for canonical
+  reviewed memory records, with filesystem payload refs where appropriate. Do
+  not revive an ai-backend product-memory table or silently use in-memory state.
 - H7 recalls accepted memory as untrusted context; it cannot alter policy or
   capability grants.
 - F9 is in-run delegation quality; I3 is durable cross-run orchestration.
@@ -523,8 +560,8 @@ Every PRD inherits:
 - [ ] Owning service full suite and affected workspace typechecks/builds pass.
 - [ ] No sibling-service source imports; apps use facade only.
 - [ ] Pydantic/JSON/TypeScript/event contracts have golden fixture parity.
-- [ ] Verified identity derives tenant/user/project scope; cross-tenant
-      negative tests cover every route/job/cache.
+- [ ] The local desktop session derives the active user/device/workspace scope;
+      tests reject forged profile, workspace, and future-sync identities.
 - [ ] Idempotency keys bind stable identity and payload digest; conflicting
       reuse fails.
 - [ ] Content, secrets, physical paths, credentials, raw tool args, and
@@ -534,8 +571,8 @@ Every PRD inherits:
       BYOK/region/training settings, and closed purpose.
 - [ ] Cancellation, timeout, retry, process crash, duplicate delivery, stale
       policy, and partial external failure are tested.
-- [ ] Retention, deletion cascade, export, legal hold, and cache/index
-      invalidation are implemented—not only documented.
+- [ ] Retention, deletion cascade, export, local backup/restore, and
+      cache/index invalidation are implemented—not only documented.
 - [ ] Metrics/SLOs, alerts, repair/runbooks, feature flag, cohort rollout, and
       backout are present.
 - [ ] AR-F1 offline/shadow gates pass with no unresolved high-severity safety
@@ -549,7 +586,8 @@ Every PRD inherits:
       source-deleted states.
 - [ ] Keyboard/screen-reader coverage and design-system tokens.
 - [ ] Untrusted content never executes in a renderer.
-- [ ] Web and supervised desktop live smoke through facade.
+- [ ] Supervised desktop live smoke through the local facade; any future web
+      host has its own transport conformance suite.
 
 ### Learning definition of done
 
@@ -557,8 +595,8 @@ Every PRD inherits:
 - [ ] Candidate generation is visibly separate from acceptance/publication.
 - [ ] Reviewer sees scope, sensitivity, source state, model/prompt/policy
       revisions, diff, tests, and consequences.
-- [ ] User/admin can inspect, correct, reject, export, disable, and delete
-      learned state within policy.
+- [ ] The user can inspect, correct, reject, export, disable, and delete
+      learned state locally.
 - [ ] A memory/skill/routine cannot grant tools, connectors, roles, or broader
       scope.
 - [ ] Contradictions and source deletion are explicit; no silent merge.
@@ -574,9 +612,10 @@ For every durable or effectful workflow, the PRD/implementation must answer:
 5. What changes behavior or external state?
 6. Where is the decision and outcome audited/exported?
 7. How long are source, derived, cached, indexed, and audit records retained?
-8. How are user, project, tenant, and source deletions cascaded?
-9. How does legal hold alter deletion without reactivating content?
-10. How are authorization and policy rechecked at use/fire/commit time?
+8. How are user, device, workspace, and source deletions cascaded?
+9. How do export, local backup, restore, or future sync preserve the user's
+   deletion choice without reactivating content?
+10. How are local grants and policy rechecked at use/fire/commit time?
 
 ## Shared performance and quality gates
 
@@ -601,7 +640,8 @@ tail latency, serialization, and retries must be measured.
 - Land contracts and dark infrastructure before changing runtime selection.
 - Shadow mode may observe but must not double-call tools/models/effects unless
   explicitly budgeted and isolated in an evaluation environment.
-- Cohorts key on stable tenant/user policy; flag changes are audited.
+- Rollout cohorts key on local app version, device profile, and explicit user
+  opt-in; flag changes are locally auditable.
 - No rollout flag combination may execute both old and new effect paths.
 - Backout disables new production/selection while preserving durable records
   and review/repair access.
@@ -663,8 +703,8 @@ tail latency, serialization, and retries must be measured.
   extensibility surface.
 - Arbitrary local package execution remains out unless J1 is approved.
 - Automatic skill publication, memory acceptance, routine activation, and
-  organizational knowledge deletion remain prohibited.
+  learned-user-data deletion remain prohibited.
 - In-process third-party plugins in shared workers remain out of scope.
 - Semantic ranking may augment deterministic retrieval but never authorization.
-- Training/fine-tuning on customer trajectories requires a separate program.
+- Training/fine-tuning on user trajectories requires a separate opt-in program.
 - Image/audio expansion is optional J2 and does not block the core program.

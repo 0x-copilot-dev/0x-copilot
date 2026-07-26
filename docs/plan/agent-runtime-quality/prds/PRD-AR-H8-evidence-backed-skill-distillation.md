@@ -13,7 +13,7 @@ version but can never publish it.
 | Priority     | P2                                                                                                                       |
 | Owners       | `services/ai-backend` (trajectory analysis/drafting), `services/backend` (candidate/draft ownership), facade/UI (review) |
 | Depends on   | AR-F1, AR-G3, AR-H1, AR-H2, AR-H4 consolidation, AR-H5, AR-H6 deletion contract; optionally AR-H3 telemetry              |
-| Rollout flag | `SKILL_DISTILLATION_ENABLED`, tenant opt-in                                                                              |
+| Rollout flag | `SKILL_DISTILLATION_ENABLED`, explicit desktop-user opt-in                                                               |
 | UI impact    | Learned-procedure candidate queue, evidence viewer, draft diff/tests                                                     |
 
 ## Implementer brief
@@ -73,7 +73,7 @@ Launch gates:
 - Online skill ranking (AR-H3).
 - Consolidating or merging existing skills (AR-H4/H2).
 - Memory extraction or recall (AR-H5/H6/H7).
-- Fine-tuning on customer trajectories.
+- Fine-tuning on personal trajectories.
 
 ## Interfaces consumed
 
@@ -92,8 +92,7 @@ Launch gates:
 ```text
 SkillDistillationCandidate
   candidate_id
-  tenant_id
-  owner_user_id
+  local_account_id
   proposed_name
   trigger_summary
   message_evidence_refs[]
@@ -142,7 +141,7 @@ H5 `kind=procedure` is the only learned-candidate kind accepted here. H6 memory
 A candidate qualifies through either:
 
 - explicit user request to learn/save the completed workflow; or
-- repeated-pattern policy: at least a tenant-configured number of successful
+- repeated-pattern policy: at least a user-configured number of successful
   trajectories with compatible goals/capabilities and verified outcomes.
 
 Failures followed by a corrected successful path are valuable evidence.
@@ -164,7 +163,7 @@ approval evidence is opened through the owning exact-record resolvers with curre
 retention, revision/digest, and source-state checks. H8 never manufactures those records
 from transcript prose or asks G3 to return excluded tool data.
 
-Replace record IDs, URLs, filesystem paths, people, and tenant names with typed
+Replace record IDs, URLs, filesystem paths, people, and account-specific names with typed
 parameters unless they are intentionally constant and approved.
 
 ### 3. Clustering and contradictions
@@ -226,7 +225,7 @@ The reviewer sees:
 - intended capabilities and approval requirements;
 - full package diff;
 - scan and evaluation results;
-- detected tenant/user-specific content.
+- detected personal/account-specific content.
 
 Actions: edit draft, request regeneration, reject, split, request consolidation with an
 existing skill, or send to AR-H2 publish review. A consolidation request creates an H4
@@ -237,24 +236,28 @@ reasons remain local evaluation feedback.
 
 ### 7. Historical backfill
 
-Backfill is a separately authorized job with tenant/user/conversation filters,
+Backfill is a separately user-confirmed local job with project/conversation filters,
 time range, maximum conversations, cost cap, and dry-run estimate. It reads
 only retained, searchable AR-G3 message evidence plus separately authorized exact
 operation-trajectory records. Jobs are resumable, deduplicate against live candidates,
 and create proposals only. No global default backfill.
 
-## Persistence, retention, and deletion
+## Persistence, retention, deletion, and future sync
 
-Backend owns candidate/draft metadata and AR-H2 package versions. Large
-evidence/evaluation artifacts use A2 refs. ai-backend owns bounded job state
-and usage. Source deletion follows H6's normative matrix: exact copies are
+Backend owns candidate/draft metadata and AR-H2 package versions in its embedded local
+database. Large evidence/evaluation artifacts use content-addressed A2 filesystem refs.
+ai-backend owns bounded job/checkpoint state and usage in the desktop-default
+`FileRuntimeApiStore`. Source deletion follows H6's normative matrix: exact copies are
 deleted/redacted; pending candidates and unsupported unpublished drafts are withdrawn;
 partially supported drafts are marked incomplete and revalidated. A published
 trajectory-derived skill with insufficient remaining support moves through H2 to
-`review_required`, and H3 excludes it from automatic selection/load until an authorized
-reviewer reapproves or re-sources an exact revision. Source-deleted provenance retains
-only a non-content tombstone unless legal hold governs the protected source. Backfill
-checkpoints are deleted after completion/retention.
+`review_required`, and H3 excludes it from automatic selection/load until the user
+reapproves or re-sources an exact revision. Source-deleted provenance retains only a
+non-content tombstone. Backfill checkpoints are deleted after completion/retention.
+
+Future consumer sync may carry immutable draft/package revisions after user opt-in, but
+distillation, review, export, and deletion remain functional offline and no source chat
+is uploaded merely because sync exists.
 
 ## Authorization, privacy, and supply-chain security
 
@@ -263,7 +266,7 @@ checkpoints are deleted after completion/retention.
 - H5's immutable `EvidenceScopeCeiling` and source ACL digest are copied into the H1
   package provenance and H2 draft. Review can narrow them; any widening requires a new,
   authorized evidence basis and fresh H1/H2 review.
-- Shared/org publication requires the relevant AR-H2 release role.
+- Project publication requires the same explicit AR-H2 scope review as manual skills.
 - Redaction occurs before synthesis/evaluation calls.
 - The entire generated package—not only support files—obeys AR-H1
   `agent_generated` path/type/size/secret/license/executable scanning.
@@ -277,7 +280,8 @@ checkpoints are deleted after completion/retention.
 - Live runs enqueue only AR-H5 candidates; distillation is asynchronous.
 - Cluster lookup is indexed; no unbounded all-pairs trajectory comparison.
 - Each job has source/run/token/output/tool-schema/cost limits.
-- Auxiliary calls use an approved task model and hard daily tenant budgets.
+- Auxiliary calls use the user's approved local/BYOK model and hard daily per-device
+  budgets.
 - Backfill exposes estimate and progress; default concurrency is low and
   preemptible behind interactive workloads.
 - Target: draft available within five minutes for an explicit request, absent
@@ -304,12 +308,12 @@ skill, and proposed skill.
 
 ## Rollout and backout
 
-1. Explicit user-request candidates only; internal tenants.
+1. Explicit user-request candidates only; opt-in desktop dogfood.
 2. Generate evidence/normalization preview without model synthesis.
 3. Enable draft synthesis and deterministic validation.
 4. Enable AR-F1 held-out evaluation and publish handoff.
 5. Enable repeated-pattern qualification.
-6. Offer bounded historical backfill behind explicit admin/user action.
+6. Offer bounded historical backfill behind explicit user action.
 
 Backout stops new jobs and cancels backfill. Existing unpublished drafts remain
 reviewable/exportable or may be withdrawn. Published versions are unchanged.
@@ -332,7 +336,7 @@ reviewable/exportable or may be withdrawn. Published versions are unchanged.
 - Successful, failed-then-corrected, and unverified trajectories.
 - Secret/PII/path/record-ID generalization.
 - Conflicting workflows and conditional split.
-- Cross-tenant/source-scope intersection.
+- Cross-account/source-scope intersection and renderer identity forgery.
 - Malformed/oversize/injected model output.
 - Whole generated-package path/type/size/secret/license/executable scan with exact
   artifact/package/draft digest binding.
@@ -359,13 +363,13 @@ reviewable/exportable or may be withdrawn. Published versions are unchanged.
 - A chat summary is not a skill.
 - One unverified success is not evidence of a reusable procedure unless the
   user explicitly asks for a draft.
-- Never preserve secrets or tenant-specific identifiers as procedure constants.
+- Never preserve secrets or account-specific identifiers as procedure constants.
 - Never turn a skill into executable authority.
-- Never train or publish automatically from customer trajectories.
+- Never train or publish automatically from personal trajectories.
 
 ## Open decisions
 
 1. Minimum repeated-support count by task family.
 2. Whether reviewer-authored steps without trajectory evidence are allowed and
    how they are labeled.
-3. Retention period for unpublished distillation evidence maps.
+3. User-selectable retention period for unpublished distillation evidence maps.

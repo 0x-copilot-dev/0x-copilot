@@ -1,8 +1,8 @@
 # PRD-AR-H2 — Skill draft, review, publish, and rollback
 
 **Goal.** Replace mutable, immediately active skill edits with immutable revisions and
-an explicit draft→review→publish workflow, so users and admins can inspect exact
-content/tool permissions, publish atomically, and roll back without losing history.
+an explicit draft→review→publish workflow, so a user can inspect exact content/tool
+permissions, publish atomically, and roll back without losing history.
 
 | Field           | Value                                                                                                                                      |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -53,11 +53,13 @@ Rollback must be atomic and evidence-preserving.
 
 ## Current implementation and predecessor contracts
 
-- **[shipped]** Stable skill ids/names, user/org scope, preloaded/user source types, enable/disable,
-  audit events, and internal card/bundle routes already exist.
+- **[shipped]** Stable skill ids/names, account scope, preloaded/user source types,
+  enable/disable, local audit events, and internal card/bundle routes already exist.
 - **[shipped]** Runtime loads compact cards then full markdown on demand.
 - **[shipped]** Manifest parsing and allowed-tool subset checks already exist.
-- **[shipped]** Facade stamps verified identity, and backend stores enforce tenant scope.
+- **[shipped]** The packaged desktop supervises the facade/backend locally, stamps
+  verified local-account identity, and persists current skills in its embedded
+  PostgreSQL product database.
 - **[depends on]** H1 provides immutable package bytes and scan reports for
   package-backed imports/generated drafts.
 - **[depends on]** Fixed artifact/rendering and E1 audit/lifecycle patterns are
@@ -85,7 +87,7 @@ Rollback must be atomic and evidence-preserving.
 
 - External package scanning (H1), skill ranking (H3), or automatic skill learning.
 - Executing a skill during review.
-- Organization-wide approval governance beyond the role/policy hooks defined here.
+- Multi-reviewer governance.
 - Editing preloaded/system skill bodies; they remain release-managed.
 - Mutable rewrite or deletion of published revision history.
 
@@ -94,9 +96,9 @@ Rollback must be atomic and evidence-preserving.
 - Existing skill identity/scope/manifest/audit contracts.
 - H1 `ready_for_review` package and findings, conditionally required only for imported
   or `agent_generated` package-backed drafts.
-- Existing auth roles/scopes and facade identity stamping.
+- Existing local-account session and facade identity stamping.
 - Runtime private card/bundle HTTP seam.
-- E1 retention, legal hold, audit export, and repair requirements.
+- E1 local retention, export, deletion, audit, and repair requirements.
 
 ## Interfaces exposed
 
@@ -104,7 +106,7 @@ Rollback must be atomic and evidence-preserving.
 
 ```text
 skills
-  skill_id, org_id, owner_user_id, stable_name, display_name
+  skill_id, local_account_id, stable_name, display_name
   scope, source_type
   lifecycle_state: draft_only | active | disabled | archived | review_required |
                    deleted
@@ -181,7 +183,7 @@ SkillDraftCreateRequest
   package_import_id?: string
   markdown?: string
   display_name?: string
-  scope?: user | org
+  scope?: personal | project
   idempotency_key: string
 
 SkillPublishRequest
@@ -293,13 +295,14 @@ instructions.
 
 ### D4. Authorization and decision policy
 
-- User-scoped draft: owner may review/publish subject to tenant policy.
-- Org-scoped draft: requires an organization skill-admin role and, where configured,
-  a second distinct approver.
-- A user cannot approve their own org-scoped agent/import draft when separation of
-  duties is enabled.
-- Added tools are checked against tenant catalog, caller authority, H3 task-profile
-  policy, and runtime compatibility.
+- Personal draft: the signed-in owner may review and publish after explicit confirmation.
+- Project draft: the owner may publish it into a local project after an explicit scope
+  preview; this does not share it with another account or device.
+- Imported/agent-generated drafts always require a deliberate review action even on a
+  single-user machine; self-review is a UX safety gate, not multi-reviewer separation of
+  duties.
+- Added tools are checked against the local capability catalog, current user grants,
+  H3 task-profile policy, and runtime compatibility.
 - Imported/generated evidence scope may be narrowed but cannot be widened beyond the H1
   package's immutable `scope_ceiling`; broader publication requires a new authorized
   evidence basis, new H1 package/report, and fresh review.
@@ -326,8 +329,8 @@ Rollback is a publication action targeting a prior immutable revision. It requir
 same authorization and exact expected-active compare-and-set as publish. It does not
 delete or mutate the bad revision. The publication chain records from/to and reason ref.
 
-An H1-revoked source may be selected for rollback only if tenant policy explicitly
-allows an emergency exception; default is deny.
+An H1-revoked source may not be selected for rollback by default. A developer-mode
+exception must be local, explicit, time-bounded, and visibly disable effectful tools.
 
 ### D7. Enable/disable
 
@@ -379,7 +382,7 @@ Current create/update endpoints remain compatibility adapters during rollout:
 - update makes a draft; a synthetic decision is permitted only for an explicitly
   allowlisted, dated migration of pre-existing manually authored user-scoped rows;
 - synthetic decisions are forbidden for H1 imports, `agent_generated` or H8 drafts,
-  org-scoped publication, newly created post-migration content, and any change that
+  project-scoped publication, newly created post-migration content, and any change that
   widens scope or allowed tools;
 - each permitted synthetic decision records migration batch, original row digest,
   actor `system_migration`, policy snapshot, and sunset date; the route is removed at
@@ -387,24 +390,32 @@ Current create/update endpoints remain compatibility adapters during rollout:
 
 No mode may update the old body and revision tables independently.
 
-## Persistence, retention, deletion, and legal hold
+## Persistence, retention, deletion, backup, and future sync
 
 - Published revisions, publication records, and review decisions are append-only.
-- Draft snapshots may be compacted after abandonment only when no decision/audit/hold
-  references them; final candidate digest/metadata remains.
-- User deletion removes private draft bodies and inactive user-scoped skills subject to
-  hold; published org skills require ownership transfer/admin action.
+- Draft snapshots may be compacted after abandonment only when no decision, audit, or
+  active revision references them; final candidate digest/metadata remains.
+- Deleting the local account removes private drafts and inactive personal/project
+  skills after a user-visible export/delete confirmation.
 - Skill delete becomes soft-delete/tombstone plus runtime disable. Physical collection
-  waits for retention, ref graph, audit, package, run snapshot, and hold checks.
+  waits for the chosen undo window and ref-graph, audit, package, and run-snapshot
+  checks.
 - Run receipts retain skill/revision/digest attribution but not full markdown.
 - Package/asset refs are reference-counted across revisions and collected only when
   unreachable.
+- Canonical lifecycle rows remain in the existing embedded PostgreSQL backend database;
+  immutable markdown/assets are content-addressed filesystem blobs below OS app data.
+  This reuses the shipped desktop backup/migration boundary rather than introducing a
+  second SQLite database solely for skills.
+- A future consumer sync adapter may replicate immutable revisions and publication
+  events through an outbox. Local authoring/publishing must remain fully usable offline,
+  and sync conflict resolution creates a new draft instead of rewriting history.
 
 ## Authorization, privacy, supply chain, and security
 
-- Verified identity determines tenant/user; payload scope cannot broaden it.
-- Every read/mutation returns 404 for foreign ids except explicit authorized admin
-  routes.
+- Verified local-session identity determines the account; renderer payload scope cannot
+  broaden it.
+- Every read/mutation returns 404 for ids owned by another local account.
 - Publication rechecks H1 scan/revocation and tool availability.
 - Markdown/assets are untrusted and never rendered as executable HTML/code.
 - No skill can grant tools; `allowed_tools` only narrows a separately authorized
@@ -419,7 +430,7 @@ No mode may update the old body and revision tables independently.
 - Edit validation p95 below 300 ms for a normal text-only skill.
 - Publish/rollback transaction p95 below 500 ms.
 - Revision list is keyset-paginated, default 25/max 100.
-- Diffs above 1 MiB total input use bounded server-side summary plus downloadable exact
+- Diffs above 1 MiB total input use a bounded local-service summary plus downloadable exact
   revisions; no unbounded JSON/SSE.
 - Runtime card listing remains compact and index-backed; no revision-body join.
 
@@ -450,7 +461,7 @@ No mode may update the old body and revision tables independently.
 - `skill_repair_findings_total{class}`
 - `skill_draft_age_seconds{status}`
 
-No skill/user/org/name/body/id appears in metric labels.
+No skill/user/name/body/id appears in metric labels.
 
 ## Rollout and backout
 
@@ -474,7 +485,7 @@ history.
 4. Implement atomic publish/rollback/enable/disable and outbox.
 5. Add routes/facade/types and shared review UI.
 6. Pin runtime cards/bundles per run and add generation invalidation.
-7. Add lifecycle, audit export, repair, metrics, rollout, and legacy retirement.
+7. Add lifecycle, local export, repair, metrics, rollout, and legacy retirement.
 
 ## Test plan
 
@@ -486,8 +497,8 @@ history.
 
 ### Authorization and supply chain
 
-- Owner/org-admin/separation-of-duties, self-approval policy, cross-tenant ids, scope
-  widening, tool widening, package revocation after approval.
+- Local-account ownership, renderer identity forgery, second-account ids, explicit
+  self-review, scope widening, tool widening, and package revocation after approval.
 - Untrusted markdown/assets cannot execute or change policy.
 
 ### Publication/recovery
@@ -495,7 +506,7 @@ history.
 - Exact digest/decision binding, expected-active drift, duplicate commands, crash before
   and after commit, outbox retry, cache-generation lag, repair.
 - Publish vs publish, publish vs rollback, disable vs load concurrency.
-- Imported/generated/org-scoped/new content cannot use synthetic publication; only a
+- Imported/generated/project-scoped/new content cannot use synthetic publication; only a
   dated allowlisted legacy manual-user migration fixture can.
 
 ### Runtime and lifecycle
@@ -504,8 +515,8 @@ history.
   revision; disable behavior; rollback.
 - H4 lifecycle commands fail on stale revision/digest/row-version/policy; H3 excludes
   disabled, archived, review-required, and deleted rows.
-- Migration preserves behavior; account/org deletion, retention, hold, asset/package
-  reference collection, receipt attribution.
+- Migration preserves behavior; local-account deletion, undo-window expiry,
+  asset/package reference collection, backup/restore, and receipt attribution.
 
 ### UI/accessibility
 
@@ -519,7 +530,8 @@ history.
 - [ ] Publish and rollback are atomic, idempotent, audited, and digest-bound.
 - [ ] Runs pin the active revision they started with.
 - [ ] Existing skills migrate without behavior or identity loss.
-- [ ] Deletion, hold, repair, concurrency, authorization, and UI launch suites pass.
+- [ ] Deletion, export/restore, repair, concurrency, authorization, and UI launch suites
+      pass.
 - [ ] Legacy mutable/auto-active paths are retired for enabled cohorts.
 
 ## Guardrails
@@ -532,5 +544,5 @@ history.
 
 ## Open decisions
 
-- Default organization-scope separation-of-duties policy.
-- Retention duration for abandoned draft bodies when no legal hold applies.
+- Default undo window for deleted skills and abandoned draft bodies.
+- Whether project-scoped skills participate in future account sync at initial launch.

@@ -28,11 +28,21 @@ Read:
 
 Browser screenshot capture already belongs to D4. Artifact storage and rendering already belong to A1/A2 and B1/B2. This PRD adds capability metadata, routing, media normalization, execution envelopes, and quality evaluation; it must not create a second blob store, screenshot mechanism, renderer system, or unrestricted media tool.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 Media tasks differ substantially: inspect an image, extract text from a scan, transcribe audio, synthesize speech, generate an image, sample a video, transform an asset, or render a final result. Providers support different modalities, limits, costs, regions, safety controls, latency, and output guarantees. Exposing all provider tools directly increases prompt tokens and wrong-tool calls, while ad hoc wrappers produce inconsistent artifact handling, privacy enforcement, and quality measurement.
 
-The runtime needs a governed registry of media capabilities and a deterministic router that selects a small set of eligible options from task intent, media metadata, tenant policy, model compatibility, cost, and quality history.
+The runtime needs a governed registry of media capabilities and a deterministic router that selects a small set of eligible options from task intent, media metadata, user policy, model compatibility, cost, and quality history.
 
 ## Current state and strengths to preserve
 
@@ -56,7 +66,7 @@ The runtime needs a governed registry of media capabilities and a deterministic 
 ## Scope
 
 - Image understanding, OCR, image generation/editing, transcription, speech synthesis, audio understanding, video sampling/understanding, and safe media transformation
-- Capability cards, provider adapters, tenant enablement, routing, fallback, and health
+- Capability cards, provider adapters, user enablement, routing, fallback, and health
 - Media sniffing, validation, normalization, derivatives, and artifact linkage
 - Execution jobs, progress events, cancellation, budgets, safety, provenance, and evaluation
 - Prompt-facing compact media handles and result manifests
@@ -77,7 +87,7 @@ The runtime needs a governed registry of media capabilities and a deterministic 
 - B1/B2 artifact authoring, render plans, renderer selection, and edit handoff
 - D3 sandbox jobs for deterministic media inspection and transformation
 - D4 browser screenshot artifact and provenance contracts
-- F3 tenant-policy-aware capability discovery and compact prompt projection
+- F3 local-profile-policy-aware capability discovery and compact prompt projection
 - Backend provider enablement and vault-backed BYOK references
 - Existing AI-backend run events, cancellation, budgets, and artifact references
 
@@ -141,7 +151,7 @@ MediaAssetDescriptor
 
 MediaJob
   media_job_id
-  tenant_id
+  profile_id
   actor_id
   operation
   capability_id
@@ -193,9 +203,9 @@ The eligibility filter removes capabilities that violate MIME, dimensions, durat
 
 ### 4. Routing and prompt optimization
 
-The router ranks the remaining small set using task fit, validated quality, predicted cost, latency, reliability, and tenant preference. It returns one primary and at most two policy-valid fallbacks plus concise reason codes.
+The router ranks the remaining small set using task fit, validated quality, predicted cost, latency, reliability, and user preference. It returns one primary and at most two policy-valid fallbacks plus concise reason codes.
 
-The model sees normalized capability families or the selected operation schema, not every provider tool. Registry lookup is cached by tenant policy revision, registry revision, operation, and media shape. Secret/key changes invalidate eligibility without exposing the key.
+The model sees normalized capability families or the selected operation schema, not every provider tool. Registry lookup is cached by user policy revision, registry revision, operation, and media shape. Secret/key changes invalidate eligibility without exposing the key.
 
 ### 5. Understanding and extraction
 
@@ -222,7 +232,7 @@ Segment results retain timecode linkage and are merged by a deterministic adapte
 
 ### 8. Safety, privacy, and accessibility
 
-Policy can require content classification before external processing or generation. Routing respects tenant bans, user consent, age restrictions, biometric restrictions, copyright policy, data residency, and provider retention settings.
+Policy can require content classification before external processing or generation. Routing respects local user controls, consent, age restrictions, biometric restrictions, copyright policy, and provider retention settings.
 
 Generated media records safety decisions and disclosure metadata. User-visible outputs include alt text or transcript/caption artifacts when policy requires them. Metadata stripping must not remove provenance needed for audit.
 
@@ -244,19 +254,19 @@ Collect privacy-safe automated and human signals:
 - latency, cost, safety false-positive/negative review; and
 - provider/model regression by capability version.
 
-Evaluation data is separate from customer content unless explicit policy allows its use.
+Evaluation data is separate from user content unless explicit opt-in allows its use.
 
 ## Ownership and service boundaries
 
-| Responsibility                                      | Owner                       |
-| --------------------------------------------------- | --------------------------- |
-| Capability registry, routing, adapters, media jobs  | AI backend                  |
-| Provider enablement, BYOK references, tenant policy | Backend                     |
-| Artifact manifests, bytes, provenance               | A1/A2 owners                |
-| Deterministic isolated transformation               | D3 owner                    |
-| Browser screenshots                                 | D4 owner                    |
-| Render plans and presentation                       | B1/B2 and surface renderers |
-| Public API aggregation                              | Backend facade              |
+| Responsibility                                     | Owner                       |
+| -------------------------------------------------- | --------------------------- |
+| Capability registry, routing, adapters, media jobs | AI backend                  |
+| Provider enablement, BYOK references, user policy  | Backend                     |
+| Artifact manifests, bytes, provenance              | A1/A2 owners                |
+| Deterministic isolated transformation              | D3 owner                    |
+| Browser screenshots                                | D4 owner                    |
+| Render plans and presentation                      | B1/B2 and surface renderers |
+| Public API aggregation                             | Backend facade              |
 
 No service imports a sibling deployment's source. Provider keys are resolved through authenticated internal contracts and never persisted in media jobs.
 
@@ -266,12 +276,14 @@ No service imports a sibling deployment's source. Provider keys are resolved thr
 - Media jobs store references, digests, usage, safety, and provenance; bytes remain in A2.
 - Intermediate derivatives have explicit parent linkage and shorter default retention.
 - Delete traverses originals, eligible derivatives, OCR/transcript artifacts, embeddings, job rows, caches, and render references.
-- Legal hold preserves required artifacts and provenance while preventing further processing when policy requires.
-- Provider-side retention behavior is recorded per execution and exposed to administrators.
+- Local backup/restore policy preserves selected artifacts and provenance without
+  re-enabling external processing after a user delete.
+- Provider-side retention behavior is recorded per execution and exposed to users.
 
 ## Authentication, authorization, security, and audit
 
-- Derive tenant/actor from verified context and authorize every artifact read.
+- Derive the local profile/actor from verified context and authorize every
+  artifact read.
 - Resolve provider keys just in time and redact them from jobs, events, traces, and errors.
 - Validate file structures in isolated processes; codec/parser crashes cannot compromise the runtime.
 - Apply SSRF controls to remote imports and never let a model provide backend-fetchable private addresses.
@@ -293,7 +305,7 @@ Provider processing latency has capability-specific SLOs. The job contract expos
 
 ## Failure, idempotency, and recovery
 
-- Job creation is idempotent by tenant, operation, input digests, normalized parameters, and caller key where reuse is safe.
+- Job creation is idempotent by profile, operation, input digests, normalized parameters, and caller key where reuse is safe.
 - Non-deterministic generation does not reuse outputs unless the caller explicitly requests the prior job.
 - Async claims use leases and checkpointed provider request IDs.
 - Partial outputs are quarantined until manifest validation and artifact commit finish.
@@ -323,7 +335,8 @@ Release gates:
 - raw bytes and secrets do not appear in prompts, logs, or ordinary events;
 - media-embedded instructions cannot alter harness policy;
 - provider fallback stays within budget and policy;
-- malformed-media, decompression, parser-isolation, deletion, and tenant-isolation tests pass; and
+- malformed-media, decompression, parser-isolation, deletion, and
+  local-profile-isolation tests pass; and
 - routing improves tool-schema prompt size without reducing benchmark quality.
 
 ## Rollout and backout
@@ -333,7 +346,7 @@ Release gates:
 3. Add transcription and deterministic transformations.
 4. Add image generation/editing with artifact provenance and safety review.
 5. Add bounded video sampling/understanding.
-6. Expand providers and tenant policies after quality and privacy gates.
+6. Expand providers and local-user policy choices after quality and privacy gates.
 
 Backout disables a capability version or provider in the registry, drains/cancels jobs, preserves artifacts and provenance, and routes only to previously approved alternatives. D4 screenshots and existing artifact rendering continue independently.
 
@@ -357,7 +370,8 @@ Backout disables a capability version or provider in the registry, drains/cancel
 - Quality: OCR, transcription, grounding, generation adherence, accessibility
 - Governance: disabled provider, missing key, residency, retention, safety policy
 - Fault injection: provider timeout, lost response, artifact commit failure, worker crash
-- Retention: derivative cascade, user deletion, legal hold, provider-retention record
+- Retention: derivative cascade, user deletion, local backup/restore policy,
+  and provider-retention record
 - Performance: large registry, long media segmentation, bounded prompt payload
 
 ## Definition of done
@@ -374,14 +388,14 @@ Backout disables a capability version or provider in the registry, drains/cancel
 - Media is untrusted content, never harness policy.
 - Capability metadata is code-reviewed configuration, not model-authored tool schema.
 - No raw secrets, unrestricted URLs, host file paths, or unbounded binary prompt content.
-- No provider outside tenant policy or declared residency/retention limits.
+- No provider outside user policy or declared residency/retention limits.
 - No silent fallback, hidden generation spend, provenance loss, or unsafe partial artifact.
 - Unsupported or unhealthy capability versions fail closed and remain explainable.
 
 ## Open decisions
 
 1. Which initial providers and local processors satisfy each operation.
-2. Which quality signals may be learned from customer usage under explicit policy.
+2. Which quality signals may be learned from user usage under explicit opt-in.
 3. Whether speech synthesis and image generation require per-job user confirmation.
 4. Which provenance and disclosure standards are required for generated media.
 5. Maximum default duration, pages, pixels, frames, variants, and provider fallback count.

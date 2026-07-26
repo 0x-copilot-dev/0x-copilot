@@ -1,7 +1,7 @@
 # PRD-AR-H9 — Governed historical learning backfill
 
-**Goal:** Let an authorized user or tenant run a bounded, consented, resumable
-learning pass over selected retained conversations so old chats can propose memory
+**Goal:** Let a user run a bounded, consented, resumable local learning pass over
+selected retained conversations so old chats can propose memory
 facts, preferences, project conventions, and routines without silently changing
 memory, publishing skills, or activating automation.
 
@@ -13,10 +13,10 @@ memory, publishing skills, or activating automation.
 | Priority                | P2                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | Wave                    | H — skills, memory, and learning                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Primary owners          | Backend learning-job/proposal control plane; AI-backend historical evidence and extraction worker                                                                                                                                                                                                                                                                                                                                       |
-| Supporting owners       | Facade/shared review UI, privacy/compliance, F1 evaluation owners                                                                                                                                                                                                                                                                                                                                                                       |
+| Supporting owners       | Facade/shared review UI, privacy controls, F1 evaluation owners                                                                                                                                                                                                                                                                                                                                                                         |
 | Depends on              | [G3 conversation evidence](./PRD-AR-G3-conversation-history-search-evidence-recall.md), [H5 post-run learning candidates](./PRD-AR-H5-post-run-learning-candidate-pipeline.md), [H6 durable memory](./PRD-AR-H6-durable-memory-store-review-index.md), [I1 governed routines](./PRD-AR-I1-agent-proposed-routines-automation.md), [E1 accountability lifecycle](../../generative-surfaces-v2-1/prds/PRD-E1-accountability-lifecycle.md) |
 | Related, not owned      | [H8 skill distillation/backfill](./PRD-AR-H8-evidence-backed-skill-distillation.md)                                                                                                                                                                                                                                                                                                                                                     |
-| Rollout flag            | `HISTORICAL_LEARNING_BACKFILL_ENABLED`, tenant opt-in and user control                                                                                                                                                                                                                                                                                                                                                                  |
+| Rollout flag            | `HISTORICAL_LEARNING_BACKFILL_ENABLED`, explicit desktop-user opt-in                                                                                                                                                                                                                                                                                                                                                                    |
 | Primary success measure | Selected historical conversations yield reviewable, evidence-linked proposals within the approved cost/scope, with zero automatic acceptance or activation                                                                                                                                                                                                                                                                              |
 
 ## Implementer brief
@@ -58,13 +58,13 @@ backfill reusable skills, but it intentionally excludes memory and routines. Reu
 H5 by simply looping over every historical conversation would be unsafe and expensive:
 
 - users may not have consented to learning when the chat was created;
-- private, ephemeral, deleted, expired, or legally restricted chats may be ineligible;
+- private, ephemeral, deleted, expired, or user-excluded chats may be ineligible;
 - message text alone cannot prove that a procedure or external action succeeded;
 - old connectors, identities, policy, or project scopes may no longer be valid;
 - repeated extraction can create duplicate or contradictory proposals;
 - a long job must survive crashes, pause promptly, and honor deletion;
 - estimated model cost must be visible before work starts; and
-- organization administrators must not gain implicit access to private user history.
+- another signed-in account on the device must not gain access to private history.
 
 The product needs an explicit backfill lifecycle: estimate first, confirm exact scope
 and budget, enumerate only authorized retained sources, extract with H5, checkpoint,
@@ -80,8 +80,9 @@ deduplicate against live learning, and route proposals to existing review queues
 - H6 has owner-visible memory proposal decisions and correction/deletion controls.
 - I1 defines explicit review before a routine can become active.
 - H8 defines a separate, consented historical skill-distillation path.
-- Queued workers, durable events, monotonic run sequences, and PostgreSQL adapters
-  provide reusable recovery patterns.
+- Queued workers, durable events, monotonic run sequences, ai-backend's default
+  file-native desktop store, and the backend's embedded local PostgreSQL database
+  provide reusable recovery patterns without a cloud dependency.
 
 There is no historical-learning job aggregate, metadata-only estimate, source cursor,
 cross-live/backfill dedupe boundary, or authorized run-trajectory evidence resolver
@@ -110,7 +111,7 @@ composed in production.
 
 ### Launch gates
 
-- Zero source processed outside the confirmed tenant/user/project/conversation/time
+- Zero source processed outside the confirmed local-account/project/conversation/time
   scope.
 - Zero private/ephemeral/deleted/expired source processed.
 - Zero proposal accepted as memory or activated as a routine automatically.
@@ -121,13 +122,13 @@ composed in production.
   is an explicit user-authored routine request.
 - Cancel/pause/consent withdrawal prevents admission of a new model call within 10
   seconds under normal worker health.
-- Cross-tenant and unauthorized-private-history tests have zero leakage.
+- Cross-account and unauthorized-private-history tests have zero leakage.
 
 ## Scope
 
 - Metadata-only historical-learning estimate
 - User-confirmed backfill jobs and immutable job revisions
-- Tenant/user/project/conversation/time filters
+- Local-account/project/conversation/time filters
 - Candidate-kind filters for fact, preference, project convention, and routine;
   routines carry H5's typed manual/schedule/event trigger hint/spec
 - Indexed eligible-source enumeration and stable cursors
@@ -136,7 +137,7 @@ composed in production.
 - H5 extraction reuse, batching, quotas, dedupe, and proposal routing
 - Durable claim, heartbeat, checkpoint, pause, resume, cancel, and completion
 - Progress, cost, skipped-source, and proposal-review UI
-- Deletion, consent withdrawal, legal hold, export, audit, rollout, and backout
+- Deletion, consent withdrawal, local export, audit, rollout, and backout
 
 ## Non-goals
 
@@ -144,11 +145,11 @@ composed in production.
 - Searching prior conversations for an immediate answer; G3 owns that
 - Runtime memory recall; H7 owns that
 - Accepting memory, publishing a skill, or activating a routine
-- Training or fine-tuning on historical customer content
+- Training or fine-tuning on personal historical content
 - Inferring sensitive traits, identity, health, politics, biometrics, credentials, or
   secrets
-- Reprocessing all tenant history by default
-- Reading content solely because an administrator can manage the tenant
+- Reprocessing all local history by default
+- Reading content belonging to another signed-in account on the device
 - Reconstructing hidden chain-of-thought or provider-private reasoning
 - Reviving deleted, expired, or source-revoked content from logs, embeddings, or caches
 - Treating a historical connector permission as current authority
@@ -163,8 +164,8 @@ composed in production.
   key, usage attribution, and backend proposal-ingestion contract.
 - H6 memory proposal inbox and accepted-memory duplicate/contradiction search.
 - I1 typed routine proposal intake and review.
-- Backend tenant/user learning consent, policy, quotas, and identity.
-- E1 retention, deletion, export, legal hold, audit, and outbox behavior.
+- Backend local-account learning consent, user preferences, quotas, and identity.
+- E1 retention, deletion, local export, audit, and outbox behavior.
 - F1 evaluation records for extractor/backfill quality.
 
 ## Interfaces exposed
@@ -187,7 +188,7 @@ POST   /v1/learning/evidence/run-trajectories/open
 ```
 
 Creating a backfill requires an unexpired estimate plus an exact confirmation digest.
-The facade derives actor/tenant identity from the verified session. It never accepts
+The facade derives the local account from the verified session. It never accepts
 trusted identity, cost used, proposal count, or consent status from request bodies.
 
 ### Internal backend APIs consumed by AI-backend workers
@@ -242,7 +243,7 @@ paths, connector payloads, and model prompts.
 
 ```text
 HistoricalLearningScope
-  owner_user_id
+  local_account_id
   project_ids[]
   conversation_ids[]
   created_after?
@@ -254,8 +255,7 @@ HistoricalLearningScope
 
 HistoricalLearningEstimate
   estimate_id
-  tenant_id
-  owner_user_id
+  local_account_id
   scope
   policy_revision
   source_watermark
@@ -278,8 +278,7 @@ HistoricalLearningEstimate
 
 HistoricalLearningBackfill
   backfill_id
-  tenant_id
-  owner_user_id
+  local_account_id
   estimate_id
   confirmation_digest
   scope
@@ -320,7 +319,7 @@ HistoricalLearningSourceUnit
 
 RunTrajectoryRef
   opaque_ref
-  tenant_scope_digest
+  account_scope_digest
   user_visibility_digest
   project_id?
   conversation_id
@@ -400,18 +399,17 @@ pricing, model route, or material source-count drift requires a new estimate.
 
 Backfill requires:
 
-- tenant feature enablement;
+- desktop feature enablement;
 - the source owner's affirmative learning setting;
 - explicit confirmation of scope, candidate kinds, provider, and maximum cost;
 - an authorized project/conversation relationship;
 - no pending deletion or learning-processing restriction; and
 - policy permission for each source class.
 
-A user can backfill their own eligible history. Organization-wide backfill is not
-equivalent to administrator access: it requires a separately approved tenant policy,
-eligible users' consent where required, and source-level visibility checks. Private
-user conversations remain excluded unless the owner explicitly includes them under a
-reviewed policy.
+A user can backfill only their own eligible local history. Private conversations remain
+excluded unless the user explicitly includes them in the confirmed scope. Switching
+accounts, signing out, or beginning local-data deletion pauses the job and invalidates
+its next admission check.
 
 Confirmation creates a signed/digested snapshot. UI text cannot imply that proposals
 will be saved automatically.
@@ -424,7 +422,7 @@ The enumerator pages in deterministic order:
 (conversation_updated_at, conversation_id, run_terminal_sequence)
 ```
 
-Required indexes cover tenant/user/project, retention state, conversation time,
+Required indexes cover local account/project, retention state, conversation time,
 archived/private/ephemeral classification, run terminal state, and terminal sequence.
 The cursor is opaque and bound to scope/watermark/policy.
 
@@ -445,7 +443,7 @@ An ineligible item is counted with a safe reason code and skipped without a mode
 
 Statements attributed to the user or assistant use G3 evidence refs that bind:
 
-- tenant/user visibility;
+- local-account/project visibility;
 - conversation/message ID;
 - normalized exact span;
 - message/content revision and digest;
@@ -518,7 +516,7 @@ Use H5's canonical candidate dedupe key across:
 Source-unit idempotency:
 
 ```text
-(tenant_id, conversation_id, conversation_revision,
+(local_account_id, conversation_id, conversation_revision,
  run_id?, run_terminal_sequence?, extractor_policy_revision,
  extractor_prompt_revision, candidate_kind_set_digest)
 ```
@@ -559,9 +557,15 @@ Backend jobs are claimed by AI-backend workers with leases. A checkpoint contain
 - current policy/consent observation.
 
 Workers process small batches and checkpoint between batches. Concurrency is bounded per
-tenant/user/provider and yields to interactive runs. A cost reservation must fit the
+device/account/provider and yields to interactive runs. A cost reservation must fit the
 remaining cap before each model call. Price changes that would exceed the cap pause the
 job for a new estimate/confirmation.
+
+Electron power/suspend/app-lifecycle signals are part of admission: by default cloud
+model backfill pauses on battery saver, thermal pressure, network loss, system suspend,
+or app quit; it resumes only after the user preference and current consent are
+revalidated. Local-model extraction may continue on battery only when the user enables
+it. No background daemon is required while the desktop app is closed.
 
 `pause` stops new batches and lets the current bounded call finish or cancel safely.
 `cancel` stops new work, requests cancellation of current inference, and leaves already
@@ -600,13 +604,15 @@ resolution and worker execution records. The AI-backend worker pulls authenticat
 backend internal APIs; backend does not import or call AI-backend source code. Apps call
 the facade only.
 
-## Persistence, retention, and deletion
+## Persistence, retention, deletion, backup, and future sync
 
-- Backend PostgreSQL stores estimates, job revisions/state, confirmation/consent refs,
+- The backend's already bundled local PostgreSQL database stores estimates, job
+  revisions/state, confirmation/consent refs,
   filters, watermarks, leases, checkpoints, aggregate usage, safe counts, proposal
   links, and audit linkage.
 - AI-backend stores source-unit execution state only as needed for idempotency,
-  trajectory-ref issuance, usage reconciliation, and run lineage.
+  trajectory-ref issuance, usage reconciliation, and run lineage in its desktop-default
+  `FileRuntimeApiStore` below `<userData>/agent-data/v1`.
 - Message and trajectory bodies remain in existing conversation/run/evidence stores.
   H9 persists refs/digests, not copied transcripts or operation payloads.
 - Estimate metadata expires quickly if no job is confirmed.
@@ -619,18 +625,21 @@ the facade only.
 - Accepted memory/routines follow H6/I1 correction/deletion rules; source deletion
   cannot retain forbidden raw source text and leaves only permitted provenance
   tombstones.
-- User/tenant deletion cascades through estimates, jobs, units, refs, proposal links,
+- “Delete local data” cascades through estimates, jobs, units, refs, proposal links,
   usage metadata, notifications, and caches across both services.
-- Legal hold may preserve required sources/records, but learning-consent revocation
-  still stops new model processing and proposal creation.
+- Backup/export snapshots database metadata together with reachable ai-backend
+  file-store refs; disposable indexes are rebuilt.
+- Future consumer sync may replicate confirmed job metadata and accepted downstream
+  records after explicit opt-in, but raw source history is never uploaded merely to
+  synchronize job progress, and desktop backfill remains fully local/offline-capable
+  with a local model.
 
 ## Authentication, authorization, privacy, security, and audit
 
-- Facade derives actor/tenant from verified session; internal workers use enterprise
-  service authentication plus trusted org/user headers.
-- Owner/admin roles are evaluated separately for create, inspect, pause/cancel, source
-  open, proposal decision, export, and delete.
-- Administrative tenant management does not automatically authorize private history.
+- Facade derives the local account from the verified session; internal workers use the
+  per-install service token plus trusted local-account headers over loopback.
+- The signed-in owner is rechecked for create, inspect, pause/cancel, source open,
+  proposal decision, export, and delete.
 - Recheck consent, account deletion, project membership, source visibility, retention,
   source class, provider policy, and budget before each model call and proposal write.
 - Redact/classify before external model processing. Secret/credential and forbidden
@@ -643,8 +652,9 @@ the facade only.
   usage, pause/resume/cancel, proposal routing, source invalidation, export, delete, and
   completion.
 - Ordinary logs/audit/events contain IDs, digests, counts, and reason codes only.
-- Provider training/retention, region, BYOK, and data-processing settings are visible at
-  confirmation and enforced at every extraction.
+- Provider training/retention, BYOK/local-model choice, and data-processing settings are
+  visible at confirmation and enforced at every extraction. Network loss pauses a cloud
+  route; it never silently changes providers.
 
 ## Performance and complexity budgets
 
@@ -662,12 +672,12 @@ Budgets:
 - Processing necessarily totals `O(C + T)` across the confirmed job.
 - Dedupe lookup is `O(log D)` per candidate with indexed canonical keys; bounded
   similarity reranking operates only over a small prefiltered set.
-- Estimate creation request p95 below 250 ms; metadata estimate becomes available p95
-  below 30 seconds for one million indexed conversations.
-- Job status/progress read p95 below 250 ms.
+- Estimate creation request p95 below 100 ms over loopback; metadata estimate becomes
+  available p95 below 10 seconds for 100,000 indexed conversations.
+- Job status/progress read p95 below 100 ms.
 - Default page size 100 sources; extraction microbatch no larger than 10 source units.
-- Default concurrency: one active backfill per user, two extraction calls per tenant,
-  and a lower-priority global pool distinct from interactive model capacity.
+- Default concurrency: one active backfill and at most two extraction calls per device,
+  in a lower-priority pool distinct from interactive model capacity.
 - Default job caps: 10,000 conversations, 90-day lookback, 5 million selected input
   tokens, 5,000 proposals before automatic pause, and explicit currency cost cap.
 - Pause/cancel/consent revocation stops new model-call admission within 10 seconds under
@@ -682,7 +692,7 @@ bucket. Big-O is not used as evidence that a background job is cheap.
 
 ## Failure, idempotency, and recovery
 
-- Estimate is idempotent by tenant/user/scope/policy/pricing/model-route digest within
+- Estimate is idempotent by local-account/scope/policy/pricing/model-route digest within
   its validity window. Estimate workers use leases and resume indexed enumeration from
   a durable cursor without opening source bodies.
 - Job creation is idempotent by estimate and confirmation digest; conflicting reuse
@@ -699,7 +709,7 @@ bucket. Big-O is not used as evidence that a background job is cheap.
 - A source revision change after enumeration returns `source_changed`; the unit is
   skipped or explicitly rebound under a new job, never silently substituted.
 - Provider timeout/retry follows H5 typed retry policy and remaining budget.
-- Backend, audit, consent, policy, durable store, or source authorization failure fails
+- Local backend, consent, policy, durable store, or source authorization failure fails
   closed.
 - Repeated malformed extraction eventually marks the source unit failed and continues
   only if job policy permits partial completion.
@@ -749,12 +759,13 @@ unbounded cost, or evidence-free proposals.
 
 1. Land contracts, indexed metadata estimator, and synthetic fixtures with no content
    reads.
-2. Enable estimate-only for internal users.
+2. Enable estimate-only for opt-in desktop dogfood.
 3. Issue/open run-trajectory refs in test/shadow mode.
 4. Run dry backfills that extract and score candidates without persistence.
 5. Enable memory proposals for small user-selected conversation lists.
 6. Add project/time-range jobs and routine proposals after I1 intake is ready.
-7. Expand caps and tenant cohorts only after privacy, quality, cost, and recovery gates.
+7. Expand caps and desktop cohorts only after privacy, quality, cost, battery, and
+   recovery gates.
 
 Backout prevents new estimates/confirmations/claims and cancels or pauses active jobs.
 Existing H6/I1 proposals remain reviewable/rejectable under their owning contracts.
@@ -764,14 +775,14 @@ export controls remain available.
 ## Implementation slices
 
 1. Estimate, scope, job, unit, cursor, budget, and event contracts
-2. Backend PostgreSQL store, migrations, routes, leases, and audit
+2. Backend embedded-local-PostgreSQL store, migrations, routes, leases, and audit
 3. Indexed AI-backend historical source estimator/enumerator
 4. Run-trajectory ref issuer, reader, redaction, and source-open projection
 5. H5 extraction adapter with historical origin and shared idempotency
 6. Cross-live/backfill dedupe and contradiction links
 7. H6 memory and I1 typed-routine proposal routing
 8. Progress/consent/pause/cancel/delete facade and shared UI
-9. Retention/deletion/export/legal-hold jobs and repair tooling
+9. Retention/deletion/local-export/backup jobs and repair tooling
 10. F1 evaluation, dashboards, alerts, feature flags, and staged rollout
 
 ## Test plan
@@ -792,13 +803,13 @@ export controls remain available.
 - Multiple workers cannot process one unit twice
 - Pause/cancel/revoke races at enumeration, model admission, and routing boundaries
 - Crash after model call/before routing and after routing/before checkpoint
-- Million-row indexed estimate/enumeration query plans
+- 100,000-row indexed estimate/enumeration query plans
 
 ### Authorization and privacy
 
-- Cross-tenant, cross-user, removed-project-member, and private-chat denial
-- Tenant admin without source visibility cannot open/process private history
-- Ephemeral/deleted/expired/legal-hold/consent-withdrawn combinations
+- Cross-account, renderer identity forgery, excluded-project, and private-chat denial
+- A second signed-in account cannot open/process private history
+- Ephemeral/deleted/expired/consent-withdrawn combinations
 - Secret, credential, sensitive-trait, prompt-injection, and malicious tool-output
   fixtures
 - Run-trajectory ref forgery, expiry, digest mismatch, deletion, and replay
@@ -817,7 +828,8 @@ export controls remain available.
 - 10/1,000/10,000 source jobs with token/cost caps
 - Interactive workload is not starved by backfill concurrency
 - Estimate accuracy, checkpoint recovery, cancellation latency, and bounded memory
-- Provider timeout, backend outage, audit outage, price change, and worker restart
+- Provider timeout/network loss, local-backend outage, price change, worker/app restart,
+  suspend/resume, battery saver, and thermal pressure
 
 ## Definition of done
 
@@ -832,14 +844,14 @@ export controls remain available.
   H8-owned.
 - No job can accept memory, publish a skill, activate a routine, or widen authority.
 - Pause, cancel, consent withdrawal, deletion, crash recovery, usage reconciliation,
-  export, legal hold, and backout pass tests.
+  local export/backup, and backout pass tests.
 - Cost never exceeds the confirmed cap and all model usage is attributable.
 - F1 quality/privacy gates pass for representative historical data.
 
 ## Guardrails
 
 - Historical retention is not learning consent.
-- Administrative control is not automatic permission to read private history.
+- Another local account or renderer process is not authorized to read private history.
 - Estimate first; no model call or proposal during estimation.
 - Propose only; never accept memory or activate a routine.
 - Skill backfill remains H8-owned.
@@ -854,13 +866,12 @@ export controls remain available.
 
 ## Open decisions
 
-1. Which maximum lookback and source-count caps ship for self-serve versus enterprise
-   cohorts?
+1. Which maximum lookback and source-count caps ship for desktop devices with different
+   memory/CPU classes?
 2. Which provider/model routes are permitted for historical processing by default?
 3. What recurrence/support threshold qualifies a routine proposal from history?
 4. Should a cancelled job offer one bulk-reject action for its still-pending proposals?
 5. Which run/tool result classes are eligible for trajectory evidence in the first
    release?
 6. What estimate drift threshold requires a fresh confirmation?
-7. Which tenant-admin backfill modes, if any, can satisfy consent requirements without
-   per-user initiation?
+7. Whether cloud-model backfill should default to AC-power-only on laptops.

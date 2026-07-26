@@ -40,6 +40,16 @@ conversation evidence respectively. Existing citation capture owns source ordina
 rendering. This PRD owns only the final-answer contract, deterministic finalization
 checks, conflict/freshness presentation, and bounded repair decision.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem statement
 
 Better retrieval and tool selection do not guarantee a better final answer. A run may
@@ -375,7 +385,7 @@ Task profiles:
 - `effect_summary`: derive action status from operation/stage/receipt records;
 - `high_assurance`: bounded buffered answer with stricter evidence and freshness rules.
 
-Profile selection is deterministic from task family, source/effect use, tenant policy,
+Profile selection is deterministic from task family, source/effect use, user policy,
 and model capability. The model cannot select a weaker profile.
 
 Buffered profiles may emit progress/activity events immediately but do not publish
@@ -403,7 +413,7 @@ discarding verification.
 
 Before verification, source resolvers:
 
-1. derive current tenant/user/project scope from runtime context;
+1. derive current profile/user/project scope from runtime context;
 2. reauthorize every evidence ref;
 3. check source existence, deletion/tombstone, expiry, version, and digest;
 4. validate the cited span/locator against the retained source;
@@ -558,12 +568,12 @@ copy source indexes across services. Apps call the facade and cannot submit a
   resolutions, and protected payloads.
 - Source deletion invalidates future resolution and updates existing UI through
   tombstone semantics; it does not rewrite historical final text silently.
-- Legal hold preserves required records but does not restore source authorization or
+- An explicitly enabled hosted retention lock may preserve required records but does not restore source authorization or
   permit new model processing when consent/policy is revoked.
 
 ## Authentication, authorization, security, and audit
 
-- Runtime identity, not envelope fields, determines tenant/user/project scope.
+- Runtime identity, not envelope fields, determines profile/user/project scope.
 - Every evidence binding is reauthorized before finalization.
 - Model-supplied `verified`, `fresh`, `supports`, confidence, or source-type labels are
   untrusted until resolved.
@@ -678,7 +688,7 @@ Deterministic hard failures cannot be overridden by an offline model grader.
 4. Enable degraded finalization without repair.
 5. Enable one targeted repair for selected grounded task families.
 6. Add effect-summary and conflict/freshness profiles.
-7. Expand tenants only after quality and latency gates.
+7. Expand consumer cohorts only after quality and latency gates.
 
 Backout disables envelope enforcement and repair while retaining reports for evaluation.
 Existing final responses, citation records, evidence refs, and F1 experiments remain
@@ -710,7 +720,7 @@ readable. No source store or task execution path changes during backout.
 ### Contract and integration
 
 - Source resolver batches and reauthorizes Library/web/history/artifact/tool refs
-- Deleted, stale, digest-mismatched, expired, and cross-tenant refs fail
+- Deleted, stale, digest-mismatched, expired, and cross-profile refs fail
 - Existing citation ordinals remain stable
 - One final authoritative response after crash/replay
 - Shared web/desktop surfaces render verified, degraded, unavailable-source, and

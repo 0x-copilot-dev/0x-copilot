@@ -15,7 +15,7 @@ change without creating a second workspace or host-write path.
 | Primary owner           | `ai-backend` workspace capability and edit controller                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | Supporting owners       | Desktop workspace authority, shared workspace UI, evaluation owners                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | Depends on              | [C1 workspace overlay](../../generative-surfaces-v2-1/prds/PRD-C1-workspace-overlay.md), [C2 workspace broker commit](../../generative-surfaces-v2-1/prds/PRD-C2-workspace-broker-commit.md), [C3 workspace product integration](../../generative-surfaces-v2-1/prds/PRD-C3-workspace-product-integration.md), [D3 sandbox adapter](../../generative-surfaces-v2-1/prds/PRD-D3-sandbox-adapter.md), [F1 evaluation and promotion](./PRD-AR-F1-harness-observability-evaluation-promotion.md), [F4 tool-use controller](./PRD-AR-F4-task-aware-tool-use-controller.md), [F6 safe concurrency](./PRD-AR-F6-capability-concurrency-safe-batching.md) |
-| Rollout flag            | `WORKSPACE_PATCH_SET_ENABLED`, with tenant and task-family cohorts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| Rollout flag            | `WORKSPACE_PATCH_SET_ENABLED`, with local rollout and task-family cohorts                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | Primary success measure | Ten-or-more-file refactors complete with fewer model/tool turns and no regression in patch correctness, reviewability, or host-write safety                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 
 ## Implementer brief
@@ -38,6 +38,16 @@ authority and owns prepare/commit/reconcile. C3 owns approval and product presen
 D3 may validate an immutable merged snapshot and return a declarative patch, but it
 cannot mutate the host. This PRD adds edit planning, atomic patch-set application to C1,
 validation orchestration, and repair policy only.
+
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
 
 ## Problem statement
 
@@ -392,7 +402,7 @@ a partially visible tree.
 Validation profiles are repository-owned or product-curated configuration, never raw
 model commands. Resolution precedence is:
 
-1. tenant security policy;
+1. local user and app safety policy;
 2. repository-owned validated configuration;
 3. recognized project metadata;
 4. product defaults.
@@ -523,11 +533,11 @@ Apps use facade/shared host ports and never receive mutation credentials.
   refs, validation snapshots, diagnostics, and uncommitted overlay revisions subject
   to C1/E1 rules.
 - Host preimages and commit journals remain C2-owned.
-- Legal hold may retain records but cannot reactivate a stage, grant, or commit permit.
+- An explicitly enabled backup or hosted retention lock may retain records but cannot reactivate a stage, grant, or commit permit.
 
 ## Authentication, authorization, security, and audit
 
-- Derive tenant, user, workspace grant, and virtual root from verified runtime context.
+- Derive profile, user, workspace grant, and virtual root from verified runtime context.
 - Reauthorize each read and patch application; planning-time access is not durable
   authority.
 - Patch operations can narrow only to paths already permitted by C1/grant policy.
@@ -575,7 +585,7 @@ count is not a win if changed-file precision or test success falls.
 
 ## Failure, idempotency, and recovery
 
-- Patch-set admission is idempotent by tenant, run, base manifest revision, and patch
+- Patch-set admission is idempotent by profile, run, base manifest revision, and patch
   digest.
 - Reusing an idempotency key with different bytes fails.
 - Atomic apply either returns the existing change-set ref or creates one revision.
@@ -638,7 +648,7 @@ confidence intervals, not only averages.
 4. Enable patch sets for multi-file documentation and test-only changes.
 5. Add D3 format/syntax/type/test profiles.
 6. Enable bounded repair for selected code task families.
-7. Expand tenant cohorts after quality, security, and latency gates.
+7. Expand desktop cohorts after quality, security, and latency gates.
 
 Backout disables new patch-set admission. Existing C1 overlays, stages, validation
 reports, and approvals remain inspectable. The runtime returns to existing
@@ -669,7 +679,7 @@ reports, and approvals remain inspectable. The runtime returns to existing
 
 ### Store and concurrency
 
-- Atomic 1/10/100-file apply on in-memory, file, and PostgreSQL C1 adapters
+- Atomic 1/10/100-file apply on in-memory, desktop file, and optional hosted Postgres C1 adapters
 - Concurrent overlay revision change causes zero partial application
 - Duplicate idempotency returns one change set
 - Cancellation/crash at every prepublish/postpublish boundary

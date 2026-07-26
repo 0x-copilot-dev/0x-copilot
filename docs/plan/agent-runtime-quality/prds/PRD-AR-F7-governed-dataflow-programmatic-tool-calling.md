@@ -31,6 +31,16 @@ external functions. Retain that safe default. This PRD defines the only allowed 
 from a program/dataflow to external capabilities; the remote sandbox remains a separate
 isolated execution adapter under D3.
 
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
+
 ## Problem and current strengths
 
 Workflows such as “list 100 records, retain those matching a rule, fetch details for
@@ -212,11 +222,11 @@ arguments, targets, preconditions, and plan digest. Approval UI must permit revi
 the exact set; execution revalidates each item through A5. Partial/indeterminate
 outcomes remain itemized.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
 - Runtime context supplies identity and capability bindings; plan fields cannot.
 - Interpreter has no ambient network/filesystem/process/environment access.
-- Input/result refs are run- and tenant-scoped and reauthorized on every read.
+- Input/result refs are run- and profile-scoped and reauthorized on every read.
 - Secret-like values are rejected from inline input/output and never exposed as
   capability binding data.
 - Every inner call produces normal operation, usage, citation, and audit records.
@@ -236,7 +246,7 @@ For `k` inner calls:
 - validation p95 below 10 ms for maximum-size plans;
 - interpreter memory/CPU and artifact bytes have hard quotas.
 
-All defaults are configuration policy, versioned and reducible by org/run.
+All defaults are configuration policy, versioned and reducible by installation/run.
 
 ## Failure, idempotency, and recovery
 
@@ -276,7 +286,7 @@ schema, oversized input/output, child failure, and effect-manifest safety.
 5. Shadow mutation-manifest generation.
 6. Reviewed batch proposals for a small reversible effect class.
 
-The capability can be disabled globally, by org, or by capability. Backout leaves
+The capability can be disabled globally, by installation, or by capability. Backout leaves
 ordinary direct tools and pure code mode available; staged effects remain A4/A5-owned.
 
 ## Implementation slices
@@ -301,7 +311,7 @@ ordinary direct tools and pure code mode available; staged effects remain A4/A5-
 - Worker crash resumes safe reads without duplicate uncertain calls.
 - Output limit uses artifact/offload and declares truncation.
 - Mutation plan creates a stage with zero effect dispatch.
-- Cross-tenant input/evidence refs fail.
+- Cross-profile input/evidence refs fail.
 
 ## Definition of done
 

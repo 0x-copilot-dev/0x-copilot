@@ -8,7 +8,7 @@
 
 ## Goal
 
-Keep MCP descriptors fresh and connections warm without crossing tenant/user scope,
+Keep MCP descriptors fresh and connections warm without crossing profile/user scope,
 duplicating control-plane work, or moving credential/transport ownership into the
 wrong service.
 
@@ -25,10 +25,20 @@ Read:
 7. `services/backend/src/backend_app/connectors/`.
 8. D1 and the root service-boundary rules.
 
-The current ai-backend cache is process-wide TTL/LRU, keyed by server/org/user, returns
+The current ai-backend cache is process-wide TTL/LRU, keyed by server/profile/user, returns
 defensive copies, single-flights cold loads, and invalidates after reauthentication.
 Default TTL is 900 seconds with 1,000 entries. Preserve these strengths. First verify
 backend client/session pooling before assigning new transport ownership.
+
+## Desktop-first deployment and storage contract
+
+The launch composition is the shipped `single_user_desktop` profile: Electron main supervises `backend`, `ai-backend`, `backend-facade`, and the local data services on loopback; the renderer still calls only the facade. This is a local application boundary, not a mandatory cloud dependency.
+
+- Runtime-owned run/event/citation/artifact state must use existing `RuntimePorts`. Desktop defaults to the single-writer file adapter under `<userData>/agent-data/v1` with the in-process worker; tests use in-memory and future hosted deployments may use Postgres.
+- Product configuration already owned by `backend` may use its existing embedded local Postgres database. This PRD must not add another database, daemon, queue, or network hop merely for desktop.
+- Authorization is expressed as the signed-in local user, device capability grants, project/conversation scope, and provider credentials. Existing internal organization identifiers remain compatibility partition keys; they are not exposed as B2C team or administrator concepts.
+- A future consumer web or opt-in sync product may add remote adapters behind the same ports and contracts. Sync, team administration, fleet policy, and always-online availability are not desktop launch dependencies.
+- Feature flags resolve locally, work offline wherever no external provider is intrinsically required, and include a bounded disk/CPU/memory budget plus an immediate local backout path.
 
 ## Problem and current strengths
 
@@ -52,7 +62,7 @@ Remaining concerns are:
 3. React to tool-list/auth/config changes without transporting secrets or raw schemas in
    invalidation events.
 4. Verify and, if needed, add backend-owned client/session pooling.
-5. Preserve per-user/org credential and authorization isolation.
+5. Preserve per-user/profile credential and authorization isolation.
 6. Keep TTL/LRU as a safety backstop.
 7. Add a distributed descriptor cache only when measured process churn justifies it.
 
@@ -78,7 +88,7 @@ Remaining concerns are:
 ```text
 McpDescriptorRevision
   server_id
-  org_id
+  profile_id
   subject_scope_hash
   revision
   tool_count
@@ -91,7 +101,7 @@ McpRevisionFeedItem
   cursor
   notice_id
   server_id
-  org_id
+  profile_id
   subject_scope_hash?
   old_revision?
   new_revision?
@@ -141,15 +151,16 @@ response. Backend records client lease reuse, reconnect, keepalive, and pool sat
 
 ### 2. Revision source
 
-Backend owns authoritative server configuration and transport. It computes a monotonic
-view revision per `(server, org, credential subject, tool-filter policy)` from canonical
-descriptor metadata. A separate server configuration revision lets broad config
+The locally supervised backend owns authoritative server configuration and proxy
+transport. It computes a monotonic view revision per
+`(server, local_profile, credential_subject, tool_filter_policy)` from canonical
+descriptor metadata in its existing persistence adapter. A separate server configuration revision lets broad config
 changes invalidate every affected view. Sources include:
 
 - successful initial/periodic discovery;
 - supported tool-list change notification;
 - OAuth credential subject change or reauthentication;
-- administrator server/config/tool-filter change;
+- user server/config/tool-filter change;
 - client/session replacement where descriptor view can change.
 
 Notification handling debounces bursts, single-flights refresh, and pages the complete
@@ -158,9 +169,10 @@ list before publishing a revision.
 ### 3. Invalidation
 
 Backend commits a revision row and durable feed/outbox record in the same transaction.
-Each ai-backend process polls the authenticated feed in the already-supported
-ai-backend-to-backend direction. Feed pages are cursor-ordered, at-least-once, bounded,
-and safe to replay. The consumer verifies service response integrity and org/scope,
+On desktop, the single ai-backend process polls that feed over authenticated loopback
+in the already-supported ai-backend-to-backend direction. Feed pages are
+cursor-ordered, at-least-once, bounded, and safe to replay. The consumer verifies the
+per-boot service token and profile/scope,
 then:
 
 1. evicts matching discovery entries;
@@ -179,7 +191,9 @@ ai-backend route.
 
 ### 4. Client/session pooling
 
-Pooling belongs in backend because backend owns credentials and MCP proxy transport.
+Pooling remains in the locally supervised backend because it already owns credentials
+and MCP proxy transport; Electron main and the renderer never receive connector
+credentials.
 Pool key includes server, credential subject, transport/config revision, and any
 connector-required session scope.
 
@@ -201,15 +215,15 @@ A descriptor/schema mismatch or unknown tool result triggers one scoped revision
 and cache eviction. A read operation may be retried once only if no provider-side work
 occurred and normal idempotency/retry policy permits. Effects are never blindly retried.
 
-## Security, tenancy, privacy, and audit
+## Security, local-profile boundaries, privacy, and audit
 
-- Internal endpoints require service authentication plus trusted org/user headers.
+- Internal endpoints require service authentication plus trusted profile/user headers.
 - Caller-supplied scope hashes/revisions are not trusted without an authenticated feed
   item or direct backend revision response.
 - Cache/pool keys include credential subject; defensive copies prevent mutation leaks.
 - Notices contain no token, endpoint secret, raw descriptor, or user data.
 - TokenVault remains backend-owned; ai-backend never receives plaintext credentials.
-- Server config, auth, revision, invalidation, and administrator pool-policy changes are
+- Server config, auth, revision, invalidation, and user pool-policy changes are
   audited.
 - Retention covers diagnostic metrics/feed items; credentials follow vault deletion.
 
@@ -235,11 +249,12 @@ occurred and normal idempotency/retry policy permits. Effects are never blindly 
 - Process restart rebuilds local cache and reconnects on demand.
 - Backend restart invalidates leases; revision state is durable if the registry store is
   durable.
-- Distributed cache is optional and cannot become the sole source of truth.
+- A distributed cache is not part of desktop launch. A future hosted adapter is
+  optional and cannot become the sole source of truth.
 
 ## Observability and quality gates
 
-Dashboards:
+Local diagnostics and exportable development metrics:
 
 - discovery hit/miss/expiry/eviction by process/server;
 - cold latency by phase, descriptors count/bytes;
@@ -277,7 +292,7 @@ cache and on-demand backend proxy path remain the safe fallback.
 
 ## Test plan
 
-- Existing TTL/LRU tenant/user keying and defensive copy tests remain.
+- Existing TTL/LRU profile/user keying and defensive copy tests remain.
 - Concurrent cold callers perform one discovery.
 - Tool-list change publishes one debounced higher view revision and evicts matching
   entries.
@@ -316,5 +331,5 @@ Open decisions:
 
 1. Which MCP transports/providers expose trustworthy tool-list notifications?
 2. What pool ownership exists today in the backend proxy path?
-3. What revision-feed retention and poll interval meet measured fleet size and
+3. What revision-feed retention and poll interval meet measured process count and
    convergence needs?
