@@ -23,7 +23,7 @@ from agent_runtime.capabilities.actions.policy import (
     EffectiveActionPolicyResolver,
 )
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
-from agent_runtime.capabilities.mcp.operation_adapter import (
+from agent_runtime.capabilities.mcp.execution_services import (
     McpOperationArgumentStorePort,
 )
 from agent_runtime.capabilities.operations.context import OperationContext

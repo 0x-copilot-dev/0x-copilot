@@ -24,11 +24,13 @@ from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
 from agent_runtime.capabilities.mcp.cards import McpAuthState
 from agent_runtime.capabilities.mcp.client import McpAuthError
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
-from agent_runtime.capabilities.mcp.operation_adapter import (
-    McpOperationArgumentMaterialResolver,
+from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
-    McpOperationStoredResult,
+)
+from agent_runtime.capabilities.mcp.execution_services import McpOperationStoredResult
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationArgumentMaterialResolver,
 )
 from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.capabilities.operations.context import (

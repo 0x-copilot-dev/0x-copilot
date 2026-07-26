@@ -24,6 +24,8 @@ of the call id, so the same logical resource yields the same URI across events.
 
 from __future__ import annotations
 
+__operation_boundary__ = "presentation"
+
 import hashlib
 import json
 import re

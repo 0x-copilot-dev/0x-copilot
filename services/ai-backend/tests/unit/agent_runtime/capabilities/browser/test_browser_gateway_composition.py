@@ -7,11 +7,13 @@ from dataclasses import dataclass, field
 
 from agent_runtime.capabilities.actions.policy import ConnectorWritePolicyOverrides
 from agent_runtime.capabilities.mcp import CallMcpTool, DynamicMcpRegistry, McpLoader
-from agent_runtime.capabilities.mcp.operation_adapter import (
-    McpOperationGateResolver,
+from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
-    McpOperationStoredResult,
+)
+from agent_runtime.capabilities.mcp.execution_services import McpOperationStoredResult
+from agent_runtime.capabilities.mcp.operation_adapter import (
+    McpOperationGateResolver,
 )
 from agent_runtime.capabilities.operations.catalog import (
     DEFAULT_OPERATION_DESCRIPTORS,

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
-from agent_runtime.capabilities.mcp.operation_adapter import McpTargetRefCodec
+from agent_runtime.capabilities.mcp.target_ref import McpTargetRefCodec
 from agent_runtime.effects.claims import EffectClaimStore
 from agent_runtime.effects.contracts import EffectDispatchRequest
 from agent_runtime.effects.dispatch import (

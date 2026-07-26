@@ -29,7 +29,7 @@ from agent_runtime.capabilities.mcp import (
     McpLoader,
 )
 from agent_runtime.capabilities.mcp.cards import McpAuthState
-from agent_runtime.capabilities.mcp.operation_adapter import (
+from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
 )

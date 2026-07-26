@@ -142,18 +142,18 @@ class OperationInvocationRegistry:
 
 
 @dataclass
-class BoundOperationContext:
-    """Immutable authority plus run-local caches."""
+class BoundOperationExecutionContext:
+    """Adapter-visible, transport-neutral authority plus run-local caches.
+
+    This is the only context object available through :class:`OperationContext`.
+    It deliberately contains identity, policy, metrics, idempotency, and
+    canonical arguments—but no ledger, artifact, or surface-presentation
+    capability. Provider adapters therefore cannot traverse a request context
+    to acquire presentation authority.
+    """
 
     identity: VerifiedOperationIdentity
     policy_snapshot: ToolUsePolicySnapshot
-    ledger_emitter: OperationEventEmitter = field(
-        default_factory=NullOperationEventEmitter
-    )
-    artifact_service: ArtifactServicePort | None = None
-    outcome_presenter: OperationOutcomePresenter = field(
-        default_factory=NullOperationOutcomePresenter
-    )
     mode: OperationGatewayMode = OperationGatewayMode.OFF
     metrics: OperationMetricsPort = field(default_factory=OperationGatewayMetrics)
     arguments: OperationArgumentResolver = field(default_factory=OperationArgumentStore)
@@ -163,15 +163,41 @@ class BoundOperationContext:
     )
 
     def __post_init__(self) -> None:
+        self.metrics = FailSoftOperationMetrics.wrap(self.metrics)
+
+
+@dataclass
+class _BoundOperationPresentationContext:
+    """Gateway-only presentation authority, never reachable from execution."""
+
+    ledger_emitter: OperationEventEmitter = field(
+        default_factory=NullOperationEventEmitter
+    )
+    artifact_service: ArtifactServicePort | None = None
+    outcome_presenter: OperationOutcomePresenter = field(
+        default_factory=NullOperationOutcomePresenter
+    )
+
+    def __post_init__(self) -> None:
         self.ledger_emitter = FailSoftOperationEventEmitter.wrap(self.ledger_emitter)
         self.outcome_presenter = FailSoftOperationOutcomePresenter.wrap(
             self.outcome_presenter
         )
-        self.metrics = FailSoftOperationMetrics.wrap(self.metrics)
 
 
-_CONTEXT: ContextVar[BoundOperationContext | None] = ContextVar(
+@dataclass(frozen=True)
+class _OperationContextBinding:
+    """Paired context tokens reset atomically by the public facade."""
+
+    execution_token: Token[BoundOperationExecutionContext | None]
+    presentation_token: Token[_BoundOperationPresentationContext | None]
+
+
+_CONTEXT: ContextVar[BoundOperationExecutionContext | None] = ContextVar(
     "operation_gateway_context", default=None
+)
+_PRESENTATION_CONTEXT: ContextVar[_BoundOperationPresentationContext | None] = (
+    ContextVar("operation_gateway_presentation_context", default=None)
 )
 _OPERATION_STACK: ContextVar[tuple[str, ...]] = ContextVar(
     "operation_gateway_stack", default=()
@@ -182,7 +208,7 @@ _PRODUCER: ContextVar[Producer] = ContextVar(
 
 
 class OperationContext:
-    """ContextVar facade following the runtime's existing bind/unbind pattern."""
+    """ContextVar facade exposing only neutral operation execution state."""
 
     @classmethod
     def bind_for_run(
@@ -197,11 +223,21 @@ class OperationContext:
         metrics: OperationMetricsPort | None = None,
         arguments: OperationArgumentResolver | None = None,
         canonical_arguments_durable: bool = False,
-    ) -> Token[BoundOperationContext | None]:
-        return _CONTEXT.set(
-            BoundOperationContext(
+    ) -> _OperationContextBinding:
+        execution_token = _CONTEXT.set(
+            BoundOperationExecutionContext(
                 identity=identity,
                 policy_snapshot=policy_snapshot,
+                mode=mode,
+                metrics=metrics if metrics is not None else OperationGatewayMetrics(),
+                arguments=(
+                    arguments if arguments is not None else OperationArgumentStore()
+                ),
+                canonical_arguments_durable=canonical_arguments_durable,
+            )
+        )
+        presentation_token = _PRESENTATION_CONTEXT.set(
+            _BoundOperationPresentationContext(
                 ledger_emitter=(
                     ledger_emitter
                     if ledger_emitter is not None
@@ -213,25 +249,24 @@ class OperationContext:
                     if outcome_presenter is not None
                     else NullOperationOutcomePresenter()
                 ),
-                mode=mode,
-                metrics=metrics if metrics is not None else OperationGatewayMetrics(),
-                arguments=(
-                    arguments if arguments is not None else OperationArgumentStore()
-                ),
-                canonical_arguments_durable=canonical_arguments_durable,
             )
+        )
+        return _OperationContextBinding(
+            execution_token=execution_token,
+            presentation_token=presentation_token,
         )
 
     @classmethod
-    def unbind(cls, token: Token[BoundOperationContext | None]) -> None:
-        _CONTEXT.reset(token)
+    def unbind(cls, token: _OperationContextBinding) -> None:
+        _PRESENTATION_CONTEXT.reset(token.presentation_token)
+        _CONTEXT.reset(token.execution_token)
 
     @classmethod
-    def active(cls) -> BoundOperationContext | None:
+    def active(cls) -> BoundOperationExecutionContext | None:
         return _CONTEXT.get()
 
     @classmethod
-    def require(cls) -> BoundOperationContext:
+    def require(cls) -> BoundOperationExecutionContext:
         active = cls.active()
         if active is None:
             raise OperationContextUnboundError
@@ -264,6 +299,17 @@ class OperationContext:
             yield
         finally:
             _PRODUCER.reset(token)
+
+
+class _GatewayPresentationContext:
+    """Private gateway seam for ledger, artifact, and outcome presentation."""
+
+    @classmethod
+    def require(cls) -> _BoundOperationPresentationContext:
+        active = _PRESENTATION_CONTEXT.get()
+        if active is None:
+            raise OperationContextUnboundError
+        return active
 
 
 class OperationRequestFactory:
@@ -364,7 +410,7 @@ class OperationGatewayStartupGuard:
 
 
 __all__ = (
-    "BoundOperationContext",
+    "BoundOperationExecutionContext",
     "NullOperationEventEmitter",
     "OperationContext",
     "OperationEventEmitterAdapter",

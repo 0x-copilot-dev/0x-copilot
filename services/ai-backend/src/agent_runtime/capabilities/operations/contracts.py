@@ -61,13 +61,12 @@ class OperationClassification(RuntimeContract):
 
 
 class OperationPresentationOutcome(RuntimeContract):
-    """Transport-neutral facts required to present one completed operation.
+    """Gateway-owned facts required to present one completed operation.
 
-    Adapters return this value only *after* their durable result write succeeds.
-    The operation gateway owns the one generic hand-off to a presenter; an
-    adapter must not import a ledger emitter, renderer, surface projector, or
-    any other UI-facing concern.  ``output`` remains the bounded connector
-    result that was just persisted, never model-authored presentation state.
+    The operation gateway derives this value only *after* an adapter's durable
+    result write succeeds. An adapter returns neutral result data and never
+    constructs a presentation contract, imports a ledger emitter/renderer, or
+    receives a UI-facing service.
     """
 
     operation_id: str = Field(min_length=1, max_length=255)
@@ -86,12 +85,19 @@ class OperationPresentationOutcome(RuntimeContract):
 
 
 class OperationRawResult(RuntimeContract):
-    """Normalized read/internal result; large bytes remain behind ``result_ref``."""
+    """Neutral read/internal result; large bytes remain behind ``result_ref``.
+
+    ``result_payload`` is transport output that has already been durably
+    stored. It is deliberately not a surface or ledger contract: the gateway
+    alone combines it with operation identity to create an outcome presenter
+    input.
+    """
 
     result_ref: str | None = Field(default=None, max_length=2048)
     safe_summary: str = Field(min_length=1, max_length=512)
     activity_ref: str | None = Field(default=None, max_length=2048)
-    presentation: OperationPresentationOutcome | None = None
+    result_payload: dict[str, object] | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
 
     @field_validator("result_ref", "activity_ref")
     @classmethod

@@ -14,6 +14,8 @@ from agent_runtime.capabilities.operations.contracts import (
     OperationOutcomePresenter,
     OperationPresentationOutcome,
 )
+
+__operation_boundary__ = "presentation"
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 
 _LOGGER = logging.getLogger(__name__)

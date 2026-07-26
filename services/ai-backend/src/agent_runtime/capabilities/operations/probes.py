@@ -24,6 +24,7 @@ from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
     OperationRequestFactory,
+    _GatewayPresentationContext,
 )
 from agent_runtime.capabilities.operations.contracts import (
     ArtifactIntent,
@@ -252,11 +253,12 @@ class OperationShadowProbe:
             basis=classification.basis,
             confidence=classification.confidence,
         )
-        await context.ledger_emitter.emit(
+        presentation = _GatewayPresentationContext.require()
+        await presentation.ledger_emitter.emit(
             LedgerEventType.OPERATION_REQUESTED,
             requested.model_dump(mode="json", exclude_none=True),
         )
-        await context.ledger_emitter.emit(
+        await presentation.ledger_emitter.emit(
             LedgerEventType.OPERATION_CLASSIFIED,
             classified.model_dump(mode="json"),
         )
@@ -289,7 +291,7 @@ class OperationShadowProbe:
             latency_ms=latency_ms,
         )
         context = OperationContext.require()
-        await context.ledger_emitter.emit(
+        await _GatewayPresentationContext.require().ledger_emitter.emit(
             LedgerEventType.OPERATION_COMPLETED,
             payload.model_dump(mode="json", exclude_none=True),
         )
@@ -313,8 +315,7 @@ class OperationShadowProbe:
             failure_code="legacy_operation_failed",
             retryable=False,
         )
-        context = OperationContext.require()
-        await context.ledger_emitter.emit(
+        await _GatewayPresentationContext.require().ledger_emitter.emit(
             LedgerEventType.OPERATION_FAILED,
             payload.model_dump(mode="json"),
         )

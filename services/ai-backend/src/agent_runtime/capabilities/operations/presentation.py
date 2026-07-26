@@ -18,6 +18,8 @@ from agent_runtime.capabilities.surfaces.generator import (
 from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 
+__operation_boundary__ = "presentation"
+
 
 class SurfaceLedgerOperationOutcomePresenter:
     """Project a read outcome through the existing v2 ledger/surface ladder."""

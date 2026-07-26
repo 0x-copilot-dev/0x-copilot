@@ -13,7 +13,10 @@ from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import Field
 
-from agent_runtime.capabilities.operations.context import OperationContext
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    _GatewayPresentationContext,
+)
 from agent_runtime.capabilities.operations.contracts import (
     GateResolution,
     OperationAdapter,
@@ -190,7 +193,7 @@ class WorkspaceGrantGate:
         reason: str,
         summary: str,
     ) -> GateResolution:
-        await OperationContext.require().ledger_emitter.emit(
+        await _GatewayPresentationContext.require().ledger_emitter.emit(
             LedgerEventType.GATE_OPENED_V2,
             {
                 "v": 1,

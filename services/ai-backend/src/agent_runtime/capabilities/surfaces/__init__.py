@@ -16,6 +16,8 @@ Surfaces v2 Work Ledger emitter (``surfaces_v2.emitter``), but the standalone
 ``SURFACES_V2`` flag is now the only switch.
 """
 
+__operation_boundary__ = "presentation"
+
 from agent_runtime.capabilities.surfaces.backend_store import (
     BackendHttpSurfaceSpecStore,
     build_surface_spec_store,

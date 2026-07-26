@@ -14,7 +14,7 @@ from dataclasses import dataclass
 import json
 from typing import Protocol
 
-from agent_runtime.capabilities.mcp.operation_adapter import (
+from agent_runtime.capabilities.mcp.execution_services import (
     McpOperationArgumentStorePort,
 )
 from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (

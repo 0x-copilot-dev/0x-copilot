@@ -72,11 +72,11 @@ from agent_runtime.capabilities.operations.context import (
     OperationEventEmitterAdapter,
     VerifiedOperationIdentity,
 )
-from agent_runtime.capabilities.mcp.operation_adapter import (
-    McpOperationGateResolver,
+from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
 )
+from agent_runtime.capabilities.mcp.operation_adapter import McpOperationGateResolver
 from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
 from agent_runtime.effects.executor import EffectExecutionScope

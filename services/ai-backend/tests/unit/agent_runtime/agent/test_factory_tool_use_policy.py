@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import cast
 
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
-from agent_runtime.capabilities.mcp.operation_adapter import (
+from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
 )
