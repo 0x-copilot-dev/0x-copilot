@@ -75,6 +75,13 @@ from backend_app.store import (
 )
 from backend_app.token_vault import TokenVault, TokenVaultFactory
 
+# Suggestion appetite, mirrored from ``routes.me_preferences``. Compared as
+# plain strings so this module does not import a routes module — the values
+# are the wire contract either way, and a typo is caught by the test that
+# asserts both sides agree.
+_SUGGESTIONS_OFF = "off"
+_SUGGESTIONS_ALWAYS = "always"
+
 
 def _is_unique_violation(ex: Exception) -> bool:
     """True iff ``ex`` is a database unique-constraint violation.
@@ -350,12 +357,16 @@ class McpRegistryService:
         user_id: str,
         exclude_paused: tuple[str, ...] = (),
         user_overrides: dict[str, bool] | None = None,
+        mode: str | None = None,
     ) -> McpCatalogResponse:
         """PR 4.4.7 Phase 2 (Slice B) — catalog entries the agent may
         suggest at run-time.
 
         Filtering rules (server-side, in order):
 
+        0. ``mode="off"`` suggests nothing at all. It is checked first
+           because it is the user saying "stop asking", and no per-entry
+           rule should be able to talk its way past that.
         1. Drop slugs whose ``seed:<slug>`` already exists in the user's
            installed servers (the user knows about that connector
            already; suggesting it again would be noise).
@@ -364,12 +375,19 @@ class McpRegistryService:
            bare slug and the ``seed:<slug>`` form so callers don't need
            to translate.
         3. Drop entries with ``discoverable=False`` *unless* the user
-           override forces ``True``.
+           override forces ``True``, or ``mode="always"`` widens the
+           curated default to the whole catalog.
         4. Drop entries the user explicitly muted (override ``False``).
+           A per-slug mute outranks ``mode="always"``: "show me
+           everything" is a default, "never this one" is a decision.
 
         Returns the same wire shape as ``list_catalog`` so the caller
         (``ai-backend``) treats the response uniformly.
         """
+
+        if mode == _SUGGESTIONS_OFF:
+            return McpCatalogResponse(entries=())
+        widen = mode == _SUGGESTIONS_ALWAYS
 
         installed = {
             record.server_id
@@ -393,9 +411,10 @@ class McpRegistryService:
             override = overrides.get(entry.slug)
             if override is False:
                 continue
-            if override is None and not entry.discoverable:
+            if override is None and not entry.discoverable and not widen:
                 continue
-            # override is True OR (override is None AND entry.discoverable)
+            # override is True, or the entry is curated-discoverable, or the
+            # user asked to hear about everything.
             suggestions.append(_catalog_entry_response(entry))
         return McpCatalogResponse(entries=tuple(suggestions))
 

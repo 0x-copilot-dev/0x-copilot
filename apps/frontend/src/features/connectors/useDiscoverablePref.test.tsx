@@ -51,14 +51,16 @@ const BASE: UserPreferences = {
       weekly_digest: { email: true, slack: false, desktop: false },
     },
   },
-  discoverable_connectors: { overrides: {} },
+  discoverable_connectors: { mode: "unblock_only", overrides: {} },
   updated_at: "2026-05-05T16:01:14Z",
 };
 
 function withOverrides(overrides: Record<string, boolean>): UserPreferences {
   return {
     ...BASE,
-    discoverable_connectors: { overrides },
+    // The per-slug overrides this hook owns sit under a global appetite it
+    // does not touch; carry the default so the fixture is a real payload.
+    discoverable_connectors: { mode: "unblock_only", overrides },
   };
 }
 
@@ -243,9 +245,7 @@ describe("useDiscoverablePref", () => {
       expect(mockPut).toHaveBeenCalledOnce();
     });
     expect(mockPut).toHaveBeenCalledWith({
-      discoverable_connectors: {
-        overrides: { linear: false, notion: true },
-      },
+      discoverable_connectors: { overrides: { linear: false, notion: true } },
     });
     await waitFor(() => {
       expect(result.current.enabled).toBe(false);

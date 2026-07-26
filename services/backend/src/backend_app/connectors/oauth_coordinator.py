@@ -52,6 +52,25 @@ _LOOPBACK_HOST = "127.0.0.1"
 _LOOPBACK_PATH = "/connectors/oauth/cb"
 _DEEP_LINK_URI = "enterprise://oauth/callback"
 
+# Product scope -> the provider-permission tiers it needs, cumulatively.
+#
+# `write` was modelled from the start — `ProviderPermission.required_for` and
+# `ConnectorToolPolicy.product_scope` both accept it, and the tool validator
+# has a rule reserved for it — but the request surface stopped at `draft`.
+# Google Drive has shipped a `required_for: write` permission and two
+# `product_scope: write` tools since AC9 that nothing could ever ask for.
+#
+# Granting write is gated by two things that were already in place, not by
+# this cap: the profile declares the narrowest scope the vendor offers
+# (`drive.file` reaches only files the app created or the user opened with
+# it), and `_mutating_tools_require_per_call_approval` refuses to load a
+# draft/write tool that does not demand per-call approval.
+_PRODUCT_SCOPE_LADDER: dict[str, tuple[str, ...]] = {
+    "read": ("read",),
+    "draft": ("read", "draft"),
+    "write": ("read", "draft", "write"),
+}
+
 
 class DesktopOAuthError(ValueError):
     """Safe, stable-coded desktop OAuth failure.
@@ -150,7 +169,7 @@ class DesktopMcpOAuthCoordinator:
         org_id: str,
         user_id: str,
         callback: DesktopOAuthCallback,
-        requested_product_scope: Literal["read", "draft"] = "read",
+        requested_product_scope: Literal["read", "draft", "write"] = "read",
     ) -> DesktopStartResult:
         """Begin OAuth for a desktop connector and return the authorization URL."""
 
@@ -301,9 +320,19 @@ class DesktopMcpOAuthCoordinator:
         profile: DesktopConnectorProfile,
         requested_product_scope: str,
     ) -> tuple[str, ...]:
-        wanted = {"read"}
-        if requested_product_scope == "draft":
-            wanted.add("draft")
+        """Return the provider scopes a product scope needs, cumulatively.
+
+        The ladder is inclusive: `draft` needs read to be useful, and `write`
+        needs both. Asking for the top rung and receiving only its own tier
+        would produce a connector that can create a file it cannot then read
+        back.
+
+        An unknown scope falls through to `read` alone. That is the
+        fail-closed direction: a caller that means more than it says gets
+        less than it asked for, never more.
+        """
+
+        wanted = set(_PRODUCT_SCOPE_LADDER.get(requested_product_scope, ("read",)))
         return tuple(
             perm.identifier
             for perm in profile.permissions

@@ -19,6 +19,7 @@ a single notification cell is ``{notifications: {matrix: {mention: {email: false
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from typing import Any
 
 from copilot_service_contracts.scopes import RUNTIME_USE
@@ -242,9 +243,24 @@ class NotificationsPreferencesUpdate(BaseModel):
 _SLUG_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
+class ConnectorSuggestionMode(StrEnum):
+    """How forward the agent may be about connectors the user lacks.
+
+    ``unblock_only`` is the default rather than ``always`` because a
+    suggestion is the one connector surface the user did not go looking for,
+    so it carries the highest bar: interrupt when the connector would change
+    the answer, not whenever it is merely relevant.
+    """
+
+    OFF = "off"
+    UNBLOCK_ONLY = "unblock_only"
+    ALWAYS = "always"
+
+
 class DiscoverableConnectorsPreferences(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    mode: ConnectorSuggestionMode = ConnectorSuggestionMode.UNBLOCK_ONLY
     overrides: dict[str, bool] = Field(default_factory=dict)
 
     @field_validator("overrides")
@@ -261,6 +277,7 @@ class DiscoverableConnectorsPreferences(BaseModel):
 class DiscoverableConnectorsPreferencesUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    mode: ConnectorSuggestionMode | None = None
     overrides: dict[str, bool] | None = None
 
     @field_validator("overrides")
@@ -322,8 +339,12 @@ def deployment_default_preferences() -> dict[str, Any]:
         # PR 4.4.7 Phase 2 (Slice A) — empty by default; absent slug
         # inherits the catalog entry's ``discoverable`` flag so a
         # fresh user gets the curated default and can opt out per
-        # vendor without ever opening the toggle.
-        "discoverable_connectors": {"overrides": {}},
+        # vendor without ever opening the toggle. ``mode`` is the global
+        # appetite the per-slug overrides sit under.
+        "discoverable_connectors": {
+            "mode": ConnectorSuggestionMode.UNBLOCK_ONLY.value,
+            "overrides": {},
+        },
     }
 
 

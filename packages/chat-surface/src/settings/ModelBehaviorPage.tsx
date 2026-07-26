@@ -34,7 +34,10 @@ import {
   type ReactElement,
 } from "react";
 
-import type { ReasoningDepth } from "@0x-copilot/api-types";
+import type {
+  ConnectorSuggestionMode,
+  ReasoningDepth,
+} from "@0x-copilot/api-types";
 import { Select, TextInput, Toggle } from "@0x-copilot/design-system";
 
 import { ApprovalPolicy, type ApprovalPolicyValue } from "./ApprovalPolicy";
@@ -97,9 +100,33 @@ export interface ModelBehaviorValue {
    * Counts each tool separately — it is not a total across the run.
    */
   readonly toolCallsPerRun: number | null;
+  /**
+   * How forward the agent is about connectors the user does not have.
+   *
+   * Posture, not inventory — which is why it sits here beside the approval
+   * policy rather than in the Tools destination. The destination answers
+   * "what can the agent reach"; this answers "how eagerly may it ask for
+   * more".
+   */
+  readonly connectorSuggestions: ConnectorSuggestionMode;
   readonly approvalPolicy: ApprovalPolicyValue;
   readonly spend: SpendGuardrailValue;
 }
+
+/**
+ * Suggestion appetite. `unblock_only` is the shipped default: a suggestion is
+ * the one connector surface the user did not go looking for, so it carries
+ * the highest bar — interrupt when the connector would change the answer,
+ * not whenever it is merely relevant.
+ */
+export const CONNECTOR_SUGGESTION_MODES: ReadonlyArray<{
+  readonly value: ConnectorSuggestionMode;
+  readonly label: string;
+}> = [
+  { value: "off", label: "Never" },
+  { value: "unblock_only", label: "Only when it would unblock" },
+  { value: "always", label: "Whenever useful" },
+];
 
 /**
  * A single option in the Default-model select. `value` is the persisted model
@@ -228,6 +255,7 @@ export function ModelBehaviorPage({
   const reasoningId = `${reactId}-reasoning-depth`;
   const webAccessId = `${reactId}-web-access`;
   const toolCallsId = `${reactId}-tool-calls-per-run`;
+  const suggestionsId = `${reactId}-connector-suggestions`;
   const capId = `${reactId}-monthly-cap`;
   const pauseId = `${reactId}-pause-at-cap`;
 
@@ -453,6 +481,42 @@ export function ModelBehaviorPage({
         value={value.approvalPolicy}
         onChange={(approvalPolicy) => onChange({ approvalPolicy })}
       />
+
+      {/* Suggestion appetite. Posture, like the approval policy above it —
+          which app the agent may reach is the Tools destination's job. */}
+      <SetCard
+        title="Connector suggestions"
+        meta="When the agent notices a tool it doesn't have."
+        data-testid="connector-suggestions"
+      >
+        <Frow
+          label="Suggest connectors"
+          hint={
+            "You can also dismiss a single suggestion from the card itself; " +
+            "muted connectors stay listed in Tools."
+          }
+          htmlFor={suggestionsId}
+        >
+          <Select
+            id={suggestionsId}
+            data-testid="connector-suggestions-select"
+            aria-label="Suggest connectors"
+            value={value.connectorSuggestions}
+            onChange={(event) =>
+              onChange({
+                connectorSuggestions: event.currentTarget
+                  .value as ConnectorSuggestionMode,
+              })
+            }
+          >
+            {CONNECTOR_SUGGESTION_MODES.map((mode) => (
+              <option key={mode.value} value={mode.value}>
+                {mode.label}
+              </option>
+            ))}
+          </Select>
+        </Frow>
+      </SetCard>
 
       {/* Spend guardrail (FR-5.18). */}
       <SetCard
