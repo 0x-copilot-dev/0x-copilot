@@ -114,7 +114,7 @@ class SandboxRunArtifact(RuntimeContract):
 
 
 class SandboxPatchManifestRef(RuntimeContract):
-    """A complete declarative patch stored behind an immutable logical ref."""
+    """A complete declarative patch stored in A2's immutable artifact authority."""
 
     patch_ref: str = Field(min_length=1, max_length=2048)
     baseline_snapshot_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -124,7 +124,14 @@ class SandboxPatchManifestRef(RuntimeContract):
     @field_validator("patch_ref")
     @classmethod
     def _immutable_patch_ref(cls, value: str) -> str:
-        return _logical_ref(value, label="sandbox patch_ref", prefix="sandbox-patch://")
+        _logical_ref(value, label="sandbox patch_ref", prefix="artifact://")
+        try:
+            ArtifactContentRefCodec.parse(value)
+        except Exception as exc:
+            raise ValueError(
+                "sandbox patch_ref must be an immutable artifact revision"
+            ) from exc
+        return value
 
     @model_validator(mode="after")
     def _complete_patch_only(self) -> "SandboxPatchManifestRef":

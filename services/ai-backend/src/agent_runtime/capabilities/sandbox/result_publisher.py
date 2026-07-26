@@ -9,7 +9,7 @@ no files, provider handle, workspace grant, or second result store.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 from pydantic import Field
 
@@ -21,10 +21,11 @@ from agent_runtime.surfaces_v2.ledger_models import ArtifactAuthor, ArtifactKind
 
 
 class SandboxResultPublication(RuntimeContract):
-    """Server-derived metadata for one immutable sandbox-result artifact."""
+    """Server-derived metadata for one immutable sandbox outcome artifact."""
 
     run_id: str = Field(min_length=1, max_length=255)
     operation_id: str = Field(min_length=1, max_length=255)
+    document_kind: Literal["result", "patch"] = "result"
     content_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     byte_size: int = Field(ge=0)
     idempotency_key: str = Field(min_length=1, max_length=255)
@@ -32,7 +33,7 @@ class SandboxResultPublication(RuntimeContract):
 
 @runtime_checkable
 class SandboxResultPublisherPort(Protocol):
-    """Publish bounded result bytes and return one immutable artifact revision."""
+    """Publish bounded result/patch bytes and return an immutable artifact revision."""
 
     async def publish_result(
         self,
@@ -41,6 +42,15 @@ class SandboxResultPublisherPort(Protocol):
         chunks: AsyncIterator[bytes],
     ) -> str:
         """Persist exact bytes through A2 and return ``artifact://…/revisions/N``."""
+        ...
+
+    async def publish_patch(
+        self,
+        *,
+        publication: SandboxResultPublication,
+        chunks: AsyncIterator[bytes],
+    ) -> str:
+        """Persist one complete patch manifest through the same A2 authority."""
         ...
 
 
@@ -58,21 +68,60 @@ class ArtifactServiceSandboxResultPublisher(SandboxResultPublisherPort):
         publication: SandboxResultPublication,
         chunks: AsyncIterator[bytes],
     ) -> str:
+        if publication.document_kind != "result":
+            raise ValueError(
+                "sandbox result publication must have document_kind=result"
+            )
+        return await self._publish(
+            publication=publication,
+            chunks=chunks,
+            title="Sandbox result",
+            filename="sandbox-result.json",
+            source_suffix="result",
+        )
+
+    async def publish_patch(
+        self,
+        *,
+        publication: SandboxResultPublication,
+        chunks: AsyncIterator[bytes],
+    ) -> str:
+        if publication.document_kind != "patch":
+            raise ValueError("sandbox patch publication must have document_kind=patch")
+        return await self._publish(
+            publication=publication,
+            chunks=chunks,
+            title="Sandbox patch proposal",
+            filename="sandbox-patch.json",
+            source_suffix="patch",
+        )
+
+    async def _publish(
+        self,
+        *,
+        publication: SandboxResultPublication,
+        chunks: AsyncIterator[bytes],
+        title: str,
+        filename: str,
+        source_suffix: str,
+    ) -> str:
         mutation = await self._service.publish_from_stream(
             org_id=self._org_id,
             user_id=self._user_id,
             request=ArtifactCreateRequest(
                 run_id=publication.run_id,
                 kind=ArtifactKind.FILE,
-                title="Sandbox result",
+                title=title,
                 media_type="application/json",
-                suggested_filename="sandbox-result.json",
+                suggested_filename=filename,
                 expected_digest=publication.content_digest,
                 idempotency_key=publication.idempotency_key,
             ),
             provenance=ArtifactProvenance(
                 author=ArtifactAuthor.SYSTEM,
-                source_ref=f"payload://sandbox/{publication.operation_id}/result",
+                source_ref=(
+                    f"payload://sandbox/{publication.operation_id}/{source_suffix}"
+                ),
             ),
             chunks=chunks,
         )
