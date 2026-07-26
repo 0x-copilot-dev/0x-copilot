@@ -24,6 +24,7 @@ from agent_runtime.capabilities.sandbox.operation_adapter import (
     SANDBOX_EXECUTE_OPERATION,
     SandboxOperationAdapter,
 )
+from agent_runtime.capabilities.sandbox.contracts import SandboxError
 from agent_runtime.capabilities.sandbox.snapshot import SandboxSnapshotPlanProvider
 from agent_runtime.surfaces_v2.ledger_models import OperationOutcome
 
@@ -94,11 +95,26 @@ class SandboxExecuteToolFactory:
                     }
                 )
             identity = identity_provider()
-            plan = await snapshot_provider.snapshot_for(
-                run_id=identity.run_id,
-                org_id=identity.org_id,
-                user_id=identity.user_id,
-            )
+            try:
+                plan = await snapshot_provider.snapshot_for(
+                    run_id=identity.run_id,
+                    org_id=identity.org_id,
+                    user_id=identity.user_id,
+                )
+            except SandboxError:
+                # A missing retained C1 version, failed A2 authorization, or
+                # invalid immutable source must be honest to the model without
+                # leaking storage/provider detail.  No gateway operation or
+                # provider action has happened at this point.
+                return json.dumps(
+                    {
+                        "status": "failed",
+                        "summary": (
+                            "An authorized immutable sandbox snapshot is unavailable; "
+                            "no command was run."
+                        ),
+                    }
+                )
             request = OperationRequestFactory.create(
                 capability=SANDBOX_CAPABILITY,
                 op=SANDBOX_EXECUTE_OPERATION,

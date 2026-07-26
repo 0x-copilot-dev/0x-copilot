@@ -11,11 +11,12 @@ is byte-identical to today:
   calculation / transformation only, with a resolver that authorizes no external
   tool, until the direct-path tool-policy engine lands. The snapshot + result
   stores are the desktop file object store.
-* **Remote sandbox execute** (``run_in_sandbox``) — gated by
-  ``RUNTIME_ENABLE_REMOTE_SANDBOX`` + a configured provider (via
-  :func:`build_sandbox_backend`) **and** ``single_user_desktop``. A dedicated
-  execute-only tool, NOT the deepagents composite default backend, so local
-  filesystem / ``/memories/`` / ``/skills/`` stay untouched.
+* **Remote sandbox execute** (``run_in_sandbox``) — gated by an injected,
+  file-first worker bundle plus ``single_user_desktop``. The handler supplies
+  that bundle only when C1 retained snapshots, A2 artifacts, D3 file records,
+  a complete patch collector, and a provider-attested lifecycle are all
+  present. A dedicated execute-only gateway tool, NOT a Deep Agents composite
+  backend, so local filesystem / ``/memories/`` / ``/skills/`` stay untouched.
 
 Kept in its own module (mirroring
 :class:`runtime_worker.workspace_backend_wiring.WorkspaceBackendWorkerWiring`) so

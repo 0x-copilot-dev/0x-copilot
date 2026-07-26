@@ -14,7 +14,12 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+import asyncio
 import hashlib
+import os
+from pathlib import Path
+import stat
+import tempfile
 from typing import Protocol, runtime_checkable
 
 from pydantic import Field, ValidationError
@@ -43,6 +48,217 @@ from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.ledger_ids import ArtifactContentRefCodec
 
 _BLOB_REF_PREFIX = "artifact-blob://sha256/"
+
+
+@dataclass(frozen=True)
+class _SealedSnapshotContent:
+    """One fully verified, worker-local staging object.
+
+    This is deliberately not another logical content authority: callers cannot
+    name it, it has no URI, and it is reachable only from the in-memory
+    authorization map created while resolving a C1/A2 source.  It exists so
+    the provider never receives a byte before the entire selected source has
+    passed its declared digest and size checks.
+    """
+
+    path: Path
+    content_digest: str
+    size_bytes: int
+
+
+class SealedSandboxSnapshotFileStore(SandboxSnapshotFileStorePort):
+    """Pre-verify an immutable source before the coordinator can open it.
+
+    A plain blob stream can report a digest mismatch only *after* yielding its
+    first bytes.  Passing that stream through to ``DeepAgentSandboxRuntime``
+    would allow an online provider to receive unverified content.  This adapter
+    consumes a bounded source into a private, atomic file under the trusted
+    file-store root, verifies the complete body, and only then exposes an
+    iterator.  ``open`` re-verifies the sealed file before it returns its
+    iterator, so a local disk race also cannot turn into a provider upload.
+
+    The temporary files are an implementation-detail spill buffer, not a
+    second artifact/result store: no model-visible reference can address them,
+    and restart loses the in-memory authorization map that makes them readable.
+    """
+
+    _MODE = 0o600
+
+    def __init__(
+        self,
+        *,
+        source: SandboxSnapshotFileStorePort,
+        root: Path,
+        max_entry_bytes: int,
+    ) -> None:
+        if max_entry_bytes < 1:
+            raise ValueError("sandbox sealed snapshot limit must be positive")
+        self._source = source
+        self._root = root.resolve()
+        self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._max_entry_bytes = max_entry_bytes
+        self._sealed: dict[str, _SealedSnapshotContent] = {}
+        self._lock = asyncio.Lock()
+
+    async def resolve(
+        self, *, source: SandboxSnapshotSource, virtual_path: str
+    ) -> SandboxResolvedSnapshotSource | None:
+        resolved = await self._source.resolve(source=source, virtual_path=virtual_path)
+        if resolved is None:
+            return None
+        await self._seal(resolved)
+        return resolved
+
+    async def open(self, *, content_ref: str) -> AsyncIterator[bytes]:
+        """Return bytes only after re-verifying the entire sealed object."""
+
+        async with self._lock:
+            sealed = self._sealed.get(content_ref)
+            if sealed is None:
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                    "Sandbox snapshot content was not authorized for this operation.",
+                )
+            content = await asyncio.to_thread(self._read_verified, sealed)
+
+        async def _stream() -> AsyncIterator[bytes]:
+            if content:
+                yield content
+
+        return _stream()
+
+    async def _seal(self, resolved: SandboxResolvedSnapshotSource) -> None:
+        if resolved.size_bytes > self._max_entry_bytes:
+            raise SandboxError(
+                SandboxErrorCode.SNAPSHOT_QUOTA_EXCEEDED,
+                "Sandbox snapshot content exceeds the per-file ceiling.",
+            )
+        async with self._lock:
+            prior = self._sealed.get(resolved.content_ref)
+            if prior is not None:
+                if (
+                    prior.content_digest != resolved.content_digest
+                    or prior.size_bytes != resolved.size_bytes
+                ):
+                    raise SandboxError(
+                        SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                        "Sandbox snapshot content did not match its immutable source.",
+                    )
+                # The sealed file is re-verified below before any later open.
+                self._read_verified(prior)
+                return
+
+            temporary_path: Path | None = None
+            try:
+                descriptor, raw_path = tempfile.mkstemp(
+                    prefix="snapshot-",
+                    suffix=".tmp",
+                    dir=self._root,
+                )
+                temporary_path = Path(raw_path)
+                os.chmod(temporary_path, self._MODE)
+                digest = hashlib.sha256()
+                total = 0
+                with os.fdopen(descriptor, "wb") as handle:
+                    # Acquire the source only after ``fdopen`` owns the
+                    # descriptor.  A source-open failure must still close the
+                    # worker-private temporary file before it is unlinked.
+                    stream = await self._source.open(content_ref=resolved.content_ref)
+                    async for chunk in stream:
+                        if not isinstance(chunk, bytes):
+                            raise SandboxError(
+                                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                                "Sandbox snapshot content did not match its immutable source.",
+                            )
+                        total += len(chunk)
+                        if total > resolved.size_bytes or total > self._max_entry_bytes:
+                            raise SandboxError(
+                                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                                "Sandbox snapshot content did not match its immutable source.",
+                            )
+                        digest.update(chunk)
+                        handle.write(chunk)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                if (
+                    total != resolved.size_bytes
+                    or digest.hexdigest() != resolved.content_digest
+                ):
+                    raise SandboxError(
+                        SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                        "Sandbox snapshot content did not match its immutable source.",
+                    )
+                target = self._sealed_path(resolved.content_ref)
+                os.replace(temporary_path, target)
+                temporary_path = None
+                self._fsync_directory()
+                self._sealed[resolved.content_ref] = _SealedSnapshotContent(
+                    path=target,
+                    content_digest=resolved.content_digest,
+                    size_bytes=resolved.size_bytes,
+                )
+            except SandboxError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - normalize storage details
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                    "An authorized immutable sandbox snapshot is unavailable.",
+                ) from exc
+            finally:
+                if temporary_path is not None:
+                    try:
+                        temporary_path.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+
+    def _read_verified(self, sealed: _SealedSnapshotContent) -> bytes:
+        """Read one private regular file fully before yielding it to a provider."""
+
+        mode = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            mode |= os.O_NOFOLLOW
+        try:
+            descriptor = os.open(sealed.path, mode)
+            try:
+                metadata = os.fstat(descriptor)
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise OSError("sealed sandbox snapshot is not a regular file")
+                chunks: list[bytes] = []
+                digest = hashlib.sha256()
+                total = 0
+                while True:
+                    chunk = os.read(descriptor, 64 * 1024)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    if total > sealed.size_bytes or total > self._max_entry_bytes:
+                        raise OSError("sealed sandbox snapshot exceeds its limit")
+                    digest.update(chunk)
+                    chunks.append(chunk)
+            finally:
+                os.close(descriptor)
+        except OSError as exc:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            ) from exc
+        if total != sealed.size_bytes or digest.hexdigest() != sealed.content_digest:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox snapshot content did not match its immutable source.",
+            )
+        return b"".join(chunks)
+
+    def _sealed_path(self, content_ref: str) -> Path:
+        key = hashlib.sha256(content_ref.encode("utf-8")).hexdigest()
+        return self._root / f"{key}.sealed"
+
+    def _fsync_directory(self) -> None:
+        descriptor = os.open(self._root, os.O_RDONLY)
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
 
 class SandboxSnapshotIdentity(RuntimeContract):
@@ -467,6 +683,7 @@ __all__ = (
     "C1A2SandboxSnapshotFileStore",
     "SandboxSnapshotIdentity",
     "SandboxSnapshotPlanAuthorityPort",
+    "SealedSandboxSnapshotFileStore",
     "TrustedSandboxSnapshotPlanProvider",
     "VersionedOverlaySnapshotFileResolverPort",
     "WorkspaceOverlaySandboxSnapshotFileResolver",
