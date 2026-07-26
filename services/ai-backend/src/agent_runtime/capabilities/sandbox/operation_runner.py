@@ -32,6 +32,7 @@ from agent_runtime.capabilities.sandbox.operation_adapter import (
     SandboxOperationLaunch,
     SandboxOperationRunResult,
     SandboxOperationRunnerPort,
+    SandboxPatchManifestRef,
 )
 from agent_runtime.capabilities.sandbox.ports import SandboxSnapshotContentPort
 from agent_runtime.capabilities.sandbox.result_publisher import (
@@ -41,10 +42,12 @@ from agent_runtime.capabilities.sandbox.result_publisher import (
 from agent_runtime.capabilities.sandbox.snapshot import (
     SandboxSnapshotFileStorePort,
     SandboxSnapshotManifest,
+    SandboxSnapshotSourceKind,
 )
 from agent_runtime.capabilities.sandbox.workspace_transfer import (
     RawSnapshotEntry,
     WorkspaceManifestBuilder,
+    WorkspacePatchBuilder,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes
 from agent_runtime.surfaces_v2.ledger_ids import ArtifactContentRefCodec
@@ -146,19 +149,38 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                 SandboxErrorCode.SANDBOX_PROVIDER_UNCONFIGURED,
                 "Sandbox execution is unavailable.",
             )
-        coordinator_request = self._coordinator_request(request)
+        coordinator_request, collect_patch = self._coordinator_request(request)
         try:
             coordinator_result = await self._coordinator.run(coordinator_request)
-            artifact_ref = await self._publish_result(
-                request=request,
-                result=coordinator_result,
-            )
+            patch = None
             activity_ref = None
-            if coordinator_result.patch is not None:
+            if collect_patch:
+                if coordinator_result.patch is None:
+                    raise SandboxError(
+                        SandboxErrorCode.SANDBOX_PATCH_INCOMPLETE,
+                        "Sandbox patch collection was not confirmed.",
+                    )
+                patch = await self._publish_patch(
+                    request=request,
+                    result=coordinator_result,
+                    baseline_snapshot_digest=(
+                        coordinator_request.create_request.snapshot.manifest_sha256
+                    ),
+                )
                 # The coordinator owns validation and its only importer is the
                 # injected C1/C3 overlay port.  This runner never gets a host
                 # authority or a physical write API.
                 activity_ref = await self._coordinator.import_patch(coordinator_result)
+            elif coordinator_result.patch is not None:
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                    "Sandbox returned a patch outside its approved overlay scope.",
+                )
+            artifact_ref = await self._publish_result(
+                request=request,
+                result=coordinator_result,
+                patch=patch,
+            )
         except SandboxError:
             raise
         except Exception as exc:  # noqa: BLE001 - never leak provider/storage detail
@@ -175,6 +197,7 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                 result_ref=artifact_ref,
                 safe_summary=self._safe_summary(coordinator_result),
                 activity_ref=activity_ref,
+                patch=patch,
             )
         except (ValueError, ValidationError) as exc:
             raise SandboxError(
@@ -182,8 +205,10 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                 "Sandbox result publication did not return an immutable artifact revision.",
             ) from exc
 
-    def _coordinator_request(self, launch: SandboxOperationLaunch) -> SandboxRunRequest:
-        snapshot = self._coordinator_snapshot(launch.snapshot)
+    def _coordinator_request(
+        self, launch: SandboxOperationLaunch
+    ) -> tuple[SandboxRunRequest, bool]:
+        snapshot, collect_patch = self._coordinator_snapshot(launch.snapshot)
         return SandboxRunRequest(
             create_request=SandboxCreateRequest(
                 run_id=launch.run_id,
@@ -198,13 +223,13 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
             ),
             command=launch.command,
             deliverables=(),
-            collect_patch=False,
+            collect_patch=collect_patch,
             redaction_terms=(),
-        )
+        ), collect_patch
 
     def _coordinator_snapshot(
         self, manifest: SandboxSnapshotManifest
-    ) -> SandboxSnapshot:
+    ) -> tuple[SandboxSnapshot, bool]:
         """Re-validate and translate the v2.1 virtual manifest for AC7 coordinator."""
 
         # Revalidation defends against an unsafe Pydantic ``model_construct``
@@ -250,9 +275,15 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                 SandboxErrorCode.SNAPSHOT_INVALID,
                 "Sandbox snapshot contains an unsupported virtual path.",
             )
-        return WorkspaceManifestBuilder.to_sandbox_snapshot(
-            transfer,
-            snapshot_id=verified.snapshot_id,
+        return (
+            WorkspaceManifestBuilder.to_sandbox_snapshot(
+                transfer,
+                snapshot_id=verified.snapshot_id,
+            ),
+            any(
+                entry.source_kind is SandboxSnapshotSourceKind.OVERLAY
+                for entry in verified.entries
+            ),
         )
 
     async def _publish_result(
@@ -260,6 +291,7 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
         *,
         request: SandboxOperationLaunch,
         result: SandboxRunResult,
+        patch: SandboxPatchManifestRef | None,
     ) -> str:
         if result.artifacts:
             # The current AC7 deliverable port returns digest/size but not an
@@ -270,7 +302,7 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                 SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
                 "Sandbox deliverables require immutable artifact revisions.",
             )
-        content = self._bounded_result_bytes(result)
+        content = self._bounded_result_bytes(result, patch=patch)
         publication = SandboxResultPublication(
             run_id=request.run_id,
             operation_id=request.operation_id,
@@ -286,6 +318,62 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
             chunks=self._single_chunk(content),
         )
 
+    async def _publish_patch(
+        self,
+        *,
+        request: SandboxOperationLaunch,
+        result: SandboxRunResult,
+        baseline_snapshot_digest: str,
+    ) -> SandboxPatchManifestRef:
+        patch = result.patch
+        if patch is None:  # pragma: no cover - guarded by run() above
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_PATCH_INCOMPLETE,
+                "Sandbox patch collection was not confirmed.",
+            )
+        WorkspacePatchBuilder.verify_patch(patch, require_complete=True)
+        if patch.baseline_manifest_sha256 != baseline_snapshot_digest:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox patch does not match the approved snapshot.",
+            )
+        content = canonical_json_bytes(
+            {"v": 1, "kind": "sandbox_patch", "patch": patch.model_dump(mode="json")}
+        )
+        if len(content) > self._limits.download_changed_bytes:
+            raise SandboxError(
+                SandboxErrorCode.SNAPSHOT_QUOTA_EXCEEDED,
+                "Sandbox patch representation exceeds the publication ceiling.",
+            )
+        publication = SandboxResultPublication(
+            run_id=request.run_id,
+            operation_id=request.operation_id,
+            document_kind="patch",
+            content_digest=hashlib.sha256(content).hexdigest(),
+            byte_size=len(content),
+            idempotency_key=(
+                "sandbox-patch:"
+                + hashlib.sha256(request.idempotency_key.encode("utf-8")).hexdigest()
+            ),
+        )
+        patch_ref = await self._result_publisher.publish_patch(
+            publication=publication,
+            chunks=self._single_chunk(content),
+        )
+        try:
+            ArtifactContentRefCodec.parse(patch_ref)
+            return SandboxPatchManifestRef(
+                patch_ref=patch_ref,
+                baseline_snapshot_digest=patch.baseline_manifest_sha256,
+                manifest_digest=patch.manifest_sha256,
+                complete=True,
+            )
+        except (ValueError, ValidationError) as exc:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
+                "Sandbox patch publication did not return an immutable artifact revision.",
+            ) from exc
+
     @staticmethod
     async def _single_chunk(content: bytes) -> AsyncIterator[bytes]:
         yield content
@@ -299,7 +387,9 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
         return "Sandbox command completed with a non-zero exit status."
 
     @staticmethod
-    def _bounded_result_bytes(result: SandboxRunResult) -> bytes:
+    def _bounded_result_bytes(
+        result: SandboxRunResult, *, patch: SandboxPatchManifestRef | None
+    ) -> bytes:
         """Encode only coordinator-safe fields within the published-result ceiling."""
 
         document: dict[str, object] = {
@@ -310,6 +400,7 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
             "output_truncated": result.output_truncated,
             "stdout": result.stdout,
             "stderr": result.stderr,
+            "patch_ref": patch.patch_ref if patch is not None else None,
         }
         encoded = canonical_json_bytes(document)
         if len(encoded) <= _MAX_RESULT_BYTES:

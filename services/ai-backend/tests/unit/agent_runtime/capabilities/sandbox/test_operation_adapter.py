@@ -24,6 +24,7 @@ from agent_runtime.capabilities.sandbox.operation_adapter import (
     SandboxOperationAdapter,
     SandboxOperationAvailability,
     SandboxOperationLaunch,
+    SandboxPatchManifestRef,
     SandboxOperationRunResult,
     SandboxOperationRunnerPort,
     sandbox_operation_descriptor,
@@ -131,6 +132,14 @@ class TestSandboxOperationAdapter:
                 operation_id="operation_sandbox",
                 result_ref="sandbox-result://operations/operation_sandbox",
                 safe_summary="Sandbox command completed.",
+            )
+
+    def test_patch_reference_cannot_create_a_second_sandbox_authority(self) -> None:
+        with pytest.raises(ValidationError, match="logical reference"):
+            SandboxPatchManifestRef(
+                patch_ref="sandbox-patch://operations/operation_sandbox",
+                baseline_snapshot_digest="a" * 64,
+                manifest_digest="b" * 64,
             )
 
     def test_unavailable_reason_must_be_a_safe_code(self) -> None:
