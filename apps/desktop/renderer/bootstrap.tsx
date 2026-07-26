@@ -59,6 +59,7 @@ import { registerAll as registerSurfaceRenderers } from "@0x-copilot/surface-ren
 
 import { applyAppearance } from "./appearance";
 import { BootGate } from "./BootProgress";
+import { DesktopWindowFrame } from "./DesktopWindowFrame";
 import { DestinationOutlet } from "./DestinationOutlet";
 import { registerDesktopItemRoutes } from "./itemRoutes";
 import { buildDesktopShellBinding } from "./shellBinding";
@@ -484,7 +485,9 @@ export function mountApp(container: HTMLElement): () => void {
   const root = createRoot(container);
   root.render(
     <StrictMode>
-      <App />
+      <DesktopWindowFrame>
+        <App />
+      </DesktopWindowFrame>
     </StrictMode>,
   );
   return () => {

@@ -21,15 +21,16 @@ describe("RunHeader", () => {
       "Ship the renewal batch",
     );
     expect(screen.getByTestId("run-header")).toHaveStyle({
-      minHeight: "58px",
-      padding: "8px 20px",
+      height: "38px",
+      gap: "12px",
+      padding: "0px 13px",
     });
-    expect(screen.getByTestId("run-header-kicker")).toHaveStyle({
-      lineHeight: "14px",
-    });
-    expect(screen.getByTestId("run-header-goal")).toHaveStyle({
-      lineHeight: "20px",
-    });
+    expect(screen.getByTestId("run-header-title").textContent).toBe(
+      "0xCopilot—Studio",
+    );
+    expect(screen.getByTestId("run-header-window-dots").children).toHaveLength(
+      3,
+    );
   });
 
   it("falls back to idle copy when the goal is null/empty (never a blank h2, and the kicker never claims a run)", () => {
@@ -99,6 +100,26 @@ describe("RunHeader", () => {
     );
     expect(screen.getByTestId("run-header-status")).not.toBeNull();
     expect(screen.getByTestId("probe").textContent).toBe("working");
+  });
+
+  it("keeps the design window identity centred while the mode control owns the command edge", () => {
+    const { container } = render(
+      <RunHeader
+        goal="A deliberately long run goal that must not move the mode control"
+        mode="studio"
+        onModeChange={() => {}}
+      />,
+    );
+
+    expect(screen.getByTestId("run-header-window-dots")).not.toBeNull();
+    expect(screen.getByTestId("run-header-title")).toHaveStyle({
+      position: "absolute",
+      pointerEvents: "none",
+    });
+    expect(
+      container.querySelector("[data-testid='run-header-goal']")?.parentElement,
+    ).toHaveStyle({ position: "absolute" });
+    expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
   });
 
   // WC-P6b — the `● working` pulse chip is driven by `runStatus`.

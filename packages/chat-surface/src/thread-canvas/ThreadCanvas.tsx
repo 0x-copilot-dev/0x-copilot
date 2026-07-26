@@ -475,7 +475,8 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
 
       <SwimlaneScrubProvider value={scrubContextValue}>
         <div
-          data-testid="tc-surface-slot"
+          data-testid="run-canvas-slot"
+          data-canvas-slot-testid="tc-surface-slot"
           data-visible={showSurfaceColumn ? "true" : "false"}
           style={surfaceSlotStyle(showSurfaceColumn)}
         >

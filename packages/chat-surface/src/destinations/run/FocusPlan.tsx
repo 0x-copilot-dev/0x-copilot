@@ -170,9 +170,11 @@ function toolLabel(
 }
 
 const rootStyle: CSSProperties = {
-  display: "grid",
+  display: "flex",
+  flexDirection: "column",
   gap: 6,
-  padding: "0 12px 12px",
+  margin: "9px 0 0",
+  padding: 0,
 };
 
 const headingStyle: CSSProperties = {

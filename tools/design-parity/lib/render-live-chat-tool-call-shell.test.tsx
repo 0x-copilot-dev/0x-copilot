@@ -30,12 +30,13 @@ import type {
 } from "@0x-copilot/chat-transport";
 import {
   KeyValueStoreProvider,
-  RunDestination,
   TransportProvider,
   type KeyValueStore,
   type WorkspaceStageHost,
 } from "@0x-copilot/chat-surface";
 
+import { DesktopWindowFrame } from "../../../apps/desktop/renderer/DesktopWindowFrame";
+import { DestinationOutlet } from "../../../apps/desktop/renderer/DestinationOutlet";
 import { runModeKey } from "../../../packages/chat-surface/src/destinations/run/useRunMode";
 
 const HERE = (p: string): string => fileURLToPath(new URL(p, import.meta.url));
@@ -97,6 +98,9 @@ class ShellTransport implements Transport {
       } as TRes;
     }
     if (request.path.endsWith("/surfaces")) return { surfaces: [] } as TRes;
+    if (request.path === "/v1/settings/provider-keys") {
+      return { keys: [{ provider: "anthropic" }] } as TRes;
+    }
     if (request.path.includes("/pending-work")) {
       return { cards: [], agents: [] } as TRes;
     }
@@ -518,19 +522,13 @@ function shell(state: ChatToolCallShellState, inner: string): string {
     <link rel="stylesheet" href="./workspace.css" />
     <link rel="stylesheet" href="./markdown.css" />
     <link rel="stylesheet" href="./subagents.css" />
+    <link rel="stylesheet" href="./desktop.css" />
     <style>
-      html, body { margin: 0; min-height: 100%; background: var(--color-bg); }
+      html, body { margin: 0; min-height: 100%; }
       *, *::before, *::after { animation: none !important; transition: none !important; }
-      #parity-frame {
-        box-sizing: border-box; display: flex; flex-direction: column;
-        width: 1200px; height: 816px; overflow: hidden;
-        background: var(--color-bg); color: var(--color-text);
-        font-family: var(--font-sans);
-      }
-      #parity-frame > .run-destination { flex: 1; min-height: 0; }
     </style>
   </head>
-  <body><div id="parity-frame" data-parity-live-state="${state}">${inner}</div></body>
+  <body><div id="root" data-parity-live-state="${state}">${inner}</div></body>
 </html>`;
 }
 
@@ -556,6 +554,10 @@ describe("live chat/tool-call shell — RunDestination fixture", () => {
     copyFileSync(
       REPO("packages/design-system/src/styles.css"),
       LIVE("styles.css"),
+    );
+    copyFileSync(
+      REPO("apps/desktop/renderer/desktop.css"),
+      LIVE("desktop.css"),
     );
     for (const [source, destination] of [
       ["packages/chat-surface/src/composer/composer.css", "composer.css"],
@@ -605,7 +607,7 @@ describe("live chat/tool-call shell — RunDestination fixture", () => {
   });
 
   for (const state of CHAT_TOOL_CALL_SHELL_STATES) {
-    it(`${state} — serializes the real RunDestination/ThreadCanvas state`, async () => {
+    it(`${state} — serializes the desktop host's real RunDestination/ThreadCanvas state`, async () => {
       const transport = new ShellTransport();
       const mode = state === "focus-thinking" ? "focus" : "studio";
       const rendered = render(
@@ -615,14 +617,15 @@ describe("live chat/tool-call shell — RunDestination fixture", () => {
           h(
             KeyValueStoreProvider,
             { store: makeStore(mode) },
-            h(RunDestination, {
-              conversationId: CONVERSATION_ID,
-              runId: RUN_ID,
-              agentName: "0xCopilot",
-              goal: "Monday catch-up",
-              surfacesV2: true,
-              workspaceStageHost,
-            }),
+            h(
+              DesktopWindowFrame,
+              { id: "parity-frame" },
+              h(DestinationOutlet, {
+                destination: "run",
+                conversationId: CONVERSATION_ID,
+                workspaceStageHost,
+              }),
+            ),
           ),
         ),
       );
@@ -637,7 +640,9 @@ describe("live chat/tool-call shell — RunDestination fixture", () => {
       await screen.findByTestId(expectedLiveAnchor(state));
 
       // Required shell anchors prove this is the actual cockpit composition,
-      // rather than a component-level or bespoke markup fixture.
+      // routed through the shipping desktop host rather than a bespoke fixture.
+      expect(screen.getByTestId("desktop-window-frame")).not.toBeNull();
+      expect(screen.getByTestId("destination-outlet")).not.toBeNull();
       expect(screen.getByTestId("run-header")).not.toBeNull();
       expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
       expect(screen.getByTestId("tc-chat")).not.toBeNull();
@@ -647,6 +652,10 @@ describe("live chat/tool-call shell — RunDestination fixture", () => {
         LIVE(`${state}.html`),
         shell(state, rendered.container.innerHTML),
       );
+      const liveHtml = readFileSync(LIVE(`${state}.html`), "utf8");
+      expect(liveHtml).toContain('data-testid="desktop-window-frame"');
+      expect(liveHtml).toContain('id="parity-frame"');
+      expect(liveHtml).not.toContain("#parity-frame {");
     });
   }
 });

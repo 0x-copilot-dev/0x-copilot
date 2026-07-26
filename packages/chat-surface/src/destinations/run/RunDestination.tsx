@@ -3012,7 +3012,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         />
       ) : null}
 
-      <div data-testid="run-canvas-slot" style={canvasSlotStyle}>
+      <div data-testid="run-cockpit-canvas-slot" style={canvasSlotStyle}>
         {/* PR-3.11 (FR-3.25): no active run → the empty/idle composer (never a
             blank ThreadCanvas / placeholder string). When the host injects
             `renderEmptyComposer`, the cockpit shows the design's "What should we
@@ -3319,6 +3319,8 @@ const RUN_COCKPIT_SCOPE_CSS = `
 
   .run-destination [data-testid="composer"] {
     display: block !important;
+    flex-direction: row !important;
+    gap: normal !important;
   }
 
   .run-destination[data-mode="focus"][data-run-status="streaming"]

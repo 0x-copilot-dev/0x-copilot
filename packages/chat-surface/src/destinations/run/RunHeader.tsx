@@ -1,8 +1,8 @@
-// RunHeader — the Run cockpit's `.ws-head` (PR-3.5).
+// RunHeader — the desktop Run cockpit's window bar (PR-3.5).
 //
 // Source: docs/plan/desktop-redesign/design-reference/DESIGN-SPEC.md §2
-//   Header `.ws-head`: agent avatar (Mark), an "ACTIVE RUN" mono kicker + the
-//   goal `<h2>`, and a right-aligned **mode segmented control** (Studio / Focus).
+//   Header `.mw-bar`: macOS traffic-light dots, the centred `0xCopilot — mode`
+//   identity, and a right-aligned **mode segmented control** (Focus / Studio).
 //
 // Ownership: RunHeader is presentation only. The *mode value* is owned by
 // `useRunMode` (KeyValueStore-backed); this component renders the current mode
@@ -59,7 +59,11 @@ export interface RunHeaderProps {
    * not have (DESIGN-SPEC §2). An explicit value overrides both states.
    */
   readonly kicker?: string;
-  /** Agent display name — seeds the avatar glyph + a11y label. */
+  /**
+   * Retained for API compatibility with existing RunDestination callers. The
+   * compact desktop bar intentionally uses product identity rather than an
+   * agent avatar; the active run is still exposed in the accessible summary.
+   */
   readonly agentName?: string;
   /** Current layout mode (drives the segmented control's selected tab). */
   readonly mode: RunMode;
@@ -124,30 +128,29 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
   // An explicit `kicker` prop overrides both states.
   const resolvedKicker =
     kicker ?? (activeGoal !== null ? ACTIVE_KICKER : IDLE_KICKER);
-  const avatarGlyph = (agentName.trim()[0] ?? "A").toUpperCase();
+  const modeLabel = MODE_LABELS[mode];
 
   return (
     <header data-testid="run-header" style={headerStyle}>
-      <div
-        aria-hidden="true"
-        data-testid="run-header-avatar"
-        style={avatarStyle}
-      >
-        {avatarGlyph}
+      <WindowDots />
+      <div data-testid="run-header-title" style={titleLayerStyle}>
+        <b style={productNameStyle}>
+          <span style={productMarkStyle}>0x</span>Copilot
+        </b>
+        <span aria-hidden="true">—</span>
+        <span>{modeLabel}</span>
       </div>
-      <div style={headingBlockStyle}>
-        <span data-testid="run-header-kicker" style={kickerStyle}>
-          {resolvedKicker}
-        </span>
-        <div style={goalRowStyle}>
-          <h2 data-testid="run-header-goal" style={goalStyle}>
-            {goalText}
-          </h2>
-          <RunStatusPulse runStatus={runStatus} />
-          {status !== undefined && status !== null ? (
-            <span data-testid="run-header-status">{status}</span>
-          ) : null}
-        </div>
+      {/* Preserve the run’s useful semantic summary without competing with the
+          authoritative compact window-bar composition. The visually rendered
+          identity is the product + selected workspace mode; assistive tech
+          retains the active/standby state, goal, and live run status. */}
+      <div style={visuallyHiddenStyle}>
+        <span data-testid="run-header-kicker">{resolvedKicker}</span>
+        <h2 data-testid="run-header-goal">{goalText}</h2>
+        <RunStatusPulse runStatus={runStatus} />
+        {status !== undefined && status !== null ? (
+          <span data-testid="run-header-status">{status}</span>
+        ) : null}
       </div>
       <ModeSegmentedControl
         agentName={agentName}
@@ -155,6 +158,20 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
         onModeChange={onModeChange}
       />
     </header>
+  );
+}
+
+function WindowDots(): ReactElement {
+  return (
+    <div
+      aria-hidden="true"
+      data-testid="run-header-window-dots"
+      style={windowDotsStyle}
+    >
+      <span style={{ ...windowDotStyle, background: "#ff5f57" }} />
+      <span style={{ ...windowDotStyle, background: "#febc2e" }} />
+      <span style={{ ...windowDotStyle, background: "#28c840" }} />
+    </div>
   );
 }
 
@@ -294,71 +311,65 @@ const pulseDotStyle: CSSProperties = {
 
 const headerStyle: CSSProperties = {
   boxSizing: "border-box",
+  position: "relative",
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
-  gap: 14,
-  minHeight: 58,
-  padding: "8px 20px",
+  gap: 12,
+  height: 38,
+  padding: "0 13px",
   borderBottom: "1px solid var(--color-border)",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
 };
 
-const avatarStyle: CSSProperties = {
-  flexShrink: 0,
-  width: 40,
-  height: 40,
-  borderRadius: "50%",
-  display: "grid",
-  placeItems: "center",
-  background: "var(--color-accent-soft, rgba(95,178,236,.10))",
-  color: "var(--color-accent, #5fb2ec)",
-  border: "1px solid var(--color-accent-line, rgba(95,178,236,.35))",
-  fontWeight: 600,
-  fontSize: "var(--font-size-md, 15px)",
-};
-
-const headingBlockStyle: CSSProperties = {
-  // Keep the title content-sized and let the switcher consume the remaining
-  // header space through its auto margin. This mirrors the cockpit's calm,
-  // right-pinned mode control while still allowing long goals to shrink.
-  flex: "0 1 auto",
-  maxWidth: "calc(100% - 160px)",
-  minWidth: 0,
+const windowDotsStyle: CSSProperties = {
+  zIndex: 2,
   display: "flex",
-  flexDirection: "column",
-  gap: 4,
+  gap: 8,
+  alignItems: "center",
 };
 
-const kickerStyle: CSSProperties = {
-  fontFamily: "var(--font-mono)",
-  fontSize: "var(--font-size-2xs, 11px)",
-  letterSpacing: "0.08em",
-  textTransform: "uppercase",
-  color: "var(--color-text-muted, #9aa0a6)",
-  lineHeight: "14px",
+const windowDotStyle: CSSProperties = {
+  width: 11,
+  height: 11,
+  borderRadius: "50%",
+  border: "0.5px solid rgba(0,0,0,.2)",
 };
 
-const goalRowStyle: CSSProperties = {
+const titleLayerStyle: CSSProperties = {
+  position: "absolute",
+  inset: 0,
+  top: 0,
   display: "flex",
   alignItems: "center",
-  gap: 10,
-  minWidth: 0,
+  justifyContent: "center",
+  gap: 7,
+  fontSize: 12,
+  color: "var(--color-text-muted)",
+  pointerEvents: "none",
 };
 
-const goalStyle: CSSProperties = {
-  margin: 0,
-  fontFamily: "var(--font-display, var(--font-sans))",
-  fontSize: "var(--font-size-md, 15px)",
+const productNameStyle: CSSProperties = {
+  color: "var(--color-text-secondary, var(--color-text))",
   fontWeight: 600,
-  lineHeight: "20px",
-  letterSpacing: "-0.01em",
-  color: "var(--color-text, #f4f5f6)",
+};
+
+const productMarkStyle: CSSProperties = {
+  color: "var(--color-accent)",
+};
+
+const visuallyHiddenStyle: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
   overflow: "hidden",
-  textOverflow: "ellipsis",
+  clip: "rect(0, 0, 0, 0)",
   whiteSpace: "nowrap",
+  border: 0,
 };
 
 const segmentedStyle: CSSProperties = {

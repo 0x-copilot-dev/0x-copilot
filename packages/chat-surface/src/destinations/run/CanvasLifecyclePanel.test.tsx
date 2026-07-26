@@ -10,10 +10,15 @@ describe("CanvasLifecyclePanel (PRD-B3)", () => {
   it("pins the honest chat-only copy", () => {
     render(<CanvasLifecyclePanel lifecycle="chat_only" failure={null} />);
 
-    expect(screen.getByTestId("canvas-lifecycle-panel")).toHaveAttribute(
-      "data-lifecycle",
-      "chat_only",
-    );
+    const panel = screen.getByTestId("canvas-lifecycle-panel");
+    expect(panel).toHaveAttribute("data-lifecycle", "chat_only");
+    // The empty state is a canvas state, not nested card chrome.
+    expect(panel).toHaveStyle({
+      background: "transparent",
+      borderRadius: "0px",
+      padding: "26px",
+    });
+    expect(panel.style.borderWidth).toBe("0px");
     expect(screen.getByText("Answered in chat")).toBeInTheDocument();
     expect(screen.getByText(CHAT_ONLY_CANVAS_COPY)).toBeInTheDocument();
   });

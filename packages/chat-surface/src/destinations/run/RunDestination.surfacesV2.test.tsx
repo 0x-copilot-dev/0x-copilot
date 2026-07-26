@@ -511,14 +511,14 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     stream(transport, [created("s_issue", "record", "ENG-142")]);
 
     // Studio (default): the surface column is visible → canvas mounted.
-    const slot = screen.getByTestId("tc-surface-slot");
+    const slot = screen.getByTestId("run-canvas-slot");
     expect(slot.getAttribute("data-visible")).toBe("true");
 
     // Switch to Focus: the surface column is hidden → no generative surfaces.
     fireEvent.click(screen.getByTestId("run-mode-focus"));
     await waitFor(() =>
       expect(
-        screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
+        screen.getByTestId("run-canvas-slot").getAttribute("data-visible"),
       ).toBe("false"),
     );
 
@@ -526,7 +526,7 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     fireEvent.click(screen.getByTestId("run-mode-studio"));
     await waitFor(() =>
       expect(
-        screen.getByTestId("tc-surface-slot").getAttribute("data-visible"),
+        screen.getByTestId("run-canvas-slot").getAttribute("data-visible"),
       ).toBe("true"),
     );
   });
