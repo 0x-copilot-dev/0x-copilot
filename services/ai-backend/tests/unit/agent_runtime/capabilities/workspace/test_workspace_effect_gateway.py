@@ -12,6 +12,7 @@ import pytest
 
 from agent_runtime.capabilities.operations.context import (
     OperationContext,
+    OperationRequestFactory,
     VerifiedOperationIdentity,
 )
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
@@ -38,7 +39,6 @@ from agent_runtime.capabilities.workspace.effects import (
     WorkspaceStoredProposal,
 )
 from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
-from agent_runtime.capabilities.workspace.overlay import WorkspaceOverlayService
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
     EffectStageScope,
@@ -216,7 +216,7 @@ class RecordingProposalStore:
 class Harness:
     backend: WorkspaceGatewayBackend
     base: ExplodingWorkspaceBase
-    overlay: WorkspaceOverlayService
+    overlays: InMemoryWorkspaceOverlayStore
     ledger: FakeLedger
     outbox: FakeOutbox
     emitter: RecordingEmitter
@@ -273,18 +273,11 @@ def _harness(
     base = ExplodingWorkspaceBase(files)
     overlays = InMemoryWorkspaceOverlayStore()
     blobs = InMemoryArtifactBlobStore()
-    overlay = WorkspaceOverlayService(
-        run_id=RUN_ID,
-        base_read=base,
-        overlay_store=overlays,
-        blob_store=blobs,
-    )
     merged = MergedWorkspaceBackend(
         run_id=RUN_ID,
         base_read=base,
         overlay_store=overlays,
         blob_store=blobs,
-        overlay_service=overlay,
     )
     ledger = FakeLedger()
     outbox = FakeOutbox()
@@ -303,8 +296,6 @@ def _harness(
     )
     adapter = WorkspaceOperationAdapter(
         services=WorkspaceGatewayServices(
-            merged=merged,
-            overlay=overlay,
             stager=stager,
             scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER),
             actor=EffectActorIdentity(
@@ -313,7 +304,11 @@ def _harness(
             ),
             proposals=proposals,
             grants=grants,
-        )
+        ),
+        run_id=RUN_ID,
+        base_read=base,
+        overlay_store=overlays,
+        blob_store=blobs,
     )
     return Harness(
         backend=WorkspaceGatewayBackend(
@@ -323,7 +318,7 @@ def _harness(
             grants=grants,
         ),
         base=base,
-        overlay=overlay,
+        overlays=overlays,
         ledger=ledger,
         outbox=outbox,
         emitter=RecordingEmitter(),
@@ -388,6 +383,59 @@ async def test_every_workspace_mutation_stages_and_never_touches_base(
         isinstance(value, str) and value.startswith(("/", "file://", "filesystem://"))
         for value in event.payload.values()
     )
+
+
+async def test_model_cannot_use_the_read_facade_to_mutate_without_a_stage() -> None:
+    """A model gets the Deep Agents backend, never an overlay write capability."""
+
+    path = f"/workspace/{MOUNT}/report.csv"
+    harness = _harness()
+    for mutator in ("awrite", "aedit", "adelete", "amove", "amkdir"):
+        assert not hasattr(harness.backend._merged, mutator)
+
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(path, "account,total\nAcme,10\n")
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert (
+        result.error == "Workspace change staged for review; the host was not modified."
+    )
+    manifest = await harness.overlays.get_manifest(run_id=RUN_ID)
+    entry = manifest.entry_at(path)
+    assert entry is not None and entry.stage_id is not None
+    assert harness.ledger.append_calls == 1
+    assert harness.outbox.enqueue_calls == 0
+    assert harness.base.mutation_calls == []
+
+
+async def test_direct_adapter_call_cannot_append_an_overlay_without_gateway_scope() -> (
+    None
+):
+    """Model-visible code cannot substitute a direct adapter call for A4."""
+
+    path = f"/workspace/{MOUNT}/bypass.csv"
+    harness = _harness()
+    token = harness.bind()
+    try:
+        request = OperationRequestFactory.create(
+            capability="workspace",
+            op="write",
+            arguments={"virtual_path": path, "content": "must stage"},
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="workspace mutations must be invoked through OperationGateway",
+        ):
+            await harness.backend._adapter.build_proposal(request)
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entries == ()
+    assert harness.ledger.append_calls == 0
+    assert harness.outbox.enqueue_calls == 0
+    assert harness.base.mutation_calls == []
 
 
 @pytest.mark.parametrize(
@@ -472,14 +520,14 @@ async def test_edit_revises_same_stage_and_invalidates_old_revision() -> None:
     token = harness.bind()
     try:
         await harness.backend.awrite(path, "draft one\n")
-        first_manifest = await harness.overlay.manifest()
+        first_manifest = await harness.overlays.get_manifest(run_id=RUN_ID)
         first = first_manifest.entry_at(path)
         assert first is not None
         await harness.backend.aedit(path, "one", "two")
     finally:
         OperationContext.unbind(token)  # type: ignore[arg-type]
 
-    current = (await harness.overlay.manifest()).entry_at(path)
+    current = (await harness.overlays.get_manifest(run_id=RUN_ID)).entry_at(path)
     assert current is not None
     assert current.stage_id == first.stage_id
     assert current.stage_revision == 2

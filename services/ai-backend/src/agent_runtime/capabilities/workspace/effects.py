@@ -32,8 +32,12 @@ from agent_runtime.capabilities.workspace.contracts import (
     mount_id_for_path,
     normalize_virtual_path,
 )
-from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
-from agent_runtime.capabilities.workspace.overlay import WorkspaceOverlayService
+from agent_runtime.artifacts.ports import ArtifactBlobStorePort
+from agent_runtime.capabilities.workspace.overlay import _WorkspaceOverlayMutationEngine
+from agent_runtime.capabilities.workspace.ports import (
+    WorkspaceBaseReadPort,
+    WorkspaceOverlayStorePort,
+)
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
     EffectPolicySnapshot,
@@ -110,8 +114,6 @@ class WorkspaceProposalStorePort(Protocol):
 class WorkspaceGatewayServices:
     """Per-run dependencies for the enforced workspace adapter."""
 
-    merged: MergedWorkspaceBackend
-    overlay: WorkspaceOverlayService
     stager: EffectStager
     scope: EffectStageScope
     actor: EffectActorIdentity
@@ -213,18 +215,41 @@ class WorkspaceGrantGate:
 
 
 class WorkspaceOperationAdapter(OperationAdapter):
-    """Build one exact overlay mutation and bind it to an A4 stage."""
+    """The sole model-mutation gateway for one workspace run.
 
-    def __init__(self, *, services: WorkspaceGatewayServices) -> None:
+    This is the only public constructor that owns the private raw overlay
+    engine.  It is invoked exclusively by :class:`OperationGateway`; model
+    backends receive this adapter but never a raw overlay capability.
+    """
+
+    def __init__(
+        self,
+        *,
+        services: WorkspaceGatewayServices,
+        run_id: str,
+        base_read: WorkspaceBaseReadPort,
+        overlay_store: WorkspaceOverlayStorePort,
+        blob_store: ArtifactBlobStorePort,
+    ) -> None:
         self._services = services
+        self._mutations = _WorkspaceOverlayMutationEngine(
+            run_id=run_id,
+            base_read=base_read,
+            overlay_store=overlay_store,
+            blob_store=blob_store,
+        )
 
     async def execute_read(self, request: OperationRequest) -> OperationRawResult:
         del request
         raise RuntimeError("workspace reads use the merged read backend")
 
     async def build_proposal(self, request: OperationRequest) -> GatewayProposedEffect:
+        if OperationContext.parent_operation_id() != request.operation_id:
+            raise RuntimeError(
+                "workspace mutations must be invoked through OperationGateway"
+            )
         arguments = _request_arguments(request)
-        before = await self._services.overlay.manifest()
+        before = await self._mutations._manifest()
         mutation = await self._mutate(request.op, arguments)
         paths = _bound_paths(request.op, arguments, mutation)
 
@@ -301,7 +326,7 @@ class WorkspaceOperationAdapter(OperationAdapter):
         )
         revision = state.current_revision
         try:
-            await self._services.overlay.bind_stage(
+            await self._mutations._bind_stage(
                 virtual_paths=paths,
                 stage_id=state.stage_id,
                 stage_revision=revision.revision,
@@ -338,14 +363,12 @@ class WorkspaceOperationAdapter(OperationAdapter):
             path = _required_text(arguments, "virtual_path")
             content = _required_text(arguments, "content")
             if op == "create":
-                return await self._services.overlay.propose_create(
+                return await self._mutations._propose_create(
                     path, content, author=author
                 )
-            return await self._services.overlay.propose_replace(
-                path, content, author=author
-            )
+            return await self._mutations._propose_replace(path, content, author=author)
         if op == "edit":
-            return await self._services.overlay.propose_edit(
+            return await self._mutations._propose_edit(
                 _required_text(arguments, "virtual_path"),
                 _required_text(arguments, "old_string"),
                 _required_text(arguments, "new_string", allow_empty=True),
@@ -353,17 +376,17 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 author=author,
             )
         if op == "delete":
-            return await self._services.overlay.propose_delete(
+            return await self._mutations._propose_delete(
                 _required_text(arguments, "virtual_path"), author=author
             )
         if op == "move":
-            return await self._services.overlay.propose_move(
+            return await self._mutations._propose_move(
                 _required_text(arguments, "source_virtual_path"),
                 _required_text(arguments, "destination_virtual_path"),
                 author=author,
             )
         if op == "mkdir":
-            return await self._services.overlay.propose_mkdir(
+            return await self._mutations._propose_mkdir(
                 _required_text(arguments, "virtual_path"), author=author
             )
         raise RuntimeError("workspace operation is not stageable")

@@ -1,4 +1,9 @@
-"""Merged virtual workspace reads plus overlay-only mutation entry points."""
+"""Merged, read-only virtual workspace view.
+
+This object is intentionally model-reachable, so it owns no overlay mutation
+primitive and exposes no mutation methods.  The separate workspace operation
+adapter is the only model-visible route that can stage a workspace change.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +18,6 @@ from agent_runtime.capabilities.workspace.contracts import (
     WorkspaceBaseEntry,
     WorkspaceBaseMatch,
     WorkspaceEntryKind,
-    WorkspaceMutationResult,
     blob_key_from_content_ref,
     normalize_virtual_path,
 )
@@ -21,7 +25,6 @@ from agent_runtime.capabilities.workspace.errors import (
     WorkspaceIsDirectoryError,
     WorkspaceNotFoundError,
 )
-from agent_runtime.capabilities.workspace.overlay import WorkspaceOverlayService
 from agent_runtime.capabilities.workspace.ports import (
     WorkspaceBaseReadPort,
     WorkspaceOverlayStorePort,
@@ -31,9 +34,9 @@ from agent_runtime.capabilities.workspace.ports import (
 class MergedWorkspaceBackend:
     """One run's read-your-writes workspace facade.
 
-    The only authority passed in is ``WorkspaceBaseReadPort``.  Every mutation
-    delegates to ``WorkspaceOverlayService``; there is intentionally no host
-    mutation client, callback, or generic executor in this object graph.
+    The only authority passed in is ``WorkspaceBaseReadPort`` plus read-only
+    overlay/blob ports.  There is intentionally no mutation client, callback,
+    raw overlay engine, or generic executor in this object graph.
     """
 
     def __init__(
@@ -43,13 +46,11 @@ class MergedWorkspaceBackend:
         base_read: WorkspaceBaseReadPort,
         overlay_store: WorkspaceOverlayStorePort,
         blob_store: ArtifactBlobStorePort,
-        overlay_service: WorkspaceOverlayService,
     ) -> None:
         self._run_id = run_id
         self._base_read = base_read
         self._overlay_store = overlay_store
         self._blob_store = blob_store
-        self._overlay_service = overlay_service
 
     async def astat(self, virtual_path: str) -> WorkspaceBaseEntry | None:
         path = normalize_virtual_path(virtual_path, allow_mount_root=True)
@@ -128,55 +129,6 @@ class MergedWorkspaceBackend:
                         line_text=line,
                     )
         return tuple(matches[key] for key in sorted(matches))
-
-    async def awrite(
-        self, virtual_path: str, content: bytes | str, *, author: str = "agent"
-    ) -> WorkspaceMutationResult:
-        """Stage a create/replace only in the durable overlay."""
-
-        return await self._overlay_service.propose_replace(
-            virtual_path, content, author=author
-        )
-
-    async def aedit(
-        self,
-        virtual_path: str,
-        old_string: str,
-        new_string: str,
-        *,
-        replace_all: bool = False,
-        author: str = "agent",
-    ) -> WorkspaceMutationResult:
-        """Stage a strict textual edit only in the durable overlay."""
-
-        return await self._overlay_service.propose_edit(
-            virtual_path,
-            old_string,
-            new_string,
-            replace_all=replace_all,
-            author=author,
-        )
-
-    async def adelete(
-        self, virtual_path: str, *, author: str = "agent"
-    ) -> WorkspaceMutationResult:
-        return await self._overlay_service.propose_delete(virtual_path, author=author)
-
-    async def amove(
-        self,
-        source_virtual_path: str,
-        destination_virtual_path: str,
-        *,
-        author: str = "agent",
-    ) -> WorkspaceMutationResult:
-        return await self._overlay_service.propose_move(
-            source_virtual_path, destination_virtual_path, author=author
-        )
-
-    async def amkdir(
-        self, virtual_path: str, *, author: str = "agent"
-    ) -> WorkspaceMutationResult:
-        return await self._overlay_service.propose_mkdir(virtual_path, author=author)
 
     async def _stat(
         self,

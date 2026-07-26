@@ -15,7 +15,7 @@ from agent_runtime.capabilities.workspace.contracts import (
 )
 from agent_runtime.capabilities.workspace.errors import WorkspaceOverlayConflictError
 from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
-from agent_runtime.capabilities.workspace.overlay import WorkspaceOverlayService
+from agent_runtime.capabilities.workspace.overlay import _WorkspaceOverlayMutationEngine
 from runtime_adapters.in_memory.artifact_blob_store import InMemoryArtifactBlobStore
 from runtime_adapters.in_memory.workspace_overlay_store import (
     InMemoryWorkspaceOverlayStore,
@@ -119,27 +119,30 @@ class ExplodingMutationBase:
         raise AssertionError(f"base mutation {name} must not be called")
 
 
-def _backend(
+def _internal_engine_and_read_view(
     files: dict[str, bytes], *, run_id: str = "run_overlay_1"
 ) -> tuple[
-    MergedWorkspaceBackend, ExplodingMutationBase, InMemoryWorkspaceOverlayStore
+    _WorkspaceOverlayMutationEngine,
+    MergedWorkspaceBackend,
+    ExplodingMutationBase,
+    InMemoryWorkspaceOverlayStore,
 ]:
     base = ExplodingMutationBase(files)
     overlays = InMemoryWorkspaceOverlayStore()
     blobs = InMemoryArtifactBlobStore()
-    service = WorkspaceOverlayService(
+    engine = _WorkspaceOverlayMutationEngine(
         run_id=run_id,
         base_read=base,
         overlay_store=overlays,
         blob_store=blobs,
     )
     return (
+        engine,
         MergedWorkspaceBackend(
             run_id=run_id,
             base_read=base,
             overlay_store=overlays,
             blob_store=blobs,
-            overlay_service=service,
         ),
         base,
         overlays,
@@ -148,9 +151,11 @@ def _backend(
 
 async def test_replace_is_read_your_writes_and_never_mutates_the_base() -> None:
     path = "/workspace/project/report.txt"
-    backend, base, overlays = _backend({path: b"base report\n"})
+    engine, backend, base, overlays = _internal_engine_and_read_view(
+        {path: b"base report\n"}
+    )
 
-    staged = await backend.awrite(path, "overlay report\n")
+    staged = await engine._propose_replace(path, "overlay report\n")
 
     assert (
         staged.message
@@ -174,10 +179,12 @@ async def test_create_then_edit_is_merged_and_base_write_methods_remain_unused()
     None
 ):
     path = "/workspace/project/generated.txt"
-    backend, base, overlays = _backend({"/workspace/project/base.txt": b"unchanged\n"})
+    engine, backend, base, overlays = _internal_engine_and_read_view(
+        {"/workspace/project/base.txt": b"unchanged\n"}
+    )
 
-    await backend.awrite(path, "first draft\n")
-    await backend.aedit(path, "first", "second")
+    await engine._propose_replace(path, "first draft\n")
+    await engine._propose_edit(path, "first", "second")
 
     assert await backend.aread_bytes(path) == b"second draft\n"
     listed = await backend.alist("/workspace/project")
@@ -198,10 +205,10 @@ async def test_create_then_edit_is_merged_and_base_write_methods_remain_unused()
 
 async def test_stale_append_cannot_drop_a_prior_overlay_write() -> None:
     path = "/workspace/project/new.txt"
-    backend, _base, overlays = _backend({})
+    engine, backend, _base, overlays = _internal_engine_and_read_view({})
     before = await overlays.get_manifest(run_id="run_overlay_1")
 
-    await backend.awrite(path, "durable overlay value")
+    await engine._propose_replace(path, "durable overlay value")
 
     with pytest.raises(WorkspaceOverlayConflictError):
         await overlays.append_revision(
@@ -213,10 +220,10 @@ async def test_stale_append_cannot_drop_a_prior_overlay_write() -> None:
 async def test_move_retains_overlay_bytes_without_calling_a_base_mutation() -> None:
     source = "/workspace/project/source.txt"
     destination = "/workspace/project/destination.txt"
-    backend, base, _overlays = _backend({})
+    engine, backend, base, _overlays = _internal_engine_and_read_view({})
 
-    await backend.awrite(source, "overlay-only source")
-    await backend.amove(source, destination)
+    await engine._propose_replace(source, "overlay-only source")
+    await engine._propose_move(source, destination)
 
     assert await backend.aread_bytes(destination) == b"overlay-only source"
     assert base.mutation_calls == []

@@ -1,6 +1,9 @@
-"""Durable, host-write-free workspace overlay domain."""
+"""Public workspace read facade and enforced effect gateway contracts.
+
+Raw overlay mutation primitives are private implementation details of
+``workspace.effects`` and are intentionally not re-exported here.
+"""
 
 from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
-from agent_runtime.capabilities.workspace.overlay import WorkspaceOverlayService
 
-__all__ = ("MergedWorkspaceBackend", "WorkspaceOverlayService")
+__all__ = ("MergedWorkspaceBackend",)

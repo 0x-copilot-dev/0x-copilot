@@ -1,4 +1,14 @@
-"""Host-write-free mutation service for a durable workspace overlay."""
+"""Private host-write-free mutation engine for the durable workspace overlay.
+
+This module deliberately exposes no public API.  ``WorkspaceOperationAdapter``
+in :mod:`agent_runtime.capabilities.workspace.effects` is the sole production
+constructor and caller.  Model-visible backends receive the adapter, never this
+engine, so a model mutation has to cross the universal operation/effect gateway
+before an overlay revision can be appended.
+
+The engine keeps its own read composition for edit preconditions.  That is an
+internal, non-model recovery/read path only; it has no host-write dependency.
+"""
 
 from __future__ import annotations
 
@@ -34,8 +44,8 @@ from agent_runtime.capabilities.workspace.ports import (
 )
 
 
-class WorkspaceOverlayService:
-    """Propose mutations into a run-scoped overlay, never into the base workspace.
+class _WorkspaceOverlayMutationEngine:
+    """Internal primitive used only after the universal gateway has admitted work.
 
     A2 owns the immutable bytes through ``ArtifactBlobStorePort``.  This service
     records only its digest and an opaque reference, then appends one metadata
@@ -61,12 +71,12 @@ class WorkspaceOverlayService:
         self._overlay_store = overlay_store
         self._blob_store = blob_store
 
-    async def manifest(self) -> OverlayManifest:
+    async def _manifest(self) -> OverlayManifest:
         """Return the current immutable run overlay manifest."""
 
         return await self._overlay_store.get_manifest(run_id=self._run_id)
 
-    async def propose_create(
+    async def _propose_create(
         self, virtual_path: str, content: bytes | str, *, author: str = "agent"
     ) -> WorkspaceMutationResult:
         """Create a new overlay file, failing if the merged target already exists."""
@@ -84,7 +94,7 @@ class WorkspaceOverlayService:
             baseline=BasePrecondition(existence=BaseExistence.MUST_NOT_EXIST),
         )
 
-    async def propose_replace(
+    async def _propose_replace(
         self, virtual_path: str, content: bytes | str, *, author: str = "agent"
     ) -> WorkspaceMutationResult:
         """Create or replace a file while preserving its original base precondition."""
@@ -125,7 +135,7 @@ class WorkspaceOverlayService:
             baseline=baseline,
         )
 
-    async def propose_delete(
+    async def _propose_delete(
         self, virtual_path: str, *, author: str = "agent"
     ) -> WorkspaceMutationResult:
         """Place one explicit tombstone in the overlay; never infer descendants."""
@@ -175,7 +185,7 @@ class WorkspaceOverlayService:
             ),
         )
 
-    async def propose_move(
+    async def _propose_move(
         self,
         source_virtual_path: str,
         destination_virtual_path: str,
@@ -259,7 +269,7 @@ class WorkspaceOverlayService:
             entry=updated.entry_at(destination), manifest=updated
         )
 
-    async def propose_mkdir(
+    async def _propose_mkdir(
         self, virtual_path: str, *, author: str = "agent"
     ) -> WorkspaceMutationResult:
         """Create exactly one virtual directory; parent recursion is explicit."""
@@ -282,7 +292,7 @@ class WorkspaceOverlayService:
             ),
         )
 
-    async def propose_edit(
+    async def _propose_edit(
         self,
         virtual_path: str,
         old_string: str,
@@ -305,7 +315,6 @@ class WorkspaceOverlayService:
             base_read=self._base_read,
             overlay_store=self._overlay_store,
             blob_store=self._blob_store,
-            overlay_service=self,
         )
         try:
             current = (await backend.aread_bytes(path)).decode("utf-8")
@@ -319,7 +328,7 @@ class WorkspaceOverlayService:
         if occurrences > 1 and not replace_all:
             raise WorkspaceEditError("Workspace edit string is ambiguous.")
         updated = current.replace(old_string, new_string, -1 if replace_all else 1)
-        return await self.propose_replace(path, updated, author=author)
+        return await self._propose_replace(path, updated, author=author)
 
     async def _write(
         self,
@@ -371,7 +380,7 @@ class WorkspaceOverlayService:
             entry=updated.entry_at(mutation.virtual_path), manifest=updated
         )
 
-    async def bind_stage(
+    async def _bind_stage(
         self,
         *,
         virtual_paths: tuple[str, ...],
@@ -487,4 +496,4 @@ class WorkspaceOverlayService:
         return content if isinstance(content, bytes) else content.encode("utf-8")
 
 
-__all__ = ("WorkspaceOverlayService",)
+__all__: tuple[()] = ()

@@ -1280,9 +1280,6 @@ class RuntimeRunHandler:
         from agent_runtime.capabilities.workspace.merged_backend import (  # noqa: PLC0415
             MergedWorkspaceBackend,
         )
-        from agent_runtime.capabilities.workspace.overlay import (  # noqa: PLC0415
-            WorkspaceOverlayService,
-        )
         from runtime_worker.workspace_effect_storage import (  # noqa: PLC0415
             RuntimeWorkspaceProposalStore,
         )
@@ -1327,18 +1324,11 @@ class RuntimeRunHandler:
         )
         if session is None or session.base_read is None:
             return WorkspaceTombstoneBackend()
-        overlay = WorkspaceOverlayService(
-            run_id=run.run_id,
-            base_read=session.base_read,
-            overlay_store=self._workspace_overlay_store,
-            blob_store=self._artifact_blob_store,
-        )
         merged = MergedWorkspaceBackend(
             run_id=run.run_id,
             base_read=session.base_read,
             overlay_store=self._workspace_overlay_store,
             blob_store=self._artifact_blob_store,
-            overlay_service=overlay,
         )
         gate = WorkspaceGrantGate(grants=session.grants)
         gateway = OperationGateway(
@@ -1347,8 +1337,6 @@ class RuntimeRunHandler:
             gates=gate,
         )
         services = WorkspaceGatewayServices(
-            merged=merged,
-            overlay=overlay,
             stager=mcp_gateway_services.stager,
             scope=mcp_gateway_services.stage_scope,
             actor=mcp_gateway_services.stage_author,
@@ -1362,7 +1350,13 @@ class RuntimeRunHandler:
         return WorkspaceGatewayBackend(
             merged=merged,
             gateway=gateway,
-            adapter=WorkspaceOperationAdapter(services=services),
+            adapter=WorkspaceOperationAdapter(
+                services=services,
+                run_id=run.run_id,
+                base_read=session.base_read,
+                overlay_store=self._workspace_overlay_store,
+                blob_store=self._artifact_blob_store,
+            ),
             grants=session.grants,
         )
 
