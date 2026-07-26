@@ -27,7 +27,7 @@ from agent_runtime.execution.tool_error_sanitizer import (
     ErrorHintExtractor,
     ErrorSanitizer,
 )
-from agent_runtime.execution.tool_errors import RunFatalToolError
+from agent_runtime.execution.tool_errors import RunFatalToolError, ToolBudgetRejected
 
 
 class ToolErrorOutcome(StrEnum):
@@ -76,13 +76,38 @@ class ToolErrorPolicy(Protocol):
     ) -> ToolErrorClassification: ...
 
 
+class _BudgetHints:
+    """Structured hints attached to a surfaced budget refusal.
+
+    ``retryable`` is explicitly ``False``: unlike a transient transport
+    error, calling again cannot succeed — the cap holds for the rest of
+    the run. Spelling that out keeps the model from burning turns on
+    retries it is guaranteed to lose.
+    """
+
+    CATEGORY = "tool_budget"
+    PAYLOAD: Mapping[str, Any] = {
+        "category": CATEGORY,
+        "budget_exhausted": True,
+        "retryable": False,
+        "recommended_action": "finalize",
+    }
+
+
 class DefaultToolErrorPolicy:
     """The shipped policy.
 
     Routing rule, in order:
-      1. :class:`RunFatalToolError` (any subclass) → ``FAIL_RUN``.
-      2. Anything else → ``SURFACE_TO_LLM`` with sanitized message and
+      1. :class:`ToolBudgetRejected` → ``SURFACE_TO_LLM``, message passed
+         through verbatim. The cap already blocked the call; the model
+         is told to finalize rather than having the run killed under it.
+      2. :class:`RunFatalToolError` (any subclass) → ``FAIL_RUN``.
+      3. Anything else → ``SURFACE_TO_LLM`` with sanitized message and
          structured hints attached.
+
+    Rule 1 precedes rule 2 only for clarity — :class:`ToolBudgetRejected`
+    is deliberately not a :class:`RunFatalToolError` subclass, so the two
+    branches are disjoint.
 
     Cancellation, keyboard interrupts, and system exits are NEVER
     classified — the caller is expected to re-raise them before
@@ -93,6 +118,18 @@ class DefaultToolErrorPolicy:
     def classify(
         self, exc: BaseException, *, tool: BaseTool
     ) -> ToolErrorClassification:
+        if isinstance(exc, ToolBudgetRejected):
+            return ToolErrorClassification(
+                outcome=ToolErrorOutcome.SURFACE_TO_LLM,
+                error_class=type(exc).__name__,
+                # Authored safe at the raise site. Passing it through the
+                # sanitizer would risk redacting the very numbers that
+                # make the message actionable (a tool name that happens
+                # to look like a hex id, for instance).
+                sanitized_message=exc.safe_summary,
+                structured_hints=_BudgetHints.PAYLOAD,
+                audit_trace=self._safe_traceback(exc),
+            )
         if isinstance(exc, RunFatalToolError):
             return ToolErrorClassification(
                 outcome=ToolErrorOutcome.FAIL_RUN,

@@ -21,6 +21,11 @@ from agent_runtime.execution.contracts import (
     ModelThinkingMode,
     RuntimeContract,
 )
+
+# Imported from the leaf module rather than the ``records`` package so
+# settings does not pull the whole persistence surface (and its imports)
+# in at configuration-load time.
+from agent_runtime.persistence.records.tool_budgets import DefaultToolBudget
 from agent_runtime.rollout import (
     E2RolloutResolution,
     LegacyRolloutInputs,
@@ -173,7 +178,13 @@ class RuntimeExecutionSettings(RuntimeContract):
     max_parallel_runs: int = Field(default=4, ge=1, le=100)
     max_parallel_tasks: int = Field(default=4, ge=1, le=100)
     max_parallel_subagents: int = Field(default=4, ge=1, le=100)
-    tool_call_budget: int = Field(default=6, ge=1, le=100)
+    # Per-tool call cap. Feeds BOTH the prompt suffix the model is given
+    # and the ``runtime_tool_budgets`` seed row the middleware enforces —
+    # they must agree, or the model is told a cap that is not the one it
+    # actually hits. Keep in step with ``DefaultToolBudget``.
+    tool_call_budget: int = Field(
+        default=DefaultToolBudget.MAX_CALLS_PER_RUN, ge=1, le=100
+    )
     worker_poll_interval_seconds: float = Field(default=1, gt=0, le=60)
     worker_lock_seconds: int = Field(default=60, gt=0, le=3600)
     start_in_process_worker: bool = True
@@ -517,7 +528,9 @@ class RuntimeSettings(BaseSettings):
                 max_parallel_runs=int(_s(v, E.MAX_PARALLEL_RUNS, "4")),
                 max_parallel_tasks=int(_s(v, E.MAX_PARALLEL_TASKS, "4")),
                 max_parallel_subagents=int(_s(v, E.MAX_PARALLEL_SUBAGENTS, "4")),
-                tool_call_budget=int(_s(v, E.TOOL_CALL_BUDGET, "6")),
+                tool_call_budget=int(
+                    _s(v, E.TOOL_CALL_BUDGET, str(DefaultToolBudget.MAX_CALLS_PER_RUN))
+                ),
                 worker_poll_interval_seconds=float(
                     _s(v, E.WORKER_POLL_INTERVAL_SECONDS, "1")
                 ),

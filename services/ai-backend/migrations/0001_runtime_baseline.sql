@@ -1384,8 +1384,13 @@ GRANT DELETE, INSERT, SELECT, UPDATE ON usage_budget_state TO enterprise_app;
 GRANT DELETE, INSERT, SELECT, UPDATE ON usage_budgets TO enterprise_app;
 
 -- ===== Bootstrap data: global default tool budget (from 0010) =====
+-- Must match DefaultToolBudget.MAX_CALLS_PER_RUN in
+-- agent_runtime/persistence/records/tool_budgets.py, which is the single
+-- definition the in-memory and file adapters build their seed row from.
+-- tests/unit/agent_runtime/persistence/test_default_tool_budget.py asserts
+-- this literal against that constant so the two cannot drift.
 INSERT INTO runtime_tool_budgets (
     id, org_id, tool_name, max_calls_per_run, enforcement, created_at, updated_at
 ) VALUES (
-    'seed_default', NULL, '*', 6, 'hard', now(), now()
+    'seed_default', NULL, '*', 10, 'hard', now(), now()
 ) ON CONFLICT DO NOTHING;

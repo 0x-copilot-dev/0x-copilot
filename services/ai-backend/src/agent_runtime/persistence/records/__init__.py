@@ -88,6 +88,7 @@ from agent_runtime.persistence.records.todo_extractions import (
     TodoExtractionState,
 )
 from agent_runtime.persistence.records.tool_budgets import (
+    DefaultToolBudget,
     ToolBudgetEnforcement,
     ToolBudgetRecord,
 )
@@ -169,6 +170,7 @@ __all__ = [
     "ChargeOutcome",
     "TodoExtractionRecord",
     "TodoExtractionState",
+    "DefaultToolBudget",
     "ToolBudgetEnforcement",
     "ToolBudgetRecord",
     "ToolOrdinalBindingRecord",

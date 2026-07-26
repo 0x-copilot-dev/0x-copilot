@@ -33,6 +33,7 @@ from agent_runtime.persistence.records import (
     BudgetWithState,
     ChargeOutcome,
     CompressionEventRecord,
+    DefaultToolBudget,
     ModelPricingRecord,
     OutboxStatus,
     RetentionKind,
@@ -43,7 +44,6 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
-    ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
     UsageAttributionEdge,
@@ -248,13 +248,7 @@ class InMemoryRuntimeApiStore:
         # global default so in-memory and Postgres deploys behave identically.
         # Tests can override by adding rows for a specific (org_id, tool_name).
         self.tool_budgets: dict[str, ToolBudgetRecord] = {
-            "seed_default": ToolBudgetRecord(
-                id="seed_default",
-                org_id=None,
-                tool_name="*",
-                max_calls_per_run=6,
-                enforcement=ToolBudgetEnforcement.HARD,
-            ),
+            DefaultToolBudget.ID: DefaultToolBudget.record(),
         }
 
     async def create_conversation(

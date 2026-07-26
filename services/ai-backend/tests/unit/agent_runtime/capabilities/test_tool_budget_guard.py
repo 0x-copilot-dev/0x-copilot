@@ -23,9 +23,15 @@ from agent_runtime.capabilities.tool_budget_guard import (
     ToolBudgetGuard,
     ToolBudgetGuardedRegistry,
     ToolBudgetGuardedTool,
+    _Limits,
 )
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.execution.tool_errors import (
+    BudgetExceeded,
+    RunFatalToolError,
+    ToolBudgetRejected,
+)
 from agent_runtime.persistence.records import (
     ToolBudgetEnforcement,
     ToolBudgetRecord,
@@ -148,17 +154,36 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         # One admitted call landed on the ledger.
         assert ledger.charged_calls("echo") == 1
 
-    async def test_raises_budget_exceeded_on_hard_reject(self) -> None:
-        """HARD-cap rejection raises ``BudgetExceeded``.
+    @staticmethod
+    def _capped_guard(
+        *,
+        run_id: str,
+        cap: int = 2,
+        max_surfaced_rejections: int | None = None,
+    ) -> ToolBudgetGuard:
+        """Build a guard whose ``echo`` budget is already fully consumed."""
 
-        The run handler catches the typed exception and routes it through
-        :class:`RunTerminationCoordinator` so the run terminates with
-        ``reason=BUDGET_EXCEEDED``. The LLM never sees a "talk your way
-        past the cap" tool result — the cap exists exactly to bound
-        spend regardless of the model's reasoning.
+        ledger = ToolCallLedger(run_id=run_id)
+        for index in range(cap):
+            ledger.started(f"prior-{index}", tool_name="echo", budget_scoped=True)
+        return ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=cap)]
+            ),
+            ledger=ledger,
+            max_surfaced_rejections=max_surfaced_rejections,
+        )
+
+    async def test_hard_reject_is_surfaced_not_fatal(self) -> None:
+        """HARD-cap rejection raises the NON-fatal ``ToolBudgetRejected``.
+
+        Refusing the call is what bounds the spend — the inner tool never
+        runs either way. Raising a run-fatal error on top of that would
+        additionally discard every tool result the run had already
+        gathered, which is why the cap is surfaced to the model instead:
+        the policy turns it into a ``ToolMessage`` and the model
+        finalizes with what it has.
         """
-
-        from agent_runtime.execution.tool_errors import BudgetExceeded
 
         inner = _RecordingTool()
         wrapped = ToolBudgetGuardedTool(
@@ -166,25 +191,103 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
             description=inner.description,
             inner=inner,
         )
-        ledger = ToolCallLedger(run_id="run-2")
-        # Pre-fill the ledger so the next admit would exceed the cap.
-        for index in range(2):
-            ledger.started(f"prior-{index}", tool_name="echo")
+        guard = self._capped_guard(run_id="run-2")
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            with pytest.raises(ToolBudgetRejected) as caught:
+                await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+        # Non-fatal: the run handler must not treat this as terminal.
+        assert not isinstance(caught.value, RunFatalToolError)
+        assert "echo" in caught.value.safe_summary
+        assert "budget" in caught.value.safe_summary.lower()
+        assert inner.calls == []  # inner tool short-circuited — spend is bounded.
+
+    async def test_rejection_escalates_to_fatal_after_grace_exhausted(self) -> None:
+        """A model that answers every refusal with another call still terminates.
+
+        The allowance exists so a looping model cannot spin forever on
+        free refusals; the first calls past the cap are surfaced, and
+        only the ones beyond the allowance fail the run.
+        """
+
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        guard = self._capped_guard(run_id="run-2b", max_surfaced_rejections=3)
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            for _ in range(3):
+                with pytest.raises(ToolBudgetRejected):
+                    await wrapped._arun("hi")
+            # Fourth refusal is past the allowance → run-fatal.
+            with pytest.raises(BudgetExceeded):
+                await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+        assert inner.calls == []  # never executed, at any point.
+
+    def test_hard_reject_is_surfaced_on_sync_path(self) -> None:
+        """The sync dispatch path shares the async path's non-fatal behavior."""
+
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        guard = self._capped_guard(run_id="run-2c")
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            with pytest.raises(ToolBudgetRejected):
+                wrapped._run("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+        assert inner.calls == []
+
+    def test_default_allowance_leaves_room_for_a_parallel_fan_out(self) -> None:
+        """The shipped allowance must exceed a single parallel tool batch.
+
+        If it were 1, one turn that fans out several calls would exhaust
+        the allowance before the model ever got a turn to write its
+        answer — reintroducing the dead run this guard exists to avoid.
+        """
+
+        assert _Limits.MAX_SURFACED_REJECTIONS >= 4
+
+    async def test_rejection_names_the_requested_tool_not_the_wildcard(self) -> None:
+        """A wildcard budget must still name the tool the model actually called.
+
+        Reporting ``'*'`` names nothing the model can act on, and reads
+        as a bug in the logs.
+        """
+
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        ledger = ToolCallLedger(run_id="run-2d")
+        ledger.started("prior-0", tool_name="echo", budget_scoped=True)
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(
-                [_budget(org_id=None, tool_name="echo", max_calls_per_run=2)]
+                [_budget(org_id=None, tool_name="*", max_calls_per_run=1)]
             ),
             ledger=ledger,
         )
         token = ToolBudgetGuard.bind_for_run(guard)
         try:
-            with pytest.raises(BudgetExceeded) as caught:
+            with pytest.raises(ToolBudgetRejected) as caught:
                 await wrapped._arun("hi")
         finally:
             ToolBudgetGuard.unbind(token)
-        assert "echo" in caught.value.safe_summary
-        assert "budget" in caught.value.safe_summary.lower()
-        assert inner.calls == []  # inner tool short-circuited.
+        assert "'echo'" in caught.value.safe_summary
+        assert "'*'" not in caught.value.safe_summary
 
     async def test_soft_warn_emits_budget_warning_and_admits(self) -> None:
         inner = _RecordingTool()
@@ -196,7 +299,7 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         producer = self._FakeProducer()
         ledger = ToolCallLedger(run_id="run-3")
         for index in range(2):
-            ledger.started(f"prior-{index}", tool_name="echo")
+            ledger.started(f"prior-{index}", tool_name="echo", budget_scoped=True)
         guard = ToolBudgetGuard(
             middleware=ToolBudgetMiddleware(
                 [

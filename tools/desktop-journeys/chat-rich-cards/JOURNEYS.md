@@ -36,6 +36,33 @@ a missing payload detail fails the
 run and leaves screenshots plus the Electron/service logs in
 `tools/desktop-journeys/runs/chat-rich-cards/`.
 
+## Budget-overrun journey (`budget_overrun.py`)
+
+A separate script in this folder covers the research-shaped turn that made
+more tool calls than the per-run budget allows:
+
+```bash
+python3 tools/desktop-journeys/chat-rich-cards/budget_overrun.py
+```
+
+| ID  | Exact user action                                                                | Desktop assertions                                                                           | Priority |
+| --- | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------- |
+| B1  | “Catch me up on this week's AI agent releases, then draft a short update …”      | The turn reaches a real assistant answer: no errored tool card, no `RUN INTERRUPTED` banner. | P0       |
+| B2  | “Check what shipped in Ethereum's latest upgrade, then draft a community update” | Same, sent as a follow-up in the existing conversation rather than a first run.              | P0       |
+| B3  | Eight distinct topics, each demanded with its own search.                        | Same, under a turn that deliberately wants more searches than a tight cap allows.            | P0       |
+
+These reproduce the reported failure where exceeding the tool budget raised a
+run-fatal error out of the stream and the user lost every result the run had
+already gathered. Hitting the cap must degrade to "the model is told to stop
+and answers with what it has", never to a dead run.
+
+To exercise the refusal path itself rather than relying on a model that
+happens to search a lot, lower `DefaultToolBudget.MAX_CALLS_PER_RUN` in the
+**staged** runtime under `apps/desktop/resources/runtime/<platform>-<arch>/`
+before running, then restore it. `RUNTIME_TOOL_CALL_BUDGET` is deliberately
+not in the desktop env passthrough allowlist, so it cannot be injected from
+the launching shell.
+
 ## What the suite covers (and what it does not pretend to cover)
 
 The current transcript’s non-message activity surfaces are the tool card and

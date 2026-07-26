@@ -72,6 +72,7 @@ from agent_runtime.persistence.records import (
     BudgetStateRecord,
     ChargeOutcome,
     CompressionEventRecord,
+    DefaultToolBudget,
     ModelPricingRecord,
     OutboxStatus,
     RetentionKind,
@@ -84,7 +85,6 @@ from agent_runtime.persistence.records import (
     RuntimeRunUsageRecord,
     RuntimeWorkerClaim,
     RuntimeWorkerResult,
-    ToolBudgetEnforcement,
     ToolBudgetRecord,
     ToolInvocationRecord,
     UsageAttributionEdge,
@@ -347,13 +347,7 @@ class FileRuntimeApiStore:
         self.deletion_evidence: list = []
         self.workspace_defaults: dict[str, WorkspaceDefaultsRecord] = {}
         self.tool_budgets: dict[str, ToolBudgetRecord] = {
-            "seed_default": ToolBudgetRecord(
-                id="seed_default",
-                org_id=None,
-                tool_name="*",
-                max_calls_per_run=6,
-                enforcement=ToolBudgetEnforcement.HARD,
-            ),
+            DefaultToolBudget.ID: DefaultToolBudget.record(),
         }
         self.audit_log: list[tuple[str, dict[str, object]]] = []
         self._audit_chain_signer = AuditChainSigner.from_env(

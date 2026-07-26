@@ -33,6 +33,9 @@ class ToolBudgetWarn:
     kind: str  # "calls" or "input_tokens_per_call" or "input_tokens_per_run"
     current: int
     limit: int
+    # The tool actually requested. Distinct from ``budget.tool_name``,
+    # which is ``"*"`` whenever the global wildcard row matched.
+    tool_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,10 @@ class ToolBudgetReject:
     kind: str
     current: int
     limit: int
+    # The tool actually requested. Reporting ``budget.tool_name`` here
+    # would print ``'*'`` for every wildcard-governed rejection, which
+    # names no tool the model can act on and reads as a bug in logs.
+    tool_name: str = ""
 
     @property
     def outcome(self) -> ToolOutcome:
@@ -56,11 +63,18 @@ class ToolBudgetReject:
 
     @property
     def safe_message(self) -> str:
-        """Return a safe user-facing rejection message."""
+        """Return the model-facing rejection message.
+
+        Written as an instruction, not just a diagnosis: this string is
+        handed to the model as a tool result, and the behavior we want
+        from it is "stop calling this tool and answer now".
+        """
         return (
-            f"Tool '{self.budget.tool_name}' rejected: "
-            f"per-run {self.kind} budget ({self.current + 1}/{self.limit}) "
-            "exceeded. Continue with a different approach or finalize."
+            f"Tool '{self.tool_name or self.budget.tool_name}' is out of "
+            f"budget for this run: the per-run {self.kind} limit was "
+            f"exceeded ({self.current}/{self.limit} used). Do not call this "
+            "tool again — finalize now and answer with what you have "
+            "already gathered, stating plainly what is still uncertain."
         )
 
 
@@ -94,6 +108,7 @@ class ToolBudgetMiddleware:
                 kind="calls",
                 current=current_calls,
                 limit=budget.max_calls_per_run,
+                tool_name=tool_name,
             )
 
         if (
@@ -105,6 +120,7 @@ class ToolBudgetMiddleware:
                 kind="input_tokens_per_call",
                 current=estimated_input_tokens,
                 limit=budget.max_input_tokens_per_call,
+                tool_name=tool_name,
             )
 
         if budget.max_input_tokens_per_run is not None:
@@ -115,6 +131,7 @@ class ToolBudgetMiddleware:
                     kind="input_tokens_per_run",
                     current=ledger.total_input_tokens(tool_name),
                     limit=budget.max_input_tokens_per_run,
+                    tool_name=tool_name,
                 )
 
         return ToolBudgetAdmit()
@@ -143,6 +160,7 @@ class ToolBudgetMiddleware:
         kind: str,
         current: int,
         limit: int,
+        tool_name: str,
     ) -> ToolBudgetDecision:
         """Return a ``ToolBudgetWarn`` or ``ToolBudgetReject`` based on the budget's enforcement mode."""
         if budget.enforcement is ToolBudgetEnforcement.SOFT:
@@ -151,10 +169,12 @@ class ToolBudgetMiddleware:
                 kind=kind,
                 current=current,
                 limit=limit,
+                tool_name=tool_name,
             )
         return ToolBudgetReject(
             budget=budget,
             kind=kind,
             current=current,
             limit=limit,
+            tool_name=tool_name,
         )
