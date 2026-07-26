@@ -63,10 +63,7 @@ class SandboxCapabilityReadiness:
                 config, overrides=provider_overrides
             )
         except SandboxError as exc:
-            if (
-                config.provider is SandboxProviderId.OPENAI_HOSTED_CONTAINER
-                and exc.code is SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED
-            ):
+            if config.provider is SandboxProviderId.OPENAI_HOSTED_CONTAINER:
                 reason = SandboxReadinessReason.OPENAI_HOSTED_CONTAINER_CONTROL_GAP
             else:
                 reason = (

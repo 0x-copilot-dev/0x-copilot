@@ -41,11 +41,20 @@ class SandboxCleanupSchedule(BaseModel):
     record_type: Literal["sandbox_cleanup"] = "sandbox_cleanup"
     operation_id: str = Field(min_length=1, max_length=255)
     run_id: str = Field(min_length=1, max_length=255)
-    provider_session_ref: str = Field(
-        min_length=1, max_length=2048, pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$"
+    provider_session_ref: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=2048,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    owner_marker: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=255,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
     snapshot_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
-    state: Literal["cleanup_pending", "cleaned"] = "cleanup_pending"
+    state: Literal["provisioning", "cleanup_pending", "cleaned"] = "cleanup_pending"
     transition_no: int = Field(default=0, ge=0)
     attempts: int = Field(default=0, ge=0)
     retry_not_before: datetime = Field(default_factory=lambda: datetime.now(UTC))
@@ -66,18 +75,31 @@ class SandboxCleanupSchedule(BaseModel):
         expected = _identity_digest(
             operation_id=self.operation_id,
             run_id=self.run_id,
+            owner_marker=self.owner_marker,
+            snapshot_digest=self.snapshot_digest,
+        )
+        legacy = _legacy_identity_digest(
+            operation_id=self.operation_id,
+            run_id=self.run_id,
             provider_session_ref=self.provider_session_ref,
             snapshot_digest=self.snapshot_digest,
         )
         if self.immutable_identity is None:
             object.__setattr__(self, "immutable_identity", expected)
-            return self
-        if self.immutable_identity != expected:
+        elif self.immutable_identity not in {expected, legacy}:
             raise ValueError("sandbox cleanup immutable identity is mismatched")
+        if self.state == "provisioning":
+            if self.provider_session_ref is not None or self.owner_marker is None:
+                raise ValueError(
+                    "provisioning cleanup duties require an owner marker only"
+                )
+        elif self.state == "cleanup_pending" and self.provider_session_ref is None:
+            raise ValueError("cleanup_pending duties require a provider session ref")
         return self
 
 
 _TRANSITIONS: dict[str, frozenset[str]] = {
+    "provisioning": frozenset({"provisioning", "cleanup_pending", "cleaned"}),
     "cleanup_pending": frozenset({"cleanup_pending", "cleaned"}),
     "cleaned": frozenset(),
 }
@@ -128,7 +150,10 @@ class FileSandboxCleanupStore:
     def _schedule(self, record: SandboxCleanupSchedule) -> SandboxCleanupSchedule:
         record = _validate_record(record)
         operation_id = canonical_record_key(record.operation_id, field="operation id")
-        if record.transition_no != 0 or record.state != "cleanup_pending":
+        if record.transition_no != 0 or record.state not in {
+            "provisioning",
+            "cleanup_pending",
+        }:
             raise SandboxCleanupScheduleError(
                 "sandbox cleanup duty must start at transition zero"
             )
@@ -231,6 +256,25 @@ class FileSandboxCleanupStore:
                 raise SandboxCleanupScheduleError(
                     "sandbox cleanup update time regressed"
                 )
+            if (
+                previous.provider_session_ref is not None
+                and record.provider_session_ref != previous.provider_session_ref
+            ):
+                raise SandboxCleanupScheduleError(
+                    "sandbox cleanup provider reference changed"
+                )
+            if previous.owner_marker != record.owner_marker:
+                raise SandboxCleanupScheduleError(
+                    "sandbox cleanup owner marker changed"
+                )
+            if (
+                previous.state == "provisioning"
+                and record.state == "cleanup_pending"
+                and record.provider_session_ref is None
+            ):
+                raise SandboxCleanupScheduleError(
+                    "sandbox cleanup binding omitted provider reference"
+                )
             self._write_to(
                 self._records if primary is not None else self._recovery_records,
                 record,
@@ -296,7 +340,7 @@ class FileSandboxCleanupStore:
                     raise SandboxCleanupScheduleError(
                         "sandbox cleanup duty has conflicting durable copies"
                     )
-                if record.state == "cleanup_pending":
+                if record.state in {"provisioning", "cleanup_pending"}:
                     by_operation[operation_id] = record
         return tuple(
             sorted(
@@ -329,10 +373,23 @@ def _identity_digest(
     *,
     operation_id: str,
     run_id: str,
-    provider_session_ref: str,
+    owner_marker: str | None,
     snapshot_digest: str,
 ) -> str:
-    identity = "\0".join((operation_id, run_id, provider_session_ref, snapshot_digest))
+    identity = "\0".join((operation_id, run_id, owner_marker or "", snapshot_digest))
+    return hashlib.sha256(identity.encode("utf-8")).hexdigest()
+
+
+def _legacy_identity_digest(
+    *,
+    operation_id: str,
+    run_id: str,
+    provider_session_ref: str | None,
+    snapshot_digest: str,
+) -> str:
+    identity = "\0".join(
+        (operation_id, run_id, provider_session_ref or "", snapshot_digest)
+    )
     return hashlib.sha256(identity.encode("utf-8")).hexdigest()
 
 

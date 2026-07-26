@@ -87,16 +87,13 @@ class SandboxProviderRegistry:
 
             return LangSmithSandboxProvider(region=config.region)
         if provider_id is SandboxProviderId.OPENAI_HOSTED_CONTAINER:
-            from agent_runtime.capabilities.sandbox.providers.openai_hosted import (
-                OpenAIHostedContainerProvider,
+            # The OpenAI SDK client is intentionally never read from ambient
+            # process environment.  The file-native composition root must
+            # inject the client as an explicit provider override.
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_PROVIDER_UNCONFIGURED,
+                "OpenAI hosted-container client must be injected by composition.",
             )
-
-            if config.openai_hosted_container is None:
-                raise SandboxError(
-                    SandboxErrorCode.SANDBOX_PROVIDER_UNCONFIGURED,
-                    "OpenAI hosted-container configuration is unavailable.",
-                )
-            return OpenAIHostedContainerProvider(config=config.openai_hosted_container)
         raise SandboxError(  # pragma: no cover - enum is exhaustive today
             SandboxErrorCode.SANDBOX_PROVIDER_UNCONFIGURED,
             "No adapter is available for the configured sandbox provider.",

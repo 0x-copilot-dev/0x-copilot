@@ -46,6 +46,11 @@ from agent_runtime.capabilities.sandbox.contracts import (
     _utcnow,
 )
 from agent_runtime.capabilities.sandbox.ports import SandboxHandle
+from agent_runtime.capabilities.sandbox.provisioning import (
+    SandboxProvisioningAuthority,
+    SandboxProvisioningCapability,
+    SandboxProvisioningGrant,
+)
 from agent_runtime.capabilities.sandbox.workspace_transfer import WorkspacePathValidator
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes
@@ -97,6 +102,44 @@ class _ExecutionContext:
     deliverables: tuple[str, ...]
 
 
+@dataclass
+class _ExecutionAccess:
+    """Unforgeable live-session token registered only by the transport."""
+
+    container_id: str
+    provider: "OpenAIHostedContainerProvider"
+    active: bool = True
+
+    def require_live(self) -> None:
+        """Verify this exact capability is still registered by its provider."""
+
+        self.provider._require_execution_access(self)
+
+
+class OpenAIHostedContainerTransport:
+    """Narrow SDK transport that accepts only service-minted capabilities.
+
+    It deliberately has no request-based ``create`` API.  A direct caller can
+    invoke :meth:`provision`, but a capability issued by another authority (or
+    a consumed one) fails the provider's identity check before any OpenAI SDK
+    method is reached.  The capability is a runtime object, not a convention
+    based on a method name or an AST check.
+    """
+
+    def __init__(self, *, provider: "OpenAIHostedContainerProvider") -> None:
+        self._provider = provider
+
+    async def provision(self, capability: object) -> SandboxHandle:
+        """Provision only after the provider validates a service capability."""
+
+        if not isinstance(capability, SandboxProvisioningCapability):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "OpenAI container provisioning requires a service capability.",
+            )
+        return await self._provider._provision_from_service_capability(capability)
+
+
 class OpenAIHostedContainerBackend(BaseSandbox):
     """Deep Agents backend façade backed exclusively by OpenAI hosted APIs.
 
@@ -117,6 +160,7 @@ class OpenAIHostedContainerBackend(BaseSandbox):
         container_request_id: str | None,
         network_policy: SandboxEgressPolicy,
         memory_limit: str | None,
+        access: _ExecutionAccess,
     ) -> None:
         self._client = client
         self._config = config
@@ -125,6 +169,7 @@ class OpenAIHostedContainerBackend(BaseSandbox):
         self._container_request_id = container_request_id
         self._network_policy = network_policy
         self._memory_limit = memory_limit
+        self._access = access
         self._input_files: dict[str, _ContainerFile] = {}
         self._execution_context: _ExecutionContext | None = None
         self._response_id: str | None = None
@@ -156,6 +201,7 @@ class OpenAIHostedContainerBackend(BaseSandbox):
     async def prepare_execution(self, request: SandboxRunRequest) -> None:
         """Bind one coordinator-approved command and declared deliverables."""
 
+        self._ensure_access()
         context = _ExecutionContext(
             command=request.command,
             deliverables=tuple(
@@ -184,6 +230,7 @@ class OpenAIHostedContainerBackend(BaseSandbox):
     ) -> ExecuteResponse:
         """Run exactly one canonical coordinator command via Code Interpreter."""
 
+        self._ensure_access()
         if self._execution_context is None:
             raise SandboxError(
                 SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
@@ -221,6 +268,7 @@ class OpenAIHostedContainerBackend(BaseSandbox):
     ) -> list[FileUploadResponse]:
         """Upload only sealed byte payloads with deterministic safe filenames."""
 
+        self._ensure_access()
         responses: list[FileUploadResponse] = []
         for raw_path, content in files:
             path = WorkspacePathValidator.normalize(raw_path)
@@ -259,6 +307,7 @@ class OpenAIHostedContainerBackend(BaseSandbox):
     async def a_download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download only explicitly declared, assistant-created deliverables."""
 
+        self._ensure_access()
         normalized = tuple(WorkspacePathValidator.normalize(path) for path in paths)
         permitted = (
             set(self._execution_context.deliverables)
@@ -317,6 +366,11 @@ class OpenAIHostedContainerBackend(BaseSandbox):
 
     def _input_filename(self, virtual_path: str) -> str:
         return self._provider_filename("input", virtual_path)
+
+    def _ensure_access(self) -> None:
+        """Fail before any SDK call unless transport created this live backend."""
+
+        self._access.require_live()
 
     def _deliverable_filename(self, virtual_path: str) -> str:
         return self._provider_filename("deliverable", virtual_path)
@@ -427,13 +481,22 @@ class OpenAIHostedContainerProvider:
         self,
         *,
         config: OpenAIHostedContainerConfig,
-        client: OpenAIHostedContainerClient | None = None,
+        client: OpenAIHostedContainerClient,
     ) -> None:
         self._config = config
         self._client = client
+        self._transport = OpenAIHostedContainerTransport(provider=self)
+        self._provisioning_authority: SandboxProvisioningAuthority | None = None
         self._by_idempotency: dict[str, SandboxHandle] = {}
         self._owner_by_ref: dict[str, str] = {}
+        self._access_by_ref: dict[str, _ExecutionAccess] = {}
         self._create_lock = asyncio.Lock()
+
+    @property
+    def transport(self) -> OpenAIHostedContainerTransport:
+        """The narrow transport; it still rejects non-service grants."""
+
+        return self._transport
 
     @property
     def isolation_ready(self) -> bool:
@@ -459,21 +522,115 @@ class OpenAIHostedContainerProvider:
         )
 
     async def create(self, request: SandboxCreateRequest) -> SandboxHandle:
-        """Create an explicitly network-constrained OpenAI container.
+        """Refuse direct provisioning outside ``RemoteExecutionService``."""
 
-        This real SDK path is reachable only through direct integration tests
-        while ``isolation_ready`` remains false; the registry never exposes it
-        to a model or production D3 coordinator.
-        """
+        del request
+        raise SandboxError(
+            SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+            "OpenAI container provisioning requires the remote execution service.",
+        )
 
+    def bind_provisioning_authority(
+        self, authority: SandboxProvisioningAuthority
+    ) -> None:
+        """Bind the single service authority allowed to mint capabilities."""
+
+        if not authority.is_remote_execution_service_authority:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "OpenAI container provisioning must be bound by RemoteExecutionService.",
+            )
+        if (
+            self._provisioning_authority is not None
+            and self._provisioning_authority is not authority
+        ):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "OpenAI container provider is already bound to a lifecycle service.",
+            )
+        self._provisioning_authority = authority
+
+    def cleanup_owner_marker(self, request: SandboxCreateRequest) -> str:
+        """Return the per-operation marker stored before provider provisioning."""
+
+        return (
+            f"{self._owner_namespace(request.owner_tag)}-"
+            f"{hashlib.sha256(request.operation_id.encode('utf-8')).hexdigest()[:20]}"
+        )
+
+    async def provision_with_capability(
+        self, capability: SandboxProvisioningCapability
+    ) -> SandboxHandle:
+        """Reach the narrow transport with one service-minted capability."""
+
+        return await self._transport.provision(capability)
+
+    async def _provision_from_service_capability(
+        self, capability: SandboxProvisioningCapability
+    ) -> SandboxHandle:
+        """Consume a capability only when this service owns its authority."""
+
+        authority = self._provisioning_authority
+        if authority is None:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "OpenAI container provisioning has no lifecycle authority.",
+            )
+        provisioning = capability.consume(authority=authority)
+        request = provisioning.request
+        cleanup = provisioning.cleanup
+        if (
+            cleanup.state not in {"provisioning", "cleanup_pending"}
+            or cleanup.owner_marker != self.cleanup_owner_marker(request)
+            or not provisioning.attestation.satisfies(request.egress)
+            or (
+                cleanup.state == "provisioning"
+                and cleanup.provider_session_ref is not None
+            )
+            or (
+                cleanup.state == "cleanup_pending"
+                and cleanup.provider_session_ref is None
+            )
+        ):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "OpenAI container capability is not bound to a valid cleanup reservation.",
+            )
+        return await self._provision_from_service_grant(provisioning)
+
+    async def _provision_from_service_grant(
+        self, provisioning: SandboxProvisioningGrant
+    ) -> SandboxHandle:
+        """SDK translation reachable only after service capability consumption."""
+
+        request = provisioning.request
+        owner_marker = provisioning.cleanup.owner_marker
+        if owner_marker is None:  # pragma: no cover - capability validation above
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "OpenAI container cleanup reservation is incomplete.",
+            )
         self._validate_request(request)
         async with self._create_lock:
             existing = self._by_idempotency.get(request.idempotency_key)
             if existing is not None:
+                if (
+                    provisioning.cleanup.provider_session_ref is not None
+                    and existing.session.provider_session_ref
+                    != provisioning.cleanup.provider_session_ref
+                ):
+                    raise SandboxError(
+                        SandboxErrorCode.SANDBOX_LIFECYCLE_CONFLICT,
+                        "OpenAI container idempotency does not match cleanup state.",
+                    )
                 return existing
-            owner_marker = self._owner_marker(request.owner_tag)
+            if provisioning.cleanup.state == "cleanup_pending":
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_LIFECYCLE_CONFLICT,
+                    "OpenAI container cleanup state exists without a live service handle.",
+                )
             try:
-                created = await self._sdk_client().containers.create(
+                created = await self._client.containers.create(
                     name=owner_marker,
                     expires_after={
                         "anchor": "last_active_at",
@@ -528,7 +685,7 @@ class OpenAIHostedContainerProvider:
                 ),
             )
             backend = OpenAIHostedContainerBackend(
-                client=self._sdk_client(),
+                client=self._client,
                 config=self._config,
                 container_id=container_id,
                 owner_marker=owner_marker,
@@ -537,6 +694,7 @@ class OpenAIHostedContainerProvider:
                 else None,
                 network_policy=actual_policy,
                 memory_limit=_optional_string(actual_memory),
+                access=self._register_execution_access(container_id),
             )
             handle = SandboxHandle(session=session, backend=backend)
             self._by_idempotency[request.idempotency_key] = handle
@@ -547,9 +705,7 @@ class OpenAIHostedContainerProvider:
         """Map concrete container status to D3's durable session projection."""
 
         try:
-            container = await self._sdk_client().containers.retrieve(
-                provider_session_ref
-            )
+            container = await self._client.containers.retrieve(provider_session_ref)
             actual_policy = _provider_network_policy(container)
             container_id = _required_string(container, "id")
             actual_memory = _optional_string(_value(container, "memory_limit"))
@@ -601,29 +757,59 @@ class OpenAIHostedContainerProvider:
         """
 
         try:
-            await self._sdk_client().containers.delete(provider_session_ref)
+            await self._client.containers.delete(provider_session_ref)
         except Exception as exc:  # noqa: BLE001 - external SDK boundary
             if _is_not_found(exc):
+                self._deactivate_execution_access(provider_session_ref)
                 return
             raise SandboxError(
                 SandboxErrorCode.SANDBOX_CLEANUP_PENDING,
                 "The sandbox provider could not confirm container deletion.",
             ) from exc
+        self._deactivate_execution_access(provider_session_ref)
+
+    async def recover_provisioning(self, owner_marker: str) -> None:
+        """Delete only containers matching a durable pre-bind operation marker."""
+
+        after: str | None = None
+        while True:
+            page_arguments: dict[str, object] = {"name": owner_marker, "limit": 100}
+            if after is not None:
+                page_arguments["after"] = after
+            try:
+                page = await self._client.containers.list(**page_arguments)
+                data = _value(page, "data")
+                if not isinstance(data, (list, tuple)):
+                    raise ValueError("container listing was malformed")
+            except Exception as exc:  # noqa: BLE001 - provider boundary
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_CLEANUP_PENDING,
+                    "The sandbox provider could not enumerate a cleanup reservation.",
+                ) from exc
+            for container in data:
+                if (
+                    _value(container, "name") == owner_marker
+                    and _value(container, "status") != "deleted"
+                ):
+                    await self.terminate(_required_string(container, "id"))
+            if not _value(page, "has_more"):
+                return
+            after = _required_string(page, "last_id")
 
     async def list_owned_sessions(
         self, owner_tag: str
     ) -> tuple[ManagedSandboxSession, ...]:
         """List only containers carrying D3's deterministic owner marker."""
 
-        marker = self._owner_marker(owner_tag)
+        namespace = self._owner_namespace(owner_tag)
         after: str | None = None
         sessions: list[ManagedSandboxSession] = []
         while True:
             try:
-                page_arguments: dict[str, object] = {"name": marker, "limit": 100}
+                page_arguments: dict[str, object] = {"limit": 100}
                 if after is not None:
                     page_arguments["after"] = after
-                page = await self._sdk_client().containers.list(**page_arguments)
+                page = await self._client.containers.list(**page_arguments)
                 data = _value(page, "data")
                 if not isinstance(data, (list, tuple)):
                     raise ValueError("container listing was malformed")
@@ -633,7 +819,10 @@ class OpenAIHostedContainerProvider:
                     "The sandbox provider could not enumerate owned containers.",
                 ) from exc
             for container in data:
-                if _value(container, "name") != marker:
+                marker = _value(container, "name")
+                if not isinstance(marker, str) or not marker.startswith(
+                    f"{namespace}-"
+                ):
                     continue
                 container_id = _required_string(container, "id")
                 status = str(_value(container, "status") or "unknown")
@@ -685,8 +874,8 @@ class OpenAIHostedContainerProvider:
             )
 
     @staticmethod
-    def _owner_marker(owner_tag: str) -> str:
-        return "d3-" + hashlib.sha256(owner_tag.encode("utf-8")).hexdigest()[:48]
+    def _owner_namespace(owner_tag: str) -> str:
+        return "d3-" + hashlib.sha256(owner_tag.encode("utf-8")).hexdigest()[:20]
 
     def _network_policy_payload(self) -> dict[str, object]:
         if self._config.network_policy.is_deny_all():
@@ -696,21 +885,32 @@ class OpenAIHostedContainerProvider:
             "allowed_domains": list(self._config.network_policy.destinations),
         }
 
-    def _sdk_client(self) -> OpenAIHostedContainerClient:
-        if self._client is None:
-            # Delayed import/client construction means startup/readiness never
-            # reads a credential or contacts OpenAI.  Normal tests inject a
-            # hermetic client and never take this branch.
-            from openai import AsyncOpenAI  # allow-direct-llm-import: D3 API
-
-            self._client = AsyncOpenAI()
-        return self._client
-
     async def _delete_quietly(self, container_id: str) -> None:
         try:
-            await self._sdk_client().containers.delete(container_id)
+            await self._client.containers.delete(container_id)
         except Exception:  # noqa: BLE001 - delete is deliberately idempotent
             return
+
+    def _register_execution_access(self, container_id: str) -> _ExecutionAccess:
+        access = _ExecutionAccess(container_id=container_id, provider=self)
+        self._access_by_ref[container_id] = access
+        return access
+
+    def _require_execution_access(self, access: _ExecutionAccess) -> None:
+        if (
+            not isinstance(access, _ExecutionAccess)
+            or not access.active
+            or self._access_by_ref.get(access.container_id) is not access
+        ):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "OpenAI container execution requires a live service session.",
+            )
+
+    def _deactivate_execution_access(self, container_id: str) -> None:
+        access = self._access_by_ref.pop(container_id, None)
+        if access is not None:
+            access.active = False
 
 
 def _value(value: object, name: str) -> object | None:
@@ -816,4 +1016,5 @@ __all__ = (
     "OpenAIHostedContainerClient",
     "OpenAIHostedContainerExecutionEvidence",
     "OpenAIHostedContainerProvider",
+    "OpenAIHostedContainerTransport",
 )

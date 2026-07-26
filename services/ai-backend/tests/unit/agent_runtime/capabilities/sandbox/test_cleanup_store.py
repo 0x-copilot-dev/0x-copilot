@@ -111,6 +111,42 @@ class TestFileSandboxCleanupStore:
         with pytest.raises(SandboxCleanupScheduleError):
             await store.transition(record=cleaned, expected_transition_no=1)
 
+    async def test_provisioning_reservation_survives_reopen_before_ref_binding(
+        self, tmp_path: Path
+    ) -> None:
+        """A crash before a provider ref is known still leaves reaper evidence."""
+
+        layout = FileStoreLayout(tmp_path / "agent-data")
+        timestamp = datetime.now(UTC)
+        reservation = SandboxCleanupSchedule(
+            operation_id="operation-reserved",
+            run_id="run-reserved",
+            owner_marker="d3-owner-operation",
+            snapshot_digest="b" * 64,
+            state="provisioning",
+            retry_not_before=timestamp,
+            created_at=timestamp,
+            updated_at=timestamp,
+        )
+        store = FileSandboxCleanupStore(layout=layout)
+
+        assert await store.schedule(reservation) == reservation
+        reopened = FileSandboxCleanupStore(layout=FileStoreLayout(layout.root))
+        assert await reopened.list_pending() == (reservation,)
+
+        bound = reservation.model_copy(
+            update={
+                "provider_session_ref": "container-reserved-1",
+                "state": "cleanup_pending",
+                "transition_no": 1,
+                "updated_at": timestamp + timedelta(seconds=1),
+            }
+        )
+        assert (
+            await reopened.transition(record=bound, expected_transition_no=0) == bound
+        )
+        assert await reopened.get(reservation.operation_id) == bound
+
     async def test_primary_write_failure_is_retained_in_recovery_journal(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

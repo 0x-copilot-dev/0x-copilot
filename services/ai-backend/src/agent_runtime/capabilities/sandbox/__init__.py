@@ -127,6 +127,7 @@ from agent_runtime.capabilities.sandbox.providers.openai_hosted import (
     OpenAIHostedContainerBackend,
     OpenAIHostedContainerExecutionEvidence,
     OpenAIHostedContainerProvider,
+    OpenAIHostedContainerTransport,
 )
 
 __all__ = [
@@ -148,6 +149,7 @@ __all__ = [
     "OpenAIHostedContainerConfig",
     "OpenAIHostedContainerExecutionEvidence",
     "OpenAIHostedContainerProvider",
+    "OpenAIHostedContainerTransport",
     "PolicyEnforcedSandboxBackend",
     "RawSnapshotEntry",
     "RemoteExecutionService",
