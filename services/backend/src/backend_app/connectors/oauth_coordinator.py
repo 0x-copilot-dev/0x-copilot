@@ -284,6 +284,7 @@ class DesktopMcpOAuthCoordinator:
             server_id=profile.server_id,
             org_id=org_id,
             user_id=user_id,
+            connector_slug=profile.connector_slug,
             name=self._slug_name(profile.connector_slug),
             display_name=profile.connector_slug.title(),
             url=profile.endpoint_template,

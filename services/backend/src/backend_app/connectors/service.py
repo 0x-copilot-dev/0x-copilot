@@ -729,8 +729,23 @@ _MCP_SEED_PREFIX = "seed:"
 
 
 def mcp_connector_slug(record: McpServerRecord) -> str:
-    """Connector-row slug for an MCP server record (stable natural key)."""
+    """Connector-row slug for an MCP server record (stable natural key).
 
+    Prefers the explicit ``connector_slug``; falls back to the historical
+    derivation for rows written before that field existed.
+
+    The fallback is the reason this change is additive: a row created by an
+    older build carries no slug, and reading one must keep resolving exactly
+    as it did — otherwise the migration would orphan every existing
+    installation. It is also the part to delete once the backfill has run
+    everywhere, because it is lossy: both mint paths write
+    ``name = slug.replace("-", "_")``, so a dashed slug that did not arrive
+    through a ``seed:`` id came back with underscores and the same connector
+    had two identities depending on which surface installed it.
+    """
+
+    if record.connector_slug:
+        return record.connector_slug
     if record.server_id.startswith(_MCP_SEED_PREFIX):
         return record.server_id[len(_MCP_SEED_PREFIX) :]
     return record.name
