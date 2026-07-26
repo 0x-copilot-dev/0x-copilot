@@ -108,6 +108,9 @@ from agent_runtime.capabilities.sandbox.cleanup_store import (
     SandboxCleanupSchedule,
     SandboxCleanupScheduleError,
 )
+from agent_runtime.capabilities.sandbox.snapshot_file_store import (
+    SealedSandboxSnapshotFileStore,
+)
 from agent_runtime.capabilities.sandbox.workspace_transfer import (
     WORKSPACE_ROOT,
     RawSnapshotEntry,
@@ -173,6 +176,7 @@ __all__ = [
     "SandboxCleanupSchedule",
     "SandboxCleanupScheduleError",
     "SandboxSnapshot",
+    "SealedSandboxSnapshotFileStore",
     "SandboxSnapshotStoreContentSource",
     "SandboxSnapshotContentPort",
     "SandboxUsageAttribution",

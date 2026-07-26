@@ -1,0 +1,312 @@
+"""Filesystem-first composition for the model-visible D3 sandbox tool.
+
+This is the one worker boundary permitted to join the C1 retained-overlay
+authority, A2 artifact bytes, D3 file records, a provider-attested lifecycle
+coordinator, and the operation-gateway adapter.  It deliberately fails closed:
+there is no hosted/Postgres branch, no in-memory lifecycle fallback, no direct
+``session_scope``/``aexecute`` model tool, and no automatic C1 patch import.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from pathlib import Path
+from typing import cast
+
+from agent_runtime.artifacts.ports import ArtifactBlobStorePort
+from agent_runtime.artifacts.service import ArtifactService
+from agent_runtime.capabilities.operations.descriptors import (
+    OperationDescriptorRegistry,
+)
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.sandbox.config import RemoteSandboxConfig
+from agent_runtime.capabilities.sandbox.coordinator import SandboxLifecycleCoordinator
+from agent_runtime.capabilities.sandbox.execute_tool import (
+    SandboxExecuteToolFactory,
+    SandboxRunIdentityProvider,
+)
+from agent_runtime.capabilities.sandbox.lifecycle import FileSandboxLifecycleStore
+from agent_runtime.capabilities.sandbox.operation_adapter import (
+    SandboxOperationAdapter,
+    SandboxOperationAvailability,
+    sandbox_operation_descriptor,
+)
+from agent_runtime.capabilities.sandbox.operation_runner import (
+    SandboxLifecycleOperationRunner,
+    SandboxSnapshotStoreContentSource,
+)
+from agent_runtime.capabilities.sandbox.ports import (
+    SandboxPatchCollectorPort,
+    SandboxProviderPort,
+)
+from agent_runtime.capabilities.sandbox.result_publisher import (
+    ArtifactServiceSandboxResultPublisher,
+)
+from agent_runtime.capabilities.sandbox.runtime_adapter import DeepAgentSandboxRuntime
+from agent_runtime.capabilities.sandbox.seam import build_sandbox_backend
+from agent_runtime.capabilities.sandbox.session_store import FileSandboxSessionStore
+from agent_runtime.capabilities.sandbox.snapshot_file_store import (
+    SandboxSnapshotIdentity,
+    SealedSandboxSnapshotFileStore,
+    TrustedSandboxSnapshotPlanProvider,
+    WorkspaceOverlaySandboxSnapshotFileResolver,
+)
+from agent_runtime.capabilities.sandbox.snapshot import SandboxSnapshotPlanProvider
+from agent_runtime.capabilities.sandbox.usage_meter import FileSandboxUsageMeter
+from agent_runtime.capabilities.sandbox.cleanup_store import FileSandboxCleanupStore
+from agent_runtime.capabilities.sandbox.contracts import (
+    SandboxError,
+    SandboxErrorCode,
+    SandboxProviderId,
+)
+from agent_runtime.capabilities.workspace.ports import WorkspaceOverlayStorePort
+from agent_runtime.execution.contracts import AgentRuntimeContext
+from runtime_adapters.file._paths import FileStoreLayout
+from runtime_worker.sandbox_snapshot_authority import (
+    RuntimeWorkerOverlaySnapshotPlanAuthority,
+)
+
+
+_DESKTOP_PROFILE = "single_user_desktop"
+_DEPLOYMENT_PROFILE_ENV = "ENTERPRISE_DEPLOYMENT_PROFILE"
+
+
+@dataclass(frozen=True)
+class SandboxWorkerBundle:
+    """One complete, file-native factory for ``run_in_sandbox``.
+
+    Its fields are intentionally private: callers may ask only for a
+    gateway-routed model tool.  They cannot reach a provider service, a file
+    layout, a snapshot resolver, or a patch importer through this object.
+    ``cleanup_store`` is retained as part of the D3 file-native bundle for the
+    separate janitor/recovery loop; command completion itself never imports a
+    patch or writes a host workspace.
+    """
+
+    _gateway: OperationGateway
+    _adapter: SandboxOperationAdapter
+    _snapshot_provider: SandboxSnapshotPlanProvider
+    _cleanup_store: FileSandboxCleanupStore
+
+    @classmethod
+    def compose(
+        cls,
+        *,
+        runtime_context: AgentRuntimeContext,
+        file_store: object | None,
+        artifact_service: ArtifactService | None,
+        artifact_blob_store: ArtifactBlobStorePort | None,
+        workspace_overlay_store: WorkspaceOverlayStorePort | None,
+        patch_collector: SandboxPatchCollectorPort | None,
+        env: Mapping[str, str] | None = None,
+        provider_overrides: (
+            Mapping[SandboxProviderId, SandboxProviderPort] | None
+        ) = None,
+    ) -> "SandboxWorkerBundle | None":
+        """Return the complete factory or ``None`` when any authority is absent.
+
+        This makes the only production posture explicit: file-native desktop
+        plus C1 retained versions, A2 blob/result authority, a complete patch
+        collector, and an isolation-ready provider.  A non-file runtime never
+        substitutes Postgres or memory persistence.
+        """
+
+        values = dict(env) if env is not None else _environment()
+        if values.get(_DEPLOYMENT_PROFILE_ENV, "") != _DESKTOP_PROFILE:
+            return None
+        layout = _file_layout(file_store)
+        if (
+            layout is None
+            or artifact_service is None
+            or artifact_blob_store is None
+            or workspace_overlay_store is None
+            or patch_collector is None
+            or not _has_overlay_history_authority(workspace_overlay_store)
+            or not _has_blob_authority(artifact_blob_store)
+        ):
+            return None
+        try:
+            identity = SandboxSnapshotIdentity(
+                run_id=runtime_context.run_id,
+                org_id=runtime_context.org_id,
+                user_id=runtime_context.user_id,
+            )
+            config = RemoteSandboxConfig.from_env(values)
+            limits = config.resolve_limits()
+            service = build_sandbox_backend(
+                config,
+                provider_overrides=provider_overrides,
+                session_store=FileSandboxSessionStore(layout=layout),
+            )
+        except Exception:  # noqa: BLE001 - configuration is a fail-closed gate
+            return None
+        if service is None:
+            return None
+
+        # C1's authority returns only exact retained overlay versions for this
+        # verified run.  The resolver requires the same bound identity again;
+        # neither model input nor a current/latest manifest reaches this path.
+        authority = RuntimeWorkerOverlaySnapshotPlanAuthority(
+            overlay_store=workspace_overlay_store
+        )
+        snapshot_provider = _BoundSnapshotPlanProvider(
+            identity=identity,
+            delegate=TrustedSandboxSnapshotPlanProvider(authority=authority),
+        )
+        overlay_resolver = WorkspaceOverlaySandboxSnapshotFileResolver(
+            identity=identity,
+            overlay_store=workspace_overlay_store,
+            blob_store=artifact_blob_store,
+        )
+        # The plan authority currently emits C1 overlays only.  This adapter
+        # narrows the generic C1/A2 source port to that factual contract rather
+        # than fabricating an artifact-metadata or latest-view fallback.
+        source_store = _OverlaySnapshotFileStore(resolver=overlay_resolver)
+        snapshot_store = SealedSandboxSnapshotFileStore(
+            source=source_store,
+            root=_sealed_snapshot_root(layout=layout, run_id=identity.run_id),
+            max_entry_bytes=limits.max_upload_file_bytes,
+        )
+        coordinator = SandboxLifecycleCoordinator(
+            service=service,
+            lifecycle_store=FileSandboxLifecycleStore(
+                root=layout.root / "sandbox" / "lifecycle"
+            ),
+            runtime=DeepAgentSandboxRuntime(),
+            usage_meter=FileSandboxUsageMeter(root=layout.root / "sandbox" / "usage"),
+            snapshot_source=SandboxSnapshotStoreContentSource(store=snapshot_store),
+            # Overlay snapshots require a complete, provider-specific listing.
+            # Absence was rejected above so no command can mutate an overlay
+            # snapshot without returning a reviewable artifact-backed patch.
+            patch_collector=patch_collector,
+            limits=limits,
+        )
+        runner = SandboxLifecycleOperationRunner(
+            coordinator=coordinator,
+            result_publisher=ArtifactServiceSandboxResultPublisher(
+                service=artifact_service,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+            ),
+            limits=limits,
+            availability=SandboxOperationAvailability(available=True),
+        )
+        adapter = SandboxOperationAdapter(
+            runner=runner,
+            snapshot_store=snapshot_store,
+        )
+        return cls(
+            _gateway=OperationGateway(
+                descriptors=OperationDescriptorRegistry(
+                    entries=(sandbox_operation_descriptor(),)
+                )
+            ),
+            _adapter=adapter,
+            _snapshot_provider=snapshot_provider,
+            _cleanup_store=FileSandboxCleanupStore(layout=layout),
+        )
+
+    def build_tool(self, *, identity_provider: Callable[[], object]) -> object | None:
+        """Create only the descriptor/gateway-routed model tool."""
+
+        return SandboxExecuteToolFactory.build(
+            gateway=self._gateway,
+            adapter=self._adapter,
+            identity_provider=cast(SandboxRunIdentityProvider, identity_provider),
+            snapshot_provider=self._snapshot_provider,
+        )
+
+
+@dataclass(frozen=True)
+class _OverlaySnapshotFileStore:
+    """C1-only source store used before the sealed-byte boundary.
+
+    It deliberately has no artifact-revision branch: C1's actual worker
+    authority emits only retained overlay refs today.  Adding an unscoped A2
+    metadata lookup here would weaken, not complete, the stated authority.
+    """
+
+    resolver: WorkspaceOverlaySandboxSnapshotFileResolver
+
+    async def resolve(self, *, source, virtual_path):  # noqa: ANN001
+        from agent_runtime.capabilities.sandbox.snapshot import (  # noqa: PLC0415
+            SandboxSnapshotSourceKind,
+        )
+
+        if source.kind is not SandboxSnapshotSourceKind.OVERLAY:
+            return None
+        return await self.resolver.resolve_overlay_file(
+            overlay_ref=source.source_ref,
+            virtual_path=virtual_path,
+        )
+
+    async def open(self, *, content_ref: str):
+        return await self.resolver.open(content_ref=content_ref)
+
+
+@dataclass(frozen=True)
+class _BoundSnapshotPlanProvider(SandboxSnapshotPlanProvider):
+    """Pin C1 selection to the handler's verified run identity.
+
+    ``SandboxExecuteToolFactory`` accepts an identity provider solely to create
+    the canonical operation request.  That value must never be able to select
+    a different C1 overlay.  The worker-owned bundle therefore checks it
+    against the verified identity captured at composition, then delegates using
+    only the captured values.
+    """
+
+    identity: SandboxSnapshotIdentity
+    delegate: TrustedSandboxSnapshotPlanProvider
+
+    async def snapshot_for(self, *, run_id, org_id, user_id):  # noqa: ANN001
+        if (
+            run_id != self.identity.run_id
+            or org_id != self.identity.org_id
+            or user_id != self.identity.user_id
+        ):
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            )
+        return await self.delegate.snapshot_for(
+            run_id=self.identity.run_id,
+            org_id=self.identity.org_id,
+            user_id=self.identity.user_id,
+        )
+
+
+def _file_layout(file_store: object | None) -> FileStoreLayout | None:
+    """Return a real file-store layout, never a duck-typed hosted fallback."""
+
+    if file_store is None or not hasattr(file_store, "object_store"):
+        return None
+    layout = getattr(file_store, "layout", None)
+    return layout if isinstance(layout, FileStoreLayout) else None
+
+
+def _has_overlay_history_authority(store: object) -> bool:
+    return callable(getattr(store, "get_manifest", None)) and callable(
+        getattr(store, "get_manifest_version", None)
+    )
+
+
+def _has_blob_authority(store: object) -> bool:
+    return callable(getattr(store, "stat", None)) and callable(
+        getattr(store, "open_stream", None)
+    )
+
+
+def _sealed_snapshot_root(*, layout: FileStoreLayout, run_id: str) -> Path:
+    return (
+        layout.root / "sandbox" / "sealed-snapshots" / FileStoreLayout.safe_key(run_id)
+    )
+
+
+def _environment() -> dict[str, str]:
+    import os  # noqa: PLC0415
+
+    return dict(os.environ)
+
+
+__all__ = ("SandboxWorkerBundle",)
