@@ -71,6 +71,10 @@ import {
   type CapabilityService,
 } from "./capabilities";
 import {
+  createProductionWorkspaceAuthority,
+  type WorkspaceAuthorityLifecycle,
+} from "./capabilities/workspace-production-authority";
+import {
   FacadeWorkspaceApprovalClient,
   WorkspaceApprovalHost,
   WorkspaceApprovalPermitSource,
@@ -90,11 +94,13 @@ import { isDesktopBrowserEnabled } from "./browser/feature-gate";
 import { resolveAuthPosture } from "./posture";
 import { installSingleInstance, shouldSupervise } from "./services/boot-mode";
 import {
+  loadOrCreateBootSecrets,
   setBootSecretsEncryption,
   type BootSecretsFs,
 } from "./services/boot-secrets";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
 import { LocalServiceIdentityRegistry } from "./services/local-service-identity";
+import { MacosWorkspaceConfinement } from "./services/macos-workspace-confinement";
 import { BROWSER_BROKER_AUDIENCE } from "./browser/protocol";
 import { resolveRuntimePaths } from "./services/runtime-paths";
 import { applyBundledGoogleOAuth } from "./services/google-oauth-default";
@@ -156,6 +162,7 @@ let supervisorStopped = false;
 let browserSubsystem: ProductionDesktopBrowserSubsystem | null = null;
 let browserSubsystemStopped = false;
 let capabilityService: CapabilityService | null = null;
+let workspaceAuthorityLifecycle: WorkspaceAuthorityLifecycle | null = null;
 // C3 decision reservations are main-only. The private broker handoff consumes
 // this typed source after C2 prepare; it is never installed in preload or
 // renderer globals.
@@ -171,6 +178,7 @@ let connectorService: ConnectorService | null = null;
 // built the service. Null until then; the first-run handlers fall back to the
 // advisory workspaceId while it is null (see resolveFirstRunKey).
 let activeAuthService: ActiveAuthService | null = null;
+let activeFacadeBaseUrl: string | null = null;
 let latestBootStatus: BootStatusPayload | null = null;
 let updateHandle: AutoUpdateHandle | null = null;
 let latestUpdateStatus: UpdateStatusPayload | null = null;
@@ -298,12 +306,47 @@ function startAutoUpdate(): void {
   }
 }
 
+/**
+ * Electron main resolves a grant owner from an already-verified facade session.
+ * A renderer workspace hint only selects a stored session; it never becomes an
+ * authority claim or a persisted grant owner.
+ */
+async function resolveVerifiedWorkspaceProfileId(): Promise<string | null> {
+  const auth = activeAuthService;
+  const facadeBaseUrl = activeFacadeBaseUrl;
+  const workspaceId = auth?.activeWorkspace();
+  if (auth === null || facadeBaseUrl === null || workspaceId == null) {
+    return null;
+  }
+  try {
+    const bearer = await auth.getBearer(workspaceId);
+    if (bearer === null) return null;
+    const response = await fetch(
+      `${facadeBaseUrl.replace(/\/+$/u, "")}/v1/me/profile`,
+      {
+        headers: { authorization: `Bearer ${bearer}` },
+      },
+    );
+    if (!response.ok) return null;
+    const payload = (await response.json()) as { readonly user_id?: unknown };
+    const userId = payload.user_id;
+    return typeof userId === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/u.test(userId)
+      ? userId
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 // Builds the capability service (grant store + native picker + loopback
 // broker) and starts the broker. The broker token is minted per boot and is
 // delivered OUT OF BAND to intended children (slice 2 wiring); it is never
 // logged and never crosses renderer IPC. A broker failure must never block
 // boot — the app is fully usable without host-folder grants.
-async function startCapabilitySubsystem(): Promise<{
+async function startCapabilitySubsystem(
+  workspaceConfinement: MacosWorkspaceConfinement | null,
+): Promise<{
   readonly workspaceBroker: {
     readonly baseUrl: string;
     readonly token: string;
@@ -311,6 +354,8 @@ async function startCapabilitySubsystem(): Promise<{
   } | null;
   /** Main-only signer; its private key never reaches a child process. */
   readonly workspaceAttestation: DesktopWorkspaceAttestationPublisher;
+  /** The exact confinement instance used to launch the supervised children. */
+  readonly workspaceConfinement: MacosWorkspaceConfinement | null;
 } | null> {
   try {
     // Plaintext is legitimate in dev AND whenever the user's secure-storage
@@ -321,6 +366,33 @@ async function startCapabilitySubsystem(): Promise<{
       process.env.BACKEND_ENVIRONMENT === "development" ||
       process.env.COPILOT_AUTH_MODE === "dev-mint" ||
       secureStorageMode === "file";
+    // C2 is only enabled for the supported packaged posture. The lifecycle
+    // factory independently re-checks every condition and returns null on any
+    // uncertainty; ordinary read grants and desktop boot remain available.
+    if (workspaceConfinement !== null) {
+      try {
+        const secrets = await loadOrCreateBootSecrets({
+          userDataDir: app.getPath("userData"),
+          safeStorage: storesSafeStorage,
+          fs: bootSecretsFs,
+          mode: secureStorageMode,
+        });
+        workspaceAuthorityLifecycle = await createProductionWorkspaceAuthority({
+          userDataDir: app.getPath("userData"),
+          safeStorage: storesSafeStorage,
+          installationSecret: secrets.vaultSecret,
+          profileIdResolver: resolveVerifiedWorkspaceProfileId,
+          confinement: workspaceConfinement,
+          production: resolveAuthPosture({
+            isPackaged: app.isPackaged,
+            env: process.env,
+          }).productionPosture,
+          packaged: app.isPackaged,
+        });
+      } catch {
+        workspaceAuthorityLifecycle = null;
+      }
+    }
     capabilityService = createCapabilityService({
       userDataDir: app.getPath("userData"),
       safeStorage: storesSafeStorage,
@@ -339,6 +411,7 @@ async function startCapabilitySubsystem(): Promise<{
         return { canceled: result.canceled, filePaths: result.filePaths };
       },
       allowPlaintextFallback: allowPlaintext,
+      workspace: workspaceAuthorityLifecycle?.seed,
       localBrokerClients: [
         supervisedServiceIdentities.forBroker(
           "ai-backend",
@@ -381,8 +454,12 @@ async function startCapabilitySubsystem(): Promise<{
               audience: CAPABILITY_BROKER_AUDIENCE,
             },
       workspaceAttestation,
+      workspaceConfinement:
+        workspaceAuthorityLifecycle === null ? null : workspaceConfinement,
     };
   } catch (err) {
+    await workspaceAuthorityLifecycle?.dispose().catch(() => {});
+    workspaceAuthorityLifecycle = null;
     workspaceApprovalPermitSource = null;
     capabilityService = null;
     console.error("[capabilities] init failed (continuing without):", err);
@@ -556,12 +633,51 @@ if (hasSingleInstanceLock) {
     // RUNTIME_ENABLE_DESKTOP_FILESYSTEM, read ONCE at boot — when unset/false
     // the broker never binds and (because capabilityService stays null) the
     // capability IPC channels are never registered, so calls fail closed.
+    // C2 supports only a signed packaged macOS runtime. The confinement object
+    // is constructed from main-owned runtime paths and is handed to both the
+    // authority launch gate and the actual supervisor; no renderer or service
+    // can select its profile or weaken its rules.
+    let workspaceConfinement: MacosWorkspaceConfinement | null = null;
+    if (isDesktopFilesystemEnabled(process.env) && app.isPackaged) {
+      try {
+        const runtimePaths = resolveRuntimePaths({
+          resourcesPath: process.resourcesPath,
+          runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
+        });
+        workspaceConfinement = new MacosWorkspaceConfinement({
+          runtimeRoot: runtimePaths.runtimeRoot,
+          webDir: runtimePaths.webDir,
+          // Do not grant child Python the complete Electron userData tree:
+          // capability grants, native helper journals/staging and Electron
+          // settings stay main-only. These are the only child data roots
+          // published by the desktop service-env contract.
+          childDataDirs: [
+            join(app.getPath("userData"), "agent-data", "v1"),
+            join(app.getPath("userData"), "model-catalog"),
+          ],
+          temporaryDir: process.env.TMPDIR ?? "/tmp",
+          pythonBin: runtimePaths.pythonBin,
+          serviceDirs: [
+            runtimePaths.serviceDir("backend"),
+            runtimePaths.serviceDir("ai-backend"),
+            runtimePaths.serviceDir("backend-facade"),
+          ],
+        });
+      } catch (err) {
+        console.error(
+          "[workspace-confinement] setup failed; workspace writes remain unavailable:",
+          err,
+        );
+      }
+    }
     const capabilitySubsystem = isDesktopFilesystemEnabled(process.env)
-      ? await startCapabilitySubsystem()
+      ? await startCapabilitySubsystem(workspaceConfinement)
       : null;
     const workspaceBroker = capabilitySubsystem?.workspaceBroker ?? null;
     const workspaceAttestation =
       capabilitySubsystem?.workspaceAttestation ?? null;
+    const verifiedWorkspaceConfinement =
+      capabilitySubsystem?.workspaceConfinement ?? null;
     if (!isDesktopFilesystemEnabled(process.env)) {
       console.log(
         "[capabilities] desktop filesystem disabled " +
@@ -672,6 +788,7 @@ if (hasSingleInstanceLock) {
         runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
         processEnv: supervisedEnv,
         localServiceIdentities: supervisedServiceIdentities,
+        workspaceChildConfinement: verifiedWorkspaceConfinement ?? undefined,
       });
       supervisor.onStatus(sendBootStatus);
       supervisor
@@ -725,6 +842,7 @@ function wireTransportAndIpc(
   facadeUrl: string | undefined,
   hostToken?: string,
 ): void {
+  activeFacadeBaseUrl = facadeUrl ?? null;
   const auditLog = createFileAuthAuditLog({
     filePath: join(app.getPath("userData"), "audit", "auth.log"),
   });
@@ -885,6 +1003,10 @@ app.on("before-quit", (event) => {
   if (capabilityService !== null) {
     void capabilityService.stopBroker().catch(() => {});
     capabilityService = null;
+  }
+  if (workspaceAuthorityLifecycle !== null) {
+    void workspaceAuthorityLifecycle.dispose().catch(() => {});
+    workspaceAuthorityLifecycle = null;
   }
   workspaceApprovalPermitSource = null;
   // Ordered shutdown: children (facade -> ai -> backend), postgres, then the
