@@ -13,6 +13,7 @@ class OperationGatewayErrorCode(StrEnum):
     IDEMPOTENCY_CONFLICT = "operation_idempotency_conflict"
     INVALID_DESCRIPTOR = "operation_descriptor_invalid"
     ENFORCEMENT_NOT_READY = "operation_enforcement_not_ready"
+    STAGE_CAPABILITY_INVALID = "operation_stage_capability_invalid"
     ADAPTER_FAILED = "operation_adapter_failed"
     ARTIFACT_FAILED = "operation_artifact_failed"
 
@@ -82,6 +83,16 @@ class OperationEnforcementNotReadyError(OperationGatewayError):
         )
 
 
+class OperationStageCapabilityError(OperationGatewayError):
+    """Raised when proposal staging did not receive gateway-issued authority."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            OperationGatewayErrorCode.STAGE_CAPABILITY_INVALID,
+            "Operation stage authority is unavailable for this request.",
+        )
+
+
 __all__ = (
     "OperationArgumentsDigestMismatchError",
     "OperationArgumentsMissingError",
@@ -91,4 +102,5 @@ __all__ = (
     "OperationGatewayErrorCode",
     "OperationIdempotencyConflictError",
     "OperationIdentityMismatchError",
+    "OperationStageCapabilityError",
 )

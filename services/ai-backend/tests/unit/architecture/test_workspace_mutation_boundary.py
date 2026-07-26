@@ -17,12 +17,17 @@ from pathlib import Path
 from agent_runtime.capabilities.workspace import __all__ as workspace_exports
 from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
 from agent_runtime.capabilities.workspace.overlay import __all__ as overlay_exports
+from agent_runtime.capabilities.operations.stage_authority import (
+    __all__ as stage_authority_exports,
+)
 
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[3]
 _SOURCE_ROOT = _SERVICE_ROOT / "src"
 _RAW_ENGINE = "agent_runtime.capabilities.workspace.overlay"
 _ENFORCED_GATEWAY = "agent_runtime.capabilities.workspace.effects"
+_STAGE_AUTHORITY_MODULE = "agent_runtime.capabilities.operations.stage_authority"
+_GATEWAY_MODULE = "agent_runtime.capabilities.operations.gateway"
 _MODEL_VISIBLE_ROOTS = (
     "agent_runtime.capabilities.workspace.deep_backend",
     "agent_runtime.capabilities.workspace.merged_backend",
@@ -110,6 +115,27 @@ def _unmediated_raw_engine_paths(source_root: Path) -> tuple[tuple[str, ...], ..
     return tuple(sorted(set(violations)))
 
 
+def _private_stage_minter_imports(source_root: Path) -> tuple[str, ...]:
+    """Find imports of the non-exported mint function, including local imports."""
+
+    imports: list[str] = []
+    for path in source_root.rglob("*.py"):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            base = _resolve_from_module(
+                _current_module(source_root, path), node.module, node.level
+            )
+            if base != _STAGE_AUTHORITY_MODULE:
+                continue
+            if any(
+                alias.name == "_mint_gateway_stage_capability" for alias in node.names
+            ):
+                imports.append(str(path.relative_to(source_root)))
+    return tuple(sorted(imports))
+
+
 def test_model_visible_workspace_graph_cannot_reach_raw_overlay_unmediated() -> None:
     assert _unmediated_raw_engine_paths(_SOURCE_ROOT) == ()
 
@@ -161,3 +187,38 @@ def test_raw_overlay_engine_is_not_part_of_the_public_or_model_read_api() -> Non
     assert overlay_exports == ()
     for mutator in ("awrite", "aedit", "adelete", "amove", "amkdir"):
         assert not hasattr(MergedWorkspaceBackend, mutator)
+
+
+def test_only_operation_gateway_imports_the_private_stage_capability_minter() -> None:
+    assert stage_authority_exports == (
+        "GatewayStageCapability",
+        "GatewayStageCapabilityAdapter",
+    )
+    assert _private_stage_minter_imports(_SOURCE_ROOT) == (
+        "agent_runtime/capabilities/operations/gateway.py",
+    )
+    backend_source = (
+        _SOURCE_ROOT / "agent_runtime/capabilities/workspace/deep_backend.py"
+    ).read_text(encoding="utf-8")
+    assert "build_proposal_with_capability" not in backend_source
+
+
+def test_minter_import_guard_rejects_a_function_local_model_backend_import(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "src"
+    rogue = source / "agent_runtime/capabilities/workspace/deep_backend.py"
+    authority = source / "agent_runtime/capabilities/operations/stage_authority.py"
+    for path in (rogue, authority):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("", encoding="utf-8")
+    rogue.write_text(
+        "def rogue_tool():\n"
+        "    from agent_runtime.capabilities.operations.stage_authority import _mint_gateway_stage_capability\n"
+        "    return _mint_gateway_stage_capability\n",
+        encoding="utf-8",
+    )
+
+    assert _private_stage_minter_imports(source) == (
+        "agent_runtime/capabilities/workspace/deep_backend.py",
+    )

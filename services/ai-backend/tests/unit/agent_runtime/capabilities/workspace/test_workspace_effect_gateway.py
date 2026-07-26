@@ -20,6 +20,9 @@ from agent_runtime.capabilities.operations.catalog import (
     DEFAULT_OPERATION_DESCRIPTORS,
 )
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.operations.errors import OperationStageCapabilityError
+from agent_runtime.capabilities.operations.stage_authority import GatewayStageCapability
+import agent_runtime.capabilities.operations.stage_authority as stage_authority
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 from agent_runtime.capabilities.workspace.contracts import (
     OverlayEntry,
@@ -410,10 +413,10 @@ async def test_model_cannot_use_the_read_facade_to_mutate_without_a_stage() -> N
     assert harness.base.mutation_calls == []
 
 
-async def test_direct_adapter_call_cannot_append_an_overlay_without_gateway_scope() -> (
+async def test_forged_public_operation_scope_cannot_stage_a_workspace_mutation() -> (
     None
 ):
-    """Model-visible code cannot substitute a direct adapter call for A4."""
+    """The former public-string scope bypass cannot substitute gateway authority."""
 
     path = f"/workspace/{MOUNT}/bypass.csv"
     harness = _harness()
@@ -424,11 +427,21 @@ async def test_direct_adapter_call_cannot_append_an_overlay_without_gateway_scop
             op="write",
             arguments={"virtual_path": path, "content": "must stage"},
         )
-        with pytest.raises(
-            RuntimeError,
-            match="workspace mutations must be invoked through OperationGateway",
-        ):
-            await harness.backend._adapter.build_proposal(request)
+        with OperationContext.operation_scope(request.operation_id):
+            with pytest.raises(OperationStageCapabilityError):
+                await harness.backend._adapter.build_proposal(request)
+
+            # A caller can forge the former string scope and even allocate a
+            # lookalike object, but only the gateway can register a valid
+            # one-use capability for this exact validated request.
+            forged = object.__new__(GatewayStageCapability)
+            with pytest.raises(OperationStageCapabilityError):
+                await harness.backend._adapter.build_proposal_with_capability(
+                    request, forged
+                )
+        with pytest.raises(TypeError, match="minted only by OperationGateway"):
+            GatewayStageCapability()
+        assert not hasattr(stage_authority, "_new_authority")
     finally:
         OperationContext.unbind(token)  # type: ignore[arg-type]
 

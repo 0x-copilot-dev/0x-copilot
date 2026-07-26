@@ -32,6 +32,10 @@ from agent_runtime.capabilities.workspace.contracts import (
     mount_id_for_path,
     normalize_virtual_path,
 )
+from agent_runtime.capabilities.operations.stage_authority import (
+    GatewayStageCapability,
+)
+from agent_runtime.capabilities.operations.errors import OperationStageCapabilityError
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
 from agent_runtime.capabilities.workspace.overlay import _WorkspaceOverlayMutationEngine
 from agent_runtime.capabilities.workspace.ports import (
@@ -244,10 +248,19 @@ class WorkspaceOperationAdapter(OperationAdapter):
         raise RuntimeError("workspace reads use the merged read backend")
 
     async def build_proposal(self, request: OperationRequest) -> GatewayProposedEffect:
-        if OperationContext.parent_operation_id() != request.operation_id:
-            raise RuntimeError(
-                "workspace mutations must be invoked through OperationGateway"
-            )
+        """Refuse the legacy adapter seam; use gateway-issued authority instead."""
+
+        del request
+        raise OperationStageCapabilityError()
+
+    async def build_proposal_with_capability(
+        self,
+        request: OperationRequest,
+        capability: GatewayStageCapability,
+    ) -> GatewayProposedEffect:
+        if not isinstance(capability, GatewayStageCapability):
+            raise OperationStageCapabilityError()
+        capability._consume_for(request)
         arguments = _request_arguments(request)
         before = await self._mutations._manifest()
         mutation = await self._mutate(request.op, arguments)

@@ -47,6 +47,10 @@ from agent_runtime.capabilities.operations.errors import (
     OperationEnforcementNotReadyError,
     OperationIdentityMismatchError,
 )
+from agent_runtime.capabilities.operations.stage_authority import (
+    GatewayStageCapabilityAdapter,
+    _mint_gateway_stage_capability,
+)
 from agent_runtime.surfaces_v2.canonical_json import (
     CanonicalJsonError,
     canonical_json_bytes,
@@ -220,7 +224,13 @@ class OperationGateway:
                         op=metric_op,
                         effect_class=classification.effect_class.value,
                     )
-                    proposed = await adapter.build_proposal(request)
+                    capability = _mint_gateway_stage_capability(request)
+                    if isinstance(adapter, GatewayStageCapabilityAdapter):
+                        proposed = await adapter.build_proposal_with_capability(
+                            request, capability
+                        )
+                    else:
+                        proposed = await adapter.build_proposal(request)
                     raw_result = None
 
             if (
