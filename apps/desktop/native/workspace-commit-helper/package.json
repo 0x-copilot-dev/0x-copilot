@@ -1,0 +1,8 @@
+{
+  "name": "@0x-copilot/workspace-commit-helper",
+  "private": true,
+  "description": "macOS native retained-handle workspace commit helper, launched only by Electron main",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}

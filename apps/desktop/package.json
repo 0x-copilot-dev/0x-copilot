@@ -7,8 +7,9 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
-    "test": "vitest run",
-    "compile": "node esbuild.config.mjs",
+    "test": "npm run build:workspace-commit-helper && vitest run",
+    "build:workspace-commit-helper": "npm run build --prefix native/workspace-commit-helper",
+    "compile": "npm run build:workspace-commit-helper && node esbuild.config.mjs",
     "copy:renderer-assets": "node -e \"require('node:fs').mkdirSync('out/renderer',{recursive:true}); require('node:fs').copyFileSync('renderer/index.html','out/renderer/index.html')\"",
     "build": "npm run compile",
     "dev": "npm run build && node scripts/dev-launch.mjs",
