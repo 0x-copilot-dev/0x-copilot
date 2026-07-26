@@ -63,8 +63,9 @@ class _SnapshotProvider(SandboxSnapshotPlanProvider):
 
 class _SnapshotStore(SandboxSnapshotFileStorePort):
     async def resolve(
-        self, *, source: SandboxSnapshotSource
+        self, *, source: SandboxSnapshotSource, virtual_path: str
     ) -> SandboxResolvedSnapshotSource | None:
+        del virtual_path
         return SandboxResolvedSnapshotSource(
             kind=source.kind,
             source_ref=source.source_ref,

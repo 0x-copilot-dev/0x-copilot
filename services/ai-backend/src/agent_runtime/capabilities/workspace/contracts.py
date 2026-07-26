@@ -6,6 +6,7 @@ Neither host paths nor file bytes belong in these records.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hashlib
 import posixpath
 import re
@@ -23,6 +24,9 @@ _MAX_VIRTUAL_PATH_LENGTH = 4096
 _MAX_VIRTUAL_PATH_DEPTH = 64
 _MAX_SEGMENT_LENGTH = 255
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_OVERLAY_VERSION_REF = re.compile(
+    r"^workspace-overlay://runs/([A-Za-z0-9._-]{1,255})/versions/([1-9][0-9]*)$"
+)
 _WINDOWS_RESERVED = re.compile(
     r"^(?:CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\..*)?$", re.IGNORECASE
 )
@@ -52,6 +56,32 @@ class BaseExistence(StrEnum):
 class OverlayMutationKind(StrEnum):
     UPSERT = "upsert"
     REMOVE = "remove"
+
+
+@dataclass(frozen=True, slots=True)
+class WorkspaceOverlayVersionRef:
+    """One exact, retained C1 manifest version.
+
+    This is deliberately an opaque product reference rather than a path.  It
+    can be supplied to a D3 snapshot resolver, but never names a host file or
+    a mutable "latest" view of the overlay.
+    """
+
+    run_id: str
+    version: int
+
+    @classmethod
+    def parse(cls, value: str) -> "WorkspaceOverlayVersionRef":
+        match = _OVERLAY_VERSION_REF.fullmatch(value)
+        if match is None:
+            raise ValueError("overlay reference must name one retained version")
+        return cls(run_id=match.group(1), version=int(match.group(2)))
+
+    @classmethod
+    def format(cls, *, run_id: str, version: int) -> str:
+        candidate = f"workspace-overlay://runs/{run_id}/versions/{version}"
+        cls.parse(candidate)
+        return candidate
 
 
 def utc_now() -> datetime:
@@ -363,6 +393,7 @@ __all__ = (
     "WorkspaceEntryKind",
     "WorkspaceMutationResult",
     "WorkspaceOperation",
+    "WorkspaceOverlayVersionRef",
     "blob_key_from_content_ref",
     "content_ref_for_blob",
     "mount_id_for_path",

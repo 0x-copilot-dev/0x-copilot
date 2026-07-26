@@ -45,8 +45,9 @@ _RESULT_ARTIFACT = "artifact://art_550e8400-e29b-41d4-a716-446655440001/revision
 @dataclass
 class _Store(SandboxSnapshotFileStorePort):
     async def resolve(
-        self, *, source: SandboxSnapshotSource
+        self, *, source: SandboxSnapshotSource, virtual_path: str
     ) -> SandboxResolvedSnapshotSource | None:
+        del virtual_path
         return SandboxResolvedSnapshotSource(
             kind=source.kind,
             source_ref=source.source_ref,

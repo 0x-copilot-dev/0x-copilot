@@ -70,6 +70,19 @@ class PostgresWorkspaceOverlayStore:
         except Exception as exc:  # pragma: no cover - requires a broken driver
             raise WorkspaceOverlayConflictError() from exc
 
+    async def get_manifest_version(
+        self, *, run_id: str, version: int
+    ) -> OverlayManifest | None:
+        """Refuse immutable D3 reads until C1 history has a durable SQL adapter.
+
+        The current JSONB row intentionally represents only C1's live manifest.
+        Returning that row for a requested version would silently turn a D3
+        snapshot into a mutable-latest fallback, so this adapter fails closed.
+        """
+
+        del run_id, version
+        return None
+
     async def append_revision(
         self,
         *,

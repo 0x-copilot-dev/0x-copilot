@@ -43,8 +43,9 @@ class _SnapshotStore(SandboxSnapshotFileStorePort):
     resolved_refs: list[str] = field(default_factory=list)
 
     async def resolve(
-        self, *, source: SandboxSnapshotSource
+        self, *, source: SandboxSnapshotSource, virtual_path: str
     ) -> SandboxResolvedSnapshotSource | None:
+        del virtual_path
         self.resolved_refs.append(source.source_ref)
         return self.resolved.get(source.source_ref)
 

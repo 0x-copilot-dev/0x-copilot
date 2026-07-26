@@ -259,9 +259,14 @@ class SandboxSnapshotFileStorePort(Protocol):
     """
 
     async def resolve(
-        self, *, source: SandboxSnapshotSource
+        self, *, source: SandboxSnapshotSource, virtual_path: str
     ) -> SandboxResolvedSnapshotSource | None:
-        """Resolve one source reference to immutable digest-pinned content."""
+        """Resolve one source at its exact virtual path to immutable content.
+
+        ``virtual_path`` is required for C1: a versioned overlay reference names
+        one multi-file manifest and the virtual path selects its one file entry.
+        Artifact revisions ignore the path but receive the same complete input.
+        """
         ...
 
     async def open(self, *, content_ref: str) -> AsyncIterator[bytes]:
@@ -298,7 +303,9 @@ class SandboxSnapshotBuilder:
         entries: list[SandboxSnapshotEntry] = []
         total_bytes = 0
         for item in plan.entries:
-            resolved = await store.resolve(source=item.source)
+            resolved = await store.resolve(
+                source=item.source, virtual_path=item.virtual_path
+            )
             if resolved is None:
                 raise SandboxError(
                     SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
