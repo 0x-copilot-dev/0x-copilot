@@ -266,7 +266,7 @@ async def astream_runtime(
     call = _TracedRuntimeCall(
         harness,
         event_prefix="runtime.stream",
-        safe_message="Runtime streaming failed safely.",
+        safe_message="We couldn't complete this run. Please try again.",
         logger=logger or RuntimeLogger(),
         start_metadata={"message_count": len(messages)},
     )

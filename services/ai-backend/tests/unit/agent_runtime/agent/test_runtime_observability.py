@@ -15,6 +15,7 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from agent_runtime.execution.graph import ConfiguredRuntimeGraph
 from agent_runtime.execution.runtime import (
+    astream_runtime,
     ainvoke_runtime,
     runtime_config,
 )
@@ -38,6 +39,12 @@ class CapturingInvokeAgent:
         if self.fail:
             raise RuntimeError("provider token=super-secret")
         return self.result
+
+
+class FailingStreamAgent:
+    async def astream(self, *_args: object, **_kwargs: object):
+        raise ValueError("provider request shape was invalid")
+        yield  # pragma: no cover - makes this an async generator for the port
 
 
 def make_harness(
@@ -168,6 +175,29 @@ async def test_invoke_runtime_logs_safe_error_without_raw_exception(
     # ``RuntimeLogger.exception_metadata`` docstring for the contract.
     assert (
         "provider token=super-secret" in error_payload["metadata"]["exception_message"]  # type: ignore[index]
+    )
+
+
+async def test_stream_runtime_uses_a_user_facing_safe_message(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    harness = make_harness(
+        runtime_context_admin,
+        fake_dependencies,
+        agent=FailingStreamAgent(),
+    )
+
+    with pytest.raises(AgentRuntimeError) as exc_info:
+        async for _ in astream_runtime(
+            harness,
+            messages=({"role": "user", "content": "secret"},),
+        ):
+            pass
+
+    assert (
+        exc_info.value.safe_message
+        == "We couldn't complete this run. Please try again."
     )
 
 

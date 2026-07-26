@@ -203,6 +203,27 @@ class TestTerminalRunEvent:
         assert failed[0].payload["reason"] == TerminationReason.TOOL_FATAL_ERROR.value
         assert failed[0].payload["error_class"] == "ValueError"
 
+    async def test_emits_safe_error_envelope_when_supplied(self) -> None:
+        producer, run, store = await _seeded_producer_and_run()
+        coordinator = RunTerminationCoordinator(event_producer=producer)
+        await coordinator.terminate(
+            run=run,
+            terminal_status=AgentRunStatus.FAILED,
+            reason=TerminationReason.EXECUTION_ERROR,
+            extra_payload={
+                "code": "external_service_error",
+                "safe_message": "We couldn't complete this run. Please try again.",
+                "retryable": True,
+                "correlation_id": "trace_run",
+            },
+        )
+
+        failed = _events_of_type(store, run.run_id, RuntimeApiEventType.RUN_FAILED)
+        assert failed[0].payload["code"] == "external_service_error"
+        assert failed[0].payload["safe_message"] == (
+            "We couldn't complete this run. Please try again."
+        )
+
     async def test_emits_run_completed_on_normal_completion(self) -> None:
         producer, run, store = await _seeded_producer_and_run()
         coordinator = RunTerminationCoordinator(event_producer=producer)

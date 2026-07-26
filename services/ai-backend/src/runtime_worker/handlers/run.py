@@ -42,6 +42,7 @@ from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
     RuntimeErrorCode,
+    RuntimeErrorEnvelope,
     StreamEventSource,
 )
 from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
@@ -660,18 +661,24 @@ class RuntimeRunHandler:
             # Map typed fatal errors to semantic termination reasons so the FE and
             # audit log can distinguish budget / auth failures from generic errors.
             termination_reason = _termination_reason_for(exc)
+            error = RuntimeErrorEnvelope.from_exception(
+                exc,
+                correlation_id=command.trace_id,
+                default_message="We couldn't complete this run. Please try again.",
+            )
             await self._emit_receipt_then_terminate(
                 run=failed,
                 terminal_status=AgentRunStatus.FAILED,
                 reason=termination_reason,
                 summary="Run failed",
                 cause=exc,
+                extra_payload=error.model_dump(mode="json"),
             )
             await self.audit_emitter.emit_run_failed(
                 failed,
                 status=AgentRunStatus.FAILED,
                 error_class=type(exc).__name__,
-                error_code=ToolErrorCode.TOOL_EXCEPTION.value,
+                error_code=error.code.value,
                 duration_ms=int((time.perf_counter() - run_start_perf) * 1000),
             )
             await self._record_run_usage(
@@ -1711,18 +1718,42 @@ class RuntimeRunHandler:
         messages: list[dict[str, str]],
         prompt_context: str,
     ) -> None:
-        """Insert a SYSTEM message with prior tool context just before the last USER message."""
-        insert_at = len(messages)
+        """Attach prior observations to the current user turn as untrusted data.
+
+        The Deep Agents builder already owns the trusted system prompt. Adding a
+        second system message in the conversation violates Anthropic's Messages
+        contract and grants external tool/subagent output inappropriate
+        instruction priority. Keeping observations in a user turn is
+        provider-neutral and preserves their lower trust level.
+        """
         for index in range(len(messages) - 1, -1, -1):
             if messages[index][cls._Fields.ROLE] == MessageRole.USER.value:
-                insert_at = index
-                break
-        messages.insert(
-            insert_at,
+                user_content = messages[index][cls._Fields.CONTENT]
+                messages[index][cls._Fields.CONTENT] = "\n\n".join(
+                    (
+                        "<application_context "
+                        'source="prior_tool_and_subagent_observations">\n'
+                        f"{prompt_context}\n"
+                        "</application_context>",
+                        user_content,
+                    )
+                )
+                return
+
+        # A run always has a current user message, but retain context rather than
+        # silently dropping it if a malformed legacy conversation lacks one.
+        messages.append(
             {
-                cls._Fields.ROLE: MessageRole.SYSTEM.value,
-                cls._Fields.CONTENT: prompt_context,
-            },
+                cls._Fields.ROLE: MessageRole.USER.value,
+                cls._Fields.CONTENT: "\n".join(
+                    (
+                        "<application_context "
+                        'source="prior_tool_and_subagent_observations">',
+                        prompt_context,
+                        "</application_context>",
+                    )
+                ),
+            }
         )
 
     @classmethod

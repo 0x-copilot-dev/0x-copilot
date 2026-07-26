@@ -514,18 +514,28 @@ async def test_runtime_worker_injects_prior_tool_observation_summaries() -> None
         store.runs[follow_up.run_id],
     )
 
-    assert [message["role"] for message in messages] == [
-        "user",
-        "assistant",
-        "system",
-        "user",
-    ]
-    context = messages[-2]["content"]
+    assert [message["role"] for message in messages] == ["user", "assistant", "user"]
+    context = messages[-1]["content"]
+    assert (
+        '<application_context source="prior_tool_and_subagent_observations">' in context
+    )
     assert "Prior tool and subagent observations from earlier turns" in context
     assert "load_prior_tool_result" in context
     assert "jira_search" in context
     assert "AUTH-123" in context
-    assert "Which one is highest priority?" == messages[-1]["content"]
+    assert context.endswith("Which one is highest priority?")
+    # Deep Agents prepends its trusted system prompt at invocation time. The
+    # worker must not add another system message after conversation history:
+    # Anthropic rejects that shape as non-consecutive system messages.
+    provider_messages = [
+        {"role": "system", "content": "Trusted instructions."},
+        *messages,
+    ]
+    assert [
+        index
+        for index, message in enumerate(provider_messages)
+        if message["role"] == "system"
+    ] == [0]
 
 
 async def test_create_run_response_returns_prior_run_ids_for_chain() -> None:
@@ -648,7 +658,10 @@ async def test_runtime_worker_injects_prior_subagent_results_into_next_turn() ->
         store.runs[follow_up.run_id],
     )
 
-    context = messages[-2]["content"]
+    context = messages[-1]["content"]
+    assert (
+        '<application_context source="prior_tool_and_subagent_observations">' in context
+    )
     assert "Prior tool and subagent observations from earlier turns" in context
     assert "subagent:general-purpose" in context
     assert "hallucinations and tool misuse" in context
@@ -806,7 +819,7 @@ async def test_runtime_worker_prior_tool_observations_are_branch_safe() -> None:
         store.run_commands[-1],
         store.runs[follow_up.run_id],
     )
-    context = messages[-2]["content"]
+    context = messages[-1]["content"]
 
     assert "AUTH-123" in context
     assert "SIBLING-999" not in context
@@ -1200,6 +1213,66 @@ async def test_runtime_worker_completes_queue_item_when_stream_times_out() -> No
     ]
     assert store.events_by_run[run_id][-1].summary == "Run timed out"
     assert set(store._queue_statuses.values()) == {OutboxStatus.COMPLETED}
+
+
+async def test_runtime_worker_emits_safe_error_envelope_when_stream_fails() -> None:
+    store = InMemoryRuntimeApiStore()
+    settings = _TestSettings.create(max_retries=0)
+    run_id = await _TestHelpers.create_queued_run(store, settings)
+
+    def fake_agent_factory(
+        *,
+        context: AgentRuntimeContext,
+        dependencies: RuntimeDependencies,
+    ) -> RuntimeHarness:
+        return RuntimeHarness(
+            agent=object(),
+            context=context,
+            dependencies=dependencies,
+            tools=(),
+            mcp_servers=(),
+            subagents=(),
+            memory_backend=None,
+            skill_directories=(),
+        )
+
+    async def failing_streamer(
+        _harness: RuntimeHarness,
+        _messages: Sequence[object],
+    ):
+        raise AgentRuntimeError(
+            RuntimeErrorCode.EXTERNAL_SERVICE_ERROR,
+            "We couldn't complete this run. Please try again.",
+            retryable=True,
+        )
+        yield  # pragma: no cover - makes this an async generator for the port
+
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=settings,
+        retry_delay_seconds=0,
+        run_handler=RuntimeRunHandler(
+            persistence=store,
+            event_store=store,
+            settings=settings,
+            agent_factory=fake_agent_factory,
+            runtime_streamer=failing_streamer,
+        ),
+    )
+
+    assert await worker.run_until_idle() == 1
+    failed = next(
+        event
+        for event in store.events_by_run[run_id]
+        if event.event_type == RuntimeApiEventType.RUN_FAILED
+    )
+    assert failed.payload["code"] == RuntimeErrorCode.EXTERNAL_SERVICE_ERROR.value
+    assert failed.payload["safe_message"] == (
+        "We couldn't complete this run. Please try again."
+    )
+    assert failed.payload["retryable"] is True
 
 
 async def test_runtime_worker_settles_inflight_tool_calls_on_run_timeout() -> None:
