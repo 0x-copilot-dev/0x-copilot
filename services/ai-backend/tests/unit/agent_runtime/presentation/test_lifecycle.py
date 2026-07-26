@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from tests.unit.agent_runtime.presentation.lifecycle_corpus_runner import (
+    load_corpus,
+    project_corpus,
+)
+
 from agent_runtime.presentation.lifecycle import (
     CanvasLifecycleProjection,
     CanvasLifecycleState,
@@ -140,3 +145,47 @@ def test_every_replay_prefix_is_deterministic_and_preserves_tab_order() -> None:
         tab_orders.append(tuple(subject.key for subject in first.tabs))
     assert tab_orders[2] == ("artifact:art_b",)
     assert tab_orders[-1] == ("artifact:art_b", "surface:surface://a")
+
+
+def test_shared_differential_corpus_has_no_hand_maintained_projection_snapshot() -> (
+    None
+):
+    """Exercise every prefix from the cross-language corpus in the Python fold.
+
+    The TypeScript suite compares this runner's normalized output directly to
+    its own fold.  This test intentionally asserts structural corpus coverage,
+    not a second hand-authored state snapshot.
+    """
+
+    corpus = load_corpus()
+    cases = corpus["cases"]
+    assert isinstance(cases, list)
+    transitions = {
+        transition
+        for case in cases
+        if isinstance(case, dict)
+        for transition in case.get("transitions", [])
+        if isinstance(transition, str)
+    }
+    assert {
+        "created",
+        "derived",
+        "updated",
+        "rejected",
+        "replay_duplicate",
+        "stable_order",
+    } <= transitions
+
+    projected = project_corpus(corpus)
+    snapshots = {case["id"]: case["prefixes"][-1] for case in projected["cases"]}
+    rejected = snapshots["rejected-stage-is-terminal-not-parked"]
+    assert rejected["lifecycle"] == "presenting"
+    assert rejected["pendingSubjectKeys"] == []
+    assert rejected["tabs"][0]["revision"] == 2
+    assert [
+        tab["key"]
+        for tab in snapshots["same-priority-tabs-use-stable-key-order"]["tabs"]
+    ] == [
+        "artifact:art_a",
+        "artifact:art_z",
+    ]

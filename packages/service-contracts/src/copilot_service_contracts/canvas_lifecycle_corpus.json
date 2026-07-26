@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "description": "Executable, transport-envelope-lite corpus for differential Canvas lifecycle folding. Every case is projected at every source-order replay prefix; no projected output is stored here.",
+  "cases": [
+    {
+      "id": "created-derived-updated-out-of-order-replay",
+      "transitions": [
+        "created",
+        "derived",
+        "updated",
+        "replay_duplicate",
+        "stable_order"
+      ],
+      "events": [
+        {
+          "sequence_no": 4,
+          "event_type": "artifact.revised",
+          "payload": { "artifact_id": "art_brief", "revision": 2 }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "artifact.presentation_decided",
+          "payload": { "artifact_id": "art_brief", "decision": "canvas" }
+        },
+        {
+          "sequence_no": 1,
+          "event_type": "artifact.created",
+          "payload": {
+            "artifact_id": "art_brief",
+            "kind": "document",
+            "revision": 1
+          }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "surface.created",
+          "payload": {
+            "surface_id": "surface://deals",
+            "kind": "table",
+            "title": "Deals"
+          }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "surface.created",
+          "payload": {
+            "surface_id": "surface://deals",
+            "kind": "table",
+            "title": "Deals"
+          }
+        },
+        {
+          "sequence_no": 5,
+          "event_type": "view.derived",
+          "payload": { "surface_id": "surface://deals" }
+        },
+        { "sequence_no": 6, "event_type": "final_response", "payload": {} },
+        {
+          "sequence_no": 7,
+          "event_type": "run_completed",
+          "payload": { "status": "completed" }
+        }
+      ]
+    },
+    {
+      "id": "rejected-stage-is-terminal-not-parked",
+      "transitions": [
+        "created",
+        "updated",
+        "rejected",
+        "replay_duplicate",
+        "stable_order"
+      ],
+      "events": [
+        {
+          "sequence_no": 4,
+          "event_type": "effect.decision_recorded",
+          "payload": { "stage_id": "stage_delete", "decision": "reject" }
+        },
+        {
+          "sequence_no": 1,
+          "event_type": "effect.staged",
+          "payload": {
+            "stage_id": "stage_delete",
+            "display_target": "Delete draft",
+            "revision": 1
+          }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "effect.revised",
+          "payload": {
+            "stage_id": "stage_delete",
+            "display_target": "Delete revised draft",
+            "revision": 2
+          }
+        },
+        {
+          "sequence_no": 3,
+          "event_type": "surface.created",
+          "payload": {
+            "surface_id": "surface://drafts",
+            "kind": "table",
+            "title": "Drafts"
+          }
+        },
+        {
+          "sequence_no": 4,
+          "event_type": "effect.decision_recorded",
+          "payload": { "stage_id": "stage_delete", "decision": "reject" }
+        },
+        { "sequence_no": 5, "event_type": "final_response", "payload": {} },
+        {
+          "sequence_no": 6,
+          "event_type": "run_completed",
+          "payload": { "status": "completed" }
+        }
+      ]
+    },
+    {
+      "id": "same-priority-tabs-use-stable-key-order",
+      "transitions": ["created", "stable_order"],
+      "events": [
+        {
+          "sequence_no": 2,
+          "event_type": "artifact.presentation_decided",
+          "payload": { "artifact_id": "art_z", "decision": "canvas" }
+        },
+        {
+          "sequence_no": 1,
+          "event_type": "artifact.created",
+          "payload": { "artifact_id": "art_z", "kind": "code", "revision": 1 }
+        },
+        {
+          "sequence_no": 1,
+          "event_type": "artifact.created",
+          "payload": { "artifact_id": "art_a", "kind": "code", "revision": 1 }
+        },
+        {
+          "sequence_no": 2,
+          "event_type": "artifact.presentation_decided",
+          "payload": { "artifact_id": "art_a", "decision": "canvas" }
+        }
+      ]
+    }
+  ]
+}

@@ -66,8 +66,8 @@ const [ARTIFACT_CREATED, ARTIFACT_REVISED, , ARTIFACT_PRESENTATION_DECIDED] =
   ARTIFACT_EVENT_TYPES;
 const [
   EFFECT_STAGED,
-  ,
-  ,
+  EFFECT_REVISED,
+  EFFECT_DECISION_RECORDED,
   ,
   EFFECT_APPLIED,
   EFFECT_INDETERMINATE,
@@ -231,6 +231,33 @@ export function projectCanvasLifecycle(
         priority: 400,
         rendererHint: "effect-stage",
       });
+      continue;
+    }
+    if (type === EFFECT_REVISED) {
+      const key = effectKeys.get(text(payload.stage_id) ?? "");
+      const subject = key === undefined ? undefined : subjects.get(key);
+      if (subject !== undefined) {
+        const revision = positiveInt(payload.revision);
+        if (revision !== null) subject.revision = revision;
+        const title = text(payload.display_target);
+        if (title !== null) subject.title = title;
+        subject.lastSeq = seq;
+      }
+      continue;
+    }
+    if (type === "decision.recorded" || type === EFFECT_DECISION_RECORDED) {
+      const key = effectKeys.get(text(payload.stage_id) ?? "");
+      if (
+        key !== undefined &&
+        (text(payload.decision) === "reject" ||
+          text(payload.decision) === "cancel")
+      ) {
+        // A rejected/cancelled proposal is still reviewable, but no longer
+        // waits for a decision and therefore cannot keep Studio parked.
+        pendingStages.delete(key);
+        const subject = subjects.get(key);
+        if (subject !== undefined) subject.lastSeq = seq;
+      }
       continue;
     }
     if (
