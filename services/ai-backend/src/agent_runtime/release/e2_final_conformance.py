@@ -185,16 +185,13 @@ class E2FinalConformanceRunner:
         )
         if violations:
             return _fail(3, "no direct effect client upstream", *violations)
-        if _legacy_mcp_direct_dispatch_present(self._paths.source_root):
-            return _blocked(
-                3,
-                "no direct effect client upstream",
-                "D7 prerequisite: CallMcpTool legacy direct-read compatibility path remains; default-off writes and unknown operations are fail-closed",
-            )
+        mcp_dispatch = _model_facing_mcp_dispatch_violations(self._paths.source_root)
+        if mcp_dispatch:
+            return _fail(3, "no direct effect client upstream", *mcp_dispatch)
         return _pass(
             3,
             "no direct effect client upstream",
-            "sole-producer and sole-workspace-constructor AST guards; D7 legacy path retired",
+            "sole-producer, sole-workspace-constructor, and model-facing MCP dispatch AST guards",
         )
 
     def _canonical_effect_result_producer(self) -> ConformanceCondition:
@@ -485,27 +482,37 @@ def _load_tool_module(name: str, filename: str) -> Any | None:
     return module
 
 
-def _legacy_mcp_direct_dispatch_present(source_root: Path) -> bool:
-    """Detect the D7-owned direct model-tool client construction structurally."""
+def _model_facing_mcp_dispatch_violations(source_root: Path) -> tuple[str, ...]:
+    """Reject provider construction or invocation from model-facing MCP adapters.
+
+    ``McpOperationAdapter`` is the reviewed canonical read seam.  Everything in
+    the MCP middleware package is upstream of descriptor classification, so an
+    upstream ``create_client`` or ``call_tool`` would restore the exact D1/D7
+    bypass this release gate retires.
+    """
 
     import ast
 
-    path = source_root / "agent_runtime/capabilities/mcp/middleware/call_tool.py"
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, SyntaxError):
-        # Missing/unparseable safety evidence must never be a release pass.
-        return True
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.AsyncFunctionDef) or node.name != "ainvoke":
+    middleware_root = source_root / "agent_runtime/capabilities/mcp/middleware"
+    if not middleware_root.is_dir():
+        return ("model-facing MCP middleware directory is missing",)
+    violations: list[str] = []
+    for path in sorted(middleware_root.glob("*.py")):
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        except (OSError, SyntaxError):
+            violations.append(f"{path.relative_to(source_root)}: unparseable")
             continue
-        if any(
-            isinstance(call.func, ast.Attribute) and call.func.attr == "create_client"
-            for call in ast.walk(node)
-            if isinstance(call, ast.Call)
-        ):
-            return True
-    return False
+        for call in ast.walk(tree):
+            if not isinstance(call, ast.Call) or not isinstance(
+                call.func, ast.Attribute
+            ):
+                continue
+            if call.func.attr in {"create_client", "call_tool"}:
+                violations.append(
+                    f"{path.relative_to(source_root)}:{call.lineno}: {call.func.attr}"
+                )
+    return tuple(violations)
 
 
 __all__ = (

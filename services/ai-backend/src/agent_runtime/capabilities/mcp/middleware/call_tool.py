@@ -2,37 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
-import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import ValidationError
 
-from agent_runtime.capabilities.citation_capturing_tool import _CitationHint
-from agent_runtime.capabilities.conversation_ordinals import (
-    ConversationOrdinalAllocator,
-)
 from agent_runtime.capabilities.mcp.cards import (
     McpLoadError,
     McpLoadErrorCode,
     McpToolCallRequest,
     McpToolCallResult,
 )
-from agent_runtime.capabilities.mcp.client import (
-    McpAuthError,
-    McpClientError,
-    McpConnectionError,
-    McpTimeoutError,
-)
 from agent_runtime.capabilities.mcp.constants import Messages, Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
-from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
-    CitationProjectingMcpMiddleware,
-)
-from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.operation_adapter import (
     McpOperationAdapter,
     McpOperationGatewayContext,
@@ -44,20 +28,11 @@ from agent_runtime.capabilities.operations.context import (
     OperationContext,
     OperationRequestFactory,
 )
-from agent_runtime.capabilities.operations.probes import OperationShadowProbe
-from agent_runtime.capabilities.surfaces.generator import (
-    GenToolDescriptor,
-    SurfaceGenerationScheduler,
-)
-from agent_runtime.capabilities.surfaces.projector import SurfaceProjector
 from agent_runtime.effects.contracts import EffectPolicySnapshot
 from agent_runtime.execution.contracts import AgentRuntimeContext
-from agent_runtime.surfaces_v2.config import SurfacesV2Flag
-from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from agent_runtime.surfaces_v2.gate import ToolAccessGate
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectPolicy,
-    GateAuthState,
     OperationOutcome,
 )
 
@@ -72,11 +47,9 @@ class CallMcpTool:
     registry: DynamicMcpRegistry
     loader: McpLoader
     runtime_context: AgentRuntimeContext
-    # Generative Surfaces v2 (PRD-C2): the ToolAccessGate parks the run at the
-    # connector-dispatch boundary on missing/expired/insufficient auth. ``None``
-    # ⇒ pre-C2 bytes (the flag-off / unwired path) — every gate branch below is
-    # additionally guarded by ``SurfacesV2Flag.enabled()`` so the field being set
-    # never changes behaviour with the flag off.
+    # The canonical adapter owns the ToolAccessGate decision at the connector
+    # dispatch boundary. ``None`` keeps gateway tests and non-MCP providers
+    # simple; it never enables a direct provider-dispatch fallback.
     gate: ToolAccessGate | None = None
     name: str = Values.ToolName.CALL_MCP_TOOL
     description: str = Messages.Middleware.CALL_MCP_TOOL_DESCRIPTION
@@ -93,37 +66,22 @@ class CallMcpTool:
         if isinstance(parsed_input, McpToolCallResult):
             return parsed_input.model_dump(mode="json", exclude_none=True)
 
-        # D1 authoritative MCP convergence.  The binding is intentionally
-        # stricter than the feature flag: an enforce-mode OperationContext with
-        # durable canonical arguments AND trusted staging/result dependencies is
-        # required.  Until the worker composition root supplies all three, the
-        # established v2 path below is byte-identical.  On this path the generic
-        # tool is classified before any connector client can be created; writes,
-        # destructive calls, and unknown operations become effects, never MCP
-        # dispatches.  In particular, do not call ``_emit_ledger`` here: the
-        # OperationGateway is the sole authoritative event producer.
-        services = McpOperationGatewayContext.enforced()
-        if services is not None:
-            return await self._ainvoke_operation_gateway(parsed_input, services)
+        # D1/D7: model-facing MCP calls have one route. A safe rollback may
+        # hold work when the durable gateway is not composed, but must never
+        # recreate the retired direct provider-dispatch branch.
+        services = McpOperationGatewayContext.canonical()
+        if services is None:
+            return await self._hold_after_safe_preflight(parsed_input)
+        return await self._ainvoke_operation_gateway(parsed_input, services)
 
-        # D9 P0 transitional guard.  D7 has not yet removed the legacy read
-        # compatibility branch below, but that branch must never turn a
-        # model-originated write, destructive request, or unknown operation
-        # into ``create_client``/``call_tool`` traffic.  Such work is safe only
-        # in the enforced gateway, after descriptor classification, durable
-        # staging, user/policy decision, claim, and coordinator dispatch.
-        if not McpOperationGatewayContext.legacy_direct_read_allowed(
-            capability=parsed_input.server_name,
-            op=parsed_input.tool_name,
-        ):
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.PERMISSION_DENIED,
-                Messages.Loader.CANONICAL_EFFECT_PIPELINE_REQUIRED,
-                retryable=True,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
+    async def _hold_after_safe_preflight(
+        self, parsed_input: McpToolCallRequest
+    ) -> dict[str, Any]:
+        """Return honest load/permission failures before an unbound hold.
+
+        Resolution and card authorization do not construct a connector client,
+        so preserving this feedback cannot restore the retired dispatch path.
+        """
 
         resolution = await self.registry.resolve_server(parsed_input.server_name)
         if isinstance(resolution, McpLoadError):
@@ -135,9 +93,6 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
-
-        # Defense-in-depth: re-check authorization after registry resolve so a stale
-        # tool reference from an earlier turn can't bypass per-chat pausing.
         if not McpPermissionPolicy.is_server_card_authorized(
             self.runtime_context, resolution.card
         ):
@@ -148,217 +103,22 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 correlation_id=self.runtime_context.trace_id,
             ).model_dump(mode="json", exclude_none=True)
+        return self._held_without_gateway(parsed_input)
 
-        # Generative Surfaces v2 (PRD-C2): gate at the connector-dispatch
-        # boundary. When the connector's auth is not usable right now, park the
-        # run on the mcp_auth interrupt seam BEFORE any client is created; a
-        # cancelled gate returns a typed AUTH_FAILURE and the dependent call
-        # never dispatches (fail closed). On resume the tool node re-executes
-        # from the top with a fresh card — a now-valid auth returns ``None`` from
-        # ``gate_state`` and dispatch proceeds (this IS "resume re-enters the
-        # parked call"). Flag off / gate unwired ⇒ this whole block short-circuits
-        # before any behaviour change (byte-identical).
-        if SurfacesV2Flag.enabled() and self.gate is not None:
-            gate_state = self.gate.gate_state(resolution.card)
-            if gate_state is not None:
-                resume = await self.gate.park(
-                    card=resolution.card,
-                    tool_name=parsed_input.tool_name,
-                    arguments=parsed_input.arguments,
-                    state=gate_state,
-                )
-                if not resume.approved:
-                    return McpToolCallResult.fail(
-                        McpLoadErrorCode.AUTH_FAILURE,
-                        Messages.Loader.AUTH_FAILED,
-                        server_name=parsed_input.server_name,
-                        tool_name=parsed_input.tool_name,
-                        correlation_id=self.runtime_context.trace_id,
-                    ).model_dump(mode="json", exclude_none=True)
+    def _held_without_gateway(self, parsed_input: McpToolCallRequest) -> dict[str, Any]:
+        """Fail closed before connector construction when gateway wiring is absent."""
 
-        # Wall time of the connector dispatch, for the v2 ``read.executed``
-        # ledger event (PRD-A3 D1). Measured only around the dispatch itself so
-        # citation/ordinal/surface work downstream does not inflate it. Unused
-        # when ``SURFACES_V2`` is off (no emitter bound ⇒ ``_emit_ledger`` no-ops).
-        dispatch_latency_ms: int | None = None
-        try:
-            client = resolution.provider.create_client(resolution.card)
-            dispatch_started = time.perf_counter()
-
-            async def _dispatch() -> object:
-                return await asyncio.wait_for(
-                    client.call_tool(
-                        tool_name=parsed_input.tool_name,
-                        arguments=parsed_input.arguments,
-                    ),
-                    timeout=self.loader.timeout_seconds,
-                )
-
-            output = await OperationShadowProbe.invoke_legacy(
-                capability=parsed_input.server_name,
-                op=parsed_input.tool_name,
-                arguments=parsed_input.arguments,
-                legacy=_dispatch,
-                legacy_class=OperationShadowProbe.legacy_mcp_effect_class(
-                    parsed_input.server_name,
-                    parsed_input.tool_name,
+        return McpToolCallResult.ok(
+            server_name=parsed_input.server_name,
+            tool_name=parsed_input.tool_name,
+            output={
+                "status": "held",
+                "summary": (
+                    "The connector operation is held until the canonical operation "
+                    "gateway is available; no connector call was made."
                 ),
-            )
-            dispatch_latency_ms = int((time.perf_counter() - dispatch_started) * 1000)
-        except (McpTimeoutError, TimeoutError):
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.TIMEOUT,
-                Messages.Loader.TIMEOUT,
-                retryable=True,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
-        except McpAuthError:
-            # Mid-run revocation (PRD-C2): the card SAID authenticated but the
-            # vendor rejected the dispatch. Flag on + gate wired ⇒ re-enter the
-            # gate with ``EXPIRED`` instead of returning the terminal failure —
-            # ``park`` raises the interrupt so the run parks in place; on resume
-            # the node re-executes and the pre-dispatch gate handles the retry.
-            # If ``park`` RETURNS (resume re-execution that still failed), fall
-            # through to the fail-closed AUTH_FAILURE (never loop). Flag off /
-            # gate unwired ⇒ byte-identical to the pre-C2 terminal failure.
-            if SurfacesV2Flag.enabled() and self.gate is not None:
-                await self.gate.park(
-                    card=resolution.card,
-                    tool_name=parsed_input.tool_name,
-                    arguments=parsed_input.arguments,
-                    state=GateAuthState.EXPIRED,
-                )
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.AUTH_FAILURE,
-                Messages.Loader.AUTH_FAILED,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
-        except PermissionError:
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.AUTH_FAILURE,
-                Messages.Loader.AUTH_FAILED,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
-        except (McpConnectionError, ConnectionError):
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.CONNECTION_FAILED,
-                Messages.Loader.CONNECTION_FAILED,
-                retryable=True,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
-        except (McpClientError, Exception):
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.CONNECTION_FAILED,
-                Messages.Loader.LOAD_FAILED,
-                retryable=True,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-            ).model_dump(mode="json", exclude_none=True)
-
-        # Project citation sources from the structured output. Best-effort;
-        # the original output shape is preserved for JSON consumers.
-        await CitationProjectingMcpMiddleware.project(
-            connector=parsed_input.server_name,
-            tool_call_id=self.runtime_context.trace_id,
-            result=output,
-        )
-
-        # Classify protocol-level failures per the MCP spec: a successful HTTP
-        # response carrying ``isError: true`` is a failure, not a "completed"
-        # result. Preserve the full ``output`` envelope on the failure result so
-        # the model can read the inner error text and self-correct.
-        if McpToolCallOutcome.is_protocol_error(output):
-            return McpToolCallResult.fail(
-                McpLoadErrorCode.MCP_PROTOCOL_ERROR,
-                McpToolCallOutcome.extract_error_text(output),
-                retryable=False,
-                server_name=parsed_input.server_name,
-                tool_name=parsed_input.tool_name,
-                correlation_id=self.runtime_context.trace_id,
-                output=output,
-            ).model_dump(mode="json", exclude_none=True)
-
-        # Allocate a conversation-scoped ordinal bound to tool_call_id so the
-        # citation resolver can stamp source_tool_call_id on citation_made events.
-        # Best-effort: when no allocator is bound (replay/eval) or no tool_call_id
-        # was injected (manual call sites), the output is returned unchanged.
-        try:
-            allocator = ConversationOrdinalAllocator.active()
-            if allocator is None:
-                _LOGGER.warning(
-                    "[citations] mcp.hint_skipped server=%s tool=%s "
-                    "reason=no_allocator_bound",
-                    parsed_input.server_name,
-                    parsed_input.tool_name,
-                )
-            elif not parsed_input.tool_call_id:
-                _LOGGER.warning(
-                    "[citations] mcp.hint_skipped server=%s tool=%s "
-                    "reason=no_tool_call_id_injected (replay/eval path)",
-                    parsed_input.server_name,
-                    parsed_input.tool_name,
-                )
-            else:
-                qualified_tool_name = (
-                    f"{parsed_input.server_name}.{parsed_input.tool_name}"
-                )
-                ordinal = await allocator.allocate_for_tool_call(
-                    tool_call_id=parsed_input.tool_call_id,
-                    tool_name=qualified_tool_name,
-                )
-                hinted = _CitationHint.append_to(
-                    output,
-                    ordinal=ordinal,
-                    tool_name=qualified_tool_name,
-                )
-                if isinstance(hinted, dict):
-                    output = hinted
-                _LOGGER.info(
-                    "[citations] mcp.hint_appended server=%s tool=%s "
-                    "ordinal=%d call_id=%s",
-                    parsed_input.server_name,
-                    parsed_input.tool_name,
-                    ordinal,
-                    parsed_input.tool_call_id,
-                )
-        except Exception:  # noqa: BLE001 - best-effort; never break MCP results
-            _LOGGER.warning(
-                "[citations] mcp.hint_raised server=%s tool=%s",
-                parsed_input.server_name,
-                parsed_input.tool_name,
-                exc_info=True,
-            )
-
-        result = McpToolCallResult.ok(
-            server_name=parsed_input.server_name,
-            tool_name=parsed_input.tool_name,
-            output=output,
+            },
         ).model_dump(mode="json", exclude_none=True)
-
-        # Generative Surfaces v2 (PRD-A3/E3): record the executed read on the Work
-        # Ledger. Awaited (not fire-and-forget) for deterministic event ordering;
-        # a no-op unless a ``WorkLedgerEmitter`` is bound, which happens only when
-        # ``SURFACES_V2`` is on. The v1 ``result["surface"]`` appendage was retired
-        # in E3 — the surface envelope is now computed on-demand INSIDE
-        # ``_emit_ledger`` (only when an emitter is bound) and handed straight to
-        # the ledger; the tool result dict is never mutated with a surface.
-        await CallMcpTool._emit_ledger(
-            server_name=parsed_input.server_name,
-            tool_name=parsed_input.tool_name,
-            call_id=parsed_input.tool_call_id,
-            output=output,
-            latency_ms=dispatch_latency_ms,
-        )
-        return result
 
     async def _ainvoke_operation_gateway(
         self,
@@ -543,119 +303,6 @@ class CallMcpTool:
             tool_name=parsed_input.tool_name,
             output=output,
         ).model_dump(mode="json", exclude_none=True)
-
-    @staticmethod
-    async def _emit_ledger(
-        *,
-        server_name: str,
-        tool_name: str,
-        call_id: str | None,
-        output: object,
-        latency_ms: int | None,
-    ) -> None:
-        """Emit the v2 ledger read path for this tool call, if an emitter is bound.
-
-        No-ops when no :class:`WorkLedgerEmitter` is active (``SURFACES_V2`` off ⇒
-        no binding). When bound, computes the surface envelope on-demand
-        (:meth:`_compute_surface_envelope` — the builtin → store → schedule-
-        generation ladder that survives the v1 retirement) and hands it straight
-        to the emitter so it can record ``surface.created`` / ``view.derived``.
-        The v1 ``result["surface"]`` appendage no longer exists (E3 D4). The
-        emitter swallows its own exceptions; this wrapper adds a second
-        best-effort guard so a ledger emit can never break a tool result.
-        """
-
-        emitter = WorkLedgerEmitter.active()
-        if emitter is None:
-            return
-        surface, surface_uri = CallMcpTool._compute_surface_envelope(
-            server_name=server_name,
-            tool_name=tool_name,
-            output=output,
-            call_id=call_id,
-        )
-        try:
-            await emitter.on_tool_result(
-                server_name=server_name,
-                tool_name=tool_name,
-                call_id=call_id or "",
-                output=output,
-                surface=surface,
-                surface_uri=surface_uri,
-                latency_ms=latency_ms,
-            )
-        except Exception:  # noqa: BLE001 - best-effort; never break MCP results
-            _LOGGER.warning(
-                "[surfaces_v2] mcp.ledger_raised server=%s tool=%s",
-                server_name,
-                tool_name,
-                exc_info=True,
-            )
-
-    @staticmethod
-    def _compute_surface_envelope(
-        *,
-        server_name: str,
-        tool_name: str,
-        output: object,
-        call_id: str | None,
-    ) -> tuple[dict[str, Any] | None, str | None]:
-        """Compute the surface envelope for a tool result, for v2 ledger emission.
-
-        Runs the builtin → store → schedule-generation ladder (via
-        :meth:`_surface_projector`) and returns ``(surface_dump, surface_uri)``,
-        or ``(None, None)`` when the output is non-mapping / the projector declines
-        / it raises. Display-only and best-effort — surface projection never blocks
-        a tool call. Invoked ONLY from :meth:`_emit_ledger`, i.e. only when a
-        ``WorkLedgerEmitter`` is bound (``SURFACES_V2`` on); the v1
-        ``RUNTIME_SURFACE_EMISSION`` gate is gone — v2 is the sole consumer and its
-        own flag decides whether this runs at all.
-        """
-
-        if not isinstance(output, Mapping):
-            return (None, None)
-        try:
-            projector, tool_descriptor = CallMcpTool._surface_projector(tool_name)
-            envelope = projector.resolve(
-                server_name,
-                tool_name,
-                output,
-                call_id=call_id or None,
-                tool_descriptor=tool_descriptor,
-            )
-            if envelope is None:
-                return (None, None)
-            return (
-                envelope.model_dump(mode="json", exclude_none=True),
-                envelope.surface_uri,
-            )
-        except Exception:  # noqa: BLE001 - best-effort; never break MCP results
-            _LOGGER.warning(
-                "[surfaces] mcp.surface_raised server=%s tool=%s",
-                server_name,
-                tool_name,
-                exc_info=True,
-            )
-            return (None, None)
-
-    @staticmethod
-    def _surface_projector(
-        tool_name: str,
-    ) -> tuple[SurfaceProjector, GenToolDescriptor | None]:
-        """Build the projector for this call, wiring generation when it is on.
-
-        With no active scheduler (generation disabled), returns a bare projector
-        — byte-for-byte the pre-PRD-07 behaviour. With one bound, shares its
-        store for cache reads and passes a minimal tool descriptor for the prompt.
-        """
-
-        scheduler = SurfaceGenerationScheduler.active()
-        if scheduler is None:
-            return (SurfaceProjector(), None)
-        return (
-            SurfaceProjector(store=scheduler.store, scheduler=scheduler),
-            GenToolDescriptor(name=tool_name),
-        )
 
     async def __call__(
         self,

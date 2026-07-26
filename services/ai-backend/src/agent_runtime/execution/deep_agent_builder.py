@@ -122,23 +122,6 @@ WORKSPACE_ACCESS_GUIDANCE = (
     "you cannot create, edit, move, or delete anything there. When you need to "
     "author or revise content, write it to `/drafts/` instead."
 )
-# Replaces the read-only line above when the run has at least one WRITABLE host
-# grant (``read_write*``). Host writes remain gated: every ``write_file`` /
-# ``edit_file`` on ``/workspace/`` pauses for explicit user approval before it
-# runs, and the prior contents are snapshotted first so a change can be undone.
-WORKSPACE_WRITE_GUIDANCE = (
-    "The user has granted access to one or more host folders, mounted under "
-    "`/workspace/`. Each granted folder is a named mount: run `ls /workspace/` "
-    "to see the available mounts, then use `ls`, `read_file`, `glob`, and "
-    "`grep` under `/workspace/<mount>/<path>` to inspect their contents. These "
-    "are the user's real files — never assume a path exists; list a directory "
-    "first, then read. Some mounts are WRITABLE: you may use `write_file` and "
-    "`edit_file` under `/workspace/<mount>/<path>`, but EVERY such change pauses "
-    "for the user's explicit approval before it is applied, and the file's "
-    "prior contents are snapshotted first. Read a file before editing it, keep "
-    "edits minimal, and prefer `/drafts/` for brand-new authored content. "
-    "Read-only mounts refuse writes."
-)
 # C3 replacement for the legacy write-through guidance. ``write_file`` and
 # ``edit_file`` update the run overlay and produce an exact A4 stage. They must
 # never imply that the host changed before A5 consumes an approved command.

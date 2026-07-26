@@ -399,7 +399,7 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             == self.TestValues.Names.DRIVE_MCP
         )
 
-    def test_call_mcp_tool_invokes_selected_loaded_tool(
+    def test_call_mcp_tool_holds_selected_loaded_tool_without_gateway(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -439,10 +439,10 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
 
         assert result["server_name"] == "linear"
         assert result["tool_name"] == "list_issues"
-        assert result["output"]["content"][0]["text"] == "found tasks"
-        assert "linear" in provider.created_clients
+        assert result["output"]["status"] == "held"
+        assert provider.created_clients == []
 
-    def test_call_mcp_tool_executes_after_native_approval(
+    def test_call_mcp_tool_holds_after_native_approval_without_gateway(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -474,11 +474,10 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
 
         assert result["server_name"] == "linear"
         assert result["tool_name"] == "list_issues"
-        assert result["output"]["content"][0]["text"] == (
-            "called list_issues with {'query': 'tasks'}"
-        )
+        assert result["output"]["status"] == "held"
+        assert provider.created_clients == []
 
-    def test_call_mcp_tool_collects_misplaced_tool_arguments(
+    def test_call_mcp_tool_holds_misplaced_tool_arguments_without_gateway(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -509,9 +508,8 @@ class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
             )
         )
 
-        assert result["output"]["content"][0]["text"] == (
-            "called list_issues with {'query': 'tasks', 'assignees': ['me']}"
-        )
+        assert result["output"]["status"] == "held"
+        assert provider.created_clients == []
 
     def test_call_mcp_tool_rejects_tool_not_returned_by_loaded_server(
         self,

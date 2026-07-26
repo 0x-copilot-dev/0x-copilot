@@ -15,26 +15,24 @@ from agent_runtime.release.e2_final_conformance import (
     ConformanceStatus,
     E2FinalConformancePaths,
     E2FinalConformanceRunner,
+    _model_facing_mcp_dispatch_violations,
 )
 
 
-def test_current_report_is_blocked_until_d7_retires_legacy_direct_mcp_dispatch() -> (
-    None
-):
+def test_current_report_passes_the_d1_d7_mcp_dispatch_condition() -> None:
     report = E2FinalConformanceRunner().run()
 
     assert [item.number for item in report.conditions] == list(range(1, 13))
     assert all(item.evidence for item in report.conditions)
-    assert report.ready is False
-    assert report.conditions[2].status is ConformanceStatus.BLOCKED
-    assert "D7 prerequisite" in report.conditions[2].evidence[0]
+    assert report.ready is True
+    assert report.conditions[2].status is ConformanceStatus.PASS
 
 
 def test_report_json_is_complete_and_has_no_implicit_passes() -> None:
     report = E2FinalConformanceRunner().run().as_json()
 
     assert report["contract"] == "e2-final-conformance-v1"
-    assert report["ready"] is False
+    assert report["ready"] is True
     conditions = report["conditions"]
     assert isinstance(conditions, list)
     assert {item["status"] for item in conditions} <= {"pass", "fail", "blocked"}
@@ -74,6 +72,21 @@ def test_direct_model_construction_is_detected(tmp_path: Path) -> None:
     assert llm_seam_violations(tmp_path) == (
         "rogue.py: imports init_chat_model",
         "rogue.py: references init_chat_model()",
+    )
+
+
+def test_rogue_model_facing_mcp_client_dispatch_is_detected(tmp_path: Path) -> None:
+    rogue = tmp_path / "agent_runtime/capabilities/mcp/middleware/rogue.py"
+    rogue.parent.mkdir(parents=True)
+    rogue.write_text(
+        "client = provider.create_client(card)\n"
+        "await client.call_tool(tool_name='write', arguments={})\n",
+        encoding="utf-8",
+    )
+
+    assert _model_facing_mcp_dispatch_violations(tmp_path) == (
+        "agent_runtime/capabilities/mcp/middleware/rogue.py:1: create_client",
+        "agent_runtime/capabilities/mcp/middleware/rogue.py:2: call_tool",
     )
 
 

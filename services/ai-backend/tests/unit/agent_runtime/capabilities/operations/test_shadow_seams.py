@@ -22,9 +22,6 @@ from agent_runtime.delegation.subagents.atlas_task_tool import (
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.execution.factory import _structured_tool
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
-from tests.unit.agent_runtime.capabilities.desktop.test_workspace_backend_write import (
-    WriteBackendMixin,
-)
 from tests.unit.agent_runtime.capabilities.operations.helpers import (
     BoundContextMixin,
     RecordingEmitter as OperationEmitter,
@@ -34,7 +31,7 @@ from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 class TestMcpShadowSeam(DynamicMcpLoadingMixin, BoundContextMixin):
     @pytest.mark.asyncio
-    async def test_off_and_shadow_return_byte_equivalent_provider_result(
+    async def test_off_and_shadow_hold_before_retired_provider_dispatch(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -82,11 +79,12 @@ class TestMcpShadowSeam(DynamicMcpLoadingMixin, BoundContextMixin):
             OperationContext.unbind(shadow_token)
 
         assert shadow_result == off_result
-        assert calls == 2
-        assert emitter.calls == 3
+        assert shadow_result["output"]["status"] == "held"
+        assert calls == 0
+        assert emitter.calls == 0
 
     @pytest.mark.asyncio
-    async def test_provider_dispatch_once_when_second_shadow_event_fails(
+    async def test_shadow_telemetry_failure_cannot_restore_provider_dispatch(
         self,
         runtime_context_admin: AgentRuntimeContext,
     ) -> None:
@@ -127,86 +125,9 @@ class TestMcpShadowSeam(DynamicMcpLoadingMixin, BoundContextMixin):
         finally:
             OperationContext.unbind(token)
 
-        assert calls == 1
-        assert result["output"] == {"issue": {"id": "ENG-1"}}
-        assert "surface" not in result
-        assert emitter.calls == 3
-
-
-class TestWorkspaceShadowSeam(WriteBackendMixin, BoundContextMixin):
-    @pytest.mark.asyncio
-    async def test_off_and_shadow_return_identical_write_result(self) -> None:
-        off_backend, off_broker, _store, _snapshot_emitter = self.wired()
-        off_token = self.bind(mode=OperationGatewayMode.OFF)
-        try:
-            off_result = await off_backend.awrite("/proj/new.md", "# Notes")
-        finally:
-            OperationContext.unbind(off_token)
-
-        shadow_backend, shadow_broker, _store, _snapshot_emitter = self.wired()
-        emitter = OperationEmitter(fail_on_call=2)
-        shadow_token = self.bind(emitter=emitter)
-        try:
-            shadow_result = await shadow_backend.awrite(
-                "/proj/new.md",
-                "# Notes",
-            )
-        finally:
-            OperationContext.unbind(shadow_token)
-
-        assert shadow_result == off_result
-        assert self._mutations(shadow_broker) == self._mutations(off_broker)
-        assert len(self._mutations(shadow_broker)) == 1
-        assert emitter.calls == 3
-
-    @pytest.mark.asyncio
-    async def test_write_once_when_shadow_emitter_fails_after_request(
-        self,
-    ) -> None:
-        backend, broker, _store, _snapshot_emitter = self.wired()
-        emitter = OperationEmitter(fail_on_call=2)
-        token = self.bind(emitter=emitter)
-        try:
-            result = await backend.awrite("/proj/new.md", "# Notes")
-        finally:
-            OperationContext.unbind(token)
-
-        assert result.error is None
-        assert self._mutations(broker) == [
-            (
-                "/v1/fs/write",
-                {
-                    "grant_id": self.GRANT_RW,
-                    "path": "new.md",
-                    "content_base64": "IyBOb3Rlcw==",
-                    "run_capability_context": "rcx_test_pinned",
-                },
-            )
-        ]
-        assert emitter.calls == 3
-
-    @pytest.mark.asyncio
-    async def test_edit_once_when_shadow_emitter_fails_after_request(
-        self,
-    ) -> None:
-        backend, broker, _store, _snapshot_emitter = self.wired(
-            files={"notes.md": b"old"}
-        )
-        emitter = OperationEmitter(fail_on_call=2)
-        token = self.bind(emitter=emitter)
-        try:
-            result = await backend.aedit(
-                "/proj/notes.md",
-                "old",
-                "new",
-            )
-        finally:
-            OperationContext.unbind(token)
-
-        assert result.error is None
-        assert len(self._mutations(broker)) == 1
-        assert broker.grants[self.GRANT_RW].files["notes.md"] == b"new"
-        assert emitter.calls == 3
+        assert calls == 0
+        assert result["output"]["status"] == "held"
+        assert emitter.calls == 0
 
 
 @dataclass

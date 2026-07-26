@@ -1178,11 +1178,8 @@ class RuntimeRunHandler:
         no ``/workspace/`` route, leaving those images byte-identical. Broker
         unavailability or zero active grants likewise yield ``None`` (fail-soft).
 
-        When a writable grant is present, the write triple's durable half — the
-        content-addressed object store (``FileObjectStore``) plus a
-        snapshot-event emitter — is threaded in so the wiring can mint the run's
-        ``run_capability_context`` and enable the approval-gated write path. Both
-        are ``None`` off the file backend, so the write path stays inert.
+        The non-enforced compatibility route is read-only. Direct workspace
+        mutation cannot be restored by this mode or any rollout setting.
         """
 
         if (
@@ -1194,21 +1191,7 @@ class RuntimeRunHandler:
                 mcp_gateway_services=mcp_gateway_services,
             )
 
-        file_store = self._file_store_wiring().file_store()
-        snapshot_store = (
-            getattr(file_store, "object_store", None)
-            if file_store is not None
-            else None
-        )
-        snapshot_emitter = (
-            self._workspace_snapshot_emitter(command)
-            if snapshot_store is not None
-            else None
-        )
-        return await WorkspaceBackendWorkerWiring(
-            snapshot_store=snapshot_store,
-            snapshot_emitter=snapshot_emitter,
-        ).workspace_backend()
+        return await WorkspaceBackendWorkerWiring().workspace_backend()
 
     async def _workspace_effect_backend_for_run(
         self,
@@ -1302,19 +1285,6 @@ class RuntimeRunHandler:
             gateway=gateway,
             adapter=WorkspaceOperationAdapter(services=services),
             grants=session.grants,
-        )
-
-    def _workspace_snapshot_emitter(self, command: RuntimeRunCommand) -> object:
-        """Build the emitter the workspace backend records pre-image references through."""
-        from runtime_worker.workspace_backend_wiring import (  # noqa: PLC0415
-            WorkspaceSnapshotEventEmitter,
-        )
-
-        return WorkspaceSnapshotEventEmitter(
-            event_producer=self.event_producer,
-            persistence=self.persistence,
-            org_id=command.org_id,
-            run_id=command.run_id,
         )
 
     def _dependencies_for_run(
@@ -1446,11 +1416,15 @@ class RuntimeRunHandler:
         )
 
     def _operation_context_required(self) -> bool:
-        return bool(
-            self._artifact_publication_enabled()
-            or self.settings.execution.operation_gateway_mode
-            is not OperationGatewayMode.OFF
-        )
+        """Every model tool run needs the canonical MCP operation context.
+
+        Rollout modes may hold or stage work, but they are not authority to
+        restore a model-facing MCP client path.  Binding the context is inert
+        for non-operation tools and lets known reads retain their receipt and
+        replay semantics through the one canonical gateway.
+        """
+
+        return True
 
     def _effective_operation_gateway_mode(
         self, services: McpOperationGatewayServices | None
@@ -1471,15 +1445,13 @@ class RuntimeRunHandler:
     ) -> McpOperationGatewayServices | None:
         """Compose D1's only model-facing MCP authority for an enforced run.
 
-        All dependencies are deliberately required together.  In particular a
+        All dependencies are deliberately required together. In particular, a
         missing blob/reference store never degrades to an in-memory argument
-        cache: the legacy path remains selected until the cohort is complete.
+        cache: the model-facing tool holds work until the cohort is complete.
         """
 
         if (
             not self.settings.execution.surfaces_v2
-            or self.settings.execution.operation_gateway_mode
-            is not OperationGatewayMode.ENFORCE
             or self._queue is None
             or self._artifact_blob_store is None
             or self._artifact_reference_store is None

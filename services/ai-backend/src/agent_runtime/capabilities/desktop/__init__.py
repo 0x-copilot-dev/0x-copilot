@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from agent_runtime.capabilities.desktop.broker_client import (
     BrokerClientConfig,
+    BrokerCapabilityRetiredError,
     BrokerError,
     BrokerGrant,
     BrokerGrantRequiredError,
@@ -50,10 +51,6 @@ from agent_runtime.capabilities.desktop.workspace_backend import (
     WorkspaceBackendConfig,
     WorkspaceMount,
     WorkspaceMountTable,
-    WorkspaceMutationSnapshot,
-    WorkspaceSnapshotEmitter,
-    WorkspaceSnapshotError,
-    WorkspaceSnapshotStore,
     WorkspaceWriteNotSupportedError,
     build_workspace_backend,
 )
@@ -61,6 +58,7 @@ from agent_runtime.capabilities.desktop.workspace_backend import (
 __all__ = [
     "ROUTE_PREFIX",
     "BrokerClientConfig",
+    "BrokerCapabilityRetiredError",
     "BrokerError",
     "BrokerGrant",
     "BrokerGrantRequiredError",
@@ -97,10 +95,6 @@ __all__ = [
     "WorkspacePreparedEffect",
     "WorkspaceProposalMaterial",
     "WorkspaceProposalResolver",
-    "WorkspaceMutationSnapshot",
-    "WorkspaceSnapshotEmitter",
-    "WorkspaceSnapshotError",
-    "WorkspaceSnapshotStore",
     "WorkspaceWriteNotSupportedError",
     "WorkspaceUploadSlot",
     "build_workspace_backend",

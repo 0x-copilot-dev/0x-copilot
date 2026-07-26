@@ -250,7 +250,7 @@ async def test_tombstone_route_cannot_fall_through_to_state_backend() -> None:
 def test_staged_workspace_never_installs_generic_filesystem_interrupt() -> None:
     assert _workspace_write_permissions(True, effect_staged=True) == ()
     assert _workspace_write_permissions(False, effect_staged=True) == ()
-    assert _workspace_write_permissions(True)
+    assert _workspace_write_permissions(True) == ()
 
     instructions = _instructions_with_workspace(
         instructions="BASE",

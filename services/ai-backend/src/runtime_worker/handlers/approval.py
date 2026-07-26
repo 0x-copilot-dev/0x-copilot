@@ -534,11 +534,8 @@ class RuntimeApprovalHandler:
         """Construct the resumed run's ``/workspace/`` backend, or ``None``.
 
         Mirrors :meth:`RuntimeRunHandler._workspace_backend_for_run`: gated on the
-        desktop broker, and — when a writable grant is present — threaded with the
-        write triple's durable half (the object store + a snapshot-event emitter)
-        so the approved host write that lands DURING resume is snapshotted and
-        approval-gated exactly as on the initial run path. Both are ``None`` off
-        the file backend, so the write path stays inert.
+            desktop broker. The compatibility backend is read-only; stale
+        filesystem approvals never resume into a host mutation.
         """
         if (
             self.settings.execution.workspace_effect_mode
@@ -553,34 +550,7 @@ class RuntimeApprovalHandler:
 
             return WorkspaceTombstoneBackend()
 
-        file_store = self._file_store_wiring.file_store()
-        snapshot_store = (
-            getattr(file_store, "object_store", None)
-            if file_store is not None
-            else None
-        )
-        snapshot_emitter = (
-            self._workspace_snapshot_emitter(run)
-            if snapshot_store is not None
-            else None
-        )
-        return await WorkspaceBackendWorkerWiring(
-            snapshot_store=snapshot_store,
-            snapshot_emitter=snapshot_emitter,
-        ).workspace_backend()
-
-    def _workspace_snapshot_emitter(self, run: RunRecord) -> object:
-        """Build the emitter the workspace backend records pre-image references through."""
-        from runtime_worker.workspace_backend_wiring import (  # noqa: PLC0415
-            WorkspaceSnapshotEventEmitter,
-        )
-
-        return WorkspaceSnapshotEventEmitter(
-            event_producer=self.event_producer,
-            persistence=self.persistence,
-            org_id=run.org_id,
-            run_id=run.run_id,
-        )
+        return await WorkspaceBackendWorkerWiring().workspace_backend()
 
     def _dependencies_for_resume(
         self,

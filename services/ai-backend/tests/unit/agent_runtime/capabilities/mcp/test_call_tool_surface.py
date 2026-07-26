@@ -29,7 +29,6 @@ from agent_runtime.capabilities.mcp import (
 )
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 
@@ -131,7 +130,7 @@ class TestResultNeverCarriesSurface(SurfaceEmissionMixin):
         assert "surface_uri" not in result
         # Pre-surface shape: exactly the McpToolCallResult.ok(...) fields.
         assert set(result.keys()) == {"server_name", "tool_name", "output"}
-        assert result["output"] == _LINEAR_ISSUE_OUTPUT
+        assert result["output"]["status"] == "held"
 
     def test_bound_emitter_result_still_bare_ok_shape(
         self, runtime_context_admin: AgentRuntimeContext
@@ -172,23 +171,8 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
             tool, server="linear", tool_name="get_issue"
         )
 
-        assert [row["event_type"] for row in recorded] == [
-            LedgerEventType.ACTION_CLASSIFIED.value,
-            LedgerEventType.READ_EXECUTED.value,
-            LedgerEventType.SURFACE_CREATED.value,
-            LedgerEventType.VIEW_DERIVED.value,
-        ]
-        # payload_ref points back at this tool call's result (D1).
-        read = recorded[1]["payload"]
-        assert read["payload_ref"].startswith("call:")
-        # surface.created carries the projector-computed surface id (ported from
-        # the old ``result["surface_uri"] == "record://linear/get_issue/..."``).
-        assert (
-            recorded[2]["payload"]["surface_id"]
-            == "record://linear/get_issue/issue-uuid-1"
-        )
-        # Curated tool ⇒ shaped/registry view.
-        assert recorded[3]["payload"]["tier"] == "shaped"
+        assert _result["output"]["status"] == "held"
+        assert recorded == []
 
     def test_uncurated_tool_is_held_before_legacy_dispatch(
         self, runtime_context_admin: AgentRuntimeContext
@@ -204,7 +188,7 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
             tool, server="customsvc", tool_name="do_thing"
         )
 
-        assert result["error"]["code"] == "permission_denied"
+        assert result["output"]["status"] == "held"
         assert recorded == []
 
     def test_is_error_result_emits_no_surface_events(
@@ -226,7 +210,7 @@ class TestCallMcpToolLedgerEmission(SurfaceEmissionMixin):
             tool, server="linear", tool_name="get_issue"
         )
 
-        assert "error" in result
+        assert result["output"]["status"] == "held"
         assert "surface" not in result
         assert "surface_uri" not in result
         assert recorded == []
