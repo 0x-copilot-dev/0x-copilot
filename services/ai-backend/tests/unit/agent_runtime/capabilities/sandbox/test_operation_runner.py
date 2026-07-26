@@ -333,7 +333,7 @@ class TestSandboxLifecycleOperationRunner:
         assert len(coordinator.calls) == 2
         assert len(publisher.calls) == 1
 
-    async def test_overlay_snapshot_publishes_complete_patch_then_imports_only_via_coordinator(
+    async def test_overlay_snapshot_publishes_complete_patch_without_importing_it(
         self,
     ) -> None:
         coordinator = _Coordinator(
@@ -349,8 +349,8 @@ class TestSandboxLifecycleOperationRunner:
         )
 
         assert coordinator.calls[0].collect_patch is True
-        assert len(coordinator.import_calls) == 1
-        assert outcome.activity_ref == _OVERLAY_REF
+        assert coordinator.import_calls == []
+        assert outcome.activity_ref is None
         assert outcome.patch is not None
         assert outcome.patch.patch_ref == _PATCH_ARTIFACT
         assert outcome.patch.complete is True
@@ -373,7 +373,7 @@ class TestSandboxLifecycleOperationRunner:
             ).lower()
         )
 
-    async def test_artifact_snapshot_does_not_collect_or_import_patch(self) -> None:
+    async def test_artifact_snapshot_does_not_collect_or_publish_a_patch(self) -> None:
         coordinator = _Coordinator(result=_result())
         publisher = _ResultPublisher()
 
@@ -405,7 +405,7 @@ class TestSandboxLifecycleOperationRunner:
         assert coordinator.import_calls == []
         assert publisher.calls == []
 
-    async def test_overlay_patch_for_a_different_snapshot_is_never_imported(
+    async def test_overlay_patch_for_a_different_snapshot_is_never_published(
         self,
     ) -> None:
         coordinator = _Coordinator(
@@ -584,3 +584,4 @@ class TestSandboxLifecycleOperationRunner:
         assert "RemoteExecutionService" not in source
         assert ".aexecute(" not in source
         assert ".session_scope(" not in source
+        assert ".import_patch(" not in source

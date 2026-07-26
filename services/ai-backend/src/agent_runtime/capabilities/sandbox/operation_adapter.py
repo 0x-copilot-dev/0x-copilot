@@ -114,7 +114,12 @@ class SandboxRunArtifact(RuntimeContract):
 
 
 class SandboxPatchManifestRef(RuntimeContract):
-    """A complete declarative patch stored in A2's immutable artifact authority."""
+    """An immutable, review-required patch handoff for later C1/UI apply.
+
+    Its presence records a complete sandbox diff, but grants no overlay or
+    host-workspace write authority.  An explicit user-approved apply operation
+    outside this gateway must consume this artifact-backed contract.
+    """
 
     patch_ref: str = Field(min_length=1, max_length=2048)
     baseline_snapshot_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
@@ -159,7 +164,11 @@ class SandboxOperationLaunch(RuntimeContract):
 
 
 class SandboxOperationRunResult(RuntimeContract):
-    """Stored, redaction-safe outcome returned by the lifecycle gateway."""
+    """Stored, redaction-safe outcome returned by the lifecycle gateway.
+
+    ``patch`` is a pending artifact-backed proposal.  Command completion never
+    assigns an activity ref or applies that proposal to an overlay/workspace.
+    """
 
     run_id: str = Field(min_length=1, max_length=255)
     operation_id: str = Field(min_length=1, max_length=255)
