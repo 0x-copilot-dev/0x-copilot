@@ -49,7 +49,8 @@ from agent_runtime.capabilities.operations.errors import (
 )
 from agent_runtime.capabilities.operations.stage_authority import (
     GatewayStageCapabilityAdapter,
-    _mint_gateway_stage_capability,
+    _activate_gateway_stage_capability,
+    _deactivate_gateway_stage_capability,
 )
 from agent_runtime.surfaces_v2.canonical_json import (
     CanonicalJsonError,
@@ -224,13 +225,19 @@ class OperationGateway:
                         op=metric_op,
                         effect_class=classification.effect_class.value,
                     )
-                    capability = _mint_gateway_stage_capability(request)
-                    if isinstance(adapter, GatewayStageCapabilityAdapter):
-                        proposed = await adapter.build_proposal_with_capability(
-                            request, capability
-                        )
-                    else:
-                        proposed = await adapter.build_proposal(request)
+                    capability, authority_token = _activate_gateway_stage_capability(
+                        request,
+                        issuing_code=OperationGateway._invoke_once.__code__,
+                    )
+                    try:
+                        if isinstance(adapter, GatewayStageCapabilityAdapter):
+                            proposed = await adapter.build_proposal_with_capability(
+                                request, capability
+                            )
+                        else:
+                            proposed = await adapter.build_proposal(request)
+                    finally:
+                        _deactivate_gateway_stage_capability(authority_token)
                     raw_result = None
 
             if (

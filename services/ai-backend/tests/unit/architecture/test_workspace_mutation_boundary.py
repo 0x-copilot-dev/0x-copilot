@@ -115,8 +115,8 @@ def _unmediated_raw_engine_paths(source_root: Path) -> tuple[tuple[str, ...], ..
     return tuple(sorted(set(violations)))
 
 
-def _private_stage_minter_imports(source_root: Path) -> tuple[str, ...]:
-    """Find imports of the non-exported mint function, including local imports."""
+def _private_stage_activation_imports(source_root: Path) -> tuple[str, ...]:
+    """Find imports of the activation controls, including local imports."""
 
     imports: list[str] = []
     for path in source_root.rglob("*.py"):
@@ -130,7 +130,12 @@ def _private_stage_minter_imports(source_root: Path) -> tuple[str, ...]:
             if base != _STAGE_AUTHORITY_MODULE:
                 continue
             if any(
-                alias.name == "_mint_gateway_stage_capability" for alias in node.names
+                alias.name
+                in {
+                    "_activate_gateway_stage_capability",
+                    "_deactivate_gateway_stage_capability",
+                }
+                for alias in node.names
             ):
                 imports.append(str(path.relative_to(source_root)))
     return tuple(sorted(imports))
@@ -189,12 +194,12 @@ def test_raw_overlay_engine_is_not_part_of_the_public_or_model_read_api() -> Non
         assert not hasattr(MergedWorkspaceBackend, mutator)
 
 
-def test_only_operation_gateway_imports_the_private_stage_capability_minter() -> None:
+def test_only_operation_gateway_imports_private_stage_activation_controls() -> None:
     assert stage_authority_exports == (
         "GatewayStageCapability",
         "GatewayStageCapabilityAdapter",
     )
-    assert _private_stage_minter_imports(_SOURCE_ROOT) == (
+    assert _private_stage_activation_imports(_SOURCE_ROOT) == (
         "agent_runtime/capabilities/operations/gateway.py",
     )
     backend_source = (
@@ -203,7 +208,7 @@ def test_only_operation_gateway_imports_the_private_stage_capability_minter() ->
     assert "build_proposal_with_capability" not in backend_source
 
 
-def test_minter_import_guard_rejects_a_function_local_model_backend_import(
+def test_activation_import_guard_rejects_a_function_local_model_backend_import(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "src"
@@ -214,11 +219,11 @@ def test_minter_import_guard_rejects_a_function_local_model_backend_import(
         path.write_text("", encoding="utf-8")
     rogue.write_text(
         "def rogue_tool():\n"
-        "    from agent_runtime.capabilities.operations.stage_authority import _mint_gateway_stage_capability\n"
-        "    return _mint_gateway_stage_capability\n",
+        "    from agent_runtime.capabilities.operations.stage_authority import _activate_gateway_stage_capability\n"
+        "    return _activate_gateway_stage_capability\n",
         encoding="utf-8",
     )
 
-    assert _private_stage_minter_imports(source) == (
+    assert _private_stage_activation_imports(source) == (
         "agent_runtime/capabilities/workspace/deep_backend.py",
     )

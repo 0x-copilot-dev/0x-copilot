@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import fnmatch
 import hashlib
+import importlib
 import posixpath
+import sys
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 
@@ -35,6 +38,7 @@ from agent_runtime.capabilities.workspace.deep_backend import (
     WorkspaceTombstoneBackend,
 )
 from agent_runtime.capabilities.workspace.effects import (
+    GatewayProposedEffect,
     WorkspaceGatewayServices,
     WorkspaceGrantBinding,
     WorkspaceGrantGate,
@@ -50,6 +54,7 @@ from agent_runtime.effects.contracts import (
 from agent_runtime.effects.errors import EffectStageStaleRevision
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
+from agent_runtime.surfaces_v2.entities import OperationRequest
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectDecisionKind,
@@ -272,6 +277,7 @@ def _harness(
     files: dict[str, bytes] | None = None,
     grant: WorkspaceGrantBinding | None = None,
     expose_grant: bool = True,
+    adapter_type: type[WorkspaceOperationAdapter] = WorkspaceOperationAdapter,
 ) -> Harness:
     base = ExplodingWorkspaceBase(files)
     overlays = InMemoryWorkspaceOverlayStore()
@@ -297,7 +303,7 @@ def _harness(
         descriptors=DEFAULT_OPERATION_DESCRIPTORS,
         gates=WorkspaceGrantGate(grants=grants),
     )
-    adapter = WorkspaceOperationAdapter(
+    adapter = adapter_type(
         services=WorkspaceGatewayServices(
             stager=stager,
             scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER),
@@ -413,7 +419,7 @@ async def test_model_cannot_use_the_read_facade_to_mutate_without_a_stage() -> N
     assert harness.base.mutation_calls == []
 
 
-async def test_forged_public_operation_scope_cannot_stage_a_workspace_mutation() -> (
+async def test_forged_scope_dynamic_activation_and_reflection_cannot_stage_mutation() -> (
     None
 ):
     """The former public-string scope bypass cannot substitute gateway authority."""
@@ -427,24 +433,170 @@ async def test_forged_public_operation_scope_cannot_stage_a_workspace_mutation()
             op="write",
             arguments={"virtual_path": path, "content": "must stage"},
         )
+        authority_module = importlib.import_module(
+            "agent_runtime.capabilities.operations.stage_authority"
+        )
+
+        def function_local_activation() -> object:
+            from agent_runtime.capabilities.operations.stage_authority import (
+                _activate_gateway_stage_capability,
+            )
+
+            return _activate_gateway_stage_capability
+
+        activate = getattr(
+            sys.modules[authority_module.__name__],
+            "_activate_gateway_stage_capability",
+        )
+        assert activate is function_local_activation()
         with OperationContext.operation_scope(request.operation_id):
             with pytest.raises(OperationStageCapabilityError):
                 await harness.backend._adapter.build_proposal(request)
 
-            # A caller can forge the former string scope and even allocate a
-            # lookalike object, but only the gateway can register a valid
-            # one-use capability for this exact validated request.
+            # A caller can forge the former string scope, dynamically locate
+            # private module state, and allocate a lookalike object. Activation
+            # still requires the direct OperationGateway invocation frame.
+            with pytest.raises(OperationStageCapabilityError):
+                activate(
+                    request,
+                    issuing_code=OperationGateway._invoke_once.__code__,
+                )
             forged = object.__new__(GatewayStageCapability)
             with pytest.raises(OperationStageCapabilityError):
                 await harness.backend._adapter.build_proposal_with_capability(
                     request, forged
                 )
-        with pytest.raises(TypeError, match="minted only by OperationGateway"):
+        with pytest.raises(TypeError, match="activated only by OperationGateway"):
             GatewayStageCapability()
-        assert not hasattr(stage_authority, "_new_authority")
+        assert not hasattr(stage_authority, "_mint_gateway_stage_capability")
     finally:
         OperationContext.unbind(token)  # type: ignore[arg-type]
 
+    assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entries == ()
+    assert harness.ledger.append_calls == 0
+    assert harness.outbox.enqueue_calls == 0
+    assert harness.base.mutation_calls == []
+
+
+class ChildTaskWorkspaceAdapter(WorkspaceOperationAdapter):
+    """Adversarial adapter that tries to consume the parent's capability in a child."""
+
+    async def build_proposal_with_capability(
+        self,
+        request: OperationRequest,
+        capability: GatewayStageCapability,
+    ) -> GatewayProposedEffect:
+        return await asyncio.create_task(
+            super().build_proposal_with_capability(request, capability)
+        )
+
+
+async def test_child_task_cannot_consume_issuing_gateway_capability() -> None:
+    path = f"/workspace/{MOUNT}/child-task.csv"
+    harness = _harness(adapter_type=ChildTaskWorkspaceAdapter)
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(path, "must not stage")
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
+    assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entries == ()
+    assert harness.ledger.append_calls == 0
+    assert harness.outbox.enqueue_calls == 0
+    assert harness.base.mutation_calls == []
+
+
+class CapturingWorkspaceAdapter(WorkspaceOperationAdapter):
+    """Capture a valid capability only to prove it cannot be replayed."""
+
+    capability: GatewayStageCapability | None = None
+    request: OperationRequest | None = None
+
+    async def build_proposal_with_capability(
+        self,
+        request: OperationRequest,
+        capability: GatewayStageCapability,
+    ) -> GatewayProposedEffect:
+        self.capability = capability
+        self.request = request
+        return await super().build_proposal_with_capability(request, capability)
+
+
+async def test_valid_gateway_capability_stages_once_and_cannot_be_replayed() -> None:
+    """A capability is one-use and disappears when the gateway invocation ends."""
+
+    path = f"/workspace/{MOUNT}/replay.csv"
+    harness = _harness(adapter_type=CapturingWorkspaceAdapter)
+    adapter = harness.backend._adapter
+    assert isinstance(adapter, CapturingWorkspaceAdapter)
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(path, "only the gateway may stage")
+        assert (
+            result.error
+            == "Workspace change staged for review; the host was not modified."
+        )
+        assert adapter.capability is not None
+        assert adapter.request is not None
+        with pytest.raises(OperationStageCapabilityError):
+            await adapter.build_proposal_with_capability(
+                adapter.request,
+                adapter.capability,
+            )
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    manifest = await harness.overlays.get_manifest(run_id=RUN_ID)
+    assert manifest.entry_at(path) is not None
+    assert harness.ledger.append_calls == 1
+    assert harness.outbox.enqueue_calls == 0
+    assert harness.base.mutation_calls == []
+
+
+class CrossDigestWorkspaceAdapter(WorkspaceOperationAdapter):
+    """Adversarial adapter that substitutes a different canonical request."""
+
+    async def build_proposal_with_capability(
+        self,
+        request: OperationRequest,
+        capability: GatewayStageCapability,
+    ) -> GatewayProposedEffect:
+        forged = request.model_copy(update={"args_digest": "0" * 64})
+        return await super().build_proposal_with_capability(forged, capability)
+
+
+class CrossRunWorkspaceAdapter(WorkspaceOperationAdapter):
+    """Adversarial adapter that substitutes a request from another run."""
+
+    async def build_proposal_with_capability(
+        self,
+        request: OperationRequest,
+        capability: GatewayStageCapability,
+    ) -> GatewayProposedEffect:
+        forged = request.model_copy(update={"run_id": "run-other"})
+        return await super().build_proposal_with_capability(forged, capability)
+
+
+@pytest.mark.parametrize(
+    "adapter_type",
+    [CrossDigestWorkspaceAdapter, CrossRunWorkspaceAdapter],
+    ids=["digest", "run"],
+)
+async def test_gateway_capability_rejects_cross_request_substitution_without_effects(
+    adapter_type: type[WorkspaceOperationAdapter],
+) -> None:
+    """A capability is bound to exactly the validated request and active run."""
+
+    path = f"/workspace/{MOUNT}/substitution.csv"
+    harness = _harness(adapter_type=adapter_type)
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(path, "must not stage")
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
     assert (await harness.overlays.get_manifest(run_id=RUN_ID)).entries == ()
     assert harness.ledger.append_calls == 0
     assert harness.outbox.enqueue_calls == 0
