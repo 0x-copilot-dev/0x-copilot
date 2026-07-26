@@ -57,6 +57,35 @@ tools are local, deterministic fixture services.
 | G9  | **Recovery and honesty.** Expire a workspace grant, make one local tool return `unknown operation`, reject an approval, and cancel a streaming run.       | Gate card parks/resumes the same call; unknown tool is honest; retry cannot reuse stale approval/revision; raw fallback keeps data visible.                     | Model observes errors and asks/recovers instead of fabricating success.                                        | Gate, error/raw fallback, rejected diff               |
 | G10 | **Retention and reopen.** Complete G1/G2, close/reopen the conversation, then review receipt/sources/pending work.                                        | Event replay reconstructs editor/table/receipt without stale payloads; no pending card remains after terminal decisions.                                        | Model usage attribution has run/conversation/purpose rows, with no key or prompt secret exposure.              | Reopened Studio, receipt, Sources/Approvals           |
 
+## G0 — executable supervised plain-chat release evidence
+
+[`g0_plain_chat.py`](./g0_plain_chat.py) is the executable, credentialed G0
+release journey. It launches a fresh production-posture Electron session through
+`DriverSession`; the session has a unique
+`COPILOT_DESKTOP_USER_DATA_SUBDIR`, an embedded host-executable staged runtime,
+and **no** `COPILOT_FACADE_URL`. A green run therefore uses the app's packaged
+supervisor rather than a mock or separately started facade.
+
+The script chooses a real local OpenAI or Anthropic BYOK value only through
+`load_env_key`, fills the actual FTUE password field, and checks the authenticated
+`GET /v1/agent/models` facade response for `configured: true`. It never logs,
+serializes, names a screenshot after, or otherwise exposes the value.
+
+| G0 evidence                         | Exact assertion                                                                                                                                                                                                                                                                   |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `01-g0-sign-in.png`                 | Fresh local sign-in gate completed through `sign-in-button`.                                                                                                                                                                                                                      |
+| `02-g0-byok-composer.png`           | Real FTUE key form reached `first-run-composer` after the provider password field accepted the local BYOK value.                                                                                                                                                                  |
+| `03-g0-plain-answer-no-rich-ui.png` | Exactly one nonempty `[data-testid^=tc-chat-message-][data-role=assistant]` is visible.                                                                                                                                                                                           |
+| UI leak guard                       | No `tc-chat-tool-*`, `tc-chat-fleet-*`, `tc-tabs`, `artifact-frame`, staged-write card/control, or `receipt-v2-launch` test ID is present.                                                                                                                                        |
+| Authenticated facade truth          | The bound `#/convo/<id>` has exactly one run; `GET /runs/{id}` and replay both report `completed`; replay contains exactly one `final_response`, no tool activity/event, no artifact/effect or non-receipt surface; `/surfaces` contains at most the terminal audit-only receipt. |
+
+The only successful exit that is not a pass is a visibly reported `SKIP G0:` for
+a documented local prerequisite: no built desktop bundle, no host-executable
+staged runtime, or no OpenAI/Anthropic BYOK value in the ignored local `.env`.
+Boot, sign-in, BYOK, model catalog, run, UI, or facade assertion failures are
+hard failures. Screenshots and driver logs stay under the git-ignored
+`tools/desktop-journeys/runs/generative-workflows-g0-plain-chat/` directory.
+
 ## Local communications fixture
 
 `scenarios/local-communications.json` defines stable users, mailbox threads,
