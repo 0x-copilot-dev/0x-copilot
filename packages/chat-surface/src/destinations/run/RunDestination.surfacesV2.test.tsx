@@ -337,7 +337,7 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     expect(screen.queryByTestId("receipt-v2-launch")).toBeNull();
   });
 
-  it("E1 D4: opening a receipt from Focus returns to Studio", async () => {
+  it("E1 D4: a terminal receipt is absent from Focus and opens only in Studio", async () => {
     seq = 0;
     const transport = new FakeTransport();
     renderRun(transport, makeStore(), true);
@@ -364,19 +364,20 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
         "focus",
       ),
     );
-    await screen.findByTestId("receipt-v2-surface");
+    // The active design makes Focus a chat/activity view. Neither the full
+    // v2 receipt nor the Studio launcher may leak into its review-card stack.
+    expect(screen.queryByTestId("receipt-v2-surface")).toBeNull();
+    expect(screen.queryByTestId("receipt-v2-launch")).toBeNull();
 
-    fireEvent.click(screen.getByTestId("receipt-v2-open-studio"));
+    fireEvent.click(screen.getByTestId("run-mode-studio"));
     await waitFor(() =>
       expect(screen.getByTestId("run-destination")).toHaveAttribute(
         "data-mode",
         "studio",
       ),
     );
-    expect(screen.getByTestId("tc-surface-slot")).toHaveAttribute(
-      "data-visible",
-      "true",
-    );
+    fireEvent.click(screen.getByTestId("receipt-v2-open"));
+    await screen.findByTestId("receipt-v2-surface");
   });
 
   it("flag ON: a hostile title renders as text, not markup (no injection)", async () => {

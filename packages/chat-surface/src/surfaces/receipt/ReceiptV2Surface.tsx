@@ -12,14 +12,11 @@ import type { RunReceiptV2 } from "@0x-copilot/api-types";
 
 export interface ReceiptV2SurfaceProps {
   readonly receipt: RunReceiptV2;
-  /** Lets an optional Focus receipt return to the Studio canvas. */
-  readonly onOpenInStudio?: () => void;
 }
 
-/** The canonical v2 receipt, safe for both a Focus card and a Studio tab. */
+/** The canonical v2 receipt surface, rendered only in Studio. */
 export function ReceiptV2Surface({
   receipt,
-  onOpenInStudio,
 }: ReceiptV2SurfaceProps): ReactElement {
   return (
     <section className="ui-card" data-testid="receipt-v2-surface">
@@ -63,16 +60,6 @@ export function ReceiptV2Surface({
         <Caption as="p" data-testid="receipt-v2-warning">
           Some ledger entries could not be included in this receipt.
         </Caption>
-      ) : null}
-      {onOpenInStudio !== undefined ? (
-        <button
-          type="button"
-          className="ui-button ui-button--ghost"
-          onClick={onOpenInStudio}
-          data-testid="receipt-v2-open-studio"
-        >
-          Open in Studio
-        </button>
       ) : null}
     </section>
   );

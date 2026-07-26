@@ -2176,10 +2176,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [],
   );
 
-  // E1 D4 selection rule: receipt v2 is never auto-opened. This is called
-  // only by an explicit Studio launcher or Focus receipt action. A chat-only,
-  // zero-operation terminal run therefore stays a readable Focus artifact
-  // without stealing the canvas.
+  // E1 D4 selection rule: receipt v2 is never auto-opened. It is opened only
+  // from Studio; Focus deliberately remains chat + activity, so a terminal
+  // receipt cannot occupy its review-card stack or steal the canvas.
   const handleOpenReceiptV2 = useCallback((): void => {
     if (
       !surfacesV2 ||
@@ -2426,14 +2425,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       <CanvasFocusCards
         projection={displayedCanvasLifecycle}
         onOpenSubject={handleOpenLifecycleSubject}
-        receiptSlot={
-          receiptV2Projection.receipt !== null ? (
-            <ReceiptV2Surface
-              receipt={receiptV2Projection.receipt}
-              onOpenInStudio={handleOpenReceiptV2}
-            />
-          ) : undefined
-        }
       />
     ) : undefined;
 

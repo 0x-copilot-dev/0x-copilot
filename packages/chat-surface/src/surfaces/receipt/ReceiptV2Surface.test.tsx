@@ -39,17 +39,15 @@ function receipt(overrides: Partial<RunReceiptV2> = {}): RunReceiptV2 {
 }
 
 describe("ReceiptV2Surface", () => {
-  it("renders only canonical receipt counts and an optional Studio action", () => {
-    const onOpen = vi.fn();
-    render(<ReceiptV2Surface receipt={receipt()} onOpenInStudio={onOpen} />);
+  it("renders only canonical receipt counts in the Studio surface", () => {
+    render(<ReceiptV2Surface receipt={receipt()} />);
 
     expect(screen.getByTestId("receipt-v2-status")).toHaveTextContent(
       "Completed",
     );
     expect(screen.getByText(/2 completed/)).toBeInTheDocument();
     expect(screen.getByText(/3 recorded calls/)).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("receipt-v2-open-studio"));
-    expect(onOpen).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId("receipt-v2-open-studio")).toBeNull();
   });
 
   it("launches only after an explicit user action", () => {
