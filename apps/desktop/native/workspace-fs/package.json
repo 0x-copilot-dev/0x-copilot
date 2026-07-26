@@ -8,6 +8,7 @@
   "gypfile": true,
   "scripts": {
     "build": "node-gyp rebuild",
-    "build:electron": "node-gyp rebuild --runtime=electron --dist-url=https://electronjs.org/headers --target=$npm_config_electron_version"
+    "build:electron": "node-gyp rebuild --runtime=electron --dist-url=https://electronjs.org/headers --target=$npm_config_electron_version",
+    "build:electron:mac": "npm_config_electron_version=$(node -p \"require('../../package.json').devDependencies.electron\") npm run build:electron"
   }
 }
