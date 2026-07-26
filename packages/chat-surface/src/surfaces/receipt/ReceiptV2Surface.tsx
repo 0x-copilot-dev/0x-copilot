@@ -12,7 +12,7 @@ import type { RunReceiptV2 } from "@0x-copilot/api-types";
 
 export interface ReceiptV2SurfaceProps {
   readonly receipt: RunReceiptV2;
-  /** Present only when Studio is enabled by the product-level host flag. */
+  /** Lets an optional Focus receipt return to the Studio canvas. */
   readonly onOpenInStudio?: () => void;
 }
 

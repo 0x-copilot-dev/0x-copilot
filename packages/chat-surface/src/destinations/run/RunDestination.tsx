@@ -185,7 +185,7 @@ import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
-import { STUDIO_ENABLED, useRunMode, useRunPanelCollapsed } from "./useRunMode";
+import { useRunMode, useRunPanelCollapsed } from "./useRunMode";
 import { useRunSources } from "./useRunSources";
 import { useRunTranscript } from "./useRunTranscript";
 import { useRunSession } from "./useRunSession";
@@ -2430,7 +2430,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           receiptV2Projection.receipt !== null ? (
             <ReceiptV2Surface
               receipt={receiptV2Projection.receipt}
-              onOpenInStudio={STUDIO_ENABLED ? handleOpenReceiptV2 : undefined}
+              onOpenInStudio={handleOpenReceiptV2}
             />
           ) : undefined
         }

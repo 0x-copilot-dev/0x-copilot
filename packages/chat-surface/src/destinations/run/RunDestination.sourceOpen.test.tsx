@@ -1,6 +1,5 @@
-// E1 D5 source-open regression. This fixture enables Studio locally because
-// production Studio remains dark by default; it verifies the Studio-only tab
-// behavior without weakening the default-off product gate.
+// E1 D5 source-open regression. Studio is the production default, so this
+// exercises source-open against the real persisted mode owner.
 
 import {
   act,
@@ -19,30 +18,11 @@ import type {
   TransportCapabilities,
   TypedRequest,
 } from "@0x-copilot/chat-transport";
-import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
-
-vi.mock("./useRunMode", async () => {
-  const actual =
-    await vi.importActual<typeof import("./useRunMode")>("./useRunMode");
-  return {
-    ...actual,
-    STUDIO_ENABLED: true,
-    useRunMode: () => {
-      const [mode, setMode] = useState<"studio" | "focus">("studio");
-      return {
-        mode,
-        setMode,
-        toggle: () =>
-          setMode((current) => (current === "studio" ? "focus" : "studio")),
-      };
-    },
-  };
-});
 
 import { RunDestination } from "./RunDestination";
 

@@ -42,29 +42,15 @@ import { KeyValueStoreProvider } from "../../providers/KeyValueStoreProvider";
 import { TransportProvider } from "../../providers/TransportProvider";
 import type { KeyValueStore } from "../../storage/key-value-store";
 import { RunDestination, buildRunCreateBody } from "./RunDestination";
-import { runModeKey, STUDIO_ENABLED } from "./useRunMode";
+import { runModeKey } from "./useRunMode";
 
 const CONV = "conv-1" as ConversationId;
 
-// Studio is temporarily disabled (Focus-only). Tests that assert Studio-only
-// chrome — the Studio↔Focus switcher, the tabbed workspace rail + its count
-// badges, the timeline swimlanes — are gated behind `STUDIO_ENABLED` so they
-// run again unchanged when it flips true. Integration tests that survive in
-// Focus (in-chat approvals) stay live but resolve the mode-correct affordance:
-// the 4-zone ApprovalCard in Studio, the `.conf-card` in Focus (receipts share
-// one testid across modes).
-const studioIt = STUDIO_ENABLED ? it : it.skip;
-const focusIt = STUDIO_ENABLED ? it.skip : it;
-const approvalCardTid = (id: string): string =>
-  STUDIO_ENABLED ? `tc-chat-approval-${id}` : `tc-chat-conf-card-${id}`;
+const approvalCardTid = (id: string): string => `tc-chat-approval-${id}`;
 const approvalApproveTid = (id: string): string =>
-  STUDIO_ENABLED
-    ? `tc-chat-approval-approve-${id}`
-    : `tc-chat-conf-approve-${id}`;
+  `tc-chat-approval-approve-${id}`;
 const approvalRejectTid = (id: string): string =>
-  STUDIO_ENABLED
-    ? `tc-chat-approval-reject-${id}`
-    : `tc-chat-conf-reject-${id}`;
+  `tc-chat-approval-reject-${id}`;
 
 const CAPABILITIES: TransportCapabilities = {
   substrate: "web",
@@ -305,52 +291,28 @@ describe("RunDestination — shell composition", () => {
     );
   });
 
-  studioIt(
-    "defaults to Studio and toggles to Focus via the header control, persisting the mode",
-    async () => {
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
-      const store = makeStore();
+  it("defaults to Studio and toggles to Focus via the header control, persisting the mode", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    const store = makeStore();
 
-      renderRun(transport, store);
+    renderRun(transport, store);
 
-      const root = screen.getByTestId("run-destination");
-      const canvas = await screen.findByTestId("thread-canvas");
-      expect(root.getAttribute("data-mode")).toBe("studio");
-      expect(canvas.getAttribute("data-mode")).toBe("studio");
+    const root = screen.getByTestId("run-destination");
+    const canvas = await screen.findByTestId("thread-canvas");
+    expect(root.getAttribute("data-mode")).toBe("studio");
+    expect(canvas.getAttribute("data-mode")).toBe("studio");
 
-      fireEvent.click(screen.getByTestId("run-mode-focus"));
+    fireEvent.click(screen.getByTestId("run-mode-focus"));
 
-      // Both the shell root and the canvas reflect the new mode; no separate
-      // canvas remount (the mode is a single controlled value).
-      expect(root.getAttribute("data-mode")).toBe("focus");
-      expect(canvas.getAttribute("data-mode")).toBe("focus");
-      // Persisted to the KeyValueStore under the per-conversation key.
-      await waitFor(() => expect(store.get(runModeKey(CONV))).toBe("focus"));
-    },
-  );
-
-  focusIt(
-    "pins to Focus with no mode switcher while Studio is disabled",
-    async () => {
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
-
-      renderRun(transport, makeStore());
-
-      const root = screen.getByTestId("run-destination");
-      const canvas = await screen.findByTestId("thread-canvas");
-      // Focus-only: both the shell root and the canvas are Focus, and the
-      // Studio/Focus switcher is not rendered (RunHeader hides it).
-      expect(root.getAttribute("data-mode")).toBe("focus");
-      expect(canvas.getAttribute("data-mode")).toBe("focus");
-      expect(screen.queryByTestId("run-mode-switcher")).toBeNull();
-      expect(screen.queryByTestId("run-mode-focus")).toBeNull();
-      expect(screen.queryByTestId("run-mode-studio")).toBeNull();
-    },
-  );
+    // Both the shell root and the canvas reflect the new mode; no separate
+    // canvas remount (the mode is a single controlled value).
+    expect(root.getAttribute("data-mode")).toBe("focus");
+    expect(canvas.getAttribute("data-mode")).toBe("focus");
+    // Persisted to the KeyValueStore under the per-conversation key.
+    await waitFor(() => expect(store.get(runModeKey(CONV))).toBe("focus"));
+  });
 
   it("surfaces a non-blocking Retry banner when the run stream errors, keeping the canvas", async () => {
     const transport = new FakeTransport();
@@ -397,85 +359,55 @@ describe("RunDestination — shell composition", () => {
 
   // === PR-3.6 — tabbed right rail wiring ===
 
-  studioIt(
-    "mounts the tabbed right rail (Chat default) and collapses the in-canvas mode switcher",
-    async () => {
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
-      renderRun(transport, makeStore());
+  it("mounts the tabbed right rail (Chat default) and collapses the in-canvas mode switcher", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
 
-      // The recomposed rail mounts inside the canvas chat column once the run
-      // resolves (idle shows the empty-state composer — PR-3.11)…
-      const rail = await screen.findByTestId("run-workspace-rail");
-      expect(rail).not.toBeNull();
-      expect(
-        screen.getByRole("tablist", { name: "Run workspace tabs" }),
-      ).not.toBeNull();
-      // …Chat is the default tab and hosts the single TcChat instance…
-      expect(
-        screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
-      ).toBe("true");
-      expect(
-        within(screen.getByTestId("run-rail-panel-chat")).getByTestId(
-          "tc-chat",
-        ),
-      ).not.toBeNull();
-      // …and there is exactly ONE TcChat (rail owns the column, not ThreadCanvas).
-      expect(screen.getAllByTestId("tc-chat")).toHaveLength(1);
-      // RunHeader is the single mode control — the in-canvas switcher is gone.
-      expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
-      expect(screen.queryByTestId("tc-mode-switcher")).toBeNull();
-    },
-  );
+    // The recomposed rail mounts inside the canvas chat column once the run
+    // resolves (idle shows the empty-state composer — PR-3.11)…
+    const rail = await screen.findByTestId("run-workspace-rail");
+    expect(rail).not.toBeNull();
+    expect(
+      screen.getByRole("tablist", { name: "Run workspace tabs" }),
+    ).not.toBeNull();
+    // …Chat is the default tab and hosts the single TcChat instance…
+    expect(
+      screen.getByRole("tab", { name: "Chat" }).getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(
+      within(screen.getByTestId("run-rail-panel-chat")).getByTestId("tc-chat"),
+    ).not.toBeNull();
+    // …and there is exactly ONE TcChat (rail owns the column, not ThreadCanvas).
+    expect(screen.getAllByTestId("tc-chat")).toHaveLength(1);
+    // RunHeader is the single mode control — the in-canvas switcher is gone.
+    expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
+    expect(screen.queryByTestId("tc-mode-switcher")).toBeNull();
+  });
 
-  focusIt(
-    "mounts the rail Chat-only (no tab chrome, single TcChat) while Studio is disabled",
-    async () => {
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
-      renderRun(transport, makeStore());
+  it("toggling mode keeps the same rail + chat surface (single-mount, FR-3.9/3.13)", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
+    renderRun(transport, makeStore());
 
-      // The rail still mounts inside the canvas chat column and hosts the single
-      // TcChat — but Focus collapses it to Chat-only, so the tablist and the
-      // in-canvas mode switcher are both absent.
-      const rail = await screen.findByTestId("run-workspace-rail");
-      expect(rail).not.toBeNull();
-      expect(screen.getAllByTestId("tc-chat")).toHaveLength(1);
-      expect(
-        screen.queryByRole("tablist", { name: "Run workspace tabs" }),
-      ).toBeNull();
-      expect(screen.queryByTestId("run-mode-switcher")).toBeNull();
-      expect(screen.queryByTestId("tc-mode-switcher")).toBeNull();
-    },
-  );
+    const railBefore = await screen.findByTestId("run-workspace-rail");
+    const chatBefore = screen.getByTestId("tc-chat");
 
-  studioIt(
-    "toggling mode keeps the same rail + chat surface (single-mount, FR-3.9/3.13)",
-    async () => {
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages") ? { messages: [] } : runningRun("Goal");
-      renderRun(transport, makeStore());
+    fireEvent.click(screen.getByTestId("run-mode-focus"));
 
-      const railBefore = await screen.findByTestId("run-workspace-rail");
-      const chatBefore = screen.getByTestId("tc-chat");
-
-      fireEvent.click(screen.getByTestId("run-mode-focus"));
-
-      expect(
-        screen.getByTestId("run-destination").getAttribute("data-mode"),
-      ).toBe("focus");
-      // Same DOM nodes survive the mode switch — no remount.
-      expect(screen.getByTestId("run-workspace-rail")).toBe(railBefore);
-      expect(screen.getByTestId("tc-chat")).toBe(chatBefore);
-      // Focus collapses the rail to Chat-only: its tab chrome is suppressed.
-      expect(
-        screen.queryByRole("tablist", { name: "Run workspace tabs" }),
-      ).toBeNull();
-    },
-  );
+    expect(
+      screen.getByTestId("run-destination").getAttribute("data-mode"),
+    ).toBe("focus");
+    // Same DOM nodes survive the mode switch — no remount.
+    expect(screen.getByTestId("run-workspace-rail")).toBe(railBefore);
+    expect(screen.getByTestId("tc-chat")).toBe(chatBefore);
+    // Focus collapses the rail to Chat-only: its tab chrome is suppressed.
+    expect(
+      screen.queryByRole("tablist", { name: "Run workspace tabs" }),
+    ).toBeNull();
+  });
 
   // === PR-3.7 — timeline scrub ↔ surface time-travel + snap-to-now ===
 
@@ -685,150 +617,145 @@ function subagentToolResult(
   });
 }
 
-// Gated to Studio: the per-subagent timeline swimlanes (`transport.swimlaneSub`
-// + the lane nodes) and the Agents-tab "N live" badge are Studio-only chrome —
-// Focus mounts neither the swimlanes nor the tabbed rail. Runs again unchanged
-// when `STUDIO_ENABLED` flips true.
-(STUDIO_ENABLED ? describe : describe.skip)(
-  "RunDestination — parallel subagents (PR-3.8 / FR-3.17)",
-  () => {
-    it("renders the fleet card, per-subagent lanes, and Agents 'N live' from one stream", async () => {
-      seqCounter = 0;
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages")
-          ? { messages: [] }
-          : runningRun("Fan out the research");
-      renderRun(transport, makeStore());
+// Per-subagent timeline swimlanes and the Agents-tab "N live" badge are
+// Studio workspace chrome, so the production-default integration covers them.
+describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
+  it("renders the fleet card, per-subagent lanes, and Agents 'N live' from one stream", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Fan out the research");
+    renderRun(transport, makeStore());
 
-      // The session tail and the swimlane both subscribe to the same run stream.
-      await waitFor(() => expect(transport.sessionSub).toBeDefined());
-      await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
+    // The session tail and the swimlane both subscribe to the same run stream.
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
 
-      act(() => {
-        transport.emit(fleetStarted());
-        transport.emit(subagentStarted("task_alpha", "doc_reader"));
-        transport.emit(subagentStarted("task_beta", "press_scout"));
-      });
-
-      // (a) inline SubagentFleetCard in the conversation…
-      const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
-      expect(card).toHaveTextContent("Dispatched 2 subagents in parallel");
-      // (b) one live timeline lane per subagent…
-      expect(
-        screen.getByTestId("tc-swimlanes-lane-subagent:doc_reader"),
-      ).toBeInTheDocument();
-      expect(
-        screen.getByTestId("tc-swimlanes-lane-subagent:press_scout"),
-      ).toBeInTheDocument();
-      // (c) live Agents-tab count — all from the SINGLE stream.
-      expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
-        "2 live",
-      );
+    act(() => {
+      transport.emit(fleetStarted());
+      transport.emit(subagentStarted("task_alpha", "doc_reader"));
+      transport.emit(subagentStarted("task_beta", "press_scout"));
     });
 
-    it("updates the count on completion without remounting sibling lanes (FR-3.9)", async () => {
-      seqCounter = 0;
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages")
-          ? { messages: [] }
-          : runningRun("Fan out the research");
-      renderRun(transport, makeStore());
+    // (a) inline SubagentFleetCard in the conversation…
+    const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+    expect(card).toHaveTextContent("Dispatched 2 subagents in parallel");
+    // (b) one live timeline lane per subagent…
+    expect(
+      screen.getByTestId("tc-swimlanes-lane-subagent:doc_reader"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByTestId("tc-swimlanes-lane-subagent:press_scout"),
+    ).toBeInTheDocument();
+    // (c) live Agents-tab count — all from the SINGLE stream.
+    expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+      "2 live",
+    );
+  });
 
-      await waitFor(() => expect(transport.sessionSub).toBeDefined());
-      await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
+  it("updates the count on completion without remounting sibling lanes (FR-3.9)", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Fan out the research");
+    renderRun(transport, makeStore());
 
-      act(() => {
-        transport.emit(fleetStarted());
-        transport.emit(subagentStarted("task_alpha", "doc_reader"));
-        transport.emit(subagentStarted("task_beta", "press_scout"));
-      });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    await waitFor(() => expect(transport.swimlaneSub).toBeDefined());
 
-      await screen.findByTestId("tc-chat-fleet-fleet-1");
-      const survivingLane = screen.getByTestId(
-        "tc-swimlanes-lane-subagent:press_scout",
-      );
-      expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
-        "2 live",
-      );
-
-      act(() => {
-        transport.emit(
-          event({
-            event_type: "subagent_completed",
-            source: "subagent",
-            activity_kind: "subagent",
-            task_id: "task_alpha",
-            subagent_id: "doc_reader",
-            status: "completed",
-            payload: { parent_fleet_id: "fleet-1" },
-          }),
-        );
-      });
-
-      // One still running → badge drops to "1 live"…
-      await waitFor(() =>
-        expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
-          "1 live",
-        ),
-      );
-      // …and the still-running subagent's lane is the SAME node (no remount).
-      expect(screen.getByTestId("tc-swimlanes-lane-subagent:press_scout")).toBe(
-        survivingLane,
-      );
+    act(() => {
+      transport.emit(fleetStarted());
+      transport.emit(subagentStarted("task_alpha", "doc_reader"));
+      transport.emit(subagentStarted("task_beta", "press_scout"));
     });
 
-    it("renders a real subagent tool result in both fleet and Agents expansions from the one run stream", async () => {
-      seqCounter = 0;
-      const transport = new FakeTransport();
-      transport.requestHandler = async (req) =>
-        req.path.includes("/messages")
-          ? { messages: [] }
-          : runningRun("Fan out the research");
-      renderRun(transport, makeStore());
+    await screen.findByTestId("tc-chat-fleet-fleet-1");
+    const survivingLane = screen.getByTestId(
+      "tc-swimlanes-lane-subagent:press_scout",
+    );
+    expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+      "2 live",
+    );
 
-      await waitFor(() => expect(transport.sessionSub).toBeDefined());
-      act(() => {
-        transport.emit(fleetStarted());
-        transport.emit(subagentStarted("task_alpha", "doc_reader"));
-        transport.emit(
-          subagentToolStarted("task_alpha", "doc_reader", "call-search"),
-        );
-        transport.emit(
-          subagentToolResult("task_alpha", "doc_reader", "call-search"),
-        );
-      });
-
-      const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
-      const fleetRow = card.querySelector('[data-task-id="task_alpha"]');
-      expect(fleetRow).not.toBeNull();
-      fireEvent.click(fleetRow!);
-      expect(
-        screen.getByRole("region", { name: "Doc reader activity timeline" }),
-      ).toHaveTextContent("Found 3 primary sources");
-
-      fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
-      const details = await screen.findByTestId(
-        "agent-activity-row-details-task_alpha",
-      );
-      fireEvent.click(details.querySelector("summary")!);
-      expect(
-        screen.getByRole("region", {
-          name: "Doc reader activity details",
+    act(() => {
+      transport.emit(
+        event({
+          event_type: "subagent_completed",
+          source: "subagent",
+          activity_kind: "subagent",
+          task_id: "task_alpha",
+          subagent_id: "doc_reader",
+          status: "completed",
+          payload: { parent_fleet_id: "fleet-1" },
         }),
-      ).toHaveTextContent("Found 3 primary sources");
-
-      // One session stream plus the pre-existing Swimlanes stream only. The
-      // activity selector reads the session array and opens no subscription.
-      expect(
-        transport.subs.filter(
-          (sub) => !sub.closed && sub.path === "/v1/agent/runs/run-1/stream",
-        ),
-      ).toHaveLength(2);
+      );
     });
-  },
-);
+
+    // One still running → badge drops to "1 live"…
+    await waitFor(() =>
+      expect(screen.getByTestId("run-rail-agents-badge")).toHaveTextContent(
+        "1 live",
+      ),
+    );
+    // …and the still-running subagent's lane is the SAME node (no remount).
+    expect(screen.getByTestId("tc-swimlanes-lane-subagent:press_scout")).toBe(
+      survivingLane,
+    );
+  });
+
+  it("renders a real subagent tool result in both fleet and Agents expansions from the one run stream", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages")
+        ? { messages: [] }
+        : runningRun("Fan out the research");
+    renderRun(transport, makeStore());
+
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(fleetStarted());
+      transport.emit(subagentStarted("task_alpha", "doc_reader"));
+      transport.emit(
+        subagentToolStarted("task_alpha", "doc_reader", "call-search"),
+      );
+      transport.emit(
+        subagentToolResult("task_alpha", "doc_reader", "call-search"),
+      );
+    });
+
+    const card = await screen.findByTestId("tc-chat-fleet-fleet-1");
+    const fleetRow = card.querySelector('[data-task-id="task_alpha"]');
+    expect(fleetRow).not.toBeNull();
+    fireEvent.click(fleetRow!);
+    expect(
+      screen.getByRole("region", { name: "Doc Reader activity timeline" }),
+    ).toHaveTextContent("Found 3 primary sources");
+
+    fireEvent.click(screen.getByRole("tab", { name: /Agents/ }));
+    const details = await screen.findByTestId(
+      "agent-activity-row-details-task_alpha",
+    );
+    fireEvent.click(details.querySelector("summary")!);
+    expect(
+      screen.getByRole("region", {
+        name: "Doc Reader activity details",
+      }),
+    ).toHaveTextContent("Found 3 primary sources");
+
+    // One session stream plus the pre-existing Swimlanes stream only. The
+    // activity selector reads the session array and opens no subscription.
+    expect(
+      transport.subs.filter(
+        (sub) => !sub.closed && sub.path === "/v1/agent/runs/run-1/stream",
+      ),
+    ).toHaveLength(2);
+  });
+});
 
 // === PR-3.10 — approvals: in-chat ApprovalCard + rail count + resolution ===
 //
@@ -886,19 +813,15 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
   it("surfaces the in-chat approval affordance + the Approvals-tab count from one stream", async () => {
     await renderWithApproval();
 
-    // The in-chat approval card renders the pending approval (the 4-zone
-    // ApprovalCard in Studio, the `.conf-card` in Focus), with Approve/Reject.
+    // The in-chat approval card renders the pending approval with Approve/Reject.
     const card = screen.getByTestId(approvalCardTid("appr-1"));
     expect(card).toHaveTextContent("Post to #launch-aurora");
     expect(screen.getByTestId(approvalApproveTid("appr-1"))).not.toBeNull();
     expect(screen.getByTestId(approvalRejectTid("appr-1"))).not.toBeNull();
-    // …and (Studio) the Approvals tab shows the accent pending count badge
-    // (FR-3.12). The badge lives in the tabbed rail, which Focus collapses away.
-    if (STUDIO_ENABLED) {
-      expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
-        "1",
-      );
-    }
+    // …and the Approvals tab shows the accent pending count badge (FR-3.12).
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
   });
 
   it("approving in chat flips the card to a signed receipt, clears the count, and POSTs the decision", async () => {
@@ -974,13 +897,11 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
       );
     });
 
-    // Live: approval card present (+ rail badge in Studio).
+    // Live: approval card present with its rail badge.
     await screen.findByTestId(approvalCardTid("appr-1"));
-    if (STUDIO_ENABLED) {
-      expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
-        "1",
-      );
-    }
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
 
     // Scrub to the bead → approvals hidden (cannot approve a past state).
     act(() => {
@@ -994,11 +915,9 @@ describe("RunDestination — approvals (PR-3.10 / FR-3.21/3.22)", () => {
       fireEvent.click(screen.getByTestId("run-return-to-live"));
     });
     expect(screen.getByTestId(approvalCardTid("appr-1"))).not.toBeNull();
-    if (STUDIO_ENABLED) {
-      expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
-        "1",
-      );
-    }
+    expect(screen.getByTestId("run-rail-approvals-badge")).toHaveTextContent(
+      "1",
+    );
   });
 });
 

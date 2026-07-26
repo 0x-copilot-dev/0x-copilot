@@ -13,7 +13,6 @@ import {
   readRunMode,
   runFocusPanelCollapsedKey,
   runModeKey,
-  STUDIO_ENABLED,
   useRunMode,
   useRunPanelCollapsed,
   writeRunFocusPanelCollapsed,
@@ -22,13 +21,6 @@ import {
 } from "./useRunMode";
 
 const CONV = "conv-1" as ConversationId;
-
-// Studio-only tests run again automatically when `STUDIO_ENABLED` flips true;
-// Focus-only tests assert the shipping Focus-only behavior while it is false.
-// Keeping BOTH behind the same flag means neither set of assertions is lost —
-// the suite always exercises whichever mode the cockpit actually ships.
-const studioIt = STUDIO_ENABLED ? it : it.skip;
-const focusIt = STUDIO_ENABLED ? it.skip : it;
 
 /** Map-backed KeyValueStore for assertions on persisted values. */
 function makeStore(seed?: Record<string, string>): KeyValueStore {
@@ -79,12 +71,8 @@ afterEach(() => {
 });
 
 describe("readRunMode / persistence helpers", () => {
-  studioIt("defaults to studio when nothing is persisted", () => {
+  it("defaults to studio when nothing is persisted", () => {
     expect(readRunMode(makeStore(), CONV)).toBe("studio");
-  });
-
-  focusIt("defaults to focus when Studio is disabled", () => {
-    expect(readRunMode(makeStore(), CONV)).toBe("focus");
   });
 
   it("restores a persisted focus value", () => {
@@ -92,32 +80,20 @@ describe("readRunMode / persistence helpers", () => {
     expect(readRunMode(store, CONV)).toBe("focus");
   });
 
-  studioIt("coerces a legacy 'auto' value to studio (FR-3.7)", () => {
+  it("restores a persisted studio value", () => {
+    const store = makeStore({ [runModeKey(CONV)]: "studio" });
+    expect(readRunMode(store, CONV)).toBe("studio");
+  });
+
+  it("coerces a legacy 'auto' value to studio (FR-3.7)", () => {
     const store = makeStore({ [runModeKey(CONV)]: "auto" });
     expect(readRunMode(store, CONV)).toBe("studio");
   });
 
-  studioIt("coerces any unrecognised value to studio", () => {
+  it("coerces any unrecognised value to studio", () => {
     const store = makeStore({ [runModeKey(CONV)]: "hologram" });
     expect(readRunMode(store, CONV)).toBe("studio");
   });
-
-  focusIt(
-    "pins to focus regardless of the persisted value while Studio is disabled",
-    () => {
-      // A stale "studio"/"auto" pref must never resurrect Studio while the
-      // cockpit ships Focus-only — read always resolves to Focus.
-      expect(
-        readRunMode(makeStore({ [runModeKey(CONV)]: "studio" }), CONV),
-      ).toBe("focus");
-      expect(readRunMode(makeStore({ [runModeKey(CONV)]: "auto" }), CONV)).toBe(
-        "focus",
-      );
-      expect(
-        readRunMode(makeStore({ [runModeKey(CONV)]: "hologram" }), CONV),
-      ).toBe("focus");
-    },
-  );
 
   it("namespaces the key per conversation", () => {
     expect(runModeKey(CONV)).toBe("chats.thread.conv-1.run_mode");
@@ -126,10 +102,12 @@ describe("readRunMode / persistence helpers", () => {
     );
   });
 
-  it("writeRunMode persists via the store", () => {
+  it("writeRunMode persists explicit modes via the store", () => {
     const store = makeStore();
     writeRunMode(store, CONV, "focus");
     expect(store.get(runModeKey(CONV))).toBe("focus");
+    writeRunMode(store, CONV, "studio");
+    expect(store.get(runModeKey(CONV))).toBe("studio");
   });
 });
 
@@ -140,18 +118,10 @@ describe("useRunMode — state + persistence", () => {
     expect(result.current.mode).toBe("focus");
   });
 
-  studioIt("defaults to studio with an empty store", () => {
+  it("defaults to studio with an empty store", () => {
     const { result } = renderRunMode(makeStore());
     expect(result.current.mode).toBe("studio");
   });
-
-  focusIt(
-    "defaults to focus with an empty store while Studio is disabled",
-    () => {
-      const { result } = renderRunMode(makeStore());
-      expect(result.current.mode).toBe("focus");
-    },
-  );
 
   it("setMode updates state and persists to the store", () => {
     const store = makeStore();
@@ -163,22 +133,17 @@ describe("useRunMode — state + persistence", () => {
     expect(store.get(runModeKey(CONV))).toBe("focus");
   });
 
-  focusIt(
-    "setMode('studio') is coerced to focus while Studio is disabled",
-    () => {
-      const store = makeStore();
-      const { result } = renderRunMode(store);
-      act(() => {
-        result.current.setMode("studio");
-      });
-      // The request to enter Studio is ignored — state and the persisted value
-      // both stay Focus.
-      expect(result.current.mode).toBe("focus");
-      expect(store.get(runModeKey(CONV))).toBe("focus");
-    },
-  );
+  it("setMode restores Studio and persists to the store", () => {
+    const store = makeStore({ [runModeKey(CONV)]: "focus" });
+    const { result } = renderRunMode(store);
+    act(() => {
+      result.current.setMode("studio");
+    });
+    expect(result.current.mode).toBe("studio");
+    expect(store.get(runModeKey(CONV))).toBe("studio");
+  });
 
-  studioIt("toggle flips studio↔focus and persists each step", () => {
+  it("toggle flips studio↔focus and persists each step", () => {
     const store = makeStore();
     const { result } = renderRunMode(store);
     act(() => {
@@ -193,17 +158,7 @@ describe("useRunMode — state + persistence", () => {
     expect(store.get(runModeKey(CONV))).toBe("studio");
   });
 
-  focusIt("toggle stays on focus while Studio is disabled", () => {
-    const store = makeStore();
-    const { result } = renderRunMode(store);
-    act(() => {
-      result.current.toggle();
-    });
-    expect(result.current.mode).toBe("focus");
-    expect(store.get(runModeKey(CONV))).toBe("focus");
-  });
-
-  studioIt("keeps modes independent per conversation", () => {
+  it("keeps modes independent per conversation", () => {
     const store = makeStore({
       [runModeKey(CONV)]: "focus",
       [runModeKey("conv-2" as ConversationId)]: "studio",
@@ -216,118 +171,99 @@ describe("useRunMode — state + persistence", () => {
   });
 });
 
-// Focus-only: while Studio is disabled the ⌘M listener is NOT attached, so the
-// chord is inert and the mode stays Focus (the whole toggling describe below is
-// gated to Studio and runs again on re-enable).
-(STUDIO_ENABLED ? describe.skip : describe)(
-  "useRunMode — ⌘M is inert while Studio is disabled",
-  () => {
-    it("does not toggle the mode and never persists a studio value", () => {
-      const store = makeStore();
-      const { result } = renderRunMode(store);
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("focus");
-      expect(readRunMode(store, CONV)).toBe("focus");
-    });
-  },
-);
+describe("useRunMode — ⌘M / Ctrl+M shortcut (FR-3.8)", () => {
+  it("toggles on ⌘M (metaKey)", () => {
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "m", metaKey: true });
+    expect(result.current.mode).toBe("focus");
+    dispatchKey({ key: "m", metaKey: true });
+    expect(result.current.mode).toBe("studio");
+  });
 
-(STUDIO_ENABLED ? describe : describe.skip)(
-  "useRunMode — ⌘M / Ctrl+M shortcut (FR-3.8)",
-  () => {
-    it("toggles on ⌘M (metaKey)", () => {
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("focus");
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("studio");
-    });
+  it("toggles on Ctrl+M", () => {
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "m", ctrlKey: true });
+    expect(result.current.mode).toBe("focus");
+  });
 
-    it("toggles on Ctrl+M", () => {
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "m", ctrlKey: true });
-      expect(result.current.mode).toBe("focus");
-    });
+  it("treats uppercase M the same (some browsers report uppercase with a modifier)", () => {
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "M", metaKey: true });
+    expect(result.current.mode).toBe("focus");
+  });
 
-    it("treats uppercase M the same (some browsers report uppercase with a modifier)", () => {
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "M", metaKey: true });
-      expect(result.current.mode).toBe("focus");
-    });
+  it("persists the toggled mode from the shortcut", () => {
+    const store = makeStore();
+    renderRunMode(store);
+    dispatchKey({ key: "m", metaKey: true });
+    expect(store.get(runModeKey(CONV))).toBe("focus");
+  });
 
-    it("persists the toggled mode from the shortcut", () => {
-      const store = makeStore();
-      renderRunMode(store);
-      dispatchKey({ key: "m", metaKey: true });
-      expect(store.get(runModeKey(CONV))).toBe("focus");
-    });
+  it("does NOT fire on plain m", () => {
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "m" });
+    expect(result.current.mode).toBe("studio");
+  });
 
-    it("does NOT fire on plain m", () => {
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "m" });
-      expect(result.current.mode).toBe("studio");
-    });
+  it("does NOT fire on ⌘⇧M or ⌘⌥M", () => {
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "m", metaKey: true, shiftKey: true });
+    dispatchKey({ key: "m", metaKey: true, altKey: true });
+    expect(result.current.mode).toBe("studio");
+  });
 
-    it("does NOT fire on ⌘⇧M or ⌘⌥M", () => {
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "m", metaKey: true, shiftKey: true });
-      dispatchKey({ key: "m", metaKey: true, altKey: true });
-      expect(result.current.mode).toBe("studio");
-    });
+  it("is suppressed while a text input is focused", () => {
+    const input = globalThis.document.createElement("input");
+    globalThis.document.body.appendChild(input);
+    input.focus();
+    expect(globalThis.document.activeElement).toBe(input);
 
-    it("is suppressed while a text input is focused", () => {
-      const input = globalThis.document.createElement("input");
-      globalThis.document.body.appendChild(input);
-      input.focus();
-      expect(globalThis.document.activeElement).toBe(input);
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "m", metaKey: true });
+    expect(result.current.mode).toBe("studio");
 
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("studio");
+    input.blur();
+    dispatchKey({ key: "m", metaKey: true });
+    expect(result.current.mode).toBe("focus");
+  });
 
-      input.blur();
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("focus");
-    });
+  it("is suppressed while a textarea (composer) is focused", () => {
+    const textarea = globalThis.document.createElement("textarea");
+    globalThis.document.body.appendChild(textarea);
+    textarea.focus();
 
-    it("is suppressed while a textarea (composer) is focused", () => {
-      const textarea = globalThis.document.createElement("textarea");
-      globalThis.document.body.appendChild(textarea);
-      textarea.focus();
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "m", metaKey: true });
+    expect(result.current.mode).toBe("studio");
+  });
 
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("studio");
-    });
+  it("still fires when a non-text input (checkbox) is focused", () => {
+    const checkbox = globalThis.document.createElement("input");
+    checkbox.type = "checkbox";
+    globalThis.document.body.appendChild(checkbox);
+    checkbox.focus();
 
-    it("still fires when a non-text input (checkbox) is focused", () => {
-      const checkbox = globalThis.document.createElement("input");
-      checkbox.type = "checkbox";
-      globalThis.document.body.appendChild(checkbox);
-      checkbox.focus();
+    const { result } = renderRunMode(makeStore());
+    dispatchKey({ key: "m", metaKey: true });
+    expect(result.current.mode).toBe("focus");
+  });
 
-      const { result } = renderRunMode(makeStore());
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("focus");
-    });
+  it("does NOT attach the listener when enabled=false", () => {
+    const { result } = renderRunMode(makeStore(), { enabled: false });
+    dispatchKey({ key: "m", metaKey: true });
+    expect(result.current.mode).toBe("studio");
+  });
 
-    it("does NOT attach the listener when enabled=false", () => {
-      const { result } = renderRunMode(makeStore(), { enabled: false });
-      dispatchKey({ key: "m", metaKey: true });
-      expect(result.current.mode).toBe("studio");
-    });
-
-    it("detaches the listener on unmount", () => {
-      // After unmount the store is the durable witness: a stray ⌘M must
-      // not persist a toggle through a detached listener.
-      const store = makeStore();
-      const { unmount } = renderRunMode(store);
-      unmount();
-      dispatchKey({ key: "m", metaKey: true });
-      expect(readRunMode(store, CONV)).toBe("studio");
-    });
-  },
-);
+  it("detaches the listener on unmount", () => {
+    // After unmount the store is the durable witness: a stray ⌘M must
+    // not persist a toggle through a detached listener.
+    const store = makeStore();
+    const { unmount } = renderRunMode(store);
+    unmount();
+    dispatchKey({ key: "m", metaKey: true });
+    expect(readRunMode(store, CONV)).toBe("studio");
+  });
+});
 
 describe("useRunMode — result stability", () => {
   it("returns a stable setMode/toggle identity across re-renders", () => {

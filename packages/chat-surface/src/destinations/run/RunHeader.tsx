@@ -24,7 +24,7 @@ import {
 
 import type { AgentRunStatus } from "@0x-copilot/api-types";
 
-import { type RunMode, STUDIO_ENABLED } from "./useRunMode";
+import type { RunMode } from "./useRunMode";
 
 /** Canonical order for the segmented control + arrow-key cycling. */
 const MODE_ORDER: readonly RunMode[] = ["studio", "focus"];
@@ -146,14 +146,11 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
           ) : null}
         </div>
       </div>
-      {/* Studio disabled ⇒ Focus-only: no Studio/Focus switcher to show. */}
-      {STUDIO_ENABLED ? (
-        <ModeSegmentedControl
-          agentName={agentName}
-          mode={mode}
-          onModeChange={onModeChange}
-        />
-      ) : null}
+      <ModeSegmentedControl
+        agentName={agentName}
+        mode={mode}
+        onModeChange={onModeChange}
+      />
     </header>
   );
 }
