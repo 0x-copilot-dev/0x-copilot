@@ -295,6 +295,18 @@ def ensure_agents_panel_interaction(
     )
 
 
+def ensure_completed_agent_is_retained(s: DriverSession, task_id: str) -> None:
+    """A later run must not clear terminal children from the Agents history."""
+    s.click('[data-testid=tc-focus-panel] button[role=tab]:has-text("Agents")')
+    assert s.wait_for("[data-testid=workspace-agents-tab]"), "Agents tab did not open"
+    details = css_test_id(f"agent-activity-row-details-{task_id}")
+    assert s.present(details), (
+        "completed child from the preceding run vanished when a new message "
+        "bound its own run"
+    )
+    log("PASS  completed subagent remains visible after the next message")
+
+
 def main() -> int:
     if len(sys.argv) > 1:
         if sys.argv[1] in {"-h", "--help"}:
@@ -390,8 +402,13 @@ def main() -> int:
         assert len(new_fleets) == 1 and new_fleets[0]["testId"] == single["testId"], (
             f"R2 required exactly one single-agent fleet, got {new_fleets!r}"
         )
+        assert not s.present("[data-testid=run-multi-select]"), (
+            "the retired multi-run selector returned after a second run"
+        )
         s.shot("r2-one-subagent-complete")
-        log("PASS  exactly one subagent rendered as a singular 1/1 fleet")
+        log(
+            "PASS  exactly one subagent rendered as a singular 1/1 fleet; no run selector"
+        )
 
         # R3 — real parallel fanout, distinct from a single-agent card.
         log("── R3 exactly two parallel subagents ───────────────────────")
@@ -399,6 +416,12 @@ def main() -> int:
         assistant_before = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
         send_in_run(s, P_MULTI)
         wait_new_assistant(s, assistant_before)
+        # R8 — the run stream now follows R3, but R2's terminal child belongs
+        # to this conversation and must remain in the side-panel history.
+        old_task_id = single["childStates"][0]["taskId"]
+        assert old_task_id, single
+        ensure_completed_agent_is_retained(s, old_task_id)
+        s.shot("r3-retains-r2-completed-subagent")
         multi = wait_new_card(
             s,
             "fleet",

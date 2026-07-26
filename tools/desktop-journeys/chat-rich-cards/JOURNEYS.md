@@ -24,6 +24,7 @@ The default is `openai`.
 | R5  | Open a real tool card by click; close/open it with Space/Enter.              | The disclosure body appears/disappears and payload/source markup remains present.                                                                           | P0       |
 | R6  | Click/Space/Enter the live web-search child in a multi-agent fleet.          | Its inline activity region opens/closes and contains the real nested `web_search` timeline entry.                                                           | P0       |
 | R7  | Open the right-side **Agents** tab and click/Space/Enter that same child.    | Its native disclosure opens/closes and shows the matching live `web_search` activity, keyed by task id.                                                     | P0       |
+| R8  | Send R3 after the completed R2 single-subagent run.                          | The R2 terminal child remains in **Agents** while the R3 run is active; a new run must not erase conversation history.                                      | P0       |
 
 R1–R4 are intentionally strict. The test does **not** downgrade a model that
 ignores “exactly” to a green `BLOCKED` result: an absent card, bad cardinality,

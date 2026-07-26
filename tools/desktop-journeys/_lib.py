@@ -30,8 +30,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
+import sys
 import time
 import urllib.request
 from pathlib import Path
@@ -135,10 +137,29 @@ class DriverSession:
                 or str(REPO_ROOT / "apps" / "desktop" / "resources")
             )
         # A throwaway userData subdir ⇒ a fresh first-run every time.
-        suffix = str(int(time.time())) if fresh else "reuse"
-        env["COPILOT_DESKTOP_USER_DATA_SUBDIR"] = f"journey-{name}-{suffix}"
+        suffix = str(time.time_ns()) if fresh else "reuse"
+        self.user_data_subdir = f"journey-{name}-{suffix}"
+        env["COPILOT_DESKTOP_USER_DATA_SUBDIR"] = self.user_data_subdir
         self._env = env
         self._proc: subprocess.Popen | None = None
+        self._log = None
+
+    @property
+    def _user_data_dir(self) -> Path:
+        """The app-private data directory for this exact test invocation."""
+        if sys.platform == "darwin":
+            root = Path.home() / "Library" / "Application Support" / "0xCopilot"
+        elif sys.platform == "win32":
+            root = (
+                Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+                / "0xCopilot"
+            )
+        else:
+            root = (
+                Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+                / "0xCopilot"
+            )
+        return root / self.user_data_subdir
 
     # -- lifecycle --
     def __enter__(self) -> "DriverSession":
@@ -150,32 +171,143 @@ class DriverSession:
 
     def start(self) -> None:
         self._free_port()
-        log = open(self.run_dir / "driver.log", "w")
+        self._log = open(self.run_dir / "driver.log", "w")
         self._proc = subprocess.Popen(
             ["node", str(DRIVER)],
             env=self._env,
-            stdout=log,
+            stdout=self._log,
             stderr=subprocess.STDOUT,
             cwd=str(REPO_ROOT),
+            start_new_session=True,
         )
         deadline = time.time() + BOOT_TIMEOUT_S
         while time.time() < deadline:
             if self._probe():
                 return
+            if self._proc.poll() is not None:
+                self._cleanup_failed_launch()
+                raise SystemExit(
+                    f"[{self.name}] driver exited before the app came up "
+                    f"(see {self.run_dir}/driver.log)"
+                )
             time.sleep(2)
+        self._cleanup_failed_launch()
         raise SystemExit(
             f"[{self.name}] app did not come up within {BOOT_TIMEOUT_S}s "
             f"(see {self.run_dir}/driver.log)"
         )
 
     def stop(self) -> None:
+        quit_cleanly = False
         try:
             self.rpc("quit")
+            quit_cleanly = True
         except Exception:
             pass
+        cleanup_needed = not quit_cleanly
         if self._proc and self._proc.poll() is None:
-            self._proc.send_signal(signal.SIGKILL)
+            try:
+                self._proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                # The driver did not complete its normal `app.close()` shutdown.
+                # These are only ever pids rooted in this session's fresh data dir.
+                cleanup_needed = True
+        if cleanup_needed:
+            self._cleanup_failed_launch()
         self._free_port()
+        self._close_log()
+
+    def _close_log(self) -> None:
+        if self._log is not None:
+            self._log.close()
+            self._log = None
+
+    def _owned_pids(self) -> set[int]:
+        """Read pids only from this invocation's driver and supervised logs."""
+        pids: set[int] = set()
+        driver_log = self.run_dir / "driver.log"
+        try:
+            pids.update(
+                int(value)
+                for value in re.findall(
+                    r"<launched> pid=(\\d+)", driver_log.read_text()
+                )
+            )
+        except OSError:
+            pass
+        for path in (self._user_data_dir / "logs").glob("*.log"):
+            try:
+                pids.update(
+                    int(value)
+                    for value in re.findall(
+                        r"Started server process \[(\\d+)\]", path.read_text()
+                    )
+                )
+            except OSError:
+                continue
+        return pids
+
+    @staticmethod
+    def _stop_pid(pid: int) -> None:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        deadline = time.time() + 5
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return
+            time.sleep(0.1)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+    def _stop_owned_postgres(self) -> None:
+        pgdata = self._user_data_dir / "pgdata"
+        if not (pgdata / "postmaster.pid").exists():
+            return
+        executable = "pg_ctl.exe" if sys.platform == "win32" else "pg_ctl"
+        runtime = Path(self._env["COPILOT_HOME"]) / "runtime"
+        candidates = list(runtime.glob(f"*/postgres/bin/{executable}"))
+        if len(candidates) != 1:
+            return
+        subprocess.run(
+            [
+                str(candidates[0]),
+                "-D",
+                str(pgdata),
+                "-m",
+                "fast",
+                "-w",
+                "-t",
+                "20",
+                "stop",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    def _cleanup_failed_launch(self) -> None:
+        """Tear down a launch that failed before the driver exposed `/rpc`.
+
+        Playwright can time out after Electron has already spawned the embedded
+        runtime.  There is no RPC handle in that state, so normal app shutdown
+        is impossible.  Scope cleanup to this invocation's random userData
+        subdirectory; a real user's app and database are never considered.
+        """
+        for pid in self._owned_pids():
+            self._stop_pid(pid)
+        self._stop_owned_postgres()
+        if self._proc and self._proc.poll() is None:
+            try:
+                os.killpg(self._proc.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        self._close_log()
 
     def _free_port(self) -> None:
         # Best-effort: kill any lingering driver/electron holding the port.
