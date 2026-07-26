@@ -373,7 +373,7 @@ class RuntimeWorker:
         )
 
     def _default_workspace_overlay_store(self) -> object:
-        """Select C1 metadata persistence without inventing a Postgres side-store."""
+        """Select the C1 overlay adapter that shares the configured runtime store."""
 
         if (
             self.settings.store.backend == "file"
@@ -390,8 +390,16 @@ class RuntimeWorker:
             )
 
             return InMemoryWorkspaceOverlayStore()
-        # Local workspace is not a server-filesystem feature. Postgres/web
-        # deployments intentionally receive the tombstone backend in enforce.
+        if self.settings.store.backend == "postgres" and hasattr(
+            self.persistence, "_role_connection"
+        ):
+            from runtime_adapters.postgres.workspace_overlay_store import (
+                PostgresWorkspaceOverlayStore,
+            )
+
+            return PostgresWorkspaceOverlayStore(store=self.persistence)
+        # Keep an unrecognised/incompletely composed backend fail-closed. The
+        # C1 writer cannot fall through to a host filesystem mutation.
         return None
 
     def _effect_claim_store(self) -> object:
