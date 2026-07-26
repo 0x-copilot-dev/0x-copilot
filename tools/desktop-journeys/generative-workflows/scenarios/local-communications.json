@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "namespace": "fixture://generative-workflows/launch-week",
+  "principals": [
+    { "id": "usr_aria", "display_name": "Aria Patel", "handle": "@aria" },
+    { "id": "usr_maya", "display_name": "Maya Chen", "handle": "@maya" },
+    { "id": "usr_leo", "display_name": "Leo Martin", "handle": "@leo" },
+    {
+      "id": "usr_northstar",
+      "display_name": "Northstar Labs",
+      "handle": "@northstar"
+    }
+  ],
+  "mail": {
+    "account": { "id": "mail_launch", "address": "aria@fixture.invalid" },
+    "threads": [
+      {
+        "id": "thr_q3_renewal",
+        "subject": "Q3 renewal: launch analytics",
+        "participants": ["aria@fixture.invalid", "sam@fixture.invalid"],
+        "messages": [
+          {
+            "id": "msg_q3_1",
+            "from": "sam@fixture.invalid",
+            "sent_at": "2026-07-20T09:15:00Z",
+            "body": "Can you confirm whether the launch analytics bundle includes the export workflow before our Q3 renewal review?"
+          },
+          {
+            "id": "msg_q3_2",
+            "from": "aria@fixture.invalid",
+            "sent_at": "2026-07-20T10:02:00Z",
+            "body": "I will confirm the workflow and follow up with the release plan."
+          }
+        ]
+      }
+    ],
+    "expected_write": {
+      "operation": "send_draft",
+      "thread_id": "thr_q3_renewal",
+      "recipient": "sam@fixture.invalid",
+      "must_contain": ["export workflow", "release plan"]
+    }
+  },
+  "timeline": {
+    "account": { "id": "tl_launch", "handle": "@aria" },
+    "posts": [
+      {
+        "id": "post_northstar_launch",
+        "author": "@northstar",
+        "published_at": "2026-07-21T13:00:00Z",
+        "body": "What is the clearest way to show staged approvals in a launch walkthrough?"
+      }
+    ],
+    "expected_write": {
+      "operation": "publish_draft",
+      "in_reply_to": "post_northstar_launch",
+      "account": "@aria",
+      "must_contain": ["approval", "review"]
+    }
+  },
+  "discord": {
+    "guild": { "id": "guild_launch", "name": "Launch Week" },
+    "channels": [
+      {
+        "id": "chn_launch_room",
+        "name": "launch-room",
+        "messages": [
+          {
+            "id": "dc_1",
+            "author": "@maya",
+            "sent_at": "2026-07-22T15:10:00Z",
+            "body": "Decision: ship the editor and CSV flows in Studio first; keep Focus for chat-only work."
+          },
+          {
+            "id": "dc_2",
+            "author": "@leo",
+            "sent_at": "2026-07-22T15:13:00Z",
+            "body": "I will own the walkthrough capture once the approval surface is ready."
+          }
+        ]
+      }
+    ],
+    "expected_write": {
+      "operation": "publish_announcement",
+      "channel_id": "chn_launch_room",
+      "mentions": ["@maya", "@leo"],
+      "must_contain": ["Studio", "approval"]
+    }
+  },
+  "workspace": {
+    "root": "fixture://workspace/launch-week",
+    "files": {
+      "project-brief.md": "# Launch brief\n\nOwner: Aria\n\nThe team will validate the Studio workflows before release.\n",
+      "pipeline.csv": "account,stage,risk\nNorthstar,review,medium\nAcme,discovery,low\nOrbit,review,high\n",
+      "src/normalize.ts": "export function normalize(value: string): string {\n  return value.trim();\n}\n"
+    },
+    "expected_artifacts": [
+      "status-update.docx",
+      "launch-plan.md",
+      "launch-metrics.csv"
+    ]
+  },
+  "faults": {
+    "expired_grant_once": true,
+    "unknown_operation": "calendar.archive_nonexistent",
+    "first_discord_publish_result": "retryable_failure"
+  }
+}
