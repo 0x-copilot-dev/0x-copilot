@@ -783,9 +783,35 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
     expect(screen.getByText("Prime Checker")).toBeInTheDocument();
   });
 
-  it("replays completed fleet cards from earlier runs into the conversation transcript", async () => {
+  it("replays completed fleet and direct tool cards from earlier runs into the conversation transcript", async () => {
     seqCounter = 0;
     const transport = new FakeTransport();
+    const historicToolStarted = event({
+      run_id: "run-history",
+      event_type: "tool_call_started",
+      source: "tool",
+      activity_kind: "tool",
+      display_title: "Search the web",
+      payload: {
+        call_id: "call-history-web",
+        tool_name: "web_search",
+        args: { query: "is 97 prime" },
+      },
+    });
+    const historicToolFinished = event({
+      run_id: "run-history",
+      event_type: "tool_result",
+      source: "tool",
+      activity_kind: "tool",
+      status: "completed",
+      summary: "Found a primary source",
+      payload: {
+        call_id: "call-history-web",
+        tool_name: "web_search",
+        status: "completed",
+        output: { answer: "97 is prime" },
+      },
+    });
     const historicStarted = event({
       run_id: "run-history",
       event_type: "subagent_fleet_started",
@@ -827,8 +853,13 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
       if (req.path.endsWith("/runs/run-history/events")) {
         return {
           run_id: "run-history",
-          events: [historicStarted, historicFinished],
-          latest_sequence_no: 2,
+          events: [
+            historicToolStarted,
+            historicToolFinished,
+            historicStarted,
+            historicFinished,
+          ],
+          latest_sequence_no: 4,
           run_status: "completed",
           has_more: false,
         };
@@ -884,6 +915,16 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
     const historicCard = await screen.findByTestId(
       "tc-chat-fleet-fleet-history",
     );
+    const historicToolCard = await screen.findByTestId(
+      "tc-chat-tool-call-history-web",
+    );
+    expect(historicToolCard).toHaveAttribute("data-tool-status", "complete");
+    const historicToolDisclosure = historicToolCard.querySelector("details");
+    expect(historicToolDisclosure).not.toBeNull();
+    fireEvent.click(historicToolDisclosure!.querySelector("summary")!);
+    expect(
+      screen.getByTestId("tc-chat-tool-call-history-web-result"),
+    ).toHaveTextContent('"answer": "97 is prime"');
     expect(historicCard).toHaveTextContent("Dispatched a subagent");
     const toggle = screen.getByTestId("subagent-fleet-toggle-fleet-history");
     expect(toggle).toHaveAttribute("aria-expanded", "false");

@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-web-chat-only.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-web-chat-only.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 39 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 40 · ⚪ INFO 10
 
-## 🟡 LOW (39)
+## 🟡 LOW (40)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -45,6 +45,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.web.header` | Web read | width | 548.891px → 549px |
 | `tool.web.header` | Web read | tag | <div> → <summary> (semantic/default-style change) |
 | `web.sources-card` | Web read | transition | all → none |
+| `web.sources-card` | Web read | width | 69.3281px → 69.3125px |
 | `web.chat-only-canvas` | Web read | lineHeight | 19.5px → normal |
 | `web.chat-only-canvas` | Web read | transition | all → none |
 | `web.chat-only-canvas` | Web read | width | 613.109px → 613px |

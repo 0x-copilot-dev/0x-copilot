@@ -115,6 +115,7 @@ import {
   surfaceIdForTabUri,
   tabUriForSurface,
   type TcTab,
+  type ToolCallEntry,
   type PendingDiffHandle,
   type LedgerGateWritePolicy,
   type LedgerStagedWrite,
@@ -239,6 +240,7 @@ const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
 const EMPTY_SUBAGENT_ARCHIVE: ReadonlyMap<string, SubagentEntry> = new Map();
 const EMPTY_FLEET_ARCHIVE: readonly FleetProjection[] = [];
+const EMPTY_TOOL_CALL_ARCHIVE: readonly ToolCallEntry[] = [];
 // E2 D3: historic rows are selected through a read-only compatibility reader.
 // Kept stable while the Studio canvas flag is off so the legacy cockpit remains
 // byte-identical and never inspects older surface envelopes on that path.
@@ -262,6 +264,11 @@ interface ConversationSubagentArchive {
 interface ConversationFleetArchive {
   /** Historic fleet bookends plus the live fleets remembered by this cockpit. */
   readonly fleets: readonly FleetProjection[];
+}
+
+interface ConversationToolCallArchive {
+  /** Historic main-agent tool cards plus the live cards remembered by this cockpit. */
+  readonly toolCalls: readonly ToolCallEntry[];
 }
 
 /**
@@ -452,6 +459,106 @@ function useConversationFleetArchive(
   }, [archived, rememberedLive, liveFleets]);
 
   return { fleets };
+}
+
+/**
+ * Keep direct main-agent tool cards conversation-scoped, just like messages
+ * and fleet cards.
+ *
+ * The active run's event tail is deliberately replaced when the next user
+ * message starts. That must not erase the completed `web_search` (or other
+ * direct tool) card from the earlier turn. Replaying every run's immutable
+ * event ledger supplies that history; cards observed live are retained while
+ * the replay is in flight, and win for the same call id.
+ */
+function useConversationToolCallArchive(
+  transport: ReturnType<typeof useTransport>,
+  conversationId: ConversationId,
+  runIds: readonly string[],
+  liveToolCalls: readonly ToolCallEntry[],
+): ConversationToolCallArchive {
+  const [archived, setArchived] = useState<readonly ToolCallEntry[]>(
+    EMPTY_TOOL_CALL_ARCHIVE,
+  );
+  const [rememberedLive, setRememberedLive] = useState<
+    ReadonlyMap<string, ToolCallEntry>
+  >(new Map());
+
+  // `session.runs.map(...)` is intentionally recreated by the shell. Key the
+  // replay effect on a stable primitive so recording an archive does not cause
+  // a refetch loop.
+  const runIdsKey = [...new Set(runIds)].sort().join("\u0000");
+  const replayRunIds = useMemo(
+    () => (runIdsKey === "" ? [] : runIdsKey.split("\u0000")),
+    [runIdsKey],
+  );
+
+  useEffect(() => {
+    setArchived(EMPTY_TOOL_CALL_ARCHIVE);
+    setRememberedLive(new Map());
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (conversationId === "new" || liveToolCalls.length === 0) return;
+    setRememberedLive((previous) => {
+      const next = new Map(previous);
+      let changed = false;
+      for (const toolCall of liveToolCalls) {
+        if (next.get(toolCall.id) !== toolCall) {
+          next.set(toolCall.id, toolCall);
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [conversationId, liveToolCalls]);
+
+  useEffect(() => {
+    if (conversationId === "new") return undefined;
+    if (replayRunIds.length === 0) {
+      setArchived(EMPTY_TOOL_CALL_ARCHIVE);
+      return undefined;
+    }
+    let cancelled = false;
+    void Promise.all(
+      replayRunIds.map(async (runId) => {
+        const response = await transport.request<RuntimeEventReplayResponse>({
+          method: "GET",
+          path: `/v1/agent/runs/${encodeURIComponent(runId)}/events`,
+        });
+        return projectToolCalls(response.events ?? []);
+      }),
+    )
+      .then((toolCallGroups) => {
+        if (!cancelled) setArchived(toolCallGroups.flat());
+      })
+      .catch(() => {
+        // Cards already observed live remain visible. A historical replay is a
+        // progressive enhancement, so a transient failure must not block chat.
+        if (!cancelled) setArchived(EMPTY_TOOL_CALL_ARCHIVE);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, conversationId, replayRunIds]);
+
+  const toolCalls = useMemo(() => {
+    const merged = new Map<string, ToolCallEntry>();
+    for (const toolCall of archived) merged.set(toolCall.id, toolCall);
+    for (const toolCall of rememberedLive.values()) {
+      merged.set(toolCall.id, toolCall);
+    }
+    for (const toolCall of liveToolCalls) merged.set(toolCall.id, toolCall);
+    return [...merged.values()].sort((left, right) => {
+      const leftAt = left.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+      const rightAt = right.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+      return leftAt === rightAt
+        ? left.id.localeCompare(right.id)
+        : leftAt - rightAt;
+    });
+  }, [archived, rememberedLive, liveToolCalls]);
+
+  return { toolCalls };
 }
 
 /** Add durable subagent records to a replayed fleet whose event log only kept
@@ -1388,14 +1495,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [session.events],
   );
 
-  // Workstream D: the main-agent tool-call cards, projected off the SAME
-  // `session.events` (FR-3.3 — no second subscription/projector). Feeds the
-  // inline tool-call card in TcChat so a ~6s `web_search` shows a running→done
-  // card in the transcript flow instead of dropping the tool activity entirely.
-  // Subagent tool calls are excluded upstream (they belong to the Agents views).
+  // The live main-agent tool cards stay a pure projection of the active event
+  // tail. The conversation archive below augments that projection with
+  // completed cards from prior runs, so starting a later turn cannot erase a
+  // visible `web_search` result. Subagent tool calls are excluded upstream (they
+  // belong to the Agents views).
   const toolCalls = useMemo(
     () => projectToolCalls(session.events),
     [session.events],
+  );
+  const conversationToolCalls = useConversationToolCallArchive(
+    transport,
+    conversationId,
+    session.runs.map((run) => run.runId),
+    toolCalls,
   );
 
   // Focus exposes an honest, compact plan from the same canonical events as the
@@ -2906,7 +3019,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         subagentActivitiesByTask={subagentActivityProjection.activitiesByTask}
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).
-        toolCalls={toolCalls}
+        toolCalls={conversationToolCalls.toolCalls}
         toolCallCitations={toolCallCitations}
         // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
         approvals={chatApprovals}

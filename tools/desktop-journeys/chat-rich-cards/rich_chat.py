@@ -394,7 +394,7 @@ def main() -> int:
         if sys.argv[1] in {"-h", "--help"}:
             print(
                 "Usage: python3 tools/desktop-journeys/chat-rich-cards/rich_chat.py\n"
-                "Runs the strict R1–R7 desktop rich-chat matrix. "
+                "Runs the strict R1–R11 desktop rich-chat matrix. "
                 "Set RICH_CHAT_PROVIDER=openai|anthropic to select the BYOK key."
             )
             return 0
@@ -511,6 +511,28 @@ def main() -> int:
         # R10 — the transcript itself is conversation-scoped too. A new live
         # run must not erase R2's compact, expandable fleet card above it.
         activate_workspace_tab(s, "Chat", "[data-testid=tc-chat]")
+        # R11 — direct main-agent tool cards use the same conversation ledger.
+        # Starting R3 must not make R1's completed built-in web search vanish.
+        historic_tool = next(
+            (
+                card
+                for card in card_snapshots(s, "tool")
+                if card["testId"] == tool["testId"]
+            ),
+            None,
+        )
+        assert historic_tool is not None and historic_tool["toolStatus"] in {
+            "complete",
+            "done",
+        }, "completed R1 web-search card vanished when R3 bound a new run"
+        historic_tool_host = css_test_id(tool["testId"])
+        ensure_native_disclosure(
+            s,
+            f"{historic_tool_host} details",
+            f"{historic_tool_host} [data-testid$=-details]",
+            "Historic tool card",
+            "math.isqrt",
+        )
         historic_single = next(
             (
                 card
@@ -523,7 +545,7 @@ def main() -> int:
             "completed R2 fleet card vanished when R3 bound a new run"
         )
         ensure_fleet_card_interaction(s, single["testId"])
-        s.shot("r3-retains-r2-completed-subagent")
+        s.shot("r3-retains-historic-rich-cards")
         multi = wait_new_card(
             s,
             "fleet",
