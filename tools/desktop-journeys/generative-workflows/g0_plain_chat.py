@@ -49,68 +49,31 @@ PROMPT = (
 TERMINAL_STATUSES = frozenset(
     {"completed", "failed", "cancelled", "rejected", "timed_out"}
 )
-TOOL_EVENT_TYPES = frozenset(
+# This is a positive grammar, not a tool-event denylist.  It mirrors the
+# RuntimeApiEventType and RuntimeEventPresentationProjector contracts: a plain
+# answer is its run/model/reasoning lifecycle, exactly one final response, then
+# an optional E1 terminal receipt pair and completion.  No other transport or
+# ledger type is valid in G0.
+PLAIN_CHAT_EVENT_ACTIVITY_KINDS = {
+    "run_queued": "run",
+    "run_started": "run",
+    "model_call_started": "run",
+    "model_call_completed": "event",
+    "model_delta": "message",
+    "reasoning_summary": "reasoning",
+    "reasoning_summary_delta": "reasoning",
+    "final_response": "message",
+    "surface.created": "event",
+    "receipt.emitted": "event",
+    "run_completed": "run",
+}
+PLAIN_CHAT_IN_FLIGHT_EVENT_TYPES = frozenset(
     {
-        "tool_call",
-        "tool_call_started",
-        "tool_call_delta",
-        "tool_result",
-        "tool_call_completed",
-        "mcp_auth_required",
-        "source_ingested",
-        "sources_ingested",
-        "citation_made",
-    }
-)
-TOOL_EXECUTION_V2_EVENT_TYPES = frozenset(
-    {
-        "action.classified",
-        "read.executed",
-        "gate.opened",
-        "gate.resolved",
-    }
-)
-# These closed lifecycle events are emitted only after the supervisor's ``task``
-# tool dispatches subagent work.  Keep this explicit rather than rejecting every
-# event whose name or metadata mentions a subagent: ordinary model/run telemetry
-# remains valid for G0 when it is not task execution.
-SUBAGENT_TASK_EXECUTION_EVENT_TYPES = frozenset(
-    {
-        "subagent_update",
-        "subagent_started",
-        "subagent_progress",
-        "subagent_completed",
-        "subagent_fleet_started",
-        "subagent_fleet_finished",
-        "subagent_paused",
-        "subagent_resumed",
-    }
-)
-RICH_EVENT_TYPES = frozenset(
-    {
-        "view.derived",
-        "view.preference",
-        "shape.requested",
-        "shape.resolved",
-        "write.staged",
-        "revision.added",
-        "decision.recorded",
-        "write.applied",
-        "artifact.created",
-        "artifact.revised",
-        "artifact.promoted",
-        "artifact.presentation_decided",
-        "operation.requested",
-        "operation.classified",
-        "operation.completed",
-        "operation.failed",
-        "effect.staged",
-        "effect.revised",
-        "effect.decision_recorded",
-        "effect.claimed",
-        "effect.applied",
-        "effect.indeterminate",
-        "effect.reconciled",
+        "model_call_started",
+        "model_call_completed",
+        "model_delta",
+        "reasoning_summary",
+        "reasoning_summary_delta",
     }
 )
 
@@ -321,6 +284,117 @@ def _assert_no_rich_ui(session: DriverSession) -> None:
     assert not leaked, f"ordinary chat leaked rich Studio UI: {', '.join(leaked)}"
 
 
+def _event_payload(event: dict, event_type: str) -> dict:
+    payload = event.get("payload")
+    assert isinstance(payload, dict), (
+        f"plain chat {event_type!r} event has no object payload"
+    )
+    return payload
+
+
+def _receipt_surface_id(payload: dict, event_type: str) -> str:
+    surface_id = payload.get("surface_id")
+    assert isinstance(surface_id, str) and surface_id, (
+        f"plain chat {event_type!r} event has no receipt surface_id"
+    )
+    return surface_id
+
+
+def _assert_plain_chat_event_grammar(events: list[dict]) -> str | None:
+    """Validate the only persisted sequence that represents a plain answer."""
+
+    event_types: list[str] = []
+    previous_sequence_no: int | None = None
+    for index, event in enumerate(events):
+        assert isinstance(event, dict), f"event replay item {index} is not an object"
+        sequence_no = event.get("sequence_no")
+        assert isinstance(sequence_no, int) and not isinstance(sequence_no, bool), (
+            f"event replay item {index} has no integer sequence_no"
+        )
+        if previous_sequence_no is not None:
+            assert sequence_no > previous_sequence_no, (
+                "event replay is not strictly ordered by sequence_no: "
+                f"{previous_sequence_no} then {sequence_no}"
+            )
+        previous_sequence_no = sequence_no
+
+        event_type = event.get("event_type")
+        assert isinstance(event_type, str), (
+            f"event replay item {index} has no string event_type"
+        )
+        expected_activity_kind = PLAIN_CHAT_EVENT_ACTIVITY_KINDS.get(event_type)
+        assert expected_activity_kind is not None, (
+            f"plain chat event type is outside the grammar: {event_type!r}"
+        )
+        assert event.get("activity_kind") == expected_activity_kind, (
+            f"plain chat event {event_type!r} has activity_kind "
+            f"{event.get('activity_kind')!r}, expected {expected_activity_kind!r}"
+        )
+        event_types.append(event_type)
+
+    assert event_types[0] == "run_queued", (
+        f"plain chat must begin with run_queued, got {event_types[0]!r}"
+    )
+    assert len(event_types) > 1 and event_types[1] == "run_started", (
+        "plain chat must start immediately after queuing"
+    )
+
+    index = 2
+    saw_model_call = False
+    model_call_open = False
+    while index < len(event_types) and event_types[index] != "final_response":
+        event_type = event_types[index]
+        assert event_type in PLAIN_CHAT_IN_FLIGHT_EVENT_TYPES, (
+            f"plain chat event {event_type!r} cannot appear before final_response"
+        )
+        if event_type == "model_call_started":
+            assert not model_call_open, "plain chat opened a second model call"
+            model_call_open = True
+            saw_model_call = True
+        elif event_type == "model_call_completed":
+            assert model_call_open, (
+                "plain chat completed a model call that never started"
+            )
+            model_call_open = False
+        else:
+            assert model_call_open, (
+                f"plain chat emitted {event_type!r} outside a model call"
+            )
+        index += 1
+
+    assert saw_model_call, "plain chat has no model-call lifecycle"
+    assert index < len(event_types), "plain chat has no final_response"
+    assert event_types[index] == "final_response"
+    final_response_index = index
+    index += 1
+
+    receipt_surface_id: str | None = None
+    if index < len(event_types) and event_types[index] == "surface.created":
+        receipt_payload = _event_payload(events[index], "surface.created")
+        assert receipt_payload.get("kind") == "receipt", (
+            "plain chat may persist only an audit receipt surface"
+        )
+        receipt_surface_id = _receipt_surface_id(receipt_payload, "surface.created")
+        index += 1
+        assert index < len(event_types) and event_types[index] == "receipt.emitted", (
+            "plain chat receipt.emitted must immediately follow surface.created"
+        )
+        emitted_id = _receipt_surface_id(
+            _event_payload(events[index], "receipt.emitted"), "receipt.emitted"
+        )
+        assert emitted_id == receipt_surface_id, (
+            "plain chat terminal receipt pair has mismatched surface ids"
+        )
+        index += 1
+
+    assert index < len(event_types) and event_types[index] == "run_completed", (
+        "plain chat must complete immediately after final_response or its receipt pair"
+    )
+    assert index == len(event_types) - 1, "plain chat has events after run_completed"
+    assert final_response_index < index, "run_completed precedes final_response"
+    return receipt_surface_id
+
+
 def _assert_facade_plain_chat(session: DriverSession, run_id: str) -> None:
     replay = session.transport("GET", f"/v1/agent/runs/{run_id}/events")
     assert replay.get("run_status") == "completed", (
@@ -330,101 +404,7 @@ def _assert_facade_plain_chat(session: DriverSession, run_id: str) -> None:
     assert isinstance(events, list) and events, (
         "completed run has no persisted event replay"
     )
-    event_types = [event.get("event_type") for event in events]
-    final_responses = [
-        event for event in events if event.get("event_type") == "final_response"
-    ]
-    assert len(final_responses) == 1, (
-        f"plain chat must persist exactly one final_response, got {len(final_responses)}"
-    )
-    legacy_tool_events = [
-        event_type for event_type in event_types if event_type in TOOL_EVENT_TYPES
-    ]
-    assert not legacy_tool_events, (
-        f"plain chat invoked legacy tool transport events: {legacy_tool_events!r}"
-    )
-    v2_tool_execution_events = [
-        event_type
-        for event_type in event_types
-        if event_type in TOOL_EXECUTION_V2_EVENT_TYPES
-    ]
-    assert not v2_tool_execution_events, (
-        f"plain chat persisted v2 tool execution events: {v2_tool_execution_events!r}"
-    )
-    subagent_task_execution_events = [
-        event_type
-        for event_type in event_types
-        if event_type in SUBAGENT_TASK_EXECUTION_EVENT_TYPES
-    ]
-    assert not subagent_task_execution_events, (
-        "plain chat dispatched subagent task execution events: "
-        f"{subagent_task_execution_events!r}"
-    )
-    tool_activity = [
-        event.get("event_type")
-        for event in events
-        if event.get("activity_kind") == "tool"
-    ]
-    assert not tool_activity, f"plain chat projected tool activity: {tool_activity!r}"
-    subagent_activity = [
-        event.get("event_type")
-        for event in events
-        if event.get("activity_kind") == "subagent"
-    ]
-    assert not subagent_activity, (
-        f"plain chat projected subagent task activity: {subagent_activity!r}"
-    )
-    rich_events = [
-        event_type for event_type in event_types if event_type in RICH_EVENT_TYPES
-    ]
-    assert not rich_events, (
-        f"plain chat persisted rich-surface/effect events: {rich_events!r}"
-    )
-
-    # E1 deliberately seals every terminal run with an audit-only receipt pair:
-    # ``surface.created {kind: receipt}`` and ``receipt.emitted``. That is not a
-    # user-visible surface tab or receipt launcher (the UI assertion above proves
-    # both absent). Any other surface kind is an ordinary-chat regression.
-    receipt_surface_events = [
-        event
-        for event in events
-        if event.get("event_type") == "surface.created"
-        and event.get("payload", {}).get("kind") == "receipt"
-    ]
-    receipt_emitted_events = [
-        event for event in events if event.get("event_type") == "receipt.emitted"
-    ]
-    assert len(receipt_surface_events) <= 1, (
-        "plain chat persisted more than one terminal receipt surface: "
-        f"{len(receipt_surface_events)}"
-    )
-    assert len(receipt_emitted_events) <= 1, (
-        "plain chat persisted more than one terminal receipt emission: "
-        f"{len(receipt_emitted_events)}"
-    )
-    assert len(receipt_surface_events) == len(receipt_emitted_events), (
-        "plain chat terminal receipt is missing its matching surface/emission pair"
-    )
-    if receipt_surface_events:
-        receipt_surface_id = (
-            receipt_surface_events[0].get("payload", {}).get("surface_id")
-        )
-        receipt_emitted_id = (
-            receipt_emitted_events[0].get("payload", {}).get("surface_id")
-        )
-        assert receipt_surface_id == receipt_emitted_id, (
-            "plain chat terminal receipt pair has mismatched surface ids"
-        )
-
-    nonreceipt_surface_events = [
-        event.get("payload", {}).get("kind")
-        for event in events
-        if event.get("event_type") == "surface.created"
-        and event.get("payload", {}).get("kind") != "receipt"
-    ]
-    assert not nonreceipt_surface_events, (
-        f"plain chat persisted a non-receipt surface: {nonreceipt_surface_events!r}"
-    )
+    receipt_surface_id = _assert_plain_chat_event_grammar(events)
 
     surfaces = session.transport("GET", f"/v1/agent/runs/{run_id}/surfaces")
     assert surfaces.get("run_id") == run_id, (
@@ -432,20 +412,22 @@ def _assert_facade_plain_chat(session: DriverSession, run_id: str) -> None:
     )
     projected_surfaces = surfaces.get("surfaces")
     assert isinstance(projected_surfaces, list), "surfaces projection omitted its list"
-    receipt_surfaces = [
-        surface for surface in projected_surfaces if surface.get("kind") == "receipt"
-    ]
-    assert len(receipt_surfaces) <= 1, (
-        "plain chat facade projection has more than one terminal receipt surface: "
-        f"{len(receipt_surfaces)}"
+    expected_projected_count = 1 if receipt_surface_id is not None else 0
+    assert len(projected_surfaces) == expected_projected_count, (
+        "plain chat receipt persistence and projection disagree: "
+        f"expected {expected_projected_count} surface(s), got {len(projected_surfaces)}"
     )
-    nonreceipt_surfaces = [
-        surface for surface in projected_surfaces if surface.get("kind") != "receipt"
-    ]
-    assert not nonreceipt_surfaces, (
-        "plain chat facade projection has non-receipt surfaces: "
-        f"{nonreceipt_surfaces!r}"
-    )
+    if receipt_surface_id is not None:
+        projected_receipt = projected_surfaces[0]
+        assert isinstance(projected_receipt, dict), (
+            "plain chat projected receipt is not an object"
+        )
+        assert projected_receipt.get("kind") == "receipt", (
+            "plain chat projected a non-receipt surface"
+        )
+        assert projected_receipt.get("surface_id") == receipt_surface_id, (
+            "plain chat persisted and projected receipt surface ids differ"
+        )
 
 
 def main() -> int:
