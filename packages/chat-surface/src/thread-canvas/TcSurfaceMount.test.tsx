@@ -93,6 +93,24 @@ describe("TcSurfaceMount", () => {
     expect(fallback).toHaveTextContent(/no adapter registered for email/i);
   });
 
+  it("uses the honest record surface rather than an adapter error for a record tab", () => {
+    render(
+      <TcSurfaceMount
+        uri="record://linear/eng-142"
+        title="ENG-142"
+        transport={stubTransport}
+      />,
+    );
+
+    const record = screen.getByTestId("surface-placeholder");
+    expect(record).toHaveAttribute("data-record-state", "hydrating");
+    expect(record).toHaveTextContent("Connected record");
+    expect(
+      screen.getByTestId("surface-record-fallback-title"),
+    ).toHaveTextContent("ENG-142");
+    expect(record).not.toHaveTextContent(/no adapter registered/i);
+  });
+
   it("includes the scheme name in the fallback when URI is malformed", () => {
     render(<TcSurfaceMount uri="not-a-uri" transport={stubTransport} />);
     const fallback = screen.getByTestId("surface-placeholder");

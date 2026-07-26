@@ -49,6 +49,37 @@ function renderSurface(
 }
 
 describe("TcWorkspaceStageSurface", () => {
+  it("renders compact success status chips for staged and applied workspace work", () => {
+    const { rerender } = renderSurface();
+
+    const staged = screen.getByTestId("tc-workspace-stage-status");
+    expect(staged).toHaveClass("ui-badge--success");
+    expect(staged).toHaveStyle({
+      borderRadius: "5px",
+      fontSize: "var(--font-size-mono-8-5)",
+      padding: "2px 6px",
+    });
+    expect(screen.getByTestId("tc-workspace-stage")).toHaveStyle({
+      borderRadius: "10px",
+      boxShadow: "none",
+      padding: "0px",
+    });
+
+    rerender(
+      <TcWorkspaceStageSurface
+        stage={stage({ status: "applied" })}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onRestore={vi.fn()}
+        onEdit={vi.fn()}
+      />,
+    );
+
+    const applied = screen.getByTestId("tc-workspace-stage-applied");
+    expect(applied).toHaveClass("ui-badge--success");
+    expect(applied).toHaveTextContent("Applied");
+  });
+
   it.each<readonly [WorkspaceStageOperationKind, string]>([
     ["create", "create"],
     ["replace", "replace"],
