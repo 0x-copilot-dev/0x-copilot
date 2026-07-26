@@ -8,10 +8,17 @@ byte-identical.
 
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Callable
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
+from agent_runtime.rollout import RolloutCapability
+from agent_runtime.rollout_admission import (
+    E2RolloutAdmission,
+    PersistedRunCohortFactsProvider,
+)
+from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.file._paths import FileStoreLayout
 from runtime_adapters.file.object_store import FileObjectStore
 from runtime_worker.capability_tool_wiring import CapabilityToolWiring
@@ -54,6 +61,8 @@ def _wiring(
     file_store=None,
     external_tools=None,
     sandbox_tool_factory=None,
+    rollout_admission: E2RolloutAdmission | None = None,
+    rollout_facts: PersistedRunCohortFactsProvider | None = None,
 ) -> CapabilityToolWiring:
     return CapabilityToolWiring(
         runtime_context=_context(),
@@ -61,6 +70,56 @@ def _wiring(
         env=env,
         external_tools_by_name=external_tools,
         sandbox_tool_factory=sandbox_tool_factory,
+        rollout_admission=rollout_admission,
+        rollout_facts=rollout_facts,
+    )
+
+
+_SANDBOX_CAPABILITIES = (
+    RolloutCapability.OPERATION_GATEWAY,
+    RolloutCapability.EFFECT_STAGER,
+    RolloutCapability.EFFECT_COMMIT,
+    RolloutCapability.SANDBOX_ADAPTER,
+)
+
+
+def _sandbox_rollout(
+    *, user_id: str = "user_1", kill_switch: bool = False
+) -> tuple[E2RolloutAdmission, PersistedRunCohortFactsProvider]:
+    """Return an immutable, complete sandbox rollout snapshot for this run."""
+
+    environment = {
+        **_SANDBOX_ON,
+        "SURFACES_V2": "true",
+        "ARTIFACT_EFFECTS_V2": "true",
+        "ARTIFACT_DRAFTS_V2": "true",
+        "OPERATION_GATEWAY_MODE": "enforce",
+        "EFFECT_STAGER_MODE": "enforce",
+        "EFFECT_COMMIT_MODE": "enforce",
+        "SANDBOX_ADAPTER_MODE": "enforce",
+        "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+            [
+                {
+                    "capability": capability.value,
+                    "org_id": "org_1",
+                    "user_id": "user_1",
+                }
+                for capability in _SANDBOX_CAPABILITIES
+            ]
+        ),
+    }
+    if kill_switch:
+        environment["E2_ROLLOUT_KILL_SWITCHES_JSON"] = json.dumps(
+            [RolloutCapability.SANDBOX_ADAPTER.value]
+        )
+    settings = RuntimeSettings.load(environ=environment)
+    return (
+        E2RolloutAdmission(
+            resolution=settings.execution.rollout,
+            cohorts=settings.execution.rollout_cohorts,
+            kill_switches=settings.execution.rollout_kill_switches,
+        ),
+        PersistedRunCohortFactsProvider(org_id="org_1", user_id=user_id),
     )
 
 
@@ -68,8 +127,10 @@ class _SandboxToolFactory:
     def __init__(self, tool: object | None) -> None:
         self.tool = tool
         self.identity_provider: Callable[[], object] | None = None
+        self.build_calls = 0
 
     def build_tool(self, *, identity_provider: Callable[[], object]) -> object | None:
+        self.build_calls += 1
         self.identity_provider = identity_provider
         return self.tool
 
@@ -149,17 +210,51 @@ class TestSandboxGating:
     def test_uses_only_an_injected_worker_owned_gateway_factory(self) -> None:
         tool = object()
         factory = _SandboxToolFactory(tool)
+        admission, facts = _sandbox_rollout()
 
         assert (
             _wiring(
                 _SANDBOX_ON,
                 sandbox_tool_factory=factory,
+                rollout_admission=admission,
+                rollout_facts=facts,
             ).sandbox_execute_tool()
             is tool
         )
+        assert factory.build_calls == 1
         assert factory.identity_provider is not None
         identity = factory.identity_provider()
         assert getattr(identity, "run_id", None) == "run_1"
+
+    def test_nonmatching_cohort_never_constructs_the_worker_owned_tool(self) -> None:
+        factory = _SandboxToolFactory(object())
+        admission, facts = _sandbox_rollout(user_id="not_enrolled")
+
+        assert (
+            _wiring(
+                _SANDBOX_ON,
+                sandbox_tool_factory=factory,
+                rollout_admission=admission,
+                rollout_facts=facts,
+            ).sandbox_execute_tool()
+            is None
+        )
+        assert factory.build_calls == 0
+
+    def test_kill_switch_never_constructs_an_already_composed_worker_tool(self) -> None:
+        factory = _SandboxToolFactory(object())
+        admission, facts = _sandbox_rollout(kill_switch=True)
+
+        assert (
+            _wiring(
+                _SANDBOX_ON,
+                sandbox_tool_factory=factory,
+                rollout_admission=admission,
+                rollout_facts=facts,
+            ).sandbox_execute_tool()
+            is None
+        )
+        assert factory.build_calls == 0
 
     def test_desktop_config_without_a_complete_worker_bundle_is_absent(self) -> None:
         # A flag/provider-shaped environment is never permission to restore the

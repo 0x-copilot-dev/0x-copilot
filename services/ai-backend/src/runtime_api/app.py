@@ -67,6 +67,8 @@ from agent_runtime.observability.http_logging import (
     RequestContextMiddleware,
 )
 from agent_runtime.observability.otel import TelemetryBootstrap
+from agent_runtime.rollout import RolloutCapability, RolloutMode
+from agent_runtime.rollout_admission import E2RolloutAdmission
 from agent_runtime.settings import RuntimeSettings
 from agent_runtime.surfaces_v2.lifecycle_reference_snapshots import (
     LifecycleReferenceConformanceGate,
@@ -248,6 +250,11 @@ class RuntimeApiAppFactory:
         # API does not own the worker's descriptor/executor/attestation graph.
         # Static invalid combinations have already failed RuntimeSettings.load.
         app.state.e2_rollout = _settings.execution.rollout
+        app.state.e2_rollout_admission = E2RolloutAdmission(
+            resolution=_settings.execution.rollout,
+            cohorts=_settings.execution.rollout_cohorts,
+            kill_switches=_settings.execution.rollout_kill_switches,
+        )
         _STRUCTURED_LOGGER.info(
             "e2_rollout_resolved",
             metadata=_settings.execution.rollout.safe_diagnostics(process="api"),
@@ -336,7 +343,10 @@ class RuntimeApiAppFactory:
         # approval still enqueues a body-free A5 command only.
         workspace_approval_enabled = (
             _settings.execution.surfaces_v2
-            and _settings.execution.workspace_effect_mode.value == "enforce"
+            and _settings.execution.rollout.modes.mode_for(
+                RolloutCapability.WORKSPACE_COMMIT
+            )
+            is RolloutMode.ENFORCE
         )
         # F-006 / A5 — MCP stages created by the universal gateway or the
         # Artifact-draft cohort use the same owner-scoped decision service as
@@ -901,6 +911,7 @@ class RuntimeApiAppFactory:
         from agent_runtime.api.events import RuntimeEventProducer
         from agent_runtime.api.stage_commit_queue import RuntimeStageCommitQueue
         from agent_runtime.api.stage_ledger import RuntimeStageLedger
+        from agent_runtime.surfaces_v2.stage_rollout import StagedWriteRolloutGate
         from agent_runtime.surfaces_v2.staging import WriteStager
 
         ports = getattr(app.state, "runtime_ports", None)
@@ -926,6 +937,9 @@ class RuntimeApiAppFactory:
         return WriteStager(
             draft_store=ports.draft_store,
             ledger=ledger,
+            rollout_gate=StagedWriteRolloutGate(
+                admission=app.state.e2_rollout_admission
+            ),
             commit_queue=commit_queue,
         )
 
@@ -966,6 +980,7 @@ class RuntimeApiAppFactory:
                 event_store=ports.event_store,
             ),
             queue=ports.queue,
+            rollout_admission=app.state.e2_rollout_admission,
         )
 
     @classmethod
@@ -990,6 +1005,7 @@ class RuntimeApiAppFactory:
             blobs=getattr(ports, "artifact_blob_store", None),
             references=getattr(ports, "artifact_reference_provider", None),
             decisions=getattr(app.state, "effect_stage_decision_service", None),
+            rollout_admission=app.state.e2_rollout_admission,
         )
 
     @classmethod

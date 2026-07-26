@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from agent_runtime.api.ports import RuntimeQueuePort
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
+from agent_runtime.rollout import RolloutCapability
 from runtime_api.schemas import RuntimeStageCommitCommand
 
 
@@ -38,6 +39,7 @@ class RuntimeStageCommitQueue:
         rev: int,
         decision_seq: int,
         row_keys: tuple[str, ...] | None = None,
+        governed_capabilities: tuple[RolloutCapability, ...] | None = None,
     ) -> None:
         """Enqueue one durable commit command for an approved ``(stage_id, rev)``.
 
@@ -55,6 +57,7 @@ class RuntimeStageCommitQueue:
                 rev=rev,
                 decision_seq=decision_seq,
                 row_keys=row_keys,
+                governed_capabilities=governed_capabilities,
                 trace_propagation=QueueTracePropagator.inject(),
             )
         )

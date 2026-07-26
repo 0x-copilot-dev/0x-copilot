@@ -23,6 +23,7 @@ from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
 from runtime_api.schemas import AgentRunStatus, RunRecord
+from tests.unit.rollout_testkit import legacy_staged_write_gate
 
 _ORG = "acme"
 _USER = "sarah"
@@ -104,6 +105,7 @@ async def _stage_rowset(store, ports, holds) -> str:  # noqa: ANN001
     stager = WriteStager(
         draft_store=ports.draft_store,
         ledger=RuntimeStageLedger(event_producer=producer),
+        rollout_gate=legacy_staged_write_gate(),
     )
     rows = tuple(
         StagedRow(

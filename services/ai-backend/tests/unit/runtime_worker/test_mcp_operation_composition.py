@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 
 import pytest
 
@@ -42,11 +43,30 @@ from runtime_worker.workspace_effect_storage import (
 )
 
 
-def _settings() -> RuntimeSettings:
+def _settings(*, rollout_user: str = "user_d1") -> RuntimeSettings:
+    capabilities = (
+        "operation_gateway",
+        "effect_stager",
+        "effect_commit",
+        "mcp_gateway",
+    )
     return RuntimeSettings.load(
         environ={
             "SURFACES_V2": "true",
             "OPERATION_GATEWAY_MODE": OperationGatewayMode.ENFORCE.value,
+            "EFFECT_STAGER_MODE": "enforce",
+            "EFFECT_COMMIT_MODE": "enforce",
+            "MCP_GATEWAY_MODE": "enforce",
+            "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                [
+                    {
+                        "capability": capability,
+                        "org_id": "org_d1",
+                        "user_id": rollout_user,
+                    }
+                    for capability in capabilities
+                ]
+            ),
         }
     )
 
@@ -100,6 +120,25 @@ async def test_complete_run_composition_binds_only_durable_gateway_services() ->
     assert isinstance(services.result_store, RuntimeMcpOperationResultStore)
     assert services.stage_scope.run_id == "run_d1"
     assert services.stage_scope.owner_ref == "principal://users/user_d1"
+
+
+async def test_nonmatching_e2_cohort_cannot_expose_the_model_facing_mcp_gateway() -> (
+    None
+):
+    """A model run cannot reach the stage/queue seam by skipping the UI gate."""
+
+    store = InMemoryRuntimeApiStore()
+    coordinator = InMemoryArtifactPublicationCoordinator()
+    handler = RuntimeRunHandler(
+        persistence=store,
+        event_store=store,
+        settings=_settings(rollout_user="user_not_enrolled"),
+        queue=store,
+        artifact_blob_store=InMemoryArtifactBlobStore(coordinator),
+        artifact_reference_store=InMemoryArtifactReferenceStore(coordinator),
+    )
+
+    assert handler._build_mcp_operation_gateway_services(_run()) is None
 
 
 def test_worker_composes_the_only_effect_commit_executor_when_d1_is_ready() -> None:

@@ -36,6 +36,10 @@ from agent_runtime.rollout_control import (
     RolloutCohortConfigurationError,
     RolloutCohortPolicy,
 )
+from agent_runtime.rollout_admission import (
+    E2RolloutKillSwitches,
+    RolloutKillSwitchConfigurationError,
+)
 
 
 class _EnvFields:
@@ -89,6 +93,9 @@ class _EnvFields:
     # JSON array of exact-match cohort rules, read only by RuntimeSettings;
     # request/runtime APIs never accept or reload it.  Absent stays empty.
     E2_ROLLOUT_COHORTS_JSON = "E2_ROLLOUT_COHORTS_JSON"
+    # Targeted production rollback controls. They resolve only into the
+    # immutable settings snapshot; requests and model tools cannot mutate it.
+    E2_ROLLOUT_KILL_SWITCHES_JSON = "E2_ROLLOUT_KILL_SWITCHES_JSON"
     # Trusted legacy desktop/sandbox controls are inputs to the E2 bridge.
     # They are not a new coarse rollout switch and are never written back from
     # E2 mode resolution.
@@ -233,6 +240,12 @@ class RuntimeExecutionSettings(RuntimeContract):
     # D6 cohorts resolve alongside the E2 mode snapshot.  They remain empty
     # unless deployment injects E2_ROLLOUT_COHORTS_JSON at process startup.
     rollout_cohorts: RolloutCohortPolicy = Field(default_factory=RolloutCohortPolicy)
+    # E2 production rollback is a closed, targeted capability list resolved
+    # with the mode/cohort snapshots. It never accepts request data and cannot
+    # become a hidden global feature switch.
+    rollout_kill_switches: E2RolloutKillSwitches = Field(
+        default_factory=E2RolloutKillSwitches
+    )
 
     @model_validator(mode="after")
     def _artifact_drafts_require_repository(self) -> "RuntimeExecutionSettings":
@@ -507,6 +520,10 @@ class RuntimeSettings(BaseSettings):
             rollout_cohorts = RolloutCohortPolicy.from_startup_environment(v)
         except RolloutCohortConfigurationError as exc:
             raise RolloutConfigurationError(str(exc)) from exc
+        try:
+            rollout_kill_switches = E2RolloutKillSwitches.from_startup_environment(v)
+        except RolloutKillSwitchConfigurationError as exc:
+            raise RolloutConfigurationError(str(exc)) from exc
 
         return cls(
             environment=RuntimeEnvironment(
@@ -557,6 +574,7 @@ class RuntimeSettings(BaseSettings):
                 workspace_effect_mode=workspace_effect_mode,
                 rollout=rollout,
                 rollout_cohorts=rollout_cohorts,
+                rollout_kill_switches=rollout_kill_switches,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),

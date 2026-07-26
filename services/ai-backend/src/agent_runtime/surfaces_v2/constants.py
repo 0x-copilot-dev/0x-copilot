@@ -49,6 +49,11 @@ class Keys:
         # ``authorship_spans`` are the additive keys noted under §5).
         STAGE_ID = "stage_id"
         TARGET = "target"
+        # E2 durable governed-lane mark. It appears only on a newly explicit
+        # rollout stage; absent marks pre-E2 compatibility history, while an
+        # invalid present mark is denied by the fold/worker.
+        ROLLOUT = "rollout"
+        CAPABILITIES = "capabilities"
         PROPOSAL_REF = "proposal_ref"
         REV = "rev"
         AUTHOR = "author"

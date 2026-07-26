@@ -56,6 +56,7 @@ class RuntimeEffectCommitOutbox:
                 proposal_digest=command.proposal_digest,
                 target_digest=command.target_digest,
                 idempotency_key=command.idempotency_key,
+                governed_capabilities=command.governed_capabilities,
                 trace_propagation=QueueTracePropagator.inject(),
             )
         )

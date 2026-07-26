@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from fastapi.testclient import TestClient
 
@@ -18,6 +19,7 @@ from agent_runtime.capabilities.backends.artifact_draft_backend import (
 )
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
+from agent_runtime.rollout import RolloutCapability
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -37,17 +39,43 @@ class _Authenticated:
         return CapabilityAuthCheck(outcome=CapabilityAuthOutcome.AUTHENTICATED)
 
 
-def _settings(*, artifact_drafts_v2: bool) -> RuntimeSettings:
-    return RuntimeSettings.load(
-        environ={
-            "OPENAI_API_KEY": "sk-test",
-            "RUNTIME_DEFAULT_PROVIDER": "openai",
-            "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-            "SURFACES_V2": "true",
-            "ARTIFACT_EFFECTS_V2": "true",
-            "ARTIFACT_DRAFTS_V2": "true" if artifact_drafts_v2 else "false",
-        }
-    )
+def _settings(
+    *, artifact_drafts_v2: bool, enrolled_user_id: str | None = None
+) -> RuntimeSettings:
+    environment = {
+        "OPENAI_API_KEY": "sk-test",
+        "RUNTIME_DEFAULT_PROVIDER": "openai",
+        "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
+        "SURFACES_V2": "true",
+        "ARTIFACT_EFFECTS_V2": "true",
+        "ARTIFACT_DRAFTS_V2": "true" if artifact_drafts_v2 else "false",
+    }
+    if enrolled_user_id is not None:
+        capabilities = (
+            RolloutCapability.OPERATION_GATEWAY,
+            RolloutCapability.EFFECT_STAGER,
+            RolloutCapability.EFFECT_COMMIT,
+            RolloutCapability.MCP_GATEWAY,
+        )
+        environment.update(
+            {
+                "OPERATION_GATEWAY_MODE": "enforce",
+                "EFFECT_STAGER_MODE": "enforce",
+                "EFFECT_COMMIT_MODE": "enforce",
+                "MCP_GATEWAY_MODE": "enforce",
+                "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                    [
+                        {
+                            "capability": capability.value,
+                            "org_id": _ORG,
+                            "user_id": enrolled_user_id,
+                        }
+                        for capability in capabilities
+                    ]
+                ),
+            }
+        )
+    return RuntimeSettings.load(environ=environment)
 
 
 def _run() -> RunRecord:
@@ -90,7 +118,7 @@ def _stable_error(payload: dict[str, object]) -> dict[str, object]:
 
 
 class _Bundle:
-    def __init__(self) -> None:
+    def __init__(self, *, settings: RuntimeSettings | None = None) -> None:
         self.store = InMemoryRuntimeApiStore()
         self.store.runs[_RUN] = _run()
         self.store.events_by_run[_RUN] = []
@@ -99,7 +127,7 @@ class _Bundle:
         )
         self.app = RuntimeApiAppFactory.create_app(
             ports=self.ports,
-            settings=_settings(artifact_drafts_v2=True),
+            settings=settings or _settings(artifact_drafts_v2=True),
             configure_logging_on_create=False,
             configure_telemetry_on_create=False,
         )
@@ -185,6 +213,31 @@ def _decision_body(event: object) -> dict[str, object]:
 
 
 class TestEffectStageDecisionRoute:
+    def test_nonmatching_e2_cohort_cannot_append_a_decision_or_enqueue_a5(
+        self,
+    ) -> None:
+        bundle = _Bundle(
+            settings=_settings(
+                artifact_drafts_v2=True,
+                enrolled_user_id="other_rollout_user",
+            )
+        )
+        staged = bundle.stage_artifact_draft()
+        stage_id = str(staged["stage_id"])
+        body = _decision_body(bundle.store.events_by_run[_RUN][-1])
+
+        response = bundle.client.post(
+            f"/v1/agent/effect-stages/{stage_id}/decision?run_id={_RUN}",
+            headers=_headers(),
+            json=body,
+        )
+
+        assert response.status_code == 404
+        assert [
+            event.event_type.value for event in bundle.store.events_by_run[_RUN]
+        ] == ["effect.staged"]
+        assert bundle.store.effect_commit_commands == []
+
     def test_staged_artifact_draft_is_approveable_and_enqueues_exactly_one_a5_command(
         self,
     ) -> None:

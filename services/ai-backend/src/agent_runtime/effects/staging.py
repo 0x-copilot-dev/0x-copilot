@@ -36,6 +36,7 @@ from agent_runtime.effects.errors import (
 )
 from agent_runtime.effects.fold import EffectStageFold
 from agent_runtime.effects.policy import EffectStagePolicyResolver
+from agent_runtime.rollout import RolloutCapability
 from agent_runtime.effects.ports import (
     EffectClockPort,
     EffectCommitOutboxPort,
@@ -234,6 +235,7 @@ class EffectStager:
         target_digest: str,
         actor: EffectActorIdentity,
         idempotency_key: str,
+        governed_capabilities: tuple[RolloutCapability, ...] | None = None,
     ) -> EffectStageState:
         """Record a digest-pinned decision and enqueue only an approved command."""
 
@@ -319,6 +321,7 @@ class EffectStager:
                     proposal_digest=proposal_digest,
                     target_digest=target_digest,
                     idempotency_key=idempotency_key,
+                    governed_capabilities=governed_capabilities,
                 )
             )
         return await self.get_state(scope=scope, stage_id=stage_id)

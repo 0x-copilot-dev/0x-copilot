@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -21,6 +22,7 @@ from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.rollout import RolloutCapability
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
 from agent_runtime.surfaces_v2.entities import EffectTarget
 from agent_runtime.surfaces_v2.ledger_ids import LedgerIdCodec
@@ -105,21 +107,52 @@ async def _workspace_material(
     return f"workspace-material://sha256/{proposal_digest}", proposal_digest
 
 
-def _settings(*, enabled: bool) -> RuntimeSettings:
+def _settings(
+    *,
+    enabled: bool,
+    cohort_user_id: str | None = _USER,
+    effect_commit_killed: bool = False,
+) -> RuntimeSettings:
     environ = {
         "OPENAI_API_KEY": "sk-test",
         "RUNTIME_DEFAULT_PROVIDER": "openai",
         "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
     }
     if enabled:
+        workspace_capabilities = (
+            RolloutCapability.OPERATION_GATEWAY,
+            RolloutCapability.EFFECT_STAGER,
+            RolloutCapability.EFFECT_COMMIT,
+            RolloutCapability.WORKSPACE_OVERLAY,
+            RolloutCapability.WORKSPACE_COMMIT,
+        )
         environ.update(
             {
                 "SURFACES_V2": "true",
                 "ARTIFACT_EFFECTS_V2": "true",
                 "OPERATION_GATEWAY_MODE": "enforce",
                 "WORKSPACE_EFFECT_MODE": "enforce",
+                "EFFECT_STAGER_MODE": "enforce",
+                "EFFECT_COMMIT_MODE": "enforce",
+                "WORKSPACE_OVERLAY_MODE": "enforce",
+                "WORKSPACE_COMMIT_MODE": "enforce",
             }
         )
+        if cohort_user_id is not None:
+            environ["E2_ROLLOUT_COHORTS_JSON"] = json.dumps(
+                [
+                    {
+                        "capability": capability.value,
+                        "org_id": _ORG,
+                        "user_id": cohort_user_id,
+                    }
+                    for capability in workspace_capabilities
+                ]
+            )
+        if effect_commit_killed:
+            environ["E2_ROLLOUT_KILL_SWITCHES_JSON"] = json.dumps(
+                [RolloutCapability.EFFECT_COMMIT.value]
+            )
     return RuntimeSettings.load(environ=environ)
 
 
@@ -191,13 +224,23 @@ class _Bundle:
         )
 
 
-def _bundle(*, enabled: bool = True) -> _Bundle:
+def _bundle(
+    *,
+    enabled: bool = True,
+    cohort_user_id: str | None = _USER,
+    effect_commit_killed: bool = False,
+) -> _Bundle:
     store = InMemoryRuntimeApiStore()
     store.runs[_RUN] = _run(run_id=_RUN, user_id=_USER)
     store.events_by_run.setdefault(_RUN, [])
     ports = RuntimeAdapterFactory.from_store(store, artifact_effects_v2=True)
     app = RuntimeApiAppFactory.create_app(
-        ports=ports, settings=_settings(enabled=enabled)
+        ports=ports,
+        settings=_settings(
+            enabled=enabled,
+            cohort_user_id=cohort_user_id,
+            effect_commit_killed=effect_commit_killed,
+        ),
     )
     return _Bundle(client=TestClient(app), store=store, ports=ports)
 
@@ -389,6 +432,41 @@ class TestWorkspaceApprovalDecisionReceipt:
         assert response.status_code == 200, response.text
         assert response.json()["decision"] == "reject"
         assert response.json()["status"] == "rejected"
+        assert bundle.store.effect_commit_commands == []
+
+    def test_cohort_denial_blocks_a_forged_workspace_approval_before_queueing(
+        self,
+    ) -> None:
+        # The stage is deliberately seeded through the internal ledger helper,
+        # not the UI.  A non-enrolled user must still be unable to append a
+        # decision event or create an unsafe worker command through the public
+        # route.
+        bundle = _bundle(cohort_user_id="user_someone_else")
+        stage = bundle.stage_workspace()
+
+        response = bundle.client.post(
+            _url(stage.stage_id), headers=_headers(), json=_body(stage)
+        )
+
+        assert response.status_code == 404
+        assert _event_types(bundle.store) == ["effect.staged"]
+        assert bundle.store.effect_commit_commands == []
+
+    def test_targeted_rollback_blocks_an_existing_workspace_stage_before_queueing(
+        self,
+    ) -> None:
+        # This models a stage created before an operator reloads the targeted
+        # E2 rollback. The request path must halt the effect before it can add
+        # approval evidence or enqueue A5 work; hiding a control is insufficient.
+        bundle = _bundle(effect_commit_killed=True)
+        stage = bundle.stage_workspace()
+
+        response = bundle.client.post(
+            _url(stage.stage_id), headers=_headers(), json=_body(stage)
+        )
+
+        assert response.status_code == 404
+        assert _event_types(bundle.store) == ["effect.staged"]
         assert bundle.store.effect_commit_commands == []
 
     def test_identical_retry_replays_the_persisted_receipt_once(self) -> None:

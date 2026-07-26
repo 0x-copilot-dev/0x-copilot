@@ -32,6 +32,11 @@ from collections.abc import Callable, Mapping
 from typing import Protocol, runtime_checkable
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.rollout import RolloutCapability
+from agent_runtime.rollout_admission import (
+    E2RolloutAdmission,
+    PersistedRunCohortFactsProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,12 +128,19 @@ class CapabilityToolWiring:
         env: Mapping[str, str] | None = None,
         external_tools_by_name: Mapping[str, object] | None = None,
         sandbox_tool_factory: SandboxToolFactoryPort | None = None,
+        rollout_admission: E2RolloutAdmission | None = None,
+        rollout_facts: PersistedRunCohortFactsProvider | None = None,
     ) -> None:
         self._runtime_context = runtime_context
         self._file_store = file_store
         self._env = env
         self._external_tools_by_name = dict(external_tools_by_name or {})
         self._sandbox_tool_factory = sandbox_tool_factory
+        # The worker supplies both values for every production run. Missing
+        # admission facts fail closed for the only E2 capability this builder
+        # exposes (the remote sandbox); there is no direct activation path.
+        self._rollout_admission = rollout_admission
+        self._rollout_facts = rollout_facts
 
     # -- Monty code mode ---------------------------------------------------
 
@@ -233,6 +245,8 @@ class CapabilityToolWiring:
 
         if not self._is_desktop():
             return None
+        if not self._sandbox_admitted():
+            return None
         if self._sandbox_tool_factory is None:
             return None
         return self._sandbox_tool_factory.build_tool(
@@ -260,6 +274,16 @@ class CapabilityToolWiring:
 
     def _is_desktop(self) -> bool:
         return self._env_dict().get(_DEPLOYMENT_PROFILE_ENV, "") == _DESKTOP_PROFILE
+
+    def _sandbox_admitted(self) -> bool:
+        """Resolve the E2 sandbox lane before exposing a model tool."""
+
+        if self._rollout_admission is None or self._rollout_facts is None:
+            return False
+        return self._rollout_admission.permits_all(
+            capabilities=(RolloutCapability.SANDBOX_ADAPTER,),
+            facts_provider=self._rollout_facts,
+        )
 
     def _env_dict(self) -> dict[str, str]:
         if self._env is not None:

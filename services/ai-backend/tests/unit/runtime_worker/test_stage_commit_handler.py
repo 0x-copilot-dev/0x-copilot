@@ -30,6 +30,7 @@ from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
+from tests.unit.rollout_testkit import legacy_staged_write_gate
 
 pytestmark = pytest.mark.anyio
 
@@ -70,6 +71,7 @@ class Harness:
         self.stager = WriteStager(
             draft_store=self.drafts,
             ledger=RuntimeStageLedger(event_producer=producer),
+            rollout_gate=legacy_staged_write_gate(),
             commit_queue=RuntimeStageCommitQueue(queue=self.store),
         )
         self.run = RunRecord(

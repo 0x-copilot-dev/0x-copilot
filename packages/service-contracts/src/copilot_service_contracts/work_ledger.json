@@ -326,7 +326,7 @@
     },
     "write.staged": {
       "required": ["v", "stage_id", "surface_id", "target", "proposal_ref"],
-      "optional": ["rows", "agent_holds"]
+      "optional": ["rows", "agent_holds", "rollout"]
     },
     "revision.added": {
       "required": ["v", "stage_id", "rev", "author", "diff_ref"],

@@ -22,9 +22,16 @@ from agent_runtime.effects.contracts import (
     EffectStageScope,
     EffectStageState,
 )
-from agent_runtime.effects.errors import EffectStageNotFound
+from agent_runtime.effects.errors import EffectStageForbidden, EffectStageNotFound
 from agent_runtime.effects.executor import EffectExecutionScope
+from agent_runtime.effects.rollout import effect_execution_capabilities
 from agent_runtime.effects.staging import EffectStager
+from agent_runtime.rollout_admission import (
+    E2GovernedLane,
+    E2RolloutAdmission,
+    E2RolloutAdmissionDenied,
+    PersistedRunCohortFactsProvider,
+)
 from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
@@ -47,6 +54,7 @@ class EffectStageDecisionService:
     persistence: PersistencePort
     event_producer: RuntimeEventProducer
     queue: RuntimeQueuePort
+    rollout_admission: E2RolloutAdmission
 
     async def current_stage(
         self,
@@ -98,6 +106,7 @@ class EffectStageDecisionService:
             stage_id=stage_id,
             allowed_executors=allowed_executors,
         )
+        governed_lane = self._admit_rollout_lane(run=run, executor=_current.executor)
         owner_ref = f"principal://users/{run.user_id}"
         return await stager.decide(
             scope=scope,
@@ -118,6 +127,9 @@ class EffectStageDecisionService:
                 decision=decision,
                 proposal_digest=proposal_digest,
                 target_digest=target_digest,
+            ),
+            governed_capabilities=(
+                governed_lane.capabilities if governed_lane is not None else None
             ),
         )
 
@@ -167,6 +179,30 @@ class EffectStageDecisionService:
             # the generic MCP route must never mint a workspace decision.
             raise EffectStageNotFound()
         return run, scope, stager, state
+
+    def _admit_rollout_lane(
+        self,
+        *,
+        run,
+        executor: EffectExecutorKind,  # noqa: ANN001
+    ) -> E2GovernedLane | None:
+        """Deny the decision/enqueue path before it mutates the effect ledger.
+
+        Construction requires this immutable admission snapshot, including for
+        direct domain harnesses.  There is no unchecked decision/enqueue
+        variant to fall back to when an E2 lane becomes explicit.
+        """
+
+        try:
+            return self.rollout_admission.begin_governed_lane(
+                capabilities=effect_execution_capabilities(executor),
+                facts_provider=PersistedRunCohortFactsProvider(
+                    org_id=run.org_id,
+                    user_id=run.user_id,
+                ),
+            )
+        except (E2RolloutAdmissionDenied, ValueError) as exc:
+            raise EffectStageForbidden() from exc
 
     @staticmethod
     def _decision_key(

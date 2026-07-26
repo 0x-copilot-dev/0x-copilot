@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Sequence
+import json
 
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.workspace.contracts import (
@@ -44,11 +45,34 @@ from runtime_worker.workspace_effect_storage import (
 
 
 def _settings() -> RuntimeSettings:
+    capabilities = (
+        "operation_gateway",
+        "effect_stager",
+        "effect_commit",
+        "mcp_gateway",
+        "workspace_overlay",
+        "workspace_commit",
+    )
     return RuntimeSettings.load(
         environ={
             "SURFACES_V2": "true",
             "OPERATION_GATEWAY_MODE": OperationGatewayMode.ENFORCE.value,
             "WORKSPACE_EFFECT_MODE": OperationGatewayMode.ENFORCE.value,
+            "EFFECT_STAGER_MODE": "enforce",
+            "EFFECT_COMMIT_MODE": "enforce",
+            "MCP_GATEWAY_MODE": "enforce",
+            "WORKSPACE_OVERLAY_MODE": "enforce",
+            "WORKSPACE_COMMIT_MODE": "enforce",
+            "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                [
+                    {
+                        "capability": capability,
+                        "org_id": "org-c3",
+                        "user_id": "user-c3",
+                    }
+                    for capability in capabilities
+                ]
+            ),
         }
     )
 

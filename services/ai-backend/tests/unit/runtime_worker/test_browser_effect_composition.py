@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import json
 
 from agent_runtime.capabilities.browser.contracts import (
     BrowserActionKind,
@@ -40,10 +41,29 @@ _OPERATION_ID = "op_00000000-0000-4000-8000-000000000001"
 
 
 def _settings() -> RuntimeSettings:
+    capabilities = (
+        "operation_gateway",
+        "effect_stager",
+        "effect_commit",
+        "mcp_gateway",
+    )
     return RuntimeSettings.load(
         environ={
             "SURFACES_V2": "true",
             "OPERATION_GATEWAY_MODE": "enforce",
+            "EFFECT_STAGER_MODE": "enforce",
+            "EFFECT_COMMIT_MODE": "enforce",
+            "MCP_GATEWAY_MODE": "enforce",
+            "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                [
+                    {
+                        "capability": capability,
+                        "org_id": "org-browser",
+                        "user_id": "user-browser",
+                    }
+                    for capability in capabilities
+                ]
+            ),
         }
     )
 

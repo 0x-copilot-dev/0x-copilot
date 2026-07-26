@@ -30,6 +30,7 @@ from agent_runtime.surfaces_v2.staging import WriteStager
 from runtime_adapters.factory import RuntimeAdapterFactory
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.app import RuntimeApiAppFactory
+from tests.unit.rollout_testkit import legacy_staged_write_gate
 from runtime_api.schemas import AgentRunStatus, RunRecord
 
 _ORG = "acme"
@@ -144,7 +145,9 @@ async def _stage_a_draft(store: InMemoryRuntimeApiStore, ports) -> tuple[str, st
     )
     producer = RuntimeEventProducer(persistence=store, event_store=store)
     stager = WriteStager(
-        draft_store=drafts, ledger=RuntimeStageLedger(event_producer=producer)
+        draft_store=drafts,
+        ledger=RuntimeStageLedger(event_producer=producer),
+        rollout_gate=legacy_staged_write_gate(),
     )
     state = await stager.stage(
         run=store.runs[_RUN],
