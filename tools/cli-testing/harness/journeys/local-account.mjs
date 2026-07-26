@@ -16,7 +16,7 @@
 //
 // Hermetic: runs in its own userData subdir (COPILOT_DESKTOP_USER_DATA_SUBDIR)
 // so it never touches a real install's data. Prereqs: the staged runtime
-// (node tools/desktop-runtime/stage.mjs) and `npm install` in tools/cli-testing.
+// (node tools/desktop-runtime/stage.mjs) and `npm install` at the repo root.
 //
 //   COPILOT_HOME=<dir containing runtime/<platform>-<arch>> \
 //     node harness/journeys/local-account.mjs

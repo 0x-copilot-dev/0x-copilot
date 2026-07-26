@@ -25,12 +25,12 @@ export const DESKTOP_BROWSER_SERVER_NAME = "desktop_browser";
 export const BROWSER_BROKER_AUDIENCE = "desktop-browser-broker";
 
 /**
- * Browser build shipped with the pinned root Playwright 1.61.1 dependency.
+ * Browser build shipped with the pinned root Playwright 1.62.0 dependency.
  * The worker independently reports the launched binary's version and Electron
  * main refuses to expose the broker when it does not match this value.
  */
-export const PINNED_CHROMIUM_VERSION = "149.0.7827.55";
-export const PINNED_PLAYWRIGHT_VERSION = "1.61.1";
+export const PINNED_CHROMIUM_VERSION = "151.0.7922.34";
+export const PINNED_PLAYWRIGHT_VERSION = "1.62.0";
 
 export const BrowserProfileMode = {
   Ephemeral: "ephemeral",

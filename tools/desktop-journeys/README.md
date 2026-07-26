@@ -61,7 +61,7 @@ and the desktop bundle at `apps/desktop/out/`. The journeys point `COPILOT_HOME`
 ### 2. Playwright (once)
 
 ```bash
-npm install --prefix tools/cli-testing     # playwright + viem, used by the driver
+npm install     # root workspace owns the Playwright version used by the driver
 ```
 
 ### 3. Provider keys (from `.env`, never hardcoded)

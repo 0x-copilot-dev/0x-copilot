@@ -3,17 +3,21 @@
   "private": true,
   "workspaces": [
     "apps/*",
-    "packages/*"
+    "packages/*",
+    "tools/cli",
+    "tools/cli-testing"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run check:playwright-version && npm run test --workspaces --if-present",
+    "check:playwright-version": "node tools/check-playwright-version.mjs"
   },
   "devDependencies": {
-    "playwright": "1.61.1"
+    "playwright": "1.62.0"
   },
   "overrides": {
+    "playwright": "$playwright",
     "ws": "^8.21.1",
     "@electron/asar": "4.2.1",
     "@electron/universal": "3.0.6",

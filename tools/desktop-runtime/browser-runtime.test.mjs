@@ -12,7 +12,7 @@ import {
 
 function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "browser-stage-"));
-  const sourceRoot = path.join(root, "cache", "chromium-1228");
+  const sourceRoot = path.join(root, "cache", "chromium-9999");
   const executable = path.join(sourceRoot, "chrome", "chrome");
   fs.mkdirSync(path.dirname(executable), { recursive: true });
   fs.writeFileSync(executable, "browser", { mode: 0o700 });
@@ -28,9 +28,9 @@ function fixture() {
 }
 
 const metadata = {
-  playwrightVersion: "1.61.1",
-  chromiumRevision: "1228",
-  chromiumVersion: "149.0.7827.55",
+  playwrightVersion: "test-playwright",
+  chromiumRevision: "9999",
+  chromiumVersion: "999.0.0.0",
 };
 
 test("stageBrowserTree atomically copies the exact revision and manifest", () => {
@@ -151,9 +151,9 @@ test("assertPinnedBrowserMetadata fails closed on package drift", () => {
   assert.throws(
     () =>
       assertPinnedBrowserMetadata(metadata, {
-        playwright_version: "1.61.0",
-        chromium_revision: "1228",
-        chromium_version: "149.0.7827.55",
+        playwright_version: "other-playwright",
+        chromium_revision: "9999",
+        chromium_version: "999.0.0.0",
       }),
     /does not match manifest/u,
   );

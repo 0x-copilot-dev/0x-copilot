@@ -24,6 +24,7 @@ import {
 } from "./worker-rpc";
 
 const TOKEN = "a".repeat(43);
+const TEST_BROWSER_VERSION = "test-browser-version";
 
 const READ: BrowserActionRequest = {
   version: 1,
@@ -197,7 +198,7 @@ function harness(token = TOKEN) {
   const uninstall = installBrowserWorkerRpcServer({
     process: workerProcess,
     token,
-    version: "149.0.7827.55",
+    version: TEST_BROWSER_VERSION,
     worker,
   });
   return { worker, workerProcess, child, uninstall };
@@ -214,7 +215,7 @@ describe("authenticated browser worker RPC", () => {
 
     await expect(client.health()).resolves.toEqual({
       healthy: true,
-      version: "149.0.7827.55",
+      version: TEST_BROWSER_VERSION,
     });
     await expect(client.listTools()).resolves.toEqual(BROWSER_TOOL_SCHEMAS);
     await expect(client.dispatch(READ)).resolves.toMatchObject({

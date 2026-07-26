@@ -38,7 +38,7 @@ function runtimeFixture(overrides: Record<string, unknown> = {}) {
       platform: "darwin",
       arch: "arm64",
       playwright_version: PINNED_PLAYWRIGHT_VERSION,
-      chromium_revision: "1228",
+      chromium_revision: "9999",
       chromium_version: PINNED_CHROMIUM_VERSION,
       executable: "chromium/bin/chrome",
       ...overrides,

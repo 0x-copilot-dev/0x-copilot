@@ -49,7 +49,7 @@ COPILOT_HOME="$PWD/../../apps/desktop/resources" \
 ## Run
 
 ```bash
-npm install --prefix tools/cli-testing            # playwright + viem
+npm install                                       # root workspace installs playwright + viem
 # stage + build the app the same way a user would, once:
 node tools/cli/bin/copilot.mjs install
 npm run build --workspace @0x-copilot/desktop

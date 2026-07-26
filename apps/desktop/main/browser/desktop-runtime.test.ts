@@ -4,7 +4,7 @@ import type { SpawnOptions } from "node:child_process";
 
 import { describe, expect, it } from "vitest";
 
-import { BROWSER_BROKER_AUDIENCE } from "./protocol";
+import { BROWSER_BROKER_AUDIENCE, PINNED_CHROMIUM_VERSION } from "./protocol";
 import {
   createProductionDesktopBrowserSubsystem,
   readOriginPolicy,
@@ -43,7 +43,7 @@ class FakeProductionWorker implements BrowserWorkerIpcChild {
   readonly #events = new EventEmitter();
   readonly requests: Array<Record<string, unknown>> = [];
   readonly token: string;
-  version = "149.0.7827.55";
+  version = PINNED_CHROMIUM_VERSION;
   healthy = true;
 
   constructor(env: NodeJS.ProcessEnv, options: { healthy?: boolean } = {}) {

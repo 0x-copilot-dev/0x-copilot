@@ -83,7 +83,7 @@ Fully assertable today (no model/key needed) once the runtime is staged.
 
 ## How to run (once the stack is staged)
 
-Prereqs (same as `local-account.mjs`): `npm install --prefix tools/cli-testing`,
+Prereqs (same as `local-account.mjs`): `npm install` at the repository root,
 a staged runtime (`node tools/desktop-runtime/stage.mjs --platform … --arch …`),
 and a built desktop app (`npm run build --workspace @0x-copilot/desktop`).
 
