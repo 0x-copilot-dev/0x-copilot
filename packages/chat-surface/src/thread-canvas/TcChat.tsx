@@ -32,6 +32,11 @@ import {
   ApprovalCard,
   ApprovalReceipt,
   type ActivityParam,
+  ConsentCard,
+  ConnectorConsentCard,
+  EMPTY_CONNECTOR_TRUST,
+  type ApprovalPresentation,
+  type ConnectorTrust,
 } from "../approvals";
 // WC-P5a (AD-6/AD-7) — the MCP-OAuth launcher port TYPE + the approval-kind
 // union. `McpAuthPort` is a pure interface (no runtime code), so this type-only
@@ -86,6 +91,14 @@ export interface TcChatApproval {
   } | null;
   /** Inset key/value frame. */
   readonly params: readonly ActivityParam[];
+  /**
+   * The design's card shape (rows / preview / params) plus its narrative
+   * labels, projected server-side off the real tool-call arguments. Null
+   * renders the params frame every approval rendered before shapes existed.
+   */
+  readonly presentation: ApprovalPresentation | null;
+  /** Server-derived trust clauses for an `mcp_auth` card; nulls are omitted. */
+  readonly connectorTrust: ConnectorTrust;
   /** Resolved? Pending → card / conf-card; resolved → receipt. */
   readonly resolved: boolean;
   /** Final decision once resolved; null while pending. */
@@ -297,6 +310,11 @@ const APPROVAL_REASSURANCE =
 // you approve on the vendor's consent screen.
 const MCP_AUTH_REASSURANCE =
   "Connecting opens the vendor's sign-in — Copilot never sees your password.";
+// Focus states the pause, Studio states the policy. Both are server-independent
+// product facts, which is why they are constants here rather than fields on the
+// model-authored presentation block.
+const FOCUS_APPROVAL_REASSURANCE =
+  "The agent paused here — nothing runs until you decide.";
 
 type LoadState =
   | { readonly status: "idle" }
@@ -502,32 +520,19 @@ function renderStudioApprovalCard(
       data-testid={`tc-chat-approval-${approval.approvalId}`}
       data-approval-id={approval.approvalId}
     >
-      <ApprovalCard
+      <ConsentCard
         title={approval.title}
-        reason={approval.reason}
-        category={approval.category}
-        params={[...approval.params]}
+        presentation={approval.presentation}
+        params={approval.params}
+        // Server-derived, and passed OUTSIDE the presentation block on purpose:
+        // a reassurance is a claim, and the narrative layer must never carry one.
         reassurance={APPROVAL_REASSURANCE}
-        actions={
-          <>
-            <button
-              type="button"
-              data-testid={`tc-chat-approval-reject-${approval.approvalId}`}
-              onClick={() => onReject?.(approval.approvalId)}
-              style={approvalRejectButtonStyle}
-            >
-              Reject <span aria-hidden="true">⌘⌫</span>
-            </button>
-            <button
-              type="button"
-              data-testid={`tc-chat-approval-approve-${approval.approvalId}`}
-              onClick={() => onApprove?.(approval.approvalId)}
-              style={approvalApproveButtonStyle}
-            >
-              Approve <span aria-hidden="true">⌘↵</span>
-            </button>
-          </>
-        }
+        showChords
+        onApprove={() => onApprove?.(approval.approvalId)}
+        onReject={() => onReject?.(approval.approvalId)}
+        approveTestId={`tc-chat-approval-approve-${approval.approvalId}`}
+        rejectTestId={`tc-chat-approval-reject-${approval.approvalId}`}
+        testId={`tc-chat-consent-${approval.approvalId}`}
       />
     </div>
   );
@@ -555,38 +560,27 @@ function renderMcpAuthConnectCard(
       data-approval-id={approval.approvalId}
       data-server-id={serverId ?? ""}
     >
-      <ApprovalCard
-        title={approval.title}
-        reason={approval.reason}
-        category={approval.category}
-        params={[...approval.params]}
-        reassurance={MCP_AUTH_REASSURANCE}
-        actions={
-          <>
-            <button
-              type="button"
-              data-testid={`tc-chat-mcp-skip-${approval.approvalId}`}
-              disabled={!actionable}
-              onClick={() =>
-                serverId !== null ? mcpAuthPort?.skipAuth(serverId) : undefined
-              }
-              style={approvalRejectButtonStyle}
-            >
-              Skip
-            </button>
-            <button
-              type="button"
-              data-testid={`tc-chat-mcp-connect-${approval.approvalId}`}
-              disabled={!actionable}
-              onClick={() =>
-                serverId !== null ? mcpAuthPort?.beginAuth(serverId) : undefined
-              }
-              style={approvalApproveButtonStyle}
-            >
-              Connect
-            </button>
-          </>
+      <ConnectorConsentCard
+        displayName={approval.title}
+        // The model's stated reason for wanting the connector — narrative, and
+        // the one line on this card it authors.
+        purpose={approval.summary ?? approval.reason}
+        // A pending gate is the only state the run stream can tell us about:
+        // connecting/connected/denied happen after the host launches OAuth, so
+        // the host owns those transitions (P5b).
+        state="pending"
+        trust={approval.connectorTrust}
+        brandKey={serverId}
+        actionable={actionable}
+        onConnect={() =>
+          serverId !== null ? mcpAuthPort?.beginAuth(serverId) : undefined
         }
+        onDeny={() =>
+          serverId !== null ? mcpAuthPort?.skipAuth(serverId) : undefined
+        }
+        connectTestId={`tc-chat-mcp-connect-${approval.approvalId}`}
+        denyTestId={`tc-chat-mcp-skip-${approval.approvalId}`}
+        testId={`tc-chat-connector-${approval.approvalId}`}
       />
     </div>
   );
@@ -601,41 +595,20 @@ function renderConfCard(
     <div
       key={`conf-${approval.approvalId}`}
       className="conf-card"
-      role="group"
-      aria-label={`Approval: ${approval.title}`}
       data-testid={`tc-chat-conf-card-${approval.approvalId}`}
       data-approval-id={approval.approvalId}
-      style={confCardStyle}
     >
-      <div className="conf-card__head" style={confHeadStyle}>
-        {approval.title}
-      </div>
-      {approval.summary !== null ? (
-        <p className="conf-card__summary" style={confSummaryStyle}>
-          {approval.summary}
-        </p>
-      ) : null}
-      <div className="conf-card__actions" style={confActionsStyle}>
-        <button
-          type="button"
-          data-testid={`tc-chat-conf-reject-${approval.approvalId}`}
-          onClick={() => onReject?.(approval.approvalId)}
-          style={confRejectButtonStyle}
-        >
-          Reject
-        </button>
-        <button
-          type="button"
-          data-testid={`tc-chat-conf-approve-${approval.approvalId}`}
-          onClick={() => onApprove?.(approval.approvalId)}
-          style={confApproveButtonStyle}
-        >
-          Approve &amp; sign
-        </button>
-      </div>
-      <p className="conf-card__foot" style={confFootStyle}>
-        The agent paused here — it won&apos;t sign until you approve
-      </p>
+      <ConsentCard
+        title={approval.title}
+        presentation={approval.presentation}
+        params={approval.params}
+        reassurance={FOCUS_APPROVAL_REASSURANCE}
+        onApprove={() => onApprove?.(approval.approvalId)}
+        onReject={() => onReject?.(approval.approvalId)}
+        approveTestId={`tc-chat-conf-approve-${approval.approvalId}`}
+        rejectTestId={`tc-chat-conf-reject-${approval.approvalId}`}
+        testId={`tc-chat-conf-consent-${approval.approvalId}`}
+      />
     </div>
   );
 }

@@ -11,6 +11,8 @@ import "../styles.css";
 // Subagent cards, fleet rows, and the Agents-tab timeline are shared with
 // desktop rather than being coupled to this host's private stylesheet.
 import "@0x-copilot/chat-surface/src/subagents/subagents.css";
+// Consent cards — same stylesheet desktop loads, so the two hosts cannot drift.
+import "@0x-copilot/chat-surface/src/approvals/approvals.css";
 import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";

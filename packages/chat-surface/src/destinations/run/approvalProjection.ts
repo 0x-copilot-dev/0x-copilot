@@ -25,6 +25,12 @@
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 import type { ActivityParam } from "../../approvals";
+import {
+  parseApprovalPresentation,
+  parseConnectorTrust,
+  type ApprovalPresentation,
+  type ConnectorTrust,
+} from "../../approvals/presentation";
 import type {
   ApprovalsQueueItem,
   ApprovalsQueueProjection,
@@ -69,6 +75,18 @@ export interface RunApproval {
   readonly params: readonly ActivityParam[];
   /** Connector / target preview ("#launch-aurora"); null when absent. */
   readonly target: string | null;
+  /**
+   * The design's card shape — a batch of decidable rows, the draft about to be
+   * sent, or the key/value frame. Null keeps the params frame, which is what
+   * every approval rendered before shapes existed.
+   */
+  readonly presentation: ApprovalPresentation | null;
+  /**
+   * Connector consent card's server-derived trust clauses. Only meaningful on
+   * `mcp_auth` approvals; a null field means the clause has no trustworthy
+   * source and the card must omit it rather than guess.
+   */
+  readonly connectorTrust: ConnectorTrust;
   readonly runId: string | null;
   /** Anchor for the rail's jump-to-card (the requesting event's id). */
   readonly messageId: string;
@@ -125,6 +143,8 @@ interface MutableApproval {
   category: { vendor: string; access: string } | null;
   params: ActivityParam[];
   target: string | null;
+  presentation: ApprovalPresentation | null;
+  connectorTrust: ConnectorTrust;
   runId: string | null;
   messageId: string;
   sequenceNo: number;
@@ -253,6 +273,16 @@ function reduceRequested(
     category: buildCategory(event),
     params: buildParams(payload.arguments),
     target: buildTarget(payload.arguments),
+    // A redelivered event carrying no shape must not erase a shape an earlier
+    // frame established — replay would otherwise flatten a rows card to params.
+    presentation:
+      parseApprovalPresentation(payload.presentation) ??
+      existing?.presentation ??
+      null,
+    connectorTrust: mergeConnectorTrust(
+      parseConnectorTrust(payload),
+      existing?.connectorTrust,
+    ),
     runId: event.run_id,
     messageId: event.event_id,
     sequenceNo: existing?.sequenceNo ?? event.sequence_no,
@@ -293,6 +323,8 @@ function freeze(m: MutableApproval): RunApproval {
     category: m.category,
     params: m.params,
     target: m.target,
+    presentation: m.presentation,
+    connectorTrust: m.connectorTrust,
     runId: m.runId,
     messageId: m.messageId,
     sequenceNo: m.sequenceNo,
@@ -415,6 +447,29 @@ function buildTarget(value: unknown): string | null {
     stringField(args.recipient) ??
     null
   );
+}
+
+/**
+ * Keep any trust clause an earlier frame established.
+ *
+ * The blocking gate and the discovery suggestion can both touch one approval id,
+ * and a later frame that omits `auth_host` means "this frame didn't carry it",
+ * not "there is no host". Dropping to null there would silently retract a clause
+ * the user already read. Nothing is ever *invented* here — an absent clause on
+ * both sides stays absent.
+ */
+function mergeConnectorTrust(
+  next: ConnectorTrust,
+  existing: ConnectorTrust | undefined,
+): ConnectorTrust {
+  if (existing === undefined) {
+    return next;
+  }
+  return {
+    accessMode: next.accessMode ?? existing.accessMode,
+    authHost: next.authHost ?? existing.authHost,
+    sourceTool: next.sourceTool ?? existing.sourceTool,
+  };
 }
 
 function stringField(value: unknown): string | null {

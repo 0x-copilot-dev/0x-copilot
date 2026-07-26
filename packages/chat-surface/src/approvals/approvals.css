@@ -1,0 +1,442 @@
+/* Consent cards — the connector card and the three approval shapes.
+ *
+ * This stylesheet lives in chat-surface, not in a host app, because the cards it
+ * styles are mounted by BOTH hosts. The previous approval card's rules shipped
+ * only in `apps/frontend/src/styles.css`, which desktop never imports, so the
+ * desktop cockpit rendered a bare card frame with none of its internal layout.
+ * Keeping these rules next to the components they style is what stops that
+ * happening again — both `bootstrap.tsx` (desktop) and the web entry import this
+ * file explicitly.
+ *
+ * Values are the 0xCopilot App v3 design (`copilot.css` / `copilot-workspace3.jsx`)
+ * expressed through design-system tokens. Where the design hard-codes a value the
+ * token scale can't express — the connector card's 22px vendor mark, the 3px
+ * attention ring — the literal is kept and the reason noted inline.
+ */
+
+/* ==========================================================================
+   Connector consent card — the design's `connCard()`
+   ========================================================================== */
+
+.cc {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 11px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
+/* Unanswered ask. The design ring-lights it so a gate can't read as inert
+   transcript — this is the one card in the column waiting on the user. */
+.cc[data-state="pending"] {
+  border-color: var(--color-accent-line, var(--color-accent));
+  box-shadow: 0 0 0 3px var(--color-accent-soft);
+}
+
+.cc[data-state="connected"] {
+  border-color: color-mix(in srgb, var(--color-success) 32%, transparent);
+  background: color-mix(in srgb, var(--color-success) 7%, var(--color-surface));
+}
+
+/* Declined: still present (the run continues without it, and the user can
+   reconsider) but visibly inactive rather than deleted. */
+.cc[data-state="denied"] {
+  border-style: dashed;
+  background: transparent;
+}
+
+.cc__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* 22px is the design's literal — between --space-md and --space-lg, and sized
+   to sit optically level with a 13.5px title rather than to a spacing rung. */
+.cc__mark {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
+  /* Hue is derived per connector so Linear and Slack are distinguishable at a
+     glance; the component sets --cc-mark-h. */
+  color: oklch(0.95 0.02 var(--cc-mark-h, 258));
+  background: oklch(0.42 0.13 var(--cc-mark-h, 258));
+}
+
+.cc__title {
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-tight);
+  white-space: nowrap;
+}
+
+.cc[data-state="denied"] .cc__title {
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+}
+
+.cc__purpose {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.cc__spacer {
+  flex: 1;
+}
+
+.cc__actions {
+  display: flex;
+  gap: 6px;
+  flex: none;
+}
+
+/* Trust line + provenance. Indented past the mark so it reads as a footnote to
+   the title rather than a second column. */
+.cc__foot {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-left: 32px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.cc__trust {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The tool that produced this card. Mono because it is an identifier, not prose
+   — and dimmed because it answers "why am I seeing this", not "what do I do". */
+.cc__provenance {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+  color: var(--color-text-muted);
+  opacity: 0.8;
+}
+
+.cc__caption {
+  padding-left: 32px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  line-height: var(--line-height-base);
+}
+
+.cc__spinner {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  border-radius: 50%;
+  animation: cc-spin 0.7s linear infinite;
+}
+
+@keyframes cc-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc__spinner {
+    animation-duration: 2.4s;
+  }
+}
+
+/* ==========================================================================
+   Approval card — shared frame, three shapes
+   ========================================================================== */
+
+.apc {
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  overflow: hidden;
+}
+
+.apc__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-semibold);
+}
+
+.apc__icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-accent);
+}
+
+.apc__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Which run, against which account — the design's `.conf-sum`. */
+.apc__provenance {
+  margin-left: auto;
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-muted);
+}
+
+/* --- rows shape: a batch of individually decidable line items --- */
+
+.apc__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--color-border);
+  font-size: var(--font-size-sm);
+}
+
+.apc__row:last-of-type {
+  border-bottom: 0;
+}
+
+.apc__row-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  min-width: 0;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  color: var(--color-text);
+}
+
+.apc__row-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apc__avatar {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+  color: var(--color-text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-semibold);
+}
+
+.apc__row-note {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+  flex: none;
+}
+
+.apc__row-value {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.apc__row-actions {
+  display: flex;
+  gap: 7px;
+  flex: none;
+}
+
+.apc__row-status {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+}
+
+.apc__row-status[data-status="approved"] {
+  color: var(--color-success);
+}
+
+.apc__row-status[data-status="rejected"] {
+  color: var(--color-danger);
+}
+
+.apc__row-status[data-status="queued"] {
+  color: var(--color-text-muted);
+}
+
+/* --- preview shape: the literal content about to leave the workspace --- */
+
+.apc__preview {
+  margin: 10px 13px 0;
+  padding: 9px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-elevated);
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-loose);
+  /* Model-authored content rendered as plain text. `pre-wrap` preserves the
+     author's line breaks without letting the string style the card. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 13rem;
+  overflow-y: auto;
+}
+
+.apc__preview-meta {
+  display: block;
+  margin-top: 6px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  color: var(--color-text-muted);
+}
+
+/* --- params shape: the key/value frame --- */
+
+.apc__params {
+  display: grid;
+  gap: 6px;
+  margin: 10px 13px 0;
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.apc__param {
+  display: grid;
+  grid-template-columns: 7rem minmax(0, 1fr);
+  gap: var(--space-md);
+  align-items: baseline;
+  margin: 0;
+  font-size: var(--font-size-xs);
+}
+
+.apc__param dt {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: var(--tracking-label);
+  text-transform: uppercase;
+}
+
+.apc__param dd {
+  margin: 0;
+  color: var(--color-text);
+  overflow-wrap: anywhere;
+}
+
+/* --- actions + reassurance --- */
+
+.apc__actions {
+  display: flex;
+  gap: var(--space-sm);
+  justify-content: flex-end;
+  padding: 11px 13px;
+}
+
+.apc__foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: 9px 13px;
+  background: var(--color-bg-elevated);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.apc__foot-icon {
+  display: inline-flex;
+  flex: none;
+  color: var(--color-success);
+}
+
+/* ==========================================================================
+   Decision buttons — shared by both card families
+   ========================================================================== */
+
+.apc-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background 0.12s,
+    border-color 0.12s,
+    color 0.12s;
+}
+
+.apc-btn:hover:not(:disabled) {
+  background: var(--color-surface-muted);
+}
+
+.apc-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.apc-btn--primary {
+  background: var(--color-accent);
+  border-color: transparent;
+  color: var(--color-accent-contrast);
+}
+
+.apc-btn--primary:hover:not(:disabled) {
+  background: var(--color-accent-strong, var(--color-accent));
+}
+
+/* Reject is destructive only on hover — a resting red button reads as the
+   recommended action, which it never is. */
+.apc-btn--reject {
+  color: var(--color-text-muted);
+}
+
+.apc-btn--reject:hover:not(:disabled) {
+  color: var(--color-danger);
+  border-color: color-mix(in srgb, var(--color-danger) 35%, transparent);
+}
+
+.apc-btn__chord {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  opacity: 0.7;
+}

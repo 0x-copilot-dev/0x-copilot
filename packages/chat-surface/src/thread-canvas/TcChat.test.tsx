@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { EMPTY_CONNECTOR_TRUST } from "../approvals";
 import {
   fireEvent,
   render,
@@ -849,6 +850,8 @@ function approval(overrides: Partial<TcChatApproval> = {}): TcChatApproval {
     serverId: null,
     category: { vendor: "SLACK", access: "ACTION" },
     params: [{ label: "channel", value: "#launch-aurora" }],
+    presentation: null,
+    connectorTrust: EMPTY_CONNECTOR_TRUST,
     resolved: false,
     decision: null,
     createdAtMs: 1716000090000,
@@ -942,8 +945,11 @@ describe("TcChat approvals (PR-3.10 / FR-3.22)", () => {
     expect(conf).toHaveClass("conf-card");
     expect(conf).toHaveTextContent("Post to #launch-aurora");
     expect(conf).toHaveTextContent("The agent paused here");
+    // The design reserves "Approve & sign" for actions that actually reach a
+    // wallet; it arrives via `presentation.approve_label` on those approvals.
+    // A generic approval promises no signature.
     expect(screen.getByTestId("tc-chat-conf-approve-appr-1")).toHaveTextContent(
-      "Approve & sign",
+      "Approve",
     );
     // The Studio ApprovalCard is NOT used in Focus.
     expect(screen.queryByTestId("tc-chat-approval-appr-1")).toBeNull();
@@ -1024,9 +1030,11 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(
       screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
     ).toHaveTextContent("Connect");
+    // "Deny" not "Skip": the design's fourth connector state offers to reverse
+    // this ("Reconsider"), which only reads as sensible if it was a decision.
     expect(
       screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
-    ).toHaveTextContent("Skip");
+    ).toHaveTextContent("Deny");
     // …and NOT the Approve/Reject `/decision` card.
     expect(
       screen.queryByTestId("tc-chat-approval-approve-mcp_auth:run_1:linear"),
