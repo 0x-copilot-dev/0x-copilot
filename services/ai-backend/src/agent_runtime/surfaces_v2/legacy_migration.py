@@ -14,7 +14,7 @@ from enum import StrEnum
 import re
 from typing import Protocol, runtime_checkable
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
@@ -54,6 +54,21 @@ class LegacyStageDisposition(StrEnum):
 
     COMPATIBILITY_ONLY = "compatibility_only"
     REQUIRE_FRESH_APPROVAL = "require_fresh_approval"
+    QUARANTINED = "quarantined"
+
+
+class LegacyStageMigrationOutcome(StrEnum):
+    """Durable, non-executing outcome for one pending legacy stage.
+
+    This is intentionally more specific than :class:`LegacyStageDisposition`:
+    the inventory disposition says what an old projection *looks like*, while
+    this outcome records what the migration safely did.  In particular no
+    outcome means that an old approval was copied to a new stage.
+    """
+
+    COMPATIBILITY_ONLY = "compatibility_only"
+    CANONICAL_HELD = "canonical_held"
+    FROZEN_RECONCILE = "frozen_reconcile"
     QUARANTINED = "quarantined"
 
 
@@ -134,6 +149,60 @@ class LegacyStageEvidence(RuntimeContract):
     @classmethod
     def _stage_digest(cls, value: str) -> str:
         return _digest(value)
+
+
+class LegacyStageMigrationRecord(RuntimeContract):
+    """A source-digest-fenced checkpoint for exactly one legacy stage.
+
+    The record stores no body, arguments, approval identity, queue payload, or
+    executable command.  ``canonical_stage_id`` is present only for a newly
+    created **unapproved** canonical stage.  A retry can therefore prove it is
+    handling the exact same source without producing a duplicate stage.
+    """
+
+    org_id: str = Field(min_length=1, max_length=256)
+    migration_id: str = Field(min_length=1, max_length=256)
+    run_id: str = Field(min_length=1, max_length=256)
+    legacy_stage_id: str = Field(min_length=1, max_length=256)
+    source_digest: str = Field(min_length=64, max_length=64)
+    outcome: LegacyStageMigrationOutcome
+    canonical_stage_id: str | None = Field(default=None, min_length=1, max_length=256)
+    queue_cancelled: bool = False
+    reconciler_frozen: bool = False
+    revision: int = Field(ge=0)
+    created_at: datetime
+    updated_at: datetime
+
+    @field_validator(
+        "org_id", "migration_id", "run_id", "legacy_stage_id", "canonical_stage_id"
+    )
+    @classmethod
+    def _stage_migration_identifier(cls, value: str | None) -> str | None:
+        return None if value is None else _opaque(value)
+
+    @field_validator("source_digest")
+    @classmethod
+    def _stage_migration_digest(cls, value: str) -> str:
+        return _digest(value)
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def _stage_migration_timestamp(cls, value: datetime) -> datetime:
+        return _utc(value)
+
+    @model_validator(mode="after")
+    def _stage_migration_facts_are_consistent(self) -> LegacyStageMigrationRecord:
+        if self.outcome is LegacyStageMigrationOutcome.CANONICAL_HELD:
+            if self.canonical_stage_id is None or self.reconciler_frozen:
+                raise ValueError("canonical held migration facts are inconsistent")
+        elif self.canonical_stage_id is not None:
+            raise ValueError("only canonical held records may name a canonical stage")
+        if self.outcome is LegacyStageMigrationOutcome.FROZEN_RECONCILE:
+            if not self.reconciler_frozen:
+                raise ValueError("frozen reconcile records require a frozen reconciler")
+        elif self.reconciler_frozen:
+            raise ValueError("only frozen reconcile records may freeze a reconciler")
+        return self
 
 
 class LegacyMigrationInventory(RuntimeContract):
@@ -249,6 +318,41 @@ class LegacyMigrationCheckpointStore(Protocol):
         """Advance state iff the persisted revision still equals ``expected``."""
 
 
+@runtime_checkable
+class LegacyStageMigrationStore(Protocol):
+    """Durable per-stage idempotency/mapping record for E2 D5.
+
+    This deliberately has no method to return, approve, enqueue, or execute a
+    legacy command.  Its only mutation is a source-bound outcome checkpoint.
+    """
+
+    async def load_or_create(
+        self, *, record: LegacyStageMigrationRecord
+    ) -> LegacyStageMigrationRecord:
+        """Create or replay the exact source-bound record, otherwise fail closed."""
+
+    async def load(
+        self,
+        *,
+        org_id: str,
+        migration_id: str,
+        run_id: str,
+        legacy_stage_id: str,
+    ) -> LegacyStageMigrationRecord | None:
+        """Load one tenant-scoped mapping/checkpoint."""
+
+    async def replace_frozen(
+        self, *, record: LegacyStageMigrationRecord
+    ) -> LegacyStageMigrationRecord:
+        """Replace only a prior frozen observation after a fresh safe scan.
+
+        ``frozen_reconcile`` is intentionally not terminal migration truth. A
+        later scan may observe that the old command is no longer claimed and
+        may then create a separately held canonical stage. Adapters must
+        reject replacement of every other outcome.
+        """
+
+
 def inventory_digest(
     *,
     org_id: str,
@@ -333,6 +437,9 @@ __all__ = (
     "LegacyMigrationStatus",
     "LegacyStageDisposition",
     "LegacyStageEvidence",
+    "LegacyStageMigrationOutcome",
+    "LegacyStageMigrationRecord",
+    "LegacyStageMigrationStore",
     "inventory_digest",
     "report_digest",
 )

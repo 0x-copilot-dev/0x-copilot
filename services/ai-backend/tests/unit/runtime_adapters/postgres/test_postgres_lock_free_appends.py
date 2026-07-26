@@ -25,9 +25,19 @@ from uuid import uuid4
 
 import pytest
 from agent_runtime.execution.contracts import AgentRuntimeContext, StreamEventSource
+from agent_runtime.api.legacy_stage_migration_runtime import legacy_stage_source_digest
 from agent_runtime.persistence.ports import RuntimeEventSequenceConflict
+from agent_runtime.surfaces_v2.legacy_stage_materialization import (
+    MATERIALIZATION_FENCE_METADATA_KEY,
+    LegacyStageMaterializationFence,
+    LegacyStageMaterializationRejected,
+)
+from agent_runtime.surfaces_v2.staging import StagedWriteFold
 from psycopg import errors as psycopg_errors
 from runtime_adapters.postgres import PostgresRuntimeApiStore
+from runtime_adapters.postgres.legacy_stage_migration_control import (
+    PostgresLegacyStageReservationStore,
+)
 from runtime_adapters.postgres.runtime_api_store import _AppendEventRetry
 from runtime_api.schemas import (
     CreateConversationRequest,
@@ -249,6 +259,139 @@ class TestLockFreeAppendIntegration:
 
         assert retried == first
         assert await postgres_store.get_latest_sequence(run_id=run_id) == 1
+
+    async def test_materialization_run_fence_rejects_a_concurrent_legacy_revision(
+        self,
+        postgres_store: PostgresRuntimeApiStore,
+        monkeypatch,
+    ) -> None:
+        """A real revision append cannot cross a held materialization proof.
+
+        The revision uses the public ``append_event`` path. It acquires the
+        run-row fence first and pauses after that acquisition; the canonical
+        append is then forced to wait. Once the revision commits, materialized
+        source revalidation sees the changed digest and rejects the canonical
+        stage. This would have written stale canonical work with the old
+        reservation-plus-``FOR SHARE`` implementation.
+        """
+
+        org_id, _user_id, run_id, conv_id = await _seed_run(postgres_store)
+        legacy_stage_id = f"legacy_{uuid4().hex}"
+        await postgres_store.append_event(
+            RuntimeEventDraft(
+                run_id=run_id,
+                conversation_id=conv_id,
+                org_id=org_id,
+                trace_id="trace_legacy_source",
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.WRITE_STAGED,
+                payload={
+                    "stage_id": legacy_stage_id,
+                    "surface_id": f"surface_{uuid4().hex}",
+                    "target": {"connector": "linear", "op": "create_issue"},
+                    "proposal_ref": "draft://legacy/v1",
+                },
+            )
+        )
+        source_events = await postgres_store.list_events_after(
+            org_id=org_id,
+            run_id=run_id,
+            after_sequence=0,
+        )
+        source_state = StagedWriteFold.fold(source_events)[legacy_stage_id]
+        source_digest = legacy_stage_source_digest(
+            run_id=run_id,
+            state=source_state,
+        )
+        canonical_stage_id = f"effstage_{uuid4().hex}"
+        idempotency_key = f"e2stage_{uuid4().hex}"
+        reservations = PostgresLegacyStageReservationStore(store=postgres_store)
+        assert (
+            await reservations.verify_and_reserve(
+                org_id=org_id,
+                run_id=run_id,
+                legacy_stage_id=legacy_stage_id,
+                expected_source_digest=source_digest,
+                idempotency_key=idempotency_key,
+                canonical_stage_id=canonical_stage_id,
+            )
+        ).value == "reserved"
+
+        revision_has_run_fence = asyncio.Event()
+        release_revision = asyncio.Event()
+        original_retention = postgres_store._resolve_retention_until  # noqa: SLF001
+
+        async def paused_retention(*args, **kwargs):
+            revision_has_run_fence.set()
+            await release_revision.wait()
+            return await original_retention(*args, **kwargs)
+
+        monkeypatch.setattr(
+            postgres_store,
+            "_resolve_retention_until",
+            paused_retention,
+        )
+        revision_task = asyncio.create_task(
+            postgres_store.append_event(
+                RuntimeEventDraft(
+                    run_id=run_id,
+                    conversation_id=conv_id,
+                    org_id=org_id,
+                    trace_id="trace_legacy_revision",
+                    source=StreamEventSource.RUNTIME,
+                    event_type=RuntimeApiEventType.REVISION_ADDED,
+                    payload={
+                        "stage_id": legacy_stage_id,
+                        "rev": 2,
+                        "proposal_ref": "draft://legacy/v2",
+                        "diff_ref": "diff://legacy/v2",
+                        "author": "user",
+                    },
+                )
+            )
+        )
+        await asyncio.wait_for(revision_has_run_fence.wait(), timeout=2)
+        canonical_task = asyncio.create_task(
+            postgres_store.append_event(
+                RuntimeEventDraft(
+                    run_id=run_id,
+                    conversation_id=conv_id,
+                    org_id=org_id,
+                    trace_id="trace_canonical_stage",
+                    source=StreamEventSource.RUNTIME,
+                    event_type=RuntimeApiEventType.EFFECT_STAGED,
+                    payload={"stage_id": canonical_stage_id, "status": "held"},
+                    metadata={
+                        MATERIALIZATION_FENCE_METADATA_KEY: (
+                            LegacyStageMaterializationFence(
+                                org_id=org_id,
+                                run_id=run_id,
+                                legacy_stage_id=legacy_stage_id,
+                                source_digest=source_digest,
+                                idempotency_key=idempotency_key,
+                                canonical_stage_id=canonical_stage_id,
+                            ).model_dump(mode="json")
+                        )
+                    },
+                )
+            )
+        )
+        await asyncio.sleep(0)
+        assert not canonical_task.done()
+
+        release_revision.set()
+        await revision_task
+        with pytest.raises(LegacyStageMaterializationRejected):
+            await canonical_task
+
+        events = await postgres_store.list_events_after(
+            org_id=org_id,
+            run_id=run_id,
+            after_sequence=0,
+        )
+        assert not any(
+            event.event_type is RuntimeApiEventType.EFFECT_STAGED for event in events
+        )
 
 
 # --------------------------------------------------------------------------

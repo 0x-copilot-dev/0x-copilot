@@ -390,6 +390,10 @@ class FileRuntimeApiStore:
         self._conversation_locks: dict[str, asyncio.Lock] = {}
         self._approval_batch_locks: dict[str, asyncio.Lock] = {}
         self._state_lock = asyncio.Lock()
+        # Every event mutation joins this gate.  E2's source fence is checked
+        # again while holding it, so a source-stage mutation cannot slip
+        # between that proof and the canonical held-stage append.
+        self._e2_legacy_stage_materialization_lock = asyncio.Lock()
 
         # ---- ledgers ----------------------------------------------------
         self._ledgers: dict[str, StateLedger] = {}
@@ -979,7 +983,9 @@ class FileRuntimeApiStore:
                 table=table, lines_before=before, lines_after=ledger.line_count
             )
 
-    _QUEUE_TERMINAL = frozenset({OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER})
+    _QUEUE_TERMINAL = frozenset(
+        {OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER, OutboxStatus.CANCELLED}
+    )
 
     def _compact_queue_ledger(self) -> None:
         """Fold the raw queue op-log down to its LIVE commands at boot.
@@ -2097,29 +2103,40 @@ class FileRuntimeApiStore:
         )
 
     async def append_event(self, event: RuntimeEventDraft) -> RuntimeEventEnvelope:
-        async with self._conversation_lock(event.conversation_id):
-            events = self.events_by_run.setdefault(event.run_id, [])
-            if event.event_id is not None:
-                existing = next(
-                    (item for item in events if item.event_id == event.event_id),
-                    None,
-                )
-                if existing is not None:
-                    if event.matches_envelope(existing):
-                        return existing
-                    raise RuntimeEventIdempotencyConflict(
-                        run_id=event.run_id,
-                        event_id=event.event_id,
+        async with self._e2_legacy_stage_materialization_lock:
+            async with self._conversation_lock(event.conversation_id):
+                events = self.events_by_run.setdefault(event.run_id, [])
+                if event.event_id is not None:
+                    existing = next(
+                        (item for item in events if item.event_id == event.event_id),
+                        None,
                     )
-            envelope = self._envelope_for(event, sequence_no=len(events) + 1)
-            events.append(envelope)
-            self._events_by_id[envelope.event_id] = envelope
-            self._persist_event(envelope, org_id=event.org_id)
-            if event.run_id in self.runs:
-                await self.set_run_latest_sequence(
-                    run_id=event.run_id, latest_sequence_no=envelope.sequence_no
+                    if existing is not None:
+                        if event.matches_envelope(existing):
+                            return existing
+                        raise RuntimeEventIdempotencyConflict(
+                            run_id=event.run_id,
+                            event_id=event.event_id,
+                        )
+                legacy_control = getattr(
+                    self, "_e2_legacy_stage_reservation_control", None
                 )
-        return envelope
+                fence = (
+                    legacy_control.assert_append_fence(event=event)
+                    if legacy_control is not None
+                    else None
+                )
+                envelope = self._envelope_for(event, sequence_no=len(events) + 1)
+                events.append(envelope)
+                self._events_by_id[envelope.event_id] = envelope
+                self._persist_event(envelope, org_id=event.org_id)
+                if fence is not None:
+                    legacy_control.mark_append_staged(fence=fence)
+                if event.run_id in self.runs:
+                    await self.set_run_latest_sequence(
+                        run_id=event.run_id, latest_sequence_no=envelope.sequence_no
+                    )
+            return envelope
 
     async def append_events_batch(
         self, events: Sequence[RuntimeEventDraft]
@@ -2152,25 +2169,26 @@ class FileRuntimeApiStore:
                 f"saw {len(run_ids)}."
             )
         first = events[0]
-        async with self._conversation_lock(first.conversation_id):
-            bucket = self.events_by_run.setdefault(first.run_id, [])
-            base = len(bucket)
-            envelopes = [
-                self._envelope_for(event, sequence_no=base + offset)
-                for offset, event in enumerate(events, start=1)
-            ]
-            # Durable commit first; only then advance the in-memory view so a
-            # failed/interrupted write leaves no phantom events behind.
-            self._persist_events_batch(envelopes, org_id=first.org_id)
-            bucket.extend(envelopes)
-            for envelope in envelopes:
-                self._events_by_id[envelope.event_id] = envelope
-            if first.run_id in self.runs:
-                await self.set_run_latest_sequence(
-                    run_id=first.run_id,
-                    latest_sequence_no=envelopes[-1].sequence_no,
-                )
-        return tuple(envelopes)
+        async with self._e2_legacy_stage_materialization_lock:
+            async with self._conversation_lock(first.conversation_id):
+                bucket = self.events_by_run.setdefault(first.run_id, [])
+                base = len(bucket)
+                envelopes = [
+                    self._envelope_for(event, sequence_no=base + offset)
+                    for offset, event in enumerate(events, start=1)
+                ]
+                # Durable commit first; only then advance the in-memory view so a
+                # failed/interrupted write leaves no phantom events behind.
+                self._persist_events_batch(envelopes, org_id=first.org_id)
+                bucket.extend(envelopes)
+                for envelope in envelopes:
+                    self._events_by_id[envelope.event_id] = envelope
+                if first.run_id in self.runs:
+                    await self.set_run_latest_sequence(
+                        run_id=first.run_id,
+                        latest_sequence_no=envelopes[-1].sequence_no,
+                    )
+            return tuple(envelopes)
 
     async def list_events_after(
         self, *, org_id: str, run_id: str, after_sequence: int
@@ -3991,7 +4009,11 @@ class FileRuntimeApiStore:
             now = datetime.now(timezone.utc)
             for command_id in self._queue_order:
                 status_value = self._queue_statuses[command_id]
-                if status_value in {OutboxStatus.COMPLETED, OutboxStatus.DEAD_LETTER}:
+                if status_value not in {
+                    OutboxStatus.PENDING,
+                    OutboxStatus.RETRY,
+                    OutboxStatus.CLAIMED,
+                }:
                     continue
                 if self._queue_available_at[command_id] > now:
                     continue

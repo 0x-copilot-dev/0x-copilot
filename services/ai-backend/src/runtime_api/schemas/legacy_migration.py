@@ -24,3 +24,21 @@ class LegacyMigrationRunRequest(RuntimeContract):
     @classmethod
     def _org_id(cls, value: object, info: ValidationInfo) -> str:
         return ValueNormalizer.normalize_id(value, info.field_name)
+
+
+class LegacyStageMigrationRunRequest(RuntimeContract):
+    """Internal-only D5 control-plane request for pending legacy stages.
+
+    The source is always discovered server-side.  In particular this request
+    cannot carry a proposal, target, digest, queue id, or old approval that an
+    untrusted caller might try to replay into a canonical stage.
+    """
+
+    org_id: str
+    dry_run: bool = True
+    batch_size: int = Field(default=25, ge=1, le=100)
+
+    @field_validator("org_id", mode="before")
+    @classmethod
+    def _stage_org_id(cls, value: object, info: ValidationInfo) -> str:
+        return ValueNormalizer.normalize_id(value, info.field_name)

@@ -76,6 +76,7 @@ from runtime_adapters.factory import RuntimeAdapterFactory, RuntimePorts
 from runtime_adapters.repair_planning import (
     build_audit_export_verification_store,
     build_legacy_migration_checkpoint_store,
+    build_legacy_stage_migration_service,
 )
 from runtime_api.http.account_merge_routes import AccountMergeApiRouter
 from runtime_api.http.desktop_workspace_attestation import (
@@ -312,6 +313,12 @@ class RuntimeApiAppFactory:
             migration_artifact_service = cls.default_artifact_service(app)
         app.state.legacy_migration_service = cls.default_legacy_migration_service(
             app, artifact_service=migration_artifact_service
+        )
+        # D5 is independent from the draft/artifact prerequisite above.  Its
+        # control plane is internal-only, authenticated, adapter-selected, and
+        # creates at most a held canonical stage.  It has no execution path.
+        app.state.legacy_stage_migration_service = (
+            cls.default_legacy_stage_migration_service(app)
         )
         # E1 D4/D5 — click-time source opening is deliberately composed as a
         # separate service. It receives the canonical run/event stores plus the
@@ -734,6 +741,20 @@ class RuntimeApiAppFactory:
                 persistence=ports.persistence,
             ),
             audit=ports.persistence,
+        )
+
+    @classmethod
+    def default_legacy_stage_migration_service(cls, app: FastAPI) -> object | None:
+        """Compose the authenticated D5 stage control plane for real adapters."""
+
+        ports = getattr(app.state, "runtime_ports", None)
+        settings = getattr(app.state, "runtime_settings", None)
+        if ports is None or settings is None:
+            return None
+        return build_legacy_stage_migration_service(
+            settings=settings,
+            persistence=ports.persistence,
+            event_store=ports.event_store,
         )
 
     @classmethod

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hmac
 import json
 import os
 
@@ -30,6 +31,14 @@ class TrustedRequestIdentity:
     roles: tuple[str, ...] = ("employee",)
     permission_scopes: tuple[str, ...] = ()
     connector_scopes: dict[str, tuple[str, ...]] | None = None
+
+
+@dataclass(frozen=True)
+class SealedMigrationJobIdentity:
+    """An explicit one-purpose capability layered on trusted service identity."""
+
+    identity: TrustedRequestIdentity
+    job_id: str
 
 
 class RuntimeServiceAuthenticator:
@@ -139,6 +148,41 @@ class RuntimeServiceAuthenticator:
                 request.headers.get(CONNECTOR_SCOPES_HEADER, "{}")
             ),
         )
+
+    @classmethod
+    def require_e2_legacy_stage_migration_job(
+        cls, request: Request
+    ) -> SealedMigrationJobIdentity:
+        """Require the sealed D5 control-plane capability, never just service auth.
+
+        The global service token establishes a trusted tenant identity.  This
+        second secret is deliberately capability-scoped and accepted only with
+        the exact operation name, so unrelated internal callers cannot invoke
+        a migration that mutates reservations or old queue rows.
+        """
+
+        identity = cls.require_identity(request)
+        expected = os.environ.get("E2_LEGACY_STAGE_MIGRATION_JOB_TOKEN", "").strip()
+        if not expected:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "E2 legacy-stage migration job capability is not configured",
+            )
+        supplied = request.headers.get("x-e2-migration-job-token", "")
+        capability = request.headers.get("x-e2-migration-capability", "")
+        job_id = request.headers.get("x-e2-migration-job-id", "").strip()
+        if (
+            capability != "e2_legacy_stage_materialization_v1"
+            or not job_id
+            or len(job_id) > 256
+            or any(char.isspace() for char in job_id)
+            or not hmac.compare_digest(supplied, expected)
+        ):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                "E2 legacy-stage migration capability is required",
+            )
+        return SealedMigrationJobIdentity(identity=identity, job_id=job_id)
 
     @staticmethod
     def _service_token() -> str:
