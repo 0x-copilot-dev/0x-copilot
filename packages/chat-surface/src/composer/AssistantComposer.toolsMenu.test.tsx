@@ -1,5 +1,5 @@
-// Per-run tools belong inside the composer's one `+` menu, never as a second
-// bottom-bar trigger. This exercises the complete disclosure path.
+// The per-run Tools pill is an additive bottom-row slot, independent of the
+// attachment `+` menu.
 
 import { fireEvent, render, screen } from "@testing-library/react";
 import { type ReactNode } from "react";
@@ -62,29 +62,18 @@ function renderComposer(overrides: Partial<AssistantComposerProps> = {}): void {
   );
 }
 
-describe("AssistantComposer per-run Tools menu", () => {
-  it("uses the + menu as the only trigger and returns to its root", () => {
+describe("AssistantComposer toolsTrigger slot", () => {
+  it("renders the Tools pill beside the attachment controls", () => {
     renderComposer({
-      renderToolsMenu: ({ onBack }) => (
-        <button data-testid="tools-content" type="button" onClick={onBack}>
-          Back from tools
-        </button>
-      ),
+      toolsTrigger: <button data-testid="tools-trigger">Tools</button>,
     });
 
-    expect(screen.queryByTestId("first-run-tools-button")).toBeNull();
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /Open attachment and tools menu/i }),
-    );
-    fireEvent.click(screen.getByTestId("composer-plus-menu-tools"));
-
+    const plus = screen.getByRole("button", {
+      name: /Open attachment and tools menu/i,
+    });
+    const tools = screen.getByTestId("tools-trigger");
     expect(
-      screen.getByRole("menu", { name: "Tools menu" }),
-    ).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("tools-content"));
-    expect(
-      screen.getByRole("menu", { name: "Attachment and tools menu" }),
-    ).toBeInTheDocument();
+      plus.compareDocumentPosition(tools) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 });

@@ -71,8 +71,8 @@ export interface RunComposerProps {
    */
   readonly onGetLocalModels?: () => void;
   /**
-   * MCP connector surface for the composer's `+ → Tools` view. When provided,
-   * it supplies web-search, connected rows, one-click connect, and Custom MCP.
+   * MCP connector surface for the composer's Tools pill. When provided, it
+   * supplies web-search, connected rows, one-click connect, and Custom MCP.
    * Omitted ⇒ the legacy flat "open the Tools surface" button is retained.
    */
   readonly connectorsPort?: ComposerConnectorsPort;
@@ -94,7 +94,7 @@ export interface RunComposerProps {
  *   - attachments   → `filePicker` + single-stage `attachmentAdapter`
  *   - `/` commands  → skills (`GET /v1/skills`) drive the `/`-menu + skill pills
  *   - connections   → MCP servers (`GET /v1/mcp/servers`) list in the `+` menu;
- *                     `+ → Tools` opens the fuller run-scoped controls
+ *                     the Tools pill opens fuller run-scoped controls
  *                     (MCP + non-MCP)
  *   - model select  → curated cloud + local models, `depthVisible={false}`
  *
@@ -168,20 +168,19 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     };
   }, [providerKeysPort, refreshCatalog]);
 
-  // The `+ → Tools` view (when a connectors port is injected) owns per-run
-  // web-search + active connector ids and yields the run-body values
-  // (`webSearchEnabled` / `connectorScopes`) threaded on submit. Its Custom MCP
-  // and pre-registered rows route to the Tools surface.
-  const { renderToolsMenu, webSearchEnabled, connectorScopes } =
+  // The Tools pill (when a connectors port is injected) owns per-run web-search
+  // + active connector ids and yields the run-body values threaded on submit.
+  const { toolsTrigger, webSearchEnabled, connectorScopes } =
     useDesktopComposerTools({
       connectorsPort,
       onAddCustom: onShowConnectors,
+      disabled,
     });
 
   // Older hosts without the connector adapter keep their single flat link.
-  // Normal desktop runs render the richer controls inside the `+` menu.
+  // Normal desktop runs render the richer Tools pill.
   const connectorsTrigger =
-    renderToolsMenu === undefined ? (
+    toolsTrigger === undefined ? (
       <ComposerConnectorsButton
         activeCount={activeConnectorCount}
         open={false}
@@ -215,7 +214,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
                 toRunAttachment,
               ) as unknown as RunStartRequest["attachments"])
             : undefined,
-        // `+ → Tools` selections: web_search defaults on at the runtime, so
+        // Tools pill selections: web_search defaults on at the runtime, so
         // only an explicit opt-OUT is meaningful; active connector ids become
         // request_context.connector_scopes (buildRunCreateBody applies both).
         webSearchEnabled,
@@ -289,7 +288,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
         onRemoveSkill={handleRemoveSkill}
         onClearSkills={handleClearSkills}
         connectorsTrigger={connectorsTrigger}
-        renderToolsMenu={renderToolsMenu}
+        toolsTrigger={toolsTrigger}
         // "Add a provider key" navigates to Settings → Provider keys (the one
         // surface); takes precedence over the inline port below.
         onAddProviderKey={onOpenModelSettings}

@@ -194,8 +194,8 @@ const FIRST_RUN_CAPABILITIES = {
 const onboardingFilePicker = new DesktopComposerFilePicker();
 const onboardingAttachmentAdapter = createDesktopAttachmentAdapter();
 
-/** The first-run composer's `+`-menu / skills-settings navigations are
- *  intentional no-ops — its connector affordance is the `+ → Tools` view
+/** The first-run composer's attachment-menu / skills-settings navigations are
+ *  intentional no-ops — its connector affordance is the run-scoped Tools pill
  *  (wired via `connectorsPort` below), not these deep-links into Settings. */
 function noop(): void {
   /* intentional no-op — FTUE has no in-composer Settings navigation */
@@ -477,7 +477,7 @@ export function FirstRunSurfaceMount({
           onSubmit={handleSubmit}
           startError={launchPhase === "error" ? launch.error : null}
           onDismissError={resetLaunch}
-          renderToolsMenu={ctx.renderToolsMenu}
+          toolsTrigger={ctx.toolsTrigger}
           disabled={launchPhase === "starting"}
         />
       );

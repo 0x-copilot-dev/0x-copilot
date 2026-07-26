@@ -1,9 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { ComposerConnectorsPort } from "@0x-copilot/chat-surface";
 
-import { ChatToolsMenu } from "./ChatToolsTrigger";
+import { ChatToolsTrigger } from "./ChatToolsTrigger";
 
 function fakeConnectorsPort(): ComposerConnectorsPort {
   return {
@@ -15,10 +15,10 @@ function fakeConnectorsPort(): ComposerConnectorsPort {
   };
 }
 
-describe("ChatToolsMenu", () => {
-  it("renders only the shared + menu body, with an explicit Back control", () => {
+describe("ChatToolsTrigger", () => {
+  it("opens the shared portal-safe Tools pill", () => {
     render(
-      <ChatToolsMenu
+      <ChatToolsTrigger
         port={fakeConnectorsPort()}
         webSearchEnabled
         onToggleWebSearch={vi.fn()}
@@ -26,13 +26,11 @@ describe("ChatToolsMenu", () => {
         onToggleConnector={vi.fn()}
         onConnectCatalog={vi.fn()}
         onAddCustom={vi.fn()}
-        onBack={vi.fn()}
       />,
     );
 
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    expect(screen.getByTestId("composer-tools-popover")).toBeTruthy();
     expect(screen.getByTestId("first-run-tools-websearch")).toBeTruthy();
-    expect(screen.getByTestId("first-run-tools-back")).toBeTruthy();
-    expect(screen.queryByTestId("first-run-tools-button")).toBeNull();
-    expect(screen.queryByTestId("first-run-tools-popover")).toBeNull();
   });
 });

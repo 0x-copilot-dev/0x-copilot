@@ -8,8 +8,8 @@
 // host's TEXT-adapter path so the rows are model-visible).
 //
 // Substrate-clean: all I/O is host-injected (attachmentAdapter / filePicker /
-// resolveAttachment / onSubmit). Per-run tools render inside the shared `+`
-// menu rather than as a second composer pill.
+// resolveAttachment / onSubmit). The per-run Tools pill is supplied as a
+// host-bound slot beside the model selector.
 
 import {
   forwardRef,
@@ -122,10 +122,8 @@ export interface OnboardingComposerProps {
   readonly onDismissError?: () => void;
   /** Legacy connector-only trigger for hosts without the richer tools adapter. */
   readonly connectorsTrigger?: ReactNode;
-  /** Per-run tools body rendered inside AssistantComposer's `+` menu. */
-  readonly renderToolsMenu?: (args: {
-    readonly onBack: () => void;
-  }) => ReactNode;
+  /** Run-scoped Tools pill + anchored popover. */
+  readonly toolsTrigger?: ReactNode;
   readonly disabled?: boolean;
 }
 
@@ -164,7 +162,7 @@ function OnboardingComposerInner(
     onAddKey,
     onDismissError,
     connectorsTrigger,
-    renderToolsMenu,
+    toolsTrigger,
     disabled = false,
   } = props;
 
@@ -270,7 +268,7 @@ function OnboardingComposerInner(
         onRemoveSkill={onRemoveSkill}
         onClearSkills={onClearSkills}
         connectorsTrigger={connectorsTrigger}
-        renderToolsMenu={renderToolsMenu}
+        toolsTrigger={toolsTrigger}
         models={models}
         selectedModel={selectedModel}
         onModelChange={onModelChange}

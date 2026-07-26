@@ -46,7 +46,6 @@ const handlers = () => ({
   onAttachFile: vi.fn(),
   onOpenMcp: vi.fn(),
   onOpenSkills: vi.fn(),
-  onOpenTools: vi.fn(),
   onOpenMcpSettings: vi.fn(),
   onOpenSkillsSettings: vi.fn(),
   onShowConnectors: vi.fn(),
@@ -96,6 +95,9 @@ describe("<ComposerPlusMenu> — root view", () => {
     // No trace of the retired third idiom.
     expect(container.querySelector(".aui-plus-menu")).toBeNull();
     expect(container.querySelector(".aui-trigger-popover__item")).toBeNull();
+    expect(
+      container.querySelector("[data-testid='composer-plus-menu-tools']"),
+    ).toBeNull();
   });
 
   it("keeps every row a `.ui-pop-row` menuitem and fires its callback", () => {

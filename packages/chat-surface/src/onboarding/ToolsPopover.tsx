@@ -16,7 +16,8 @@
 //
 // Data comes from the host-injected `FirstRunConnectorsPort` (fetched once on
 // open) and is classified by the pure `projectFirstRunConnectors`. The package
-// has no `document`; portalling is opt-in via host-owned `portalTarget`.
+// has no `document`; the legacy standalone dialog takes an opt-in host-owned
+// `portalTarget`, while the shipping composer pill uses design-system `Menu`.
 //
 // ── Design parity, composer punch-list rows 43 + 46 ─────────────────────────
 // This surface used to be styled with 100% inline `CSSProperties` objects — a
@@ -117,7 +118,7 @@ export interface ToolsPopoverProps {
 
 /**
  * The run-scoped Tools body without its own trigger, overlay, or scrim.
- * `AssistantComposer` mounts this inside the one composer `+` menu; the
+ * `ComposerToolsTrigger` mounts this in its anchored composer-pill menu; the
  * standalone `ToolsPopover` below remains for callers that need a dialog.
  */
 export interface ToolsPopoverContentProps {
@@ -128,7 +129,7 @@ export interface ToolsPopoverContentProps {
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
   readonly onAddCustom: () => void;
-  /** Return to the parent composer menu. */
+  /** Return to a parent menu when this content is used as a drill-down. */
   readonly onBack?: () => void;
   /** Close a standalone dialog. Mutually exclusive with `onBack`. */
   readonly onClose?: () => void;

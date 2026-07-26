@@ -1,14 +1,13 @@
-// useDesktopComposerTools — the Run cockpit composers' `+` menu Tools view.
+// useDesktopComposerTools — per-run Tools pill state for desktop composers.
 //
-// The desktop Run composers own per-run web-search and connector state here,
-// then provide a body for the shared composer's one `+` menu. There is no
-// standalone Tools pill: it competed with the attachment button and its
-// independently positioned popover was clipped by the desktop frame.
+// The pill is intentionally independent of the `+` attachment menu. Its shared
+// trigger uses a body portal, so the 300px controls panel remains clickable
+// above the overflow-hidden desktop composer frame.
 
 import { useCallback, useMemo, useState, type ReactNode } from "react";
 
 import {
-  ToolsPopoverContent,
+  ComposerToolsTrigger,
   type ComposerConnectorsPort,
   type FirstRunInstallableConnector,
 } from "@0x-copilot/chat-surface";
@@ -17,27 +16,23 @@ import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 import { CONNECTOR_CHANNELS } from "../../main/connectors/channels";
 
 export interface UseDesktopComposerToolsOptions {
-  /** Shared `/v1/mcp/*` connector adapter; absent means no per-run tools UI. */
   readonly connectorsPort?: ComposerConnectorsPort;
+  readonly disabled?: boolean;
   /** Route Custom MCP and pre-registered catalog entries to Tools settings. */
   readonly onAddCustom?: () => void;
 }
 
 export interface DesktopComposerTools {
-  /** Body rendered in AssistantComposer's `+` menu Tools view. */
-  readonly renderToolsMenu:
-    | ((args: { readonly onBack: () => void }) => ReactNode)
-    | undefined;
-  /** Per-run web-search toggle (default true). Thread an explicit `false`. */
+  /** Tools pill + portal-safe popover, omitted when the adapter is unavailable. */
+  readonly toolsTrigger: ReactNode | undefined;
   readonly webSearchEnabled: boolean;
-  /** Active connector ids mapped to request-context scopes. */
   readonly connectorScopes: ConversationConnectorScopes | undefined;
 }
 
 export function useDesktopComposerTools(
   options: UseDesktopComposerToolsOptions,
 ): DesktopComposerTools {
-  const { connectorsPort, onAddCustom } = options;
+  const { connectorsPort, disabled, onAddCustom } = options;
   const [webOn, setWebOn] = useState(true);
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
@@ -81,35 +76,29 @@ export function useDesktopComposerTools(
     return Object.fromEntries(activeConnectorIds.map((id) => [id, []]));
   }, [activeConnectorIds]);
 
-  const renderToolsMenu = useCallback(
-    ({ onBack }: { readonly onBack: () => void }): ReactNode => {
-      if (connectorsPort === undefined) return null;
-      return (
-        <ToolsPopoverContent
-          port={connectorsPort}
-          webSearchEnabled={webOn}
-          onToggleWebSearch={setWebOn}
-          activeConnectorIds={activeConnectorIds}
-          onToggleConnector={handleToggleConnector}
-          onConnectCatalog={handleConnectCatalog}
-          onAddCustom={() => onAddCustom?.()}
-          onBack={onBack}
-        />
-      );
-    },
-    [
-      connectorsPort,
-      webOn,
-      activeConnectorIds,
-      handleToggleConnector,
-      handleConnectCatalog,
-      onAddCustom,
-    ],
-  );
+  const toolsTrigger = useMemo<ReactNode | undefined>(() => {
+    if (connectorsPort === undefined) return undefined;
+    return (
+      <ComposerToolsTrigger
+        port={connectorsPort}
+        webSearchEnabled={webOn}
+        onToggleWebSearch={setWebOn}
+        activeConnectorIds={activeConnectorIds}
+        onToggleConnector={handleToggleConnector}
+        onConnectCatalog={handleConnectCatalog}
+        onAddCustom={() => onAddCustom?.()}
+        disabled={disabled}
+      />
+    );
+  }, [
+    connectorsPort,
+    webOn,
+    activeConnectorIds,
+    handleToggleConnector,
+    handleConnectCatalog,
+    onAddCustom,
+    disabled,
+  ]);
 
-  return {
-    renderToolsMenu: connectorsPort === undefined ? undefined : renderToolsMenu,
-    webSearchEnabled: webOn,
-    connectorScopes,
-  };
+  return { toolsTrigger, webSearchEnabled: webOn, connectorScopes };
 }

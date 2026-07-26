@@ -46,7 +46,7 @@ import type {
 import { Icon } from "../icons/Icon";
 import { providerInitials } from "../icons/providerMarks";
 
-export type ComposerMenuView = "root" | "mcp" | "skills" | "tools";
+export type ComposerMenuView = "root" | "mcp" | "skills";
 
 /** The design's `.pop` width for the composer attach menu (copilot-composer2
  *  renders `<Pop>` at its 296 default). `maxWidth` is the only defensive
@@ -99,7 +99,6 @@ function MenuRow({
   onClick,
   hint,
   pinned,
-  testId,
 }: {
   badge: ReactNode;
   title: string;
@@ -108,7 +107,6 @@ function MenuRow({
   /** `title` attribute — the hover tooltip; unchanged from the pre-migration markup. */
   hint: string;
   pinned?: boolean;
-  testId?: string;
 }): ReactElement {
   return (
     <button
@@ -117,7 +115,6 @@ function MenuRow({
       role="menuitem"
       title={hint}
       onClick={onClick}
-      data-testid={testId}
     >
       <span className="ui-pop-row__lg">{badge}</span>
       <span className="ui-pop-row__m">
@@ -175,13 +172,11 @@ export function ComposerPlusMenu({
   onAttachFile,
   onOpenMcp,
   onOpenSkills,
-  onOpenTools,
   onOpenMcpSettings,
   onOpenSkillsSettings,
   onShowConnectors,
   onUseMcpServer,
   onUseSkill,
-  renderToolsMenu,
   onDismiss,
   onEscape,
 }: {
@@ -199,18 +194,11 @@ export function ComposerPlusMenu({
   onAttachFile: () => void;
   onOpenMcp: () => void;
   onOpenSkills: () => void;
-  onOpenTools: () => void;
   onOpenMcpSettings: () => void;
   onOpenSkillsSettings: () => void;
   onShowConnectors: () => void;
   onUseMcpServer: (server: McpServer) => void;
   onUseSkill: (skill: Skill) => void;
-  /**
-   * Optional per-run Tools view, supplied by the host. Keeping it inside this
-   * menu makes the composer `+` the one entry point for attachments, skills,
-   * connectors, and run-scoped tools; it must not render a second trigger.
-   */
-  renderToolsMenu?: (args: { readonly onBack: () => void }) => ReactNode;
   /**
    * Close the whole menu. When supplied, the design's transparent click-out
    * scrim (`.ui-pop-scrim`) renders behind the panel and Escape dismisses —
@@ -350,10 +338,6 @@ export function ComposerPlusMenu({
     );
   }
 
-  if (view === "tools" && renderToolsMenu !== undefined) {
-    return frame("Tools menu", renderToolsMenu({ onBack }));
-  }
-
   return frame(
     "Attachment and tools menu",
     <>
@@ -377,16 +361,6 @@ export function ComposerPlusMenu({
         />
         <div className="ui-pop__div" />
         <div className="ui-pop__grp">Tools &amp; skills</div>
-        {renderToolsMenu !== undefined ? (
-          <MenuRow
-            badge={<Icon name="plug" size={13} />}
-            title="Tools"
-            sub="web search and connectors"
-            hint="Open run tools"
-            onClick={onOpenTools}
-            testId="composer-plus-menu-tools"
-          />
-        ) : null}
         <MenuRow
           badge={<Icon name="plug" size={13} />}
           title="MCP Servers"

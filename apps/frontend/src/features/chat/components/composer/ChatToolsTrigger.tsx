@@ -1,17 +1,13 @@
-// ChatToolsMenu — the web host's body for composer `+ → Tools`.
-//
-// The caller owns web-search + connector state; this component deliberately
-// renders only the body because AssistantComposer's `+` menu is the one entry
-// point for attachments, skills, connectors, and run-scoped tools.
+// ChatToolsTrigger — the web host binding for the composer's Tools pill.
 
 import {
-  ToolsPopoverContent,
+  ComposerToolsTrigger,
   type ComposerConnectorsPort,
   type FirstRunInstallableConnector,
 } from "@0x-copilot/chat-surface";
 import { type ReactElement } from "react";
 
-export interface ChatToolsMenuProps {
+export interface ChatToolsTriggerProps {
   readonly port: ComposerConnectorsPort;
   readonly webSearchEnabled: boolean;
   readonly onToggleWebSearch: (next: boolean) => void;
@@ -19,10 +15,9 @@ export interface ChatToolsMenuProps {
   readonly onToggleConnector: (serverId: string, active: boolean) => void;
   readonly onConnectCatalog: (entry: FirstRunInstallableConnector) => void;
   readonly onAddCustom: () => void;
-  readonly onBack: () => void;
 }
 
-export function ChatToolsMenu({
+export function ChatToolsTrigger({
   port,
   webSearchEnabled,
   onToggleWebSearch,
@@ -30,10 +25,9 @@ export function ChatToolsMenu({
   onToggleConnector,
   onConnectCatalog,
   onAddCustom,
-  onBack,
-}: ChatToolsMenuProps): ReactElement {
+}: ChatToolsTriggerProps): ReactElement {
   return (
-    <ToolsPopoverContent
+    <ComposerToolsTrigger
       port={port}
       webSearchEnabled={webSearchEnabled}
       onToggleWebSearch={onToggleWebSearch}
@@ -41,7 +35,6 @@ export function ChatToolsMenu({
       onToggleConnector={onToggleConnector}
       onConnectCatalog={onConnectCatalog}
       onAddCustom={onAddCustom}
-      onBack={onBack}
     />
   );
 }

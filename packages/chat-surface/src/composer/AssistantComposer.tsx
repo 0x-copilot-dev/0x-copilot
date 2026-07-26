@@ -102,11 +102,11 @@ export interface AssistantComposerProps {
    */
   connectorsTrigger?: ReactNode;
   /**
-   * Host-owned body for the per-run Tools view inside the composer `+` menu.
-   * This is deliberately a body renderer, not a trigger: the `+` button is
-   * the single entry point for attachments, skills, connectors, and tools.
+   * The run-scoped Tools pill and its anchored popover. It sits beside the
+   * model control; hosts own its data wiring while the trigger itself portals
+   * above the overflow-hidden composer frame.
    */
-  renderToolsMenu?: (args: { readonly onBack: () => void }) => ReactNode;
+  toolsTrigger?: ReactNode;
   /** PR 8.0.1 — display name of the active model, surfaced in the
    *  composer footer hint row. */
   activeModelLabel?: string;
@@ -233,7 +233,7 @@ export const AssistantComposer = forwardRef<
     onRemoveSkill,
     onClearSkills,
     connectorsTrigger,
-    renderToolsMenu,
+    toolsTrigger,
     // activeModelLabel is still typed on the prop surface (callers haven't
     // been migrated) but the composer no longer surfaces it — the model
     // name lives in <ModelPill> only (Phase 9 dedup).
@@ -467,8 +467,6 @@ export const AssistantComposer = forwardRef<
                     }
                     onOpenMcp={() => setMenuView("mcp")}
                     onOpenSkills={() => setMenuView("skills")}
-                    onOpenTools={() => setMenuView("tools")}
-                    renderToolsMenu={renderToolsMenu}
                     onEscape={dismissMenu}
                     onOpenMcpSettings={onOpenMcpSettings}
                     onOpenSkillsSettings={onOpenSkillsSettings}
@@ -487,10 +485,7 @@ export const AssistantComposer = forwardRef<
               })}
             </div>
             {connectorsTrigger ?? null}
-            {/* The `+` menu owns run-scoped tools when the host supplies
-             * `renderToolsMenu`; a legacy connector-only trigger may still be
-             * rendered here by hosts that do not expose the per-run tool
-             * controls. */}
+            {toolsTrigger ?? null}
             {models && selectedModel !== undefined && onModelChange ? (
               <ModelPill
                 models={models}

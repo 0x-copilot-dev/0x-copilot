@@ -346,36 +346,25 @@ function fakeConnectorsPort(): ComposerConnectorsPort {
   };
 }
 
-describe("RunComposer + menu Tools", () => {
-  it("uses + as the only entry point when a connectorsPort is provided", async () => {
+describe("RunComposer Tools pill", () => {
+  it("renders the portal-safe Tools pill when a connectorsPort is provided", async () => {
     const { container } = renderComposer({
       connectorsPort: fakeConnectorsPort(),
     });
     await waitFor(() => {
       expect(textarea(container)).not.toBeNull();
     });
-    expect(
-      container.querySelector("[data-testid='first-run-tools-button']"),
-    ).toBeNull();
     fireEvent.click(
       container.querySelector(
-        "button[aria-label='Open attachment and tools menu']",
+        "[data-testid='first-run-tools-button']",
       ) as HTMLButtonElement,
     );
-    const tools = await waitFor(() => {
-      const element = document.querySelector<HTMLButtonElement>(
-        "[data-testid='composer-plus-menu-tools']",
-      );
-      expect(element).not.toBeNull();
-      return element as HTMLButtonElement;
-    });
-    fireEvent.click(tools);
     expect(
       document.querySelector("[data-testid='first-run-tools-websearch']"),
     ).not.toBeNull();
   });
 
-  it("does not mount the formerly clipped standalone Tools dialog", async () => {
+  it("uses an anchored portal instead of the formerly clipped inline dialog", async () => {
     const { container } = renderComposer({
       connectorsPort: fakeConnectorsPort(),
     });
@@ -383,12 +372,14 @@ describe("RunComposer + menu Tools", () => {
       expect(textarea(container)).not.toBeNull();
     });
 
+    fireEvent.click(
+      container.querySelector(
+        "[data-testid='first-run-tools-button']",
+      ) as HTMLButtonElement,
+    );
     expect(
-      container.querySelector("[data-testid='first-run-tools-button']"),
-    ).toBeNull();
-    expect(
-      document.querySelector("[data-testid='first-run-tools-popover']"),
-    ).toBeNull();
+      document.querySelector("[data-testid='composer-tools-popover']"),
+    ).not.toBeNull();
   });
 
   it("falls back to the flat connectors button when no connectorsPort is provided", async () => {
@@ -409,20 +400,11 @@ describe("RunComposer + menu Tools", () => {
       expect(textarea(container)).not.toBeNull();
     });
 
-    // Open + → Tools, then turn the default-on web-search toggle OFF.
+    // Open the Tools pill, then turn the default-on web-search toggle OFF.
     fireEvent.click(
       container.querySelector(
-        "button[aria-label='Open attachment and tools menu']",
+        "[data-testid='first-run-tools-button']",
       ) as HTMLButtonElement,
-    );
-    fireEvent.click(
-      await waitFor(() => {
-        const element = document.querySelector<HTMLButtonElement>(
-          "[data-testid='composer-plus-menu-tools']",
-        );
-        expect(element).not.toBeNull();
-        return element as HTMLButtonElement;
-      }),
     );
     const toggle = await waitFor(() => {
       const t = document.querySelector(

@@ -275,8 +275,8 @@ describe("<FirstRunSurface>", () => {
     expect(screen.queryByTestId("first-run-wallet-chip")).toBeNull();
   });
 
-  it("provides a Tools menu body to the composer ctx when connectorsPort is set (P4)", () => {
-    let sawToolsMenu = false;
+  it("provides a Tools pill to the composer ctx when connectorsPort is set (P4)", () => {
+    let sawToolsTrigger = false;
     let ctxWebSearch: boolean | undefined;
     render(
       <FirstRunSurface
@@ -286,25 +286,20 @@ describe("<FirstRunSurface>", () => {
         initialStage="ready"
         connectorsPort={fakeConnectorsPort()}
         renderComposer={(ctx) => {
-          sawToolsMenu = ctx.renderToolsMenu !== undefined;
+          sawToolsTrigger = ctx.toolsTrigger !== undefined;
           ctxWebSearch = ctx.webSearchEnabled;
-          return (
-            <div data-testid="p3-composer">
-              {ctx.renderToolsMenu?.({ onBack: () => undefined })}
-            </div>
-          );
+          return <div data-testid="p3-composer">{ctx.toolsTrigger}</div>;
         }}
       />,
     );
-    expect(sawToolsMenu).toBe(true);
+    expect(sawToolsTrigger).toBe(true);
     // Web search defaults ON in the surface state.
     expect(ctxWebSearch).toBe(true);
-    expect(screen.getByTestId("first-run-tools-websearch")).not.toBeNull();
-    expect(screen.queryByTestId("first-run-tools-button")).toBeNull();
+    expect(screen.getByTestId("first-run-tools-button")).not.toBeNull();
   });
 
-  it("no connectorsPort ⇒ composer ctx has no Tools menu (pre-P4 shape)", () => {
-    let toolsMenu: unknown = "sentinel";
+  it("no connectorsPort ⇒ composer ctx has no Tools pill (pre-P4 shape)", () => {
+    let toolsTrigger: unknown = "sentinel";
     render(
       <FirstRunSurface
         providerKeys={fakePort()}
@@ -312,12 +307,12 @@ describe("<FirstRunSurface>", () => {
         onComplete={() => undefined}
         initialStage="ready"
         renderComposer={(ctx) => {
-          toolsMenu = ctx.renderToolsMenu;
+          toolsTrigger = ctx.toolsTrigger;
           return <div data-testid="p3-composer">composer</div>;
         }}
       />,
     );
-    expect(toolsMenu).toBeUndefined();
+    expect(toolsTrigger).toBeUndefined();
   });
 
   it("web-search toggle flips the composer ctx webSearchEnabled (P4)", () => {
@@ -331,20 +326,17 @@ describe("<FirstRunSurface>", () => {
         connectorsPort={fakeConnectorsPort()}
         renderComposer={(ctx) => {
           lastWebSearch = ctx.webSearchEnabled;
-          return (
-            <div data-testid="p3-composer">
-              {ctx.renderToolsMenu?.({ onBack: () => undefined })}
-            </div>
-          );
+          return <div data-testid="p3-composer">{ctx.toolsTrigger}</div>;
         }}
       />,
     );
-    // Toggle web search OFF through the body that the `+` menu mounts.
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    // Toggle web search OFF through the anchored Tools pill popover.
     fireEvent.click(screen.getByTestId("first-run-tools-websearch"));
     expect(lastWebSearch).toBe(false);
   });
 
-  it("does not mount a separate Tools pill or independently positioned dialog", () => {
+  it("opens the Tools pill through a portal-safe dialog", () => {
     render(
       <FirstRunSurface
         providerKeys={fakePort()}
@@ -353,15 +345,14 @@ describe("<FirstRunSurface>", () => {
         initialStage="ready"
         connectorsPort={fakeConnectorsPort()}
         renderComposer={(ctx) => (
-          <div data-testid="p3-composer">
-            {ctx.renderToolsMenu?.({ onBack: () => undefined })}
-          </div>
+          <div data-testid="p3-composer">{ctx.toolsTrigger}</div>
         )}
       />,
     );
 
-    expect(screen.queryByTestId("first-run-tools-button")).toBeNull();
-    expect(screen.queryByTestId("first-run-tools-popover")).toBeNull();
+    fireEvent.click(screen.getByTestId("first-run-tools-button"));
+    expect(screen.getByTestId("composer-tools-popover")).not.toBeNull();
+    expect(screen.getByTestId("first-run-tools-websearch")).not.toBeNull();
   });
 
   it("footer-right is engine-keyed: key engine → keychain line, else → 'nothing leaves this machine' (P4)", async () => {

@@ -3,7 +3,7 @@
 // When there is no active run, the cockpit renders the design's "What should we
 // run first?" surface (0xCopilot First Run) instead of the plain goal card. This
 // binder mounts the shared `OnboardingComposer` (hero + starter chips +
-// AssistantComposer: model pill · `+ → Tools` · attach · send) bound to the SAME
+// AssistantComposer: model pill · Tools · attach · send) bound to the SAME
 // desktop composer data the in-chat `RunComposer` uses (`useRunComposerBindings`
 // — real skills, MCP servers, model catalog), so the empty→live transition never
 // swaps the model/tools out from under the user.
@@ -56,7 +56,7 @@ export interface RunEmptyComposerProps {
   /** Navigate to the Skills surface. */
   readonly onOpenSkills?: () => void;
   /**
-   * MCP connector surface for the `+ → Tools` view. When provided, it supplies
+   * MCP connector surface for the Tools pill. When provided, it supplies
    * web-search, connected rows, one-click connect, and Custom MCP. Omitted ⇒
    * the legacy flat "open the Tools surface" button is retained.
    */
@@ -135,17 +135,18 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
     [],
   );
 
-  // The `+ → Tools` view (when a connectors port is injected) owns the per-run
+  // The Tools pill (when a connectors port is injected) owns the per-run
   // web-search toggle + active connector ids, and yields the values threaded
   // into the start-run payload.
-  const { renderToolsMenu, webSearchEnabled, connectorScopes } =
+  const { toolsTrigger, webSearchEnabled, connectorScopes } =
     useDesktopComposerTools({
       connectorsPort,
       onAddCustom: onShowConnectors,
+      disabled: ctx.submitting,
     });
 
   // Send → start the first run through the cockpit seam. The model pill's
-  // selection and the composer attachments become the run body; `+ → Tools`
+  // selection and the composer attachments become the run body; the Tools pill
   // threads the per-run web-search toggle + active connector scopes
   // (RunStartRequest already carries them). The cockpit owns the empty→live
   // binding + the submitting/error state (surfaced back through `ctx`).
@@ -172,7 +173,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
   );
 
   const connectorsTrigger =
-    renderToolsMenu === undefined ? (
+    toolsTrigger === undefined ? (
       <ComposerConnectorsButton
         activeCount={activeConnectorCount}
         open={false}
@@ -198,7 +199,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       onRemoveSkill={onRemoveSkill}
       onClearSkills={onClearSkills}
       connectorsTrigger={connectorsTrigger}
-      renderToolsMenu={renderToolsMenu}
+      toolsTrigger={toolsTrigger}
       // Settings is the one provider-key setup surface. Keep the inline port as
       // a defensive fallback for a host that does not implement navigation, but
       // the supplied deep-link below always wins in the desktop app.

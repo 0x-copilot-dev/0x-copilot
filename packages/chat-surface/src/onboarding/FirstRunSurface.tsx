@@ -61,7 +61,7 @@ import {
   type FirstRunKeyProvider,
   type FirstRunStage,
 } from "./firstRun";
-import { ToolsPopoverContent } from "./ToolsPopover";
+import { ComposerToolsTrigger } from "./ComposerToolsTrigger";
 import type { FirstRunConnectorsPort } from "./ports/FirstRunConnectorsPort";
 import type { FirstRunProfilePort } from "./ports/FirstRunProfilePort";
 import type { FirstRunInstallableConnector } from "./projectFirstRunConnectors";
@@ -95,10 +95,8 @@ export interface FirstRunComposerCtx {
   /** The composer calls this after run-create → surface renders the ack. */
   readonly onSent: () => void;
   // --- P4 tools wiring (present only when a `connectorsPort` is injected) ---
-  /** Per-run tools body rendered inside the shared composer's `+` menu. */
-  readonly renderToolsMenu?: (args: {
-    readonly onBack: () => void;
-  }) => ReactNode;
+  /** Run-scoped Tools pill + anchored popover. */
+  readonly toolsTrigger?: ReactNode;
   /**
    * Per-run web-search toggle at render time (SPEC `webOn`, default true). The
    * host threads this into `createFirstRun` on send.
@@ -151,9 +149,8 @@ export interface FirstRunSurfaceProps {
   readonly profilePort?: FirstRunProfilePort;
   /**
    * P4 — host-injected MCP connector surface for the composer Tools popover.
-   * When provided, the surface owns `webOn` + `activeConnectorIds` and exposes
-   * the controls through the composer's one `+` menu. Absent ⇒ no per-run
-   * tools view.
+   * When provided, the surface owns `webOn` + `activeConnectorIds` and mounts
+   * the Tools pill beside the model selector. Absent ⇒ no per-run tools pill.
    */
   readonly connectorsPort?: FirstRunConnectorsPort;
   /**
@@ -389,36 +386,29 @@ export function FirstRunSurface({
     return scopes;
   }, [activeConnectorIds]);
 
-  // Tools render inside the one composer `+` menu. This avoids a duplicate
-  // bottom-bar pill and lets the host's existing anchored menu portal own the
-  // desktop clipping boundary.
-  const renderToolsMenu = useCallback(
-    ({ onBack }: { readonly onBack: () => void }): ReactNode => {
-      if (!connectorsPort) {
-        return null;
-      }
-      return (
-        <ToolsPopoverContent
-          port={connectorsPort}
-          webSearchEnabled={webOn}
-          onToggleWebSearch={setWebOn}
-          activeConnectorIds={activeConnectorIds}
-          onToggleConnector={handleToggleConnector}
-          onConnectCatalog={handleConnectCatalog}
-          onAddCustom={handleAddCustom}
-          onBack={onBack}
-        />
-      );
-    },
-    [
-      connectorsPort,
-      webOn,
-      activeConnectorIds,
-      handleToggleConnector,
-      handleConnectCatalog,
-      handleAddCustom,
-    ],
-  );
+  const toolsTrigger = useMemo<ReactNode | undefined>(() => {
+    if (connectorsPort === undefined) {
+      return undefined;
+    }
+    return (
+      <ComposerToolsTrigger
+        port={connectorsPort}
+        webSearchEnabled={webOn}
+        onToggleWebSearch={setWebOn}
+        activeConnectorIds={activeConnectorIds}
+        onToggleConnector={handleToggleConnector}
+        onConnectCatalog={handleConnectCatalog}
+        onAddCustom={handleAddCustom}
+      />
+    );
+  }, [
+    connectorsPort,
+    webOn,
+    activeConnectorIds,
+    handleToggleConnector,
+    handleConnectCatalog,
+    handleAddCustom,
+  ]);
 
   // A local engine is usable once the pull reaches 100% — or immediately when
   // the preset was already installed (P8 §6's short-circuit issues no pull, so
@@ -469,8 +459,7 @@ export function FirstRunSurface({
       modelReady,
       modelBlocked: localModelBlocked,
       onSent: () => setSent(true),
-      renderToolsMenu:
-        connectorsPort === undefined ? undefined : renderToolsMenu,
+      toolsTrigger,
       webSearchEnabled: webOn,
       connectorScopes,
     }),
@@ -481,8 +470,7 @@ export function FirstRunSurface({
       localModelPct,
       modelReady,
       localModelBlocked,
-      connectorsPort,
-      renderToolsMenu,
+      toolsTrigger,
       webOn,
       connectorScopes,
     ],

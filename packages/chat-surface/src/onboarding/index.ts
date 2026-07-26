@@ -110,6 +110,13 @@ export type {
   ToolsPopoverContentProps,
 } from "./ToolsPopover";
 export {
+  ComposerToolsButton,
+  COMPOSER_TOOLS_BUTTON_COPY,
+} from "./ComposerToolsButton";
+export type { ComposerToolsButtonProps } from "./ComposerToolsButton";
+export { ComposerToolsTrigger } from "./ComposerToolsTrigger";
+export type { ComposerToolsTriggerProps } from "./ComposerToolsTrigger";
+export {
   projectFirstRunConnectors,
   firstRunActiveToolCount,
 } from "./projectFirstRunConnectors";

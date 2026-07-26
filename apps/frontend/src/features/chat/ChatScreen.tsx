@@ -109,7 +109,7 @@ import {
   type FirstRunInstallableConnector,
   type ProviderKeysPort,
 } from "@0x-copilot/chat-surface";
-import { ChatToolsMenu } from "./components/composer/ChatToolsTrigger";
+import { ChatToolsTrigger } from "./components/composer/ChatToolsTrigger";
 import { createComposerConnectorsPort } from "../connectors/composerConnectorsPort";
 import { createFirstRunProviderKeysPort } from "../onboarding/firstRunProviderKeysPort";
 import {
@@ -977,7 +977,7 @@ export function ChatScreen({
     ],
   );
 
-  // Composer `+ → Tools` per-run state (SPEC `webOn`, default true; connectors
+  // Composer Tools pill state (SPEC `webOn`, default true; connectors
   // held as active ids since a toggle is per-turn intent, threaded into the
   // run-create body — no per-toggle PATCH, the FTUE model). Declared before
   // `submitUserMessage` so the send closure can read the current selection.
@@ -1744,9 +1744,9 @@ export function ChatScreen({
     [composerConnectorsPort],
   );
 
-  const renderToolsMenu = useCallback(
-    ({ onBack }: { readonly onBack: () => void }) => (
-      <ChatToolsMenu
+  const toolsTrigger = useMemo(
+    () => (
+      <ChatToolsTrigger
         port={composerConnectorsPort}
         webSearchEnabled={webSearchEnabled}
         onToggleWebSearch={setWebSearchEnabled}
@@ -1754,7 +1754,6 @@ export function ChatScreen({
         onToggleConnector={onToggleToolConnector}
         onConnectCatalog={onToolConnectCatalog}
         onAddCustom={() => onOpenSettings("connectors")}
-        onBack={onBack}
       />
     ),
     [
@@ -2131,7 +2130,7 @@ export function ChatScreen({
                       })
                     }
                     runIndicator={runIndicator}
-                    renderToolsMenu={renderToolsMenu}
+                    toolsTrigger={toolsTrigger}
                     providerKeysPort={providerKeysPort}
                     activeModelLabel={selectedModel?.name}
                     models={allModels}

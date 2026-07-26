@@ -81,7 +81,7 @@ export interface RunComposerBindings {
   readonly onRemoveSkill: (skillId: string) => void;
   readonly onClearSkills: () => void;
 
-  // --- MCP servers (connections shown in the `+` menu / Tools trigger) ---
+  // --- MCP servers (connections shown in the Tools trigger) ---
   readonly servers: readonly McpServer[];
   readonly serversLoading: boolean;
   /** "N active for this chat" — the count reflected on the connectors trigger. */

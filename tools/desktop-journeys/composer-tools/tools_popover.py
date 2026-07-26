@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Journey CT-01/02/03/05/06/10 — composer `+` menu Tools, desktop only.
+"""Journey CT-01/02/03/05/06/10 — composer Tools pill, desktop only.
 
-The rich per-run Tools controls have ONE entry point: the composer `+` menu.
-This drives the packaged Electron app through all desktop composer placements:
+The rich per-run Tools controls have ONE entry point: the composer Tools pill.
+The attachment `+` menu deliberately contains no Tools entry. This drives the
+packaged Electron app through all desktop composer placements:
 
 * first-run composer,
 * a bound run in Studio and Focus, and
 * a fresh New Chat in Studio and Focus.
 
 Each placement proves real pointer disclosure and Web Search interaction; the
-bound Studio path additionally proves keyboard Enter/Space, Back, Escape, and
+bound Studio path additionally proves keyboard Enter/Space, Escape, and
 click-out. No selector assertion is accepted until the row is the actual hit
 target at its rendered coordinates.
 """
@@ -25,13 +26,9 @@ from _lib import DriverSession, load_env_key  # noqa: E402
 
 
 PLUS = 'button[aria-label="Open attachment and tools menu"]'
-TOOLS_ENTRY = "[data-testid=composer-plus-menu-tools]"
-TOOLS_MENU = '[role=menu][aria-label="Tools menu"]'
-ROOT_MENU = '[role=menu][aria-label="Attachment and tools menu"]'
+TOOLS_BUTTON = "[data-testid=first-run-tools-button]"
+TOOLS_MENU = "[data-testid=composer-tools-popover]"
 WEB_SEARCH = "[data-testid=first-run-tools-websearch]"
-BACK = "[data-testid=first-run-tools-back]"
-OLD_TOOLS_BUTTON = "[data-testid=first-run-tools-button]"
-OLD_TOOLS_DIALOG = "[data-testid=first-run-tools-popover]"
 RUN_HEADER = "[data-testid=run-header]"
 
 
@@ -61,19 +58,19 @@ def row_receives_pointer(session: DriverSession) -> bool:
 
 
 def open_tools_with_pointer(session: DriverSession) -> None:
-    session.click(PLUS)
-    assert session.wait_for(ROOT_MENU, timeout_s=10), "`+` menu did not open"
-    session.click(TOOLS_ENTRY)
-    assert session.wait_for(TOOLS_MENU, timeout_s=10), "`+ → Tools` did not open"
+    session.click(TOOLS_BUTTON)
+    assert session.wait_for(TOOLS_MENU, timeout_s=10), "Tools pill did not open"
 
 
 def assert_single_entry_point(session: DriverSession, label: str) -> None:
-    assert not session.present(OLD_TOOLS_BUTTON), (
-        f"{label}: retired standalone Tools pill is still rendered"
+    assert session.present(TOOLS_BUTTON), f"{label}: composer Tools pill is absent"
+    # The attachment menu is allowed to keep its attach/MCP/skills features,
+    # but must no longer become a duplicate route to per-run Tools.
+    session.click(PLUS)
+    assert not session.present("[data-testid=composer-plus-menu-tools]"), (
+        f"{label}: attachment `+` menu still exposes a duplicate Tools entry"
     )
-    assert not session.present(OLD_TOOLS_DIALOG), (
-        f"{label}: retired standalone Tools dialog is still rendered"
-    )
+    session.click(PLUS)
 
 
 def exercise_tools(
@@ -83,12 +80,12 @@ def exercise_tools(
     keyboard: bool = False,
     outside_selector: str = RUN_HEADER,
 ) -> None:
-    """Pointer-open, verify hit target, toggle, Back, click-out; optionally keys."""
+    """Pointer-open, verify hit target, toggle, click-out; optionally keys."""
     assert_single_entry_point(session, label)
     open_tools_with_pointer(session)
     time.sleep(0.2)  # let the shared pop recipe settle before compositor sampling
-    assert row_receives_pointer(session), f"{label}: Web Search row is clipped/covered"
     session.shot(f"{label}-tools-open")
+    assert row_receives_pointer(session), f"{label}: Web Search row is clipped/covered"
 
     before = session.evaluate(
         "document.querySelector('[data-testid=first-run-tools-websearch]').getAttribute('aria-checked')"
@@ -100,22 +97,16 @@ def exercise_tools(
     )
     assert after != before, f"{label}: pointer click did not toggle Web Search"
 
-    session.click(BACK)
-    assert session.wait_for(ROOT_MENU, timeout_s=5), (
-        f"{label}: Back did not return to + root"
-    )
     session.click(outside_selector)
-    assert wait_until_absent(session, ROOT_MENU), (
-        f"{label}: click-out did not close + menu"
+    assert wait_until_absent(session, TOOLS_MENU), (
+        f"{label}: click-out did not close Tools"
     )
 
     if not keyboard:
         return
 
     # Use real Enter/Space events, not synthetic DOM state changes.
-    session.press(PLUS, "Enter")
-    assert session.wait_for(ROOT_MENU, timeout_s=5), f"{label}: Enter did not open +"
-    session.press(TOOLS_ENTRY, "Enter")
+    session.press(TOOLS_BUTTON, "Enter")
     assert session.wait_for(TOOLS_MENU, timeout_s=5), (
         f"{label}: Enter did not open Tools"
     )
@@ -165,9 +156,9 @@ def main() -> int:
     key = load_env_key("anthropic")
     print(f"[composer-tools] anthropic key_len={len(key)} (value withheld)")
 
-    with DriverSession(name="composer-tools-plus-menu") as session:
-        # First-run composer: the same shared `+` menu, before a conversation
-        # exists. It has no Studio/Focus shell yet but must not retain the pill.
+    with DriverSession(name="composer-tools-pill") as session:
+        # First-run composer: the shared Tools pill, before a conversation
+        # exists. It has no Studio/Focus shell yet.
         session.sign_in_local()
         session.ftue_add_key("anthropic", key)
         exercise_tools(
@@ -202,8 +193,8 @@ def main() -> int:
         exercise_tools(session, "new-chat-focus")
 
     print(
-        "PASS: + → Tools is interactive in first-run, bound Studio/Focus, and "
-        "New Chat Studio/Focus; no standalone Tools pill remains"
+        "PASS: Tools pill is interactive in first-run, bound Studio/Focus, and "
+        "New Chat Studio/Focus; attachment + has no duplicate Tools entry"
     )
     return 0
 

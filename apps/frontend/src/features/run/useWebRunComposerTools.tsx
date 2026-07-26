@@ -16,7 +16,7 @@
 // connectors port + provider-keys port). No `@0x-copilot/chat-surface` internals,
 // no `apps/desktop` import, no raw fetch.
 
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useMemo, useState, type ReactElement } from "react";
 
 import {
   type ComposerConnectorsPort,
@@ -27,7 +27,7 @@ import {
 import type { ConversationConnectorScopes } from "@0x-copilot/api-types";
 
 import type { RequestIdentity } from "../../api/config";
-import { ChatToolsMenu } from "../chat/components/composer/ChatToolsTrigger";
+import { ChatToolsTrigger } from "../chat/components/composer/ChatToolsTrigger";
 import { createComposerConnectorsPort } from "../connectors/composerConnectorsPort";
 import { createFirstRunProviderKeysPort } from "../onboarding/firstRunProviderKeysPort";
 import { toReadableRunAttachments } from "../onboarding/firstRunAttachments";
@@ -48,10 +48,8 @@ export interface WebRunComposerTools {
   readonly onModelChange: (id: string) => void;
   /** Host provider-keys port — the model pill's inline "Add a provider key" form. */
   readonly providerKeysPort: ProviderKeysPort;
-  /** Body rendered by the shared composer's `+ → Tools` view. */
-  readonly renderToolsMenu: (args: {
-    readonly onBack: () => void;
-  }) => ReactNode;
+  /** Run-scoped Tools pill + anchored popover. */
+  readonly toolsTrigger: ReactElement;
   /**
    * Build the run-start body from the composer submit (goal + resolved model +
    * attachments + web-search + connector scopes). The ONE place both web
@@ -74,7 +72,7 @@ export function useWebRunComposerTools(
     modelName: null,
   });
 
-  // `+ → Tools` state (web-search default on + per-run active connectors).
+  // Tools pill state (web-search default on + per-run active connectors).
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
@@ -134,9 +132,9 @@ export function useWebRunComposerTools(
     return scopes;
   }, [activeConnectorIds]);
 
-  const renderToolsMenu = useCallback(
-    ({ onBack }: { readonly onBack: () => void }): ReactNode => (
-      <ChatToolsMenu
+  const toolsTrigger = useMemo(
+    () => (
+      <ChatToolsTrigger
         port={connectorsPort}
         webSearchEnabled={webSearchEnabled}
         onToggleWebSearch={setWebSearchEnabled}
@@ -144,7 +142,6 @@ export function useWebRunComposerTools(
         onToggleConnector={onToggleConnector}
         onConnectCatalog={onConnectCatalog}
         onAddCustom={noop}
-        onBack={onBack}
       />
     ),
     [
@@ -178,7 +175,7 @@ export function useWebRunComposerTools(
     selectedModel,
     onModelChange,
     providerKeysPort,
-    renderToolsMenu,
+    toolsTrigger,
     buildRunStartRequest,
   };
 }

@@ -213,25 +213,14 @@ describe("RunEmptyComposer", () => {
     expect(textarea(container)?.disabled).toBe(true);
   });
 
-  it("uses + as the only Tools entry point when a connectorsPort is provided", async () => {
+  it("renders the portal-safe Tools pill when a connectorsPort is provided", async () => {
     const { container } = renderEmpty(makeCtx(), fakeConnectorsPort());
     await waitFor(() => expect(textarea(container)).not.toBeNull());
-    expect(
-      container.querySelector("[data-testid='first-run-tools-button']"),
-    ).toBeNull();
     fireEvent.click(
       container.querySelector(
-        "button[aria-label='Open attachment and tools menu']",
+        "[data-testid='first-run-tools-button']",
       ) as HTMLButtonElement,
     );
-    const tools = await waitFor(() => {
-      const element = document.querySelector<HTMLButtonElement>(
-        "[data-testid='composer-plus-menu-tools']",
-      );
-      expect(element).not.toBeNull();
-      return element as HTMLButtonElement;
-    });
-    fireEvent.click(tools);
     expect(
       document.querySelector("[data-testid='first-run-tools-websearch']"),
     ).not.toBeNull();
@@ -269,17 +258,8 @@ describe("RunEmptyComposer", () => {
 
     fireEvent.click(
       container.querySelector(
-        "button[aria-label='Open attachment and tools menu']",
+        "[data-testid='first-run-tools-button']",
       ) as HTMLButtonElement,
-    );
-    fireEvent.click(
-      await waitFor(() => {
-        const element = document.querySelector<HTMLButtonElement>(
-          "[data-testid='composer-plus-menu-tools']",
-        );
-        expect(element).not.toBeNull();
-        return element as HTMLButtonElement;
-      }),
     );
     const toggle = await waitFor(() => {
       const t = document.querySelector(

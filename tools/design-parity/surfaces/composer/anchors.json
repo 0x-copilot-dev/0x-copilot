@@ -1,6 +1,6 @@
 {
   "surface": "composer",
-  "note": "design↔live element correspondence for the SHARED composer chrome — the bottom control row (attach · model pill · hint · send) and the model-picker popover. Design side = copilot-composer2.jsx `.cmp*` / `.pop*` (design-kit/copilot-v3.css). Live side = the shipping @0x-copilot/chat-surface OnboardingComposer → Composer → AssistantComposer → ModelPill, rendered by lib/render-live-composer.test.tsx with the four real stylesheets inlined (design-system, apps/frontend/src/styles.css, onboarding.css, composer.css — composer.css LAST, so the DESKTOP copy of every forked rule wins in this snapshot). The mock's separate Tools pill is an explicit product divergence: tools now live behind the one `+` entry point, exercised by the desktop composer-tools journey. Labels are the DESIGN labels; the live profiles are re-keyed onto them by lib/align-live.mjs (raw extractor output preserved as out/live-*.raw.json). Live-only elements keep their own live label and surface as `extra-in-live`.",
+  "note": "design↔live element correspondence for the SHARED composer chrome — the bottom control row (attach · Tools pill · model pill · hint · send) and the model-picker popover. Design side = copilot-composer2.jsx `.cmp*` / `.pop*` (design-kit/copilot-v3.css). Live side = the shipping @0x-copilot/chat-surface OnboardingComposer → Composer → AssistantComposer → ComposerToolsTrigger → ModelPill, rendered by lib/render-live-composer.test.tsx with the four real stylesheets inlined (design-system, apps/frontend/src/styles.css, onboarding.css, composer.css — composer.css LAST, so the DESKTOP copy of every forked rule wins in this snapshot). The static render captures the closed Tools pill; the desktop composer-tools journey proves its portaled popover's click, keyboard, and dismissal behaviour. Labels are the DESIGN labels; the live profiles are re-keyed onto them by lib/align-live.mjs (raw extractor output preserved as out/live-*.raw.json). Live-only elements keep their own live label and surface as `extra-in-live`.",
   "states": ["closed", "model"],
   "elements": [
     {
@@ -87,37 +87,33 @@
       "label": "cmp.tools.pill",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3)",
-      "live": null,
-      "liveLabel": null,
-      "liveAuthoredAt": "Retired: tools are selected through the composer's one `+` menu.",
-      "expectDivergence": "Product decision: remove the duplicate bottom-row Tools pill. The desktop interaction audit covers `+ → Tools` in first-run, bound Studio/Focus, and New Chat Studio/Focus."
+      "live": "[data-testid=\"first-run-tools-button\"]",
+      "liveLabel": "tools-pill",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx (shared leaf) + packages/design-system/src/styles.css:.ui-cpill"
     },
     {
       "label": "cmp.tools.icon",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3) > svg",
-      "live": null,
-      "liveLabel": null,
-      "liveAuthoredAt": "Retired with the duplicate bottom-row Tools pill.",
-      "expectDivergence": "Product decision: tools are now reached through the `+` menu instead of a second composer pill."
+      "live": "[data-testid=\"first-run-tools-button\"] > svg",
+      "liveLabel": "tools-icon",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx (Icon plug, 11px) + design-system .ui-cpill svg"
     },
     {
       "label": "cmp.tools.label",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3) > .lb",
-      "live": null,
-      "liveLabel": null,
-      "liveAuthoredAt": "Retired with the duplicate bottom-row Tools pill.",
-      "expectDivergence": "Product decision: tools are now reached through the `+` menu instead of a second composer pill."
+      "live": "[data-testid=\"first-run-tools-button\"] > .ui-cpill__lb",
+      "liveLabel": "tools-label",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx + design-system .ui-cpill__lb"
     },
     {
       "label": "cmp.tools.count",
       "group": "A · Tools pill",
       "design": ".cmp-row > .cmp-pill:nth-of-type(3) > .n",
-      "live": null,
-      "liveLabel": null,
-      "liveAuthoredAt": "Retired with the duplicate bottom-row Tools pill.",
-      "expectDivergence": "Product decision: tools are now reached through the `+` menu instead of a second composer pill."
+      "live": "[data-testid=\"first-run-tools-button\"] > .ui-cpill__n",
+      "liveLabel": "tools-count",
+      "liveAuthoredAt": "packages/chat-surface/src/onboarding/ComposerToolsButton.tsx + design-system .ui-cpill__n"
     },
     {
       "label": "cmp.hint",

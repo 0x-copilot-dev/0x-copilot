@@ -1,10 +1,11 @@
 # Composer Tools journeys
 
 This matrix covers every supported Tools outcome across the desktop user journey.
-The composer has one entry point: **`+` → Tools**. There is no standalone
-`Tools N` pill or independently positioned Tools dialog. Rows marked **fixture**
-need a configured provider/connector or a local test fixture; they must not be
-simulated as a successful real integration.
+The composer has one entry point: the **`Tools N` pill** beside the model
+selector. Its popover is anchored through a body portal, and the attachment
+`+` menu has no duplicate Tools entry. Rows marked **fixture** need a configured
+provider/connector or a local test fixture; they must not be simulated as a
+successful real integration.
 
 Run the executable safe smoke from this worktree after staging the desktop
 runtime:
@@ -17,16 +18,16 @@ python3 tools/desktop-journeys/composer-tools/tools_popover.py
 
 ## Core navigation and interaction
 
-| ID    | Entry state                 | Actions                                       | Expected outcome                                                             | Automation         |
-| ----- | --------------------------- | --------------------------------------------- | ---------------------------------------------------------------------------- | ------------------ |
-| CT-01 | First-run composer          | `+` → Tools                                   | No standalone pill; Tools view is visible and Web Search is the hit target.  | `tools_popover.py` |
-| CT-02 | New Chat, Studio            | `+` → Tools                                   | View stays inside the correctly anchored `+` menu, never clipped.            | `tools_popover.py` |
-| CT-03 | New Chat, Focus             | `+` → Tools                                   | Same disclosure and hit-target contract as Studio.                           | `tools_popover.py` |
-| CT-04 | Bound Run, Studio and Focus | `+` → Tools                                   | Same menu in both modes; Web Search selection persists per composer.         | `tools_popover.py` |
-| CT-05 | Any panel                   | Back, Escape, click outside                   | Back returns to `+` root; Escape and click-out close the menu.               | `tools_popover.py` |
-| CT-06 | Keyboard-only               | Tab through, Space/Enter a switch             | Logical order, visible focus, truthful roles and `aria-checked`.             | component + E2E    |
-| CT-07 | Narrow window / long names  | Resize to 320px and use long connector labels | Panel stays within viewport, scrolls internally, and rows remain actionable. | visual fixture     |
-| CT-08 | Reduced motion              | Open/close with reduced motion preference     | No disruptive animation; menu is immediately usable.                         | visual fixture     |
+| ID    | Entry state                 | Actions                                       | Expected outcome                                                              | Automation         |
+| ----- | --------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------- | ------------------ |
+| CT-01 | First-run composer          | Tools pill                                    | Pill is visible; Web Search is the rendered hit target; `+` has no Tools row. | `tools_popover.py` |
+| CT-02 | New Chat, Studio            | Tools pill                                    | Anchored portal stays above the composer and is never clipped.                | `tools_popover.py` |
+| CT-03 | New Chat, Focus             | Tools pill                                    | Same disclosure and hit-target contract as Studio.                            | `tools_popover.py` |
+| CT-04 | Bound Run, Studio and Focus | Tools pill                                    | Same popover in both modes; Web Search selection persists per composer.       | `tools_popover.py` |
+| CT-05 | Any panel                   | Escape, click outside                         | Escape and click-out close the popover; `+` has no duplicate route.           | `tools_popover.py` |
+| CT-06 | Keyboard-only               | Tab through, Space/Enter a switch             | Logical order, visible focus, truthful roles and `aria-checked`.              | component + E2E    |
+| CT-07 | Narrow window / long names  | Resize to 320px and use long connector labels | Panel stays within viewport, scrolls internally, and rows remain actionable.  | visual fixture     |
+| CT-08 | Reduced motion              | Open/close with reduced motion preference     | No disruptive animation; menu is immediately usable.                          | visual fixture     |
 
 ## Built-ins and selection
 

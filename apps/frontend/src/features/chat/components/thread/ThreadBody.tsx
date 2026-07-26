@@ -111,8 +111,8 @@ export const ThreadBody = forwardRef<
     onClearSkills?: () => void;
     onOpenSources?: (citationId: string) => void;
     connectorsTrigger?: ReactNode;
-    /** Host body for the composer's single `+ → Tools` view. */
-    renderToolsMenu?: (args: { readonly onBack: () => void }) => ReactNode;
+    /** Host-owned Tools pill + anchored popover. */
+    toolsTrigger?: ReactNode;
     /**
      * When set, the model pill's "Add a provider key" opens an inline
      * `<KeyForm>` sub-view inside the popover (saved via the port) instead of the
@@ -173,7 +173,7 @@ export const ThreadBody = forwardRef<
     onClearSkills,
     onOpenSources,
     connectorsTrigger,
-    renderToolsMenu,
+    toolsTrigger,
     providerKeysPort,
     onProviderKeyAdded,
     activeModelLabel,
@@ -297,7 +297,7 @@ export const ThreadBody = forwardRef<
           onRemoveSkill={onRemoveSkill}
           onClearSkills={onClearSkills}
           connectorsTrigger={connectorsTrigger}
-          renderToolsMenu={renderToolsMenu}
+          toolsTrigger={toolsTrigger}
           providerKeysPort={providerKeysPort}
           onProviderKeyAdded={onProviderKeyAdded}
           activeModelLabel={activeModelLabel}

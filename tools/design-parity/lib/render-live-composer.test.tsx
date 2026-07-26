@@ -6,13 +6,15 @@
  * HTML documents with the REAL stylesheets INLINED, so the browser extractor
  * reads the exact computed styles the app produces.
  *
- * Two states:
+ * Three states:
  *   surfaces/composer/live/closed.html — the full bottom row: one `+` button
- *       (attachments, skills, connectors, and per-run Tools live behind it),
- *       mic, model pill, send button, hint row.
+ *       (attachments, skills, connectors), the per-run Tools pill, mic, model
+ *       pill, send button, hint row.
  *   surfaces/composer/live/model.html — the SAME composer with the ModelPill
  *       popover OPEN: "Your keys" (2 cloud models) + "Local · on-device"
  *       (1 ollama model) + the footer.
+ *   surfaces/composer/live/tools.html — the SAME composer with the shared
+ *       Tools pill's anchored panel OPEN: Web Search + connector surface.
  *
  * HOW THE OPEN STATE IS PRODUCED (option (i) from the brief): the popover is a
  * click-driven `useState`, so `renderToStaticMarkup` can never reach it. We
@@ -46,6 +48,7 @@ import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 
 import {
+  ComposerToolsTrigger,
   OnboardingComposer,
   TransportProvider,
 } from "@0x-copilot/chat-surface";
@@ -143,6 +146,15 @@ const fakeTransport = {
 
 const fakeFilePicker = { pick: () => Promise.resolve([]) };
 
+const fakeConnectorsPort = {
+  listServers: () => Promise.resolve([]),
+  listCatalog: () => Promise.resolve([]),
+  installFromCatalog: () =>
+    Promise.reject(new Error("not used by parity render")),
+  addCustomServer: () => Promise.reject(new Error("not used by parity render")),
+  beginAuth: () => Promise.resolve(),
+};
+
 // Both hosts (apps/frontend RunEmptyComposer, apps/desktop RunEmptyComposer)
 // pass a providerKeysPort down to the ModelPill — that is what makes the
 // popover's `.atlas-model-pill__footer` ("Add a provider key →") render at all.
@@ -192,6 +204,15 @@ const MODELS = [
 const SELECTED = "anthropic/claude-sonnet-4-5";
 
 function mountComposer() {
+  const toolsTrigger = h(ComposerToolsTrigger, {
+    port: fakeConnectorsPort,
+    webSearchEnabled: true,
+    onToggleWebSearch: noop,
+    activeConnectorIds: [],
+    onToggleConnector: noop,
+    onConnectCatalog: noop,
+    onAddCustom: noop,
+  });
   return render(
     h(
       TransportProvider,
@@ -206,6 +227,7 @@ function mountComposer() {
         onShowConnectors: noop,
         onOpenSkillsSettings: noop,
         onOpenMcpSettings: noop,
+        toolsTrigger,
         models: MODELS,
         selectedModel: SELECTED,
         onModelChange: noop,
@@ -253,7 +275,7 @@ it("renders the live composer bottom row (popover closed) to static HTML", () =>
   ).not.toBeNull();
   expect(
     container.querySelector('[data-testid="first-run-tools-button"]'),
-  ).toBeNull();
+  ).not.toBeNull();
   expect(container.querySelector(".atlas-composer-mic")).not.toBeNull();
   expect(container.querySelector(".atlas-model-pill")).not.toBeNull();
   expect(container.querySelector(".aui-send-button")).not.toBeNull();
@@ -324,6 +346,64 @@ it("renders the live model picker popover (open) to static HTML", () => {
     LIVE("model.html"),
     shell(
       "design-parity · composer model picker (open) · LIVE",
+      container.innerHTML,
+      portalMarkup(container),
+    ),
+  );
+});
+
+it("renders the live Tools pill popover (open) to static HTML", () => {
+  mkdirSync(LIVE(""), { recursive: true });
+  writeFonts();
+
+  const { container } = mountComposer();
+  const pill = container.querySelector<HTMLButtonElement>(
+    '[data-testid="first-run-tools-button"]',
+  );
+  expect(pill).not.toBeNull();
+
+  Object.defineProperty(window, "innerHeight", {
+    configurable: true,
+    value: 720,
+  });
+  Object.defineProperty(window, "innerWidth", {
+    configurable: true,
+    value: 1040,
+  });
+  const anchorRect = {
+    x: 300,
+    y: 413,
+    left: 300,
+    top: 413,
+    right: 377,
+    bottom: 439,
+    width: 77,
+    height: 26,
+  };
+  (pill as HTMLButtonElement).getBoundingClientRect = () => ({
+    ...anchorRect,
+    toJSON: () => anchorRect,
+  });
+
+  fireEvent.click(pill as HTMLButtonElement);
+
+  const menu = document.body.querySelector(
+    '[data-testid="composer-tools-popover"]',
+  );
+  expect(menu).not.toBeNull();
+  expect(menu?.querySelector(".ui-pop__h")).not.toBeNull();
+  expect(menu?.querySelector(".ui-pop__list")).not.toBeNull();
+  expect(
+    menu?.querySelector('[data-testid="first-run-tools-websearch"]'),
+  ).not.toBeNull();
+  expect(
+    menu?.querySelector('[data-testid="first-run-tools-custom"]'),
+  ).not.toBeNull();
+
+  writeFileSync(
+    LIVE("tools.html"),
+    shell(
+      "design-parity · composer Tools picker (open) · LIVE",
       container.innerHTML,
       portalMarkup(container),
     ),

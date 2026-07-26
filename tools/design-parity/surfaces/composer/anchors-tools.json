@@ -1,0 +1,149 @@
+{
+  "surface": "composer-tools",
+  "note": "Design↔live correspondence for the composer Tools pill and its expanded panel. The design's extra connected rows use mock-only data; this map measures the common trigger, panel, Web Search row, divider, and custom-MCP action. The live panel is deliberately portaled through Menu rather than rendered under a scrim, so the scrim and design-only footer are declared interaction/data divergences.",
+  "states": ["tools"],
+  "elements": [
+    {
+      "label": "tools.trigger",
+      "group": "A · Tools pill",
+      "design": "button[title=\"Tools & connections\"]",
+      "live": "[data-testid=\"first-run-tools-button\"]",
+      "liveLabel": "tools-pill"
+    },
+    {
+      "label": "tools.trigger.icon",
+      "group": "A · Tools pill",
+      "design": "button[title=\"Tools & connections\"] > svg",
+      "live": "[data-testid=\"first-run-tools-button\"] > svg",
+      "liveLabel": "tools-icon"
+    },
+    {
+      "label": "tools.trigger.label",
+      "group": "A · Tools pill",
+      "design": "button[title=\"Tools & connections\"] > .lb",
+      "live": "[data-testid=\"first-run-tools-button\"] > .ui-cpill__lb",
+      "liveLabel": "tools-label"
+    },
+    {
+      "label": "tools.trigger.count",
+      "group": "A · Tools pill",
+      "design": "button[title=\"Tools & connections\"] > .n",
+      "live": "[data-testid=\"first-run-tools-button\"] > .ui-cpill__n",
+      "liveLabel": "tools-count",
+      "expectDivergence": {
+        "text": "Live displays the active count only (1), not the design mock's mock-data ratio (4/4).",
+        "width": "The active-only count is intentionally narrower than the mock-data ratio."
+      }
+    },
+    {
+      "label": "tools.panel",
+      "group": "B · Popover frame",
+      "design": ".pop",
+      "live": "[data-testid=\"composer-tools-popover\"] > .ui-pop",
+      "liveLabel": "tools-panel"
+    },
+    {
+      "label": "tools.panel.scrim",
+      "group": "B · Popover frame",
+      "design": ".pop-scrim",
+      "live": null,
+      "expectDivergence": "Live Menu owns click-out through its body portal listener; it does not render a transparent scrim below the panel."
+    },
+    {
+      "label": "tools.header",
+      "group": "B · Popover frame",
+      "design": ".pop > .pop__h",
+      "live": "[data-testid=\"composer-tools-popover\"] .ui-pop__h",
+      "liveLabel": "tools-header",
+      "expectDivergence": {
+        "text": "The product label is Tools, not the mock's Tools & connections."
+      }
+    },
+    {
+      "label": "tools.header.meta",
+      "group": "B · Popover frame",
+      "design": ".pop > .pop__h > .meta",
+      "live": "[data-testid=\"first-run-tools-meta\"]",
+      "liveLabel": "tools-header-meta",
+      "expectDivergence": {
+        "text": "Live states active tools plus the approval posture; mock shows mock-data on/total."
+      }
+    },
+    {
+      "label": "tools.list",
+      "group": "B · Popover frame",
+      "design": ".pop > .pop__list",
+      "live": "[data-testid=\"composer-tools-popover\"] .ui-pop__list",
+      "liveLabel": "tools-list"
+    },
+    {
+      "label": "tools.web.row",
+      "group": "C · Web Search",
+      "design": ".pop__list > .pop-row",
+      "live": "[data-testid=\"first-run-tools-websearch\"]",
+      "liveLabel": "web-search-row"
+    },
+    {
+      "label": "tools.web.icon",
+      "group": "C · Web Search",
+      "design": ".pop__list > .pop-row > .lg",
+      "live": "[data-testid=\"first-run-tools-websearch\"] > .ui-pop-row__lg",
+      "liveLabel": "web-search-icon"
+    },
+    {
+      "label": "tools.web.copy",
+      "group": "C · Web Search",
+      "design": ".pop__list > .pop-row > .m",
+      "live": "[data-testid=\"first-run-tools-websearch\"] > .ui-pop-row__m",
+      "liveLabel": "web-search-copy"
+    },
+    {
+      "label": "tools.web.name",
+      "group": "C · Web Search",
+      "design": ".pop__list > .pop-row > .m > .nm",
+      "live": "[data-testid=\"first-run-tools-websearch\"] .ui-pop-row__nm",
+      "liveLabel": "web-search-name"
+    },
+    {
+      "label": "tools.web.sub",
+      "group": "C · Web Search",
+      "design": ".pop__list > .pop-row > .m > .sb",
+      "live": "[data-testid=\"first-run-tools-websearch\"] .ui-pop-row__sb",
+      "liveLabel": "web-search-sub"
+    },
+    {
+      "label": "tools.web.toggle",
+      "group": "C · Web Search",
+      "design": "button[aria-label=\"Toggle web search\"]",
+      "live": "[data-testid=\"first-run-tools-websearch\"] > span:last-child",
+      "liveLabel": "web-search-toggle",
+      "expectDivergence": {
+        "borderColor": "Both tracks are borderless (0px); the live accent token on its inert border color has no rendered border."
+      }
+    },
+    {
+      "label": "tools.divider",
+      "group": "C · Web Search",
+      "design": ".pop__list > .pop-div",
+      "live": "[data-testid=\"composer-tools-popover\"] .ui-pop__div",
+      "liveLabel": "tools-divider"
+    },
+    {
+      "label": "tools.custom",
+      "group": "D · Custom MCP",
+      "design": ".pop > .pop-row--pin",
+      "live": "[data-testid=\"first-run-tools-custom\"]",
+      "liveLabel": "custom-mcp-row",
+      "expectDivergence": {
+        "text": "The product routes to Custom MCP server directly; the design mock says Connect a tool…."
+      }
+    },
+    {
+      "label": "tools.footer",
+      "group": "D · Footer",
+      "design": ".pop > .pop__f",
+      "live": null,
+      "expectDivergence": "The shared composer content receives no management or policy navigation callbacks, so it does not invent the mock footer actions."
+    }
+  ]
+}
