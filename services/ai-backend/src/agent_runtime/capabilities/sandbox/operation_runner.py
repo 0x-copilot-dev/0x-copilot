@@ -60,14 +60,10 @@ _ARTIFACT_BLOB_REF = re.compile(r"^artifact-blob://sha256/[0-9a-f]{64}$")
 
 @runtime_checkable
 class SandboxLifecycleCoordinatorPort(Protocol):
-    """The sole execution and overlay-import authority available to this runner."""
+    """The sole execution authority available to this runner."""
 
     async def run(self, request: SandboxRunRequest) -> SandboxRunResult:
         """Execute the immutable request exactly once at the provider boundary."""
-        ...
-
-    async def import_patch(self, result: SandboxRunResult) -> str:
-        """Pass a complete patch only to the coordinator's injected C1/C3 port."""
         ...
 
 
@@ -153,7 +149,6 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
         try:
             coordinator_result = await self._coordinator.run(coordinator_request)
             patch = None
-            activity_ref = None
             if collect_patch:
                 if coordinator_result.patch is None:
                     raise SandboxError(
@@ -167,10 +162,10 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                         coordinator_request.create_request.snapshot.manifest_sha256
                     ),
                 )
-                # The coordinator owns validation and its only importer is the
-                # injected C1/C3 overlay port.  This runner never gets a host
-                # authority or a physical write API.
-                activity_ref = await self._coordinator.import_patch(coordinator_result)
+                # This is a reviewable proposal, not a write.  C1/UI later
+                # invokes its own explicit apply operation using this immutable
+                # artifact-backed handoff; neither the overlay nor the host
+                # workspace changes during command completion.
             elif coordinator_result.patch is not None:
                 raise SandboxError(
                     SandboxErrorCode.SANDBOX_MANIFEST_MISMATCH,
@@ -196,7 +191,6 @@ class SandboxLifecycleOperationRunner(SandboxOperationRunnerPort):
                 operation_id=request.operation_id,
                 result_ref=artifact_ref,
                 safe_summary=self._safe_summary(coordinator_result),
-                activity_ref=activity_ref,
                 patch=patch,
             )
         except (ValueError, ValidationError) as exc:
