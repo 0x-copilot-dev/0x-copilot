@@ -70,6 +70,22 @@ TOOL_EXECUTION_V2_EVENT_TYPES = frozenset(
         "gate.resolved",
     }
 )
+# These closed lifecycle events are emitted only after the supervisor's ``task``
+# tool dispatches subagent work.  Keep this explicit rather than rejecting every
+# event whose name or metadata mentions a subagent: ordinary model/run telemetry
+# remains valid for G0 when it is not task execution.
+SUBAGENT_TASK_EXECUTION_EVENT_TYPES = frozenset(
+    {
+        "subagent_update",
+        "subagent_started",
+        "subagent_progress",
+        "subagent_completed",
+        "subagent_fleet_started",
+        "subagent_fleet_finished",
+        "subagent_paused",
+        "subagent_resumed",
+    }
+)
 RICH_EVENT_TYPES = frozenset(
     {
         "view.derived",
@@ -335,12 +351,29 @@ def _assert_facade_plain_chat(session: DriverSession, run_id: str) -> None:
     assert not v2_tool_execution_events, (
         f"plain chat persisted v2 tool execution events: {v2_tool_execution_events!r}"
     )
+    subagent_task_execution_events = [
+        event_type
+        for event_type in event_types
+        if event_type in SUBAGENT_TASK_EXECUTION_EVENT_TYPES
+    ]
+    assert not subagent_task_execution_events, (
+        "plain chat dispatched subagent task execution events: "
+        f"{subagent_task_execution_events!r}"
+    )
     tool_activity = [
         event.get("event_type")
         for event in events
         if event.get("activity_kind") == "tool"
     ]
     assert not tool_activity, f"plain chat projected tool activity: {tool_activity!r}"
+    subagent_activity = [
+        event.get("event_type")
+        for event in events
+        if event.get("activity_kind") == "subagent"
+    ]
+    assert not subagent_activity, (
+        f"plain chat projected subagent task activity: {subagent_activity!r}"
+    )
     rich_events = [
         event_type for event_type in event_types if event_type in RICH_EVENT_TYPES
     ]
@@ -352,6 +385,37 @@ def _assert_facade_plain_chat(session: DriverSession, run_id: str) -> None:
     # ``surface.created {kind: receipt}`` and ``receipt.emitted``. That is not a
     # user-visible surface tab or receipt launcher (the UI assertion above proves
     # both absent). Any other surface kind is an ordinary-chat regression.
+    receipt_surface_events = [
+        event
+        for event in events
+        if event.get("event_type") == "surface.created"
+        and event.get("payload", {}).get("kind") == "receipt"
+    ]
+    receipt_emitted_events = [
+        event for event in events if event.get("event_type") == "receipt.emitted"
+    ]
+    assert len(receipt_surface_events) <= 1, (
+        "plain chat persisted more than one terminal receipt surface: "
+        f"{len(receipt_surface_events)}"
+    )
+    assert len(receipt_emitted_events) <= 1, (
+        "plain chat persisted more than one terminal receipt emission: "
+        f"{len(receipt_emitted_events)}"
+    )
+    assert len(receipt_surface_events) == len(receipt_emitted_events), (
+        "plain chat terminal receipt is missing its matching surface/emission pair"
+    )
+    if receipt_surface_events:
+        receipt_surface_id = (
+            receipt_surface_events[0].get("payload", {}).get("surface_id")
+        )
+        receipt_emitted_id = (
+            receipt_emitted_events[0].get("payload", {}).get("surface_id")
+        )
+        assert receipt_surface_id == receipt_emitted_id, (
+            "plain chat terminal receipt pair has mismatched surface ids"
+        )
+
     nonreceipt_surface_events = [
         event.get("payload", {}).get("kind")
         for event in events
@@ -368,6 +432,13 @@ def _assert_facade_plain_chat(session: DriverSession, run_id: str) -> None:
     )
     projected_surfaces = surfaces.get("surfaces")
     assert isinstance(projected_surfaces, list), "surfaces projection omitted its list"
+    receipt_surfaces = [
+        surface for surface in projected_surfaces if surface.get("kind") == "receipt"
+    ]
+    assert len(receipt_surfaces) <= 1, (
+        "plain chat facade projection has more than one terminal receipt surface: "
+        f"{len(receipt_surfaces)}"
+    )
     nonreceipt_surfaces = [
         surface for surface in projected_surfaces if surface.get("kind") != "receipt"
     ]
