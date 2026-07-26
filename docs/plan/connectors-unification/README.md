@@ -1,6 +1,6 @@
 # Connectors Unification — implementation plan
 
-**Status:** Draft · **Branch:** `claude/connectors-unification` · **Base:** `1a044e21`
+**Status:** Draft · **Branch:** `claude/connectors-unification` · **Base:** `b579aa03`
 **Design source:** _0xCopilot App v3_ — `ConnectorsSurface` (`tools/design-parity/design-kit/app-v3/copilot-app.jsx:43-71`), `ConnectModal` (`copilot-flows.jsx:186-268`), `connCard()` (`copilot-workspace3.jsx`)
 **Parity harness:** `tools/design-parity/surfaces/tools/anchors.json`
 **Product spec:** the surface/flow rationale this plan implements
@@ -37,7 +37,8 @@ Fixing the drift by syncing the files is a bandaid: it restores agreement today 
 - `desktop_profiles.yaml`'s **reconciler** (`profile_catalog.DesktopProfileCatalog`) already fails closed on orphan cards, non-HTTPS endpoints and write tools missing risk/approval metadata. It is the correct model, scoped to one host by accident of delivery order.
 - `ConnectorAvailability` already enumerates the states a card needs (`available`, `preview`, `admin_setup_required`, `tenant_disabled`, `unsupported_by_policy`, `tool_contract_mismatch`, `temporarily_unavailable`).
 - `list_suggestible_connectors` already filters correctly on installed / paused / `discoverable` / per-user mute.
-- `ConnectorConsentCard` (on `claude/tool-card-design-compare-3b5237`) already implements the four-state consent card to v3, with server-derived trust clauses and omit-rather-than-invent semantics.
+- `ConnectorConsentCard` **is on `main`** (PR #379), rendered by `TcChat` for both the blocking `auth_mcp` gate and the non-blocking `suggest_mcp_connector` suggestion. `ConnectorTrustLine` derives every trust clause from server-owned inputs — scope from the connector row, host from the _issued_ auth URL — and omits a clause it cannot source rather than guessing it.
+- `QuestionCard` / `ask_a_question` shipped in the same PR, so the in-chat "agent asks the user something" pattern now has a card of its own rather than borrowing the approval frame.
 - `PostgresConnectorsStore` **exists** (`connectors/store.py:528`). Only the wiring is missing — `app.py:1781` unconditionally constructs `InMemoryConnectorsStore()`.
 
 ---
@@ -135,9 +136,16 @@ Per §2.2. Additive migration, backfill, then a follow-up that forbids new produ
 
 ### Phase 4 — Discovery lifecycle
 
-The behaviour behind the card that already exists.
+The behaviour behind the card, which now exists on `main`. PR #379 narrowed this phase considerably: the card, its four states, and the server-derived trust line all shipped. What did not ship is who drives the states.
 
-- **Connecting mid-run never restarts the run.** Restarting re-emits work the user is reading and re-spends tokens. The connector arms the next turn; the card converts to an explicit _"Retry that step with Linear"_ affordance. This is the contract `ConnectorConsentCard`'s `connected` state is currently missing.
+`TcChat` renders the card hardcoded to `state="pending"`, and says why:
+
+> A pending gate is the only state the run stream can tell us about: connecting / connected / denied happen after the host launches OAuth, so the host owns those transitions (P5b).
+
+That is an honest boundary, not an oversight — the run stream genuinely cannot observe an OAuth popup. But it means three of four states are currently unreachable, so a user who connects sees the card sit at "pending" and concludes nothing happened. Phase 4 is now exactly: **give those transitions an owner.**
+
+- Drive `connecting → connected | denied` from the host's existing auth port (`webMcpAuthPort` on web, the IPC bridge on desktop), which already knows the OAuth outcome. This is `P5b` in [web-convergence/PRD.md](../web-convergence/PRD.md); it should be scheduled with this program rather than separately, because the card that motivates it is now shipped.
+- **Connecting mid-run never restarts the run.** Restarting re-emits work the user is reading and re-spends tokens. The connector arms the next turn; the `connected` state converts to an explicit _"Retry that step with Linear"_ affordance so the user chooses.
 - **Mute lands on the card** (`onDeny` → persist the existing per-user override), because that is where the intent forms. Settings gets the reversible list.
 - **`RUNTIME_CONNECTOR_SUGGESTIONS`**: `off` · `unblock_only` (default) · `always`, read by `list_suggestible_connectors`, surfaced in Settings → Tools.
 
