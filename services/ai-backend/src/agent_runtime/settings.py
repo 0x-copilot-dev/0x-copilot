@@ -27,6 +27,10 @@ from agent_runtime.rollout import (
     RolloutConfigurationError,
     RolloutMode,
 )
+from agent_runtime.rollout_control import (
+    RolloutCohortConfigurationError,
+    RolloutCohortPolicy,
+)
 
 
 class _EnvFields:
@@ -76,6 +80,10 @@ class _EnvFields:
     MCP_GATEWAY_MODE = "MCP_GATEWAY_MODE"
     SANDBOX_ADAPTER_MODE = "SANDBOX_ADAPTER_MODE"
     BROWSER_ADAPTER_MODE = "BROWSER_ADAPTER_MODE"
+    # D6 cohort policy is deployment-owned startup configuration.  It is a
+    # JSON array of exact-match cohort rules, read only by RuntimeSettings;
+    # request/runtime APIs never accept or reload it.  Absent stays empty.
+    E2_ROLLOUT_COHORTS_JSON = "E2_ROLLOUT_COHORTS_JSON"
     # Trusted legacy desktop/sandbox controls are inputs to the E2 bridge.
     # They are not a new coarse rollout switch and are never written back from
     # E2 mode resolution.
@@ -211,6 +219,9 @@ class RuntimeExecutionSettings(RuntimeContract):
     # controls are compatibility inputs to this immutable snapshot; callers
     # consume ``rollout.modes`` and never read a per-request environment flag.
     rollout: E2RolloutResolution = Field(default_factory=E2RolloutResolution)
+    # D6 cohorts resolve alongside the E2 mode snapshot.  They remain empty
+    # unless deployment injects E2_ROLLOUT_COHORTS_JSON at process startup.
+    rollout_cohorts: RolloutCohortPolicy = Field(default_factory=RolloutCohortPolicy)
 
     @model_validator(mode="after")
     def _artifact_drafts_require_repository(self) -> "RuntimeExecutionSettings":
@@ -481,6 +492,10 @@ class RuntimeSettings(BaseSettings):
                 ),
             ),
         )
+        try:
+            rollout_cohorts = RolloutCohortPolicy.from_startup_environment(v)
+        except RolloutCohortConfigurationError as exc:
+            raise RolloutConfigurationError(str(exc)) from exc
 
         return cls(
             environment=RuntimeEnvironment(
@@ -528,6 +543,7 @@ class RuntimeSettings(BaseSettings):
                 operation_gateway_mode=operation_gateway_mode,
                 workspace_effect_mode=workspace_effect_mode,
                 rollout=rollout,
+                rollout_cohorts=rollout_cohorts,
             ),
             store=RuntimeStoreSettings(
                 backend=_s(v, E.STORE_BACKEND, "in_memory").lower(),
