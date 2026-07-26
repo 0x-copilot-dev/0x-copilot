@@ -39,6 +39,29 @@
 #include <string.h>
 #include <stdint.h>
 
+/* `openBeneath` is a public N-API primitive.  Do not rely on a JavaScript
+ * caller to normalize its input: O_NOFOLLOW_ANY rejects symlinks but does not
+ * reject a literal ".." component. */
+static int wfs_relative_path_is_beneath(const char *path) {
+  const char *cursor;
+  const char *segment;
+  if (!path || path[0] == '/' || strchr(path, '\\')) return 0;
+  if (path[0] == '\0' || strcmp(path, ".") == 0) return 1;
+  cursor = path;
+  segment = path;
+  while (1) {
+    if (*cursor == '/' || *cursor == '\0') {
+      size_t length = (size_t)(cursor - segment);
+      if (length == 0 || (length == 1 && segment[0] == '.') ||
+          (length == 2 && segment[0] == '.' && segment[1] == '.'))
+        return 0;
+      if (*cursor == '\0') return 1;
+      segment = cursor + 1;
+    }
+    cursor++;
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Per-platform openBeneath. Each returns an OS fd (>= 0) or -1 with
  * *code set to a static errno-name string.
@@ -383,6 +406,12 @@ static napi_value OpenBeneath(napi_env env, napi_callback_info info) {
     free(root);
     free(rel);
     napi_throw_error(env, "EINVAL", "root and rel must be strings");
+    return NULL;
+  }
+  if (!wfs_relative_path_is_beneath(rel)) {
+    free(root);
+    free(rel);
+    napi_throw_error(env, "EPERM", "openBeneath path escapes root");
     return NULL;
   }
 
