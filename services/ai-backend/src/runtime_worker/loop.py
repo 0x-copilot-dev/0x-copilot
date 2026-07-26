@@ -59,6 +59,9 @@ from runtime_worker.e2_rollout_admission import (
 )
 from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.mcp_operation_storage import RuntimeMcpEffectCoordinatorFactory
+from runtime_worker.staged_write_effect_dispatch import (
+    RuntimeStagedWriteEffectDispatcherFactory,
+)
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from agent_runtime.persistence.ports import (
     CitationStorePort,
@@ -262,17 +265,31 @@ class RuntimeWorker:
                 event_store=self.event_store,
             )
         )
-        # PRD-D2 — the SOLE producer of ``write.applied``. Default construction
-        # mirrors ``approval_handler``: it builds its own durable claim ledger
-        # (off the store backend) + per-run MCP connector. Tests inject a handler
-        # with a fake engine for determinism.
+        self.effect_commit_handler = effect_commit_handler
+        self.effect_reconcile_handler = effect_reconcile_handler
+        # Every approved mutation family uses this one durable claim source.
+        # Staged writes no longer maintain a parallel commit ledger/dispatcher.
+        self.effect_claim_store: EffectClaimStore | None = effect_claim_store
+        claims = self.effect_claim_store or self._effect_claim_store()
+        self.effect_claim_store = claims
+        stage_dependencies = DefaultRuntimeDependenciesFactory(
+            self.settings,
+            mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+        )
+        # The staged-write adapter uses the same durable claim protocol as every
+        # other approved effect. It remains wrapped below so E2 rollout
+        # admission is evaluated again immediately before dispatch.
         stage_handler = stage_commit_handler or RuntimeStageCommitHandler(
             persistence=self.persistence,
             event_store=self.event_store,
             draft_store=draft_store,
+            dispatcher_factory=RuntimeStagedWriteEffectDispatcherFactory(
+                claims=claims,
+                dependencies_factory=stage_dependencies,
+                timeout_seconds=self.settings.default_timeout_seconds,
+            ),
             settings=self.settings,
             on_event_appended=on_event_appended,
-            mcp_discovery_cache=mcp_discovery_cache,
         )
         # The worker has exactly one stage-command dispatch reference. Wrap it
         # even when a host/test injects the downstream handler, so a governed
@@ -287,18 +304,10 @@ class RuntimeWorker:
                 kill_switches=self.settings.execution.rollout_kill_switches,
             ),
         )
-        self.effect_commit_handler = effect_commit_handler
-        self.effect_reconcile_handler = effect_reconcile_handler
-        # D12's planner and optional execution bridge receive this exact claim
-        # source from the worker entrypoint.  That matters for the in-memory
-        # adapter; file/Postgres would read the same durable data either way.
-        self.effect_claim_store: EffectClaimStore | None = effect_claim_store
         self.repair_reconcile_supported_executors: frozenset[EffectExecutorKind] = (
             frozenset()
         )
         if d1_ready and self.effect_commit_handler is None:
-            claims = self.effect_claim_store or self._effect_claim_store()
-            self.effect_claim_store = claims
             browser_bridge = self._browser_effect_bridge()
             factory = RuntimeMcpEffectCoordinatorFactory(
                 event_producer=self.run_handler.event_producer,

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
 
@@ -105,6 +105,12 @@ class _Authenticated:
 @dataclass
 class _RecordingConnector:
     requests: list[StageCommitRequest]
+    authorization_requests: list[StageCommitRequest] = field(default_factory=list)
+
+    async def authorize(self, request: StageCommitRequest) -> None:
+        """Model the worker's mandatory post-approval authorization check."""
+
+        self.authorization_requests.append(request)
 
     async def execute(self, request: StageCommitRequest):
         self.requests.append(request)
@@ -612,6 +618,7 @@ async def test_changes_after_stage_cannot_alter_approved_payload_and_retry_is_id
     assert first is None
     assert replay is None
     assert command.proposal_digest == queued.proposal_digest
+    assert len(connector.authorization_requests) == 1
     assert len(connector.requests) == 1
     assert connector.requests[0].tool_arguments() == {
         "body": "Approved revision",

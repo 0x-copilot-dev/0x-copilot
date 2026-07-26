@@ -22,6 +22,7 @@ from agent_runtime.capabilities.desktop.broker_client import (
 )
 from agent_runtime.effects.claims import EffectClaim
 from agent_runtime.effects.executor import (
+    EffectExecutionAuthorization,
     EffectExecutionScope,
     EffectExecutorCapabilities,
     PreparedEffect,
@@ -369,6 +370,20 @@ class WorkspaceEffectExecutor:
             return _failed(_SAFE_MESSAGE)
         result = await self._authority.commit(prepared.prepared_ref)
         return _to_effect_result(result)
+
+    async def authorize(self, prepared: PreparedEffect) -> EffectExecutionAuthorization:
+        """Retain the generic coordinator gate; C2 rechecks its private permit.
+
+        The browser/desktop authority owns the final, one-use permit validation
+        at commit time.  This typed verdict keeps every executor on the same
+        A5 contract without exposing a filesystem or permit handle here.
+        """
+
+        del prepared
+        return EffectExecutionAuthorization(
+            allowed=True,
+            safe_code="workspace_authorized",
+        )
 
     async def reconcile(self, claim: EffectClaim) -> EffectExecutionResult:
         if claim.executor is not EffectExecutorKind.WORKSPACE:

@@ -72,11 +72,11 @@ from agent_runtime.capabilities.operations.context import (
     OperationEventEmitterAdapter,
     VerifiedOperationIdentity,
 )
-from agent_runtime.capabilities.mcp.operation_adapter import (
-    McpOperationGateResolver,
+from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
 )
+from agent_runtime.capabilities.mcp.operation_adapter import McpOperationGateResolver
 from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
 from agent_runtime.effects.executor import EffectExecutionScope
@@ -88,6 +88,9 @@ from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.operations.presentation import (
+    SurfaceLedgerOperationOutcomePresenter,
+)
 from agent_runtime.rollout import RolloutCapability, RolloutMode
 from agent_runtime.rollout_admission import (
     E2RolloutAdmission,
@@ -510,6 +513,7 @@ class RuntimeRunHandler:
                         if self._artifact_publication_enabled(run)
                         else None
                     ),
+                    outcome_presenter=SurfaceLedgerOperationOutcomePresenter(),
                     mode=self._effective_operation_gateway_mode(mcp_gateway_services),
                     canonical_arguments_durable=mcp_gateway_services is not None,
                 )
@@ -1670,7 +1674,7 @@ class RuntimeRunHandler:
         Wired to the same event producer every emission uses (via
         ``RuntimeStageLedger``), the durable queue (for an allow-always
         auto-apply), and the C1 policy resolver. The stager never touches an MCP
-        client — only the CommitEngine path dispatches.
+        client — only the shared effect-dispatch path dispatches.
         """
 
         if not self.settings.execution.surfaces_v2 or run is None:

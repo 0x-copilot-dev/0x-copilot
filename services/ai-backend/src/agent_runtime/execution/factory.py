@@ -249,7 +249,7 @@ async def _assemble_harness(
         # result for block, or left untouched for auto. Fails open to the
         # deployment default snapshot (write=ask → the existing MCP approval)
         # when no policy is configured, so an unconfigured run is unchanged.
-        from agent_runtime.capabilities.mcp.operation_adapter import (
+        from agent_runtime.capabilities.mcp.gateway_context import (
             is_enforced_mcp_gateway_active,
         )
 

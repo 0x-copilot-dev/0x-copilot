@@ -60,12 +60,44 @@ class OperationClassification(RuntimeContract):
         return values
 
 
+class OperationPresentationOutcome(RuntimeContract):
+    """Gateway-owned facts required to present one completed operation.
+
+    The operation gateway derives this value only *after* an adapter's durable
+    result write succeeds. An adapter returns neutral result data and never
+    constructs a presentation contract, imports a ledger emitter/renderer, or
+    receives a UI-facing service.
+    """
+
+    operation_id: str = Field(min_length=1, max_length=255)
+    capability: str = Field(min_length=1, max_length=255)
+    op: str = Field(min_length=1, max_length=255)
+    result_ref: str = Field(min_length=1, max_length=2048)
+    output: dict[str, object]
+    latency_ms: int = Field(ge=0)
+
+    @field_validator("result_ref")
+    @classmethod
+    def _presentation_result_ref_is_logical(cls, value: str) -> str:
+        if value.startswith("/") or ":\\" in value:
+            raise ValueError("operation presentation result reference must be logical")
+        return value
+
+
 class OperationRawResult(RuntimeContract):
-    """Normalized read/internal result; large bytes remain behind ``result_ref``."""
+    """Neutral read/internal result; large bytes remain behind ``result_ref``.
+
+    ``result_payload`` is transport output that has already been durably
+    stored. It is deliberately not a surface or ledger contract: the gateway
+    alone combines it with operation identity to create an outcome presenter
+    input.
+    """
 
     result_ref: str | None = Field(default=None, max_length=2048)
     safe_summary: str = Field(min_length=1, max_length=512)
     activity_ref: str | None = Field(default=None, max_length=2048)
+    result_payload: dict[str, object] | None = None
+    latency_ms: int | None = Field(default=None, ge=0)
 
     @field_validator("result_ref", "activity_ref")
     @classmethod
@@ -199,6 +231,19 @@ class OperationAdapter(Protocol):
 
     async def build_proposal(self, request: OperationRequest) -> ProposedEffect:
         """Prepare and stage an external effect without applying it."""
+
+
+class OperationOutcomePresenter(Protocol):
+    """Project a completed operation through the configured presentation policy.
+
+    This is deliberately an operation port rather than an MCP port.  Browser,
+    builtin, and future providers may return the same
+    :class:`OperationPresentationOutcome` without acquiring a second ledger or
+    surface-emission seam.
+    """
+
+    async def present(self, outcome: OperationPresentationOutcome) -> None:
+        """Best-effort presentation after an operation result is durable."""
 
 
 class ArtifactPublicationAdapter(Protocol):
@@ -338,6 +383,8 @@ __all__ = (
     "OperationArgumentResolver",
     "OperationArgumentStore",
     "OperationClassification",
+    "OperationOutcomePresenter",
+    "OperationPresentationOutcome",
     "OperationDescriptor",
     "OperationDisposition",
     "OperationEventEmitter",

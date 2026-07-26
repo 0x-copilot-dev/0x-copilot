@@ -924,7 +924,7 @@ class RuntimeApiAppFactory:
             )
         )
         # PRD-D2 — the approve seam. On a NEW approve, the stager enqueues one
-        # durable commit command (never executes inline); the worker CommitEngine
+        # durable commit command (never executes inline); the worker shared dispatcher
         # handler consumes it. Wired unconditionally; the enqueue only fires on a
         # real approve, and with the flag off the stage routes are not mounted so
         # ``record_decision`` is unreachable. ``None`` queue ⇒ decisions record,

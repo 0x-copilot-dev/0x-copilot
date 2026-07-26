@@ -15,6 +15,7 @@ from typing import Protocol, runtime_checkable
 from pydantic import Field, field_validator
 
 from agent_runtime.effects.claims import EffectClaim
+from agent_runtime.effects.contracts import EffectDispatchRequest
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.entities import (
     EffectExecutionRequest,
@@ -40,10 +41,16 @@ class EffectExecutorCapabilities(RuntimeContract):
     prepare_performs_mutation: bool = False
 
 
+EffectPreparedRequest = EffectDispatchRequest | EffectExecutionRequest
+
+
 class PreparedEffect(RuntimeContract):
     """Opaque prepare result that can safely be persisted as a claim reference."""
 
-    request: EffectExecutionRequest
+    # ``EffectExecutionRequest`` remains accepted for direct executor contract
+    # tests and persisted A4 compatibility. Worker dispatch always supplies the
+    # narrower shared ``EffectDispatchRequest``.
+    request: EffectPreparedRequest
     prepared_ref: str | None = Field(default=None, max_length=_REF_MAX_LENGTH)
     observed_precondition_digest: str | None = Field(
         default=None, min_length=1, max_length=128
@@ -67,6 +74,23 @@ class PreparedEffect(RuntimeContract):
         return value
 
 
+class EffectExecutionAuthorization(RuntimeContract):
+    """Live authorization verdict immediately preceding one effect dispatch.
+
+    The coordinator has already verified the immutable approved stage.  This
+    separate verdict is intentionally transport-neutral: it allows an executor
+    to re-check a revocable connector grant, native host permit, or browser
+    session without receiving mutable policy or model arguments.
+    """
+
+    allowed: bool
+    safe_code: str = Field(
+        min_length=1,
+        max_length=96,
+        pattern=r"^[a-z0-9._-]+$",
+    )
+
+
 class EffectExecutionScope(RuntimeContract):
     """Verified run facts supplied to executor factories, never command payloads."""
 
@@ -84,8 +108,11 @@ class EffectExecutor(Protocol):
     kind: EffectExecutorKind
     capabilities: EffectExecutorCapabilities
 
-    async def prepare(self, request: EffectExecutionRequest) -> PreparedEffect:
+    async def prepare(self, request: EffectDispatchRequest) -> PreparedEffect:
         """Validate/reserve/read state without a user-visible mutation."""
+
+    async def authorize(self, prepared: PreparedEffect) -> EffectExecutionAuthorization:
+        """Re-check revocable authority immediately before ``apply``."""
 
     async def apply(self, prepared: PreparedEffect) -> EffectExecutionResult:
         """Apply the exact approved request after the coordinator's durable claim."""
@@ -113,11 +140,15 @@ class RecordingEffectExecutor:
         prepare_result: PreparedEffect | None = None,
         apply_result: EffectExecutionResult | None = None,
         reconcile_result: EffectExecutionResult | None = None,
-        on_prepare: Callable[[EffectExecutionRequest], Awaitable[PreparedEffect]]
+        on_prepare: Callable[[EffectDispatchRequest], Awaitable[PreparedEffect]]
         | None = None,
         on_apply: Callable[[PreparedEffect], Awaitable[EffectExecutionResult]]
         | None = None,
         on_reconcile: Callable[[EffectClaim], Awaitable[EffectExecutionResult]]
+        | None = None,
+        on_authorize: Callable[
+            [PreparedEffect], Awaitable[EffectExecutionAuthorization]
+        ]
         | None = None,
     ) -> None:
         self.kind = kind
@@ -138,13 +169,15 @@ class RecordingEffectExecutor:
         self._on_prepare = on_prepare
         self._on_apply = on_apply
         self._on_reconcile = on_reconcile
+        self._on_authorize = on_authorize
         self.calls: list[str] = []
-        self.prepared_requests: list[EffectExecutionRequest] = []
+        self.prepared_requests: list[EffectDispatchRequest] = []
         self.applied_prepared: list[PreparedEffect] = []
         self.reconciled_claims: list[EffectClaim] = []
         self.aborted_prepared: list[PreparedEffect] = []
+        self.authorized_prepared: list[PreparedEffect] = []
 
-    async def prepare(self, request: EffectExecutionRequest) -> PreparedEffect:
+    async def prepare(self, request: EffectDispatchRequest) -> PreparedEffect:
         self.calls.append("prepare")
         self.prepared_requests.append(request)
         if self._on_prepare is not None:
@@ -164,6 +197,13 @@ class RecordingEffectExecutor:
         if self._on_apply is not None:
             return await self._on_apply(prepared)
         return self._apply_result
+
+    async def authorize(self, prepared: PreparedEffect) -> EffectExecutionAuthorization:
+        self.calls.append("authorize")
+        self.authorized_prepared.append(prepared)
+        if self._on_authorize is not None:
+            return await self._on_authorize(prepared)
+        return EffectExecutionAuthorization(allowed=True, safe_code="authorized")
 
     async def reconcile(self, claim: EffectClaim) -> EffectExecutionResult:
         self.calls.append("reconcile")
@@ -185,6 +225,8 @@ def utc_now() -> str:
 
 __all__ = [
     "EffectExecutionScope",
+    "EffectExecutionAuthorization",
+    "EffectPreparedRequest",
     "EffectExecutor",
     "EffectExecutorCapabilities",
     "PreparedEffect",

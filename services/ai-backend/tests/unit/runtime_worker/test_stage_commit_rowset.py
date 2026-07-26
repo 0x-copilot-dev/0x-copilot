@@ -1,6 +1,6 @@
-"""Worker CommitEngine handler tests for bulk row-set apply (PRD-D3).
+"""Worker shared-effect-dispatch tests for bulk row-set apply (PRD-D3).
 
-Drives the REAL enqueue → command → handler → per-row CommitEngine path over
+Drives the REAL enqueue → command → handler → per-row shared dispatch path over
 in-memory stores with a SPY connector as the only side-effecting boundary.
 Proves: only commanded rows reach the connector (held rows = zero traffic, byte-
 equal row_args), per-row claims exist, a mid-apply failure yields ``partial`` +
@@ -12,27 +12,31 @@ no-op with NO ``write.applied`` event.
 from __future__ import annotations
 
 import pytest
-
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.stage_commit_queue import RuntimeStageCommitQueue
 from agent_runtime.api.stage_ledger import RuntimeStageLedger
 from agent_runtime.capabilities.surfaces.commit import ConnectorCommitResult
+from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.commit_engine import (
-    InMemoryStageCommitLedger,
     StageCommitConnectorError,
     StageCommitRequest,
 )
+from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
 from agent_runtime.surfaces_v2.rowset import AgentHold, RowFieldChange, StagedRow
 from agent_runtime.surfaces_v2.staging import (
     StagedWriteFold,
     StagedWriteStatus,
     WriteStager,
 )
+from runtime_adapters.in_memory.effect_claim_store import InMemoryEffectClaimStore
 from tests.unit.rollout_testkit import legacy_staged_write_gate
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord, RuntimeStageCommitCommand
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
+from runtime_worker.staged_write_effect_dispatch import (
+    RuntimeStagedWriteEffectDispatcher,
+)
 
 pytestmark = pytest.mark.anyio
 
@@ -54,7 +58,7 @@ class _SpyConnector:
         self._fail = fail_keys or set()
         self.execute_calls: list[StageCommitRequest] = []
 
-    async def read_remote_state(self, request: StageCommitRequest):  # noqa: ANN201
+    async def read_remote_state(self, request: StageCommitRequest):
         return None
 
     async def execute(self, request: StageCommitRequest) -> ConnectorCommitResult:
@@ -63,6 +67,29 @@ class _SpyConnector:
             raise StageCommitConnectorError("row failed")
         return ConnectorCommitResult(
             status="sent", external_ref=f"ext-{request.row_key}"
+        )
+
+    async def authorize(self, request: StageCommitRequest) -> object:
+        del request
+        return object()
+
+
+class _DispatcherFactory:
+    def __init__(self, connector: _SpyConnector) -> None:
+        self._connector = connector
+        self._claims = InMemoryEffectClaimStore()
+
+    def for_run(self, *, run: RunRecord) -> RuntimeStagedWriteEffectDispatcher:
+        return RuntimeStagedWriteEffectDispatcher(
+            scope=EffectExecutionScope(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                conversation_id=run.conversation_id,
+                run_id=run.run_id,
+                owner_ref=f"principal://users/{run.user_id}",
+            ),
+            claims=self._claims,
+            connector=self._connector,  # type: ignore[arg-type]
         )
 
 
@@ -82,7 +109,7 @@ class Harness:
     def __init__(self, *, connector: _SpyConnector | None = None) -> None:
         self.store = InMemoryRuntimeApiStore()
         self.connector = connector or _SpyConnector()
-        self.ledger = InMemoryStageCommitLedger()
+        self.dispatcher_factory = _DispatcherFactory(self.connector)
         producer = RuntimeEventProducer(persistence=self.store, event_store=self.store)
         self.stager = WriteStager(
             draft_store=None,  # type: ignore[arg-type]
@@ -122,11 +149,10 @@ class Harness:
             persistence=self.store,
             event_store=self.store,
             draft_store=None,
-            connector=self.connector,
-            ledger=self.ledger,
+            dispatcher_factory=self.dispatcher_factory,
         )
 
-    async def stage(self, rows, holds=()):  # noqa: ANN001
+    async def stage(self, rows, holds=()):
         return await self.stager.stage_rowset(
             run=self.run,
             org_id=_ORG,
@@ -138,7 +164,7 @@ class Harness:
             title="Reprioritize",
         )
 
-    async def apply(self, stage_id, rev, keys):  # noqa: ANN001
+    async def apply(self, stage_id, rev, keys):
         return await self.stager.apply_rows(
             run=self.run,
             org_id=_ORG,
@@ -159,7 +185,7 @@ class Harness:
             if getattr(getattr(e, "event_type", None), "value", None) == "write.applied"
         ]
 
-    def fold(self):  # noqa: ANN201
+    def fold(self):
         return StagedWriteFold.fold(self.store.events_by_run[_RUN])[
             self.command.stage_id
         ]
@@ -211,11 +237,15 @@ class TestRowsetDispatch:
         keys = ["row0", "row1", "row2"]
         await h.apply(state.stage_id, 1, keys)
         await h.handler.handle(h.command)
-        # Each dispatched row left a committed idempotency claim keyed by row_key.
+        # Each dispatched row left a committed shared-effect claim keyed by row.
         for k in keys:
             key = f"{h.command.stage_id}:1:{h.command.decision_seq}:{k}"
-            entry = await h.ledger.load(commit_key=key)
-            assert entry is not None and entry.committed is True
+            claim = await h.dispatcher_factory._claims.get(
+                org_id=_ORG,
+                executor=EffectExecutorKind.MCP,
+                idempotency_key=f"stage-commit:{key}",
+            )
+            assert claim is not None and claim.outcome.value == "applied"
 
     async def test_row_failure_mid_apply_yields_partial_and_row_results(self) -> None:
         h = Harness(connector=_SpyConnector(fail_keys={"row1"}))

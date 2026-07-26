@@ -14,7 +14,10 @@ from agent_runtime.artifacts.contracts import (
 from agent_runtime.artifacts.errors import ArtifactError
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.operations.classifier import OperationClassifier
-from agent_runtime.capabilities.operations.context import OperationContext
+from agent_runtime.capabilities.operations.context import (
+    OperationContext,
+    _GatewayPresentationContext,
+)
 from agent_runtime.capabilities.operations.contracts import (
     GateResolution,
     ArtifactPublicationSource,
@@ -24,6 +27,7 @@ from agent_runtime.capabilities.operations.contracts import (
     OperationDisposition,
     OperationGateResolver,
     OperationGatewayMode,
+    OperationPresentationOutcome,
     OperationRawResult,
     OperationRequest,
     OperationResultSummary,
@@ -58,6 +62,8 @@ from agent_runtime.surfaces_v2.ledger_models import (
     OperationOutcome,
     OperationRequestedPayload,
 )
+
+__operation_boundary__ = "presentation"
 
 
 class FailClosedGateResolver:
@@ -217,6 +223,26 @@ class OperationGateway:
                     proposed = await adapter.build_proposal(request)
                     raw_result = None
 
+            if (
+                raw_result is not None
+                and raw_result.result_ref is not None
+                and raw_result.result_payload is not None
+                and raw_result.latency_ms is not None
+            ):
+                # Presentation is a generic, best-effort operation outcome
+                # hand-off. Transport adapters return neutral facts only; the
+                # gateway owns construction of the presentation contract.
+                await _GatewayPresentationContext.require().outcome_presenter.present(
+                    OperationPresentationOutcome(
+                        operation_id=request.operation_id,
+                        capability=request.capability,
+                        op=request.op,
+                        result_ref=raw_result.result_ref,
+                        output=raw_result.result_payload,
+                        latency_ms=raw_result.latency_ms,
+                    )
+                )
+
             result_summary = self._result_summary(
                 raw_result=raw_result,
                 proposed=proposed,
@@ -359,7 +385,7 @@ class OperationGateway:
         if intent is None:
             return ()
         context = OperationContext.require()
-        service = context.artifact_service
+        service = _GatewayPresentationContext.require().artifact_service
         if service is None:
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ARTIFACT_FAILED,
@@ -518,7 +544,7 @@ class OperationGateway:
             args_digest=request.args_digest,
             parent_operation_id=request.parent_operation_id,
         )
-        await OperationContext.require().ledger_emitter.emit(
+        await _GatewayPresentationContext.require().ledger_emitter.emit(
             LedgerEventType.OPERATION_REQUESTED,
             payload.model_dump(mode="json", exclude_none=True),
         )
@@ -534,7 +560,7 @@ class OperationGateway:
             basis=classification.basis,
             confidence=classification.confidence,
         )
-        await OperationContext.require().ledger_emitter.emit(
+        await _GatewayPresentationContext.require().ledger_emitter.emit(
             LedgerEventType.OPERATION_CLASSIFIED,
             payload.model_dump(mode="json"),
         )
@@ -552,7 +578,7 @@ class OperationGateway:
             failure_code=failure_code,
             retryable=retryable,
         )
-        await OperationContext.require().ledger_emitter.emit(
+        await _GatewayPresentationContext.require().ledger_emitter.emit(
             LedgerEventType.OPERATION_FAILED,
             payload.model_dump(mode="json"),
         )
@@ -577,7 +603,7 @@ class OperationGateway:
             latency_ms=latency_ms,
         )
         context = OperationContext.require()
-        await context.ledger_emitter.emit(
+        await _GatewayPresentationContext.require().ledger_emitter.emit(
             LedgerEventType.OPERATION_COMPLETED,
             payload.model_dump(mode="json", exclude_none=True),
         )

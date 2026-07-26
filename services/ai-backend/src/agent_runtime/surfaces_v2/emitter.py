@@ -17,6 +17,8 @@ mirroring ``SurfaceGenerationScheduler`` in ``capabilities/surfaces/generator``.
 
 from __future__ import annotations
 
+__operation_boundary__ = "presentation"
+
 import logging
 from collections.abc import Awaitable, Callable, Mapping
 from contextvars import ContextVar

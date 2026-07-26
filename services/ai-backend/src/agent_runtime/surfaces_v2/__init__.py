@@ -13,3 +13,5 @@ contracts; the v2.1 A1 extension remains additive vocabulary only.
 """
 
 from __future__ import annotations
+
+__operation_boundary__ = "presentation"

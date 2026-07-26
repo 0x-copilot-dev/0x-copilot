@@ -13,16 +13,16 @@ command; this handler consumes it. It is the single legitimate path to a
    happened; a stale command is unreachable absent a bug — D1 freezes approved stages).
 2. **Local precondition.** The pinned draft must still be ``send_pending_approval``;
    drift ⇒ ``write.applied{failed, precondition_drift}`` + drift-abort audit, no send.
-3. **CommitEngine.** ``COMMITTED`` flips the draft to ``sent`` and emits
-   ``write.applied{applied}``; ``DRIFT_ABORTED`` / ``FAILED`` / ``INDETERMINATE`` emit
-   ``write.applied{failed, failure{code}}`` and leave the draft pending (a fresh approve
-   retries); ``IDEMPOTENT_REPLAY`` is a full no-op (the first attempt already emitted).
+3. **Shared effect dispatch.** The handler converts the exact approved revision
+   into a server-derived request and sends it through ``EffectDispatchCoordinator``
+   via ``McpEffectExecutor``.  That canonical path owns prepare → durable claim
+   → post-approval authorization → apply; this handler never owns an MCP client
+   or a second side-effecting executor.
 4. **Audit.** Every branch appends the matching audit action through the existing
    ``write_audit_log`` port.
 
-The handler owns emission + draft mutation; the :class:`CommitEngine` owns the
-ordered side-effect invariants (claim strictly precedes the connector call). The
-connector output is untrusted: only the ``commit://`` receipt ref rides the event.
+The handler owns emission + draft mutation. The connector output is untrusted:
+only the ``commit://`` receipt ref rides the event.
 """
 
 from __future__ import annotations
@@ -35,23 +35,18 @@ from uuid import uuid4
 from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import EventStorePort, PersistencePort
-from agent_runtime.execution.contracts import (
-    AgentRuntimeContext,
-    RuntimeDependencies,
-    StreamEventSource,
-)
+from agent_runtime.effects.dispatch import EffectDispatchResult
+from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.persistence.ports import OptimisticConflict
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
 from agent_runtime.settings import RuntimeSettings
-from agent_runtime.surfaces_v2.commit_engine import (
-    CommitEngine,
-    InMemoryStageCommitLedger,
-    StageCommitLedgerPort,
-    StageCommitRequest,
-    StageCommitStatus,
-)
+from agent_runtime.surfaces_v2.commit_engine import StageCommitRequest
 from agent_runtime.surfaces_v2.constants import Keys, Messages, Values
-from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
+from agent_runtime.surfaces_v2.ledger_models import (
+    EffectActor,
+    EffectOutcome,
+    LedgerEventType,
+)
 from agent_runtime.surfaces_v2.rowset import RowStance
 from agent_runtime.surfaces_v2.staging import (
     DraftRef,
@@ -59,11 +54,17 @@ from agent_runtime.surfaces_v2.staging import (
     StagedWriteState,
     StagedWriteStatus,
 )
-from runtime_api.schemas import RuntimeApiEventType, RuntimeStageCommitCommand
+from runtime_api.schemas import (
+    RunRecord,
+    RuntimeApiEventType,
+    RuntimeStageCommitCommand,
+)
+from runtime_worker.staged_write_effect_dispatch import (
+    StagedWriteEffectDispatcher,
+    StagedWriteEffectDispatcherFactory,
+)
 
 _LOGGER = logging.getLogger("runtime_worker.stage_commit")
-
-RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies]
 
 # Audit action strings. The two shared v1 values are REDECLARED verbatim (never
 # imported from the off-limits v1 island — a byte diff proves equality); the
@@ -72,22 +73,9 @@ _AUDIT_COMMITTED = "surface.commit.committed"
 _AUDIT_ABORTED_DRIFT = "surface.commit.aborted_precondition_drift"
 _AUDIT_FAILED = "surface.commit.failed"
 
-# Map each engine failure branch to its (write.applied failure code, audit action).
-_FAILURE_CODES = {
-    StageCommitStatus.DRIFT_ABORTED: (
-        Values.FAILURE_PRECONDITION_DRIFT,
-        _AUDIT_ABORTED_DRIFT,
-    ),
-    StageCommitStatus.FAILED: (Values.FAILURE_CONNECTOR_ERROR, _AUDIT_FAILED),
-    StageCommitStatus.INDETERMINATE: (
-        Values.FAILURE_ATTEMPT_INDETERMINATE,
-        _AUDIT_FAILED,
-    ),
-}
-
 
 class RuntimeStageCommitHandler:
-    """Consume ``stage_commit_requested`` commands and drive the CommitEngine (PRD-D2)."""
+    """Consume ``stage_commit_requested`` commands through the shared A5 dispatcher."""
 
     def __init__(
         self,
@@ -95,13 +83,9 @@ class RuntimeStageCommitHandler:
         persistence: PersistencePort,
         event_store: EventStorePort,
         draft_store: object | None = None,
-        engine: CommitEngine | None = None,
-        connector: object | None = None,
-        ledger: StageCommitLedgerPort | None = None,
+        dispatcher_factory: StagedWriteEffectDispatcherFactory | None = None,
         settings: RuntimeSettings | None = None,
-        dependencies_factory: RuntimeDependenciesFactory | None = None,
         on_event_appended: Callable[[str], None] | None = None,
-        mcp_discovery_cache: object | None = None,
     ) -> None:
         self.persistence = persistence
         self.event_store = event_store
@@ -112,15 +96,10 @@ class RuntimeStageCommitHandler:
             event_store=event_store,
             on_event_appended=on_event_appended,
         )
-        # A fully-injected engine (tests) wins. Otherwise the durable claim ledger
-        # is built ONCE here (a per-command ledger would forget claims ⇒ double
-        # send); the connector is built per-command because it needs the run's
-        # ``runtime_context``.
-        self._engine = engine
-        self._connector = connector
-        self._ledger = ledger if ledger is not None else self._default_ledger()
-        self._dependencies_factory = dependencies_factory
-        self._mcp_discovery_cache = mcp_discovery_cache
+        # The worker composition root supplies the shared claim/dispatch factory.
+        # ``None`` remains fail-closed for isolated/misconfigured construction:
+        # approval can record but no external change can occur.
+        self._dispatcher_factory = dispatcher_factory
 
     async def handle(self, command: RuntimeStageCommitCommand) -> None:
         """Re-validate the approval, dispatch exactly the approved rev, ledger the result."""
@@ -168,13 +147,18 @@ class RuntimeStageCommitHandler:
             return
 
         request = self._build_request(command=command, record=record, state=state)
-        engine = self._engine_for(run)
-        outcome = await engine.commit(request, captured_precondition=None)
-
-        if outcome.status is StageCommitStatus.COMMITTED:
+        dispatched = await self._dispatch(
+            run=run,
+            request=request,
+            state=state,
+            command=command,
+        )
+        if dispatched is None:
+            return
+        if dispatched.outcome is EffectOutcome.APPLIED:
             await self._on_committed(run=run, command=command, record=record)
             return
-        if outcome.status is StageCommitStatus.IDEMPOTENT_REPLAY:
+        if dispatched.safe_code in {"claimed", "applied"}:
             # The first attempt already emitted ``write.applied`` — full no-op.
             _LOGGER.info(
                 "stage_commit.idempotent_replay stage_id=%s rev=%s",
@@ -182,20 +166,15 @@ class RuntimeStageCommitHandler:
                 command.rev,
             )
             return
-        failure = _FAILURE_CODES.get(outcome.status)
-        if failure is None:  # pragma: no cover — every non-terminal maps above.
-            _LOGGER.warning(
-                "stage_commit.unexpected_outcome stage_id=%s status=%s",
-                command.stage_id,
-                outcome.status,
-            )
-            return
-        failure_code, audit_action = failure
         await self._emit_failed(
             run=run,
             command=command,
-            failure_code=failure_code,
-            audit_action=audit_action,
+            failure_code=(
+                Values.FAILURE_ATTEMPT_INDETERMINATE
+                if dispatched.outcome is EffectOutcome.INDETERMINATE
+                else Values.FAILURE_CONNECTOR_ERROR
+            ),
+            audit_action=_AUDIT_FAILED,
         )
 
     # -- PRD-D3 bulk row-set apply ------------------------------------------
@@ -221,7 +200,6 @@ class RuntimeStageCommitHandler:
             )
             return
 
-        engine = self._engine_for(run)
         row_results: list[dict[str, object]] = []
         applied = 0
         failed = 0
@@ -230,10 +208,14 @@ class RuntimeStageCommitHandler:
             if row is None:  # gate proved membership; defensive only
                 continue
             request = self._build_rowset_request(command=command, state=state, row=row)
-            outcome = await engine.commit(request, captured_precondition=None)
-            row_applied = outcome.status in (
-                StageCommitStatus.COMMITTED,
-                StageCommitStatus.IDEMPOTENT_REPLAY,
+            dispatched = await self._dispatch(
+                run=run,
+                request=request,
+                state=state,
+                command=command,
+            )
+            row_applied = (
+                dispatched is not None and dispatched.outcome is EffectOutcome.APPLIED
             )
             if row_applied:
                 applied += 1
@@ -468,80 +450,51 @@ class RuntimeStageCommitHandler:
             target_metadata=dict(record.target_metadata or {}),
         )
 
-    # -- engine construction -------------------------------------------------
+    async def _dispatch(
+        self,
+        *,
+        run: object,
+        request: StageCommitRequest,
+        state: StagedWriteState,
+        command: RuntimeStageCommitCommand,
+    ) -> EffectDispatchResult | None:
+        """Enter the shared dispatcher using the exact folded revision only."""
 
-    def _engine_for(self, run: object) -> CommitEngine:
-        """Return the injected engine, or build one over the shared durable ledger.
-
-        The ledger is the ONE built at init (claims must persist across commands);
-        only the connector is per-run (it needs the run's ``runtime_context``).
-        """
-
-        if self._engine is not None:
-            return self._engine
-        connector = self._connector or self._build_connector(run)
-        return CommitEngine(connector, self._ledger)
-
-    def _build_connector(self, run: object) -> object:
-        """Build the production MCP connector for this run (imported lazily)."""
-
-        from agent_runtime.surfaces_v2.mcp_connector import (  # noqa: PLC0415
-            McpStageCommitConnector,
-        )
-
-        return McpStageCommitConnector(
-            runtime_context=run.runtime_context,
-            dependencies_factory=self._dependencies_factory
-            or self._default_dependencies_factory(),
-            timeout_seconds=self.settings.default_timeout_seconds,
-        )
-
-    def _default_dependencies_factory(self) -> RuntimeDependenciesFactory:
-        """Build the worker's default dependencies factory (lazy import)."""
-
-        from runtime_worker.dependencies import (  # noqa: PLC0415
-            DefaultRuntimeDependenciesFactory,
-        )
-
-        return DefaultRuntimeDependenciesFactory(
-            self.settings,
-            mcp_discovery_cache=self._mcp_discovery_cache,  # type: ignore[arg-type]
-        )
-
-    def _default_ledger(self) -> StageCommitLedgerPort:
-        """Select the durable idempotency ledger for the configured store backend.
-
-        ``file`` (desktop) and ``postgres`` (production) get a durable adapter so
-        the claim survives a worker restart — at-most-once is fiction otherwise;
-        everything else (in-memory dev/tests) uses the process-local ledger.
-        """
-
-        backend = self.settings.store.backend
-        root = self.settings.store.file_store_root
-        if backend == "file" and root:
-            from runtime_adapters.file.stage_commit_ledger import (  # noqa: PLC0415
-                FileStageCommitLedger,
+        if self._dispatcher_factory is None or not isinstance(run, RunRecord):
+            _LOGGER.error(
+                "stage_commit.dispatch_unavailable stage_id=%s run_id=%s",
+                command.stage_id,
+                command.run_id,
             )
-
-            return FileStageCommitLedger(root=root)
-        if backend == "postgres":
-            ledger = self._postgres_ledger()
-            if ledger is not None:
-                return ledger
-        return InMemoryStageCommitLedger()
-
-    def _postgres_ledger(self) -> StageCommitLedgerPort | None:
-        """Build the Postgres claim ledger over the persistence store's pool, or None."""
-
+            return None
+        revision = next(
+            (item for item in state.revisions if item.rev == command.rev),
+            None,
+        )
+        if revision is None:
+            _LOGGER.warning(
+                "stage_commit.revision_unavailable stage_id=%s rev=%s",
+                command.stage_id,
+                command.rev,
+            )
+            return None
         try:
-            from runtime_adapters.postgres.stage_commit_ledger import (  # noqa: PLC0415
-                PostgresStageCommitLedger,
+            actor = EffectActor(self._apply_actor(state, command))
+        except ValueError:
+            _LOGGER.warning(
+                "stage_commit.actor_invalid stage_id=%s decision_seq=%s",
+                command.stage_id,
+                command.decision_seq,
             )
-        except Exception:  # pragma: no cover — psycopg absent in some test images.
             return None
-        if not hasattr(self.persistence, "_role_connection"):
-            return None
-        return PostgresStageCommitLedger(store=self.persistence)
+        dispatcher: StagedWriteEffectDispatcher = self._dispatcher_factory.for_run(
+            run=run
+        )
+        return await dispatcher.dispatch(
+            request=request,
+            proposal_ref=revision.proposal_ref,
+            actor=actor,
+        )
 
     # -- emission + draft flip ----------------------------------------------
 

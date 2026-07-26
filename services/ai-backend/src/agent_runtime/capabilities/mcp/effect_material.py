@@ -42,6 +42,9 @@ class McpEffectMaterial(RuntimeContract):
     # Optional for wire/backward compatibility with existing canonical-args
     # material, where the proposal itself is the argument object.
     arguments_digest: Sha256Hex | None = None
+    # Legacy staged row-set commits retain a row identity for audit/folding.
+    # It is not model input and never changes the canonical connector args.
+    row_key: str | None = Field(default=None, min_length=1, max_length=255)
 
     @field_validator("target_connector", "target_op")
     @classmethod

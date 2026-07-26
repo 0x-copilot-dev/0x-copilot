@@ -25,6 +25,8 @@ regardless of what the model returned. Nothing side-effectful survives to render
 
 from __future__ import annotations
 
+__operation_boundary__ = "presentation"
+
 import asyncio
 import json
 import logging

@@ -6,8 +6,8 @@ executor and exposes no approval or apply operation.  Reads are the only branch
 which can create an MCP client; write, destructive, and unknown operations stage
 the exact canonical argument bytes already held by :class:`OperationContext`.
 
-The runtime worker binds :class:`McpOperationGatewayServices` whenever durable
-composition is available. An unbound context is fail-closed: ``CallMcpTool``
+The runtime worker binds its trusted gateway composition whenever durable
+execution is available. An unbound context is fail-closed: ``CallMcpTool``
 holds the request rather than restoring a retired direct-dispatch path.
 """
 
@@ -15,15 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import logging
-import re
 import time
 from collections.abc import Mapping
-from contextvars import ContextVar, Token
-from dataclasses import dataclass, field
-from typing import Protocol
-
-from pydantic import Field, field_validator
+from pathlib import Path
 
 from agent_runtime.capabilities.actions.contracts import (
     ActionClass,
@@ -31,10 +25,7 @@ from agent_runtime.capabilities.actions.contracts import (
     ClassificationBasis,
     ClassifiedAction,
 )
-from agent_runtime.capabilities.actions.policy import (
-    ConnectorWritePolicyOverrides,
-    EffectiveActionPolicyResolver,
-)
+from agent_runtime.capabilities.actions.policy import EffectiveActionPolicyResolver
 from agent_runtime.capabilities.mcp.cards import McpLoadError, McpServerCard
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.mcp.client import (
@@ -46,13 +37,22 @@ from agent_runtime.capabilities.mcp.client import (
 from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
     CitationProjectingMcpMiddleware,
 )
+from agent_runtime.capabilities.mcp.material_resolver import (
+    McpOperationArgumentMaterialResolver,
+)
+from agent_runtime.capabilities.mcp.execution_services import (
+    McpOperationArgumentStorePort,
+    McpOperationExecutionServices,
+    McpOperationResultStorePort,
+    McpOperationStoredResult,
+)
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import (
     DynamicMcpRegistry,
     RegisteredMcpServer,
 )
-from agent_runtime.capabilities.operations.classifier import OperationClassifier
+from agent_runtime.capabilities.mcp.target_ref import McpTargetRef, McpTargetRefCodec
 from agent_runtime.capabilities.operations.context import OperationContext
 from agent_runtime.capabilities.operations.contracts import (
     GateResolution,
@@ -62,29 +62,21 @@ from agent_runtime.capabilities.operations.contracts import (
     OperationRequest,
     ProposedEffect as GatewayProposedEffect,
 )
-from agent_runtime.capabilities.operations.descriptors import (
-    OperationDescriptorRegistry,
-)
 from agent_runtime.capabilities.operations.errors import (
     OperationGatewayError,
     OperationGatewayErrorCode,
 )
-from agent_runtime.capabilities.operations.gateway import OperationGateway
-from agent_runtime.capabilities.tools.permissions import ToolUsePolicyMode
-from agent_runtime.effects.contracts import (
-    EffectActorIdentity,
-    EffectPolicySnapshot,
-    EffectStageScope,
-    ProposedEffect,
+from agent_runtime.capabilities.operations.presentation_boundary import (
+    assert_transport_adapter_presentation_boundary,
 )
-from agent_runtime.effects.staging import EffectStager
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
+from agent_runtime.capabilities.tools.permissions import ToolUsePolicyMode
+from agent_runtime.effects.contracts import EffectPolicySnapshot, ProposedEffect
+from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.surfaces_v2.canonical_json import (
     canonical_json_bytes,
     sha256_hex,
 )
 from agent_runtime.surfaces_v2.entities import EffectTarget, OperationDescriptor
-from agent_runtime.surfaces_v2.ledger_ids import OperationArgsRefCodec
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectClass,
     EffectExecutorKind,
@@ -94,13 +86,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
 )
 from agent_runtime.surfaces_v2.gate import ToolAccessGate
 from agent_runtime.surfaces_v2.ledger_models import GateAuthState
-from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
 
-
-_TARGET_REF = re.compile(
-    r"^mcp-target://([a-z0-9][a-z0-9._-]{0,127})/([a-z0-9][a-z0-9._-]{0,127})$"
-)
-_RESULT_REF = re.compile(r"^operation://(op_[0-9a-f-]+)/result$")
 _CANONICAL_JSON_MEDIA_TYPE = "application/json"
 _AUTH_REQUIRED = "Authentication is required before this connector call."
 _CONNECTOR_UNAVAILABLE = "The connector is unavailable; no external change was made."
@@ -108,115 +94,6 @@ _CONNECTOR_TIMEOUT = "The connector timed out; no external change was made."
 _CONNECTOR_PROTOCOL_ERROR = (
     "The connector reported an error; no external change was made."
 )
-_LOGGER = logging.getLogger(__name__)
-
-
-class McpTargetRef(RuntimeContract):
-    """A parsed, server-owned MCP effect target.
-
-    It names only the normalized connector capability and operation.  Object
-    identifiers and mutable arguments deliberately remain in the canonical
-    proposal content instead of becoming a second, lossy target representation.
-    """
-
-    capability: str
-    op: str
-
-
-class McpTargetRefCodec:
-    """Format/parse the opaque target identity accepted by the MCP executor."""
-
-    @classmethod
-    def format(cls, *, capability: str, op: str) -> str:
-        normalized_capability = OperationDescriptorRegistry.normalize_capability(
-            capability
-        )
-        normalized_op = OperationDescriptorRegistry.normalize(op)
-        return f"mcp-target://{normalized_capability}/{normalized_op}"
-
-    @classmethod
-    def parse(cls, value: str) -> McpTargetRef:
-        match = _TARGET_REF.fullmatch(value)
-        if match is None:
-            raise ValueError("MCP target reference is invalid")
-        return McpTargetRef(capability=match.group(1), op=match.group(2))
-
-
-class McpOperationStoredResult(RuntimeContract):
-    """The bounded model-facing form of a persisted MCP read result."""
-
-    result_ref: str = Field(min_length=1, max_length=2048)
-    model_output: dict[str, object]
-
-    @field_validator("result_ref")
-    @classmethod
-    def _result_ref_is_operation_result(cls, value: str) -> str:
-        match = _RESULT_REF.fullmatch(value)
-        if match is None:
-            raise ValueError("MCP read results require an operation result reference")
-        return value
-
-
-class McpOperationResultStorePort(Protocol):
-    """Persist a read result before its ``operation.completed`` event is emitted."""
-
-    async def store_read_result(
-        self,
-        *,
-        request: OperationRequest,
-        output: Mapping[str, object],
-    ) -> McpOperationStoredResult:
-        """Return an immutable result ref and bounded model-visible projection."""
-
-
-class McpOperationArgumentStorePort(Protocol):
-    """Durably retain canonical MCP arguments before the gateway can dispatch."""
-
-    async def persist(
-        self,
-        *,
-        ref: str,
-        digest: str,
-        canonical_bytes: bytes,
-    ) -> None:
-        """Persist exactly one digest-pinned canonical argument body."""
-
-    async def resolve(
-        self,
-        *,
-        ref: str,
-        digest: str,
-    ) -> bytes | None:
-        """Return exactly the stored body, or ``None`` when it is unavailable."""
-
-
-@dataclass(frozen=True)
-class McpOperationGatewayServices:
-    """Trusted per-run dependencies for the canonical MCP route.
-
-    The worker composition root creates the stage ledger/outbox and durable
-    operation-argument resolver.  Model-facing code receives this only through
-    a ContextVar and cannot construct a coordinator or executor from it.
-    """
-
-    gateway: OperationGateway
-    descriptors: OperationDescriptorRegistry
-    classifier: OperationClassifier
-    stager: EffectStager
-    stage_scope: EffectStageScope
-    stage_author: EffectActorIdentity
-    result_store: McpOperationResultStorePort
-    argument_store: McpOperationArgumentStorePort
-    browser_plans: object | None = None
-    connector_overrides: ConnectorWritePolicyOverrides = field(
-        default_factory=ConnectorWritePolicyOverrides
-    )
-
-    def __post_init__(self) -> None:
-        if self.stage_author.principal_ref != self.stage_scope.owner_ref and (
-            self.stage_author.actor.value == "user"
-        ):
-            raise ValueError("a user stage author must match the stage owner")
 
 
 class McpOperationGateResolver:
@@ -240,39 +117,6 @@ class McpOperationGateResolver:
         return GateResolution(allowed=True)
 
 
-_MCP_OPERATION_SERVICES: ContextVar[McpOperationGatewayServices | None] = ContextVar(
-    "mcp_operation_gateway_services", default=None
-)
-
-
-class McpOperationGatewayContext:
-    """Run-scoped binding for the enabled MCP adapter cohort."""
-
-    @classmethod
-    def bind_for_run(
-        cls, services: McpOperationGatewayServices
-    ) -> Token[McpOperationGatewayServices | None]:
-        return _MCP_OPERATION_SERVICES.set(services)
-
-    @classmethod
-    def unbind(cls, token: Token[McpOperationGatewayServices | None]) -> None:
-        _MCP_OPERATION_SERVICES.reset(token)
-
-    @classmethod
-    def active(cls) -> McpOperationGatewayServices | None:
-        return _MCP_OPERATION_SERVICES.get()
-
-    @classmethod
-    def canonical(cls) -> McpOperationGatewayServices | None:
-        """Return complete durable services for the canonical MCP route."""
-
-        context = OperationContext.active()
-        services = cls.active()
-        if context is None or not context.canonical_arguments_durable:
-            return None
-        return services
-
-
 class McpOperationAdapter(OperationAdapter):
     """Execute MCP reads or stage exact immutable canonical MCP arguments."""
 
@@ -286,9 +130,13 @@ class McpOperationAdapter(OperationAdapter):
         tool_name: str,
         arguments: Mapping[str, object],
         gate: ToolAccessGate | None,
-        services: McpOperationGatewayServices,
+        execution: McpOperationExecutionServices,
         tool_call_id: str | None,
     ) -> None:
+        # Python permits local and dynamic imports, so a test-only import
+        # convention is insufficient.  Verify this provider module's source
+        # before it gains any registry/client capability.
+        assert_transport_adapter_presentation_boundary(Path(__file__))
         self._registry = registry
         self._runtime_context = runtime_context
         self._timeout_seconds = timeout_seconds
@@ -296,7 +144,7 @@ class McpOperationAdapter(OperationAdapter):
         self._tool_name = tool_name
         self._arguments = dict(arguments)
         self._gate = gate
-        self._services = services
+        self._execution = execution
         self._tool_call_id = tool_call_id
         self._stored_result: McpOperationStoredResult | None = None
 
@@ -327,7 +175,7 @@ class McpOperationAdapter(OperationAdapter):
             tool_call_id=self._tool_call_id or self._runtime_context.trace_id,
             result=output,
         )
-        self._stored_result = await self._services.result_store.store_read_result(
+        self._stored_result = await self._execution.result_store.store_read_result(
             request=request,
             output=output,
         )
@@ -340,87 +188,19 @@ class McpOperationAdapter(OperationAdapter):
                 "The connector result could not be stored safely.",
                 retryable=True,
             )
-        await self._emit_read_presentation(
-            request=request,
-            output=output,
-            latency_ms=dispatch_latency_ms,
-        )
         return OperationRawResult(
             result_ref=self._stored_result.result_ref,
             safe_summary=f"Fetched {request.op} from {request.capability}.",
             activity_ref=self._stored_result.result_ref,
+            result_payload={str(key): value for key, value in output.items()},
+            latency_ms=dispatch_latency_ms,
         )
-
-    async def _emit_read_presentation(
-        self,
-        *,
-        request: OperationRequest,
-        output: Mapping[str, object],
-        latency_ms: int,
-    ) -> None:
-        """Project a canonical read onto the v2 ledger without a legacy branch.
-
-        The gateway already owns the only connector dispatch. This best-effort
-        projection runs *after* the exact result was durably stored, using the
-        operation id as the tool-result call id so ``payload_ref`` always joins
-        to that persisted event. It is intentionally inert unless the worker
-        bound a run-scoped WorkLedgerEmitter.
-        """
-
-        try:
-            # Import at the execution seam. Importing the surfaces package while
-            # the action catalog is initialized would form a package-init cycle;
-            # a canonical operation has already reached a fully composed run.
-            from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter  # noqa: PLC0415
-            from agent_runtime.capabilities.surfaces.generator import (  # noqa: PLC0415
-                GenToolDescriptor,
-                SurfaceGenerationScheduler,
-            )
-            from agent_runtime.capabilities.surfaces.projector import (  # noqa: PLC0415
-                SurfaceProjector,
-            )
-
-            emitter = WorkLedgerEmitter.active()
-            if emitter is None:
-                return
-            scheduler = SurfaceGenerationScheduler.active()
-            projector = (
-                SurfaceProjector(store=scheduler.store, scheduler=scheduler)
-                if scheduler is not None
-                else SurfaceProjector()
-            )
-            envelope = projector.resolve(
-                self._server_name,
-                self._tool_name,
-                output,
-                call_id=request.operation_id,
-                tool_descriptor=GenToolDescriptor(name=self._tool_name),
-            )
-            await emitter.on_tool_result(
-                server_name=self._server_name,
-                tool_name=self._tool_name,
-                call_id=request.operation_id,
-                output=output,
-                surface=(
-                    envelope.model_dump(mode="json", exclude_none=True)
-                    if envelope is not None
-                    else None
-                ),
-                surface_uri=envelope.surface_uri if envelope is not None else None,
-                latency_ms=latency_ms,
-            )
-        except Exception:  # noqa: BLE001 - presentation cannot break a read.
-            _LOGGER.warning(
-                "mcp_canonical_read_presentation_failed",
-                extra={"operation_id": request.operation_id},
-                exc_info=True,
-            )
 
     async def build_proposal(self, request: OperationRequest) -> GatewayProposedEffect:
         """Stage canonical arguments without creating an MCP client."""
 
         context = OperationContext.require()
-        if self._services.stage_scope.run_id != request.run_id:
+        if self._execution.stage_scope.run_id != request.run_id:
             raise OperationGatewayError(
                 OperationGatewayErrorCode.IDENTITY_MISMATCH,
                 "The requested change could not be staged safely.",
@@ -458,7 +238,7 @@ class McpOperationAdapter(OperationAdapter):
                 retryable=False,
             )
 
-        classification = self._services.classifier.classify(
+        classification = self._execution.classifier.classify(
             request,
             annotations=McpToolAnnotationsRegistry.get(request.capability, request.op),
         )
@@ -489,8 +269,8 @@ class McpOperationAdapter(OperationAdapter):
             request=request,
             classification=classification,
         )
-        staged = await self._services.stager.stage(
-            scope=self._services.stage_scope,
+        staged = await self._execution.stager.stage(
+            scope=self._execution.stage_scope,
             proposed_effect=ProposedEffect(
                 operation_id=request.operation_id,
                 executor=EffectExecutorKind.MCP,
@@ -505,7 +285,7 @@ class McpOperationAdapter(OperationAdapter):
                 policy_snapshot_ref=snapshot.snapshot_ref,
             ),
             policy_snapshot=snapshot,
-            actor=self._services.stage_author,
+            actor=self._execution.stage_author,
             idempotency_key=f"mcp-stage:{request.operation_id}",
         )
         revision = staged.current_revision
@@ -529,7 +309,7 @@ class McpOperationAdapter(OperationAdapter):
         action = self._action_for_policy(request, classification)
         effective = EffectiveActionPolicyResolver(
             snapshot=context.policy_snapshot,
-            overrides=self._services.connector_overrides,
+            overrides=self._execution.connector_overrides,
         ).resolve(action)
         mode = {
             ToolUsePolicyMode.AUTO: EffectPolicy.AUTO,
@@ -538,7 +318,7 @@ class McpOperationAdapter(OperationAdapter):
             ToolUsePolicyMode.BLOCK: EffectPolicy.BLOCK,
         }[effective.mode]
         descriptor_known = (
-            self._services.descriptors.resolve(request.capability, request.op)
+            self._execution.descriptors.resolve(request.capability, request.op)
             is not None
         )
         return EffectPolicySnapshot(
@@ -694,92 +474,13 @@ class McpOperationAdapter(OperationAdapter):
         return {str(key): value for key, value in output.items()}
 
 
-@dataclass(frozen=True)
-class McpOperationArgumentMaterialResolver:
-    """Resolve immutable MCP material for ``McpEffectExecutor``.
-
-    Canonical operation arguments remain the default.  Additive resolvers can
-    reconstruct material from another immutable proposal kind (for example an
-    Artifact revision) without changing the A5 coordinator or introducing a
-    separate connector path.
-    """
-
-    arguments: object
-    additional_material_resolvers: tuple[object, ...] = ()
-
-    async def resolve(self, request: object) -> object | None:
-        """Return validated material for the worker-owned MCP executor.
-
-        This stays in the capability layer because it only reads canonical
-        operation arguments.  The worker owns dispatch and accepts this stable
-        contract structurally; neither side imports across a deployable-service
-        boundary.
-        """
-
-        for resolver in self.additional_material_resolvers:
-            resolve = getattr(resolver, "resolve", None)
-            if resolve is None:
-                continue
-            material = await resolve(request)
-            if material is not None:
-                return material
-
-        proposal_content_ref = getattr(request, "proposal_content_ref", None)
-        proposal_digest = getattr(request, "proposal_digest", None)
-        target_ref = getattr(request, "target_ref", None)
-        if not all(
-            isinstance(value, str)
-            for value in (proposal_content_ref, proposal_digest, target_ref)
-        ):
-            return None
-        try:
-            OperationArgsRefCodec.parse(proposal_content_ref)
-            target = McpTargetRefCodec.parse(target_ref)
-            resolve = getattr(self.arguments, "resolve")
-            canonical_bytes = await resolve(
-                ref=proposal_content_ref,
-                digest=proposal_digest,
-            )
-            if canonical_bytes is None:
-                return None
-            if sha256_hex(canonical_bytes) != proposal_digest:
-                return None
-            decoded = json.loads(canonical_bytes)
-            if (
-                not isinstance(decoded, dict)
-                or canonical_json_bytes(decoded) != canonical_bytes
-            ):
-                return None
-            return McpEffectMaterial(
-                target_connector=target.capability,
-                target_op=target.op,
-                arguments=decoded,
-                target_ref=target_ref,
-                target_digest=getattr(request, "target_digest"),
-                proposal_ref=getattr(request, "proposal_ref"),
-                proposal_content_ref=proposal_content_ref,
-                proposal_digest=proposal_digest,
-            )
-        except Exception:
-            return None
-
-
-def is_enforced_mcp_gateway_active() -> bool:
-    """Compatibility predicate for the now-unconditional canonical MCP route."""
-
-    return McpOperationGatewayContext.canonical() is not None
-
-
 __all__ = [
     "McpOperationAdapter",
     "McpOperationArgumentMaterialResolver",
-    "McpOperationGatewayContext",
     "McpOperationGateResolver",
-    "McpOperationGatewayServices",
     "McpOperationArgumentStorePort",
     "McpOperationResultStorePort",
     "McpOperationStoredResult",
     "McpTargetRef",
     "McpTargetRefCodec",
-    "is_enforced_mcp_gateway_active",
 ]

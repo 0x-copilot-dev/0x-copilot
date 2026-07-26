@@ -28,6 +28,7 @@ from agent_runtime.effects.contracts import (
     ProposedEffect as StagedEffect,
 )
 from agent_runtime.effects.executor import (
+    EffectExecutionAuthorization,
     EffectExecutorCapabilities,
     PreparedEffect,
 )
@@ -150,6 +151,19 @@ class BrowserEffectExecutor:
             )
         receipt = await self.bridge.apply_prepared(prepared.prepared_ref)
         return _effect_result(receipt)
+
+    async def authorize(self, prepared: PreparedEffect) -> EffectExecutionAuthorization:
+        """Keep the coordinator's single pre-dispatch contract uniform.
+
+        Electron's private bridge performs the authoritative one-use permit
+        check at its own ``apply_prepared`` transport edge.
+        """
+
+        del prepared
+        return EffectExecutionAuthorization(
+            allowed=True,
+            safe_code="browser_authorized",
+        )
 
     async def reconcile(self, claim: EffectClaim) -> EffectExecutionResult:
         """Observe a prior attempt only; reconciliation cannot call ``apply``."""

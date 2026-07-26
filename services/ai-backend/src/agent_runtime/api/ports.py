@@ -1306,7 +1306,7 @@ class RuntimeQueuePort(Protocol):
         """Enqueue a staged-write commit command for workers (PRD-D2).
 
         Produced only when a new ``decision.recorded{approve}`` was recorded; the
-        worker-side CommitEngine handler is its sole consumer. The command is a
+        worker-side shared effect dispatcher is its sole consumer. The command is a
         durable record — the commit never runs inline in the API request path.
         """
 

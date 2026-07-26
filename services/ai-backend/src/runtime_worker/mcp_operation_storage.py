@@ -25,11 +25,11 @@ from agent_runtime.capabilities.backends.artifact_draft_effect import (
 )
 from agent_runtime.capabilities.browser.contracts import BrowserEffectBridge
 from agent_runtime.capabilities.browser.effect_adapter import BrowserEffectExecutor
-from agent_runtime.capabilities.mcp.operation_adapter import McpOperationStoredResult
-from agent_runtime.capabilities.mcp.operation_adapter import (
+from agent_runtime.capabilities.mcp.material_resolver import (
     McpOperationArgumentMaterialResolver,
-    McpTargetRefCodec,
 )
+from agent_runtime.capabilities.mcp.execution_services import McpOperationStoredResult
+from agent_runtime.capabilities.mcp.target_ref import McpTargetRefCodec
 from agent_runtime.capabilities.operations.contracts import OperationRequest
 from agent_runtime.effects.coordinator import EffectCoordinator
 from agent_runtime.effects.executor import EffectExecutionScope

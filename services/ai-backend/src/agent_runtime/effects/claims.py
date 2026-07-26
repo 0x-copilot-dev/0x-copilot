@@ -26,7 +26,6 @@ from agent_runtime.effects.contracts import validate_idempotency_key
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.ledger_ids import (
     EffectReceiptRefCodec,
-    EffectStageIdCodec,
     ProposalUriCodec,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -111,7 +110,18 @@ class EffectClaim(RuntimeContract):
     @field_validator("stage_id")
     @classmethod
     def _stage_id_is_valid(cls, value: str) -> str:
-        EffectStageIdCodec.parse(value)
+        # A4 uses ``stg_`` ids; the pre-existing staged-write ledger uses a
+        # canonical UUID token. Both reach the SAME durable claim protocol only
+        # after their own approval fold has validated the exact revision.
+        if (
+            not isinstance(value, str)
+            or not value
+            or len(value) > _IDENTIFIER_MAX_LENGTH
+            or value != value.strip()
+            or "/" in value
+            or "\\" in value
+        ):
+            raise ValueError("stage_id must be a stable opaque identifier")
         return value
 
     @field_validator("idempotency_key")
@@ -122,8 +132,14 @@ class EffectClaim(RuntimeContract):
     @field_validator("proposal_ref")
     @classmethod
     def _proposal_ref_is_canonical(cls, value: str) -> str:
-        ProposalUriCodec.parse(value)
-        return value
+        # ``proposal://`` remains mandatory for A4.  Legacy write stages use
+        # their immutable ``draft://`` / ``stage://`` revision references, so
+        # the shared dispatch store validates a safe URI here and the caller's
+        # approval fold supplies the revision proof.
+        return _validate_safe_opaque_uri(
+            value,
+            field_name="effect claim proposal reference",
+        )
 
     @field_validator("target_ref", "prepared_ref")
     @classmethod
@@ -161,12 +177,19 @@ class EffectClaim(RuntimeContract):
 
     @model_validator(mode="after")
     def _state_is_consistent(self) -> "EffectClaim":
-        parsed_proposal = ProposalUriCodec.parse(self.proposal_ref)
-        if (
-            parsed_proposal.stage_id != self.stage_id
-            or parsed_proposal.revision != self.revision
+        # A4 stage ids are canonical ``stg_`` identifiers and must preserve
+        # their proposal identity. Legacy staged writes reach this shared
+        # claim protocol only with their established UUID-like stage token and
+        # their exact revision ref (``draft://`` / ``stage://``).
+        if self.stage_id.startswith("stg_") or self.proposal_ref.startswith(
+            "proposal://"
         ):
-            raise ValueError("proposal_ref must reference this stage and revision")
+            parsed_proposal = ProposalUriCodec.parse(self.proposal_ref)
+            if (
+                parsed_proposal.stage_id != self.stage_id
+                or parsed_proposal.revision != self.revision
+            ):
+                raise ValueError("proposal_ref must reference this stage and revision")
         if self.state is EffectClaimState.CLAIMED:
             if self.outcome is not None:
                 raise ValueError("a claimed effect cannot have a terminal outcome")

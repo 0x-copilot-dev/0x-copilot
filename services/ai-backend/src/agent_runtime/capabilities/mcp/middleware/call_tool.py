@@ -17,11 +17,11 @@ from agent_runtime.capabilities.mcp.cards import (
 )
 from agent_runtime.capabilities.mcp.constants import Messages, Values
 from agent_runtime.capabilities.mcp.loader import McpLoader
-from agent_runtime.capabilities.mcp.operation_adapter import (
-    McpOperationAdapter,
+from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
     McpOperationGatewayServices,
 )
+from agent_runtime.capabilities.mcp.operation_adapter import McpOperationAdapter
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.operations.context import (
@@ -247,7 +247,7 @@ class CallMcpTool:
                 tool_name=parsed_input.tool_name,
                 arguments=parsed_input.arguments,
                 gate=self.gate,
-                services=services,
+                execution=services.execution,
                 tool_call_id=parsed_input.tool_call_id,
             )
             adapter = mcp_adapter

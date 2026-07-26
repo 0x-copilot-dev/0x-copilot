@@ -12,7 +12,7 @@ against the previous revision.
 
 **Fail-closed core (SDR §10, the D1 DoD):** this engine NEVER executes anything.
 It emits exactly the three event types above; ``write.applied`` is PRD-D2's
-CommitEngine's sole output. A ``decision.recorded{approve}`` here records intent
+the shared effect dispatcher's sole output. A ``decision.recorded{approve}`` here records intent
 and nothing more — the draft's status is untouched, no MCP client is called,
 nothing sends. Every 4xx path emits **no** ledger event (the ledger records only
 what happened).
@@ -237,7 +237,7 @@ class StagedWriteStatus(StrEnum):
     STAGED = "staged"
     REJECTED = "rejected"
     APPROVED = "approved"
-    # PRD-D2: terminal — the CommitEngine sent exactly the approved rev.
+    # PRD-D2: terminal — the shared dispatcher sent exactly the approved rev.
     APPLIED = "applied"
     # PRD-D3: apply decided (frozen), ``write.applied`` not yet folded.
     APPLY_PENDING = "apply_pending"
@@ -293,7 +293,7 @@ class StagedWriteState(RuntimeContract):
     first_sequence_no: int
     last_sequence_no: int
     # PRD-D2 — the last ``write.applied`` outcome folded onto this stage, or
-    # ``None`` until the CommitEngine reports one. ``apply_result`` is
+    # ``None`` until the shared dispatcher reports one. ``apply_result`` is
     # ``"applied"`` (⇒ APPLIED terminal) or ``"failed"`` (⇒ held, approval
     # consumed); ``apply_failure_code`` names the refusal on a failed apply.
     apply_result: str | None = None

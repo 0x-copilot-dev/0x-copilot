@@ -82,7 +82,7 @@ class Values:
         RUN_CANCEL_REQUESTED = "run_cancel_requested"
         RUN_REQUESTED = "run_requested"
         # PRD-D2 — the durable command a stage approve enqueues; the worker-side
-        # CommitEngine handler is its only consumer. The commit never runs inline
+        # shared effect dispatcher is its only consumer. The commit never runs inline
         # in the API (mirrors approval-resolution's "resume is never inline").
         STAGE_COMMIT_REQUESTED = "stage_commit_requested"
         # PRD-A5 — durable delivery only.  RuntimeWorker owns deserialisation
