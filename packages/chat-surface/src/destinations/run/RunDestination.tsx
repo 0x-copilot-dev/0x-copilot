@@ -61,6 +61,7 @@ import {
   isSourceOpenResultV2,
   type AgentRunStatus,
   type ArtifactKind,
+  type CitationSourceRef,
   type ConversationConnectorScopes,
   type ConversationId,
   type ModelSelectionRequest,
@@ -1247,6 +1248,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const citationProjection = useMemo(
     () => projectCitations(session.events),
     [session.events],
+  );
+
+  // Keep the inline chat-only source card on the same canonical stream as
+  // citation chips. The card itself requires `source_tool_call_id` equality,
+  // so this flat list cannot attach an unrelated source to a tool result.
+  const toolCallCitations = useMemo<readonly CitationSourceRef[]>(
+    () => [...citationProjection.citations.values()],
+    [citationProjection.citations],
   );
 
   // The chat transcript: persisted history ⊕ the live streamed reply, projected
@@ -2732,6 +2741,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).
         toolCalls={toolCalls}
+        toolCallCitations={toolCallCitations}
         // PR-3.10: in-chat ApprovalCard (Studio) / conf-card (Focus) + receipts.
         approvals={chatApprovals}
         onApprove={handleApprove}

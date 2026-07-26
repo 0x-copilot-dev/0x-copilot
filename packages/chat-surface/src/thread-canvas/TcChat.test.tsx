@@ -629,6 +629,52 @@ function toolCall(overrides: Partial<ToolCallEntry> = {}): ToolCallEntry {
 }
 
 describe("TcChat — inline tool-call card (Workstream D)", () => {
+  it("shows fact-bound inline results in Studio but not Focus", async () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const citations = [
+      {
+        citation_id: "source-1",
+        freshness_at: null,
+        ordinal: 1,
+        snippet: null,
+        source_connector: "web",
+        source_doc_id: "postmortem",
+        source_tool_call_id: "call-1",
+        source_url: "https://example.com/postmortem",
+        title: "Incident postmortem",
+      },
+    ];
+    const { rerender } = render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          toolCalls={[toolCall({ status: "complete" })]}
+          toolCallCitations={citations}
+        />,
+      ),
+    );
+    expect(
+      await screen.findByTestId("tc-inline-web-sources-card"),
+    ).toBeInTheDocument();
+
+    rerender(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="focus"
+          toolCalls={[toolCall({ status: "complete" })]}
+          toolCallCitations={citations}
+        />,
+      ),
+    );
+    expect(
+      screen.queryByTestId("tc-inline-web-sources-card"),
+    ).not.toBeInTheDocument();
+  });
+
   it("renders a running tool card with a spinner in the transcript", async () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     render(

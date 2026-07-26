@@ -72,6 +72,7 @@
       "label": "web.sources-card",
       "group": "Web read",
       "design": "[data-parity-anchor=\"sources-card\"]",
+      "live": "#parity-frame [data-testid=\"tc-inline-web-sources\"]",
       "what": "The reference supplies an inline source-card; shipping RunDestination only has the tool result and chat answer.",
       "baselineGap": "No matching inline web-source card is mounted in the shipping transcript."
     },

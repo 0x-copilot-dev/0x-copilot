@@ -6,6 +6,7 @@ import {
   type ReactNode,
 } from "react";
 
+import type { CitationSourceRef } from "@0x-copilot/api-types";
 import type { Transport } from "@0x-copilot/chat-transport";
 
 import { Composer } from "../composer/Composer";
@@ -45,6 +46,7 @@ import type { ApprovalsQueueItem } from "../workspace";
 // transcript at the point each tool ran. The projection is the single source of
 // truth; TcChat never re-derives tool state from raw events.
 import type { ToolCallEntry } from "./eventProjector";
+import { InlineToolResultCard } from "./InlineToolResultCard";
 import { useSwimlaneScrub } from "./SwimlaneScrubContext";
 import { ToolCallCard } from "./ToolCallCard";
 
@@ -234,6 +236,12 @@ export interface TcChatProps {
    */
   readonly toolCalls?: readonly ToolCallEntry[];
   /**
+   * Run-scoped citations supplied by the cockpit's canonical event projection.
+   * Inline source cards select only citations whose backend-issued
+   * `source_tool_call_id` matches their tool call; no source is inferred.
+   */
+  readonly toolCallCitations?: readonly CitationSourceRef[];
+  /**
    * PR-3.10 — pending + recently-resolved approvals projected off the run
    * stream. Studio renders each pending one as the hoisted 4-zone
    * `ApprovalCard` (Approve ⌘↵ / Reject ⌘⌫) and each resolved one as an
@@ -280,6 +288,7 @@ const EMPTY_SUBAGENT_ACTIVITIES: ReadonlyMap<
   readonly SubagentActivityRecord[]
 > = new Map();
 const EMPTY_TOOL_CALLS: readonly ToolCallEntry[] = [];
+const EMPTY_TOOL_CALL_CITATIONS: readonly CitationSourceRef[] = [];
 const EMPTY_APPROVALS: readonly TcChatApproval[] = [];
 const APPROVAL_REASSURANCE =
   "You're always asked before Copilot acts outside this chat.";
@@ -309,6 +318,7 @@ export function TcChat(props: TcChatProps): ReactElement {
     fleets = EMPTY_FLEETS,
     subagentActivitiesByTask = EMPTY_SUBAGENT_ACTIVITIES,
     toolCalls = EMPTY_TOOL_CALLS,
+    toolCallCitations = EMPTY_TOOL_CALL_CITATIONS,
     approvals = EMPTY_APPROVALS,
     onApprove,
     onReject,
@@ -395,6 +405,8 @@ export function TcChat(props: TcChatProps): ReactElement {
         fleets={filteredFleets}
         subagentActivitiesByTask={subagentActivitiesByTask}
         toolCalls={filteredToolCalls}
+        toolCallCitations={toolCallCitations}
+        mode={mode}
         markdownComponents={markdownComponents}
       />
     </div>
@@ -652,6 +664,8 @@ interface MessageListBodyProps {
     readonly SubagentActivityRecord[]
   >;
   readonly toolCalls: readonly ToolCallEntry[];
+  readonly toolCallCitations: readonly CitationSourceRef[];
+  readonly mode: TcChatMode;
   readonly markdownComponents?: MarkdownTextProps["components"];
 }
 
@@ -662,6 +676,8 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
     fleets,
     subagentActivitiesByTask,
     toolCalls,
+    toolCallCitations,
+    mode,
     markdownComponents,
   } = props;
   if (state.status === "loading" || state.status === "idle") {
@@ -696,7 +712,7 @@ function MessageListBody(props: MessageListBodyProps): ReactNode {
           return renderFleetCard(item.fleet, subagentActivitiesByTask);
         }
         if (item.kind === "tool") {
-          return renderToolCard(item.toolCall);
+          return renderToolCard(item.toolCall, mode, toolCallCitations);
         }
         return renderMessage(item.message, markdownComponents);
       })}
@@ -791,7 +807,11 @@ function renderFleetCard(
 // Workstream D — the compact inline tool-call card. The reusable card owns the
 // visual disclosure target and its bounded payload/detail treatment; TcChat
 // only owns transcript ordering and the list-item anchor.
-function renderToolCard(toolCall: ToolCallEntry): ReactNode {
+function renderToolCard(
+  toolCall: ToolCallEntry,
+  mode: TcChatMode,
+  citations: readonly CitationSourceRef[],
+): ReactNode {
   return (
     <li
       key={`tool-${toolCall.id}`}
@@ -800,6 +820,9 @@ function renderToolCard(toolCall: ToolCallEntry): ReactNode {
       data-tool-status={toolCall.status}
     >
       <ToolCallCard toolCall={toolCall} />
+      {mode === "studio" ? (
+        <InlineToolResultCard toolCall={toolCall} citations={citations} />
+      ) : null}
     </li>
   );
 }
