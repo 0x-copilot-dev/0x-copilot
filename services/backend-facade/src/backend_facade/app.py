@@ -47,6 +47,9 @@ from backend_facade.deployment_profile import (
     log_profile,
     resolve_or_exit,
 )
+from backend_facade.desktop_attestation_routes import (
+    register_desktop_attestation_routes,
+)
 from backend_facade.observability import (
     RequestContextMiddleware,
     TelemetryBootstrap,
@@ -189,6 +192,7 @@ def create_app(
     register_routines_webhook_routes(app)
     register_scim_routes(app)
     register_workspace_routes(app)
+    register_desktop_attestation_routes(app)
 
     @app.post("/v1/telemetry/otlp/v1/traces")
     async def telemetry_otlp_traces(request: Request) -> Response:

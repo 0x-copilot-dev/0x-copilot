@@ -139,6 +139,18 @@ export {
   type NativeWorkspaceV2Bindings,
 } from "./native-workspace-authority";
 export {
+  DESKTOP_WORKSPACE_ATTESTATION_PATH,
+  DESKTOP_WORKSPACE_ATTESTATION_TTL_MS,
+  DESKTOP_WORKSPACE_ATTESTATION_VERSION,
+  DesktopWorkspaceAttestationError,
+  DesktopWorkspaceAttestationPublisher,
+  canonicalClaimsJson,
+  type DesktopWorkspaceAttestationBootstrap,
+  type DesktopWorkspaceAttestationClaims,
+  type DesktopWorkspaceAttestationEnvelope,
+  type DesktopWorkspaceAttestationPublisherDeps,
+} from "./workspace-attestation";
+export {
   InMemoryWorkspaceJournalStore,
   LocalWorkspaceAuthority,
   WorkspaceAuthorityError,

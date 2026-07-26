@@ -181,6 +181,16 @@ export interface ServiceEnvInputs {
     readonly baseUrl?: string;
     readonly token?: string;
   };
+  /**
+   * Per-boot public-key attestation issued by Electron main. It is supplied
+   * only to the supervised ai-backend, never to the facade, backend, preload,
+   * or renderer. The private signing key remains in Electron main.
+   */
+  readonly workspaceAttestation?: {
+    readonly publicKey?: string;
+    readonly payload?: string;
+    readonly signature?: string;
+  };
 }
 
 // Builds the FULL child environment for one supervised service: filtered
@@ -273,6 +283,22 @@ export function buildServiceEnv(
         env.DESKTOP_WORKSPACE_BROKER_TOKEN = workspace.token;
       } else {
         env.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "false";
+      }
+      const workspaceAttestation = inputs.workspaceAttestation;
+      if (
+        workspaceAttestation?.publicKey !== undefined &&
+        workspaceAttestation.publicKey !== "" &&
+        workspaceAttestation.payload !== undefined &&
+        workspaceAttestation.payload !== "" &&
+        workspaceAttestation.signature !== undefined &&
+        workspaceAttestation.signature !== ""
+      ) {
+        env.DESKTOP_WORKSPACE_ATTESTATION_PUBLIC_KEY =
+          workspaceAttestation.publicKey;
+        env.DESKTOP_WORKSPACE_ATTESTATION_PAYLOAD =
+          workspaceAttestation.payload;
+        env.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE =
+          workspaceAttestation.signature;
       }
       // The override wins when the supervisor has resolved the effective backend
       // for this boot (post-migration gate); otherwise fall back to the pure

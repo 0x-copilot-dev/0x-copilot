@@ -6,6 +6,9 @@ import asyncio
 from datetime import timedelta
 
 from agent_runtime.api.user_policies_resolver import UserPoliciesResolverFactory
+from agent_runtime.capabilities.desktop.workspace_attestation import (
+    DesktopWorkspaceAttestationRegistry,
+)
 from agent_runtime.capabilities.http_pool import BackendHttpPool
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.otel import TelemetryBootstrap
@@ -139,6 +142,9 @@ class RuntimeWorkerEntrypoint:
                 artifact_blob_store=async_ports.artifact_blob_store,
                 artifact_reference_store=async_ports.artifact_reference_provider,
                 effect_claim_store=effect_claim_store,
+                workspace_attestation_registry=(
+                    DesktopWorkspaceAttestationRegistry.from_environment()
+                ),
             )
             logger.info(
                 "worker_started",

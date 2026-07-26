@@ -20,6 +20,9 @@ from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
 from agent_runtime.capabilities.operations.conformance import OperationConformanceGate
+from agent_runtime.capabilities.desktop.workspace_attestation import (
+    DesktopWorkspaceAttestationRegistry,
+)
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.execution.errors import AgentRuntimeError
@@ -119,6 +122,8 @@ class RuntimeWorker:
         artifact_reference_store: object | None = None,
         workspace_host_sessions: object | None = None,
         workspace_overlay_store: object | None = None,
+        workspace_attestation_registry: DesktopWorkspaceAttestationRegistry
+        | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -191,6 +196,13 @@ class RuntimeWorker:
             workspace_overlay_store
             if workspace_overlay_store is not None
             else self._default_workspace_overlay_store()
+        )
+        # The registry is a proof reader only. It has neither filesystem nor
+        # broker authority, and absent/malformed bootstrap material stays
+        # unattested rather than fabricating a desktop-safe default.
+        self.workspace_attestation_registry = (
+            workspace_attestation_registry
+            or DesktopWorkspaceAttestationRegistry.from_environment()
         )
         self._validate_e2_rollout_startup(
             d1_ready=d1_ready,
@@ -310,10 +322,9 @@ class RuntimeWorker:
 
         This is the only process that owns effect executors, so the API logs
         the resolved configuration while the worker decides whether an explicit
-        new ``enforce`` request is admissible.  Current C3 only exposes an
-        opaque host-session broker, not a typed C2/native attestation contract;
-        therefore a *new* ``WORKSPACE_COMMIT_MODE=enforce`` correctly fails
-        closed until that contract is supplied by its later integration slice.
+        new ``enforce`` request is admissible.  Workspace commit additionally
+        requires a current, Ed25519-verified C2 statement from Electron main;
+        the opaque host-session broker alone never counts as that proof.
         Existing C3 compatibility mode retains its established guard.
         """
 
@@ -357,9 +368,11 @@ class RuntimeWorker:
                 and self.workspace_overlay_store is not None
                 and self.workspace_host_sessions is not None
             ),
-            # No existing AI-backend interface can verify Electron's native C2
-            # attestation.  Do not convert a broker env value into a fake proof.
-            workspace_c2_native_attested=False,
+            # This is cryptographic launch evidence from Electron main, not a
+            # broker URL/token or renderer-supplied capability assertion.
+            workspace_c2_native_attested=(
+                self.workspace_attestation_registry.workspace_commit_attested()
+            ),
             mcp_gateway_ready=d1_ready,
             sandbox_adapter_ready=False,
             browser_adapter_ready=False,

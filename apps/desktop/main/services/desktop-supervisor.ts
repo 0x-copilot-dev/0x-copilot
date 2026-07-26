@@ -148,6 +148,11 @@ export function createDesktopSupervisor(
       baseUrl: processEnv.DESKTOP_WORKSPACE_BROKER_URL,
       token: processEnv.DESKTOP_WORKSPACE_BROKER_TOKEN,
     },
+    workspaceAttestation: {
+      publicKey: processEnv.DESKTOP_WORKSPACE_ATTESTATION_PUBLIC_KEY,
+      payload: processEnv.DESKTOP_WORKSPACE_ATTESTATION_PAYLOAD,
+      signature: processEnv.DESKTOP_WORKSPACE_ATTESTATION_SIGNATURE,
+    },
   });
 
   // The store backend to serve THIS boot, resolved lazily during the migrations
