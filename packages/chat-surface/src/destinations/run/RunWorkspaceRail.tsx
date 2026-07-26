@@ -77,6 +77,7 @@ import { isRunningStatus } from "../../workspace/workspaceHelpers";
 import type { PendingCard } from "./pendingCardsProjection";
 import type { PendingWorkCardV2 } from "./pendingWorkV2Projection";
 import type { LedgerSourcesProjection } from "./projectLedgerSources";
+import { FocusPlan, type FocusPlanProjection } from "./FocusPlan";
 import type { RunMode } from "./useRunMode";
 
 /** The four rail tabs, in v3 order — Chat · Agents · Approvals · Sources
@@ -207,7 +208,7 @@ export interface RunWorkspaceRailProps {
   /**
    * WS-F (Focus Run-details panel): collapsed state of the Focus-mode
    * Run-details panel. When `true` the panel shrinks to the 46px icon rail
-   * (`.sd-strip`); when `false` it shows the full 324px panel (`.sd`) with the
+   * (`.sd-strip`); when `false` it shows the full 340px panel (`.sd`) with the
    * Agents/Approvals/Sources SideTabs. Controlled by the host
    * (`RunDestination` via `useRunPanelCollapsed`, KeyValueStore-backed) so it
    * persists per conversation. Omitted → the rail owns the state internally
@@ -220,6 +221,14 @@ export interface RunWorkspaceRailProps {
    * Run-details panel. Omit for a non-persistent, session-only collapse.
    */
   readonly onPanelCollapsedChange?: (collapsed: boolean) => void;
+  /**
+   * The compact plan for Focus. It is derived by the cockpit from the same run
+   * event stream as the transcript, so it is never a second subscription or a
+   * client-side guess from the user's prompt.
+   */
+  readonly focusPlan?: FocusPlanProjection;
+  /** Whether the bound run is currently live; controls the honest activity cue. */
+  readonly focusActivityLive?: boolean;
 }
 
 export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
@@ -250,6 +259,8 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
     focusApprovalsSignal,
     panelCollapsed,
     onPanelCollapsedChange,
+    focusPlan,
+    focusActivityLive = false,
   } = props;
 
   // Internal, survives mode/tab switches (the rail is never remounted across
@@ -514,8 +525,8 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
         </div>
       ) : null}
 
-      {/* WS-F: Focus Run-details panel — the RIGHT column. Expanded (324px):
-          a "Run details" header + the Agents/Approvals/Sources SideTabs +
+      {/* WS-F: Focus Activity panel — the RIGHT column. Expanded (340px):
+          an "Activity" header + the Agents/Approvals/Sources SideTabs +
           the selected body (reused above). Collapsed (46px): the icon rail.
           Rendered as a trailing sibling so the Chat panel keeps its stable
           position (Studio → Focus never remounts `chatSlot`). */}
@@ -536,6 +547,8 @@ export function RunWorkspaceRail(props: RunWorkspaceRailProps): ReactElement {
               onSelect: (id) => setActiveTab(id),
               onCollapse: () => setCollapsed(true),
               body: focusPanelBody,
+              plan: focusPlan,
+              live: focusActivityLive,
             })
         : null}
     </div>
@@ -555,19 +568,27 @@ interface FocusPanelArgs {
   readonly onSelect: (id: FocusPanelTab) => void;
   readonly onCollapse: () => void;
   readonly body: ReactNode;
+  readonly plan?: FocusPlanProjection;
+  readonly live: boolean;
 }
 
-/** Expanded (324px) Run-details panel (`.sd` in copilot-v3.css). */
+/** Expanded (340px) Focus Activity panel (`.sd` in copilot-v3.css). */
 function renderFocusPanel(args: FocusPanelArgs): ReactElement {
-  const { tabItems, activeTab, onSelect, onCollapse, body } = args;
+  const { tabItems, activeTab, onSelect, onCollapse, body, plan, live } = args;
   return (
     <aside
       data-testid="tc-focus-panel"
-      aria-label="Run details"
+      aria-label="Run activity"
       style={focusPanelStyle}
     >
       <div style={focusPanelHeaderStyle}>
-        <span style={focusPanelTitleStyle}>Run details</span>
+        <span style={focusPanelTitleStyle}>Activity</span>
+        {live ? (
+          <span data-testid="tc-focus-panel-live" style={focusLiveStyle}>
+            <span aria-hidden="true" style={focusLiveDotStyle} />
+            live
+          </span>
+        ) : null}
         <button
           type="button"
           data-testid="tc-focus-panel-collapse"
@@ -594,6 +615,7 @@ function renderFocusPanel(args: FocusPanelArgs): ReactElement {
         style={focusPanelBodyStyle}
       >
         {body}
+        {plan !== undefined ? <FocusPlan projection={plan} /> : null}
       </div>
     </aside>
   );
@@ -859,8 +881,8 @@ const chatPanelStyle = (mode: RunMode, visible: boolean): CSSProperties =>
       };
 
 // Inner wrapper around `chatSlot` — present in BOTH modes (so the node's parent
-// chain is stable across the Studio↔Focus switch). Focus constrains the content
-// to the 730px centered column (`.fx-col`); Studio is a transparent pass-through.
+// chain is stable across the Studio↔Focus switch). Focus makes the shared chat
+// own the full left column; Studio remains a transparent pass-through.
 const chatInnerStyle = (mode: RunMode): CSSProperties =>
   mode === "focus"
     ? {
@@ -870,8 +892,8 @@ const chatInnerStyle = (mode: RunMode): CSSProperties =>
         minHeight: 0,
         minWidth: 0,
         width: "100%",
-        maxWidth: 730,
-        margin: "0 auto",
+        maxWidth: "none",
+        margin: 0,
       }
     : {
         display: "flex",
@@ -881,38 +903,39 @@ const chatInnerStyle = (mode: RunMode): CSSProperties =>
         minWidth: 0,
       };
 
-// ── WS-F Focus Run-details panel (`.sd`, 324px) ──────────────────────────
+// ── WS-F Focus Activity panel (`.sd`, 340px) ─────────────────────────────
 const focusPanelStyle: CSSProperties = {
   flex: "none",
-  width: 324,
+  width: 340,
   display: "flex",
   flexDirection: "column",
   minHeight: 0,
   minWidth: 0,
   overflow: "hidden",
-  borderLeft: "1px solid var(--color-border, #22252e)",
-  background: "var(--color-bg-elevated, #16181f)",
+  background: "var(--color-bg-elevated)",
 };
 
 const focusPanelHeaderStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 8,
+  boxSizing: "border-box",
+  height: 37,
   padding: "9px 12px",
-  borderBottom: "1px solid var(--color-border, #22252e)",
+  borderBottom: "1px solid var(--color-border)",
   flex: "none",
 };
 
 const focusPanelTitleStyle: CSSProperties = {
   flex: 1,
-  fontSize: "var(--font-size-xs, 12px)",
+  fontSize: 12,
   fontWeight: 600,
   fontFamily: "var(--font-display, var(--font-sans))",
 };
 
 const focusTabsRowStyle: CSSProperties = {
   flex: "none",
-  borderBottom: "1px solid var(--color-border, #22252e)",
+  borderBottom: "1px solid var(--color-border)",
 };
 
 const focusPanelBodyStyle: CSSProperties = {
@@ -935,6 +958,22 @@ const focusIconButtonStyle: CSSProperties = {
   background: "transparent",
   color: "var(--color-text-muted, #9aa0a6)",
   cursor: "pointer",
+};
+
+const focusLiveStyle: CSSProperties = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  color: "var(--color-text-subtle)",
+  fontFamily: "var(--font-mono)",
+  fontSize: 9.5,
+};
+
+const focusLiveDotStyle: CSSProperties = {
+  width: 5,
+  height: 5,
+  borderRadius: "50%",
+  background: "var(--color-accent)",
 };
 
 // ── WS-F Focus Run-details icon rail (`.sd-strip`, 46px) ──────────────────

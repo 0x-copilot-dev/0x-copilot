@@ -43,6 +43,10 @@ describe("RunHeader", () => {
     render(<RunHeader goal="G" mode="focus" onModeChange={() => {}} />);
     const tablist = screen.getByTestId("run-mode-switcher");
     expect(tablist.getAttribute("role")).toBe("tablist");
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent)).toEqual([
+      "Focus",
+      "Studio",
+    ]);
     const studio = screen.getByTestId("run-mode-studio");
     const focus = screen.getByTestId("run-mode-focus");
     expect(studio.getAttribute("aria-selected")).toBe("false");

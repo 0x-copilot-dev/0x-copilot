@@ -183,6 +183,7 @@ import { projectSurfaceDiffs } from "./_surfaceDiffs";
 import { RunHeader } from "./RunHeader";
 import { RunMultiSelect } from "./RunMultiSelect";
 import { RunWorkspaceRail } from "./RunWorkspaceRail";
+import { projectFocusPlan } from "./FocusPlan";
 import type { SourceRowSlot } from "../../workspace";
 import { useRailWidth } from "./useRailWidth";
 import { useRunMode, useRunPanelCollapsed } from "./useRunMode";
@@ -1123,6 +1124,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // Subagent tool calls are excluded upstream (they belong to the Agents views).
   const toolCalls = useMemo(
     () => projectToolCalls(session.events),
+    [session.events],
+  );
+
+  // Focus exposes an honest, compact plan from the same canonical events as the
+  // transcript. It never opens a second subscription and never infers future
+  // work from the user's prompt.
+  const focusPlan = useMemo(
+    () => projectFocusPlan(session.events),
     [session.events],
   );
 
@@ -2666,6 +2675,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       // WS-F: Focus Run-details panel collapse — persisted per conversation.
       panelCollapsed={focusPanelCollapsed}
       onPanelCollapsedChange={setFocusPanelCollapsed}
+      focusPlan={focusPlan}
+      focusActivityLive={
+        session.runStatus !== null &&
+        CANCELLABLE_RUN_STATUSES.has(session.runStatus)
+      }
     />
   );
 
@@ -2788,13 +2802,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     </div>
   );
 
+  const v2HeaderStatus = surfacesV2 ? (
+    <span data-testid="run-v2-chip-bar" style={v2HeaderStatusStyle}>
+      <PostureChip bypassOn={ledger.bypassFromLedger} />
+      <PendingCounterChip
+        count={pendingWork.cards.length}
+        onClick={handleOpenApprovals}
+      />
+    </span>
+  ) : undefined;
+
   return (
     <div
+      className="run-destination"
       data-testid="run-destination"
       data-run-status={session.status}
       data-mode={mode}
       style={rootStyle}
     >
+      <RunCockpitScopeStyles />
       <RunHeader
         goal={derivedGoal}
         agentName={agentName}
@@ -2804,21 +2830,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // projection's run status (no second subscription — FR-3.3). Live →
         // pulses; terminal / null → absent.
         runStatus={session.runStatus}
+        status={v2HeaderStatus}
       />
-
-      {/* Surfaces v2 (C2/E2): the always-on write-posture chip + the "N waiting"
-          cross-run counter (hidden at 0). Both gated on the flag — off ⇒ no DOM,
-          byte-identical. The counter commands the rail's Approvals tab via the
-          one-directional `approvalsFocusSignal`. */}
-      {surfacesV2 ? (
-        <div data-testid="run-v2-chip-bar" style={v2ChipBarStyle}>
-          <PostureChip bypassOn={ledger.bypassFromLedger} />
-          <PendingCounterChip
-            count={pendingWork.cards.length}
-            onClick={handleOpenApprovals}
-          />
-        </div>
-      ) : null}
 
       {/* PR-3.11 (FR-3.26): the multi-run selector. It renders NOTHING for a
           conversation with ≤1 run (single/zero-run cockpit stays chrome-free);
@@ -3139,6 +3152,53 @@ function RunFollowLiveBanner(props: RunFollowLiveBannerProps): ReactElement {
 // Styles (design-system tokens only)
 // ============================================================
 
+/**
+ * `TcChat` and `Composer` are deliberately reusable primitives with inline
+ * styles. The cockpit owns their surrounding layout, so its design-specific
+ * geometry is applied here, scoped to this destination only. `!important` is
+ * necessary solely to supersede the primitives' inline defaults; standalone
+ * ThreadCanvas consumers remain completely unchanged.
+ */
+const RUN_COCKPIT_SCOPE_CSS = `
+  .run-destination [data-testid="tc-chat"] {
+    box-sizing: border-box !important;
+    background: var(--color-bg) !important;
+    border-right: 1px solid var(--color-border) !important;
+    gap: normal !important;
+    padding: 0 !important;
+  }
+
+  .run-destination[data-mode="focus"] [data-testid="tc-chat"] {
+    margin: 0 !important;
+    max-width: none !important;
+  }
+
+  .run-destination [data-testid="tc-chat-messages"] {
+    gap: 14px !important;
+    padding: 16px !important;
+  }
+
+  .run-destination [data-testid="composer"] {
+    display: block !important;
+  }
+
+  .run-destination[data-mode="focus"][data-run-status="streaming"]
+    [data-testid^="tc-chat-message-"]:has(.reasoning-markdown) {
+      border-color: var(--color-text-muted) !important;
+      color: var(--color-text-muted) !important;
+      display: block !important;
+      font-size: 11.5px !important;
+    }
+`;
+
+function RunCockpitScopeStyles(): ReactElement {
+  return (
+    <style data-testid="run-cockpit-scope-styles">
+      {RUN_COCKPIT_SCOPE_CSS}
+    </style>
+  );
+}
+
 // Rich empty composer frame — a scrollable, vertically-centered 640px column
 // (mirrors the design's `.fr-main`; self-contained inline styles so the frame
 // never depends on onboarding.css being loaded, while the injected composer's
@@ -3164,13 +3224,18 @@ const emptyComposerColumnStyle: CSSProperties = {
 };
 
 const rootStyle: CSSProperties = {
+  boxSizing: "border-box",
   display: "flex",
   flexDirection: "column",
   height: "100%",
   minHeight: 0,
   width: "100%",
-  background: "var(--color-bg, #0e1015)",
-  color: "var(--color-text, #f4f5f6)",
+  overflow: "hidden",
+  border: "1px solid var(--color-border-strong)",
+  borderRadius: 12,
+  boxShadow: "0 40px 100px -30px rgba(0, 0, 0, 0.8)",
+  background: "var(--color-bg)",
+  color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
 };
 
@@ -3178,17 +3243,17 @@ const canvasSlotStyle: CSSProperties = {
   flex: 1,
   minHeight: 0,
   position: "relative",
+  background: "var(--color-bg)",
 };
 
-// Surfaces v2 — the header chip row (posture chip + "N waiting" counter).
-const v2ChipBarStyle: CSSProperties = {
-  flexShrink: 0,
-  display: "flex",
+// Surfaces v2 — the header-level write posture + pending-work controls. Keeping
+// them in the existing chrome preserves discoverability without stealing height
+// from the Studio canvas.
+const v2HeaderStatusStyle: CSSProperties = {
   alignItems: "center",
-  gap: 8,
-  padding: "6px 16px",
-  borderBottom: "1px solid var(--color-border, #22252e)",
-  background: "var(--color-bg-elevated, #16181f)",
+  display: "inline-flex",
+  flexShrink: 0,
+  gap: 6,
 };
 
 // Surfaces v2 — the v2 canvas body: an (optional) parked-gate region stacked

@@ -407,6 +407,12 @@ describe("RunDestination — shell composition", () => {
     expect(
       screen.queryByRole("tablist", { name: "Run workspace tabs" }),
     ).toBeNull();
+    // The compact Activity panel is derived from this same run's events. With
+    // no tool yet scheduled it is deliberately an honest pending plan, not a
+    // client-side invention from the goal text.
+    expect(screen.getByTestId("focus-plan")).toHaveTextContent(
+      "Awaiting the agent plan",
+    );
   });
 
   // === PR-3.7 — timeline scrub ↔ surface time-travel + snap-to-now ===

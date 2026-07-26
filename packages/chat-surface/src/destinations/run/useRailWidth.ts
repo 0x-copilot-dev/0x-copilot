@@ -9,11 +9,18 @@
 import { useCallback, useState } from "react";
 
 import { useKeyValueStore } from "../../providers/KeyValueStoreProvider";
-import { clampRailWidth, DEFAULT_RAIL_WIDTH } from "../../thread-canvas";
+import { clampRailWidth } from "../../thread-canvas";
 
 /** KeyValueStore key for the persisted Studio rail width. Shares the
  *  `chats.*` app-preference namespace. */
 export const RAIL_WIDTH_KEY = "chats.rail_width";
+
+/**
+ * New Run-cockpit sessions begin with the design's balanced Studio split rather
+ * than the narrow standalone-canvas default. Existing persisted preferences are
+ * never rewritten: a person who deliberately chose a compact rail keeps it.
+ */
+export const COCKPIT_DEFAULT_RAIL_WIDTH = 584;
 
 export interface UseRailWidthResult {
   /** Current rail width in px (always within the clamp range). */
@@ -32,7 +39,9 @@ export function readRailWidth(store: {
 }): number {
   const raw = store.get(RAIL_WIDTH_KEY);
   const parsed = raw === null ? Number.NaN : Number(raw);
-  return Number.isFinite(parsed) ? clampRailWidth(parsed) : DEFAULT_RAIL_WIDTH;
+  return Number.isFinite(parsed)
+    ? clampRailWidth(parsed)
+    : COCKPIT_DEFAULT_RAIL_WIDTH;
 }
 
 export function useRailWidth(): UseRailWidthResult {

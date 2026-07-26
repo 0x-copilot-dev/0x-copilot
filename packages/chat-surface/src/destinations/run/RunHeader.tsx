@@ -27,7 +27,10 @@ import type { AgentRunStatus } from "@0x-copilot/api-types";
 import type { RunMode } from "./useRunMode";
 
 /** Canonical order for the segmented control + arrow-key cycling. */
-const MODE_ORDER: readonly RunMode[] = ["studio", "focus"];
+// The design presents the compact reading mode first, followed by the active
+// workspace. Studio remains the persisted/default mode; this only fixes the
+// visual/control order to match the cockpit chrome.
+const MODE_ORDER: readonly RunMode[] = ["focus", "studio"];
 
 const MODE_LABELS: Record<RunMode, string> = {
   studio: "Studio",
@@ -290,14 +293,16 @@ const pulseDotStyle: CSSProperties = {
 // ============================================================
 
 const headerStyle: CSSProperties = {
+  boxSizing: "border-box",
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
   gap: 12,
-  padding: "12px 16px",
-  borderBottom: "1px solid var(--color-border, #22252e)",
-  background: "var(--color-bg-elevated, #16181f)",
-  color: "var(--color-text, #f4f5f6)",
+  height: 38,
+  padding: "0 13px",
+  borderBottom: "1px solid var(--color-border)",
+  background: "var(--color-bg-elevated)",
+  color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
 };
 
@@ -316,7 +321,11 @@ const avatarStyle: CSSProperties = {
 };
 
 const headingBlockStyle: CSSProperties = {
-  flex: 1,
+  // Keep the title content-sized and let the switcher consume the remaining
+  // header space through its auto margin. This mirrors the cockpit's calm,
+  // right-pinned mode control while still allowing long goals to shrink.
+  flex: "0 1 auto",
+  maxWidth: "calc(100% - 160px)",
   minWidth: 0,
   display: "flex",
   flexDirection: "column",
@@ -353,23 +362,22 @@ const goalStyle: CSSProperties = {
 const segmentedStyle: CSSProperties = {
   flexShrink: 0,
   display: "flex",
-  gap: 4,
-  padding: 3,
-  borderRadius: 999,
-  background: "var(--color-bg, #0e1015)",
-  border: "1px solid var(--color-border, #2a2d31)",
+  gap: 2,
+  marginLeft: "auto",
+  padding: 2,
+  borderRadius: 7,
+  background: "var(--color-surface)",
+  border: "1px solid var(--color-border)",
 };
 
 const segmentButtonStyle = (selected: boolean): CSSProperties => ({
-  background: selected ? "var(--color-accent, #5fb2ec)" : "transparent",
-  color: selected
-    ? "var(--color-accent-contrast, #08131d)"
-    : "var(--color-text-muted, #9aa0a6)",
-  border: "1px solid transparent",
-  borderRadius: 999,
-  padding: "4px 14px",
-  fontSize: "var(--font-size-xs, 12px)",
-  fontWeight: 600,
+  background: selected ? "var(--color-surface-elevated)" : "transparent",
+  color: selected ? "var(--color-text)" : "var(--color-text-muted)",
+  border: 0,
+  borderRadius: 5,
+  padding: "5px 12px",
+  fontSize: 12,
+  fontWeight: 500,
   cursor: "pointer",
   outline: "none",
   fontFamily: "inherit",
