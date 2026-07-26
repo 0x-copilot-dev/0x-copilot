@@ -523,7 +523,9 @@ function shell(state: ChatToolCallShellState, inner: string): string {
       *, *::before, *::after { animation: none !important; transition: none !important; }
       #parity-frame {
         box-sizing: border-box; display: flex; flex-direction: column;
-        width: 1200px; height: 816px; overflow: hidden;
+        width: 1200px; height: 767.031px; overflow: hidden;
+        border: 1px solid var(--color-border-strong); border-radius: 12px;
+        box-shadow: 0 0 0 1px rgba(0, 0, 0, .7), 0 40px 100px -30px rgba(0, 0, 0, .8);
         background: var(--color-bg); color: var(--color-text);
         font-family: var(--font-sans);
       }

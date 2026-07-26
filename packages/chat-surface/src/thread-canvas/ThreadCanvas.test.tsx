@@ -188,7 +188,7 @@ describe("ThreadCanvas", () => {
 
     it("renders the surface slot visibly in Studio mode", () => {
       renderCanvas({ mode: "studio" });
-      expect(screen.getByTestId("tc-surface-slot")).toHaveAttribute(
+      expect(screen.getByTestId("run-canvas-slot")).toHaveAttribute(
         "data-visible",
         "true",
       );
@@ -198,7 +198,7 @@ describe("ThreadCanvas", () => {
       renderCanvas({ mode: "focus" });
       // The surface slot div stays in the DOM (mount-once invariant)
       // but its data-visible flag is false; CSS hides it.
-      expect(screen.getByTestId("tc-surface-slot")).toHaveAttribute(
+      expect(screen.getByTestId("run-canvas-slot")).toHaveAttribute(
         "data-visible",
         "false",
       );
@@ -271,7 +271,7 @@ describe("ThreadCanvas", () => {
         "Proposed change",
       );
       expect(screen.queryByTestId("tc-tabs")).toBeNull();
-      expect(screen.getByTestId("tc-surface-slot")).toHaveAttribute(
+      expect(screen.getByTestId("run-canvas-slot")).toHaveAttribute(
         "data-visible",
         "false",
       );

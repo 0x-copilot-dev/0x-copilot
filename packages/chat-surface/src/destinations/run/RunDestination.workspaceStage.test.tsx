@@ -406,7 +406,7 @@ describe("RunDestination workspace EffectStage integration", () => {
     await mountWorkspaceStage(hostedTransport);
     fireEvent.click(screen.getByTestId("run-mode-focus"));
     await waitFor(() =>
-      expect(screen.getByTestId("tc-surface-slot")).toHaveAttribute(
+      expect(screen.getByTestId("run-canvas-slot")).toHaveAttribute(
         "data-visible",
         "false",
       ),

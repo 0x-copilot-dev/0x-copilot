@@ -127,11 +127,31 @@ function sha256(path) {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
-function baselineGaps(anchorsPath) {
+function baselineGaps(anchorsPath, liveProfile) {
   const anchors = JSON.parse(readFileSync(anchorsPath, "utf8"));
-  return anchors.elements
-    .filter((element) => element.baselineGap)
-    .map((element) => ({ label: element.label, detail: element.baselineGap }));
+  return (
+    anchors.elements
+      // A baseline-gap annotation is historical context, not a waiver. Keep it
+      // in the aggregate only while the corresponding live anchor is still
+      // absent; once production renders it, reporting the old claim would make
+      // the parity evidence less truthful than the strict comparator output.
+      .filter(
+        (element) =>
+          element.baselineGap &&
+          (liveProfile[element.label] === undefined ||
+            liveProfile[element.label].matched === false),
+      )
+      .map((element) => ({
+        label: element.label,
+        // Do not repeat a stale historical description when the strict map has
+        // no live selector at all: that is an observability defect in the map,
+        // not proof that production omitted the component.
+        detail:
+          element.live === undefined
+            ? "The strict anchor defines no live selector, so the extractor cannot observe the shipping component."
+            : element.baselineGap,
+      }))
+  );
 }
 
 function normalizeMarkdownReport(path) {
@@ -308,7 +328,7 @@ try {
         (entry) => entry.matched !== false,
       ).length,
       liveTotal: Object.keys(liveProfile).length,
-      gaps: baselineGaps(resolve(TOOLS, anchors)),
+      gaps: baselineGaps(resolve(TOOLS, anchors), liveProfile),
     });
   }
   writeAggregate(rows);

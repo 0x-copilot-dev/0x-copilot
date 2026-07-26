@@ -74,13 +74,18 @@ function contentFor(
 
 const panelStyle: CSSProperties = {
   display: "grid",
-  gap: "var(--space-2, 8px)",
+  // This is the canvas' empty state, not a card inside that canvas. Keeping it
+  // transparent and borderless preserves the Studio hierarchy: the canvas
+  // itself supplies the frame while this panel simply centers the honest state.
+  gap: "normal",
   alignContent: "center",
+  alignItems: "center",
+  flex: "1 1 auto",
   minHeight: "100%",
-  padding: "var(--space-8, 32px)",
-  border: "1px solid var(--color-border, #30343d)",
-  borderRadius: "var(--radius-lg, 12px)",
-  background: "var(--color-surface, #161922)",
+  padding: 26,
+  border: 0,
+  borderRadius: 0,
+  background: "transparent",
 };
 const eyebrowStyle: CSSProperties = {
   margin: 0,
