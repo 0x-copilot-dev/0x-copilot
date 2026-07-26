@@ -67,3 +67,18 @@ The facade port is allocated dynamically by the supervisor per boot; find it wit
 `lsof -nP -iTCP -sTCP:LISTEN | grep python` and probe `/v1/auth/providers`.
 
 Service logs for the supervised stack: `~/Library/Application Support/0xCopilot/logs/`.
+
+## Test the installed npm artifact, not the checkout
+
+After `make desktop-install`, launch the driver with:
+
+```bash
+COPILOT_DESKTOP_TEST_TARGET=installed-payload \
+  node tools/cli-testing/harness/driver.mjs
+```
+
+It discovers the global `@0x-copilot/cli` package via `npm root -g`, launches
+`payload/desktop`, and resolves Electron from that same installed package. The
+driver rejects `APP_DIR` in this mode so an artifact test cannot silently run
+the source app. For an isolated global installation, set
+`COPILOT_CLI_PACKAGE_ROOT=/absolute/path/to/@0x-copilot/cli` explicitly.

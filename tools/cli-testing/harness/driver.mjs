@@ -25,15 +25,12 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 import { _electron as electron } from "playwright";
+import { resolveLaunchTarget } from "./launch-target.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, "..", "..", "..");
-// APP_DIR override lets the harness drive the ASSEMBLED PAYLOAD
-// (tools/cli/payload/desktop) exactly as the published `copilot` runs it —
-// not just the source checkout (apps/desktop). Defaults to the source app.
-const APP_DIR = process.env.APP_DIR
-  ? path.resolve(process.env.APP_DIR)
-  : path.join(REPO_ROOT, "apps", "desktop");
+const TARGET = resolveLaunchTarget({ repoRoot: REPO_ROOT });
+const APP_DIR = TARGET.appDir;
 
 const CTL_PORT = Number(process.env.CTL_PORT ?? "8790");
 const POSTURE = process.env.POSTURE ?? "prod"; // "prod" | "dev"
@@ -52,9 +49,9 @@ function logConsole(line) {
   appendFileSync(CONSOLE_LOG, line.endsWith("\n") ? line : line + "\n");
 }
 
-// ---- resolve the electron binary exactly like the CLI (repoRoot first) ----
+// ---- resolve the electron binary exactly like the target CLI ----------------
 function resolveElectron() {
-  for (const base of [REPO_ROOT]) {
+  for (const base of TARGET.electronBases) {
     try {
       const require = createRequire(path.join(base, "index.js"));
       const resolved = require("electron");
@@ -63,7 +60,9 @@ function resolveElectron() {
       /* next */
     }
   }
-  throw new Error("could not resolve electron binary from repo root");
+  throw new Error(
+    `could not resolve Electron for ${TARGET.kind} from ${TARGET.electronBases.join(", ")}`,
+  );
 }
 
 // ---- build the launch env, mirroring tools/cli/lib/launch.mjs -------------
@@ -109,7 +108,13 @@ const capturedUrls = [];
 async function launch() {
   const executablePath = resolveElectron();
   const env = buildEnv();
-  logMain(`[driver] launching electron posture=${POSTURE} port=${CTL_PORT}`);
+  logMain(
+    `[driver] launching electron target=${TARGET.kind} posture=${POSTURE} port=${CTL_PORT}`,
+  );
+  logMain(`[driver] appDir=${APP_DIR}`);
+  if (TARGET.cliPackageRoot) {
+    logMain(`[driver] cliPackageRoot=${TARGET.cliPackageRoot}`);
+  }
   logMain(`[driver] executablePath=${executablePath}`);
   logMain(`[driver] COPILOT_RUNTIME_DIR=${env.COPILOT_RUNTIME_DIR}`);
   logMain(
@@ -193,6 +198,9 @@ async function rpc(cmd, args) {
             .catch(() => "")
         : "";
       return {
+        target: TARGET.kind,
+        appDir: APP_DIR,
+        cliPackageRoot: TARGET.cliPackageRoot,
         posture: POSTURE,
         url,
         title,

@@ -101,6 +101,29 @@ Each script spawns its own driver on `CTL_PORT` (default 8790), runs hermeticall
 a throwaway userData subdir (fresh first-run), writes screenshots + a `driver.log`
 under `runs/<name>/`, exits non-zero on failure, and cleans up the app.
 
+### Verifying the globally installed npm payload
+
+Use this after `make desktop-install` to drive the exact global
+`@0x-copilot/cli` payload — including its packaged desktop bundle and Electron
+dependency — instead of the source checkout:
+
+```bash
+python3 tools/desktop-journeys/installed-payload/installed_payload_smoke.py
+```
+
+The driver reports `target: installed-payload`, its global CLI package root, and
+the `payload/desktop` app directory through `status`; the smoke asserts those
+fields before touching the DOM. To run any existing suite against the exact
+same installed artifact, set the target once:
+
+```bash
+COPILOT_DESKTOP_TEST_TARGET=installed-payload \
+  python3 tools/desktop-journeys/chat-rich-cards/rich_chat.py
+```
+
+`APP_DIR` is rejected for this target. That guard prevents an apparently green
+“installed” run from silently falling back to `apps/desktop` in the checkout.
+
 ### Verifying a branch build (keep `main` clean — work in a worktree)
 
 To exercise an unmerged branch without touching the main checkout:
@@ -125,7 +148,9 @@ COPILOT_HOME="$PWD/apps/desktop/resources" \
 # 4. after merge: git worktree remove -f .claude/worktrees/<name> && git branch -D <branch>
 ```
 
-`DriverSession(app_dir=..., copilot_home=...)` accepts the same overrides directly.
+`DriverSession(app_dir=..., copilot_home=...)` accepts the source-worktree
+overrides directly. `DriverSession(installed_payload=True)` uses the installed
+CLI target and intentionally cannot take `app_dir`.
 
 ## The driver control API (what `_lib.py` wraps)
 

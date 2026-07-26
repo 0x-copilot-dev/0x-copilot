@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import type { CommandResult } from "./exec";
 import {
+  POSTGRES_OWNER_MARKER_FILE,
   PostgresError,
   PostgresManager,
   type PostgresFs,
@@ -284,5 +285,19 @@ describe("PostgresManager.stop", () => {
     const h = makeHarness({});
     await h.manager.stop();
     expect(h.calls).toHaveLength(0);
+  });
+
+  it("marks a live cluster with its Electron owner and clears it on graceful shutdown", async () => {
+    const h = makeHarness({
+      files: { [`${DATA_DIR}/PG_VERSION`]: "17\n" },
+      config: { ownerPid: 42_424 },
+    });
+    const marker = `${DATA_DIR}/${POSTGRES_OWNER_MARKER_FILE}`;
+    await h.manager.start();
+    expect(h.files.get(marker)).toBe("42424\n");
+
+    await h.manager.stop();
+    expect(h.removed).toContain(marker);
+    expect(h.files.has(marker)).toBe(false);
   });
 });

@@ -81,6 +81,10 @@ class DriverSession:
                       worktree's apps/desktop to verify a branch build.
       COPILOT_HOME  – staged runtime dir (default: <repo>/apps/desktop/resources).
                       Frontend-only changes can reuse main's staged services.
+      COPILOT_DESKTOP_TEST_TARGET=installed-payload – launch the globally installed
+                      @0x-copilot/cli payload and its own Electron binary. This
+                      intentionally rejects APP_DIR so the journey cannot silently
+                      exercise the checkout instead of the npm artifact.
       CTL_PORT      – control port (default 8790).
     """
 
@@ -91,6 +95,7 @@ class DriverSession:
         fresh: bool = True,
         app_dir: str | None = None,
         copilot_home: str | None = None,
+        installed_payload: bool = False,
     ):
         self.name = name
         self.port = CTL_PORT
@@ -101,14 +106,34 @@ class DriverSession:
         env["CTL_PORT"] = str(self.port)
         env["POSTURE"] = "prod"
         env["RUN_DIR"] = str(self.run_dir)
-        env["APP_DIR"] = (
-            app_dir or env.get("APP_DIR") or str(REPO_ROOT / "apps" / "desktop")
-        )
-        env["COPILOT_HOME"] = (
-            copilot_home
-            or env.get("COPILOT_HOME")
-            or str(REPO_ROOT / "apps" / "desktop" / "resources")
-        )
+        target = env.get("COPILOT_DESKTOP_TEST_TARGET", "source")
+        if installed_payload:
+            target = "installed-payload"
+        env["COPILOT_DESKTOP_TEST_TARGET"] = target
+        if target == "installed-payload":
+            if app_dir is not None:
+                raise ValueError(
+                    "app_dir cannot be used with installed_payload=True; "
+                    "that journey must launch the installed npm payload"
+                )
+            # An installed CLI stages to ~/.0xcopilot by default. Keep an explicit
+            # COPILOT_HOME override for isolated installs, but never substitute the
+            # source checkout's resources — that would invalidate the artifact test.
+            env["COPILOT_HOME"] = (
+                copilot_home
+                or env.get("COPILOT_HOME")
+                or str(Path.home() / ".0xcopilot")
+            )
+            env.pop("APP_DIR", None)
+        else:
+            env["APP_DIR"] = (
+                app_dir or env.get("APP_DIR") or str(REPO_ROOT / "apps" / "desktop")
+            )
+            env["COPILOT_HOME"] = (
+                copilot_home
+                or env.get("COPILOT_HOME")
+                or str(REPO_ROOT / "apps" / "desktop" / "resources")
+            )
         # A throwaway userData subdir ⇒ a fresh first-run every time.
         suffix = str(int(time.time())) if fresh else "reuse"
         env["COPILOT_DESKTOP_USER_DATA_SUBDIR"] = f"journey-{name}-{suffix}"

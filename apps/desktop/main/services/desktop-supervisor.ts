@@ -243,6 +243,9 @@ export function createDesktopSupervisor(
         // staged interpreter + psycopg from the backend's site-packages.
         pythonBin: paths.pythonBin,
         pythonSitePackages: join(paths.serviceDir("backend"), "site-packages"),
+        // Used solely by `copilot doctor` to separate this live app's database
+        // from a postmaster stranded by a crashed/force-quit predecessor.
+        ownerPid: process.pid,
         runner,
         fs: {
           readFile: (path, encoding) => readFile(path, encoding),

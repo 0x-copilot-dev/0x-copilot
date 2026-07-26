@@ -1,6 +1,6 @@
 // `copilot doctor` — inspect the install and report what would stop a launch.
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -118,18 +118,32 @@ export function doctor(pkgRoot) {
       : `${DOWNLOAD_CACHE} ${ui.c.dim("(empty)")}`,
   );
 
-  // Orphaned embedded database: a force-quit/crash leftover that would block a
-  // fresh start. The app now auto-reclaims it on boot, but surface it here with
-  // the one-liner fix. Informational — doesn't fail `doctor`.
-  const orphanPid = orphanedDatabasePid();
-  if (orphanPid !== null) {
+  // A live postmaster is not necessarily an orphan: it can belong to the
+  // desktop app that is currently open. The supervisor writes an owner marker
+  // while it is alive and leaves it behind only after a crash/force-quit.
+  const database = databaseStatus(appUserDataDir());
+  if (database.kind === "owned") {
     line(
       "database",
-      ui.c.yellow(`orphaned instance running (pid ${orphanPid})`),
+      ui.c.green(
+        `running (owned by 0xCopilot; app pid ${database.ownerPid}, database pid ${database.postgresPid})`,
+      ),
+    );
+  } else if (database.kind === "orphaned") {
+    line(
+      "database",
+      ui.c.yellow(`orphaned instance running (pid ${database.postgresPid})`),
     );
     ui.plain(
       `  ${ui.c.dim("".padEnd(16))} if a launch won't start, run ${ui.c.bold("copilot repair")}`,
     );
+  } else if (database.kind === "stale") {
+    line(
+      "database",
+      ui.c.yellow(`stale lock (pid ${database.postgresPid} is not running)`),
+    );
+  } else if (database.kind === "invalid") {
+    line("database", ui.c.yellow("unreadable postmaster lock"));
   }
   ui.plain();
 
@@ -141,24 +155,59 @@ export function doctor(pkgRoot) {
   return false;
 }
 
-/** The pid of a live orphaned embedded postgres holding pgdata, or null. */
-function orphanedDatabasePid() {
-  const pidPath = path.join(appUserDataDir(), "pgdata", "postmaster.pid");
-  if (!existsSync(pidPath)) return null;
-  let pid;
+const POSTGRES_OWNER_MARKER_FILE = ".0xcopilot-owner.pid";
+
+function parsePid(raw) {
+  const first = raw.split(/\r?\n/u, 1)[0]?.trim() ?? "";
+  if (!/^[1-9]\d*$/u.test(first)) return null;
+  const pid = Number(first);
+  return Number.isSafeInteger(pid) ? pid : null;
+}
+
+function readPid(pathname, { readFile }) {
   try {
-    const first = readFileSync(pidPath, "utf-8").split(/\r?\n/u, 1)[0] ?? "";
-    pid = Number.parseInt(first.trim(), 10);
+    return parsePid(readFile(pathname, "utf-8"));
   } catch {
     return null;
   }
-  if (Number.isNaN(pid)) return null;
+}
+
+function isPidAlive(pid) {
   try {
     process.kill(pid, 0);
-    return pid;
   } catch (e) {
-    return e && e.code === "EPERM" ? pid : null;
+    return e && e.code === "EPERM";
   }
+  return true;
+}
+
+/**
+ * Classify our embedded PostgreSQL without conflating the live app with an
+ * orphan. Injectable dependencies keep this platform-facing CLI logic covered
+ * by a plain node:test suite.
+ */
+export function databaseStatus(
+  userDataDir,
+  {
+    exists = existsSync,
+    readFile = readFileSync,
+    processAlive = isPidAlive,
+  } = {},
+) {
+  const pgdata = path.join(userDataDir, "pgdata");
+  const pidPath = path.join(pgdata, "postmaster.pid");
+  if (!exists(pidPath)) return { kind: "absent" };
+
+  const postgresPid = readPid(pidPath, { readFile });
+  if (postgresPid === null) return { kind: "invalid" };
+  if (!processAlive(postgresPid)) return { kind: "stale", postgresPid };
+
+  const ownerPath = path.join(pgdata, POSTGRES_OWNER_MARKER_FILE);
+  const ownerPid = exists(ownerPath) ? readPid(ownerPath, { readFile }) : null;
+  if (ownerPid !== null && processAlive(ownerPid)) {
+    return { kind: "owned", postgresPid, ownerPid };
+  }
+  return { kind: "orphaned", postgresPid };
 }
 
 /** Spot-check a couple of critical binaries actually carry a valid signature. */

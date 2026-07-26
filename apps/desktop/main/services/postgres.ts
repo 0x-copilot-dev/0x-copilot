@@ -15,6 +15,12 @@ export interface PostgresPaths {
   readonly pgCtl: string;
 }
 
+// This marker is written only while an Electron supervisor owns a live embedded
+// cluster. It survives a crash so `copilot doctor` can distinguish a crashed
+// host's live postmaster from an app that is still running; graceful shutdown
+// removes it. The value is just the owning Electron PID — no credentials.
+export const POSTGRES_OWNER_MARKER_FILE = ".0xcopilot-owner.pid";
+
 export interface PostgresFs {
   readFile(path: string, encoding: "utf-8"): Promise<string>;
   writeFile(
@@ -51,6 +57,8 @@ export interface PostgresManagerConfig {
   readonly processAlive?: (pid: number) => boolean;
   /** pg_ctl -w start wait budget in seconds (pg_ctl -t). Default 60. */
   readonly startTimeoutSeconds?: number;
+  /** Electron main-process PID that owns this embedded cluster, when supervised. */
+  readonly ownerPid?: number;
 }
 
 const DB_NAME_RE = /^[a-z_][a-z0-9_]*$/u;
@@ -117,6 +125,14 @@ export class PostgresManager {
       throw new PostgresError("start", outputTail(result, 20));
     }
     this.#started = true;
+    try {
+      await this.#writeOwnerMarker();
+    } catch (err) {
+      // Do not leave an unowned live postmaster behind if the marker write
+      // fails (for example, an unexpectedly read-only userData directory).
+      await this.stop();
+      throw err;
+    }
   }
 
   async ensureDatabase(name: string): Promise<void> {
@@ -149,7 +165,32 @@ export class PostgresManager {
     this.#started = false;
     const { paths, dataDir, runner } = this.#config;
     // Best-effort on shutdown: a failure here must not block app quit.
-    await runner(paths.pgCtl, ["-D", dataDir, "-m", "fast", "stop"]);
+    try {
+      await runner(paths.pgCtl, ["-D", dataDir, "-m", "fast", "stop"]);
+    } finally {
+      await this.#removeOwnerMarker();
+    }
+  }
+
+  async #writeOwnerMarker(): Promise<void> {
+    const ownerPid = this.#config.ownerPid;
+    if (ownerPid === undefined) return;
+    if (!Number.isInteger(ownerPid) || ownerPid <= 0) {
+      throw new PostgresError("owner-marker", `invalid owner pid ${ownerPid}`);
+    }
+    await this.#config.fs.writeFile(
+      join(this.#config.dataDir, POSTGRES_OWNER_MARKER_FILE),
+      `${ownerPid}\n`,
+      { mode: 0o600 },
+    );
+  }
+
+  async #removeOwnerMarker(): Promise<void> {
+    if (this.#config.ownerPid === undefined) return;
+    await this.#config.fs.rm(
+      join(this.#config.dataDir, POSTGRES_OWNER_MARKER_FILE),
+      { force: true },
+    );
   }
 
   async #ensureInitialized(): Promise<void> {

@@ -4,6 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "description": "Automated live-smoke harness that drives the copilot Electron app as a real user and captures screenshots/logs for LLM-as-judge review.",
+  "scripts": {
+    "test": "node --test harness/launch-target.test.mjs"
+  },
   "dependencies": {
     "playwright": "*",
     "viem": "^2.21.55"
