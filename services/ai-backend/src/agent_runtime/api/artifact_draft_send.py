@@ -52,13 +52,23 @@ from agent_runtime.surfaces_v2.ledger_models import (
 from runtime_adapters.artifact_references import ArtifactReferenceRepositoryPort
 
 
+class ArtifactDraftSendForbidden(PermissionError):
+    """The requested principal is not the immutable draft-stage owner.
+
+    This is deliberately distinct from an unmigrated legacy row. The
+    DraftService converts it to an opaque denial; callers must never interpret
+    it as permission to create a mutable fallback stage.
+    """
+
+
 @runtime_checkable
 class ArtifactDraftSendStagerPort(Protocol):
     """Stage a canonical Artifact draft when its v2 binding exists.
 
-    ``None`` is the deliberate migration signal: callers must retain the
-    legacy staged-draft flow for an old ``runtime_drafts`` row that has not yet
-    been imported by ``ArtifactDraftBackend``.
+    ``None`` is the only migration signal: callers may retain the legacy
+    staged-draft flow for an old ``runtime_drafts`` row that has not yet been
+    imported by ``ArtifactDraftBackend``. Authorization failures raise
+    :class:`ArtifactDraftSendForbidden` and must never fall back.
     """
 
     async def stage(
@@ -72,7 +82,10 @@ class ArtifactDraftSendStagerPort(Protocol):
         target_op: str,
         target_metadata: JsonObject,
     ) -> EffectStageState | None:
-        """Create/replay one standard effect stage for an Artifact revision."""
+        """Create/replay an Artifact stage; ``None`` only means unmigrated.
+
+        Raises :class:`ArtifactDraftSendForbidden` for an unowned run scope.
+        """
 
 
 @dataclass(frozen=True)
@@ -109,7 +122,7 @@ class ArtifactDraftSendStager(ArtifactDraftSendStagerPort):
         run_org_id = _required_text(run, "org_id")
         run_user_id = _required_text(run, "user_id")
         if run_org_id != org_id or run_user_id != user_id:
-            return None
+            raise ArtifactDraftSendForbidden()
 
         revision_resolver = self.revisions or ArtifactDraftRevisionResolver(
             artifacts=self.artifacts
@@ -282,4 +295,8 @@ class _FixedStageId:
         return self.value
 
 
-__all__ = ["ArtifactDraftSendStager", "ArtifactDraftSendStagerPort"]
+__all__ = [
+    "ArtifactDraftSendForbidden",
+    "ArtifactDraftSendStager",
+    "ArtifactDraftSendStagerPort",
+]

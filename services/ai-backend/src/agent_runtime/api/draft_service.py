@@ -7,6 +7,7 @@ from typing import Any
 
 from starlette import status
 
+from agent_runtime.api.artifact_draft_send import ArtifactDraftSendForbidden
 from agent_runtime.api.constants import Keys, Values as ApiValues
 from agent_runtime.capabilities.auth_gate import (
     CapabilityAuthCheck,
@@ -150,13 +151,18 @@ class DraftService:
         request: DraftSendRequest,
     ) -> DraftSendResponse:
         """Initiate a draft send: auth-gate check → insert v+1 → approval row → event."""
-        latest = await self._expect(
+        latest = await self._expect_owned_send_draft(
             org_id=org_id,
+            user_id=user_id,
             draft_id=draft_id,
             expected_version=request.expected_version,
         )
         if latest.status in {DraftStatus.SENT, DraftStatus.DISCARDED}:
             raise self._immutable_status_error(latest.status)
+
+        artifact_staging_enabled = (
+            self._artifact_draft_send_stager is not None and SurfacesV2Flag.enabled()
+        )
 
         # 1. Auth pre-check — fail fast BEFORE any DB write.
         await self._enforce_auth_gate(
@@ -175,7 +181,7 @@ class DraftService:
         # imported this draft. This happens before a copied ``DraftRecord`` is
         # created: approval/execution must bind the Artifact ref + digest, not
         # mutable row bytes. ``None`` signals a legacy row and falls through.
-        if self._artifact_draft_send_stager is not None and SurfacesV2Flag.enabled():
+        if artifact_staging_enabled:
             artifact_response = await self._stage_send_v2(
                 org_id=org_id,
                 user_id=user_id,
@@ -314,15 +320,20 @@ class DraftService:
                 http_status=status.HTTP_409_CONFLICT,
                 details={"error_code": "no_host_run"},
             )
-        state = await self._artifact_draft_send_stager.stage(  # type: ignore[union-attr]
-            run=run,
-            org_id=org_id,
-            user_id=user_id,
-            draft_id=draft.draft_id,
-            target_connector=request.target_connector,
-            target_op=self._target_op_for(request),
-            target_metadata=dict(request.target_metadata or {}),
-        )
+        try:
+            state = await self._artifact_draft_send_stager.stage(  # type: ignore[union-attr]
+                run=run,
+                org_id=org_id,
+                user_id=user_id,
+                draft_id=draft.draft_id,
+                target_connector=request.target_connector,
+                target_op=self._target_op_for(request),
+                target_metadata=dict(request.target_metadata or {}),
+            )
+        except ArtifactDraftSendForbidden as exc:
+            # Covers a host-run ownership race after the early service check.
+            # It remains an opaque denial, never a compatibility fallback.
+            raise self._opaque_draft_not_found() from exc
         if state is None:
             return None
         await self._audit(
@@ -626,6 +637,32 @@ class DraftService:
                 },
             ) from exc
 
+    async def _expect_owned_send_draft(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        draft_id: str,
+        expected_version: int,
+    ) -> DraftRecord:
+        """Load a draft for sending without leaking a peer's draft existence.
+
+        Draft sends are per-user actions.  This generic service boundary is
+        intentionally independent of Artifact staging, so legacy and
+        feature-off sends cannot mutate another same-org user's draft either.
+        Checking the owner before the optimistic-version check also preserves
+        the opaque 404 response if a peer guesses a stale version.
+        """
+
+        latest = await self._store.latest(org_id=org_id, draft_id=draft_id)
+        if latest is None or latest.user_id != user_id:
+            raise self._opaque_draft_not_found()
+        return await self._expect(
+            org_id=org_id,
+            draft_id=draft_id,
+            expected_version=expected_version,
+        )
+
     @staticmethod
     def _immutable_status_error(current: DraftStatus) -> RuntimeApiError:
         """Build a 409 error indicating the draft is in a final, non-writable state."""
@@ -634,6 +671,16 @@ class DraftService:
             safe_message=_DRAFT_STATUS_IMMUTABLE,
             http_status=status.HTTP_409_CONFLICT,
             details={"status": current.value},
+        )
+
+    @staticmethod
+    def _opaque_draft_not_found() -> RuntimeApiError:
+        """Return the same safe response as an absent draft, without enumeration."""
+
+        return RuntimeApiError(
+            code=RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+            safe_message=_DRAFT_NOT_FOUND,
+            http_status=status.HTTP_404_NOT_FOUND,
         )
 
     @staticmethod

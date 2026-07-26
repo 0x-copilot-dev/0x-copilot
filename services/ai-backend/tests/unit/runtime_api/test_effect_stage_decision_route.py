@@ -83,6 +83,12 @@ def _headers(*, org_id: str = _ORG, user_id: str = _USER) -> dict[str, str]:
     return {"x-enterprise-org-id": org_id, "x-enterprise-user-id": user_id}
 
 
+def _stable_error(payload: dict[str, object]) -> dict[str, object]:
+    """Compare only opaque error fields, excluding per-request diagnostics."""
+
+    return {field: payload[field] for field in ("code", "safe_message", "retryable")}
+
+
 class _Bundle:
     def __init__(self) -> None:
         self.store = InMemoryRuntimeApiStore()
@@ -121,7 +127,7 @@ class _Bundle:
         )
         self.client = TestClient(self.app)
 
-    def stage_artifact_draft(self) -> dict[str, object]:
+    def import_artifact_draft(self) -> None:
         asyncio.run(
             self.ports.draft_store.insert_version(
                 DraftRecord(
@@ -147,6 +153,9 @@ class _Bundle:
         )
         imported = asyncio.run(backend.aread(f"/drafts/{_DRAFT}.md"))
         assert imported.file_data is not None
+
+    def stage_artifact_draft(self) -> dict[str, object]:
+        self.import_artifact_draft()
         response = self.client.post(
             f"/v1/agent/drafts/{_DRAFT}/send",
             headers=_headers(),
@@ -225,6 +234,46 @@ class TestEffectStageDecisionRoute:
         assert [
             event.event_type.value for event in bundle.store.events_by_run[_RUN]
         ] == ["effect.staged"]
+        assert bundle.store.effect_commit_commands == []
+
+    def test_same_org_non_owner_cannot_fall_back_from_imported_artifact_send(
+        self,
+    ) -> None:
+        """The DraftService boundary denies before versions, approvals, or stages."""
+
+        bundle = _Bundle()
+        bundle.import_artifact_draft()
+        body = {
+            "expected_version": 1,
+            "target_connector": "gmail",
+            "target_metadata": {
+                "op": "send_email",
+                "recipient": "team@example.test",
+            },
+        }
+
+        denied = bundle.client.post(
+            f"/v1/agent/drafts/{_DRAFT}/send",
+            headers=_headers(user_id=_OTHER_USER),
+            json=body,
+        )
+        absent = bundle.client.post(
+            "/v1/agent/drafts/cafebabecafebabecafebabecafebabe/send",
+            headers=_headers(user_id=_OTHER_USER),
+            json=body,
+        )
+
+        assert denied.status_code == 404
+        assert _stable_error(denied.json()) == _stable_error(absent.json())
+        latest = asyncio.run(
+            bundle.ports.draft_store.latest(org_id=_ORG, draft_id=_DRAFT)
+        )
+        assert latest is not None
+        assert latest.version == 1
+        assert latest.status is DraftStatus.DRAFT
+        assert bundle.store.events_by_run[_RUN] == []
+        assert bundle.store.approval_requests == {}
+        assert bundle.store.approval_commands == []
         assert bundle.store.effect_commit_commands == []
 
     def test_cross_org_request_is_an_opaque_404_without_a_decision_or_command(

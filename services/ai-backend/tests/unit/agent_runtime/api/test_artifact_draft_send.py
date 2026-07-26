@@ -7,7 +7,10 @@ from dataclasses import dataclass
 
 import pytest
 
-from agent_runtime.api.artifact_draft_send import ArtifactDraftSendStager
+from agent_runtime.api.artifact_draft_send import (
+    ArtifactDraftSendForbidden,
+    ArtifactDraftSendStager,
+)
 from agent_runtime.api.draft_service import DraftService
 from agent_runtime.api.effect_commit_queue import RuntimeEffectCommitOutbox
 from agent_runtime.api.effect_ledger import RuntimeEffectLedger
@@ -123,6 +126,19 @@ class _CoordinatorFactory:
 class _FailingStageLookup:
     async def list_events_after(self, **_kwargs: object) -> tuple[object, ...]:
         raise RuntimeError("simulated event-store outage")
+
+
+class _FailingSupersessionLookup:
+    """Decorate the draft store but make the canonical safety lookup unavailable."""
+
+    def __init__(self, delegate: InMemoryDraftStore) -> None:
+        self._delegate = delegate
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._delegate, name)
+
+    async def has_effect_supersession(self, **_kwargs: object) -> bool:
+        raise RuntimeError("simulated draft-to-stage correlation outage")
 
 
 @dataclass(frozen=True)
@@ -411,6 +427,29 @@ async def test_artifact_send_stages_exact_revision_without_copying_legacy_body(
     assert state.target.target_ref.startswith("draft-send-target://sha256/")
 
 
+async def test_artifact_stager_distinguishes_forbidden_from_unmigrated_legacy_row() -> (
+    None
+):
+    """A foreign run scope is never the ``None`` migration compatibility signal."""
+
+    h = _Harness()
+    await h.seed_and_import()
+
+    with pytest.raises(ArtifactDraftSendForbidden):
+        await h.artifact_stager.stage(
+            org_id=_ORG,
+            user_id="user_same_org_not_owner",
+            run=h.run,
+            draft_id=_DRAFT_ID,
+            target_connector="gmail",
+            target_op="send_email",
+            target_metadata={"recipient": "team@example.test"},
+        )
+
+    assert h.runtime.events_by_run[_RUN] == []
+    assert h.runtime.effect_commit_commands == []
+
+
 async def test_changes_after_stage_cannot_alter_approved_payload_and_retry_is_idempotent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -484,6 +523,42 @@ async def test_stale_v1_approval_fails_closed_when_effect_stage_lookup_errors(
         persistence=h.runtime,
         event_store=_FailingStageLookup(),
         draft_store=h.drafts,
+    )
+    await worker._resolve_draft_send_approval(  # noqa: SLF001 - adversarial seam.
+        run=h.run,
+        approval=approval,
+        decision=ApprovalDecision.APPROVED,
+        decided_by_user_id=_USER,
+    )
+
+    latest = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert latest is not None
+    assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
+    assert not any(
+        version.status is DraftStatus.SENT
+        for version in h.drafts.versions[(_ORG, _DRAFT_ID)]
+    )
+
+
+async def test_stale_v1_approval_fails_closed_when_effect_supersession_lookup_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unavailable canonical correlation is unsafe, even with a healthy ledger."""
+
+    monkeypatch.setenv("SURFACES_V2", "false")
+    h = _Harness()
+    await h.seed_and_import(content="Legacy body under review")
+    v1 = await h.stage()
+    assert v1.approval_id is not None
+    approval = await h.runtime.get_approval_request(
+        org_id=_ORG, approval_id=v1.approval_id
+    )
+    assert approval is not None
+
+    worker = RuntimeApprovalHandler(
+        persistence=h.runtime,
+        event_store=h.runtime,
+        draft_store=_FailingSupersessionLookup(h.drafts),  # type: ignore[arg-type]
     )
     await worker._resolve_draft_send_approval(  # noqa: SLF001 - adversarial seam.
         run=h.run,
