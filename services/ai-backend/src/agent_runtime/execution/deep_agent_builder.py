@@ -83,6 +83,17 @@ def format_web_subagent_suffix(
         'Open-ended phrasing in the request ("many", "comprehensive", '
         '"thorough") does not lift this cap — pick the most informative queries '
         "and stop.\n\n"
+        "You do not have to track this yourself. As a tool nears its cap its "
+        "results carry a note of the form `[Tool budget — <tool_name>: X of Y "
+        "calls used this turn, Z calls left.]`. Treat that as a planning "
+        "signal, not a warning to acknowledge: with a small number left, spend "
+        "them on the gaps that matter most rather than on refinements of what "
+        "you already know. At zero, do not call that tool again — write the "
+        "answer. The count covers the whole turn, including calls your "
+        "delegated subagents make, and it resets when the user sends the next "
+        "message. If a call is refused because the budget is gone, that is not "
+        "an error to report or retry: finalize with what you have and say "
+        "plainly what is still uncertain.\n\n"
         "Subagent execution traces from this and prior turns are available "
         "read-only at `/subagents/<task_id>/`. When the user asks about a "
         "delegate's tools, queries, or conversation, run `ls /subagents/` and "

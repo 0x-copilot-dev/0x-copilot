@@ -20,8 +20,9 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetReject,
     ToolBudgetWarn,
 )
+from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.execution.contracts import StreamEventSource
-from agent_runtime.execution.tool_errors import BudgetExceeded
+from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
 from runtime_api.schemas import RuntimeApiEventType, RunRecord
 
 if TYPE_CHECKING:  # pragma: no cover — typing-only; runtime import is lazy.
@@ -30,12 +31,29 @@ if TYPE_CHECKING:  # pragma: no cover — typing-only; runtime import is lazy.
 
 _LOGGER = logging.getLogger(__name__)
 
+# Top-level key for the remaining-calls note on a dict-shaped tool result.
+# Distinct from the citation hint's key so both can ride on one result.
+_TOOL_BUDGET_NOTE_KEY = "_tool_budget_note"
+
 
 class _Limits:
     """Input-token estimate caps; 1 char ≈ 0.25 tokens, capped per call."""
 
     CHARS_PER_TOKEN = 4
     MAX_ESTIMATED_TOKENS = 100_000
+
+    MAX_SURFACED_REJECTIONS = 6
+    """Hard-cap refusals handed to the model before the run is failed.
+
+    Refusing a call costs nothing — the inner tool never runs — so the
+    only thing this bounds is a model that answers every refusal with
+    another tool call instead of finalizing. Six is deliberately loose:
+    a single turn can fan out several parallel calls and have all of
+    them refused, and the model still deserves a clean turn afterwards
+    to write its answer. It stays well inside LangGraph's default
+    recursion limit, so a looping model hits this legible error rather
+    than an opaque ``GraphRecursionError``.
+    """
 
 
 class ToolBudgetGuard:
@@ -48,12 +66,22 @@ class ToolBudgetGuard:
         ledger: "ToolCallLedger",
         run: RunRecord | None = None,
         event_producer: object | None = None,
+        max_surfaced_rejections: int | None = None,
     ) -> None:
         """Initialise the guard with a middleware, ledger, and optional event emitter."""
         self._middleware = middleware
         self._ledger = ledger
         self._run = run
         self._event_producer = event_producer
+        # Resolved here rather than as a parameter default: a default is
+        # bound once at import, so the limit could not be adjusted for a
+        # single run (or a single test) after this module loaded.
+        self._max_surfaced_rejections = (
+            _Limits.MAX_SURFACED_REJECTIONS
+            if max_surfaced_rejections is None
+            else max_surfaced_rejections
+        )
+        self._surfaced_rejections = 0
 
     @classmethod
     def bind_for_run(cls, guard: "ToolBudgetGuard") -> object:
@@ -84,6 +112,46 @@ class ToolBudgetGuard:
             estimated_input_tokens=estimated_input_tokens,
         )
 
+    def rejection_error(self, decision: ToolBudgetReject) -> Exception:
+        """Return the exception to raise for a hard-cap rejection.
+
+        The cap has already been enforced by the time this is called —
+        the inner tool is not going to run either way. What is still in
+        question is whether the *run* survives.
+
+        The first :attr:`_Limits.MAX_SURFACED_REJECTIONS` refusals return
+        a non-fatal :class:`ToolBudgetRejected`, which the error policy
+        hands to the model as a tool result so it can finalize with the
+        work it has already completed. Killing the run here instead
+        would discard every tool result the run had accumulated while
+        enforcing exactly the same spend — strictly worse for the user
+        and contrary to the refusal message's own instruction to
+        "finalize now".
+
+        Past that allowance the model is answering refusals with more
+        calls rather than an answer, so the guard escalates to the
+        fatal :class:`BudgetExceeded` to stop the loop.
+        """
+
+        self._surfaced_rejections += 1
+        exhausted = self._surfaced_rejections > self._max_surfaced_rejections
+        _LOGGER.info(
+            "tool_budget_rejected_fatal" if exhausted else "tool_budget_rejected",
+            extra={
+                "metadata": {
+                    "tool_name": decision.tool_name or decision.budget.tool_name,
+                    "kind": decision.kind,
+                    "current": decision.current,
+                    "limit": decision.limit,
+                    "surfaced_rejections": self._surfaced_rejections,
+                    "max_surfaced_rejections": self._max_surfaced_rejections,
+                }
+            },
+        )
+        if exhausted:
+            return BudgetExceeded(decision.safe_message)
+        return ToolBudgetRejected(decision.safe_message)
+
     def record_started(self, *, tool_name: str, estimated_input_tokens: int) -> str:
         """Open a ledger entry for an admitted call. Returns the call id."""
 
@@ -91,6 +159,11 @@ class ToolBudgetGuard:
         self._ledger.started(
             call_id,
             tool_name=tool_name,
+            # Budget accounting counts this entry and NOT the one the
+            # stream orchestrator opens for the same call under the
+            # provider's own call id. Both writers share this ledger; if
+            # both were counted every configured cap would be halved.
+            budget_scoped=True,
         )
         # The actual token cost is recorded at settlement; estimate is pre-check only.
         del estimated_input_tokens
@@ -107,11 +180,27 @@ class ToolBudgetGuard:
         self._ledger.record_input_tokens(call_id, observed_input_tokens)
         self._ledger.observed_settled(call_id)
 
+    def usage_note(self, *, tool_name: str) -> str | None:
+        """Return the remaining-calls note for ``tool_name``, or ``None``.
+
+        ``None`` when no budget governs the tool, or while there is still
+        comfortable headroom — the model only needs this once the tail is
+        in sight, and a note on every result is context spent for nothing.
+        """
+
+        usage = self._middleware.usage(ledger=self._ledger, tool_name=tool_name)
+        if usage is None or not usage.should_notify:
+            return None
+        return usage.render_note()
+
     async def emit_warning(self, *, decision: ToolBudgetWarn) -> None:
         """Best-effort BUDGET_WARNING emission."""
 
         producer = self._event_producer
         run = self._run
+        # The requested tool, falling back to the budget's own name for
+        # decisions built before ``tool_name`` was threaded through.
+        tool_name = decision.tool_name or decision.budget.tool_name
         if (
             producer is None
             or run is None
@@ -121,7 +210,7 @@ class ToolBudgetGuard:
                 "tool_budget_warn",
                 extra={
                     "metadata": {
-                        "tool_name": decision.budget.tool_name,
+                        "tool_name": tool_name,
                         "kind": decision.kind,
                         "current": decision.current,
                         "limit": decision.limit,
@@ -135,14 +224,14 @@ class ToolBudgetGuard:
                 source=StreamEventSource.SYSTEM,
                 event_type=RuntimeApiEventType.BUDGET_WARNING,
                 payload={
-                    "tool_name": decision.budget.tool_name,
+                    "tool_name": tool_name,
                     "kind": decision.kind,
                     "current": decision.current,
                     "limit": decision.limit,
                     "enforcement": decision.budget.enforcement.value,
                 },
                 summary=(
-                    f"Tool '{decision.budget.tool_name}' near {decision.kind} cap "
+                    f"Tool '{tool_name}' near {decision.kind} cap "
                     f"({decision.current}/{decision.limit})."
                 ),
             )
@@ -202,9 +291,10 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         if isinstance(decision, ToolBudgetReject):
-            # Raise a typed error so the run handler terminates the run rather than
-            # letting the model attempt to talk its way past the hard cap.
-            raise BudgetExceeded(decision.safe_message)
+            # The inner tool is short-circuited either way — the cap is
+            # enforced here. The guard decides only whether the refusal
+            # is surfaced to the model or ends the run.
+            raise guard.rejection_error(decision)
         if isinstance(decision, ToolBudgetWarn):
             # Sync path: schedule warning emission on the running loop; fall back to log.
             self._schedule_warning(guard=guard, decision=decision)
@@ -212,9 +302,10 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         try:
-            return self.inner._run(*args, **kwargs)
+            result = self.inner._run(*args, **kwargs)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
+        return self._with_usage_note(result, guard=guard)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Async gate: check budget, record the call, delegate to the inner tool."""
@@ -226,7 +317,7 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         if isinstance(decision, ToolBudgetReject):
-            raise BudgetExceeded(decision.safe_message)
+            raise guard.rejection_error(decision)
         if isinstance(decision, ToolBudgetWarn):
             await guard.emit_warning(decision=decision)
         if not isinstance(decision, (ToolBudgetAdmit, ToolBudgetWarn)):
@@ -237,9 +328,29 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         try:
-            return await self.inner._arun(*args, **kwargs)
+            result = await self.inner._arun(*args, **kwargs)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
+        # Settled first, so the count the model reads includes this call.
+        return self._with_usage_note(result, guard=guard)
+
+    def _with_usage_note(self, result: object, *, guard: ToolBudgetGuard) -> object:
+        """Append the remaining-calls note to ``result`` when one is due.
+
+        Best-effort: annotating a result must never fail the tool call that
+        already succeeded, so any failure here returns the result untouched.
+        """
+
+        try:
+            note = guard.usage_note(tool_name=self.name)
+            if note is None:
+                return result
+            return ToolResultNote.append(
+                result, note=note, dict_key=_TOOL_BUDGET_NOTE_KEY
+            )
+        except Exception:  # noqa: BLE001 — an annotation is never worth a failure
+            _LOGGER.warning("tool_budget_note_failed", exc_info=True)
+            return result
 
     @staticmethod
     def _schedule_warning(*, guard: ToolBudgetGuard, decision: ToolBudgetWarn) -> None:

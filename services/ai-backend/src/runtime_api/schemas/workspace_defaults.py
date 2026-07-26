@@ -58,6 +58,7 @@ class _Fields:
     DEFAULT_REASONING_EFFORT = "default_reasoning_effort"
     DEFAULT_REASONING_DEPTH = "default_reasoning_depth"
     WEB_ACCESS_DEFAULT = "web_access_default"
+    TOOL_CALLS_PER_RUN = "tool_calls_per_run"
     DEFAULT_LOCAL_MODEL = "default_local_model"
     TRAINING_DATA_OPT_OUT = "training_data_opt_out"
 
@@ -169,6 +170,12 @@ _TEMPERATURE_MAX = 1.0
 # payload while sitting comfortably above any real tag (matches the
 # ``enabled_models`` per-id cap).
 _DEFAULT_LOCAL_MODEL_MAX_CHARS = 200
+# Per-tool call cap accepted from the workspace. The ceiling matches
+# ``RuntimeExecutionSettings.tool_call_budget`` so the settings UI can never
+# persist a value the runtime would refuse to apply; the floor is 1 because a
+# cap of 0 would leave the agent no tool it could ever call.
+_TOOL_CALLS_PER_RUN_MIN = 1
+_TOOL_CALLS_PER_RUN_MAX = 100
 
 
 class WorkspaceBehaviorOverrides(RuntimeContract):
@@ -202,6 +209,16 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
     back to the historic always-on default); ``True``/``False`` seed a run that
     omits the per-turn flag.
 
+    ``tool_calls_per_run`` is how many times the agent may call **any one
+    tool** within a run before it is told to stop and answer with what it
+    has. ``None`` == unset → the deployment default
+    (:attr:`DefaultToolBudget.MAX_CALLS_PER_RUN`, overridable per deployment
+    via ``RUNTIME_TOOL_CALL_BUDGET``). It is a per-tool-name cap, not a total
+    across the run, matching what ``ToolBudgetMiddleware`` enforces and what
+    the agent's own prompt promises it. The bound mirrors
+    ``RuntimeExecutionSettings.tool_call_budget`` so a value accepted here is
+    always a value the runtime can apply.
+
     ``model_config = forbid`` rejects unknown keys at write — keeps
     the JSONB blob from accumulating drift over time.
     """
@@ -226,6 +243,12 @@ class WorkspaceBehaviorOverrides(RuntimeContract):
     default_reasoning_depth: ReasoningDepth | None = None
     # D3 — persisted default for the per-run web_search toggle. None == unset.
     web_access_default: bool | None = None
+    # Per-tool call cap for a run. None == unset → the deployment default.
+    tool_calls_per_run: int | None = Field(
+        default=None,
+        ge=_TOOL_CALLS_PER_RUN_MIN,
+        le=_TOOL_CALLS_PER_RUN_MAX,
+    )
     default_local_model: str | None = Field(
         default=None,
         max_length=_DEFAULT_LOCAL_MODEL_MAX_CHARS,

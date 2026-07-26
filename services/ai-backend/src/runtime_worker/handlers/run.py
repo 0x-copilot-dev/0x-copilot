@@ -35,7 +35,10 @@ from agent_runtime.capabilities.surfaces import (
     build_surface_spec_store,
 )
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
-from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
+from agent_runtime.capabilities.tool_budget_middleware import (
+    ToolBudgetMiddleware,
+    WorkspaceToolBudgetOverride,
+)
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from agent_runtime.execution.contracts import (
@@ -2077,10 +2080,15 @@ class RuntimeRunHandler:
         """Load the org's per-tool budgets and build a per-run guard.
 
         Returns ``None`` when the persistence port doesn't expose the
-        method yet (older test stubs) or when the org has no rows.
-        Reuses the per-run :class:`ToolCallLedger` already maintained by
-        the stream orchestrator so admission decisions and the
+        method yet (older test stubs) or when the org has neither
+        configured rows nor a workspace override. Reuses the per-run
+        :class:`ToolCallLedger` already maintained by the stream
+        orchestrator so admission decisions and the
         ``tool_call_started``/``tool_result`` reconciler share state.
+
+        The workspace's Settings → Model & behavior cap is layered over
+        the configured rows, so the user-facing number governs the run
+        without a second budget store to keep in sync.
         """
 
         loader = getattr(self.persistence, "list_tool_budgets_for_org", None)
@@ -2093,6 +2101,10 @@ class RuntimeRunHandler:
                 "tool_budget_load_failed", exc_info=True
             )
             return None
+        budgets = WorkspaceToolBudgetOverride.apply(
+            budgets,
+            max_calls_per_run=await self._workspace_tool_call_cap(run),
+        )
         if not budgets:
             return None
         ledger = self.stream_event_mapper.message_processor.ledger_for_run(run.run_id)
@@ -2102,6 +2114,29 @@ class RuntimeRunHandler:
             run=run,
             event_producer=self.event_producer,
         )
+
+    async def _workspace_tool_call_cap(self, run: RunRecord) -> int | None:
+        """Return the workspace's per-tool call cap, or ``None`` when unset.
+
+        Fails soft: a store that predates the accessor, a missing row, or a
+        read error all mean "no workspace preference", which leaves the
+        deployment's configured budgets in charge. A settings lookup must
+        never be the reason a run cannot start.
+        """
+
+        loader = getattr(self.persistence, "get_workspace_defaults", None)
+        if loader is None:
+            return None
+        try:
+            record = await loader(org_id=run.org_id)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "workspace_tool_call_cap_load_failed", exc_info=True
+            )
+            return None
+        if record is None:
+            return None
+        return record.behavior_overrides.tool_calls_per_run
 
     def _bind_citation_ledger(self, run: RunRecord) -> CitationLedger | None:
         """Build a per-run :class:`CitationLedger`, or ``None`` when disabled.

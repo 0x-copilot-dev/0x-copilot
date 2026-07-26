@@ -10,6 +10,13 @@ client when the run failed before LangGraph could close the loop.
 The ledger is per-run, in-memory, lifecycle-scoped to a single run handler
 invocation. Crash recovery after a worker death relies on the persisted
 ``runtime_tool_invocations`` projection rather than this in-memory ledger.
+
+**Two writers share one ledger.** The stream orchestrator records each call
+under the provider's tool-call id (driving tool-card reconciliation), and the
+tool-budget guard records the same call under its own uuid (driving budget
+admission). The id spaces never collide, so a single real tool call produces
+two entries. Anything that *counts* entries must therefore filter on
+``budget_scoped`` — see :meth:`ToolCallLedger.charged_calls`.
 """
 
 from __future__ import annotations
@@ -39,6 +46,14 @@ class ToolCallEntry:
     # ``charged_calls(tool_name)`` only counts entries with
     # ``budget_charged=True`` so REJECTED calls don't burn through the cap.
     budget_charged: bool = True
+    # ``True`` only for entries opened by the tool-budget guard's
+    # admission path. Two independent writers share this ledger for the
+    # same tool call — the guard (keyed by its own uuid) and the stream
+    # orchestrator (keyed by the provider's tool-call id) — and their
+    # call-id domains never collide, so each real call lands twice.
+    # Budget accounting counts the guard's entry alone; counting both
+    # silently halved every configured cap.
+    budget_scoped: bool = False
     # Connector that owned this tool — the dispatcher's MCP server name for a
     # ``call_mcp_tool`` invocation, ``None`` for a native tool. Set at
     # :meth:`ToolCallLedger.started` from ``McpDispatcherUnwrap`` (PRD-08 D1b).
@@ -73,8 +88,15 @@ class ToolCallLedger:
         parent_task_id: str | None = None,
         subagent_id: str | None = None,
         connector_slug: str | None = None,
+        budget_scoped: bool = False,
     ) -> None:
-        """Record that a tool call has begun. Idempotent on repeat call_ids."""
+        """Record that a tool call has begun. Idempotent on repeat call_ids.
+
+        ``budget_scoped`` marks the entry as the budget-authoritative
+        record for the call; only the tool-budget guard sets it. See
+        :attr:`ToolCallEntry.budget_scoped` for why the distinction
+        exists.
+        """
 
         if call_id in self._entries:
             return
@@ -84,6 +106,7 @@ class ToolCallLedger:
             parent_task_id=parent_task_id,
             subagent_id=subagent_id,
             connector_slug=connector_slug,
+            budget_scoped=budget_scoped,
         )
 
     def observed_settled(self, call_id: str) -> None:
@@ -150,7 +173,11 @@ class ToolCallLedger:
     def charged_calls(self, tool_name: str) -> int:
         """Return the number of admitted calls to ``tool_name`` in this run.
 
-        REJECTED calls (``budget_charged=False``) do not count: a
+        Counts only ``budget_scoped`` entries — the stream orchestrator
+        mirrors every call into this ledger under a different call id
+        for tool-card reconciliation, and those mirrors are not spend.
+
+        REJECTED calls (``budget_charged=False``) do not count either: a
         rejection must not consume the budget it just blocked, otherwise
         the model could be permanently locked out by a single bad call.
         """
@@ -158,7 +185,9 @@ class ToolCallLedger:
         return sum(
             1
             for entry in self._entries.values()
-            if entry.tool_name == tool_name and entry.budget_charged
+            if entry.tool_name == tool_name
+            and entry.budget_charged
+            and entry.budget_scoped
         )
 
     def total_input_tokens(self, tool_name: str) -> int:
@@ -167,7 +196,9 @@ class ToolCallLedger:
         return sum(
             entry.input_tokens or 0
             for entry in self._entries.values()
-            if entry.tool_name == tool_name and entry.budget_charged
+            if entry.tool_name == tool_name
+            and entry.budget_charged
+            and entry.budget_scoped
         )
 
     def record_input_tokens(self, call_id: str, tokens: int) -> None:

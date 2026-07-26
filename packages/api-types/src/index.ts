@@ -1081,6 +1081,20 @@ export interface WorkspaceBehaviorOverrides {
    */
   web_access_default?: boolean;
   /**
+   * How many times the agent may call **any one tool** within a run before
+   * it is told to stop and answer with what it has. `null` / omitted ==
+   * unset, which leaves the deployment default in charge (10, overridable
+   * per deployment via `RUNTIME_TOOL_CALL_BUDGET`).
+   *
+   * This is a per-tool-name cap, NOT a total across the run — the same
+   * shape the runtime's `ToolBudgetMiddleware` enforces and the agent's own
+   * prompt promises it. Server bound is [1, 100]; a value outside that is
+   * rejected rather than clamped, so the UI never persists a cap the
+   * runtime would refuse to apply. Additive + optional (JSONB blob, no
+   * migration).
+   */
+  tool_calls_per_run?: number | null;
+  /**
    * C2 — the workspace-default on-device model: a plain Ollama tag / HF
    * pull ref (e.g. ``hf.co/Qwen/Qwen3-4B-GGUF:Q8_0``). ``null`` or omitted
    * means "no default local model" (Settings renders no "default local"

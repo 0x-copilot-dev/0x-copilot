@@ -12,6 +12,7 @@ from agent_runtime.capabilities.citation_projection import CitationProjector
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
 )
+from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -30,15 +31,10 @@ class _CitationHint:
         "[Tool call #{ordinal} — {tool_name} — "
         "cite as [[{ordinal}]] when referencing this result.]"
     )
-    SEPARATOR = "\n\n"
     # Top-level key added to dict-shaped results (MCP, internal APIs)
     # when no ``content`` text block exists to extend. The model sees
     # this as part of the JSON-encoded tool result and learns to cite.
     DICT_HINT_KEY = "_citation_hint"
-    # MCP standard envelope keys.
-    MCP_CONTENT_KEY = "content"
-    MCP_BLOCK_TYPE_KEY = "type"
-    MCP_TEXT_VALUE = "text"
 
     @classmethod
     def render(cls, *, ordinal: int, tool_name: str) -> str:
@@ -49,58 +45,14 @@ class _CitationHint:
     def append_to(cls, result: object, *, ordinal: int, tool_name: str) -> object:
         """Append the rendered hint to ``result``, preserving its shape.
 
-        Handles str, tuple, list, dict (MCP content-array or generic), and
-        returns any other shape unchanged. Never raises.
+        The shape walk (str / tuple / list / MCP envelope / generic dict) is
+        shared with the tool-budget notice — see :class:`ToolResultNote`.
         """
-        rendered = cls.render(ordinal=ordinal, tool_name=tool_name)
-        suffix = cls.SEPARATOR + rendered
-        if isinstance(result, str):
-            return result + suffix
-        if isinstance(result, tuple):
-            # LangChain content_and_artifact shape: head is the string the
-            # model reads; the tail is the structured artifact we must not
-            # modify (DuckDuckGo, most web-search wrappers use this).
-            if len(result) >= 1 and isinstance(result[0], str):
-                return (result[0] + suffix, *result[1:])
-            # Tuple with no string head — walk backwards for the last string.
-            updated_seq: list[Any] = list(result)
-            for idx in range(len(updated_seq) - 1, -1, -1):
-                if isinstance(updated_seq[idx], str):
-                    updated_seq[idx] = updated_seq[idx] + suffix
-                    return tuple(updated_seq)
-            # No string entry at all — prepend the hint so the model still
-            # gets a stable pointer even from a non-string tuple.
-            updated_seq.insert(0, suffix.lstrip())
-            return tuple(updated_seq)
-        if isinstance(result, list):
-            updated = list(result)
-            for idx in range(len(updated) - 1, -1, -1):
-                if isinstance(updated[idx], str):
-                    updated[idx] = updated[idx] + suffix
-                    return updated
-            # No string entry — append the hint as its own element.
-            updated.append(suffix.lstrip())
-            return updated
-        if isinstance(result, dict):
-            updated_dict = dict(result)
-            content = updated_dict.get(cls.MCP_CONTENT_KEY)
-            if isinstance(content, list):
-                # MCP CallToolResult envelope — add a TextContent block so
-                # the hint appears in the same array the server data uses.
-                updated_content = list(content)
-                updated_content.append(
-                    {
-                        cls.MCP_BLOCK_TYPE_KEY: cls.MCP_TEXT_VALUE,
-                        cls.MCP_TEXT_VALUE: rendered,
-                    }
-                )
-                updated_dict[cls.MCP_CONTENT_KEY] = updated_content
-                return updated_dict
-            # Generic dict (internal API, custom tool) — add a dedicated
-            # top-level key so JSON-rendering consumers still expose it.
-            updated_dict[cls.DICT_HINT_KEY] = rendered
-            return updated_dict
-        return result
+        return ToolResultNote.append(
+            result,
+            note=cls.render(ordinal=ordinal, tool_name=tool_name),
+            dict_key=cls.DICT_HINT_KEY,
+        )
 
 
 class CitationCapturingTool(BaseTool):

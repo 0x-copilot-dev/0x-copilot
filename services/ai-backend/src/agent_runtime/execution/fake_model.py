@@ -18,6 +18,7 @@ Activation is logged at WARNING so it is never silent.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from collections.abc import AsyncIterator, Iterator, Sequence
@@ -31,6 +32,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable
+from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
@@ -55,9 +57,34 @@ class DeterministicFakeChatModel(BaseChatModel):
     reasoning_text: str = "Considering the request and forming a concise reply."
     emit_reasoning: bool = True
 
+    tool_calls_before_final: int = 0
+    """Tool-call turns to take before answering. ``0`` never calls a tool.
+
+    Set this to drive the real agent loop through repeated tool dispatch —
+    the only way to exercise per-run caps, tool-result surfacing, and
+    recovery paths end to end. The turn count is derived from the tool
+    messages already in the prompt rather than from instance state, so the
+    model stays deterministic and replay-safe.
+    """
+
+    tool_call_name: str = "ls"
+    tool_call_args: dict[str, Any] = Field(default_factory=lambda: {"path": "/"})
+
     @property
     def _llm_type(self) -> str:
         return "deterministic-fake"
+
+    @staticmethod
+    def _completed_tool_turns(messages: Sequence[BaseMessage]) -> int:
+        """Count tool results already in the prompt — the loop's turn index."""
+        return sum(1 for message in messages if message.type == "tool")
+
+    def _wants_tool_call(self, messages: Sequence[BaseMessage]) -> bool:
+        """True while the scripted tool-call turns are not yet used up."""
+        return self._completed_tool_turns(messages) < self.tool_calls_before_final
+
+    def _tool_call_id(self, messages: Sequence[BaseMessage]) -> str:
+        return f"fake_call_{self._completed_tool_turns(messages)}"
 
     def _text_chunks(self) -> list[str]:
         # Split on spaces but keep the trailing space on each token so the
@@ -69,7 +96,18 @@ class DeterministicFakeChatModel(BaseChatModel):
         words = self.reasoning_text.split(" ")
         return [w + (" " if i < len(words) - 1 else "") for i, w in enumerate(words)]
 
-    def _final_message(self) -> AIMessage:
+    def _final_message(self, messages: Sequence[BaseMessage]) -> AIMessage:
+        if self._wants_tool_call(messages):
+            return AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": self.tool_call_name,
+                        "args": dict(self.tool_call_args),
+                        "id": self._tool_call_id(messages),
+                    }
+                ],
+            )
         return AIMessage(content=self.response_text)
 
     def _generate(
@@ -79,7 +117,9 @@ class DeterministicFakeChatModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        return ChatResult(generations=[ChatGeneration(message=self._final_message())])
+        return ChatResult(
+            generations=[ChatGeneration(message=self._final_message(messages))]
+        )
 
     async def _agenerate(
         self,
@@ -88,7 +128,9 @@ class DeterministicFakeChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
-        return ChatResult(generations=[ChatGeneration(message=self._final_message())])
+        return ChatResult(
+            generations=[ChatGeneration(message=self._final_message(messages))]
+        )
 
     def _stream(
         self,
@@ -97,7 +139,7 @@ class DeterministicFakeChatModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
-        for chunk in self._iter_chunks():
+        for chunk in self._iter_chunks(messages):
             if run_manager is not None:
                 run_manager.on_llm_new_token(chunk.text or "", chunk=chunk)
             yield chunk
@@ -109,12 +151,32 @@ class DeterministicFakeChatModel(BaseChatModel):
         run_manager: AsyncCallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
-        for chunk in self._iter_chunks():
+        for chunk in self._iter_chunks(messages):
             if run_manager is not None:
                 await run_manager.on_llm_new_token(chunk.text or "", chunk=chunk)
             yield chunk
 
-    def _iter_chunks(self) -> Iterator[ChatGenerationChunk]:
+    def _iter_chunks(
+        self, messages: Sequence[BaseMessage]
+    ) -> Iterator[ChatGenerationChunk]:
+        if self._wants_tool_call(messages):
+            # A tool-call turn carries no assistant text — the graph
+            # dispatches the call and loops back with the result.
+            yield ChatGenerationChunk(
+                message=AIMessageChunk(
+                    content="",
+                    tool_call_chunks=[
+                        {
+                            "name": self.tool_call_name,
+                            "args": json.dumps(self.tool_call_args),
+                            "id": self._tool_call_id(messages),
+                            "index": 0,
+                            "type": "tool_call_chunk",
+                        }
+                    ],
+                )
+            )
+            return
         if self.emit_reasoning:
             for piece in self._reasoning_chunks():
                 yield ChatGenerationChunk(
@@ -138,6 +200,12 @@ class FakeModelProvider:
     """Env-gated activation + construction of the deterministic fake model."""
 
     ENV_FLAG = "RUNTIME_FAKE_MODEL"
+    # Scripted tool-call turns, for tests that must drive the real agent
+    # loop through repeated dispatch (per-run budget caps, tool-result
+    # surfacing). Both are read only when ENV_FLAG is already on.
+    ENV_TOOL_CALLS = "RUNTIME_FAKE_MODEL_TOOL_CALLS"
+    ENV_TOOL_NAME = "RUNTIME_FAKE_MODEL_TOOL_NAME"
+    ENV_TOOL_ARGS = "RUNTIME_FAKE_MODEL_TOOL_ARGS"
 
     @classmethod
     def is_enabled(cls) -> bool:
@@ -147,6 +215,18 @@ class FakeModelProvider:
         deployment can never turn it on — it is a test/CI affordance only.
         """
         return os.environ.get(cls.ENV_FLAG, "").strip().lower() in _TRUTHY
+
+    @classmethod
+    def _tool_calls_before_final(cls) -> int:
+        """Parse the scripted tool-call turn count; ``0`` when unset or invalid."""
+        raw = os.environ.get(cls.ENV_TOOL_CALLS, "").strip()
+        if not raw:
+            return 0
+        try:
+            parsed = int(raw)
+        except ValueError:
+            return 0
+        return max(parsed, 0)
 
     @classmethod
     def build(cls, model_config: object) -> BaseChatModel:
@@ -160,7 +240,28 @@ class FakeModelProvider:
                 )
             },
         )
-        return DeterministicFakeChatModel()
+        overrides: dict[str, Any] = {
+            "tool_calls_before_final": cls._tool_calls_before_final()
+        }
+        tool_name = os.environ.get(cls.ENV_TOOL_NAME, "").strip()
+        if tool_name:
+            overrides["tool_call_name"] = tool_name
+        tool_args = cls._tool_call_args()
+        if tool_args is not None:
+            overrides["tool_call_args"] = tool_args
+        return DeterministicFakeChatModel(**overrides)
+
+    @classmethod
+    def _tool_call_args(cls) -> dict[str, Any] | None:
+        """Parse the scripted tool arguments as JSON; ``None`` when unset or invalid."""
+        raw = os.environ.get(cls.ENV_TOOL_ARGS, "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return None
+        return parsed if isinstance(parsed, dict) else None
 
 
 __all__ = ["DeterministicFakeChatModel", "FakeModelProvider"]

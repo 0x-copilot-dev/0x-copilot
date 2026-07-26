@@ -7,6 +7,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetMiddleware,
     ToolBudgetReject,
     ToolBudgetWarn,
+    WorkspaceToolBudgetOverride,
 )
 from agent_runtime.execution.tool_outcomes import ToolErrorCode, ToolOutcome
 from agent_runtime.persistence.records import (
@@ -38,7 +39,7 @@ def _budget(
 def _ledger_with(*, tool_name: str, calls: int) -> ToolCallLedger:
     ledger = ToolCallLedger(run_id="run-1")
     for index in range(calls):
-        ledger.started(call_id=f"call-{index}", tool_name=tool_name)
+        ledger.started(call_id=f"call-{index}", tool_name=tool_name, budget_scoped=True)
     return ledger
 
 
@@ -133,7 +134,7 @@ class TestInputTokenCaps:
         # Two prior admitted calls with 100 + 150 input tokens = 250.
         for index, tokens in enumerate([100, 150]):
             call_id = f"prev-{index}"
-            ledger.started(call_id=call_id, tool_name="web_search")
+            ledger.started(call_id=call_id, tool_name="web_search", budget_scoped=True)
             ledger.record_input_tokens(call_id, tokens)
         # New call of 60 tokens → 310 > 300 cap.
         decision = middleware.check_admit(
@@ -143,19 +144,129 @@ class TestInputTokenCaps:
         assert decision.kind == "input_tokens_per_run"
 
 
+class TestBudgetCountsOnlyGuardEntries:
+    """Regression: the shared ledger has two writers per real tool call.
+
+    The stream orchestrator records each call under the provider's
+    tool-call id (for tool-card reconciliation) and the budget guard
+    records it under its own uuid. The id spaces never collide, so a
+    single call lands twice. Counting both halved every configured cap:
+    a documented budget of 6 rejected the 4th call, and the model was
+    handed a prompt promising a cap it never actually got.
+    """
+
+    def test_stream_mirror_entries_do_not_consume_budget(self) -> None:
+        ledger = ToolCallLedger(run_id="run-1")
+        # Three real calls, each recorded by BOTH writers.
+        for index in range(3):
+            ledger.started(
+                call_id=f"guard-{index}", tool_name="web_search", budget_scoped=True
+            )
+            ledger.started(call_id=f"provider-call-{index}", tool_name="web_search")
+
+        assert ledger.charged_calls("web_search") == 3
+
+        middleware = ToolBudgetMiddleware(
+            [_budget(org_id=None, tool_name="*", max_calls_per_run=6)]
+        )
+        decision = middleware.check_admit(ledger=ledger, tool_name="web_search")
+        assert isinstance(decision, ToolBudgetAdmit)
+
+    def test_cap_is_reached_at_the_configured_number_of_real_calls(self) -> None:
+        ledger = ToolCallLedger(run_id="run-2")
+        for index in range(6):
+            ledger.started(
+                call_id=f"guard-{index}", tool_name="web_search", budget_scoped=True
+            )
+            ledger.started(call_id=f"provider-call-{index}", tool_name="web_search")
+
+        middleware = ToolBudgetMiddleware(
+            [_budget(org_id=None, tool_name="*", max_calls_per_run=6)]
+        )
+        decision = middleware.check_admit(ledger=ledger, tool_name="web_search")
+        assert isinstance(decision, ToolBudgetReject)
+        # Reported against the real call count, not the doubled one.
+        assert decision.current == 6
+        assert decision.limit == 6
+
+    def test_rejection_message_names_the_requested_tool(self) -> None:
+        middleware = ToolBudgetMiddleware(
+            [_budget(org_id=None, tool_name="*", max_calls_per_run=1)]
+        )
+        ledger = _ledger_with(tool_name="web_search", calls=1)
+        decision = middleware.check_admit(ledger=ledger, tool_name="web_search")
+        assert isinstance(decision, ToolBudgetReject)
+        assert decision.tool_name == "web_search"
+        assert "web_search" in decision.safe_message
+        # The wildcard is a matching rule, not something the model can act on.
+        assert "'*'" not in decision.safe_message
+
+
+class TestWorkspaceToolBudgetOverride:
+    """Settings → Model & behavior "Tool calls per run" layered over the rows.
+
+    The workspace number IS the workspace's wildcard budget, so it replaces
+    wildcard rows and leaves narrower ones alone: an operator who capped one
+    specific tool did so deliberately, and a workspace-wide preference must
+    not quietly widen it.
+    """
+
+    def test_unset_leaves_rows_untouched(self) -> None:
+        rows = [
+            _budget(org_id=None, tool_name="*", max_calls_per_run=10),
+            _budget(org_id="org_a", tool_name="web_search", max_calls_per_run=3),
+        ]
+        applied = WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=None)
+        assert [b.max_calls_per_run for b in applied] == [10, 3]
+
+    def test_replaces_wildcard_but_not_a_narrower_row(self) -> None:
+        rows = [
+            _budget(org_id=None, tool_name="*", max_calls_per_run=10),
+            _budget(org_id="org_a", tool_name="web_search", max_calls_per_run=3),
+        ]
+        applied = WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=25)
+        by_name = {b.tool_name: b.max_calls_per_run for b in applied}
+        assert by_name == {"*": 25, "web_search": 3}
+
+    def test_governs_a_tool_with_no_specific_row(self) -> None:
+        rows = [_budget(org_id=None, tool_name="*", max_calls_per_run=10)]
+        middleware = ToolBudgetMiddleware(
+            WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=2)
+        )
+        ledger = _ledger_with(tool_name="web_search", calls=2)
+        decision = middleware.check_admit(ledger=ledger, tool_name="web_search")
+        assert isinstance(decision, ToolBudgetReject)
+        assert decision.limit == 2
+
+    def test_synthesizes_a_wildcard_row_when_none_exists(self) -> None:
+        """Without this the setting would silently do nothing."""
+
+        rows = [_budget(org_id="org_a", tool_name="web_search", max_calls_per_run=3)]
+        applied = WorkspaceToolBudgetOverride.apply(rows, max_calls_per_run=7)
+        wildcard = [b for b in applied if b.tool_name == "*"]
+        assert len(wildcard) == 1
+        assert wildcard[0].max_calls_per_run == 7
+        assert wildcard[0].enforcement is ToolBudgetEnforcement.HARD
+
+    def test_no_rows_and_no_override_stays_empty(self) -> None:
+        """An empty result is the caller's signal to install no guard at all."""
+
+        assert WorkspaceToolBudgetOverride.apply([], max_calls_per_run=None) == ()
+
+
 class TestLedgerHelpers:
     def test_charged_calls_excludes_rejected(self) -> None:
         ledger = ToolCallLedger(run_id="run-1")
-        ledger.started(call_id="c1", tool_name="web_search")
-        ledger.started(call_id="c2", tool_name="web_search")
+        ledger.started(call_id="c1", tool_name="web_search", budget_scoped=True)
+        ledger.started(call_id="c2", tool_name="web_search", budget_scoped=True)
         ledger.mark_rejected("c2")
         assert ledger.charged_calls("web_search") == 1
 
     def test_total_input_tokens_excludes_rejected(self) -> None:
         ledger = ToolCallLedger(run_id="run-1")
-        ledger.started(call_id="c1", tool_name="web_search")
+        ledger.started(call_id="c1", tool_name="web_search", budget_scoped=True)
         ledger.record_input_tokens("c1", 100)
-        ledger.started(call_id="c2", tool_name="web_search")
+        ledger.started(call_id="c2", tool_name="web_search", budget_scoped=True)
         ledger.record_input_tokens("c2", 200)
         ledger.mark_rejected("c2")
         assert ledger.total_input_tokens("web_search") == 100

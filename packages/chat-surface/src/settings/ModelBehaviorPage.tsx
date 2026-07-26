@@ -73,12 +73,30 @@ export interface SpendGuardrailValue {
   readonly pauseAtCap: boolean;
 }
 
+/**
+ * Default per-tool call cap the runtime applies when the workspace has not
+ * set one. Shown as the input's placeholder so "blank" reads as a concrete
+ * number rather than an unknown. Mirrors `DefaultToolBudget.MAX_CALLS_PER_RUN`
+ * server-side; a deployment that overrides `RUNTIME_TOOL_CALL_BUDGET` will
+ * differ, which is why this is only ever a placeholder and never a value.
+ */
+export const DEFAULT_TOOL_CALLS_PER_RUN = 10;
+
+/** Server-accepted range. Outside it the save is rejected, not clamped. */
+export const TOOL_CALLS_PER_RUN_MIN = 1;
+export const TOOL_CALLS_PER_RUN_MAX = 100;
+
 export interface ModelBehaviorValue {
   /** Default model id — matches a supplied option value, or null for none. */
   readonly defaultModel: string | null;
   /** Canonical depth, or `null` for "Auto" (no persisted default). */
   readonly reasoningDepth: ReasoningDepth | null;
   readonly webAccess: boolean;
+  /**
+   * Per-tool call cap for one run, or `null` to use the deployment default.
+   * Counts each tool separately — it is not a total across the run.
+   */
+  readonly toolCallsPerRun: number | null;
   readonly approvalPolicy: ApprovalPolicyValue;
   readonly spend: SpendGuardrailValue;
 }
@@ -159,6 +177,10 @@ const capInputStyle: CSSProperties = {
   width: 96,
 };
 
+const toolCallsInputStyle: CSSProperties = {
+  width: 96,
+};
+
 const alertStyle: CSSProperties = {
   margin: 0,
   padding: "10px 12px",
@@ -205,6 +227,7 @@ export function ModelBehaviorPage({
   const defaultModelId = `${reactId}-default-model`;
   const reasoningId = `${reactId}-reasoning-depth`;
   const webAccessId = `${reactId}-web-access`;
+  const toolCallsId = `${reactId}-tool-calls-per-run`;
   const capId = `${reactId}-monthly-cap`;
   const pauseId = `${reactId}-pause-at-cap`;
 
@@ -380,6 +403,33 @@ export function ModelBehaviorPage({
           </Select>
         </Frow>
 
+        {/* Per-tool call cap. Blank = the deployment default. */}
+        <Frow
+          label="Tool calls per run"
+          hint={
+            "How many times the agent may use any single tool before it " +
+            "stops and answers with what it found. Counts each tool " +
+            `separately. Leave blank for the default (${DEFAULT_TOOL_CALLS_PER_RUN}).`
+          }
+          htmlFor={toolCallsId}
+        >
+          <TextInput
+            id={toolCallsId}
+            data-testid="tool-calls-per-run-input"
+            aria-label="Tool calls per run"
+            type="text"
+            inputMode="numeric"
+            placeholder={String(DEFAULT_TOOL_CALLS_PER_RUN)}
+            style={toolCallsInputStyle}
+            value={value.toolCallsPerRun ?? ""}
+            onChange={(event) =>
+              onChange({
+                toolCallsPerRun: parseToolCalls(event.currentTarget.value),
+              })
+            }
+          />
+        </Frow>
+
         {/* Web access. */}
         <Frow
           label="Web access"
@@ -486,4 +536,21 @@ function parseCap(raw: string): number | null {
   const parsed = Number(trimmed);
   if (!Number.isFinite(parsed)) return null;
   return parsed < 0 ? 0 : parsed;
+}
+
+/**
+ * Parse the tool-call cap to `number | null`. Blank / unparseable is "use the
+ * deployment default" (null). A parsed value is floored to an integer and
+ * clamped into the server-accepted range, so the field cannot produce a save
+ * the server would reject — the user sees the corrected number immediately
+ * rather than an error after pressing Save.
+ */
+function parseToolCalls(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  const floored = Math.floor(parsed);
+  if (floored < TOOL_CALLS_PER_RUN_MIN) return TOOL_CALLS_PER_RUN_MIN;
+  return floored > TOOL_CALLS_PER_RUN_MAX ? TOOL_CALLS_PER_RUN_MAX : floored;
 }

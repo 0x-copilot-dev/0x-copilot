@@ -167,6 +167,38 @@ class TestBehaviorOverridesRoundTrip(BehaviorOverridesFixtureMixin):
         assert body["behavior_overrides"]["default_reasoning_depth"] == "deep"
         assert body["behavior_overrides"]["web_access_default"] is False
 
+    def test_put_round_trips_tool_calls_per_run(self) -> None:
+        # Settings → Model & behavior "Tool calls per run". None == unset,
+        # which leaves the deployment default in charge.
+        client, _ = self.create_client()
+        put = client.put(
+            "/v1/agent/workspace/defaults",
+            headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+            json=self._put_payload(behavior_overrides={"tool_calls_per_run": 25}),
+        )
+        assert put.status_code == 200, put.text
+        get = client.get("/v1/agent/workspace/defaults", headers=self._headers())
+        assert get.json()["behavior_overrides"]["tool_calls_per_run"] == 25
+
+    def test_put_rejects_out_of_range_tool_calls_per_run(self) -> None:
+        """A cap the runtime could not apply must never persist.
+
+        The bound mirrors ``RuntimeExecutionSettings.tool_call_budget``; a
+        zero cap would leave the agent unable to call any tool at all.
+        """
+
+        client, _ = self.create_client()
+        for invalid in (0, -1, 101):
+            response = client.put(
+                "/v1/agent/workspace/defaults",
+                headers=self._headers(permission_scopes=(RUNTIME_USE, ADMIN_USERS)),
+                json=self._put_payload(
+                    behavior_overrides={"tool_calls_per_run": invalid}
+                ),
+            )
+            assert response.status_code == 400, (invalid, response.text)
+            assert response.json()["code"] == "validation_error", invalid
+
     def test_legacy_reasoning_effort_reconciles_to_depth_on_read(self) -> None:
         # D1 — a row carrying only the legacy ``default_reasoning_effort``
         # (written by the still-live web panel) reads back with the canonical
