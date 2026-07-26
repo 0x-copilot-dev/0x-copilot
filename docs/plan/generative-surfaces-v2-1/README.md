@@ -109,9 +109,12 @@ complete` from historical focused tests alone.
 - The G0–G10 Generative Workflows journey plan, artifact/canvas computed-style
   source mapping, and current-SHA comparison reports do not yet exist as
   executable release evidence. F-007 remains a release blocker.
-- F-008 is **current-main unverified** until the full service/workspace command
-  receipts are run at this SHA. F-009, F-010, F-011, and F-014 are code/static
-  gates only until those release commands also exercise them.
+- F-008 now has one current-main execution receipt: `services/ai-backend` at
+  `c0315a431b412efb5e8769bd6d03855096161ee4` passed `4,977`, skipped `126`,
+  and deselected `1` (`python -m pytest -q`, 2026-07-26). Backend, facade,
+  TypeScript workspaces, desktop, real Studio, and parity receipts remain
+  **current-main unverified**. F-009, F-010, F-011, and F-014 remain code/static
+  gates until those release commands also exercise them.
 
 ### Legacy v2 E3 clarification
 
