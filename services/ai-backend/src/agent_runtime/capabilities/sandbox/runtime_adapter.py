@@ -58,7 +58,11 @@ class DeepAgentSandboxRuntime(SandboxRuntimePort):
         if not files:
             return 0
         try:
-            responses = await asyncio.to_thread(active.backend.upload_files, files)
+            async_upload = getattr(active.backend, "a_upload_files", None)
+            if callable(async_upload):
+                responses = await async_upload(files)
+            else:
+                responses = await asyncio.to_thread(active.backend.upload_files, files)
         except SandboxError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalize provider boundary
@@ -76,11 +80,17 @@ class DeepAgentSandboxRuntime(SandboxRuntimePort):
         return uploaded
 
     async def execute(
-        self, *, active: ActiveSandbox, command: str
+        self, *, active: ActiveSandbox, request: SandboxRunRequest
     ) -> SandboxProcessOutput:
         started = time.monotonic()
         try:
-            response = await active.backend.aexecute(command)
+            prepare_execution = getattr(active.backend, "prepare_execution", None)
+            if callable(prepare_execution):
+                # Provider adapters may bind declared deliverables to the one
+                # canonical command without creating another execution path.
+                # Legacy Deep Agents backends keep their existing behaviour.
+                await prepare_execution(request)
+            response = await active.backend.aexecute(request.command)
         except TimeoutError as exc:
             raise SandboxError(
                 SandboxErrorCode.SANDBOX_COMMAND_TIMEOUT,
@@ -115,9 +125,13 @@ class DeepAgentSandboxRuntime(SandboxRuntimePort):
             return ()
         normalized = tuple(WorkspacePathValidator.normalize(path) for path in paths)
         try:
-            responses = await asyncio.to_thread(
-                active.backend.download_files, list(normalized)
-            )
+            async_download = getattr(active.backend, "a_download_files", None)
+            if callable(async_download):
+                responses = await async_download(list(normalized))
+            else:
+                responses = await asyncio.to_thread(
+                    active.backend.download_files, list(normalized)
+                )
         except SandboxError:
             raise
         except Exception as exc:  # noqa: BLE001 - normalize provider boundary

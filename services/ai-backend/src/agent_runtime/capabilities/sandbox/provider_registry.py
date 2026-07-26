@@ -51,8 +51,9 @@ class SandboxProviderRegistry:
         """Select the provider named by ``config``.
 
         ``overrides`` lets tests bind a fake provider without touching the
-        production wiring; production passes ``None`` and only ``langsmith`` is
-        constructible. Raises ``SANDBOX_DISABLED`` when the capability is off and
+        production wiring; production passes ``None`` and built-in providers are
+        selected only from deployment-owned configuration. Raises
+        ``SANDBOX_DISABLED`` when the capability is off and
         ``SANDBOX_PROVIDER_UNCONFIGURED`` when the provider cannot be built.
         """
 
@@ -85,6 +86,17 @@ class SandboxProviderRegistry:
             )
 
             return LangSmithSandboxProvider(region=config.region)
+        if provider_id is SandboxProviderId.OPENAI_HOSTED_CONTAINER:
+            from agent_runtime.capabilities.sandbox.providers.openai_hosted import (
+                OpenAIHostedContainerProvider,
+            )
+
+            if config.openai_hosted_container is None:
+                raise SandboxError(
+                    SandboxErrorCode.SANDBOX_PROVIDER_UNCONFIGURED,
+                    "OpenAI hosted-container configuration is unavailable.",
+                )
+            return OpenAIHostedContainerProvider(config=config.openai_hosted_container)
         raise SandboxError(  # pragma: no cover - enum is exhaustive today
             SandboxErrorCode.SANDBOX_PROVIDER_UNCONFIGURED,
             "No adapter is available for the configured sandbox provider.",

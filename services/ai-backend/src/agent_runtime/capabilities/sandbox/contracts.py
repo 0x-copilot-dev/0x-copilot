@@ -36,9 +36,10 @@ def _utcnow() -> datetime:
 
 
 class SandboxProviderId(StrEnum):
-    """Providers the registry can select. Exactly one ships in AC7."""
+    """Providers the registry can select when their readiness gate permits."""
 
     LANGSMITH = "langsmith"
+    OPENAI_HOSTED_CONTAINER = "openai_hosted_container"
 
 
 class SandboxErrorCode(StrEnum):
@@ -494,6 +495,24 @@ class SandboxLifecycleRecord(RuntimeContract):
 CleanupState = Literal["active", "terminating", "deleted", "cleanup_pending"]
 
 
+class SandboxProviderEvidence(RuntimeContract):
+    """Safe, concrete evidence returned by a provider resource API.
+
+    It intentionally carries only opaque provider identifiers and the effective
+    configuration returned by the provider.  Credentials, document bytes,
+    commands, and provider error bodies are never evidence fields.
+    """
+
+    provider: SandboxProviderId
+    resource_id: str = Field(min_length=1, max_length=2048)
+    owner_marker: str = Field(min_length=1, max_length=255)
+    status: str = Field(min_length=1, max_length=128)
+    network_policy: SandboxEgressPolicy
+    memory_limit: str | None = Field(default=None, max_length=32)
+    expires_after_minutes: int | None = Field(default=None, ge=1, le=24 * 60)
+    provider_request_id: str | None = Field(default=None, max_length=2048)
+
+
 class ManagedSandboxSession(RuntimeContract):
     """Durable, credential-free projection of one provider session.
 
@@ -508,6 +527,7 @@ class ManagedSandboxSession(RuntimeContract):
     created_at: datetime = Field(default_factory=_utcnow)
     expires_at: datetime
     cleanup_state: CleanupState = "active"
+    provider_evidence: SandboxProviderEvidence | None = None
 
     def with_state(self, state: CleanupState) -> ManagedSandboxSession:
         """Return a copy transitioned to ``state`` (models are frozen)."""

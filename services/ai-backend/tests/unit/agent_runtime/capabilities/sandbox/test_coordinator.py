@@ -120,10 +120,8 @@ class _Runtime(SandboxRuntimePort):
             total += len(payload)
         return total
 
-    async def execute(
-        self, *, active: ActiveSandbox, command: str
-    ) -> SandboxProcessOutput:
-        del active, command
+    async def execute(self, *, active: ActiveSandbox, request) -> SandboxProcessOutput:
+        del active, request
         self.execute_calls += 1
         if self.execute_error is not None:
             raise self.execute_error

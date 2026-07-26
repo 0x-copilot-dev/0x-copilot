@@ -15,6 +15,7 @@ Gated OFF by default behind ``RUNTIME_ENABLE_REMOTE_SANDBOX``.
 from __future__ import annotations
 
 from agent_runtime.capabilities.sandbox.config import (
+    OpenAIHostedContainerConfig,
     RemoteSandboxConfig,
     SandboxLimitProfile,
     SandboxLimitProfiles,
@@ -32,6 +33,7 @@ from agent_runtime.capabilities.sandbox.contracts import (
     SandboxLifecycleState,
     SandboxPatchImportRequest,
     SandboxPatchManifest,
+    SandboxProviderEvidence,
     SandboxProviderId,
     SandboxRunRequest,
     SandboxRunResult,
@@ -121,6 +123,11 @@ from agent_runtime.capabilities.sandbox.workspace_transfer import (
     WorkspacePatchBuilder,
     WorkspacePathValidator,
 )
+from agent_runtime.capabilities.sandbox.providers.openai_hosted import (
+    OpenAIHostedContainerBackend,
+    OpenAIHostedContainerExecutionEvidence,
+    OpenAIHostedContainerProvider,
+)
 
 __all__ = [
     "WORKSPACE_ROOT",
@@ -137,6 +144,10 @@ __all__ = [
     "InMemorySandboxLifecycleStore",
     "FileSandboxLifecycleStore",
     "ManagedSandboxSession",
+    "OpenAIHostedContainerBackend",
+    "OpenAIHostedContainerConfig",
+    "OpenAIHostedContainerExecutionEvidence",
+    "OpenAIHostedContainerProvider",
     "PolicyEnforcedSandboxBackend",
     "RawSnapshotEntry",
     "RemoteExecutionService",
@@ -165,6 +176,7 @@ __all__ = [
     "SandboxLimitProfile",
     "SandboxLimitProfiles",
     "SandboxProviderId",
+    "SandboxProviderEvidence",
     "SandboxProviderPort",
     "SandboxProviderRegistry",
     "SandboxPatchCollectorPort",

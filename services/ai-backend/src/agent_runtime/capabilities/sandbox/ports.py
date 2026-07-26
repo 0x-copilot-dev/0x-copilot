@@ -273,9 +273,12 @@ class SandboxRuntimePort(Protocol):
         ...
 
     async def execute(
-        self, *, active: "ActiveSandbox", command: str
+        self,
+        *,
+        active: "ActiveSandbox",
+        request: SandboxRunRequest,
     ) -> SandboxProcessOutput:
-        """Execute exactly one approved command in the active session."""
+        """Execute exactly one immutable approved request in the active session."""
         ...
 
     async def download(

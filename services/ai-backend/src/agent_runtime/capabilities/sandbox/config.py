@@ -14,10 +14,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 import os
+from typing import Literal
 
 from pydantic import Field
 
 from agent_runtime.capabilities.sandbox.contracts import (
+    SandboxEgressPolicy,
     SandboxError,
     SandboxErrorCode,
     SandboxProviderId,
@@ -32,6 +34,12 @@ class _EnvFields:
     PROVIDER = "RUNTIME_SANDBOX_PROVIDER"
     REGION = "RUNTIME_SANDBOX_REGION"
     LIMIT_PROFILE = "RUNTIME_SANDBOX_LIMIT_PROFILE"
+    OPENAI_MODEL = "RUNTIME_SANDBOX_OPENAI_MODEL"
+    OPENAI_MEMORY_LIMIT = "RUNTIME_SANDBOX_OPENAI_MEMORY_LIMIT"
+    OPENAI_CONTAINER_TTL_MINUTES = "RUNTIME_SANDBOX_OPENAI_CONTAINER_TTL_MINUTES"
+    OPENAI_MAX_OUTPUT_TOKENS = "RUNTIME_SANDBOX_OPENAI_MAX_OUTPUT_TOKENS"
+    OPENAI_EGRESS_MODE = "RUNTIME_SANDBOX_OPENAI_EGRESS_MODE"
+    OPENAI_ALLOWED_DOMAINS = "RUNTIME_SANDBOX_OPENAI_ALLOWED_DOMAINS"
 
     _TRUTHY = frozenset({"1", "true", "yes", "on"})
 
@@ -92,6 +100,51 @@ class SandboxLimitProfiles:
         return tuple(_LIMIT_PROFILES)
 
 
+class OpenAIHostedContainerConfig(RuntimeContract):
+    """Deployment-owned configuration for OpenAI's hosted Container API.
+
+    The container's egress policy is represented by D3's exact-host contract,
+    so it cannot inherit host networking.  There is deliberately no field for
+    provider ``domain_secrets``: D3 does not handle plaintext secret material.
+    """
+
+    model: str = Field(default="gpt-5.6", min_length=1, max_length=200)
+    memory_limit: Literal["1g", "4g", "16g", "64g"] = "1g"
+    container_ttl_minutes: int = Field(default=20, ge=1, le=60)
+    max_output_tokens: int = Field(default=1024, ge=16, le=16_384)
+    network_policy: SandboxEgressPolicy = SandboxEgressPolicy()
+
+    @classmethod
+    def from_env(cls, source: Mapping[str, str]) -> "OpenAIHostedContainerConfig":
+        """Resolve explicit typed provider policy from deployment settings."""
+
+        mode = (source.get(_EnvFields.OPENAI_EGRESS_MODE) or "disabled").strip().lower()
+        destinations = tuple(
+            value.strip()
+            for value in (source.get(_EnvFields.OPENAI_ALLOWED_DOMAINS) or "").split(
+                ","
+            )
+            if value.strip()
+        )
+        if mode == "disabled":
+            egress = SandboxEgressPolicy(mode="deny_all")
+        elif mode == "allowlist":
+            egress = SandboxEgressPolicy(mode="allowlist", destinations=destinations)
+        else:
+            raise ValueError("OpenAI hosted-container egress mode is unsupported")
+        return cls(
+            model=(source.get(_EnvFields.OPENAI_MODEL) or "gpt-5.6").strip(),
+            memory_limit=(source.get(_EnvFields.OPENAI_MEMORY_LIMIT) or "1g").strip(),
+            container_ttl_minutes=int(
+                (source.get(_EnvFields.OPENAI_CONTAINER_TTL_MINUTES) or "20").strip()
+            ),
+            max_output_tokens=int(
+                (source.get(_EnvFields.OPENAI_MAX_OUTPUT_TOKENS) or "1024").strip()
+            ),
+            network_policy=egress,
+        )
+
+
 class RemoteSandboxConfig(RuntimeContract):
     """Resolved, deployment-trusted sandbox configuration for one process.
 
@@ -103,6 +156,7 @@ class RemoteSandboxConfig(RuntimeContract):
     provider: SandboxProviderId | None = None
     region: str | None = None
     limit_profile: str = "desktop_v1"
+    openai_hosted_container: OpenAIHostedContainerConfig | None = None
 
     @property
     def is_active(self) -> bool:
@@ -131,12 +185,21 @@ class RemoteSandboxConfig(RuntimeContract):
         limit_profile = (
             source.get(_EnvFields.LIMIT_PROFILE) or ""
         ).strip() or "desktop_v1"
+        openai_config: OpenAIHostedContainerConfig | None = None
+        if provider is SandboxProviderId.OPENAI_HOSTED_CONTAINER:
+            try:
+                openai_config = OpenAIHostedContainerConfig.from_env(source)
+            except (TypeError, ValueError):
+                # Invalid configuration leaves the tool absent; it never
+                # broadens egress or falls back to a different provider.
+                provider = None
         active = enabled and provider is not None
         return cls(
             enabled=active,
             provider=provider if active else None,
             region=region if active else None,
             limit_profile=limit_profile,
+            openai_hosted_container=openai_config if active else None,
         )
 
 
