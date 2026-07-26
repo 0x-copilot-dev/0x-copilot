@@ -62,6 +62,14 @@ TOOL_EVENT_TYPES = frozenset(
         "citation_made",
     }
 )
+TOOL_EXECUTION_V2_EVENT_TYPES = frozenset(
+    {
+        "action.classified",
+        "read.executed",
+        "gate.opened",
+        "gate.resolved",
+    }
+)
 RICH_EVENT_TYPES = frozenset(
     {
         "view.derived",
@@ -102,6 +110,7 @@ RICH_UI_SELECTORS = {
     "staged row table": "[data-testid=tc-staged-table]",
     "workspace stage": "[data-testid=tc-workspace-stage]",
     "receipt launcher": "[data-testid=receipt-v2-launch]",
+    "receipt surface": "[data-testid=receipt-v2-surface]",
 }
 
 ASSISTANT_SELECTOR = '[data-testid^="tc-chat-message-"][data-role="assistant"]'
@@ -312,10 +321,20 @@ def _assert_facade_plain_chat(session: DriverSession, run_id: str) -> None:
     assert len(final_responses) == 1, (
         f"plain chat must persist exactly one final_response, got {len(final_responses)}"
     )
-    tool_events = [
+    legacy_tool_events = [
         event_type for event_type in event_types if event_type in TOOL_EVENT_TYPES
     ]
-    assert not tool_events, f"plain chat invoked tool transport events: {tool_events!r}"
+    assert not legacy_tool_events, (
+        f"plain chat invoked legacy tool transport events: {legacy_tool_events!r}"
+    )
+    v2_tool_execution_events = [
+        event_type
+        for event_type in event_types
+        if event_type in TOOL_EXECUTION_V2_EVENT_TYPES
+    ]
+    assert not v2_tool_execution_events, (
+        f"plain chat persisted v2 tool execution events: {v2_tool_execution_events!r}"
+    )
     tool_activity = [
         event.get("event_type")
         for event in events
