@@ -71,6 +71,14 @@ def boundary_violations(
 _TS_IMPORT = re.compile(
     r"(?:import(?:\s+type)?|export)\s+(?:[^;]*?\s+from\s+)?[\"']([^\"']+)[\"']"
 )
+_TYPESCRIPT_EXTENSIONS = (".ts", ".tsx", ".mts", ".cts")
+_DESKTOP_MAIN_IMPORT_PREFIX = "@0x-copilot/desktop/main"
+_DESKTOP_MAIN_IPC_CONTRACTS = (
+    "apps/desktop/main/capabilities/channels.ts",
+    "apps/desktop/main/connectors/channels.ts",
+    "apps/desktop/main/services/first-run-channels.ts",
+    "apps/desktop/main/services/secure-storage-channels.ts",
+)
 
 
 def desktop_ipc_boundary_violations(repo_root: Path = REPO_ROOT) -> tuple[str, ...]:
@@ -84,7 +92,7 @@ def desktop_ipc_boundary_violations(repo_root: Path = REPO_ROOT) -> tuple[str, .
     comment/text keywords and is covered by planted canaries.
     """
 
-    checks = (
+    checks: list[tuple[str, Path, frozenset[str]]] = [
         (
             "desktop-renderer",
             repo_root / "apps/desktop/renderer",
@@ -95,22 +103,16 @@ def desktop_ipc_boundary_violations(repo_root: Path = REPO_ROOT) -> tuple[str, .
             repo_root / "apps/desktop/preload",
             frozenset({"electron/main", "electron/renderer"}),
         ),
-        (
-            "chat-transport",
-            repo_root / "packages/chat-transport/src",
-            frozenset({"electron"}),
-        ),
-        (
-            "chat-surface",
-            repo_root / "packages/chat-surface/src",
-            frozenset({"electron"}),
-        ),
-        (
-            "api-types",
-            repo_root / "packages/api-types/src",
-            frozenset({"electron"}),
-        ),
-    )
+    ]
+    packages_root = repo_root / "packages"
+    if packages_root.is_dir():
+        checks.extend(
+            (package.name, package / "src", frozenset({"electron"}))
+            for package in sorted(packages_root.iterdir())
+            if (package / "src").is_dir()
+        )
+    allowed_contracts = _desktop_main_ipc_contracts(repo_root)
+    desktop_main_root = (repo_root / "apps/desktop/main").resolve()
     violations: list[str] = []
     for name, root, forbidden_modules in checks:
         if not root.is_dir():
@@ -121,11 +123,18 @@ def desktop_ipc_boundary_violations(repo_root: Path = REPO_ROOT) -> tuple[str, .
                 if module in forbidden_modules:
                     relative = path.relative_to(root).as_posix()
                     violations.append(f"{name}:{relative}:electron-import:{module}")
-                if _imports_desktop_main_or_broker(module):
+                resolved_main_import = _resolve_desktop_main_import(
+                    source=path,
+                    module=module,
+                    repo_root=repo_root,
+                )
+                if (
+                    resolved_main_import is not None
+                    and _is_within(resolved_main_import, desktop_main_root)
+                    and resolved_main_import not in allowed_contracts
+                ):
                     relative = path.relative_to(root).as_posix()
-                    violations.append(
-                        f"{name}:{relative}:desktop-main-broker-import:{module}"
-                    )
+                    violations.append(f"{name}:{relative}:desktop-main-import:{module}")
     return tuple(sorted(violations))
 
 
@@ -142,7 +151,7 @@ def _imported_modules(tree: ast.AST) -> tuple[tuple[str, int], ...]:
 def _typescript_sources(root: Path) -> tuple[Path, ...]:
     return tuple(
         path
-        for extension in ("*.ts", "*.tsx", "*.mts", "*.cts")
+        for extension in tuple(f"*{suffix}" for suffix in _TYPESCRIPT_EXTENSIONS)
         for path in root.rglob(extension)
         if not path.name.endswith((".test.ts", ".test.tsx", ".type-test.ts"))
     )
@@ -152,23 +161,70 @@ def _typescript_imports(path: Path) -> tuple[str, ...]:
     return tuple(_TS_IMPORT.findall(path.read_text(encoding="utf-8")))
 
 
-def _imports_desktop_main_or_broker(module: str) -> bool:
-    """Keep Electron-main/broker authority out of renderer and shared code."""
+def _desktop_main_ipc_contracts(repo_root: Path) -> frozenset[Path]:
+    """Return the only Electron-main modules renderer/shared code may import.
+
+    These modules expose typed IPC channel names only.  Adding a contract is a
+    deliberate trust-boundary decision rather than a suffix-pattern exception.
+    """
+
+    return frozenset(
+        (repo_root / contract).resolve() for contract in _DESKTOP_MAIN_IPC_CONTRACTS
+    )
+
+
+def _resolve_desktop_main_import(
+    *,
+    source: Path,
+    module: str,
+    repo_root: Path,
+) -> Path | None:
+    """Resolve relative/desktop-main TypeScript imports to their canonical path.
+
+    TypeScript commonly omits extensions, so checking the raw specifier would
+    let ``../main/capabilities/broker`` bypass a ``.ts`` rule.  Resolution is
+    intentionally filesystem-light and deterministic: existing candidates win;
+    an unresolved extensionless path canonicalizes to ``.ts`` so planted
+    canaries and future imports remain fail-closed.
+    """
 
     normalized = module.replace("\\", "/")
-    if normalized.startswith("@0x-copilot/desktop/main"):
-        return True
-    # Channel-name modules are an intentionally shared typed RPC vocabulary;
-    # importing those constants grants neither Electron nor broker authority.
-    private_suffixes = (
-        "/main/capabilities/broker",
-        "/main/capabilities/host-fs",
-        "/main/capabilities/workspace-authority",
-        "/main/browser/private-effect-bridge",
-        "/main/services/local-service-identity",
-        "/main/services/service-env",
-    )
-    return any(normalized.endswith(suffix) for suffix in private_suffixes)
+    if normalized.startswith("."):
+        candidate = source.parent / normalized
+    elif normalized == _DESKTOP_MAIN_IMPORT_PREFIX:
+        candidate = repo_root / "apps/desktop/main"
+    elif normalized.startswith(f"{_DESKTOP_MAIN_IMPORT_PREFIX}/"):
+        suffix = normalized.removeprefix(_DESKTOP_MAIN_IMPORT_PREFIX).lstrip("/")
+        candidate = repo_root / "apps/desktop/main" / suffix
+    else:
+        return None
+    return _resolve_typescript_path(candidate)
+
+
+def _resolve_typescript_path(candidate: Path) -> Path:
+    """Normalize an explicit or extensionless TypeScript module path."""
+
+    if candidate.suffix in _TYPESCRIPT_EXTENSIONS:
+        return candidate.resolve()
+
+    for suffix in _TYPESCRIPT_EXTENSIONS:
+        typed_candidate = candidate.with_suffix(suffix)
+        if typed_candidate.is_file():
+            return typed_candidate.resolve()
+    if candidate.is_dir():
+        for suffix in _TYPESCRIPT_EXTENSIONS:
+            index_candidate = candidate / f"index{suffix}"
+            if index_candidate.is_file():
+                return index_candidate.resolve()
+    return candidate.with_suffix(".ts").resolve()
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
 
 
 def main(argv: list[str] | None = None) -> int:

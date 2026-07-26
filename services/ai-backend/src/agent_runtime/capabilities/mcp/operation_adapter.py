@@ -294,6 +294,16 @@ class McpOperationGatewayContext:
         """
 
         descriptor = DEFAULT_OPERATION_DESCRIPTORS.resolve(capability, op)
+        annotations = McpToolAnnotationsRegistry.get(capability, op)
+        # The legacy branch has no canonical stage to preserve a tightened
+        # intent, so it must be stricter than the gateway's catalog-first
+        # classification. A provider hint can never grant a read here; either
+        # write-tightening hint vetoes direct dispatch, including a conflicting
+        # ``readOnlyHint=true`` / ``destructiveHint=true`` pair.
+        if annotations is not None and (
+            annotations.destructive_hint is True or annotations.read_only_hint is False
+        ):
+            return False
         return descriptor is not None and descriptor.effect_class in {
             EffectClass.NONE,
             EffectClass.INTERNAL_REVERSIBLE,

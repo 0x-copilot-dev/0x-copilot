@@ -12,6 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
+import pytest
+
 from agent_runtime.capabilities.actions.policy import ConnectorWritePolicyOverrides
 from agent_runtime.capabilities.mcp import CallMcpTool, DynamicMcpRegistry, McpLoader
 from agent_runtime.capabilities.mcp.annotations import (
@@ -431,6 +433,56 @@ def test_legacy_gateway_cannot_dispatch_model_originated_write_or_unknown_operat
         "This connector change requires the canonical review pipeline."
     )
     assert unknown["error"]["safe_message"] == write["error"]["safe_message"]
+
+
+@pytest.mark.parametrize(
+    "annotations",
+    (
+        McpToolAnnotations(destructive_hint=True),
+        McpToolAnnotations(read_only_hint=False),
+        McpToolAnnotations(read_only_hint=True, destructive_hint=True),
+    ),
+)
+def test_legacy_catalog_read_refuses_registered_tightening_annotations_before_client_creation(
+    monkeypatch,
+    annotations: McpToolAnnotations,
+) -> None:
+    """D9 P1: hints can tighten the default-off compatibility branch only."""
+
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    monkeypatch.setenv("SURFACES_V2", "false")
+    registry_token = McpToolAnnotationsRegistry.bind_for_run({})
+    McpToolAnnotationsRegistry.register(_SERVER, "list_issues", annotations)
+    try:
+        result = _invoke(tool, "list_issues", {"team": "ENG"})
+    finally:
+        McpToolAnnotationsRegistry.unbind(registry_token)
+
+    assert provider.created_clients == []
+    assert result["error"]["code"] == "permission_denied"
+    assert result["error"]["safe_message"] == (
+        "This connector change requires the canonical review pipeline."
+    )
+
+
+def test_legacy_catalog_read_keeps_only_non_tightening_annotation(monkeypatch) -> None:
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    monkeypatch.setenv("SURFACES_V2", "false")
+    registry_token = McpToolAnnotationsRegistry.bind_for_run({})
+    McpToolAnnotationsRegistry.register(
+        _SERVER,
+        "list_issues",
+        McpToolAnnotations(read_only_hint=True),
+    )
+    try:
+        result = _invoke(tool, "list_issues", {"team": "ENG"})
+    finally:
+        McpToolAnnotationsRegistry.unbind(registry_token)
+
+    assert provider.created_clients == [_SERVER]
+    assert result["output"] == {"items": [{"id": "L-1"}]}
 
 
 def test_material_resolver_returns_only_the_exact_canonical_stage_arguments() -> None:
