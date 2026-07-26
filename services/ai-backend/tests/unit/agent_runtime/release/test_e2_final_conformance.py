@@ -18,20 +18,20 @@ from agent_runtime.release.e2_final_conformance import (
 )
 
 
-def test_current_report_has_all_twelve_numbered_conditions_and_is_not_ready() -> None:
+def test_current_report_has_all_twelve_numbered_conditions_and_is_ready() -> None:
     report = E2FinalConformanceRunner().run()
 
     assert [item.number for item in report.conditions] == list(range(1, 13))
     assert all(item.evidence for item in report.conditions)
-    assert report.ready is False
-    assert report.conditions[1].status is ConformanceStatus.BLOCKED
+    assert report.ready is True
+    assert all(item.status is ConformanceStatus.PASS for item in report.conditions)
 
 
 def test_report_json_is_complete_and_has_no_implicit_passes() -> None:
     report = E2FinalConformanceRunner().run().as_json()
 
     assert report["contract"] == "e2-final-conformance-v1"
-    assert report["ready"] is False
+    assert report["ready"] is True
     conditions = report["conditions"]
     assert isinstance(conditions, list)
     assert {item["status"] for item in conditions} <= {"pass", "fail", "blocked"}
@@ -101,8 +101,22 @@ def test_boundary_and_dark_scanner_failures_are_not_waived() -> None:
     assert runner._service_boundaries().status is ConformanceStatus.FAIL
 
 
-def test_descriptor_executor_gap_is_blocked_not_passed() -> None:
-    condition = E2FinalConformanceRunner()._effect_descriptor_execution_path()
+def test_descriptor_executor_gap_is_blocked_not_passed(tmp_path: Path) -> None:
+    paths = E2FinalConformancePaths.current()
+    missing_builtin_factory = tmp_path / "mcp_operation_storage.py"
+    missing_builtin_factory.write_text(
+        "factories = {EffectExecutorKind.MCP: lambda scope: object()}\n",
+        encoding="utf-8",
+    )
+    condition = E2FinalConformanceRunner(
+        paths=E2FinalConformancePaths(
+            repo_root=paths.repo_root,
+            source_root=paths.source_root,
+            descriptor_factory=missing_builtin_factory,
+            surface_schema=paths.surface_schema,
+            renderer_spec_types=paths.renderer_spec_types,
+        )
+    )._effect_descriptor_execution_path()
 
     assert condition.status is ConformanceStatus.BLOCKED
     assert "uncomposed executor kinds" in condition.evidence[0]

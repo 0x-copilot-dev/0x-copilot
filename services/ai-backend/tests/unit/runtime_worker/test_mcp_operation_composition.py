@@ -34,6 +34,7 @@ from runtime_worker.mcp_operation_storage import (
     RuntimeMcpOperationArgumentStore,
     RuntimeMcpOperationResultStore,
 )
+from runtime_worker.builtin_effect_executor import BuiltinRowSetEffectExecutor
 from runtime_worker.workspace_effect_storage import (
     InMemoryWorkspaceHostSessionRegistry,
 )
@@ -149,6 +150,39 @@ def test_worker_registry_resolves_the_typed_workspace_executor() -> None:
     )
 
     assert isinstance(executor, WorkspaceEffectExecutor)
+
+
+def test_worker_registry_resolves_only_the_closed_builtin_rowset_executor() -> None:
+    """The builtin registry entry cannot become a generic tool dispatcher."""
+
+    store = InMemoryRuntimeApiStore()
+    publication = InMemoryArtifactPublicationCoordinator()
+    run = _run()
+    scope = EffectExecutionScope(
+        org_id=run.org_id,
+        user_id=run.user_id,
+        conversation_id=run.conversation_id,
+        run_id=run.run_id,
+        owner_ref=f"principal://users/{run.user_id}",
+    )
+    factory = RuntimeMcpEffectCoordinatorFactory(
+        event_producer=RuntimeEventProducer(
+            persistence=store,
+            event_store=store,
+        ),
+        claims=InMemoryEffectClaimStore(),
+        blobs=InMemoryArtifactBlobStore(publication),
+        references=InMemoryArtifactReferenceStore(publication),
+        dependencies_factory=object(),
+        timeout_seconds=30,
+    )
+
+    executor = factory.for_run(run=run)._executors.resolve(  # noqa: SLF001
+        kind=EffectExecutorKind.BUILTIN,
+        scope=scope,
+    )
+
+    assert isinstance(executor, BuiltinRowSetEffectExecutor)
 
 
 def test_worker_registry_refuses_workspace_without_overlay_authority() -> None:
