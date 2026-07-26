@@ -16,6 +16,10 @@ import { CapabilityBroker, CAPABILITY_BROKER_PROTOCOL } from "./broker";
 import { HostFs } from "./host-fs";
 import { FS_LIMITS } from "./path-validation";
 import type { Grant, GrantProvider, GrantSnapshot } from "./types";
+import {
+  LOCAL_BROKER_AUDIENCE,
+  LocalServiceIdentityRegistry,
+} from "../services/local-service-identity";
 
 const b64 = (s: string): string => Buffer.from(s, "utf-8").toString("base64");
 
@@ -291,6 +295,108 @@ describe("CapabilityBroker", () => {
     await broker.stop();
     expect(() => broker.authToken()).toThrow(/not running/u);
     expect(() => broker.baseUrl()).toThrow(/not running/u);
+  });
+});
+
+describe("CapabilityBroker named local clients", () => {
+  it("rejects missing, wrong, sibling-swapped, and browser-channel credentials", async () => {
+    let byte = 0;
+    const identities = new LocalServiceIdentityRegistry({
+      randomBytes: (size) => Buffer.alloc(size, ++byte),
+    });
+    const broker = new CapabilityBroker({
+      grants: new FakeGrants(),
+      clientCredentials: [
+        identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.capability),
+      ],
+    });
+    const { baseUrl } = await broker.start();
+    const request = (
+      service: string | undefined,
+      audience: string | undefined,
+      token: string,
+    ) =>
+      fetch(`${baseUrl}/v1/handshake`, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${token}`,
+          "x-capability-protocol": CAPABILITY_BROKER_PROTOCOL,
+          "content-type": "application/json",
+          ...(service === undefined
+            ? {}
+            : { "x-desktop-local-service": service }),
+          ...(audience === undefined
+            ? {}
+            : { "x-desktop-local-audience": audience }),
+        },
+        body: "{}",
+      });
+    try {
+      await expect(
+        request(
+          undefined,
+          LOCAL_BROKER_AUDIENCE.capability,
+          identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.capability)
+            .credential,
+        ),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        request(
+          "backend",
+          LOCAL_BROKER_AUDIENCE.capability,
+          identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.capability)
+            .credential,
+        ),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        request(
+          "ai-backend",
+          undefined,
+          identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.capability)
+            .credential,
+        ),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        request(
+          "ai-backend",
+          LOCAL_BROKER_AUDIENCE.browser,
+          identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.capability)
+            .credential,
+        ),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        request(
+          "ai-backend",
+          LOCAL_BROKER_AUDIENCE.capability,
+          identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.browser)
+            .credential,
+        ),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        request(
+          "ai-backend",
+          LOCAL_BROKER_AUDIENCE.capability,
+          identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.capability)
+            .credential,
+        ),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(() => broker.authToken()).toThrow(/disabled/i);
+    } finally {
+      await broker.stop();
+    }
+  });
+
+  it("rejects a channel credential configured for another broker", () => {
+    const identities = new LocalServiceIdentityRegistry();
+    expect(
+      () =>
+        new CapabilityBroker({
+          grants: new FakeGrants(),
+          clientCredentials: [
+            identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.browser),
+          ],
+        }),
+    ).toThrow(/audience/i);
   });
 });
 

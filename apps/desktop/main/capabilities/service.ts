@@ -88,6 +88,11 @@ export class CapabilityService {
     return this.#broker.authToken();
   }
 
+  /** Main-only: named local child credential; never renderer IPC. */
+  brokerClientCredential(service: string): string {
+    return this.#broker.clientCredential(service);
+  }
+
   /** Non-secret broker base URL. */
   brokerBaseUrl(): string {
     return this.#broker.baseUrl();

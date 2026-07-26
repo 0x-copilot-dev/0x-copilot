@@ -18,6 +18,7 @@ import httpx
 
 from agent_runtime.capabilities.browser.constants import (
     BrowserBroker,
+    BrowserEnv,
     BrowserMessages,
 )
 from agent_runtime.capabilities.browser.contracts import (
@@ -35,6 +36,8 @@ class DesktopBrowserEffectBridge(BrowserEffectBridge):
 
     broker_url: str
     broker_token: str = field(repr=False)
+    service_identity: str | None = None
+    broker_audience: str | None = None
     timeout_seconds: float = 10.0
     http_client: httpx.AsyncClient = field(
         default_factory=httpx.AsyncClient,
@@ -100,6 +103,10 @@ class DesktopBrowserEffectBridge(BrowserEffectBridge):
             BrowserBroker.PROTOCOL_HEADER: BrowserBroker.PROTOCOL_VERSION,
             "content-type": "application/json",
         }
+        if self.service_identity:
+            headers[BrowserEnv.SERVICE_IDENTITY_HEADER] = self.service_identity
+        if self.broker_audience:
+            headers[BrowserEnv.SERVICE_AUDIENCE_HEADER] = self.broker_audience
         try:
             response = await self.http_client.post(
                 f"{self.broker_url.rstrip('/')}{route}",

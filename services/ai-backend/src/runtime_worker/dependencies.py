@@ -356,6 +356,8 @@ class DefaultRuntimeDependenciesFactory:
                 deployment_profile=env.get("ENTERPRISE_DEPLOYMENT_PROFILE", ""),
                 broker_url=env.get(BrowserEnv.BROKER_URL) or None,
                 broker_token=env.get(BrowserEnv.BROKER_TOKEN) or None,
+                service_identity=env.get(BrowserEnv.SERVICE_IDENTITY) or None,
+                broker_audience=env.get(BrowserEnv.BROKER_AUDIENCE) or None,
                 runtime_context=context,
                 effects_enabled=bool(
                     self.settings.execution.surfaces_v2

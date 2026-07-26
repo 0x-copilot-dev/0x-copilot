@@ -4,6 +4,7 @@ import { isAbsolute, join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import type { BootSecrets } from "./boot-secrets";
+import { LocalServiceIdentityRegistry } from "./local-service-identity";
 import {
   aiFileStoreV1Root,
   AI_FILE_STORE_V1_FLAG,
@@ -176,9 +177,11 @@ describe("buildServiceEnv(ai-backend)", () => {
     expect(env.RUNTIME_ENABLE_DESKTOP_BROWSER).toBe("false");
     expect(env.DESKTOP_BROWSER_BROKER_URL).toBeUndefined();
     expect(env.DESKTOP_BROWSER_BROKER_TOKEN).toBeUndefined();
+    expect(env.DESKTOP_BROWSER_BROKER_AUDIENCE).toBeUndefined();
     expect(env.RUNTIME_ENABLE_DESKTOP_WORKSPACE).toBe("false");
     expect(env.DESKTOP_WORKSPACE_BROKER_URL).toBeUndefined();
     expect(env.DESKTOP_WORKSPACE_BROKER_TOKEN).toBeUndefined();
+    expect(env.DESKTOP_WORKSPACE_BROKER_AUDIENCE).toBeUndefined();
     // Backend-only settings do not leak.
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
     expect(env.BACKEND_ENVIRONMENT).toBeUndefined();
@@ -221,18 +224,21 @@ describe("buildServiceEnv(ai-backend)", () => {
         enabled: true,
         baseUrl: "http://127.0.0.1:54321",
         token: "browser-broker-secret",
+        audience: "desktop-browser-broker",
       },
     };
     const ai = buildServiceEnv("ai-backend", withBrowser);
     expect(ai.RUNTIME_ENABLE_DESKTOP_BROWSER).toBe("true");
     expect(ai.DESKTOP_BROWSER_BROKER_URL).toBe("http://127.0.0.1:54321");
     expect(ai.DESKTOP_BROWSER_BROKER_TOKEN).toBe("browser-broker-secret");
+    expect(ai.DESKTOP_BROWSER_BROKER_AUDIENCE).toBe("desktop-browser-broker");
 
     for (const sibling of ["backend", "backend-facade"] as const) {
       const env = buildServiceEnv(sibling, withBrowser);
       expect(env.RUNTIME_ENABLE_DESKTOP_BROWSER).toBeUndefined();
       expect(env.DESKTOP_BROWSER_BROKER_URL).toBeUndefined();
       expect(env.DESKTOP_BROWSER_BROKER_TOKEN).toBeUndefined();
+      expect(env.DESKTOP_BROWSER_BROKER_AUDIENCE).toBeUndefined();
     }
     expect(ENV_PASSTHROUGH_ALLOWLIST).not.toContain(
       "DESKTOP_BROWSER_BROKER_TOKEN",
@@ -246,18 +252,23 @@ describe("buildServiceEnv(ai-backend)", () => {
         enabled: true,
         baseUrl: "http://127.0.0.1:54322",
         token: "workspace-broker-secret",
+        audience: "desktop-capability-broker",
       },
     };
     const ai = buildServiceEnv("ai-backend", withWorkspace);
     expect(ai.RUNTIME_ENABLE_DESKTOP_WORKSPACE).toBe("true");
     expect(ai.DESKTOP_WORKSPACE_BROKER_URL).toBe("http://127.0.0.1:54322");
     expect(ai.DESKTOP_WORKSPACE_BROKER_TOKEN).toBe("workspace-broker-secret");
+    expect(ai.DESKTOP_WORKSPACE_BROKER_AUDIENCE).toBe(
+      "desktop-capability-broker",
+    );
 
     for (const sibling of ["backend", "backend-facade"] as const) {
       const env = buildServiceEnv(sibling, withWorkspace);
       expect(env.RUNTIME_ENABLE_DESKTOP_WORKSPACE).toBeUndefined();
       expect(env.DESKTOP_WORKSPACE_BROKER_URL).toBeUndefined();
       expect(env.DESKTOP_WORKSPACE_BROKER_TOKEN).toBeUndefined();
+      expect(env.DESKTOP_WORKSPACE_BROKER_AUDIENCE).toBeUndefined();
     }
     expect(ENV_PASSTHROUGH_ALLOWLIST).not.toContain(
       "DESKTOP_WORKSPACE_BROKER_TOKEN",
@@ -452,6 +463,42 @@ describe("buildServiceEnv(backend-facade)", () => {
     expect(env.AI_BACKEND_URL).toBe("http://127.0.0.1:8001");
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
+  });
+});
+
+describe("buildServiceEnv local service identity", () => {
+  it("injects only the identity issued for the child and rejects a swap", () => {
+    let byte = 0;
+    const registry = new LocalServiceIdentityRegistry({
+      randomBytes: (size) => Buffer.alloc(size, ++byte),
+    });
+    const ai = buildServiceEnv("ai-backend", {
+      ...inputs(),
+      localServiceIdentity: registry.forService("ai-backend"),
+    });
+    expect(ai.DESKTOP_LOCAL_SERVICE_IDENTITY).toBe("ai-backend");
+    expect(ai.DESKTOP_LOCAL_SERVICE_AUDIENCE).toBe("desktop-local:ai-backend");
+    expect(ai.DESKTOP_LOCAL_SERVICE_CREDENTIAL).toBeUndefined();
+    expect(() =>
+      buildServiceEnv("ai-backend", {
+        ...inputs(),
+        localServiceIdentity: registry.forService("backend"),
+      }),
+    ).toThrow(/does not match/i);
+  });
+
+  it("does not accept ambient process attempts to set local authority identity", () => {
+    const env = buildServiceEnv(
+      "backend",
+      inputs({
+        DESKTOP_LOCAL_SERVICE_IDENTITY: "ai-backend",
+        DESKTOP_LOCAL_SERVICE_CREDENTIAL: "stolen",
+        DESKTOP_LOCAL_SERVICE_AUDIENCE: "desktop-local:ai-backend",
+      }),
+    );
+    expect(env.DESKTOP_LOCAL_SERVICE_IDENTITY).toBeUndefined();
+    expect(env.DESKTOP_LOCAL_SERVICE_CREDENTIAL).toBeUndefined();
+    expect(env.DESKTOP_LOCAL_SERVICE_AUDIENCE).toBeUndefined();
   });
 });
 

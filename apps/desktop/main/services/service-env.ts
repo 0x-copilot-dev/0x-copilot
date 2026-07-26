@@ -1,6 +1,11 @@
 import { delimiter, join } from "node:path";
 
 import type { BootSecrets } from "./boot-secrets";
+import {
+  LOCAL_SERVICE_IDENTITY_ENV,
+  LOCAL_SERVICE_IDENTITY_PROTOCOL,
+  type LocalServiceIdentity,
+} from "./local-service-identity";
 import type { SupervisedServiceName } from "./runtime-paths";
 
 // ONE passthrough allowlist for all three children. Anything not named
@@ -169,6 +174,8 @@ export interface ServiceEnvInputs {
     readonly enabled: boolean;
     readonly baseUrl?: string;
     readonly token?: string;
+    /** Fixed local broker audience; never supplied by the child. */
+    readonly audience?: string;
   };
   /**
    * Electron-main workspace authority for the supervised ai-backend only.
@@ -180,6 +187,8 @@ export interface ServiceEnvInputs {
     readonly enabled: boolean;
     readonly baseUrl?: string;
     readonly token?: string;
+    /** Fixed local broker audience; never supplied by the child. */
+    readonly audience?: string;
   };
   /**
    * Per-boot public-key attestation issued by Electron main. It is supplied
@@ -191,6 +200,14 @@ export interface ServiceEnvInputs {
     readonly payload?: string;
     readonly signature?: string;
   };
+  /**
+   * Per-boot, non-secret identity for THIS child. It is deliberately distinct
+   * from ENTERPRISE_SERVICE_TOKEN, which remains a compatibility credential
+   * for the existing service mesh until its private-transport replacement
+   * lands. Local broker credentials are injected separately, only into the
+   * intended broker channel, and are bound to this service identity.
+   */
+  readonly localServiceIdentity?: LocalServiceIdentity;
 }
 
 // Builds the FULL child environment for one supervised service: filtered
@@ -216,7 +233,18 @@ export function buildServiceEnv(
   env.OTEL_SDK_DISABLED = "true";
   env.ENTERPRISE_DEPLOYMENT_PROFILE = "single_user_desktop";
   env.ENTERPRISE_AUTH_SECRET = inputs.secrets.authSecret;
+  // Compatibility lane only: sibling HTTP services still consume this shared
+  // token. It is no longer valid evidence for a main-owned local authority.
   env.ENTERPRISE_SERVICE_TOKEN = inputs.secrets.serviceToken;
+  const localIdentity = inputs.localServiceIdentity;
+  if (localIdentity !== undefined) {
+    if (localIdentity.service !== name) {
+      throw new Error("desktop local service identity does not match child");
+    }
+    env[LOCAL_SERVICE_IDENTITY_ENV.service] = localIdentity.service;
+    env[LOCAL_SERVICE_IDENTITY_ENV.audience] = localIdentity.audience;
+    env[LOCAL_SERVICE_IDENTITY_ENV.protocol] = LOCAL_SERVICE_IDENTITY_PROTOCOL;
+  }
 
   const backendUrl = `http://127.0.0.1:${inputs.backendPort}`;
   const aiBackendUrl = `http://127.0.0.1:${inputs.aiBackendPort}`;
@@ -262,11 +290,14 @@ export function buildServiceEnv(
         browser.baseUrl !== undefined &&
         browser.baseUrl !== "" &&
         browser.token !== undefined &&
-        browser.token !== ""
+        browser.token !== "" &&
+        browser.audience !== undefined &&
+        browser.audience !== ""
       ) {
         env.RUNTIME_ENABLE_DESKTOP_BROWSER = "true";
         env.DESKTOP_BROWSER_BROKER_URL = browser.baseUrl;
         env.DESKTOP_BROWSER_BROKER_TOKEN = browser.token;
+        env.DESKTOP_BROWSER_BROKER_AUDIENCE = browser.audience;
       } else {
         env.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
       }
@@ -276,11 +307,14 @@ export function buildServiceEnv(
         workspace.baseUrl !== undefined &&
         workspace.baseUrl !== "" &&
         workspace.token !== undefined &&
-        workspace.token !== ""
+        workspace.token !== "" &&
+        workspace.audience !== undefined &&
+        workspace.audience !== ""
       ) {
         env.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "true";
         env.DESKTOP_WORKSPACE_BROKER_URL = workspace.baseUrl;
         env.DESKTOP_WORKSPACE_BROKER_TOKEN = workspace.token;
+        env.DESKTOP_WORKSPACE_BROKER_AUDIENCE = workspace.audience;
       } else {
         env.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "false";
       }

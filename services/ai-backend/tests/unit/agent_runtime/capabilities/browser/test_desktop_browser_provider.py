@@ -142,6 +142,38 @@ class BrowserProviderFixtures:
         )
 
 
+async def test_named_local_identity_and_fixed_audience_reach_browser_broker_headers() -> (
+    None
+):
+    context = BrowserProviderFixtures().context()
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == BrowserBroker.ROUTE_HANDSHAKE:
+            return httpx.Response(
+                200, json={"protocol": "1", "audience": BrowserBroker.AUDIENCE}
+            )
+        return httpx.Response(200, json={"tools": []})
+
+    provider = build_browser_mcp(
+        BrowserMcpConfig(
+            enabled=True,
+            deployment_profile=BrowserProviderFixtures.Values.DESKTOP,
+            broker_url=BrowserProviderFixtures.Values.BROKER_URL,
+            broker_token=BrowserProviderFixtures.Values.TOKEN,
+            service_identity="ai-backend",
+            broker_audience="desktop-browser-broker",
+            runtime_context=context,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+    )
+    assert provider is not None
+    await provider.readiness()
+    assert seen[0].headers["x-desktop-local-service"] == "ai-backend"
+    assert seen[0].headers["x-desktop-local-audience"] == "desktop-browser-broker"
+
+
 class TestBuildBrowserMcpSeam(BrowserProviderFixtures):
     def _config(self, **overrides: object) -> BrowserMcpConfig:
         base = dict(

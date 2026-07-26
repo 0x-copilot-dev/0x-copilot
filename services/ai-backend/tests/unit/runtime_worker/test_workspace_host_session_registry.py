@@ -155,6 +155,7 @@ def test_env_factory_requires_the_dedicated_private_broker_contract() -> None:
                 "RUNTIME_ENABLE_DESKTOP_WORKSPACE": "true",
                 "DESKTOP_WORKSPACE_BROKER_URL": _BASE,
                 "DESKTOP_WORKSPACE_BROKER_TOKEN": _TOKEN,
+                "DESKTOP_WORKSPACE_BROKER_AUDIENCE": "desktop-capability-broker",
             },
         ),
         DesktopWorkspaceHostSessionRegistry,

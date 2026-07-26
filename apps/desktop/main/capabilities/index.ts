@@ -1,4 +1,5 @@
 import type { SafeStorageLike } from "../auth/secret-storage";
+import type { LocalServiceChannelCredential } from "../services/local-service-identity";
 
 import { CapabilityBroker } from "./broker";
 import { FolderPicker, type ShowOpenDialogResult } from "./folder-picker";
@@ -37,6 +38,8 @@ export interface CreateCapabilityServiceConfig {
    * AI-backend input must never populate these fields.
    */
   readonly workspace?: WorkspaceAuthorityBootstrap;
+  /** Named children permitted to call the main-owned local broker. */
+  readonly localBrokerClients?: readonly LocalServiceChannelCredential[];
 }
 
 export interface WorkspaceAuthorityBootstrap {
@@ -110,6 +113,7 @@ export function createCapabilityService(
     grants: store,
     hostFs: new HostFs(),
     workspaceAuthority: authority,
+    clientCredentials: config.localBrokerClients,
   });
   return new CapabilityService({
     store,
@@ -126,7 +130,11 @@ export {
   type CapabilityChannelName,
 } from "./channels";
 export { CapabilityService } from "./service";
-export { CapabilityBroker, CAPABILITY_BROKER_PROTOCOL } from "./broker";
+export {
+  CapabilityBroker,
+  CAPABILITY_BROKER_AUDIENCE,
+  CAPABILITY_BROKER_PROTOCOL,
+} from "./broker";
 export { GrantStore } from "./grant-store";
 export {
   EncryptedWorkspaceJournalStore,

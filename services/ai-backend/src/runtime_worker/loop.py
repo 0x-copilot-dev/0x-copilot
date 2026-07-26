@@ -457,6 +457,8 @@ class RuntimeWorker:
         env = os.environ
         broker_url = env.get(BrowserEnv.BROKER_URL)
         broker_token = env.get(BrowserEnv.BROKER_TOKEN)
+        service_identity = env.get(BrowserEnv.SERVICE_IDENTITY)
+        broker_audience = env.get(BrowserEnv.BROKER_AUDIENCE)
         if (
             not BrowserEnv.is_enabled(env.get(BrowserEnv.FLAG))
             or env.get("ENTERPRISE_DEPLOYMENT_PROFILE")
@@ -468,6 +470,8 @@ class RuntimeWorker:
         return DesktopBrowserEffectBridge(
             broker_url=broker_url,
             broker_token=broker_token,
+            service_identity=service_identity or None,
+            broker_audience=broker_audience or None,
         )
 
     async def run_once(self) -> bool:
