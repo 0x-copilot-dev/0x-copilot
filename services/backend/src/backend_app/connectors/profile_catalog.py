@@ -88,6 +88,12 @@ class DesktopConnectorProfile(_ProfileContract):
     profile_id: str
     connector_slug: str
     server_id: str
+    # Presentation copy. It used to be looked up from `catalog.yaml`, which
+    # meant a profile could not describe itself and the marketing file could
+    # not be retired. Optional because a seed-backed profile may defer to the
+    # seed's own copy; `ConnectorRegistry` falls through in that order.
+    display_name: str = ""
+    description: str = ""
     display_group: str
     endpoint_template: str
     transport: Literal["http"] = "http"
@@ -204,34 +210,52 @@ class DesktopProfileCatalog:
         marketing: Iterable[ConnectorCatalogEntry] | None = None,
         preview_enabled: bool = False,
     ) -> tuple[ResolvedConnectorProfile, ...]:
-        """Join every profile to its marketing card + installable MCP server.
+        """Join every profile to its display copy + installable MCP server.
 
-        Fails closed if any profile references a slug the marketing catalog
-        does not advertise (an orphan card), or a server id that is neither an
-        existing ``seed:*`` nor a profile-owned seed definition. Returns
-        resolved rows sorted by display group + display name.
+        Fails closed on a server id that is neither an existing ``seed:*`` nor
+        a profile-owned seed definition, and on a profile with no display name
+        from any source. Returns rows sorted by display group + display name.
+
+        A profile no longer has to appear in a marketing catalog. It used to:
+        `catalog.yaml` owned every card's copy, so a profile without a row
+        there was an "orphan card" and the load failed. That coupling is why
+        the file could not be retired. Profiles now carry their own
+        `display_name` / `description`, and copy resolves profile → marketing
+        (still honoured when supplied) → MCP seed.
         """
 
         marketing_by_slug = {
             entry.slug: entry
             for entry in (marketing if marketing is not None else load_catalog())
         }
+        seeds_by_slug = {entry.slug: entry for entry in DEFAULT_CATALOG}
         seed_ids = {entry.server_id for entry in DEFAULT_CATALOG}
 
         resolved: list[ResolvedConnectorProfile] = []
         for profile in self._profiles:
             card = marketing_by_slug.get(profile.connector_slug)
-            if card is None:
+            seed = seeds_by_slug.get(profile.connector_slug)
+            display_name = (
+                profile.display_name
+                or (card.display_name if card is not None else "")
+                or (seed.display_name if seed is not None else "")
+            )
+            if not display_name:
                 raise ProfileCatalogError(
-                    f"profile {profile.profile_id!r} references unknown marketing "
-                    f"slug {profile.connector_slug!r} — orphan card"
+                    f"profile {profile.profile_id!r} has no display name from any "
+                    f"source — set display_name on the profile"
                 )
+            description = (
+                profile.description
+                or (card.description if card is not None else "")
+                or (seed.description if seed is not None else "")
+            )
             self._assert_installable_server(profile, seed_ids)
             resolved.append(
                 ResolvedConnectorProfile(
                     profile=profile,
-                    display_name=card.display_name,
-                    description=card.description,
+                    display_name=display_name,
+                    description=description,
                     availability=profile.default_availability(
                         preview_enabled=preview_enabled
                     ),

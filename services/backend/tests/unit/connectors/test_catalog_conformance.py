@@ -1,18 +1,17 @@
-"""Every advertised connector must resolve to something installable.
+"""The connector registry resolves one honest list from every source.
 
-The profile catalog already guards one direction — no profile may reference a
-marketing slug the catalog does not advertise. This guards the inverse, which
-is the direction a user experiences: a card on the "Available" tab whose
-Connect button cannot succeed, because `install_from_catalog` raises
-`Unknown catalog entry` for a slug with no MCP seed and no desktop profile.
+Phase 0 shipped these tests with the strict assertion `xfail`ed: three
+advertised slugs (gcal, salesforce, slack) resolved to nothing installable,
+so their Connect button could not succeed. Phase 2 removed the way to
+express that — `installable` is derived from `server_id`, and only a profile
+or a seed can set one — so the marker is gone and the assertion is live.
 
-Two tests, doing different jobs:
+What the tests cover, in order of what they protect:
 
-* the strict one is the goal, and is `xfail` until the orphans are resolved —
-  it flips to a hard failure the moment someone fixes them, which is the
-  signal to delete the marker;
-* the pinning one is the guard that works *today*: it fails if a fourth
-  orphan is ever added, so the defect cannot grow while the fix is pending.
+* the registry resolves the union of all three sources, deduplicated;
+* precedence is by evidence (profile > seed > announced), not file order;
+* `capabilities_declared` is honest about what nobody has inventoried;
+* the shipped data holds every invariant.
 """
 
 from __future__ import annotations
@@ -23,87 +22,171 @@ from backend_app.connectors.conformance import (
     ConnectorCatalogConformance,
     ConnectorCatalogConformanceError,
 )
-from backend_app.connectors.service import ConnectorCatalogEntry
+from backend_app.connectors.registry import (
+    AnnouncedConnector,
+    ConnectorLifecycle,
+    ConnectorRegistry,
+    ConnectorSource,
+)
+from backend_app.mcp_catalog import CatalogEntry
 
-# Advertised in `connectors/catalog.yaml` with no endpoint behind them. Each
-# renders a Connect button that resolves to nothing.
-KNOWN_ORPHANS = ("gcal", "salesforce", "slack")
 
-
-def _entry(slug: str) -> ConnectorCatalogEntry:
-    return ConnectorCatalogEntry(
+def _seed(slug: str, **overrides: object) -> CatalogEntry:
+    return CatalogEntry(
         slug=slug,
-        display_name=slug.title(),
-        description="",
-        icon_hint=slug,
+        display_name=overrides.pop("display_name", slug.title()),  # type: ignore[arg-type]
+        url=f"https://{slug}.example/mcp",
+        **overrides,  # type: ignore[arg-type]
     )
 
 
-class TestShippedCatalog:
-    @pytest.mark.xfail(
-        strict=True,
-        reason=(
-            "catalog.yaml advertises gcal, salesforce and slack with no MCP seed "
-            "and no desktop profile. Resolving them (a verified endpoint, or "
-            "retiring the card) is the fix; delete this marker when it lands."
-        ),
-    )
-    def test_every_advertised_slug_is_installable(self) -> None:
-        ConnectorCatalogConformance.assert_installable()
-
-    def test_the_orphan_set_has_not_grown(self) -> None:
-        """The defect is known and bounded — a fourth orphan is a regression."""
-
-        assert ConnectorCatalogConformance.unresolvable_slugs() == KNOWN_ORPHANS
-
-    def test_installable_slugs_span_both_sources(self) -> None:
-        """Profiles and MCP seeds both count; neither alone is the catalog."""
-
-        installable = ConnectorCatalogConformance.installable_slugs()
-        # `gmail` exists only as a desktop profile...
-        assert "gmail" in installable
-        # ...and `linear` only as an MCP catalog seed.
-        assert "linear" in installable
+def _announced(slug: str, **overrides: object) -> AnnouncedConnector:
+    payload: dict[str, object] = {
+        "slug": slug,
+        "display_name": slug.title(),
+        "description": "",
+    }
+    payload.update(overrides)
+    return AnnouncedConnector.model_validate(payload)
 
 
-class TestConformanceRule:
-    def test_a_slug_with_a_profile_resolves(self) -> None:
-        orphans = ConnectorCatalogConformance.unresolvable_slugs(
-            marketing=[_entry("acme")], profile_slugs=["acme"]
+class TestShippedRegistry:
+    def test_the_shipped_data_is_conformant(self) -> None:
+        """The assertion Phase 0 could only xfail."""
+
+        ConnectorCatalogConformance.assert_conformant()
+
+    def test_no_advertised_connector_is_a_dead_end(self) -> None:
+        assert ConnectorCatalogConformance.unresolvable_slugs() == ()
+
+    def test_every_card_has_a_label(self) -> None:
+        assert ConnectorCatalogConformance.blank_display_names() == ()
+
+    def test_the_two_surfaces_now_see_one_list(self) -> None:
+        """The whole point: composer and destination read the same registry.
+
+        Before this, the destination advertised 9 slugs and the composer
+        offered 13, overlapping by 3.
+        """
+
+        registry = ConnectorRegistry.load()
+        slugs = {row.slug for row in registry}
+        # Was destination-only and uninstallable...
+        assert {"gcal", "salesforce", "slack"} <= slugs
+        # ...and these were composer-only, invisible in Tools.
+        assert {"linear", "sentry", "asana"} <= slugs
+
+    def test_the_former_orphans_are_declared_not_installable(self) -> None:
+        registry = ConnectorRegistry.load()
+        for slug in ("gcal", "salesforce", "slack"):
+            row = registry.get(slug)
+            assert row is not None, slug
+            assert row.installable is False, slug
+            assert row.lifecycle is ConnectorLifecycle.COMING_SOON, slug
+            assert row.server_id is None, slug
+
+    def test_no_announcement_has_been_overtaken(self) -> None:
+        registry = ConnectorRegistry.load()
+        announced = ConnectorRegistry.load_announced()
+        assert registry.superseded_announcements(announced) == ()
+
+
+class TestPrecedence:
+    def test_a_profile_beats_a_seed_for_the_same_slug(self) -> None:
+        """Atlassian ships as both; the profile carries more evidence."""
+
+        registry = ConnectorRegistry.load()
+        row = registry.get("atlassian")
+        assert row is not None
+        assert row.source is ConnectorSource.PROFILE
+        assert row.capabilities_declared is True
+
+    def test_a_seed_beats_an_announcement(self) -> None:
+        registry = ConnectorRegistry.resolve(
+            seeds=[_seed("linear")], announced=[_announced("linear")]
         )
-        assert orphans == ()
+        row = registry.get("linear")
+        assert row is not None
+        assert row.source is ConnectorSource.MCP_SEED
+        assert row.installable is True
 
-    def test_a_slug_with_only_an_mcp_seed_resolves(self) -> None:
-        # `linear` is in DEFAULT_CATALOG and has no desktop profile.
-        orphans = ConnectorCatalogConformance.unresolvable_slugs(
-            marketing=[_entry("linear")], profile_slugs=[]
-        )
-        assert orphans == ()
+    def test_each_slug_resolves_exactly_once(self) -> None:
+        registry = ConnectorRegistry.load()
+        slugs = [row.slug for row in registry]
+        assert len(slugs) == len(set(slugs))
 
-    def test_a_slug_with_neither_is_an_orphan(self) -> None:
-        orphans = ConnectorCatalogConformance.unresolvable_slugs(
-            marketing=[_entry("nowhere")], profile_slugs=[]
-        )
-        assert orphans == ("nowhere",)
 
-    def test_orphans_are_reported_sorted(self) -> None:
-        """Stable output so the failure message doesn't churn between runs."""
+class TestCapabilityHonesty:
+    def test_a_seed_does_not_claim_a_tool_inventory(self) -> None:
+        """A seed is a URL and an auth mode — nobody inventoried its tools.
 
-        orphans = ConnectorCatalogConformance.unresolvable_slugs(
-            marketing=[_entry("zeta"), _entry("alpha")], profile_slugs=[]
-        )
-        assert orphans == ("alpha", "zeta")
+        False must read as "unknown", never as "has none": a caller deciding
+        per-tool risk has to withhold rather than assume.
+        """
 
-    def test_the_error_names_every_orphan_and_says_what_to_do(self) -> None:
-        with pytest.raises(ConnectorCatalogConformanceError) as caught:
-            ConnectorCatalogConformance.assert_installable(
-                marketing=[_entry("ghost"), _entry("phantom")], profile_slugs=[]
+        registry = ConnectorRegistry.load()
+        row = registry.get("linear")
+        assert row is not None
+        assert row.source is ConnectorSource.MCP_SEED
+        assert row.capabilities_declared is False
+
+    def test_a_profile_with_declared_tools_says_so(self) -> None:
+        registry = ConnectorRegistry.load()
+        row = registry.get("gmail")
+        assert row is not None
+        assert row.capabilities_declared is True
+
+
+class TestInvariantsFailLoudly:
+    def test_a_row_that_neither_installs_nor_declares_itself_raises(self) -> None:
+        registry = ConnectorRegistry(
+            (
+                ConnectorRegistry._from_seed(_seed("ok")).model_copy(
+                    update={"server_id": None, "source": ConnectorSource.MCP_SEED}
+                ),
             )
-        message = str(caught.value)
-        assert "ghost" in message
-        assert "phantom" in message
-        # An error that only states the problem makes the reader go hunting.
-        assert "verified endpoint" in message
+        )
+        with pytest.raises(ConnectorCatalogConformanceError) as caught:
+            ConnectorCatalogConformance.assert_conformant(registry, announced=[])
+        assert "ok" in str(caught.value)
+        # An error that only states the problem sends the reader hunting.
+        assert "coming_soon" in str(caught.value)
 
-    def test_an_empty_catalog_is_trivially_conformant(self) -> None:
-        ConnectorCatalogConformance.assert_installable(marketing=[], profile_slugs=[])
+    def test_a_blank_display_name_raises(self) -> None:
+        registry = ConnectorRegistry(
+            (
+                ConnectorRegistry._from_seed(_seed("ghost")).model_copy(
+                    update={"display_name": "  "}
+                ),
+            )
+        )
+        with pytest.raises(ConnectorCatalogConformanceError) as caught:
+            ConnectorCatalogConformance.assert_conformant(registry, announced=[])
+        assert "blank card" in str(caught.value)
+
+    def test_a_superseded_announcement_raises(self) -> None:
+        registry = ConnectorRegistry.resolve(seeds=[_seed("linear")])
+        with pytest.raises(ConnectorCatalogConformanceError) as caught:
+            ConnectorCatalogConformance.assert_conformant(
+                registry, announced=[_announced("linear")]
+            )
+        assert "dead copy" in str(caught.value)
+
+
+class TestAnnouncedRows:
+    def test_an_announcement_cannot_declare_an_endpoint(self) -> None:
+        """The file has no field to make a promise installable with."""
+
+        with pytest.raises(Exception):
+            AnnouncedConnector.model_validate(
+                {
+                    "slug": "x",
+                    "display_name": "X",
+                    "url": "https://x.example/mcp",
+                }
+            )
+
+    def test_a_missing_announced_file_is_not_an_error(self) -> None:
+        from pathlib import Path
+
+        assert ConnectorRegistry.load_announced(Path("/nonexistent.yaml")) == ()
