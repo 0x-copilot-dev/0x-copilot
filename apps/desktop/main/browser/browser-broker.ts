@@ -26,6 +26,11 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
+import {
+  LOCAL_SERVICE_AUDIENCE_HEADER,
+  LOCAL_SERVICE_IDENTITY_HEADER,
+  type LocalServiceChannelCredential,
+} from "../services/local-service-identity";
 
 import {
   BROWSER_BROKER_AUDIENCE,
@@ -85,6 +90,8 @@ export interface BrowserBrokerConfig {
   readonly now?: () => number;
   /** Replay-cache TTL for nonces/request ids (default 5 min). */
   readonly nonceTtlMs?: number;
+  /** Named local child credentials. Supplying these disables legacy bearer auth. */
+  readonly clientCredentials?: readonly LocalServiceChannelCredential[];
 }
 
 export interface BrowserBrokerHandle {
@@ -113,6 +120,7 @@ export class BrowserBroker {
   readonly #nonceTtlMs: number;
   #server: Server | null = null;
   #tokenBuf: Buffer | null = null;
+  readonly #clientCredentials = new Map<string, Buffer>();
   #port = 0;
   // Replay caches: value -> expiry epoch ms.
   readonly #seenNonces = new Map<string, number>();
@@ -125,6 +133,18 @@ export class BrowserBroker {
     this.#randomBytes = config.randomBytes ?? nodeRandomBytes;
     this.#now = config.now ?? Date.now;
     this.#nonceTtlMs = config.nonceTtlMs ?? 5 * 60 * 1000;
+    for (const identity of config.clientCredentials ?? []) {
+      if (identity.brokerAudience !== BROWSER_BROKER_AUDIENCE) {
+        throw new Error("browser broker client has the wrong audience");
+      }
+      if (this.#clientCredentials.has(identity.service)) {
+        throw new Error("duplicate browser broker client identity");
+      }
+      this.#clientCredentials.set(
+        identity.service,
+        Buffer.from(identity.credential, "utf8"),
+      );
+    }
   }
 
   isRunning(): boolean {
@@ -134,10 +154,12 @@ export class BrowserBroker {
   async start(): Promise<BrowserBrokerHandle> {
     if (this.#server !== null)
       throw new Error("browser broker already running");
-    this.#tokenBuf = Buffer.from(
-      this.#randomBytes(TOKEN_BYTES).toString("base64url"),
-      "utf-8",
-    );
+    if (this.#clientCredentials.size === 0) {
+      this.#tokenBuf = Buffer.from(
+        this.#randomBytes(TOKEN_BYTES).toString("base64url"),
+        "utf-8",
+      );
+    }
     const server = createServer((req, res) => {
       this.#handle(req, res).catch(() => {
         if (!res.headersSent) respondJson(res, 500, { error: "internal" });
@@ -180,9 +202,22 @@ export class BrowserBroker {
 
   /** Per-boot bearer for the AI worker. MAIN-ONLY; never over renderer IPC. */
   authToken(): string {
+    if (this.#clientCredentials.size !== 0) {
+      throw new Error(
+        "legacy browser broker bearer is disabled for named local clients",
+      );
+    }
     if (this.#tokenBuf === null)
       throw new Error("browser broker is not running");
     return this.#tokenBuf.toString("utf-8");
+  }
+
+  clientCredential(service: string): string {
+    const credential = this.#clientCredentials.get(service);
+    if (credential === undefined) {
+      throw new Error("browser broker client identity is not configured");
+    }
+    return credential.toString("utf8");
   }
 
   async #handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -367,6 +402,26 @@ export class BrowserBroker {
   }
 
   #authorized(req: IncomingMessage): boolean {
+    if (this.#clientCredentials.size !== 0) {
+      const service = headerValue(req, LOCAL_SERVICE_IDENTITY_HEADER);
+      if (service === null) return false;
+      if (
+        headerValue(req, LOCAL_SERVICE_AUDIENCE_HEADER) !==
+        BROWSER_BROKER_AUDIENCE
+      ) {
+        return false;
+      }
+      const expected = this.#clientCredentials.get(service);
+      if (expected === undefined) return false;
+      const header = headerValue(req, "authorization");
+      const match = header === null ? null : /^Bearer (.+)$/u.exec(header);
+      if (match === null) return false;
+      const provided = Buffer.from(match[1], "utf8");
+      return (
+        provided.length === expected.length &&
+        timingSafeEqual(provided, expected)
+      );
+    }
     const expected = this.#tokenBuf;
     if (expected === null) return false;
     const header = headerValue(req, "authorization");

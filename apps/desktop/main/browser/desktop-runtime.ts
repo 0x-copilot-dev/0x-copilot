@@ -9,6 +9,8 @@ import { randomBytes } from "node:crypto";
 import { spawn as nodeSpawn, type SpawnOptions } from "node:child_process";
 import { join } from "node:path";
 
+import type { LocalServiceChannelCredential } from "../services/local-service-identity";
+
 import { BrowserBroker, type BrowserBrokerHandle } from "./browser-broker";
 import {
   BrowserWorkerSupervisor,
@@ -64,6 +66,8 @@ export interface ProductionDesktopBrowserConfig {
   readonly spawn?: SpawnBrowserWorker;
   readonly log?: (message: string) => void;
   readonly onStateChange?: (state: BrowserWorkerState, reason?: string) => void;
+  /** Named supervised children allowed to use the browser broker. */
+  readonly brokerClients?: readonly LocalServiceChannelCredential[];
 }
 
 export interface ProductionDesktopBrowserSubsystem {
@@ -122,6 +126,7 @@ export function createProductionDesktopBrowserSubsystem(
     worker: workerPort,
     readAuthority,
     privateEffects: workerPort,
+    clientCredentials: config.brokerClients,
   });
 
   return {

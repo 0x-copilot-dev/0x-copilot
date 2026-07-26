@@ -105,6 +105,34 @@ class TestBrokerClientRoundTrips(BrokerClientMixin):
         assert route == "/v1/fs/stat"
         assert body == {"grant_id": "grant-1", "path": "notes.txt"}
 
+    async def test_named_local_identity_and_fixed_audience_are_forwarded_only_when_configured(
+        self,
+    ) -> None:
+        response = httpx.Response(200, json={"protocol": "1", "methods": []})
+        client, seen = self.client_returning(response)
+        await client.grants_snapshot()
+        assert "x-desktop-local-service" not in seen[0].headers
+        assert "x-desktop-local-audience" not in seen[0].headers
+
+        named = DesktopBrokerClient(
+            BrokerClientConfig(
+                base_url=TEST_BASE_URL,
+                token=TEST_TOKEN,
+                service_identity="ai-backend",
+                broker_audience="desktop-capability-broker",
+            ),
+            http_client=httpx.AsyncClient(
+                transport=httpx.MockTransport(
+                    lambda request: seen.append(request) or response
+                )
+            ),
+        )
+        await named.grants_snapshot()
+        assert seen[-1].headers["x-desktop-local-service"] == "ai-backend"
+        assert (
+            seen[-1].headers["x-desktop-local-audience"] == "desktop-capability-broker"
+        )
+
     async def test_list_parses_entries(self) -> None:
         broker = self.single_fs_broker()
         result = await broker.client().list("grant-1", "")

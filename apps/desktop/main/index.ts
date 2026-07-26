@@ -65,6 +65,7 @@ import {
 } from "./app-protocol";
 import {
   createCapabilityService,
+  CAPABILITY_BROKER_AUDIENCE,
   DesktopWorkspaceAttestationPublisher,
   isDesktopFilesystemEnabled,
   type CapabilityService,
@@ -93,6 +94,8 @@ import {
   type BootSecretsFs,
 } from "./services/boot-secrets";
 import { createDesktopSupervisor } from "./services/desktop-supervisor";
+import { LocalServiceIdentityRegistry } from "./services/local-service-identity";
+import { BROWSER_BROKER_AUDIENCE } from "./browser/protocol";
 import { resolveRuntimePaths } from "./services/runtime-paths";
 import { applyBundledGoogleOAuth } from "./services/google-oauth-default";
 import { SECURE_STORAGE_CHANNELS } from "./services/secure-storage-channels";
@@ -146,6 +149,9 @@ const storesSafeStorage = gatedSafeStorage(
 const bootSecretsFs: BootSecretsFs = { readFile, writeFile, mkdir, chmod };
 let tier2LifecycleHandle: Tier2LifecycleHandle | null = null;
 let supervisor: ServiceSupervisor | null = null;
+// Created once per Electron boot. Only the relevant child's credential is put
+// into its curated environment; main-owned brokers bind requests to it.
+const supervisedServiceIdentities = new LocalServiceIdentityRegistry();
 let supervisorStopped = false;
 let browserSubsystem: ProductionDesktopBrowserSubsystem | null = null;
 let browserSubsystemStopped = false;
@@ -301,6 +307,7 @@ async function startCapabilitySubsystem(): Promise<{
   readonly workspaceBroker: {
     readonly baseUrl: string;
     readonly token: string;
+    readonly audience: typeof CAPABILITY_BROKER_AUDIENCE;
   } | null;
   /** Main-only signer; its private key never reaches a child process. */
   readonly workspaceAttestation: DesktopWorkspaceAttestationPublisher;
@@ -332,6 +339,12 @@ async function startCapabilitySubsystem(): Promise<{
         return { canceled: result.canceled, filePaths: result.filePaths };
       },
       allowPlaintextFallback: allowPlaintext,
+      localBrokerClients: [
+        supervisedServiceIdentities.forBroker(
+          "ai-backend",
+          CAPABILITY_BROKER_AUDIENCE,
+        ),
+      ],
     });
     // C2 launch evidence is created from main-owned authority facts before
     // services start. It contains no path/grant/renderer input and is signed
@@ -364,7 +377,8 @@ async function startCapabilitySubsystem(): Promise<{
           ? null
           : {
               baseUrl: handle.baseUrl,
-              token: capabilityService.brokerAuthToken(),
+              token: capabilityService.brokerClientCredential("ai-backend"),
+              audience: CAPABILITY_BROKER_AUDIENCE,
             },
       workspaceAttestation,
     };
@@ -571,10 +585,13 @@ if (hasSingleInstanceLock) {
         supervisedEnv.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "true";
         supervisedEnv.DESKTOP_WORKSPACE_BROKER_URL = workspaceBroker.baseUrl;
         supervisedEnv.DESKTOP_WORKSPACE_BROKER_TOKEN = workspaceBroker.token;
+        supervisedEnv.DESKTOP_WORKSPACE_BROKER_AUDIENCE =
+          workspaceBroker.audience;
       } else {
         supervisedEnv.RUNTIME_ENABLE_DESKTOP_WORKSPACE = "false";
         delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_URL;
         delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_TOKEN;
+        delete supervisedEnv.DESKTOP_WORKSPACE_BROKER_AUDIENCE;
       }
       if (workspaceAttestation !== null) {
         const bootstrap = workspaceAttestation.bootstrap();
@@ -609,6 +626,12 @@ if (hasSingleInstanceLock) {
             electronExecutable: process.execPath,
             browserExecutablePath,
             processEnv: process.env,
+            brokerClients: [
+              supervisedServiceIdentities.forBroker(
+                "ai-backend",
+                BROWSER_BROKER_AUDIENCE,
+              ),
+            ],
             log: (message) => console.log(message),
             onStateChange: (state, reason) => {
               console.log(
@@ -620,7 +643,9 @@ if (hasSingleInstanceLock) {
           supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "true";
           supervisedEnv.DESKTOP_BROWSER_BROKER_URL = handle.baseUrl;
           supervisedEnv.DESKTOP_BROWSER_BROKER_TOKEN =
-            browserSubsystem.broker.authToken();
+            browserSubsystem.broker.clientCredential("ai-backend");
+          supervisedEnv.DESKTOP_BROWSER_BROKER_AUDIENCE =
+            BROWSER_BROKER_AUDIENCE;
           // URL is loopback metadata; neither broker nor worker credential is
           // logged or exposed through renderer IPC.
           console.log("[browser] supervised broker is ready");
@@ -628,6 +653,7 @@ if (hasSingleInstanceLock) {
           supervisedEnv.RUNTIME_ENABLE_DESKTOP_BROWSER = "false";
           delete supervisedEnv.DESKTOP_BROWSER_BROKER_URL;
           delete supervisedEnv.DESKTOP_BROWSER_BROKER_TOKEN;
+          delete supervisedEnv.DESKTOP_BROWSER_BROKER_AUDIENCE;
           browserSubsystem = null;
           browserSubsystemStopped = true;
           console.error(
@@ -645,6 +671,7 @@ if (hasSingleInstanceLock) {
         resourcesPath: process.resourcesPath,
         runtimeDirOverride: process.env.COPILOT_RUNTIME_DIR,
         processEnv: supervisedEnv,
+        localServiceIdentities: supervisedServiceIdentities,
       });
       supervisor.onStatus(sendBootStatus);
       supervisor

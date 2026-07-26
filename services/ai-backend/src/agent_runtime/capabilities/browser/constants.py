@@ -42,6 +42,10 @@ class BrowserEnv:
     FLAG = "RUNTIME_ENABLE_DESKTOP_BROWSER"
     BROKER_URL = "DESKTOP_BROWSER_BROKER_URL"
     BROKER_TOKEN = "DESKTOP_BROWSER_BROKER_TOKEN"
+    BROKER_AUDIENCE = "DESKTOP_BROWSER_BROKER_AUDIENCE"
+    SERVICE_IDENTITY = "DESKTOP_LOCAL_SERVICE_IDENTITY"
+    SERVICE_IDENTITY_HEADER = "x-desktop-local-service"
+    SERVICE_AUDIENCE_HEADER = "x-desktop-local-audience"
 
     #: Truthy tokens mirror the desktop feature gate exactly.
     _TRUTHY = frozenset({"1", "true", "yes", "on", "enabled"})

@@ -125,6 +125,8 @@ class Header:
     AUTHORIZATION: Final = "Authorization"
     PROTOCOL: Final = "X-Capability-Protocol"
     CONTENT_TYPE: Final = "content-type"
+    SERVICE_IDENTITY: Final = "x-desktop-local-service"
+    SERVICE_AUDIENCE: Final = "x-desktop-local-audience"
 
 
 class Field_:  # noqa: N801 — a small constants namespace, not a runtime type
@@ -528,6 +530,10 @@ class BrokerClientConfig:
 
     base_url: str
     token: str
+    # The supervised child identity bound by Electron main, when configured.
+    service_identity: str | None = None
+    # The fixed Electron-main broker audience for this private channel.
+    broker_audience: str | None = None
     protocol_version: str = "1"
     timeout_seconds: float = 10.0
     max_response_bytes: int = 16 * 1024 * 1024
@@ -915,6 +921,10 @@ class DesktopBrokerClient:
             Header.PROTOCOL: self._config.protocol_version,
             Header.CONTENT_TYPE: "application/json",
         }
+        if self._config.service_identity:
+            headers[Header.SERVICE_IDENTITY] = self._config.service_identity
+        if self._config.broker_audience:
+            headers[Header.SERVICE_AUDIENCE] = self._config.broker_audience
         try:
             response = await self._http.post(
                 url,
@@ -961,6 +971,10 @@ class DesktopBrokerClient:
             Header.CONTENT_TYPE: "application/octet-stream",
             "x-workspace-upload-final": "true" if final else "false",
         }
+        if self._config.service_identity:
+            headers[Header.SERVICE_IDENTITY] = self._config.service_identity
+        if self._config.broker_audience:
+            headers[Header.SERVICE_AUDIENCE] = self._config.broker_audience
         try:
             response = await self._http.put(
                 url,

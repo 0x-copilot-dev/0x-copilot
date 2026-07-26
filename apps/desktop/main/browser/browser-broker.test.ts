@@ -14,6 +14,10 @@ import {
   type BrowserActionResult,
 } from "./protocol";
 import { MainBrowserReadAuthority } from "./read-authority";
+import {
+  LOCAL_BROKER_AUDIENCE,
+  LocalServiceIdentityRegistry,
+} from "../services/local-service-identity";
 import { BROWSER_TOOL_SCHEMAS, type BrowserToolSchema } from "./tool-schemas";
 
 class FakeWorker implements BrowserWorkerPort {
@@ -244,5 +248,117 @@ describe("BrowserBroker", () => {
     });
     expect(res.status).toBe(401);
     expect((await res.json()).error).toBe("expiry_too_far");
+  });
+});
+
+describe("BrowserBroker named local clients", () => {
+  it("has no fallback bearer and refuses a sibling, missing-audience, and capability-channel swap", async () => {
+    let byte = 0;
+    const identities = new LocalServiceIdentityRegistry({
+      randomBytes: (size) => Buffer.alloc(size, ++byte),
+    });
+    const broker = new BrowserBroker({
+      worker: new FakeWorker(),
+      now: () => NOW,
+      readAuthority: new MainBrowserReadAuthority({
+        originPolicy: ORIGIN_POLICY,
+      }),
+      clientCredentials: [
+        identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.browser),
+      ],
+    });
+    const { baseUrl } = await broker.start();
+    const headers = (
+      service: string,
+      audience: string | undefined,
+      credential: string,
+    ) => ({
+      authorization: `Bearer ${credential}`,
+      "x-browser-protocol": BROWSER_BROKER_PROTOCOL,
+      "x-desktop-local-service": service,
+      ...(audience === undefined
+        ? {}
+        : { "x-desktop-local-audience": audience }),
+    });
+    try {
+      await expect(
+        fetch(`${baseUrl}/v1/browser/handshake`, {
+          method: "POST",
+          headers: headers(
+            "backend",
+            LOCAL_BROKER_AUDIENCE.browser,
+            identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.browser)
+              .credential,
+          ),
+        }),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        fetch(`${baseUrl}/v1/browser/handshake`, {
+          method: "POST",
+          headers: headers(
+            "ai-backend",
+            undefined,
+            identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.browser)
+              .credential,
+          ),
+        }),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        fetch(`${baseUrl}/v1/browser/handshake`, {
+          method: "POST",
+          headers: headers(
+            "ai-backend",
+            LOCAL_BROKER_AUDIENCE.capability,
+            identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.browser)
+              .credential,
+          ),
+        }),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        fetch(`${baseUrl}/v1/browser/handshake`, {
+          method: "POST",
+          headers: headers(
+            "ai-backend",
+            LOCAL_BROKER_AUDIENCE.browser,
+            identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.capability)
+              .credential,
+          ),
+        }),
+      ).resolves.toMatchObject({ status: 401 });
+      await expect(
+        fetch(`${baseUrl}/v1/browser/handshake`, {
+          method: "POST",
+          headers: headers(
+            "ai-backend",
+            LOCAL_BROKER_AUDIENCE.browser,
+            identities.forBroker("ai-backend", LOCAL_BROKER_AUDIENCE.browser)
+              .credential,
+          ),
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(() => broker.authToken()).toThrow(/disabled/i);
+    } finally {
+      await broker.stop();
+    }
+  });
+
+  it("rejects a channel credential configured for another broker", () => {
+    const identities = new LocalServiceIdentityRegistry();
+    expect(
+      () =>
+        new BrowserBroker({
+          worker: new FakeWorker(),
+          now: () => NOW,
+          readAuthority: new MainBrowserReadAuthority({
+            originPolicy: ORIGIN_POLICY,
+          }),
+          clientCredentials: [
+            identities.forBroker(
+              "ai-backend",
+              LOCAL_BROKER_AUDIENCE.capability,
+            ),
+          ],
+        }),
+    ).toThrow(/audience/i);
   });
 });

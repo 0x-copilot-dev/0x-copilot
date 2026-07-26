@@ -44,6 +44,7 @@ import {
 } from "./service-env";
 import { ServiceSupervisor, type AllocatedPorts } from "./supervisor";
 import type { BootSecrets } from "./boot-secrets";
+import { LocalServiceIdentityRegistry } from "./local-service-identity";
 import type { SecureStorageMode } from "./secure-storage-policy";
 
 // ENOENT -> false (marker absent); any other error propagates so the boot
@@ -91,6 +92,8 @@ export interface DesktopSupervisorConfig {
   readonly processEnv?: Readonly<Record<string, string | undefined>>;
   readonly platform?: NodeJS.Platform;
   readonly arch?: NodeJS.Architecture;
+  /** Main-created identities shared with main-owned local-authority brokers. */
+  readonly localServiceIdentities?: LocalServiceIdentityRegistry;
 }
 
 // Composes the pure orchestrator (supervisor.ts) with the real OS-facing
@@ -107,6 +110,8 @@ export function createDesktopSupervisor(
     arch: config.arch,
   });
   const processEnv = config.processEnv ?? process.env;
+  const localServiceIdentities =
+    config.localServiceIdentities ?? new LocalServiceIdentityRegistry();
   const runner = createCommandRunner();
   const logsDir = join(config.userDataDir, "logs");
   const fsAdapter = { readFile, writeFile, mkdir, rm, chmod };
@@ -117,6 +122,7 @@ export function createDesktopSupervisor(
   const configuredBackend = resolveAiStoreBackend(processEnv);
 
   const envInputs = (
+    name: SupervisedServiceName,
     ports: AllocatedPorts,
     secrets: BootSecrets,
     storeBackendOverride?: StoreBackend,
@@ -127,6 +133,7 @@ export function createDesktopSupervisor(
     aiBackendPort: ports.aiBackend,
     facadePort: ports.facade,
     processEnv,
+    localServiceIdentity: localServiceIdentities.forService(name),
     userDataDir: config.userDataDir,
     // Staged frontend web assets (wallet.html + assets/); the facade serves the
     // SIWE wallet page from here (FACADE_WEB_DIST_DIR).
@@ -140,6 +147,7 @@ export function createDesktopSupervisor(
         "true",
       baseUrl: processEnv.DESKTOP_BROWSER_BROKER_URL,
       token: processEnv.DESKTOP_BROWSER_BROKER_TOKEN,
+      audience: processEnv.DESKTOP_BROWSER_BROKER_AUDIENCE,
     },
     workspaceBroker: {
       enabled:
@@ -147,6 +155,7 @@ export function createDesktopSupervisor(
         "true",
       baseUrl: processEnv.DESKTOP_WORKSPACE_BROKER_URL,
       token: processEnv.DESKTOP_WORKSPACE_BROKER_TOKEN,
+      audience: processEnv.DESKTOP_WORKSPACE_BROKER_AUDIENCE,
     },
     workspaceAttestation: {
       publicKey: processEnv.DESKTOP_WORKSPACE_ATTESTATION_PUBLIC_KEY,
@@ -208,7 +217,7 @@ export function createDesktopSupervisor(
             // kill-switch); the CLI reads source/dest from argv, not env.
             env: buildServiceEnv(
               "ai-backend",
-              envInputs(ports, secrets, "file"),
+              envInputs("ai-backend", ports, secrets, "file"),
             ),
             runner,
             log: migrationLog,
@@ -274,7 +283,10 @@ export function createDesktopSupervisor(
           service,
           pythonBin: paths.pythonBin,
           serviceDir: paths.serviceDir(service),
-          env: buildServiceEnv(service, envInputs(ports, secrets, backend)),
+          env: buildServiceEnv(
+            service,
+            envInputs(service, ports, secrets, backend),
+          ),
           runner,
         });
       }
@@ -284,7 +296,7 @@ export function createDesktopSupervisor(
         service,
         pythonBin: paths.pythonBin,
         serviceDir: paths.serviceDir(service),
-        env: buildServiceEnv(service, envInputs(ports, secrets)),
+        env: buildServiceEnv(service, envInputs(service, ports, secrets)),
         runner,
       });
     },
@@ -318,7 +330,7 @@ export function createDesktopSupervisor(
         cwd: paths.serviceDir(name),
         env: buildServiceEnv(
           name,
-          envInputs(ports, secrets, storeBackendOverride),
+          envInputs(name, ports, secrets, storeBackendOverride),
         ),
         spawnFn: spawn as unknown as SpawnFn,
         log,

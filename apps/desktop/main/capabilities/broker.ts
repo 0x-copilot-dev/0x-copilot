@@ -20,6 +20,12 @@ import {
 } from "./path-validation";
 import { RunContextStore } from "./run-context";
 import {
+  LOCAL_BROKER_AUDIENCE,
+  LOCAL_SERVICE_AUDIENCE_HEADER,
+  LOCAL_SERVICE_IDENTITY_HEADER,
+  type LocalServiceChannelCredential,
+} from "../services/local-service-identity";
+import {
   toBrokerGrant,
   type Grant,
   type GrantMode,
@@ -73,6 +79,7 @@ import type { WorkspaceApprovalPermitHandoff } from "./workspace-approval";
 // nothing about the path and is not a brute-force oracle across boots.
 
 export const CAPABILITY_BROKER_PROTOCOL = "1";
+export const CAPABILITY_BROKER_AUDIENCE = LOCAL_BROKER_AUDIENCE.capability;
 
 const TOKEN_BYTES = 32; // 256-bit
 const MAX_BODY_BYTES = 64 * 1024;
@@ -192,6 +199,12 @@ export interface CapabilityBrokerConfig {
    * filesystem right.
    */
   readonly workspaceAuthority?: LocalWorkspaceAuthority;
+  /**
+   * Per-boot identities accepted by this local authority. When supplied, the
+   * legacy process-wide bearer is disabled and every request must prove the
+   * exact expected child identity in addition to its distinct credential.
+   */
+  readonly clientCredentials?: readonly LocalServiceChannelCredential[];
 }
 
 export interface CapabilityBrokerHandle {
@@ -237,7 +250,10 @@ export class CapabilityBroker {
   #workspaceHostSessionSequence = 0;
 
   #server: Server | null = null;
+  // Compatibility only for unit tests and older standalone callers. Production
+  // desktop supervision supplies clientCredentials and never mints this token.
   #tokenBuf: Buffer | null = null;
+  readonly #clientCredentials = new Map<string, Buffer>();
   // Per-boot salt keying the opaque grant `mount` ids (G1). Minted with the
   // token, dropped on stop — so mount ids rotate every boot alongside it.
   #saltBuf: Buffer | null = null;
@@ -251,6 +267,18 @@ export class CapabilityBroker {
       config.runContexts ??
       new RunContextStore({ randomBytes: this.#randomBytes });
     this.#workspaceAuthority = config.workspaceAuthority ?? null;
+    for (const identity of config.clientCredentials ?? []) {
+      if (identity.brokerAudience !== CAPABILITY_BROKER_AUDIENCE) {
+        throw new Error("capability broker client has the wrong audience");
+      }
+      if (this.#clientCredentials.has(identity.service)) {
+        throw new Error("duplicate capability broker client identity");
+      }
+      this.#clientCredentials.set(
+        identity.service,
+        Buffer.from(identity.credential, "utf8"),
+      );
+    }
   }
 
   isRunning(): boolean {
@@ -282,10 +310,12 @@ export class CapabilityBroker {
       throw new Error("capability broker already running");
     }
     // 256-bit token, base64url (43 chars). Length is not secret.
-    this.#tokenBuf = Buffer.from(
-      this.#randomBytes(TOKEN_BYTES).toString("base64url"),
-      "utf-8",
-    );
+    if (this.#clientCredentials.size === 0) {
+      this.#tokenBuf = Buffer.from(
+        this.#randomBytes(TOKEN_BYTES).toString("base64url"),
+        "utf-8",
+      );
+    }
     // 256-bit per-boot salt for the opaque grant `mount` ids (never sent).
     this.#saltBuf = this.#randomBytes(TOKEN_BYTES);
 
@@ -357,10 +387,24 @@ export class CapabilityBroker {
    * over renderer IPC and NEVER log it. Throws if not running.
    */
   authToken(): string {
+    if (this.#clientCredentials.size !== 0) {
+      throw new Error(
+        "legacy capability broker bearer is disabled for named local clients",
+      );
+    }
     if (this.#tokenBuf === null) {
       throw new Error("capability broker is not running");
     }
     return this.#tokenBuf.toString("utf-8");
+  }
+
+  /** Main-only credential lookup for a configured, named child. */
+  clientCredential(service: string): string {
+    const credential = this.#clientCredentials.get(service);
+    if (credential === undefined) {
+      throw new Error("capability broker client identity is not configured");
+    }
+    return credential.toString("utf8");
   }
 
   /**
@@ -865,6 +909,26 @@ export class CapabilityBroker {
   }
 
   #authorized(req: IncomingMessage): boolean {
+    if (this.#clientCredentials.size !== 0) {
+      const service = headerValue(req, LOCAL_SERVICE_IDENTITY_HEADER);
+      if (service === null) return false;
+      if (
+        headerValue(req, LOCAL_SERVICE_AUDIENCE_HEADER) !==
+        CAPABILITY_BROKER_AUDIENCE
+      ) {
+        return false;
+      }
+      const expected = this.#clientCredentials.get(service);
+      if (expected === undefined) return false;
+      const header = headerValue(req, "authorization");
+      const match = header === null ? null : /^Bearer (.+)$/u.exec(header);
+      if (match === null) return false;
+      const provided = Buffer.from(match[1], "utf8");
+      return (
+        provided.length === expected.length &&
+        timingSafeEqual(provided, expected)
+      );
+    }
     const expected = this.#tokenBuf;
     if (expected === null) return false;
     const header = headerValue(req, "authorization");

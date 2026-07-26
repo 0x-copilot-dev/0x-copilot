@@ -102,6 +102,8 @@ class WorkspaceBackendWorkerWiring:
             BrokerClientConfig(
                 base_url=config.broker_base_url,
                 token=config.broker_token,
+                service_identity=config.service_identity,
+                broker_audience=config.broker_audience,
                 protocol_version=config.protocol_version,
                 timeout_seconds=config.timeout_seconds,
             ),

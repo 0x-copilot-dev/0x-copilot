@@ -33,6 +33,7 @@ import httpx
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.browser.constants import (
     BrowserBroker,
+    BrowserEnv,
     BrowserKeys,
     BrowserMessages,
     BrowserServer,
@@ -70,6 +71,8 @@ class BrowserMcpConfig:
     broker_url: str | None
     broker_token: str | None
     runtime_context: AgentRuntimeContext
+    service_identity: str | None = None
+    broker_audience: str | None = None
     effects_enabled: bool = False
     timeout_seconds: float = 10.0
     http_client: httpx.AsyncClient | None = None
@@ -108,6 +111,8 @@ def build_browser_mcp(config: BrowserMcpConfig) -> "DesktopBrowserMcpProvider | 
     return DesktopBrowserMcpProvider(
         broker_url=config.broker_url,
         broker_token=config.broker_token,
+        service_identity=config.service_identity,
+        broker_audience=config.broker_audience,
         runtime_context=config.runtime_context,
         effects_enabled=config.effects_enabled,
         timeout_seconds=config.timeout_seconds,
@@ -122,6 +127,8 @@ class DesktopBrowserMcpProvider:
     broker_url: str
     broker_token: str
     runtime_context: AgentRuntimeContext
+    service_identity: str | None = None
+    broker_audience: str | None = None
     effects_enabled: bool = False
     timeout_seconds: float = 10.0
     http_client: httpx.AsyncClient = field(
@@ -193,6 +200,8 @@ class DesktopBrowserMcpProvider:
         return DesktopBrowserMcpClient(
             broker_url=self.broker_url,
             broker_token=self.broker_token,
+            service_identity=self.service_identity,
+            broker_audience=self.broker_audience,
             card=card,
             runtime_context=self.runtime_context,
             effects_enabled=self.effects_enabled,
@@ -209,6 +218,8 @@ class DesktopBrowserMcpClient:
     broker_token: str
     card: McpServerCard
     runtime_context: AgentRuntimeContext
+    service_identity: str | None = None
+    broker_audience: str | None = None
     effects_enabled: bool = False
     timeout_seconds: float = 10.0
     http_client: httpx.AsyncClient = field(
@@ -326,6 +337,10 @@ class DesktopBrowserMcpClient:
             BrowserBroker.PROTOCOL_HEADER: BrowserBroker.PROTOCOL_VERSION,
             "content-type": "application/json",
         }
+        if self.service_identity:
+            headers[BrowserEnv.SERVICE_IDENTITY_HEADER] = self.service_identity
+        if self.broker_audience:
+            headers[BrowserEnv.SERVICE_AUDIENCE_HEADER] = self.broker_audience
         try:
             response = await self.http_client.post(
                 url,

@@ -124,6 +124,8 @@ class _Env:
     BROKER_URL: Final = "DESKTOP_BROKER_URL"
     BROKER_TOKEN: Final = "DESKTOP_BROKER_TOKEN"
     BROKER_PROTOCOL: Final = "DESKTOP_BROKER_PROTOCOL"
+    SERVICE_IDENTITY: Final = "DESKTOP_LOCAL_SERVICE_IDENTITY"
+    BROKER_AUDIENCE: Final = "DESKTOP_WORKSPACE_BROKER_AUDIENCE"
 
 
 class _Encoding:
@@ -1014,6 +1016,8 @@ class WorkspaceBackendConfig:
 
     broker_base_url: str | None = None
     broker_token: str | None = None
+    service_identity: str | None = None
+    broker_audience: str | None = None
     protocol_version: str = "1"
     timeout_seconds: float = 10.0
     read_max_bytes: int = DEFAULT_READ_MAX_BYTES
@@ -1031,6 +1035,8 @@ class WorkspaceBackendConfig:
         return cls(
             broker_base_url=source.get(_Env.BROKER_URL) or None,
             broker_token=source.get(_Env.BROKER_TOKEN) or None,
+            service_identity=source.get(_Env.SERVICE_IDENTITY) or None,
+            broker_audience=source.get(_Env.BROKER_AUDIENCE) or None,
             protocol_version=source.get(_Env.BROKER_PROTOCOL) or "1",
             mounts=tuple(mounts),
         )
@@ -1075,6 +1081,8 @@ def build_workspace_backend(
         BrokerClientConfig(
             base_url=config.broker_base_url,
             token=config.broker_token,
+            service_identity=config.service_identity,
+            broker_audience=config.broker_audience,
             protocol_version=config.protocol_version,
             timeout_seconds=config.timeout_seconds,
         )

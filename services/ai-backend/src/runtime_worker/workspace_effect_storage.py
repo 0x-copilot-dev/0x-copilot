@@ -70,6 +70,8 @@ _DESKTOP_WORKSPACE_ENABLED = "RUNTIME_ENABLE_DESKTOP_WORKSPACE"
 _DESKTOP_WORKSPACE_BROKER_URL = "DESKTOP_WORKSPACE_BROKER_URL"
 _DESKTOP_WORKSPACE_BROKER_TOKEN = "DESKTOP_WORKSPACE_BROKER_TOKEN"
 _DESKTOP_WORKSPACE_BROKER_PROTOCOL = "DESKTOP_WORKSPACE_BROKER_PROTOCOL"
+_DESKTOP_WORKSPACE_BROKER_AUDIENCE = "DESKTOP_WORKSPACE_BROKER_AUDIENCE"
+_DESKTOP_LOCAL_SERVICE_IDENTITY = "DESKTOP_LOCAL_SERVICE_IDENTITY"
 
 
 @dataclass(frozen=True)
@@ -223,7 +225,9 @@ def desktop_workspace_host_sessions_from_env(
         return None
     base_url = source.get(_DESKTOP_WORKSPACE_BROKER_URL, "").strip()
     token = source.get(_DESKTOP_WORKSPACE_BROKER_TOKEN, "").strip()
-    if not base_url or not token:
+    service_identity = source.get(_DESKTOP_LOCAL_SERVICE_IDENTITY, "").strip()
+    broker_audience = source.get(_DESKTOP_WORKSPACE_BROKER_AUDIENCE, "").strip()
+    if not base_url or not token or not broker_audience:
         return None
     protocol = source.get(_DESKTOP_WORKSPACE_BROKER_PROTOCOL, "1").strip() or "1"
     return DesktopWorkspaceHostSessionRegistry(
@@ -231,6 +235,8 @@ def desktop_workspace_host_sessions_from_env(
             BrokerClientConfig(
                 base_url=base_url,
                 token=token,
+                service_identity=service_identity or None,
+                broker_audience=broker_audience or None,
                 protocol_version=protocol,
             )
         ),
