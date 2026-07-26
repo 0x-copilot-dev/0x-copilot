@@ -1,5 +1,7 @@
 // @vitest-environment node
-import { isAbsolute, join } from "node:path";
+import { readFileSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { describe, expect, it } from "vitest";
 
@@ -27,6 +29,10 @@ const SECRETS: BootSecrets = {
 };
 
 const USER_DATA_DIR = "/Users/test/Library/Application Support/0xCopilot";
+const REPOSITORY_ROOT = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../../../..",
+);
 
 function inputs(
   processEnv: Record<string, string | undefined> = {},
@@ -388,6 +394,44 @@ describe("resolveAiStoreBackend", () => {
         "postgres",
       );
     }
+  });
+});
+
+describe("desktop file-first documentation contract", () => {
+  it("keeps the published store-selection contract aligned with the resolver", () => {
+    // This test is intentionally alongside the resolver: the desktop runtime
+    // has a legacy Postgres compatibility drill, so prose which calls that drill
+    // the default would make the supported desktop topology ambiguous again.
+    expect(resolveAiStoreBackend({})).toBe("file");
+    expect(resolveAiStoreBackend({ [AI_FILE_STORE_V1_FLAG]: "off" })).toBe(
+      "postgres",
+    );
+
+    const desktopReadme = readFileSync(
+      join(REPOSITORY_ROOT, "apps/desktop/README.md"),
+      "utf8",
+    );
+    const runtimeReadme = readFileSync(
+      join(REPOSITORY_ROOT, "tools/desktop-runtime/README.md"),
+      "utf8",
+    );
+    const localDrill = readFileSync(
+      join(REPOSITORY_ROOT, "tools/desktop-runtime/run-local.mjs"),
+      "utf8",
+    );
+
+    expect(desktopReadme).toContain("**File-native AI store (default)**");
+    expect(runtimeReadme).toContain("## Store-selection authority");
+    expect(runtimeReadme).toContain("**file-first**");
+    expect(runtimeReadme).toContain(
+      "not the desktop ai-backend store-selection authority",
+    );
+    expect(runtimeReadme).toContain(
+      "legacy compatibility lane, not the production desktop default",
+    );
+    expect(localDrill).toContain(
+      "NOT\n * the production desktop store-selection authority",
+    );
   });
 });
 

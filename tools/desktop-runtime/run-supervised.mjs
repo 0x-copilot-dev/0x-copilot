@@ -24,7 +24,9 @@
  *      services itself under the single_user_desktop PRODUCTION posture
  *      (main/posture.ts#isProductionPosture → real SIWE/Google sign-in, no dev
  *      IdP). This is the GUI counterpart to run-local.mjs, which boots the same
- *      backend topology headlessly but never opens the Electron shell.
+ *      backend topology headlessly but deliberately covers the legacy Postgres
+ *      compatibility lane. The real supervisor resolves ai-backend to the
+ *      file-native store by default in main/services/service-env.ts.
  *
  * When to use which:
  *   - this script / `make desktop-supervised` — the REAL supervised desktop app
@@ -33,7 +35,8 @@
  *   - `npm run dev --workspace @0x-copilot/desktop` — Electron shell ONLY against
  *     MockTransport (or COPILOT_FACADE_URL); no supervisor, no embedded postgres.
  *   - `node tools/desktop-runtime/run-local.mjs` — the supervised BACKEND stack
- *     headlessly (no Electron GUI) + a hermetic run→stream smoke; the CI drill.
+ *     headlessly (no Electron GUI) + a hermetic legacy-Postgres run→stream
+ *     smoke; the CI compatibility drill, not a file-first boot proof.
  *
  * Flags:
  *   --skip-stage        skip staging (fast path when only main/renderer changed
