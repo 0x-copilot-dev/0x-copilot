@@ -1496,6 +1496,26 @@ def create_app(
             identity=identity,
         )
 
+    @app.post("/v1/agent/effect-stages/{stage_id}/decision")
+    async def record_effect_stage_decision(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        """Pure proxy for the generic owner-scoped MCP effect decision route."""
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/effect-stages/{stage_id}/decision",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
     @app.post("/v1/agent/stages/{stage_id}/apply")
     async def apply_stage_rows(
         request: Request,

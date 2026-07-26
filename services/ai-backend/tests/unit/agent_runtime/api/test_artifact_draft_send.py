@@ -56,6 +56,8 @@ from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
 from runtime_adapters.in_memory.effect_claim_store import InMemoryEffectClaimStore
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, DraftSendRequest, RunRecord
+from runtime_api.schemas import ApprovalDecision
+from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.mcp_effect_executor import McpEffectExecutor
 from runtime_worker.mcp_operation_storage import RuntimeMcpEffectCoordinatorFactory
 
@@ -366,6 +368,18 @@ async def test_changes_after_stage_cannot_alter_approved_payload_and_retry_is_id
     # to the Artifact-authored revision. This is the exact F-006 adversary.
     changed = await h.backend.awrite(f"/drafts/{_DRAFT_ID}.md", "New mutable body")
     assert changed.error is None
+    # A legacy row may still be edited by an old client or migration replay.
+    # It is deliberately NOT consulted by the generic effect coordinator.
+    legacy = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert legacy is not None
+    await h.drafts.insert_version(
+        legacy.model_copy(
+            update={
+                "version": legacy.version + 1,
+                "content_text": "Legacy mutable body",
+            }
+        )
+    )
     command = await _approved_command(h, stage_id=response.stage_id)
     connector = _RecordingConnector(requests=[])
     coordinator, _ = await _coordinator(h, connector)
@@ -383,6 +397,64 @@ async def test_changes_after_stage_cannot_alter_approved_payload_and_retry_is_id
     }
 
 
+async def test_stale_v1_draft_approval_cannot_send_after_f006_effect_stage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An F-006 binding supersedes a pending v1 approval for the same draft.
+
+    The old worker historically sent ``DraftRecord.latest``.  Once the exact
+    Artifact revision is staged, resolving that older approval must do nothing:
+    only the generic effect decision + A5 coordinator may send it.
+    """
+
+    h = _Harness()
+    await h.seed_and_import(content="Original legacy approval body")
+
+    monkeypatch.setenv("SURFACES_V2", "false")
+    v1 = await h.stage()
+    assert v1.approval_id is not None
+    pending = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert pending is not None
+
+    monkeypatch.setenv("SURFACES_V2", "true")
+    f006 = await h.service.send(
+        org_id=_ORG,
+        user_id=_USER,
+        draft_id=_DRAFT_ID,
+        request=DraftSendRequest(
+            expected_version=pending.version,
+            target_connector="gmail",
+            target_metadata={"op": "send_email", "recipient": "team@example.test"},
+        ),
+    )
+    assert f006.stage_id is not None
+    assert f006.approval_id is None
+
+    approval = await h.runtime.get_approval_request(
+        org_id=_ORG, approval_id=v1.approval_id
+    )
+    assert approval is not None
+    worker = RuntimeApprovalHandler(
+        persistence=h.runtime,
+        event_store=h.runtime,
+        draft_store=h.drafts,
+    )
+    await worker._resolve_draft_send_approval(  # noqa: SLF001 - adversarial seam.
+        run=h.run,
+        approval=approval,
+        decision=ApprovalDecision.APPROVED,
+        decided_by_user_id=_USER,
+    )
+
+    latest = await h.drafts.latest(org_id=_ORG, draft_id=_DRAFT_ID)
+    assert latest is not None
+    assert latest.status is DraftStatus.SEND_PENDING_APPROVAL
+    assert not any(
+        version.status is DraftStatus.SENT
+        for version in h.drafts.versions[(_ORG, _DRAFT_ID)]
+    )
+
+
 async def test_missing_or_digest_mismatched_artifact_revision_never_reaches_connector(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -393,51 +465,20 @@ async def test_missing_or_digest_mismatched_artifact_revision_never_reaches_conn
     assert response.stage_id is not None
     command = await _approved_command(h, stage_id=response.stage_id)
     connector = _RecordingConnector(requests=[])
-    _, material = await _coordinator(h, connector)
+    coordinator, _ = await _coordinator(h, connector)
 
-    # A stale/forged stage revision that combines the old immutable ref with a
-    # different digest cannot materialise connector arguments and therefore
-    # cannot reach the side-effecting connector.
-    forged = EffectExecutionRequest(
-        stage_id=command.stage_id,
-        revision=command.revision,
-        idempotency_key=command.idempotency_key,
-        target_ref=(
-            (
-                await h.effect_stager().get_state(
-                    scope=EffectStageScope(
-                        run_id=_RUN, owner_ref=f"principal://users/{_USER}"
-                    ),
-                    stage_id=command.stage_id,
-                )
-            ).target.target_ref
-        ),
-        target_digest=command.target_digest,
-        proposal_ref=(
-            (
-                await h.effect_stager().get_state(
-                    scope=EffectStageScope(
-                        run_id=_RUN, owner_ref=f"principal://users/{_USER}"
-                    ),
-                    stage_id=command.stage_id,
-                )
-            ).current_revision.proposal_ref
-        ),
-        proposal_content_ref=(
-            (
-                await h.effect_stager().get_state(
-                    scope=EffectStageScope(
-                        run_id=_RUN, owner_ref=f"principal://users/{_USER}"
-                    ),
-                    stage_id=command.stage_id,
-                )
-            ).current_revision.proposal_content_ref
-        ),
-        proposal_digest="0" * 64,
-        actor=EffectActor.USER,
-        decision_ledger_id=command.decision_ledger_id,
+    # Deliver a stale/forged A5 command through the real coordinator. Its
+    # digest no longer agrees with the approved folded stage, so the
+    # coordinator must refuse before it prepares or calls the connector.
+    forged = command.model_copy(
+        update={
+            "proposal_digest": "0" * 64,
+            "idempotency_key": f"effect-commit-stale:{command.stage_id}",
+        }
     )
-    assert await material.resolve(forged) is None
+    result = await coordinator.handle(forged)
+
+    assert result.status.value == "refused"
     assert connector.requests == []
 
 

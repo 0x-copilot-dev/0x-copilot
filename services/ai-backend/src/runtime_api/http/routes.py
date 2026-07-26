@@ -884,6 +884,7 @@ class RuntimeApiRouter:
         cls,
         *,
         artifact_effects_v2: bool = False,
+        effect_stage_decisions_enabled: bool = False,
         workspace_approval_enabled: bool = False,
     ) -> APIRouter:
         """Return a router with every agent-runtime route registered under ``/v1/agent``."""
@@ -1150,6 +1151,15 @@ class RuntimeApiRouter:
             from runtime_api.http.pending_work import register_pending_work_routes
 
             register_pending_work_routes(router)
+        # F-006 — one generic, owner-scoped A4 decision path for standard MCP
+        # stages. It is deliberately singular so C3's receipt-bearing workspace
+        # path keeps its existing plural ``/decisions`` contract.
+        if effect_stage_decisions_enabled:
+            from runtime_api.http.effect_stage_decisions import (
+                register_effect_stage_decision_routes,
+            )
+
+            register_effect_stage_decision_routes(router)
         # C3 — this route is deliberately distinct from legacy staged-write
         # routes and exists only for an enforced workspace-effect cohort.
         if workspace_approval_enabled:

@@ -948,16 +948,24 @@ class RuntimeApprovalHandler:
     async def _draft_superseded_by_v2_stage(
         self, *, run: RunRecord, draft_id: str
     ) -> bool:
-        """Return whether this draft has a ``write.staged`` event on the run's ledger.
+        """Return whether a v2 stage supersedes this legacy draft approval.
 
         A ``write.staged`` for this draft means the write was re-homed onto the v2
         staged-write engine (the WYSIWYG-guarded path); a stale v1 approval must
-        NOT independently send. Scans the run's persisted events for a
-        ``write.staged`` whose ``proposal_ref`` names ``draft_id``. Best-effort: any
-        read failure returns ``False`` (the v1 send proceeds unchanged — the guard
+        NOT independently send. F-006 has the same consequence when an
+        ``effect.staged`` row binds the deterministic Artifact for this virtual
+        draft: the approval must not fall through to ``DraftRecord.latest`` and
+        send content changed after the old v1 review. Best-effort: any read
+        failure returns ``False`` (the v1 send proceeds unchanged — the guard
         never breaks the existing flow, it only refuses a proven-superseded send).
         """
 
+        from agent_runtime.capabilities.backends.artifact_draft_backend import (  # noqa: PLC0415
+            ArtifactDraftPathBinding,
+        )
+        from agent_runtime.surfaces_v2.ledger_ids import (  # noqa: PLC0415
+            ArtifactContentRefCodec,
+        )
         from agent_runtime.surfaces_v2.ledger_models import (  # noqa: PLC0415
             LedgerEventType,
         )
@@ -970,15 +978,38 @@ class RuntimeApprovalHandler:
         except Exception:  # noqa: BLE001 — never break the v1 flow on a read error.
             return False
         staged_value = LedgerEventType.WRITE_STAGED.value
+        effect_staged_value = LedgerEventType.EFFECT_STAGED.value
+        artifact_id = ArtifactDraftPathBinding(
+            org_id=run.org_id,
+            user_id=run.user_id,
+            conversation_id=run.conversation_id,
+            run_id=run.run_id,
+            draft_id=draft_id,
+        ).artifact_id
         for event in events:
             event_type = getattr(getattr(event, "event_type", None), "value", None)
-            if event_type != staged_value:
-                continue
             payload = getattr(event, "payload", None)
             if not isinstance(payload, Mapping):
                 continue
-            parsed = DraftRef.parse_proposal(payload.get("proposal_ref"))
-            if parsed is not None and parsed[0] == draft_id:
+            if event_type == staged_value:
+                parsed = DraftRef.parse_proposal(payload.get("proposal_ref"))
+                if parsed is not None and parsed[0] == draft_id:
+                    return True
+                continue
+            if (
+                event_type != effect_staged_value
+                or payload.get("executor") != "mcp"
+                or payload.get("proposal_kind") != "artifact_revision"
+            ):
+                continue
+            content_ref = payload.get("proposal_content_ref")
+            if not isinstance(content_ref, str):
+                continue
+            try:
+                parsed_artifact = ArtifactContentRefCodec.parse(content_ref)
+            except ValueError:
+                continue
+            if parsed_artifact.artifact_id == artifact_id:
                 return True
         return False
 
