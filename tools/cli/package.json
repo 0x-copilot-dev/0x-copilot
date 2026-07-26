@@ -18,10 +18,6 @@
   "engines": {
     "node": ">=20"
   },
-  "os": [
-    "darwin",
-    "win32"
-  ],
   "dependencies": {
     "electron": "42.1.0",
     "playwright": "1.62.0"
