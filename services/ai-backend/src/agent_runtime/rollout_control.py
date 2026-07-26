@@ -15,12 +15,13 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import secrets
 from collections.abc import Mapping
 from datetime import datetime, timedelta
 from enum import StrEnum
-from typing import Final, Protocol
+from typing import Final, Protocol, runtime_checkable
 
 from opentelemetry import metrics
 from pydantic import Field, model_validator
@@ -30,23 +31,7 @@ from agent_runtime.rollout import E2RolloutResolution, RolloutCapability, Rollou
 
 
 class RolloutCohortConfigurationError(ValueError):
-    """Safe error for a malformed or untrusted deployment cohort document."""
-
-
-class CohortConfigurationSource(StrEnum):
-    """Sources a composition root may label a cohort document with."""
-
-    TRUSTED_DEPLOYMENT = "trusted_deployment"
-    REQUEST = "request"
-    USER = "user"
-
-
-class CohortSubjectSource(StrEnum):
-    """Sources a composition root may label identity facts with."""
-
-    VERIFIED_IDENTITY = "verified_identity"
-    REQUEST = "request"
-    USER = "user"
+    """Safe error for malformed cohort startup configuration or identity facts."""
 
 
 class CohortMatchScope(StrEnum):
@@ -101,6 +86,7 @@ _DIAGNOSTIC_SAMPLE_DENOMINATOR: Final = 64
 _PROCESS_FINGERPRINT_KEY: Final[bytes] = secrets.token_bytes(32)
 _LOGGER = logging.getLogger(__name__)
 _METER_NAME: Final = "agent_runtime.e2_rollout_control"
+_COHORTS_JSON_ENVIRONMENT_NAME: Final = "E2_ROLLOUT_COHORTS_JSON"
 
 
 class RolloutCohortRule(RuntimeContract):
@@ -155,68 +141,112 @@ class RolloutCohortRule(RuntimeContract):
         )
 
 
-class _TrustedRolloutCohortDocument(RuntimeContract):
-    """Internal parsed deployment document; instantiate through the factory."""
+class _StartupRolloutCohortDocument(RuntimeContract):
+    """Private JSON document accepted only from the deployment environment."""
 
-    source: CohortConfigurationSource
     rules: tuple[RolloutCohortRule, ...] = Field(default_factory=tuple, max_length=128)
 
     @model_validator(mode="after")
-    def _requires_deployment_source(self) -> "_TrustedRolloutCohortDocument":
-        if self.source is not CohortConfigurationSource.TRUSTED_DEPLOYMENT:
-            raise ValueError("rollout cohorts must come from trusted deployment config")
+    def _requires_unique_rules(self) -> "_StartupRolloutCohortDocument":
         if len(self.rules) != len(set(self.rules)):
             raise ValueError("rollout cohort rules must be unique")
         return self
 
 
-class VerifiedRolloutCohortSubject(RuntimeContract):
-    """Verified identity/device/connector facts, never request-provided values."""
+class VerifiedRolloutCohortFacts(RuntimeContract):
+    """Identity/device facts produced by a server-authoritative provider only."""
 
-    source: CohortSubjectSource
+    org_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
+    user_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
+    device_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
+    connector_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
+
+
+@runtime_checkable
+class VerifiedRolloutCohortFactsProvider(Protocol):
+    """Explicit composition seam for server-verified rollout identity facts.
+
+    Implementations must derive facts from a verified session, persisted run,
+    attested device, or server-side connector registry.  Runtime API payloads
+    and plain mappings do not satisfy this boundary and are rejected by
+    :meth:`VerifiedRolloutCohortSubject.from_verified_facts_provider`.
+    """
+
+    def verified_rollout_cohort_facts(self) -> VerifiedRolloutCohortFacts:
+        """Return facts already verified by the implementation's authority."""
+
+
+class VerifiedRolloutCohortSubject(RuntimeContract):
+    """Resolved verified facts, never parsed from a request-shaped mapping."""
+
     org_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
     user_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
     device_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
     connector_id: str | None = Field(default=None, pattern=_IDENTIFIER_PATTERN)
 
     @classmethod
-    def from_verified_identity(
-        cls, facts: Mapping[str, object]
+    def from_verified_facts_provider(
+        cls, provider: VerifiedRolloutCohortFactsProvider
     ) -> "VerifiedRolloutCohortSubject":
-        """Parse only composition-root verified facts, failing closed and safely."""
+        """Copy only facts from the explicit trusted provider seam.
+
+        This constructor intentionally has no mapping/JSON overload.  A caller
+        handling a request must first cross an authenticated server-owned
+        identity or connector/device-attestation seam before it can construct
+        a cohort subject.
+        """
 
         try:
-            subject = cls.model_validate(facts)
+            if isinstance(provider, Mapping) or not isinstance(
+                provider, VerifiedRolloutCohortFactsProvider
+            ):
+                raise TypeError
+            facts = provider.verified_rollout_cohort_facts()
+            if not isinstance(facts, VerifiedRolloutCohortFacts):
+                raise TypeError
         except Exception as exc:
             raise RolloutCohortConfigurationError(
-                "verified rollout identity facts are malformed"
+                "verified rollout cohort facts must come from a trusted provider"
             ) from exc
-        if subject.source is not CohortSubjectSource.VERIFIED_IDENTITY:
-            raise RolloutCohortConfigurationError(
-                "rollout identity facts must come from verified identity"
-            )
-        return subject
+        return cls(
+            org_id=facts.org_id,
+            user_id=facts.user_id,
+            device_id=facts.device_id,
+            connector_id=facts.connector_id,
+        )
 
 
 class RolloutCohortPolicy(RuntimeContract):
-    """Immutable, deployment-resolved cohort policy with no config reload path."""
+    """Immutable policy resolved from deployment environment at startup only."""
 
     rules: tuple[RolloutCohortRule, ...] = Field(default_factory=tuple)
 
     @classmethod
-    def from_trusted_deployment(cls, document: object) -> "RolloutCohortPolicy":
-        """Build a policy only from a trusted deployment-labelled document.
+    def from_startup_environment(
+        cls, environment: Mapping[str, str]
+    ) -> "RolloutCohortPolicy":
+        """Resolve ``E2_ROLLOUT_COHORTS_JSON`` once from deployment environment.
 
-        This is intentionally the only public parser.  Request and user
-        sources, unknown fields, malformed selector values, and duplicate
-        rules all return a generic safe error without exposing their contents.
+        ``RuntimeSettings.load`` is the only production call site.  The JSON
+        value must be an array of exact-match rules; missing or blank config
+        produces an empty policy.  Unknown fields, a former caller-supplied
+        trust label, malformed JSON, duplicate rules, and more than 128 rules
+        fail startup with a safe error that never includes config values.
         """
 
         try:
-            parsed = _TrustedRolloutCohortDocument.model_validate(document)
+            raw = environment.get(_COHORTS_JSON_ENVIRONMENT_NAME)
+            if raw is None or not raw.strip():
+                return cls()
+            if not isinstance(raw, str):
+                raise TypeError
+            document = json.loads(raw)
+            if not isinstance(document, list):
+                raise TypeError
+            parsed = _StartupRolloutCohortDocument.model_validate({"rules": document})
         except Exception as exc:
             raise RolloutCohortConfigurationError(
-                "trusted rollout cohort configuration is malformed"
+                f"{_COHORTS_JSON_ENVIRONMENT_NAME} is malformed"
             ) from exc
         return cls(rules=parsed.rules)
 
@@ -658,9 +688,7 @@ def _require_aware(value: datetime) -> None:
 __all__ = (
     "CohortAdmissionDecision",
     "CohortAdmissionOutcome",
-    "CohortConfigurationSource",
     "CohortMatchScope",
-    "CohortSubjectSource",
     "ProtectedRolloutDiagnostic",
     "ProtectedRolloutDiagnosticLogSink",
     "RolloutCohortConfigurationError",
@@ -677,6 +705,8 @@ __all__ = (
     "RolloutTransitionDecision",
     "RolloutTransitionOutcome",
     "SoakEvaluationOutcome",
+    "VerifiedRolloutCohortFacts",
+    "VerifiedRolloutCohortFactsProvider",
     "VerifiedRolloutCohortSubject",
     "evaluate_soak",
     "validate_transition",

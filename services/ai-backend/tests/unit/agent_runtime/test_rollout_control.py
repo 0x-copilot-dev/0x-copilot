@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+import json
 
 import pytest
+from pydantic import ValidationError
 
 from agent_runtime.rollout import (
     E2RolloutResolution,
@@ -14,9 +16,7 @@ from agent_runtime.rollout import (
 )
 from agent_runtime.rollout_control import (
     CohortAdmissionOutcome,
-    CohortConfigurationSource,
     CohortMatchScope,
-    CohortSubjectSource,
     RolloutCohortConfigurationError,
     RolloutCohortPolicy,
     RolloutControlObserver,
@@ -25,10 +25,12 @@ from agent_runtime.rollout_control import (
     RolloutSoakRequirements,
     RolloutTransitionOutcome,
     SoakEvaluationOutcome,
+    VerifiedRolloutCohortFacts,
     VerifiedRolloutCohortSubject,
     evaluate_soak,
     validate_transition,
 )
+from agent_runtime.settings import RuntimeSettings
 
 
 def _resolution(mode: RolloutMode) -> E2RolloutResolution:
@@ -37,31 +39,39 @@ def _resolution(mode: RolloutMode) -> E2RolloutResolution:
     )
 
 
+class _TrustedFactsProvider:
+    def __init__(self, *, user_id: str = "user-7") -> None:
+        self._facts = VerifiedRolloutCohortFacts(
+            org_id="org-1",
+            user_id=user_id,
+            device_id="device-2",
+            connector_id="connector-3",
+        )
+
+    def verified_rollout_cohort_facts(self) -> VerifiedRolloutCohortFacts:
+        return self._facts
+
+
 def _subject(*, user_id: str = "user-7") -> VerifiedRolloutCohortSubject:
-    return VerifiedRolloutCohortSubject.from_verified_identity(
-        {
-            "source": CohortSubjectSource.VERIFIED_IDENTITY,
-            "org_id": "org-1",
-            "user_id": user_id,
-            "device_id": "device-2",
-            "connector_id": "connector-3",
-        }
+    return VerifiedRolloutCohortSubject.from_verified_facts_provider(
+        _TrustedFactsProvider(user_id=user_id)
     )
 
 
 def _policy() -> RolloutCohortPolicy:
-    return RolloutCohortPolicy.from_trusted_deployment(
-        {
-            "source": CohortConfigurationSource.TRUSTED_DEPLOYMENT,
-            "rules": [
-                {
-                    "capability": RolloutCapability.OPERATION_GATEWAY,
-                    "org_id": "org-1",
-                    "user_id": "user-7",
-                }
-            ],
+    return RuntimeSettings.load(
+        environ={
+            "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                [
+                    {
+                        "capability": RolloutCapability.OPERATION_GATEWAY,
+                        "org_id": "org-1",
+                        "user_id": "user-7",
+                    }
+                ]
+            )
         }
-    )
+    ).execution.rollout_cohorts
 
 
 def _requirements() -> RolloutSoakRequirements:
@@ -73,56 +83,103 @@ def _requirements() -> RolloutSoakRequirements:
     )
 
 
-def test_cohort_configuration_and_subject_require_trusted_sources() -> None:
-    with pytest.raises(RolloutCohortConfigurationError, match="malformed"):
-        RolloutCohortPolicy.from_trusted_deployment(
-            {
-                "source": CohortConfigurationSource.REQUEST,
-                "rules": [
-                    {
-                        "capability": RolloutCapability.OPERATION_GATEWAY,
-                        "org_id": "org-1",
-                    }
-                ],
-            }
-        )
-    with pytest.raises(RolloutCohortConfigurationError, match="verified identity"):
-        VerifiedRolloutCohortSubject.from_verified_identity(
-            {"source": CohortSubjectSource.REQUEST, "org_id": "org-1"}
+def test_subject_rejects_request_shaped_mapping_without_a_verified_provider() -> None:
+    with pytest.raises(RolloutCohortConfigurationError, match="trusted provider"):
+        VerifiedRolloutCohortSubject.from_verified_facts_provider(  # type: ignore[arg-type]
+            {"org_id": "org-1", "user_id": "user-7"}
         )
 
 
 @pytest.mark.parametrize(
-    "document",
+    "raw_config",
     (
-        {"source": CohortConfigurationSource.TRUSTED_DEPLOYMENT, "rules": [{}]},
-        {
-            "source": CohortConfigurationSource.TRUSTED_DEPLOYMENT,
-            "rules": [
+        "not-json",
+        json.dumps([{}]),
+        json.dumps(
+            [
                 {
                     "capability": RolloutCapability.OPERATION_GATEWAY,
                     "org_id": "contains a space",
                 }
-            ],
-        },
-        {
-            "source": CohortConfigurationSource.TRUSTED_DEPLOYMENT,
-            "rules": [
+            ]
+        ),
+        json.dumps(
+            [
                 {
                     "capability": RolloutCapability.OPERATION_GATEWAY,
                     "org_id": "org-1",
                     "unexpected": "request data",
                 }
-            ],
-        },
+            ]
+        ),
     ),
 )
-def test_malformed_criteria_fail_closed_without_echoing_input(document: object) -> None:
-    with pytest.raises(RolloutCohortConfigurationError) as error:
-        RolloutCohortPolicy.from_trusted_deployment(document)
+def test_malformed_criteria_fail_closed_without_echoing_input(raw_config: str) -> None:
+    with pytest.raises(ValueError, match="E2_ROLLOUT_COHORTS_JSON") as error:
+        RuntimeSettings.load(environ={"E2_ROLLOUT_COHORTS_JSON": raw_config})
 
+    assert raw_config not in str(error.value)
     assert "contains a space" not in str(error.value)
     assert "request data" not in str(error.value)
+
+
+def test_request_json_and_direct_trust_label_spoof_cannot_become_active_policy() -> (
+    None
+):
+    request_json = json.dumps(
+        [
+            {
+                "capability": RolloutCapability.OPERATION_GATEWAY,
+                "org_id": "org-1",
+            }
+        ]
+    )
+    settings = RuntimeSettings.load(environ={"request.rollout_cohorts": request_json})
+
+    assert RuntimeSettings.load(environ={}).execution.rollout_cohorts.rules == ()
+    assert settings.execution.rollout_cohorts.rules == ()
+    with pytest.raises(ValueError, match="E2_ROLLOUT_COHORTS_JSON"):
+        RuntimeSettings.load(
+            environ={
+                "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                    {
+                        "source": "trusted_deployment",
+                        "rules": json.loads(request_json),
+                    }
+                )
+            }
+        )
+
+
+def test_startup_config_rejects_cohort_over_limit_and_is_immutable_after_load() -> None:
+    over_limit = [
+        {
+            "capability": RolloutCapability.OPERATION_GATEWAY,
+            "user_id": f"user-{index}",
+        }
+        for index in range(129)
+    ]
+    with pytest.raises(ValueError, match="E2_ROLLOUT_COHORTS_JSON"):
+        RuntimeSettings.load(
+            environ={"E2_ROLLOUT_COHORTS_JSON": json.dumps(over_limit)}
+        )
+
+    environment = {
+        "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+            [
+                {
+                    "capability": RolloutCapability.OPERATION_GATEWAY,
+                    "org_id": "org-1",
+                }
+            ]
+        )
+    }
+    settings = RuntimeSettings.load(environ=environment)
+    environment["E2_ROLLOUT_COHORTS_JSON"] = "[]"
+
+    assert len(settings.execution.rollout_cohorts.rules) == 1
+    with pytest.raises(ValidationError):
+        settings.execution.rollout_cohorts.rules = ()
 
 
 def test_cohort_admission_matches_all_trusted_dimensions_and_global_mode() -> None:
