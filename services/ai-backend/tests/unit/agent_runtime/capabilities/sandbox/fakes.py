@@ -16,8 +16,11 @@ Command grammar understood by :class:`FakeSandboxBackend.execute`:
 
 from __future__ import annotations
 
+import base64
 from datetime import timedelta
 import hashlib
+import json
+import re
 
 from deepagents.backends.protocol import (
     ExecuteResponse,
@@ -63,7 +66,34 @@ class FakeSandboxBackend(BaseSandbox):
         if command.startswith("big:"):
             size = int(command[len("big:") :])
             return ExecuteResponse(output="x" * size, exit_code=0)
+        if command.startswith("write:"):
+            _prefix, path, content = command.split(":", 2)
+            self._files[path] = content.encode("utf-8")
+            return ExecuteResponse(output="", exit_code=0)
+        if "os.scandir(path)" in command and "base64.b64decode" in command:
+            return ExecuteResponse(output=self._listing_output(command), exit_code=0)
         return ExecuteResponse(output=command, exit_code=0)
+
+    def _listing_output(self, command: str) -> str:
+        match = re.search(r"base64\.b64decode\('([^']+)'\)", command)
+        if match is None:
+            return json.dumps({"error": "path_not_found"})
+        directory = base64.b64decode(match.group(1)).decode("utf-8").rstrip("/")
+        children: dict[str, bool] = {}
+        prefix = f"{directory}/"
+        for path in self._files:
+            if not path.startswith(prefix):
+                continue
+            remainder = path[len(prefix) :]
+            name, separator, _rest = remainder.partition("/")
+            if name:
+                children[name] = bool(separator)
+        if not children and directory not in {"/workspace", "/workspace/project"}:
+            return json.dumps({"error": "path_not_found"})
+        return "\n".join(
+            json.dumps({"path": f"{directory}/{name}", "is_dir": is_directory})
+            for name, is_directory in sorted(children.items())
+        )
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
         responses: list[FileUploadResponse] = []

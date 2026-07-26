@@ -82,6 +82,14 @@ class SandboxLifecycleCoordinator:
     async def run(self, request: SandboxRunRequest) -> SandboxRunResult:
         """Run an immutable request, or fail closed instead of replaying it."""
 
+        # This is the final D3 execution boundary.  Do not create a provider
+        # session for an empty snapshot even if a malformed/internal caller
+        # bypasses the operation adapter and plan materializer.
+        if not request.create_request.snapshot.entries:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED,
+                "An authorized immutable sandbox snapshot is unavailable.",
+            )
         WorkspaceManifestBuilder.verify_manifest(
             request.create_request.snapshot, limits=self._limits
         )
@@ -258,6 +266,7 @@ class SandboxLifecycleCoordinator:
             cleaned = await self._service.cleanup_provider_ref(
                 run_id=current.run_id,
                 provider_session_ref=current.provider_session_ref,
+                operation_id=current.operation_id,
             )
             if cleaned:
                 current = await self._transition(current, SandboxLifecycleState.CLEANED)
@@ -376,7 +385,9 @@ class SandboxLifecycleCoordinator:
     async def _cleanup_active(
         self, *, active: ActiveSandbox, lifecycle: SandboxLifecycleRecord
     ) -> SandboxLifecycleRecord:
-        result = await self._service.teardown(active.session.session_id)
+        result = await self._service.teardown(
+            active.session.session_id, operation_id=lifecycle.operation_id
+        )
         if result is not None and result.cleanup_state == "deleted":
             if lifecycle.state is SandboxLifecycleState.CLEANED:
                 return lifecycle

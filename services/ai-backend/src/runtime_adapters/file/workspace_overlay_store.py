@@ -22,17 +22,20 @@ from runtime_adapters.file._advisory_lock import acquire_exclusive, release_excl
 
 
 class FileWorkspaceOverlayStore:
-    """Persist one canonical manifest per run with atomic replace semantics."""
+    """Persist current and immutable historical manifests with CAS semantics."""
 
     _SUBDIR: ClassVar[str] = "workspace-overlays"
     _LOCK_FILENAME: ClassVar[str] = ".overlays.lock"
     _DIR_MODE: ClassVar[int] = 0o700
     _FILE_MODE: ClassVar[int] = 0o600
+    _VERSIONS_SUBDIR: ClassVar[str] = "versions"
 
     def __init__(self, *, root: str | Path) -> None:
         base = Path(root).expanduser().resolve()
         self._root = base if base.name == self._SUBDIR else base / self._SUBDIR
         self._root.mkdir(mode=self._DIR_MODE, parents=True, exist_ok=True)
+        self._versions_root = self._root / self._VERSIONS_SUBDIR
+        self._versions_root.mkdir(mode=self._DIR_MODE, exist_ok=True)
         self._lock_path = self._root / self._LOCK_FILENAME
         self._lock = asyncio.Lock()
 
@@ -40,6 +43,17 @@ class FileWorkspaceOverlayStore:
         async with self._lock:
             with self._exclusive_lock():
                 return self._read(run_id)
+
+    async def get_manifest_version(
+        self, *, run_id: str, version: int
+    ) -> OverlayManifest | None:
+        """Read an immutable version file without falling back to current state."""
+
+        if version < 1:
+            return None
+        async with self._lock:
+            with self._exclusive_lock():
+                return self._read_version(run_id, version)
 
     async def append_revision(
         self,
@@ -68,6 +82,11 @@ class FileWorkspaceOverlayStore:
                     entries=tuple(entries[path] for path in sorted(entries)),
                 )
                 self._write(run_id, updated)
+                # The current pointer commits first.  A crash before the
+                # immutable version file exists leaves a snapshot unavailable,
+                # never a mutable-latest substitute.  Historical files are
+                # create-only and cannot be altered by a later overlay edit.
+                self._write_version(run_id, updated)
                 return updated
 
     async def compact(self, *, run_id: str) -> OverlayManifest:
@@ -75,11 +94,20 @@ class FileWorkspaceOverlayStore:
             with self._exclusive_lock():
                 manifest = self._read(run_id)
                 self._write(run_id, manifest)
+                if manifest.version > 0:
+                    self._write_version(run_id, manifest)
                 return manifest
 
     def _read(self, run_id: str) -> OverlayManifest:
         path = self._path(run_id)
         if not path.exists():
+            # A missing current pointer means an empty overlay only when this
+            # run has never committed a retained version.  Treating a pointer
+            # loss as version zero would silently authorize an empty D3
+            # snapshot after a crash or accidental deletion, discarding
+            # immutable C1 history.  The caller must repair the state instead.
+            if self._has_retained_history(run_id):
+                raise WorkspaceOverlayConflictError()
             return OverlayManifest(run_id=run_id)
         try:
             raw = json.loads(path.read_text(encoding="utf-8"))
@@ -91,6 +119,31 @@ class FileWorkspaceOverlayStore:
         if manifest.run_id != run_id:
             raise WorkspaceOverlayConflictError(
                 "Workspace overlay scope does not match."
+            )
+        return manifest
+
+    def _has_retained_history(self, run_id: str) -> bool:
+        """Whether a missing pointer would conceal an immutable run history."""
+
+        directory = self._version_path(run_id, 1).parent
+        try:
+            return any(
+                candidate.is_file() and candidate.suffix == ".json"
+                for candidate in directory.iterdir()
+            )
+        except FileNotFoundError:
+            return False
+        except OSError as exc:
+            raise WorkspaceOverlayConflictError() from exc
+
+    def _read_version(self, run_id: str, version: int) -> OverlayManifest | None:
+        path = self._version_path(run_id, version)
+        if not path.exists():
+            return None
+        manifest = self._read_path(path, run_id=run_id)
+        if manifest.version != version:
+            raise WorkspaceOverlayConflictError(
+                "Workspace overlay version does not match its immutable record."
             )
         return manifest
 
@@ -118,9 +171,69 @@ class FileWorkspaceOverlayStore:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def _write_version(self, run_id: str, manifest: OverlayManifest) -> None:
+        """Create one immutable manifest record, accepting only an exact retry."""
+
+        path = self._version_path(run_id, manifest.version)
+        path.parent.mkdir(mode=self._DIR_MODE, parents=True, exist_ok=True)
+        encoded = self._encoded(manifest)
+        try:
+            fd = os.open(
+                path,
+                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                self._FILE_MODE,
+            )
+        except FileExistsError:
+            existing = self._read_version(run_id, manifest.version)
+            if existing != manifest:
+                raise WorkspaceOverlayConflictError(
+                    "Workspace overlay version is already immutable."
+                )
+            return
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(encoded)
+                handle.flush()
+                os.fsync(handle.fileno())
+            self._fsync_directory(path.parent)
+        except BaseException:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+            raise
+
     def _path(self, run_id: str) -> Path:
         digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
         return self._root / f"{digest}.json"
+
+    def _version_path(self, run_id: str, version: int) -> Path:
+        digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
+        return self._versions_root / digest / f"{version}.json"
+
+    @staticmethod
+    def _encoded(manifest: OverlayManifest) -> str:
+        return json.dumps(
+            manifest.model_dump(mode="json"),
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _read_path(path: Path, *, run_id: str) -> OverlayManifest:
+        try:
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            manifest = OverlayManifest.model_validate(raw)
+        except Exception as exc:
+            raise WorkspaceOverlayConflictError(
+                "Workspace overlay storage is unavailable."
+            ) from exc
+        if manifest.run_id != run_id:
+            raise WorkspaceOverlayConflictError(
+                "Workspace overlay scope does not match."
+            )
+        return manifest
 
     @contextmanager
     def _exclusive_lock(self) -> Iterator[None]:
@@ -145,8 +258,12 @@ class FileWorkspaceOverlayStore:
             ) from exc
 
     def _fsync_root(self) -> None:
+        self._fsync_directory(self._root)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
         try:
-            fd = os.open(self._root, os.O_RDONLY)
+            fd = os.open(path, os.O_RDONLY)
             try:
                 os.fsync(fd)
             finally:

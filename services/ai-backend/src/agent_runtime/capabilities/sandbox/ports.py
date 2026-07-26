@@ -31,6 +31,7 @@ if TYPE_CHECKING:
         ActiveSandbox,
     )
     from agent_runtime.capabilities.sandbox.workspace_transfer import RawSnapshotEntry
+    from agent_runtime.capabilities.sandbox.cleanup_store import SandboxCleanupSchedule
 
 
 @dataclass(frozen=True)
@@ -118,6 +119,36 @@ class SandboxSessionStore(Protocol):
 
     async def delete(self, session_id: str) -> None:
         """Remove a session projection."""
+        ...
+
+
+@runtime_checkable
+class SandboxCleanupStorePort(Protocol):
+    """Durable provider-teardown duty store used by file-native recovery."""
+
+    async def schedule(
+        self, record: "SandboxCleanupSchedule"
+    ) -> "SandboxCleanupSchedule":
+        """Persist an immutable cleanup obligation before session persistence."""
+        ...
+
+    async def get(self, operation_id: str) -> "SandboxCleanupSchedule | None":
+        """Return one durable teardown obligation."""
+        ...
+
+    async def transition(
+        self,
+        *,
+        record: "SandboxCleanupSchedule",
+        expected_transition_no: int,
+    ) -> "SandboxCleanupSchedule":
+        """Advance a duty with compare-and-swap semantics."""
+        ...
+
+    async def list_pending(
+        self, *, limit: int = 100
+    ) -> tuple["SandboxCleanupSchedule", ...]:
+        """List pending durable teardown obligations."""
         ...
 
 

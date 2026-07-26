@@ -52,6 +52,11 @@ class WorkspaceOverlayStorePort(Protocol):
     async def get_manifest(self, *, run_id: str) -> OverlayManifest:
         """Read the current immutable manifest for a run."""
 
+    async def get_manifest_version(
+        self, *, run_id: str, version: int
+    ) -> OverlayManifest | None:
+        """Read one retained immutable version, never a current-view fallback."""
+
     async def append_revision(
         self,
         *,

@@ -247,6 +247,38 @@ def _coordinator(
 
 @pytest.mark.asyncio
 class TestSandboxLifecycleCoordinator:
+    async def test_empty_selected_snapshot_never_reaches_provider_upload_or_execute(
+        self,
+    ) -> None:
+        """The final execution boundary rejects zero C1/A2 inputs pre-provider."""
+
+        provider = FakeSandboxProvider()
+        runtime = _Runtime()
+        coordinator, lifecycle, _meter = _coordinator(
+            runtime=runtime,
+            source=_SnapshotSource({}),
+            provider=provider,
+        )
+        request = SandboxRunRequest(
+            create_request=make_request(),
+            command="echo must-not-run",
+            deliverables=(),
+            collect_patch=False,
+            redaction_terms=(),
+        )
+
+        with pytest.raises(SandboxError) as excinfo:
+            await coordinator.run(request)
+
+        assert excinfo.value.code is SandboxErrorCode.SANDBOX_SNAPSHOT_REQUIRED
+        assert provider.create_calls == 0
+        assert runtime.uploaded == {}
+        assert runtime.execute_calls == 0
+        assert (
+            await lifecycle.get(idempotency_key=request.create_request.idempotency_key)
+            is None
+        )
+
     async def test_exact_snapshot_artifact_redaction_usage_and_cleanup(self) -> None:
         source_content = b"immutable-input"
         output_content = b"a,b\n1,2\n"

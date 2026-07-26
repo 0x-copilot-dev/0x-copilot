@@ -85,9 +85,34 @@ from agent_runtime.capabilities.sandbox.runtime_adapter import DeepAgentSandboxR
 from agent_runtime.capabilities.sandbox.artifact_publisher import (
     ArtifactServiceSandboxPublisher,
 )
+from agent_runtime.capabilities.sandbox.patch_collector import (
+    DeepAgentArtifactPatchCollector,
+)
+from agent_runtime.capabilities.sandbox.operation_runner import (
+    SandboxLifecycleCoordinatorPort,
+    SandboxLifecycleOperationRunner,
+    SandboxSnapshotStoreContentSource,
+)
+from agent_runtime.capabilities.sandbox.result_publisher import (
+    ArtifactServiceSandboxResultPublisher,
+    SandboxResultPublication,
+    SandboxResultPublisherPort,
+)
 from agent_runtime.capabilities.sandbox.usage_meter import (
     FileSandboxUsageMeter,
     InMemorySandboxUsageMeter,
+)
+from agent_runtime.capabilities.sandbox.session_store import (
+    FileSandboxSessionStore,
+    SandboxSessionStoreError,
+)
+from agent_runtime.capabilities.sandbox.cleanup_store import (
+    FileSandboxCleanupStore,
+    SandboxCleanupSchedule,
+    SandboxCleanupScheduleError,
+)
+from agent_runtime.capabilities.sandbox.snapshot_file_store import (
+    SealedSandboxSnapshotFileStore,
 )
 from agent_runtime.capabilities.sandbox.workspace_transfer import (
     WORKSPACE_ROOT,
@@ -102,8 +127,12 @@ __all__ = [
     "ActiveSandbox",
     "ArtifactRef",
     "ArtifactServiceSandboxPublisher",
+    "ArtifactServiceSandboxResultPublisher",
     "DeepAgentSandboxRuntime",
+    "DeepAgentArtifactPatchCollector",
     "FileSandboxUsageMeter",
+    "FileSandboxSessionStore",
+    "FileSandboxCleanupStore",
     "InMemorySandboxSessionStore",
     "InMemorySandboxLifecycleStore",
     "FileSandboxLifecycleStore",
@@ -130,6 +159,8 @@ __all__ = [
     "SandboxLifecycleState",
     "SandboxLifecycleStore",
     "SandboxLifecycleCoordinator",
+    "SandboxLifecycleCoordinatorPort",
+    "SandboxLifecycleOperationRunner",
     "SandboxLifecycleTransitionError",
     "SandboxLimitProfile",
     "SandboxLimitProfiles",
@@ -145,10 +176,17 @@ __all__ = [
     "SandboxRuntimePort",
     "SandboxSecretLeaseRef",
     "SandboxSessionStore",
+    "SandboxSessionStoreError",
+    "SandboxCleanupSchedule",
+    "SandboxCleanupScheduleError",
     "SandboxSnapshot",
+    "SealedSandboxSnapshotFileStore",
+    "SandboxSnapshotStoreContentSource",
     "SandboxSnapshotContentPort",
     "SandboxUsageAttribution",
     "SandboxUsageMeterPort",
+    "SandboxResultPublication",
+    "SandboxResultPublisherPort",
     "WorkspaceManifestBuilder",
     "WorkspacePatchBuilder",
     "WorkspacePatchEntry",

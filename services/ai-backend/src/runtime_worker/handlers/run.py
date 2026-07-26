@@ -241,6 +241,9 @@ class RuntimeRunHandler:
         artifact_reference_store: object | None = None,
         workspace_host_sessions: object | None = None,
         workspace_overlay_store: object | None = None,
+        sandbox_patch_collector: object | None = None,
+        sandbox_provider_overrides: Mapping[object, object] | None = None,
+        capability_env: Mapping[str, str] | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -256,6 +259,12 @@ class RuntimeRunHandler:
         self._artifact_reference_store = artifact_reference_store
         self._workspace_host_sessions = workspace_host_sessions
         self._workspace_overlay_store = workspace_overlay_store
+        # An injected collector is a test/extension seam. The file-native D3
+        # composition otherwise constructs its own A2-backed collector; it
+        # still accepts no C1 importer and never applies a patch at completion.
+        self._sandbox_patch_collector = sandbox_patch_collector
+        self._sandbox_provider_overrides = sandbox_provider_overrides
+        self._capability_env = capability_env
         self.settings = settings or RuntimeSettings.load()
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
@@ -344,6 +353,16 @@ class RuntimeRunHandler:
             raise AgentRuntimeError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 "Run command user_id does not match persisted run.",
+                retryable=False,
+                correlation_id=command.trace_id,
+            )
+        if not _runtime_context_matches_persisted_run(command.runtime_context, run):
+            # Queue payloads are transport, not authority. Refuse a stale or
+            # forged context before budgets, snapshot reads, provider attestation,
+            # or any external sandbox work can begin.
+            raise AgentRuntimeError(
+                RuntimeErrorCode.VALIDATION_ERROR,
+                "Run command runtime context does not match persisted run.",
                 retryable=False,
                 correlation_id=command.trace_id,
             )
@@ -1140,6 +1159,32 @@ class RuntimeRunHandler:
 
         return self._file_store_wiring().file_store()
 
+    def _sandbox_worker_bundle(self, context: AgentRuntimeContext) -> object | None:
+        """Compose D3 only on the file-native, fully attested desktop path.
+
+        The composition object owns the C1/A2 snapshot chain, sealed source
+        bytes, file lifecycle/session/usage/cleanup records, and the
+        gateway-routed operation runner.  Any missing authority returns
+        ``None``; this handler never substitutes an in-memory/Postgres/direct
+        provider path.
+        """
+
+        from runtime_worker.sandbox_composition import (  # noqa: PLC0415
+            SandboxWorkerBundle,
+        )
+
+        return SandboxWorkerBundle.compose(
+            runtime_context=context,
+            file_store=self._file_backend_store(),
+            artifact_service=self.artifact_service,  # type: ignore[arg-type]
+            artifact_blob_store=self._artifact_blob_store,  # type: ignore[arg-type]
+            workspace_overlay_store=self._workspace_overlay_store,  # type: ignore[arg-type]
+            run_store=self.persistence,
+            patch_collector=self._sandbox_patch_collector,  # type: ignore[arg-type]
+            env=self._capability_env,
+            provider_overrides=self._sandbox_provider_overrides,  # type: ignore[arg-type]
+        )
+
     def _build_tool_result_offloader(self) -> object | None:
         """Construct the file-store tool-result offloader, or ``None`` elsewhere."""
 
@@ -1342,6 +1387,8 @@ class RuntimeRunHandler:
         capability_tools = CapabilityToolWiring(
             runtime_context=command.runtime_context,
             file_store=self._file_backend_store(),
+            env=self._capability_env,
+            sandbox_tool_factory=self._sandbox_worker_bundle(command.runtime_context),
         )
         code_mode_tool = capability_tools.code_mode_tool()
         if code_mode_tool is not None:
@@ -2488,6 +2535,20 @@ class RuntimeRunHandler:
         """Return the string value of ``key`` from ``context.trace_metadata``, or ``None`` if absent or blank."""
         value = context.trace_metadata.get(key)
         return value if isinstance(value, str) and value.strip() else None
+
+
+def _runtime_context_matches_persisted_run(
+    context: AgentRuntimeContext, run: RunRecord
+) -> bool:
+    """Require the queued execution context to be the run's persisted scope."""
+
+    persisted = run.runtime_context
+    return (
+        persisted is not None
+        and context.run_id == run.run_id == persisted.run_id
+        and context.org_id == run.org_id == persisted.org_id
+        and context.user_id == run.user_id == persisted.user_id
+    )
 
 
 def _termination_reason_for(exc: BaseException) -> TerminationReason:
