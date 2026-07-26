@@ -31,7 +31,6 @@ import type {
 const connectorsApiMocks = vi.hoisted(() => ({
   fetchConnectors: vi.fn(),
   fetchConnector: vi.fn(),
-  startConnectorOAuth: vi.fn(),
   refreshConnector: vi.fn(),
   disconnectConnector: vi.fn(),
   patchConnectorScopes: vi.fn(),
@@ -46,7 +45,6 @@ vi.mock("../../../api/connectorsApi", async () => {
     ...actual,
     fetchConnectors: connectorsApiMocks.fetchConnectors,
     fetchConnector: connectorsApiMocks.fetchConnector,
-    startConnectorOAuth: connectorsApiMocks.startConnectorOAuth,
     refreshConnector: connectorsApiMocks.refreshConnector,
     disconnectConnector: connectorsApiMocks.disconnectConnector,
     patchConnectorScopes: connectorsApiMocks.patchConnectorScopes,
@@ -60,6 +58,7 @@ vi.mock("../../../api/connectorsApi", async () => {
 // real HTTP surface.
 const mcpApiMocks = vi.hoisted(() => ({
   createMcpServer: vi.fn(),
+  installMcpServer: vi.fn(),
   startMcpAuth: vi.fn(),
 }));
 vi.mock("../../../api/mcpApi", async () => {
@@ -69,6 +68,7 @@ vi.mock("../../../api/mcpApi", async () => {
   return {
     ...actual,
     createMcpServer: mcpApiMocks.createMcpServer,
+    installMcpServer: mcpApiMocks.installMcpServer,
     startMcpAuth: mcpApiMocks.startMcpAuth,
   };
 });
@@ -426,7 +426,8 @@ describe("ConnectorsRoute connect flow", () => {
 
   beforeEach(() => {
     connectorsApiMocks.fetchConnectors.mockReset();
-    connectorsApiMocks.startConnectorOAuth.mockReset();
+    mcpApiMocks.installMcpServer.mockReset();
+    mcpApiMocks.startMcpAuth.mockReset();
     connectorsApiMocks.setConnectorAccessMode.mockReset();
     connectorsApiMocks.streamConnectorEvents.mockReset();
     // Popup OAuth: stub window.open so jsdom doesn't warn "Not implemented".
@@ -450,9 +451,11 @@ describe("ConnectorsRoute connect flow", () => {
         ],
       ),
     );
-    connectorsApiMocks.startConnectorOAuth.mockResolvedValueOnce({
-      authorization_url: "https://example.com/oauth",
-      state: "state_abc",
+    mcpApiMocks.installMcpServer.mockResolvedValueOnce({
+      server_id: "seed:notion",
+    });
+    mcpApiMocks.startMcpAuth.mockResolvedValueOnce({
+      auth_url: "https://example.com/oauth",
     });
     connectorsApiMocks.setConnectorAccessMode.mockResolvedValueOnce({
       connector: connector({
@@ -477,10 +480,14 @@ describe("ConnectorsRoute connect flow", () => {
 
     // Pick the catalog entry → OAuth round-trip starts + spinner shows.
     fireEvent.click(screen.getByTestId("connect-catalog-option"));
-    expect(connectorsApiMocks.startConnectorOAuth).toHaveBeenCalledWith(
-      IDENTITY,
-      "notion",
-    );
+    // Install-then-authorize on the MCP path — the destination has no
+    // OAuth surface of its own.
+    await waitFor(() => {
+      expect(mcpApiMocks.installMcpServer).toHaveBeenCalledWith(
+        "notion",
+        IDENTITY,
+      );
+    });
     expect(screen.getByTestId("connect-oauth")).toBeInTheDocument();
 
     // OAuth completes: the SSE reports the created connector, clearing the
@@ -706,7 +713,8 @@ describe("ConnectorsRoute reconnect", () => {
 
   beforeEach(() => {
     connectorsApiMocks.fetchConnectors.mockReset();
-    connectorsApiMocks.startConnectorOAuth.mockReset();
+    mcpApiMocks.installMcpServer.mockReset();
+    mcpApiMocks.startMcpAuth.mockReset();
     connectorsApiMocks.streamConnectorEvents.mockReset();
     connectorsApiMocks.streamConnectorEvents.mockReturnValue({
       close: vi.fn(),
@@ -737,9 +745,11 @@ describe("ConnectorsRoute reconnect", () => {
         }),
       ]),
     );
-    connectorsApiMocks.startConnectorOAuth.mockResolvedValueOnce({
-      authorization_url: "https://example.com/oauth",
-      state: "state_abc",
+    mcpApiMocks.installMcpServer.mockResolvedValueOnce({
+      server_id: "seed:gmail",
+    });
+    mcpApiMocks.startMcpAuth.mockResolvedValueOnce({
+      auth_url: "https://example.com/oauth",
     });
 
     render(<ConnectorsRoute identity={IDENTITY} />);
@@ -753,9 +763,9 @@ describe("ConnectorsRoute reconnect", () => {
     fireEvent.click(screen.getByTestId("connector-reconnect"));
 
     await waitFor(() => {
-      expect(connectorsApiMocks.startConnectorOAuth).toHaveBeenCalledWith(
-        IDENTITY,
+      expect(mcpApiMocks.installMcpServer).toHaveBeenCalledWith(
         "gmail",
+        IDENTITY,
       );
     });
     expect(window.location.assign).toHaveBeenCalledWith(

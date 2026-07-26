@@ -39,8 +39,6 @@ class Constants:
     class Paths:
         LIST = "/v1/connectors"
         ITEM = "/v1/connectors/{connector_id}"
-        START_OAUTH = "/v1/connectors/{slug}/start-oauth"
-        OAUTH_CALLBACK = "/v1/connectors/oauth-callback"
         REFRESH = "/v1/connectors/{connector_id}/refresh"
         DISCONNECT = "/v1/connectors/{connector_id}/disconnect"
         SCOPES = "/v1/connectors/{connector_id}/scopes"
@@ -51,9 +49,9 @@ class Constants:
         WRITE_POLICY = "/v1/connectors/{connector_id}/write-policy"
         AUDIT = "/v1/connectors/{connector_id}/audit"
         STREAM = "/v1/connectors/stream"
-        # AC9 — desktop-only OAuth transport variant. Distinct paths from the
-        # web START_OAUTH / OAUTH_CALLBACK above so the shipped web redirect
-        # flow's wire shapes stay byte-identical.
+        # AC9 — desktop-only OAuth transport variant (loopback / deep-link
+        # PKCE). The web side has no counterpart here on purpose: it runs the
+        # one OAuth round-trip this product has, on the MCP path.
         DESKTOP_CATALOG = "/v1/connectors/desktop/catalog"
         DESKTOP_START_OAUTH = "/v1/connectors/{slug}/desktop/start-oauth"
         DESKTOP_OAUTH_CALLBACK = "/v1/connectors/desktop/oauth-callback"
@@ -222,44 +220,6 @@ def register_connector_routes(app: FastAPI) -> None:
         response = await client.get(
             f"{backend_url}/v1/connectors/{connector_id}",
             params={"org_id": identity.org_id, "user_id": identity.user_id},
-            headers=FacadeAuthenticator.service_headers(identity),
-            timeout=15,
-        )
-        return _coerce_object_or_raise(response)
-
-    # ----- Start OAuth ----------------------------------------------------
-
-    @app.post(Constants.Paths.START_OAUTH)
-    async def start_oauth(request: Request, slug: str) -> dict[str, object]:
-        backend_url = _settings_for(app).backend_url
-        client = http_client(app)
-        identity = await FacadeAuthenticator.verify_with_touch(
-            request, backend_url=backend_url, http_client=client
-        )
-        body = await _safe_json(request)
-        response = await client.post(
-            f"{backend_url}/v1/connectors/{slug}/start-oauth",
-            params={"org_id": identity.org_id, "user_id": identity.user_id},
-            json=body,
-            headers=FacadeAuthenticator.service_headers(identity),
-            timeout=15,
-        )
-        return _coerce_object_or_raise(response)
-
-    # ----- OAuth callback -------------------------------------------------
-
-    @app.post(Constants.Paths.OAUTH_CALLBACK)
-    async def oauth_callback(request: Request) -> dict[str, object]:
-        backend_url = _settings_for(app).backend_url
-        client = http_client(app)
-        identity = await FacadeAuthenticator.verify_with_touch(
-            request, backend_url=backend_url, http_client=client
-        )
-        body = await _safe_json(request)
-        response = await client.post(
-            f"{backend_url}{Constants.Paths.OAUTH_CALLBACK}",
-            params={"org_id": identity.org_id, "user_id": identity.user_id},
-            json=body,
             headers=FacadeAuthenticator.service_headers(identity),
             timeout=15,
         )

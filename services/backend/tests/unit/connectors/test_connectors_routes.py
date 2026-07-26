@@ -225,7 +225,7 @@ class TestRefreshEndpoint:
 
 
 class TestScopePatchEndpoint:
-    def test_scope_shrink_returns_202_reauth_url(self) -> None:
+    def test_scope_shrink_returns_202_asking_for_reauth(self) -> None:
         client, store = _client()
         record = _seed_record(store)
         resp = client.patch(
@@ -242,9 +242,11 @@ class TestScopePatchEndpoint:
             },
         )
         assert resp.status_code == 202, resp.text
-        body = resp.json()
-        assert "reauth_url" in body
-        assert "state" in body
+        # The route reports THAT re-auth is needed, never a URL: minting one
+        # needs the caller's redirect URI, which this route never receives.
+        # The previous shape returned an `auth.example` stub the client then
+        # redirected the user to.
+        assert resp.json() == {"reauth_required": True}
         # Audit emitted.
         actions = [r.action for r in store.audits if r.target_id == record.id]
         assert "connector.scope_removed" in actions
@@ -397,14 +399,32 @@ class TestWritePolicyPatchEndpoint:
         assert resp.json()["detail"] == "connector_not_found"
 
 
-class TestStartOAuthEndpoint:
-    def test_start_oauth_returns_stub_url(self) -> None:
+class TestOAuthIsNotServedHere:
+    """The destination does not run its own OAuth round-trip.
+
+    It used to expose `start-oauth` / `oauth-callback` as "aliases" of the
+    MCP path, but no composition root ever wired them: start returned a
+    hardcoded `auth.example` URL and the callback 503'd. A second auth
+    surface that nobody implements is worse than no second surface, so the
+    client now calls the MCP path directly and these routes are gone.
+    """
+
+    def test_start_oauth_route_no_longer_exists(self) -> None:
         client, _ = _client()
         resp = client.post("/v1/connectors/gmail/start-oauth", params=_q())
-        assert resp.status_code == 200
-        body = resp.json()
-        assert "authorization_url" in body
-        assert "state" in body
+        assert resp.status_code == 404
+
+    def test_oauth_callback_route_no_longer_exists(self) -> None:
+        client, _ = _client()
+        resp = client.post(
+            "/v1/connectors/oauth-callback",
+            params=_q(),
+            json={"code": "c", "state": "s"},
+        )
+        # 405, not 404: with the POST handler gone the path now matches the
+        # sibling `GET /v1/connectors/{connector_id}` route, which has no POST.
+        # Either way nothing here accepts a callback any more.
+        assert resp.status_code in {404, 405}
 
 
 class TestAuditEndpoint:

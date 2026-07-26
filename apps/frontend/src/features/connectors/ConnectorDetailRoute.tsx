@@ -37,6 +37,7 @@ import {
   patchConnectorScopes,
   refreshConnector,
 } from "../../api/connectorsApi";
+import { installMcpServer, startMcpAuth } from "../../api/mcpApi";
 import { errorMessage } from "../../utils/errors";
 import { formatLastSync, statusLabel, statusTone } from "./adapters";
 
@@ -158,17 +159,25 @@ export function ConnectorDetailRoute({
         const res = await patchConnectorScopes(identity, connectorId, {
           scopes,
         });
-        // 202 ⇒ server is requesting a re-OAuth round-trip; redirect
-        // the user. The SSE channel picks up the scope_changed event
-        // when the re-OAuth completes.
-        if (typeof window !== "undefined" && res.reauth_url) {
-          window.location.assign(res.reauth_url);
+        // 202 ⇒ the change is stored and the provider must re-confirm it.
+        // The server tells us re-auth is needed, not where to go: the
+        // authorization URL is minted on the MCP path, which is the only
+        // place the redirect URI is known. The SSE channel picks up the
+        // scope_changed event when the round-trip completes.
+        if (!res.reauth_required) return;
+        const slug =
+          state.kind === "ready" ? state.response.connector.slug : null;
+        if (slug === null) return;
+        const server = await installMcpServer(slug, identity);
+        const auth = await startMcpAuth(server.server_id, identity);
+        if (typeof window !== "undefined") {
+          window.location.assign(auth.auth_url);
         }
       } catch (error: unknown) {
         setPendingError(errorMessage(error, "Could not update scopes."));
       }
     },
-    [identity, connectorId],
+    [identity, connectorId, state],
   );
 
   // ---- Render -------------------------------------------------------

@@ -13,7 +13,6 @@ import type {
 } from "@0x-copilot/api-types";
 
 import {
-  completeConnectorOAuth,
   disconnectConnector,
   fetchConnector,
   fetchConnectorAudit,
@@ -22,7 +21,6 @@ import {
   patchConnectorScopes,
   refreshConnector,
   setConnectorAccessMode,
-  startConnectorOAuth,
   streamConnectorEvents,
 } from "./connectorsApi";
 import { configureAuthBearerProvider } from "./http";
@@ -204,63 +202,6 @@ describe("fetchConnector", () => {
   });
 });
 
-// ===========================================================================
-// OAUTH
-// ===========================================================================
-
-describe("startConnectorOAuth + completeConnectorOAuth", () => {
-  beforeEach(() => {
-    configureAuthBearerProvider(() => "test-bearer");
-  });
-  afterEach(() => {
-    configureAuthBearerProvider(() => null);
-    vi.unstubAllGlobals();
-  });
-
-  it("POSTs /v1/connectors/{slug}/start-oauth with empty body", async () => {
-    const fetchMock = fetchMockReturning(() =>
-      jsonResponse({
-        authorization_url: "https://example.com/oauth",
-        state: "state_abc",
-      }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    const res = await startConnectorOAuth(IDENTITY, "gmail");
-
-    expect(res.state).toBe("state_abc");
-    const url = String(fetchMock.mock.calls[0][0]);
-    expect(url).toContain("/v1/connectors/gmail/start-oauth");
-    expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("POST");
-  });
-
-  it("POSTs /v1/connectors/oauth-callback with the callback payload", async () => {
-    const fetchMock = fetchMockReturning(() =>
-      jsonResponse(connectorFixture()),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-
-    await completeConnectorOAuth(IDENTITY, {
-      code: "auth_code",
-      state: "state_abc",
-    });
-
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
-      "/v1/connectors/oauth-callback",
-    );
-    expect(
-      JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string),
-    ).toEqual({
-      code: "auth_code",
-      state: "state_abc",
-    });
-  });
-});
-
-// ===========================================================================
-// MUTATIONS
-// ===========================================================================
-
 describe("refreshConnector + disconnectConnector + patchConnectorScopes", () => {
   beforeEach(() => {
     configureAuthBearerProvider(() => "test-bearer");
@@ -300,10 +241,7 @@ describe("refreshConnector + disconnectConnector + patchConnectorScopes", () => 
 
   it("PATCHes /v1/connectors/{id}/scopes with the requested scope set", async () => {
     const fetchMock = fetchMockReturning(() =>
-      jsonResponse({
-        reauth_url: "https://example.com/reauth",
-        state: "state_xyz",
-      }),
+      jsonResponse({ reauth_required: true }),
     );
     vi.stubGlobal("fetch", fetchMock);
 
@@ -320,7 +258,8 @@ describe("refreshConnector + disconnectConnector + patchConnectorScopes", () => 
       { scopes },
     );
 
-    expect(res.reauth_url).toBe("https://example.com/reauth");
+    // 202 reports THAT re-auth is needed; the URL is minted on the MCP path.
+    expect(res.reauth_required).toBe(true);
     expect((fetchMock.mock.calls[0][1] as RequestInit).method).toBe("PATCH");
     expect(
       JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string),
