@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import { CodeArtifactRenderer } from "./CodeArtifactRenderer";
 import {
+  DATASET_DOM_ROW_BUDGET,
+  DATASET_PREVIEW_ROW_BUDGET,
   DatasetArtifactRenderer,
   parseCsv,
   parseLosslessDelimited,
@@ -169,6 +171,74 @@ describe("fixed artifact renderers", () => {
     fireEvent.click(screen.getByRole("button", { name: "Next rows" }));
     expect(screen.getByText("row-100")).toBeInTheDocument();
     expect(screen.getByText("Showing rows 101–101 of 101")).toBeInTheDocument();
+  });
+
+  it("keeps a 100k-row CSV within the explicit DOM budget while sorting, filtering, editing, and saving one complete inert revision", async () => {
+    const saveRevision = vi.fn(async (_source: string) => "saved" as const);
+    const untrusted = "<img src=x onerror=globalThis.pwned>";
+    const source =
+      "name,rank,note\n" +
+      Array.from(
+        { length: DATASET_PREVIEW_ROW_BUDGET },
+        (_, index) =>
+          `row-${index},${DATASET_PREVIEW_ROW_BUDGET - index},${index === 0 ? untrusted : "plain"}`,
+      ).join("\n");
+    const editable = {
+      ...artifact("dataset", source),
+      mediaType: "text/csv",
+      datasetEditor: { disabled: false, saveRevision },
+    } as unknown as ArtifactRenderState;
+    const { container } = render(
+      <DatasetArtifactRenderer artifact={editable} />,
+    );
+
+    // B2 performance contract: data parsing is capped at 100k rows, while a
+    // virtual window mounts no more than 100 body rows. This is deterministic
+    // and avoids flaky elapsed-time checks in jsdom/CI.
+    const virtualWindow = screen.getByTestId("dataset-virtual-window");
+    expect(DATASET_PREVIEW_ROW_BUDGET).toBe(100_000);
+    expect(DATASET_DOM_ROW_BUDGET).toBe(100);
+    expect(virtualWindow).toHaveAttribute("data-dom-row-budget", "100");
+    expect(virtualWindow).toHaveAttribute("data-window-row-count", "100");
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(
+      DATASET_DOM_ROW_BUDGET,
+    );
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+    expect(screen.getByDisplayValue(untrusted)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Next rows" }));
+    expect(virtualWindow).toHaveAttribute("data-window-start", "100");
+    expect(screen.queryByLabelText("name, row 2")).toBeNull();
+    expect(screen.getByLabelText("name, row 102")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Filter dataset rows"), {
+      target: { value: untrusted },
+    });
+    expect(virtualWindow).toHaveAttribute("data-window-row-count", "1");
+    expect(container.querySelectorAll("img")).toHaveLength(0);
+
+    fireEvent.change(screen.getByLabelText("Filter dataset rows"), {
+      target: { value: "" },
+    });
+    fireEvent.change(screen.getByLabelText("Sort dataset rows"), {
+      target: { value: "1" },
+    });
+    expect(screen.getByLabelText("name, row 100001")).toHaveValue("row-99999");
+    fireEvent.change(screen.getByLabelText("Filter dataset rows"), {
+      target: { value: "row-99999" },
+    });
+    fireEvent.change(screen.getByLabelText("name, row 100001"), {
+      target: { value: "patched-row" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Save patched revision" }),
+    );
+    await waitFor(() => expect(saveRevision).toHaveBeenCalledTimes(1));
+
+    const saved = saveRevision.mock.calls[0]?.[0];
+    expect(saved).toContain("patched-row,1,plain");
+    expect(saved).toContain(`row-0,100000,${untrusted}`);
+    expect(saved.split("\n")).toHaveLength(DATASET_PREVIEW_ROW_BUDGET + 1);
   });
 
   it("drops raw document HTML rather than creating a DOM node", () => {

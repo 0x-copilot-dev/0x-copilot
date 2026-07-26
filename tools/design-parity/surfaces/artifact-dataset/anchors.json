@@ -1,0 +1,39 @@
+{
+  "surface": "artifact-dataset",
+  "state": "editor",
+  "baseline": {
+    "kind": "scoped-fallback",
+    "source": "/Users/parthpahwa/Downloads/copilot-project-folder-copy/project/Chat & Tool Calls.dc.html",
+    "reason": "The available source includes only a compact CSV analysis result (forecast_q1.csv row/column statistics), not a B2 artifact table or editor. It has no corresponding table grid, edit controls, virtual-window treatment, or revision actions to map honestly."
+  },
+  "elements": [
+    {
+      "label": "artifact.card",
+      "group": "Artifact dataset",
+      "design": null,
+      "live": "#artifact-dataset [data-testid=\"artifact-dataset-renderer\"]",
+      "expectDivergence": "Scoped fallback: no B2-equivalent card exists in the available source mock. This live selector is retained as the future map anchor."
+    },
+    {
+      "label": "dataset.controls",
+      "group": "Dataset view",
+      "design": null,
+      "live": "#artifact-dataset [aria-label=\"Dataset view controls\"]",
+      "expectDivergence": "Scoped fallback: the source has no filter/sort controls for a rendered CSV artifact."
+    },
+    {
+      "label": "dataset.grid",
+      "group": "Dataset view",
+      "design": null,
+      "live": "#artifact-dataset [data-testid=\"dataset-virtual-window\"] table[role=\"grid\"]",
+      "expectDivergence": "Scoped fallback: the source reports CSV statistics in chat but does not expose a data grid."
+    },
+    {
+      "label": "dataset.revision-actions",
+      "group": "Artifact editing",
+      "design": null,
+      "live": "#artifact-dataset [aria-label=\"Dataset revision actions\"]",
+      "expectDivergence": "Scoped fallback: immutable revision actions are absent from the source mock."
+    }
+  ]
+}
