@@ -14,6 +14,10 @@ from agent_runtime.capabilities.sandbox.provider_registry import (
     InMemorySandboxSessionStore,
     SandboxProviderRegistry,
 )
+from agent_runtime.capabilities.sandbox.readiness import (
+    SandboxCapabilityReadiness,
+    SandboxReadinessReason,
+)
 from agent_runtime.capabilities.sandbox.remote_execution_service import (
     RemoteExecutionService,
 )
@@ -59,6 +63,26 @@ class TestRegistry:
                 overrides={SandboxProviderId.LANGSMITH: UnverifiedProvider()},
             )
         assert excinfo.value.code is SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED
+
+
+class TestSandboxReadiness:
+    def test_disabled_configuration_is_not_ready(self) -> None:
+        readiness = SandboxCapabilityReadiness.assess(RemoteSandboxConfig.from_env({}))
+        assert not readiness.available
+        assert readiness.reason is SandboxReadinessReason.DISABLED
+
+    def test_verified_adapter_is_ready_without_provisioning(self) -> None:
+        readiness = SandboxCapabilityReadiness.assess(
+            _active_config(),
+            provider_overrides={SandboxProviderId.LANGSMITH: FakeSandboxProvider()},
+        )
+        assert readiness.available
+        assert readiness.provider_id is SandboxProviderId.LANGSMITH
+
+    def test_unverified_production_adapter_is_not_misreported_as_ready(self) -> None:
+        readiness = SandboxCapabilityReadiness.assess(_active_config())
+        assert not readiness.available
+        assert readiness.reason is SandboxReadinessReason.ISOLATION_UNVERIFIED
 
 
 class TestSessionStore:
