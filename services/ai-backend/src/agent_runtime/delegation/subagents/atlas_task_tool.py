@@ -33,6 +33,7 @@ PEP 563 string annotations break that detection (they look like the
 literal string `"ToolRuntime"` and `issubclass` returns False).
 """
 
+import asyncio
 import dataclasses
 import json
 from collections.abc import Sequence
@@ -58,6 +59,10 @@ from deepagents.middleware.subagents import (  # type: ignore[import-untyped]
     create_sub_agent,
 )
 from agent_runtime.capabilities.operations.context import OperationContext
+from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.capabilities.operations.internal_adapter import (
+    InternalOperationAdapter,
+)
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.delegation.subagents.operation_identity import (
     SUBAGENT_DELEGATION_OPERATION_ID_KEY,
@@ -216,11 +221,59 @@ def build_atlas_task_tool(
         """
         return build_subagent_invocation_config(runtime.tool_call_id)
 
+    def _gateway_enforced() -> bool:
+        context = OperationContext.active()
+        return context is not None and context.mode is OperationGatewayMode.ENFORCE
+
+    async def _invoke_authoritative(
+        *,
+        capability: str,
+        op: str,
+        arguments: dict[str, object],
+        legacy: Any,
+        safe_summary: str,
+    ) -> object:
+        """Execute one reviewed delegation operation through the gateway.
+
+        A non-success disposition is an honest model-visible result.  Crucially,
+        the captured legacy callable is never entered when the gateway blocks or
+        stages work, so neither task nor dispatch can bypass its authority.
+        """
+
+        result = await InternalOperationAdapter(
+            capability=capability,
+            op=op,
+        ).invoke(
+            arguments=arguments,
+            legacy=legacy,
+            safe_summary=safe_summary,
+        )
+        return result.value if result.completed else result.safe_summary
+
     def task(
         description: str,
         subagent_type: str,
         runtime: ToolRuntime,
     ) -> str | Command:
+        if _gateway_enforced():
+            # A model run uses StructuredTool's coroutine.  A synchronous host
+            # may still use the same authoritative path when it owns no running
+            # event loop; inside a loop we fail closed rather than reviving the
+            # old direct ``subagent.invoke`` branch.
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                return asyncio.run(
+                    atask(
+                        description=description,
+                        subagent_type=subagent_type,
+                        runtime=runtime,
+                    )
+                )
+            raise RuntimeError(
+                "Synchronous subagent delegation is unavailable inside an event loop; "
+                "use the task coroutine."
+            )
         if subagent_type not in subagent_graphs:
             allowed_types = ", ".join([f"`{k}`" for k in subagent_graphs])
             return (
@@ -264,27 +317,48 @@ def build_atlas_task_tool(
                     with _subagent_tracing_context():
                         return await subagent.ainvoke(subagent_state, subagent_config)
 
+                arguments = {
+                    "description": description,
+                    "subagent_type": subagent_type,
+                }
+                if _gateway_enforced():
+                    return await _invoke_authoritative(
+                        capability="subagent",
+                        op="dispatch",
+                        arguments=arguments,
+                        legacy=_dispatch,
+                        safe_summary="Completed subagent dispatch.",
+                    )
                 dispatched = await OperationShadowProbe.invoke_legacy(
                     capability="subagent",
                     op="dispatch",
-                    arguments={
-                        "description": description,
-                        "subagent_type": subagent_type,
-                    },
+                    arguments=arguments,
                     legacy=_dispatch,
                 )
                 await OperationShadowProbe.observe_model_result(dispatched)
                 return dispatched
 
-        result = await OperationShadowProbe.invoke_legacy(
-            capability="builtin",
-            op="task",
-            arguments={
-                "description": description,
-                "subagent_type": subagent_type,
-            },
-            legacy=_invoke_subagent,
-        )
+        task_arguments = {
+            "description": description,
+            "subagent_type": subagent_type,
+        }
+        if _gateway_enforced():
+            result = await _invoke_authoritative(
+                capability="builtin",
+                op="task",
+                arguments=task_arguments,
+                legacy=_invoke_subagent,
+                safe_summary="Completed subagent delegation.",
+            )
+        else:
+            result = await OperationShadowProbe.invoke_legacy(
+                capability="builtin",
+                op="task",
+                arguments=task_arguments,
+                legacy=_invoke_subagent,
+            )
+        if not isinstance(result, dict):
+            return str(result)
         return _return_command_with_state_update(result, runtime.tool_call_id)
 
     return StructuredTool.from_function(
