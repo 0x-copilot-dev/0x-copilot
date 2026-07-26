@@ -3,10 +3,17 @@ import { useEffect, useMemo, useState, type ReactElement } from "react";
 import type { ArtifactRenderState } from "./model";
 import { previewNotice } from "./model";
 
-const MAX_PREVIEW_ROWS = 10_000;
-const MAX_PREVIEW_CELLS = 100_000;
+/**
+ * B2 capacity contract: a preview may retain at most 100k rows / 1m cells,
+ * while each virtual table window mounts at most 100 body rows. These are
+ * explicit work and DOM budgets, rather than timing assertions that vary by
+ * browser or CI host.
+ */
+export const DATASET_PREVIEW_ROW_BUDGET = 100_000;
+export const DATASET_PREVIEW_CELL_BUDGET = 1_000_000;
+export const DATASET_DOM_ROW_BUDGET = 100;
 const MAX_PREVIEW_COLUMNS = 100;
-const TABLE_WINDOW_ROWS = 100;
+const EMPTY_DATASET_PATCH: DatasetPatch = {};
 
 export type ArtifactRevisionSaveOutcome = "saved" | "conflict" | "error";
 
@@ -66,8 +73,8 @@ interface DatasetModel {
 export function parseLosslessDelimited(
   text: string,
   delimiter = ",",
-  maxRows = MAX_PREVIEW_ROWS,
-  maxCells = MAX_PREVIEW_CELLS,
+  maxRows = DATASET_PREVIEW_ROW_BUDGET,
+  maxCells = DATASET_PREVIEW_CELL_BUDGET,
 ): LosslessDelimitedDataset {
   const bom = text.startsWith("\ufeff") ? "\ufeff" : "";
   const source = bom === "" ? text : text.slice(1);
@@ -184,8 +191,8 @@ export function parseLosslessDelimited(
 /** Backward-compatible display parser backed by the lossless tokenizer. */
 export function parseCsv(
   text: string,
-  maxRows = MAX_PREVIEW_ROWS,
-  maxCells = MAX_PREVIEW_CELLS,
+  maxRows = DATASET_PREVIEW_ROW_BUDGET,
+  maxCells = DATASET_PREVIEW_CELL_BUDGET,
   delimiter = ",",
 ): CsvTable {
   const parsed = parseLosslessDelimited(text, delimiter, maxRows, maxCells);
@@ -242,10 +249,10 @@ function parseJsonObjectRows(text: string): DatasetModel | null {
     ) {
       return null;
     }
-    const records = parsed.slice(0, MAX_PREVIEW_ROWS) as readonly Record<
-      string,
-      unknown
-    >[];
+    const records = parsed.slice(
+      0,
+      DATASET_PREVIEW_ROW_BUDGET,
+    ) as readonly Record<string, unknown>[];
     const headers = [
       ...new Set(records.flatMap((row) => Object.keys(row))),
     ].slice(0, MAX_PREVIEW_COLUMNS);
@@ -302,7 +309,13 @@ function datasetModel(artifact: ArtifactRenderState): DatasetModel | null {
   ) {
     return null;
   }
-  const parsed = parseLosslessDelimited(artifact.text, delimiter);
+  // Delimited previews reserve one retained row for the header so the public
+  // data-row budget still means a 100k-row CSV can be viewed and edited.
+  const parsed = parseLosslessDelimited(
+    artifact.text,
+    delimiter,
+    DATASET_PREVIEW_ROW_BUDGET + 1,
+  );
   const rows = parsed.rows.map((row) => row.cells.map((cell) => cell.value));
   const [headers = [], ...body] = rows;
   return {
@@ -422,19 +435,22 @@ function DatasetPreview(props: {
 }
 
 function DatasetGrid(props: { readonly model: DatasetModel }): ReactElement {
-  const [windowStart, setWindowStart] = useState(0);
-  const windowedRows = props.model.rows.slice(
-    windowStart,
-    windowStart + TABLE_WINDOW_ROWS,
-  );
+  const view = useDatasetView(props.model, EMPTY_DATASET_PATCH);
   return (
     <>
+      <DatasetViewControls model={props.model} view={view} />
       <DatasetWindowControls
-        start={windowStart}
-        total={props.model.rows.length}
-        onChange={setWindowStart}
+        start={view.windowStart}
+        total={view.rowIndexes.length}
+        onChange={view.setWindowStart}
       />
-      <div className="ui-table-wrap">
+      <div
+        className="ui-table-wrap"
+        data-testid="dataset-virtual-window"
+        data-dom-row-budget={DATASET_DOM_ROW_BUDGET}
+        data-window-row-count={view.windowedRowIndexes.length}
+        data-window-start={view.windowStart}
+      >
         <table role="grid" aria-label="Dataset preview">
           <thead>
             <tr role="row">
@@ -446,11 +462,11 @@ function DatasetGrid(props: { readonly model: DatasetModel }): ReactElement {
             </tr>
           </thead>
           <tbody>
-            {windowedRows.map((row, rowIndex) => (
-              <tr key={windowStart + rowIndex} role="row">
+            {view.windowedRowIndexes.map((rowIndex) => (
+              <tr key={rowIndex} role="row">
                 {props.model.headers.map((_, columnIndex) => (
                   <td key={columnIndex} role="gridcell">
-                    {row[columnIndex] ?? ""}
+                    {view.valueAt(rowIndex, columnIndex)}
                   </td>
                 ))}
               </tr>
@@ -475,13 +491,13 @@ function DatasetPatchEditor(props: {
     readonly source: string;
     readonly label: string;
   } | null>(null);
-  const [windowStart, setWindowStart] = useState(0);
   useEffect(() => {
     setPatch({});
     setStatus("idle");
     setPending(null);
-    setWindowStart(0);
   }, [props.artifactKey]);
+
+  const view = useDatasetView(props.model, patch);
 
   const update = (row: number, column: number, value: string): void => {
     const key = cellKey(row, column);
@@ -526,10 +542,6 @@ function DatasetPatchEditor(props: {
   };
   const canEdit =
     props.model.editable && !props.actions.disabled && status !== "saving";
-  const windowedRows = props.model.rows.slice(
-    windowStart,
-    windowStart + TABLE_WINDOW_ROWS,
-  );
   return (
     <section aria-label="Dataset cell editor">
       <p className="ui-caption" id="dataset-cell-editor-help">
@@ -537,11 +549,18 @@ function DatasetPatchEditor(props: {
         Keyboard focus moves through cells normally.
       </p>
       <DatasetWindowControls
-        start={windowStart}
-        total={props.model.rows.length}
-        onChange={setWindowStart}
+        start={view.windowStart}
+        total={view.rowIndexes.length}
+        onChange={view.setWindowStart}
       />
-      <div className="ui-table-wrap">
+      <DatasetViewControls model={props.model} view={view} />
+      <div
+        className="ui-table-wrap"
+        data-testid="dataset-virtual-window"
+        data-dom-row-budget={DATASET_DOM_ROW_BUDGET}
+        data-window-row-count={view.windowedRowIndexes.length}
+        data-window-start={view.windowStart}
+      >
         <table
           role="grid"
           aria-label="Dataset cell editor"
@@ -563,8 +582,8 @@ function DatasetPatchEditor(props: {
             </tr>
           </thead>
           <tbody>
-            {windowedRows.map((row, offset) => {
-              const rowIndex = windowStart + offset;
+            {view.windowedRowIndexes.map((rowIndex) => {
+              const row = props.model.rows[rowIndex]!;
               return (
                 <tr key={rowIndex} role="row">
                   {props.model.headers.map((header, column) => {
@@ -575,11 +594,7 @@ function DatasetPatchEditor(props: {
                           aria-label={`${header || `Column ${column + 1}`}, row ${rowNumber}`}
                           className="ui-input"
                           disabled={!canEdit}
-                          value={
-                            patch[cellKey(rowIndex + 1, column)] ??
-                            row[column] ??
-                            ""
-                          }
+                          value={view.valueAt(rowIndex, column)}
                           onChange={(event) =>
                             update(rowIndex + 1, column, event.target.value)
                           }
@@ -649,13 +664,145 @@ function DatasetPatchEditor(props: {
   );
 }
 
+interface DatasetView {
+  readonly filter: string;
+  readonly setFilter: (value: string) => void;
+  readonly sortColumn: number | null;
+  readonly setSortColumn: (column: number | null) => void;
+  readonly sortDirection: "ascending" | "descending";
+  readonly toggleSortDirection: () => void;
+  readonly rowIndexes: readonly number[];
+  readonly windowStart: number;
+  readonly setWindowStart: (start: number) => void;
+  readonly windowedRowIndexes: readonly number[];
+  readonly valueAt: (rowIndex: number, columnIndex: number) => string;
+}
+
+function useDatasetView(
+  model: DatasetModel,
+  patch: Readonly<Record<string, string>>,
+): DatasetView {
+  const [filter, setFilter] = useState("");
+  const [sortColumn, setSortColumnState] = useState<number | null>(null);
+  const [sortDirection, setSortDirection] = useState<
+    "ascending" | "descending"
+  >("ascending");
+  const [windowStart, setWindowStart] = useState(0);
+  const valueAt = (rowIndex: number, columnIndex: number): string =>
+    patch[cellKey(rowIndex + 1, columnIndex)] ??
+    model.rows[rowIndex]?.[columnIndex] ??
+    "";
+  const rowIndexes = useMemo(() => {
+    const query = filter.trim().toLocaleLowerCase();
+    const matching: number[] = [];
+    for (const [rowIndex, row] of model.rows.entries()) {
+      if (
+        query === "" ||
+        row.some((_, columnIndex) =>
+          valueAt(rowIndex, columnIndex).toLocaleLowerCase().includes(query),
+        )
+      ) {
+        matching.push(rowIndex);
+      }
+    }
+    if (sortColumn === null) return matching;
+    return matching.toSorted((left, right) => {
+      const comparison = valueAt(left, sortColumn).localeCompare(
+        valueAt(right, sortColumn),
+      );
+      return comparison === 0
+        ? left - right
+        : sortDirection === "ascending"
+          ? comparison
+          : -comparison;
+    });
+  }, [filter, model.rows, patch, sortColumn, sortDirection]);
+  const maxWindowStart = Math.max(0, rowIndexes.length - 1);
+  const safeWindowStart = Math.min(windowStart, maxWindowStart);
+  const windowedRowIndexes = rowIndexes.slice(
+    safeWindowStart,
+    safeWindowStart + DATASET_DOM_ROW_BUDGET,
+  );
+
+  useEffect(() => {
+    setWindowStart(0);
+  }, [filter, sortColumn, sortDirection]);
+
+  return {
+    filter,
+    setFilter,
+    sortColumn,
+    setSortColumn: (column) => {
+      setSortColumnState(column);
+      setSortDirection("ascending");
+    },
+    sortDirection,
+    toggleSortDirection: () =>
+      setSortDirection((current) =>
+        current === "ascending" ? "descending" : "ascending",
+      ),
+    rowIndexes,
+    windowStart: safeWindowStart,
+    setWindowStart,
+    windowedRowIndexes,
+    valueAt,
+  };
+}
+
+function DatasetViewControls(props: {
+  readonly model: DatasetModel;
+  readonly view: DatasetView;
+}): ReactElement {
+  return (
+    <div className="ui-toolbar" aria-label="Dataset view controls">
+      <label className="ui-caption">
+        Filter rows
+        <input
+          aria-label="Filter dataset rows"
+          className="ui-input"
+          value={props.view.filter}
+          onChange={(event) => props.view.setFilter(event.target.value)}
+        />
+      </label>
+      <label className="ui-caption">
+        Sort rows
+        <select
+          aria-label="Sort dataset rows"
+          className="ui-input"
+          value={props.view.sortColumn ?? ""}
+          onChange={(event) =>
+            props.view.setSortColumn(
+              event.target.value === "" ? null : Number(event.target.value),
+            )
+          }
+        >
+          <option value="">Original order</option>
+          {props.model.headers.map((header, column) => (
+            <option key={column} value={column}>
+              {header || `Column ${column + 1}`}
+            </option>
+          ))}
+        </select>
+      </label>
+      <button
+        className="ui-button ui-button--ghost"
+        type="button"
+        disabled={props.view.sortColumn === null}
+        onClick={props.view.toggleSortDirection}
+      >
+        Sort {props.view.sortDirection}
+      </button>
+    </div>
+  );
+}
+
 function DatasetWindowControls(props: {
   readonly start: number;
   readonly total: number;
   readonly onChange: (start: number) => void;
 }): ReactElement | null {
-  if (props.total <= TABLE_WINDOW_ROWS) return null;
-  const end = Math.min(props.start + TABLE_WINDOW_ROWS, props.total);
+  if (props.total <= DATASET_DOM_ROW_BUDGET) return null;
+  const end = Math.min(props.start + DATASET_DOM_ROW_BUDGET, props.total);
   return (
     <div className="ui-toolbar" aria-label="Dataset row navigation">
       <span className="ui-caption" aria-live="polite">
@@ -666,7 +813,7 @@ function DatasetWindowControls(props: {
         type="button"
         disabled={props.start === 0}
         onClick={() =>
-          props.onChange(Math.max(0, props.start - TABLE_WINDOW_ROWS))
+          props.onChange(Math.max(0, props.start - DATASET_DOM_ROW_BUDGET))
         }
       >
         Previous rows
