@@ -72,6 +72,7 @@
       "label": "csv.summary-card",
       "group": "Local CSV read",
       "design": "[data-parity-anchor=\"csv-card\"]",
+      "live": "#parity-frame [data-testid=\"tc-inline-csv-summary\"]",
       "what": "The reference has an inline CSV summary card; shipping chat renders the raw tool result only.",
       "baselineGap": "No shipping inline CSV-summary component is mounted for a chat-only read."
     },
