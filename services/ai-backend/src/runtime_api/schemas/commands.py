@@ -17,6 +17,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     LedgerEventType,
     WorkLedgerVocabulary,
 )
+from agent_runtime.rollout import RolloutCapability
 from runtime_api.schemas.common import ApprovalDecision
 
 
@@ -80,6 +81,15 @@ class RuntimeStageCommitCommand(RuntimeContract):
     # single-artifact (D1) commit. The worker gate re-checks that this equals the
     # apply decision's scope exactly; held rows are never present here.
     row_keys: tuple[str, ...] | None = None
+    # E2: copied from the authoritative ``write.staged.rollout`` mark when a
+    # stage entered a governed lane. The worker re-folds the ledger mark and
+    # rejects disagreement, so this body-free command is never authority.
+    governed_capabilities: tuple[RolloutCapability, ...] | None = Field(
+        default=None,
+        # Preserve the historical command shape for ungoverned work while
+        # retaining the durable mark whenever it is present.
+        exclude_if=lambda value: value is None,
+    )
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -105,6 +115,14 @@ class RuntimeEffectCommitCommand(RuntimeContract):
     proposal_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     target_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     idempotency_key: str = Field(min_length=1, max_length=256)
+    # A durable explicit-E2 mark. It prevents a queued command from becoming a
+    # legacy permit if a process restarts with the corresponding lane disabled.
+    governed_capabilities: tuple[RolloutCapability, ...] | None = Field(
+        default=None,
+        # Preserve the historical command shape for ungoverned work while
+        # retaining the durable mark whenever it is present.
+        exclude_if=lambda value: value is None,
+    )
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 

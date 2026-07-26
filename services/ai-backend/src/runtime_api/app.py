@@ -911,6 +911,7 @@ class RuntimeApiAppFactory:
         from agent_runtime.api.events import RuntimeEventProducer
         from agent_runtime.api.stage_commit_queue import RuntimeStageCommitQueue
         from agent_runtime.api.stage_ledger import RuntimeStageLedger
+        from agent_runtime.surfaces_v2.stage_rollout import StagedWriteRolloutGate
         from agent_runtime.surfaces_v2.staging import WriteStager
 
         ports = getattr(app.state, "runtime_ports", None)
@@ -936,6 +937,9 @@ class RuntimeApiAppFactory:
         return WriteStager(
             draft_store=ports.draft_store,
             ledger=ledger,
+            rollout_gate=StagedWriteRolloutGate(
+                admission=app.state.e2_rollout_admission
+            ),
             commit_queue=commit_queue,
         )
 

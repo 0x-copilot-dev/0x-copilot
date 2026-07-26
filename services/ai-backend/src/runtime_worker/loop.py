@@ -54,6 +54,7 @@ from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
 from runtime_worker.handlers.effect_reconcile import RuntimeEffectReconcileHandler
 from runtime_worker.e2_rollout_admission import (
     E2RolloutEffectCommitHandler,
+    E2RolloutStageCommitHandler,
     EventStoreEffectStageExecutorResolver,
 )
 from runtime_worker.audit import WorkerAuditEmitter
@@ -265,13 +266,26 @@ class RuntimeWorker:
         # mirrors ``approval_handler``: it builds its own durable claim ledger
         # (off the store backend) + per-run MCP connector. Tests inject a handler
         # with a fake engine for determinism.
-        self.stage_commit_handler = stage_commit_handler or RuntimeStageCommitHandler(
+        stage_handler = stage_commit_handler or RuntimeStageCommitHandler(
             persistence=self.persistence,
             event_store=self.event_store,
             draft_store=draft_store,
             settings=self.settings,
             on_event_appended=on_event_appended,
             mcp_discovery_cache=mcp_discovery_cache,
+        )
+        # The worker has exactly one stage-command dispatch reference. Wrap it
+        # even when a host/test injects the downstream handler, so a governed
+        # D1/D3 stage cannot reach a claim or connector after cohort rollback.
+        self.stage_commit_handler = E2RolloutStageCommitHandler(
+            delegate=stage_handler,
+            persistence=self.persistence,
+            event_store=self.event_store,
+            admission=E2RolloutAdmission(
+                resolution=self.settings.execution.rollout,
+                cohorts=self.settings.execution.rollout_cohorts,
+                kill_switches=self.settings.execution.rollout_kill_switches,
+            ),
         )
         self.effect_commit_handler = effect_commit_handler
         self.effect_reconcile_handler = effect_reconcile_handler

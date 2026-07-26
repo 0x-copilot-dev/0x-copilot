@@ -36,6 +36,12 @@ from pydantic import PositiveInt
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.persistence.ports import DraftStorePort, OptimisticConflict
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
+from agent_runtime.rollout import RolloutCapability
+from agent_runtime.rollout_admission import (
+    E2GovernedLane,
+    E2RolloutAdmissionDenied,
+    PersistedRunCohortFactsProvider,
+)
 from agent_runtime.surfaces_v2.constants import Keys, Messages, Titles, Values
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 from agent_runtime.surfaces_v2.revision_diff import AuthorshipSpan, RevisionDiffer
@@ -49,6 +55,7 @@ from agent_runtime.surfaces_v2.rowset import (
     RowsetValidator,
     StagedRow,
 )
+from agent_runtime.surfaces_v2.stage_rollout import StagedWriteRolloutGate
 
 
 # ---------------------------------------------------------------------------
@@ -114,11 +121,15 @@ class StageCommitQueuePort(Protocol):
         rev: int,
         decision_seq: int,
         row_keys: tuple[str, ...] | None = None,
+        governed_capabilities: tuple[RolloutCapability, ...] | None = None,
     ) -> None:
         """Enqueue the commit command for one approved ``(stage_id, rev)``.
 
         ``row_keys`` is ``None`` for a single-artifact (D1) commit and the exact
         approved row set for a row-set (D3) apply — the worker gate re-checks it.
+        ``governed_capabilities`` is the durable E2 admission mark copied from
+        ``write.staged``. It is opaque to this domain port; the worker re-folds
+        the authoritative ledger mark before dispatch.
         """
 
 
@@ -210,6 +221,13 @@ class InvalidRowset(StagedWriteError):
     safe_message = "The proposed row-set is invalid."
 
 
+class StageRolloutDenied(StagedWriteError):
+    """The persisted-run cohort is not admitted to mutate or send a stage."""
+
+    code = "stage_rollout_denied"
+    safe_message = "This staged write is unavailable for the current rollout."
+
+
 # ---------------------------------------------------------------------------
 # Fold output contracts
 # ---------------------------------------------------------------------------
@@ -287,6 +305,11 @@ class StagedWriteState(RuntimeContract):
     rows: tuple[RowState, ...] | None = None
     row_counts: RowCounts | None = None
     staged_rows: tuple[StagedRow, ...] | None = None
+    # E2: a durable stage entered an explicitly governed lane.  It is absent
+    # only for pre-E2 compatibility history.  A malformed on-wire mark is
+    # represented separately so a bad value cannot be dropped into legacy.
+    governed_lane: E2GovernedLane | None = None
+    governed_lane_invalid: bool = False
 
     def is_rowset(self) -> bool:
         """Whether this stage is a bulk row-set (vs a single-artifact draft)."""
@@ -397,6 +420,8 @@ class _StageAccumulator:
     row_stances: dict[str, RowStance] = field(default_factory=dict)
     row_decided_by: dict[str, str] = field(default_factory=dict)
     row_apply_outcomes: dict[str, str] = field(default_factory=dict)
+    governed_lane: E2GovernedLane | None = None
+    governed_lane_invalid: bool = False
 
     def to_state(self) -> StagedWriteState:
         rows: tuple[RowState, ...] | None = None
@@ -428,6 +453,8 @@ class _StageAccumulator:
             rows=rows,
             row_counts=row_counts,
             staged_rows=staged_rows,
+            governed_lane=self.governed_lane,
+            governed_lane_invalid=self.governed_lane_invalid,
         )
 
     def _row_state(self, row_key: str) -> RowState:
@@ -527,6 +554,15 @@ class StagedWriteFold:
             first_sequence_no=seq,
             last_sequence_no=seq,
         )
+        # E2 governed-lane marks are immutable ``write.staged`` data.  A mark
+        # that fails strict parsing is remembered as invalid: silently dropping
+        # it would turn a governed queued write into an uncontrolled legacy one.
+        if Keys.Field.ROLLOUT in payload:
+            raw_lane = payload.get(Keys.Field.ROLLOUT)
+            try:
+                accumulator.governed_lane = E2GovernedLane.model_validate(raw_lane)
+            except Exception:  # noqa: BLE001 - malformed ledger input is fail-closed.
+                accumulator.governed_lane_invalid = True
         # PRD-D3 — a ``rows`` count marks this a row-set stage; ``agent_holds``
         # seed the sticky per-row pre-hold reasons (decided_by ``agent``). The
         # full row content arrives with the rev-1 ``revision.added.rowset``.
@@ -923,6 +959,10 @@ class WriteStager:
 
     draft_store: DraftStorePort
     ledger: StageLedgerPort
+    # E2 is injected by every production composition root.  The gate owns the
+    # *entire* D1/D3 staged-MCP lane: an explicit cohort/rollback denial happens
+    # before the first ledger append and before every later decision or enqueue.
+    rollout_gate: StagedWriteRolloutGate
     differ: type[RevisionDiffer] = RevisionDiffer
     # PRD-D2: optional, duck-typed on ``enqueue_stage_commit`` (same
     # optional-injection style as ``DraftService.event_producer``). When wired, a
@@ -956,6 +996,7 @@ class WriteStager:
         author ``agent``, empty spans). Returns the folded state.
         """
 
+        governed_lane = self._admit_new_stage(run=run, org_id=org_id)
         stage_id = uuid4().hex
         surface_id = uuid4().hex
         proposal_ref = DraftRef.proposal(draft_id=draft.draft_id, version=draft.version)
@@ -995,6 +1036,7 @@ class WriteStager:
                         Keys.Field.OP: target_op,
                     },
                     Keys.Field.PROPOSAL_REF: proposal_ref,
+                    **self._governed_lane_payload(governed_lane),
                 },
                 summary=Messages.WRITE_STAGED,
             )
@@ -1052,6 +1094,7 @@ class WriteStager:
         except RowsetValidationError as exc:
             raise InvalidRowset(exc.safe_message) from exc
 
+        governed_lane = self._admit_new_stage(run=run, org_id=org_id)
         stage_id = uuid4().hex
         surface_id = uuid4().hex
         proposal_ref = StageRef.proposal(stage_id=stage_id, rev=1)
@@ -1100,6 +1143,7 @@ class WriteStager:
                         }
                         for hold in holds_t
                     ],
+                    **self._governed_lane_payload(governed_lane),
                 },
                 summary=Messages.ROWSET_STAGED,
             )
@@ -1155,6 +1199,7 @@ class WriteStager:
                 rev=1,
                 decision_seq=approve.sequence_no,
                 row_keys=auto_keys,
+                governed_capabilities=self._governed_capabilities(governed_lane),
             )
 
         return self._require_state(self._fold([*prior, *emitted]), stage_id=stage_id)
@@ -1182,6 +1227,7 @@ class WriteStager:
         keys_t = tuple(dict.fromkeys(row_keys))  # de-dupe, keep order
         prior = await self.ledger.list_events(org_id=org_id, run_id=run_id)
         state = self._require_state(self._fold(prior), stage_id=stage_id)
+        self._require_stage_continuation(run=run, org_id=org_id, state=state)
 
         if decision not in (Values.DECISION_APPROVE, Values.DECISION_HOLD):
             raise UnsupportedDecision()
@@ -1232,6 +1278,7 @@ class WriteStager:
         requested = frozenset(row_keys)
         prior = await self.ledger.list_events(org_id=org_id, run_id=run_id)
         state = self._require_state(self._fold(prior), stage_id=stage_id)
+        self._require_stage_continuation(run=run, org_id=org_id, state=state)
         if not state.is_rowset():
             raise UnsupportedDecision()
 
@@ -1284,6 +1331,7 @@ class WriteStager:
                 conversation_id=self._run_attr(run, "conversation_id"),
                 rev=rev,
                 decision_seq=emitted.sequence_no,
+                governed_capabilities=self._governed_capabilities(state.governed_lane),
                 row_keys=ordered,
             )
         return self._require_state(self._fold([*prior, emitted]), stage_id=stage_id)
@@ -1311,6 +1359,7 @@ class WriteStager:
 
         prior = await self.ledger.list_events(org_id=org_id, run_id=run_id)
         state = self._require_state(self._fold(prior), stage_id=stage_id)
+        self._require_stage_continuation(run=run, org_id=org_id, state=state)
         if state.status is not StagedWriteStatus.STAGED:
             raise StageFrozen()
         if base_rev != state.latest_rev:
@@ -1402,6 +1451,7 @@ class WriteStager:
 
         prior = await self.ledger.list_events(org_id=org_id, run_id=run_id)
         state = self._require_state(self._fold(prior), stage_id=stage_id)
+        self._require_stage_continuation(run=run, org_id=org_id, state=state)
 
         if decision == Values.DECISION_HOLD:
             raise UnsupportedDecision()
@@ -1450,6 +1500,7 @@ class WriteStager:
                 conversation_id=self._run_attr(run, "conversation_id"),
                 rev=scope_rev,
                 decision_seq=emitted.sequence_no,
+                governed_capabilities=self._governed_capabilities(state.governed_lane),
             )
         return self._require_state(self._fold([*prior, emitted]), stage_id=stage_id)
 
@@ -1504,6 +1555,58 @@ class WriteStager:
 
         value = getattr(run, name, "")
         return value if isinstance(value, str) else ""
+
+    def _admit_new_stage(self, *, run: object, org_id: str) -> E2GovernedLane | None:
+        """Admit a proposal before it can append a surface, ledger row, or queue."""
+
+        try:
+            return self.rollout_gate.admit_new(
+                facts_provider=PersistedRunCohortFactsProvider(
+                    org_id=org_id,
+                    user_id=self._run_attr(run, "user_id"),
+                )
+            )
+        except (E2RolloutAdmissionDenied, ValueError) as exc:
+            raise StageRolloutDenied() from exc
+
+    def _require_stage_continuation(
+        self,
+        *,
+        run: object,
+        org_id: str,
+        state: StagedWriteState,
+    ) -> None:
+        """Keep a persisted governed stage governed for every later mutation."""
+
+        try:
+            self.rollout_gate.require_continuation(
+                lane=state.governed_lane,
+                malformed_mark=state.governed_lane_invalid,
+                facts_provider=PersistedRunCohortFactsProvider(
+                    org_id=org_id,
+                    user_id=self._run_attr(run, "user_id"),
+                ),
+            )
+        except (E2RolloutAdmissionDenied, ValueError) as exc:
+            raise StageRolloutDenied() from exc
+
+    @staticmethod
+    def _governed_lane_payload(lane: E2GovernedLane | None) -> dict[str, object]:
+        """Return the one optional durable mark for a ``write.staged`` payload."""
+
+        if lane is None:
+            return {}
+        return {Keys.Field.ROLLOUT: lane.model_dump(mode="json")}
+
+    @staticmethod
+    def _governed_capabilities(
+        lane: E2GovernedLane | None,
+    ) -> tuple[RolloutCapability, ...] | None:
+        """Copy a mark into the body-free command without trusting it at apply."""
+
+        if lane is None:
+            return None
+        return lane.capabilities
 
     @staticmethod
     def _fold(events: Sequence[_LedgerEventLike]) -> dict[str, StagedWriteState]:

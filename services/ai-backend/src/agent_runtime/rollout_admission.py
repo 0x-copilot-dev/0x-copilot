@@ -161,6 +161,28 @@ class E2RolloutAdmissionDenied(RuntimeError):
     """Safe domain signal used by request/worker adapters to halt a capability."""
 
 
+class E2GovernedLane(RuntimeContract):
+    """Immutable proof that a durable command entered an E2-governed lane.
+
+    The mark intentionally contains the closed capability dependency set rather
+    than an ambient ``enabled`` bit or a mutable cohort result.  A later worker
+    can therefore distinguish an old compatibility command from work that was
+    admitted through E2, then require the latter to *remain* governed after a
+    process restart, cohort reload, or emergency rollback.
+    """
+
+    capabilities: tuple[RolloutCapability, ...] = Field(
+        min_length=1,
+        max_length=len(RolloutCapability),
+    )
+
+    @model_validator(mode="after")
+    def _capabilities_are_unique(self) -> "E2GovernedLane":
+        if len(self.capabilities) != len(set(self.capabilities)):
+            raise ValueError("governed lane capabilities must be unique")
+        return self
+
+
 class E2RolloutAdmission:
     """Shared v2.1 admission boundary for request and worker paths.
 
@@ -249,11 +271,7 @@ class E2RolloutAdmission:
         unique = tuple(dict.fromkeys(capabilities))
         if not unique:
             raise ValueError("an E2 capability admission requires a capability")
-        controlled = any(
-            self._is_explicitly_controlled(capability)
-            or self._kill_switches.disables(capability)
-            for capability in unique
-        )
+        controlled = self.controls_any(unique)
         if not controlled:
             return True
         return all(
@@ -261,6 +279,87 @@ class E2RolloutAdmission:
             is E2RuntimeAdmissionOutcome.ADMITTED
             for capability in unique
         )
+
+    def controls_any(self, capabilities: Iterable[RolloutCapability]) -> bool:
+        """Return whether a dependency group has entered E2 control.
+
+        This is deliberately public because stage/queue adapters must make the
+        same boundary decision as request-time exposure.  It is not an
+        authorization result: callers must use :meth:`begin_governed_lane` or
+        :meth:`require_all` before producing an effect.
+        """
+
+        unique = tuple(dict.fromkeys(capabilities))
+        if not unique:
+            raise ValueError("an E2 capability admission requires a capability")
+        return any(
+            self._is_explicitly_controlled(capability)
+            or self._kill_switches.disables(capability)
+            for capability in unique
+        )
+
+    def begin_governed_lane(
+        self,
+        *,
+        capabilities: Iterable[RolloutCapability],
+        facts_provider: VerifiedRolloutCohortFactsProvider,
+    ) -> E2GovernedLane | None:
+        """Admit new durable work and mark it if its group is E2-controlled.
+
+        A legacy-only group returns ``None`` and retains its existing
+        compatibility behavior.  Once even one dependency is controlled, every
+        dependency must be explicitly enforced, cohort-admitted, and outside a
+        kill switch *before* the caller may append a ledger row or enqueue a
+        command.  The returned mark must be persisted with that work.
+        """
+
+        unique = tuple(dict.fromkeys(capabilities))
+        if not unique:
+            raise ValueError("an E2 capability admission requires a capability")
+        if not self.controls_any(unique):
+            return None
+        self.require_all(capabilities=unique, facts_provider=facts_provider)
+        return E2GovernedLane(capabilities=unique)
+
+    def permits_governed_lane(
+        self,
+        *,
+        lane: E2GovernedLane,
+        facts_provider: VerifiedRolloutCohortFactsProvider,
+    ) -> bool:
+        """Require a previously marked lane to remain governed and admitted.
+
+        Unlike :meth:`permits_all`, this never grants a legacy fallback.  A
+        rollout change from ``enforce`` to ``off`` therefore halts a queued
+        marked command; it cannot reinterpret that command as pre-E2 work.
+        """
+
+        return all(
+            self._is_explicitly_controlled(capability)
+            and not self._kill_switches.disables(capability)
+            and self.decision(
+                capability=capability,
+                facts_provider=facts_provider,
+            ).outcome
+            is E2RuntimeAdmissionOutcome.ADMITTED
+            for capability in lane.capabilities
+        )
+
+    def require_governed_lane(
+        self,
+        *,
+        lane: E2GovernedLane,
+        facts_provider: VerifiedRolloutCohortFactsProvider,
+    ) -> None:
+        """Raise unless a persisted E2 mark remains admitted at continuation."""
+
+        if not self.permits_governed_lane(
+            lane=lane,
+            facts_provider=facts_provider,
+        ):
+            raise E2RolloutAdmissionDenied(
+                "The requested capability is unavailable for this rollout cohort."
+            )
 
     def require_all(
         self,
@@ -284,6 +383,7 @@ class E2RolloutAdmission:
 __all__ = (
     "E2RolloutAdmission",
     "E2RolloutAdmissionDenied",
+    "E2GovernedLane",
     "E2RolloutKillSwitches",
     "E2RuntimeAdmissionDecision",
     "E2RuntimeAdmissionOutcome",

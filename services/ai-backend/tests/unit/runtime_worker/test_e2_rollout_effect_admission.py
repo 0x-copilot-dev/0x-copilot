@@ -181,6 +181,29 @@ async def test_operational_rollback_blocks_an_already_enqueued_effect_before_app
     assert spy.commands == []
 
 
+@pytest.mark.parametrize(
+    "continuation_settings",
+    (
+        RuntimeSettings.load(environ={}),
+        _settings(kill=True),
+    ),
+)
+async def test_governed_effect_command_never_reverts_to_legacy_after_reload(
+    continuation_settings: RuntimeSettings,
+) -> None:
+    """A durable E2 mark survives restart; off is a denial, never a permit."""
+
+    spy = _ExternalEffectSpy()
+    handler = _handler(settings=continuation_settings, run=_run(), spy=spy)
+    governed = _command().model_copy(update={"governed_capabilities": _CAPABILITIES})
+
+    with pytest.raises(AgentRuntimeError) as error:
+        await handler.handle(governed)
+
+    assert error.value.code is RuntimeErrorCode.PERMISSION_DENIED
+    assert spy.commands == []
+
+
 async def test_admitted_cohort_reaches_the_wrapped_effect_handler_once() -> None:
     spy = _ExternalEffectSpy()
     handler = _handler(settings=_settings(), run=_run(), spy=spy)

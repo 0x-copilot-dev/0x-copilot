@@ -29,6 +29,7 @@ from agent_runtime.surfaces_v2.staging import (
     StagedWriteStatus,
     WriteStager,
 )
+from tests.unit.rollout_testkit import legacy_staged_write_gate
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord, RuntimeStageCommitCommand
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
@@ -86,6 +87,7 @@ class Harness:
         self.stager = WriteStager(
             draft_store=None,  # type: ignore[arg-type]
             ledger=RuntimeStageLedger(event_producer=producer),
+            rollout_gate=legacy_staged_write_gate(),
             commit_queue=RuntimeStageCommitQueue(queue=self.store),
         )
         self.run = RunRecord(

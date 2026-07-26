@@ -16,6 +16,7 @@ from agent_runtime.api.effect_commit_queue import RuntimeEffectCommitOutbox
 from agent_runtime.api.effect_ledger import RuntimeEffectLedger
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.stage_ledger import RuntimeStageLedger
+from tests.unit.rollout_testkit import legacy_staged_write_gate
 from agent_runtime.artifacts import ArtifactScope, ArtifactService
 from agent_runtime.capabilities.auth_gate import (
     CapabilityAuthCheck,
@@ -951,6 +952,7 @@ async def test_b1_cohort_off_keeps_the_existing_legacy_v2_stage(
         write_stager=WriteStager(
             draft_store=h.drafts,
             ledger=RuntimeStageLedger(event_producer=h.producer),
+            rollout_gate=legacy_staged_write_gate(),
         ),
         # Deliberately no artifact_draft_send_stager.
     )

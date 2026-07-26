@@ -16,6 +16,7 @@ from urllib.parse import unquote
 from pydantic import Field, field_validator, model_validator
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.rollout import RolloutCapability
 from agent_runtime.surfaces_v2.entities import EffectTarget
 from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec, ProposalUriCodec
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -394,6 +395,14 @@ class EffectCommitCommand(RuntimeContract):
     proposal_digest: Sha256Hex
     target_digest: Sha256Hex
     idempotency_key: str
+    # E2 decision boundary copies this closed set onto newly governed work.
+    # ``None`` remains the explicit compatibility shape for old A4 commands.
+    governed_capabilities: tuple[RolloutCapability, ...] | None = Field(
+        default=None,
+        # The mark is additive for new governed work.  Do not alter the
+        # serialized compatibility shape of pre-E2 commands.
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator("run_id")
     @classmethod

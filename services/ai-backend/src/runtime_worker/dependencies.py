@@ -27,6 +27,8 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.effects.rollout import effect_execution_capabilities
+from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.rollout import RolloutCapability
 from agent_runtime.rollout_admission import (
@@ -139,6 +141,11 @@ class DefaultRuntimeDependenciesFactory:
         """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``."""
         self.settings = settings or RuntimeSettings.load()
         self.mcp_discovery_cache = mcp_discovery_cache
+        self._rollout_admission = E2RolloutAdmission(
+            resolution=self.settings.execution.rollout,
+            cohorts=self.settings.execution.rollout_cohorts,
+            kill_switches=self.settings.execution.rollout_kill_switches,
+        )
 
     def __call__(self, _context: AgentRuntimeContext) -> RuntimeDependencies:
         """Build dependencies without an E2 subject-bound browser adapter.
@@ -362,7 +369,13 @@ class DefaultRuntimeDependenciesFactory:
         so non-desktop / unconfigured images are byte-identical.
         """
         providers: list[object] = []
-        if self.settings.mcp.backend_registry_url is not None:
+        if (
+            self.settings.mcp.backend_registry_url is not None
+            and self._backend_mcp_allowed(
+                rollout_admission=rollout_admission,
+                rollout_facts=rollout_facts,
+            )
+        ):
             providers.append(
                 BackendMcpProvider(
                     backend_url=self.settings.mcp.backend_registry_url,
@@ -380,6 +393,30 @@ class DefaultRuntimeDependenciesFactory:
         if not providers:
             return EmptyMcpRegistry()
         return DynamicMcpRegistry(providers=tuple(providers))
+
+    def _backend_mcp_allowed(
+        self,
+        *,
+        rollout_admission: E2RolloutAdmission | None,
+        rollout_facts: PersistedRunCohortFactsProvider | None,
+    ) -> bool:
+        """Gate generic backend MCP discovery before server cards are exposed.
+
+        A regular worker run supplies persisted facts, so the full MCP effect
+        dependency set is cohort-admitted. Generic composition has no verified
+        subject: it may retain legacy discovery only while that set is wholly
+        uncontrolled; an explicit E2 request cannot leak cards through an
+        unscoped dependency factory.
+        """
+
+        admission = rollout_admission or self._rollout_admission
+        capabilities = effect_execution_capabilities(EffectExecutorKind.MCP)
+        if rollout_facts is None:
+            return not admission.controls_any(capabilities)
+        return admission.permits_all(
+            capabilities=capabilities,
+            facts_provider=rollout_facts,
+        )
 
     def _browser_provider(
         self,

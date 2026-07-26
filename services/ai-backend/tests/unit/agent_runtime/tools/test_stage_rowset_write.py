@@ -25,6 +25,7 @@ from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 from agent_runtime.surfaces_v2.staging import WriteStager
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import AgentRunStatus, RunRecord
+from tests.unit.rollout_testkit import legacy_staged_write_gate
 from tests.unit.agent_runtime.capabilities.operations.helpers import (
     BoundContextMixin,
     RecordingEmitter,
@@ -80,6 +81,7 @@ def _tool() -> tuple[StageRowsetWriteTool, InMemoryRuntimeApiStore]:
     stager = WriteStager(
         draft_store=None,  # type: ignore[arg-type]
         ledger=RuntimeStageLedger(event_producer=producer),
+        rollout_gate=legacy_staged_write_gate(),
     )
     tool = StageRowsetWriteTool(stager=stager, run=run, org_id=_ORG, run_id=_RUN)
     return tool, store

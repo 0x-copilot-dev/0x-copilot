@@ -1243,7 +1243,37 @@ class RuntimeEventPresentationProjector:
                 for hold in (cls._agent_hold(raw) for raw in holds)
                 if hold is not None
             ]
+        if _LedgerKeys.Field.ROLLOUT in payload:
+            rollout = cls._rollout_mark(payload.get(_LedgerKeys.Field.ROLLOUT))
+            # Preserve an invalid-present marker as an empty object. The stage
+            # fold treats that as deny-not-legacy; silently omitting it would
+            # create the very rollback bypass this projection protects.
+            safe_payload[_LedgerKeys.Field.ROLLOUT] = rollout or {}
         return safe_payload
+
+    @staticmethod
+    def _rollout_mark(value: object) -> JsonObject | None:
+        """Strictly rebuild the durable E2 governed-lane mark.
+
+        The caller preserves a malformed-present mark as an empty sentinel, so
+        replay denies it rather than treating it as legacy. This helper itself
+        only accepts the closed capability enum, never an arbitrary string.
+        """
+
+        if not isinstance(value, dict):
+            return None
+        capabilities = value.get(_LedgerKeys.Field.CAPABILITIES)
+        if not isinstance(capabilities, (list, tuple)) or not capabilities:
+            return None
+        from agent_runtime.rollout import RolloutCapability  # noqa: PLC0415
+
+        try:
+            parsed = tuple(RolloutCapability(item) for item in capabilities)
+        except (TypeError, ValueError):
+            return None
+        if len(parsed) != len(set(parsed)):
+            return None
+        return {_LedgerKeys.Field.CAPABILITIES: [item.value for item in parsed]}
 
     @classmethod
     def _agent_hold(cls, value: object) -> JsonObject | None:

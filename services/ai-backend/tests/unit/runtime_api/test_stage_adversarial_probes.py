@@ -37,6 +37,7 @@ from agent_runtime.surfaces_v2.staging import (
     StagedWriteStatus,
     WriteStager,
 )
+from tests.unit.rollout_testkit import legacy_staged_write_gate
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
 from runtime_adapters.in_memory.runtime_api_store import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
@@ -119,6 +120,7 @@ class Harness:
             WriteStager(
                 draft_store=self.drafts,
                 ledger=RuntimeStageLedger(event_producer=self.producer),
+                rollout_gate=legacy_staged_write_gate(),
             )
             if wire_stager
             else None
@@ -207,6 +209,7 @@ class TestV2EngineCannotExecute:
             "differ",
             "commit_queue",
             "policy_resolver",
+            "rollout_gate",
         }
         # This harness wires no queue ⇒ approve executes nothing.
         assert h.stager.commit_queue is None

@@ -27,6 +27,7 @@ from agent_runtime.effects.executor import EffectExecutionScope
 from agent_runtime.effects.rollout import effect_execution_capabilities
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.rollout_admission import (
+    E2GovernedLane,
     E2RolloutAdmission,
     E2RolloutAdmissionDenied,
     PersistedRunCohortFactsProvider,
@@ -105,7 +106,7 @@ class EffectStageDecisionService:
             stage_id=stage_id,
             allowed_executors=allowed_executors,
         )
-        self._require_rollout_admission(run=run, executor=_current.executor)
+        governed_lane = self._admit_rollout_lane(run=run, executor=_current.executor)
         owner_ref = f"principal://users/{run.user_id}"
         return await stager.decide(
             scope=scope,
@@ -126,6 +127,9 @@ class EffectStageDecisionService:
                 decision=decision,
                 proposal_digest=proposal_digest,
                 target_digest=target_digest,
+            ),
+            governed_capabilities=(
+                governed_lane.capabilities if governed_lane is not None else None
             ),
         )
 
@@ -176,12 +180,12 @@ class EffectStageDecisionService:
             raise EffectStageNotFound()
         return run, scope, stager, state
 
-    def _require_rollout_admission(
+    def _admit_rollout_lane(
         self,
         *,
         run,
         executor: EffectExecutorKind,  # noqa: ANN001
-    ) -> None:
+    ) -> E2GovernedLane | None:
         """Deny the decision/enqueue path before it mutates the effect ledger.
 
         Construction requires this immutable admission snapshot, including for
@@ -190,7 +194,7 @@ class EffectStageDecisionService:
         """
 
         try:
-            self.rollout_admission.require_all(
+            return self.rollout_admission.begin_governed_lane(
                 capabilities=effect_execution_capabilities(executor),
                 facts_provider=PersistedRunCohortFactsProvider(
                     org_id=run.org_id,

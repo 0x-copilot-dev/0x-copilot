@@ -18,6 +18,7 @@ from agent_runtime.capabilities.browser.desktop_browser_provider import (
     DesktopBrowserMcpProvider,
 )
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
+from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.rollout import RolloutCapability
 from agent_runtime.rollout_admission import (
     E2RolloutAdmission,
@@ -42,6 +43,13 @@ _BROWSER_CAPABILITIES = (
     RolloutCapability.EFFECT_STAGER,
     RolloutCapability.EFFECT_COMMIT,
     RolloutCapability.BROWSER_ADAPTER,
+)
+
+_MCP_CAPABILITIES = (
+    RolloutCapability.OPERATION_GATEWAY,
+    RolloutCapability.EFFECT_STAGER,
+    RolloutCapability.EFFECT_COMMIT,
+    RolloutCapability.MCP_GATEWAY,
 )
 
 
@@ -78,6 +86,32 @@ def _admission(factory: DefaultRuntimeDependenciesFactory) -> E2RolloutAdmission
         resolution=factory.settings.execution.rollout,
         cohorts=factory.settings.execution.rollout_cohorts,
         kill_switches=factory.settings.execution.rollout_kill_switches,
+    )
+
+
+def _mcp_factory() -> DefaultRuntimeDependenciesFactory:
+    """Build a generic backend-MCP registry under explicit E2 control."""
+
+    return DefaultRuntimeDependenciesFactory(
+        RuntimeSettings.load(
+            environ={
+                "MCP_BACKEND_REGISTRY_URL": "http://backend.example.test",
+                "OPERATION_GATEWAY_MODE": "enforce",
+                "EFFECT_STAGER_MODE": "enforce",
+                "EFFECT_COMMIT_MODE": "enforce",
+                "MCP_GATEWAY_MODE": "enforce",
+                "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                    [
+                        {
+                            "capability": capability.value,
+                            "org_id": "org_456",
+                            "user_id": "user_123",
+                        }
+                        for capability in _MCP_CAPABILITIES
+                    ]
+                ),
+            }
+        )
     )
 
 
@@ -196,3 +230,57 @@ class TestBrowserProviderGating:
             )
             is None
         )
+
+
+class TestBackendMcpProviderRolloutGating:
+    """Generic MCP card discovery is an exposure boundary, not just invocation."""
+
+    def test_generic_factory_cannot_expose_cards_without_verified_cohort_facts(
+        self, runtime_context_admin
+    ) -> None:
+        factory = _mcp_factory()
+
+        # ``__call__`` is intentionally subject-less. Once E2 controls MCP, it
+        # must not leak the backend registry into an unscoped composition path.
+        dependencies = factory(runtime_context_admin)
+        assert isinstance(dependencies.mcp_registry, EmptyMcpRegistry)
+
+    def test_nonmatching_cohort_hides_backend_mcp_cards_on_run_and_resume(
+        self, runtime_context_admin
+    ) -> None:
+        factory = _mcp_factory()
+        admission = _admission(factory)
+        denied_facts = _facts(user_id="user_not_enrolled")
+
+        registry = factory._mcp_registry(
+            runtime_context_admin,
+            rollout_admission=admission,
+            rollout_facts=denied_facts,
+        )
+        resumed = factory.for_run(
+            runtime_context_admin,
+            rollout_admission=admission,
+            rollout_facts=denied_facts,
+        )
+
+        assert isinstance(registry, EmptyMcpRegistry)
+        # ``RuntimeApprovalHandler._dependencies_for_resume`` calls ``for_run``;
+        # this pins card discovery on approval resume as well as initial setup.
+        assert isinstance(resumed.mcp_registry, EmptyMcpRegistry)
+
+    def test_admitted_cohort_exposes_backend_mcp_cards_once(
+        self, runtime_context_admin
+    ) -> None:
+        factory = _mcp_factory()
+        admission = _admission(factory)
+
+        registry = factory._mcp_registry(
+            runtime_context_admin,
+            rollout_admission=admission,
+            rollout_facts=_facts(),
+        )
+
+        assert isinstance(registry, DynamicMcpRegistry)
+        assert [type(provider) for provider in registry.providers] == [
+            BackendMcpProvider
+        ]

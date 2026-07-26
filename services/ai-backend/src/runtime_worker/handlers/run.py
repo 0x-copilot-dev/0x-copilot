@@ -1689,6 +1689,9 @@ class RuntimeRunHandler:
         from agent_runtime.surfaces_v2.rowset_policy import (  # noqa: PLC0415
             RowsetPolicyResolver,
         )
+        from agent_runtime.surfaces_v2.stage_rollout import (  # noqa: PLC0415
+            StagedWriteRolloutGate,
+        )
         from agent_runtime.surfaces_v2.staging import WriteStager  # noqa: PLC0415
         from runtime_worker.rowset_effect_staging import (  # noqa: PLC0415
             RuntimeRowSetEffectProposalPort,
@@ -1718,6 +1721,7 @@ class RuntimeRunHandler:
         stager = WriteStager(
             draft_store=self.draft_store,  # type: ignore[arg-type] — rowsets never touch drafts
             ledger=RuntimeStageLedger(event_producer=self.event_producer),
+            rollout_gate=StagedWriteRolloutGate(admission=self._e2_rollout_admission),
             commit_queue=(
                 RuntimeStageCommitQueue(queue=self._queue)  # type: ignore[arg-type]
                 if self._queue is not None

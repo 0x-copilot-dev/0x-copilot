@@ -37,6 +37,7 @@ from pydantic import (
 from copilot_service_contracts.work_ledger import load_work_ledger_contract
 
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.rollout_admission import E2GovernedLane
 from agent_runtime.surfaces_v2.ledger_ids import (
     ArtifactContentRefCodec,
     EffectReceiptRefCodec,
@@ -548,6 +549,9 @@ class WriteStagedPayload(LedgerPayload):
     proposal_ref: str
     rows: NonNegativeInt | None = None
     agent_holds: tuple[AgentHold, ...] | None = None
+    # Durable E2 governed-lane mark. Missing remains valid for pre-E2 history;
+    # a present value is strictly parsed and never silently downgraded.
+    rollout: E2GovernedLane | None = None
 
 
 class RevisionAuthorshipSpan(RuntimeContract):

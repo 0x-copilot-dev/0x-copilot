@@ -414,6 +414,8 @@ export interface WriteStagedPayload {
   proposal_ref: string;
   rows?: number;
   agent_holds?: readonly AgentHold[];
+  /** E2 durable governed-lane mark; absent only for pre-E2 compatibility stages. */
+  rollout?: { capabilities: readonly string[] };
 }
 
 /** A half-open `[start, end)` char range of a revision's NEW text and its author
