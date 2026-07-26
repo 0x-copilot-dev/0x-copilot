@@ -1182,4 +1182,144 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     // …and never the Connect card.
     expect(screen.queryByTestId("tc-chat-mcp-auth-appr-1")).toBeNull();
   });
+
+  // The card has always DRAWN four states; until now it was always handed
+  // `pending`, because nothing in the run stream can see a consent popup. The
+  // owner is `useConnectorConsentStates` in the Run cockpit, and these tests pin
+  // the seam it drives — that `connectorConsentStates` reaches the card, keyed
+  // by `server_id`.
+  it("renders the state the host reports for this server, not a hardcoded pending", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "connecting" }}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "connecting");
+    // Connecting swaps the two actions for a single Cancel.
+    expect(screen.getByTestId("cc-cancel")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
+    ).toBeNull();
+  });
+
+  it("reaches connected — the state only the host's OAuth return can report", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "connected" }}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "connected");
+  });
+
+  it("offers Reconsider once denied", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port, beginAuth } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "denied" }}
+        />,
+      ),
+    );
+    // Reversible by design — a denial is a decision, not a dead end.
+    fireEvent.click(screen.getByTestId("cc-reconsider"));
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+  });
+
+  it("Cancel while connecting returns the card to pending", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    const onCancel = vi.fn();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "connecting" }}
+          onConnectorConsentCancel={onCancel}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("cc-cancel"));
+    expect(onCancel).toHaveBeenCalledWith("linear");
+  });
+
+  it("keys state by server_id, so one connector's state never bleeds into another's", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[
+            mcpAuthApproval(),
+            mcpAuthApproval({
+              approvalId: "mcp_auth:run_1:notion",
+              title: "Connect Notion",
+              serverId: "notion",
+            }),
+          ]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "denied" }}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "denied");
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:notion"),
+    ).toHaveAttribute("data-state", "pending");
+  });
+
+  it("falls back to pending when the host reports nothing (hook-less host)", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "pending");
+  });
 });

@@ -2372,12 +2372,21 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
       fireEvent.click(connect);
     });
     expect(beginAuth).toHaveBeenCalledWith("linear");
+
+    // Deny is exercised on a SECOND connector, not the same card: Connect now
+    // moves the card to `connecting`, which swaps both actions for a Cancel.
+    // (Before the consent states had an owner, the card sat at `pending`
+    // forever and the two clicks could share one card.)
     act(() => {
-      fireEvent.click(
-        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear"),
-      );
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:notion", "notion"));
     });
-    expect(skipAuth).toHaveBeenCalledWith("linear");
+    const deny = await screen.findByTestId(
+      "tc-chat-mcp-skip-mcp_auth:run-1:notion",
+    );
+    act(() => {
+      fireEvent.click(deny);
+    });
+    expect(skipAuth).toHaveBeenCalledWith("notion");
     // The cockpit NEVER POSTed a decision for the auth gate (AD-7).
     expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
       false,
@@ -2413,6 +2422,111 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
       false,
     );
+  });
+
+  // The cockpit owns the consent card's state machine
+  // (`useConnectorConsentStates`) and must hand the canvas the WRAPPED port.
+  // Passing the host's original would still call `beginAuth` — so every test
+  // above would pass — while leaving the card frozen at `pending`, which is the
+  // exact bug the machine exists to fix. These pin the wiring itself.
+  it("moves the card to `connecting` when Connect is pressed", async () => {
+    seqCounter = 0;
+    const beginAuth = vi.fn();
+    const { transport } = renderRunWithPort({
+      beginAuth,
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+
+    const card = await screen.findByTestId(
+      "tc-chat-connector-mcp_auth:run-1:linear",
+    );
+    expect(card).toHaveAttribute("data-state", "pending");
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear"),
+      );
+    });
+
+    // The host still hears it…
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+    // …and the card no longer reads as an unpressed button.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear"),
+      ).toHaveAttribute("data-state", "connecting");
+    });
+    expect(screen.getByTestId("cc-cancel")).toBeInTheDocument();
+  });
+
+  it("moves the card to `denied` on Deny, and Reconsider re-enters OAuth", async () => {
+    seqCounter = 0;
+    const beginAuth = vi.fn();
+    const { transport } = renderRunWithPort({
+      beginAuth,
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+    await screen.findByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear");
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear"),
+      );
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear"),
+      ).toHaveAttribute("data-state", "denied");
+    });
+
+    // Reversible: a denial is a decision, not a dead end.
+    act(() => {
+      fireEvent.click(screen.getByTestId("cc-reconsider"));
+    });
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+  });
+
+  it("Cancel while connecting returns the card to pending", async () => {
+    seqCounter = 0;
+    const { transport } = renderRunWithPort({
+      beginAuth: vi.fn(),
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+    await screen.findByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear");
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear"),
+      );
+    });
+    await screen.findByTestId("cc-cancel");
+    act(() => {
+      fireEvent.click(screen.getByTestId("cc-cancel"));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear"),
+      ).toHaveAttribute("data-state", "pending");
+    });
+    expect(
+      screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear"),
+    ).toBeInTheDocument();
   });
 
   it("still POSTs `/decision` for a plain tool_action approval (no regression)", async () => {

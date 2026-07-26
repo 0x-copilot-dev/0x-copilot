@@ -34,6 +34,7 @@ import {
   type ActivityParam,
   ConsentCard,
   ConnectorConsentCard,
+  type ConnectorConsentState,
   QuestionCard,
   type QuestionAnswer,
   type QuestionSpec,
@@ -294,6 +295,21 @@ export interface TcChatProps {
    */
   readonly mcpAuthPort?: McpAuthPort;
   /**
+   * Per-`server_id` consent state, owned by the host's OAuth machine
+   * (`useConnectorConsentStates`). Absent entries render `pending` — the run
+   * stream can report that a gate opened, but connecting / connected / denied
+   * happen in a popup it cannot observe.
+   */
+  readonly connectorConsentStates?: Readonly<
+    Record<string, ConnectorConsentState>
+  >;
+  /**
+   * Return a connector to `pending` — the card's Cancel while connecting. The
+   * Run cockpit supplies `useConnectorConsentStates().markPending`; absent, the
+   * Cancel button renders inert like every other unwired affordance here.
+   */
+  readonly onConnectorConsentCancel?: (serverId: string) => void;
+  /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
    * host uses to mount the full `AssistantComposer` (attachments, `/`-menu,
@@ -357,6 +373,8 @@ export function TcChat(props: TcChatProps): ReactElement {
     onReject,
     onAnswer,
     mcpAuthPort,
+    connectorConsentStates,
+    onConnectorConsentCancel,
     renderComposer,
   } = props;
   const transport = useTransport();
@@ -482,7 +500,12 @@ export function TcChat(props: TcChatProps): ReactElement {
                 : approval.resolved
                   ? renderApprovalReceipt(approval)
                   : isMcpAuthApproval(approval)
-                    ? renderMcpAuthConnectCard(approval, mcpAuthPort)
+                    ? renderMcpAuthConnectCard(
+                        approval,
+                        mcpAuthPort,
+                        connectorConsentStates,
+                        onConnectorConsentCancel,
+                      )
                     : renderConfCard(approval, onApprove, onReject),
             )}
           </div>
@@ -514,7 +537,12 @@ export function TcChat(props: TcChatProps): ReactElement {
               : approval.resolved
                 ? renderApprovalReceipt(approval)
                 : isMcpAuthApproval(approval)
-                  ? renderMcpAuthConnectCard(approval, mcpAuthPort)
+                  ? renderMcpAuthConnectCard(
+                      approval,
+                      mcpAuthPort,
+                      connectorConsentStates,
+                      onConnectorConsentCancel,
+                    )
                   : renderStudioApprovalCard(approval, onApprove, onReject),
           )}
         </div>
@@ -570,6 +598,8 @@ function renderStudioApprovalCard(
 function renderMcpAuthConnectCard(
   approval: TcChatApproval,
   mcpAuthPort?: McpAuthPort,
+  consentStates?: Readonly<Record<string, ConnectorConsentState>>,
+  onConsentCancel?: (serverId: string) => void,
 ): ReactNode {
   const serverId = approval.serverId;
   const actionable = mcpAuthPort !== undefined && serverId !== null;
@@ -585,10 +615,15 @@ function renderMcpAuthConnectCard(
         // The model's stated reason for wanting the connector — narrative, and
         // the one line on this card it authors.
         purpose={approval.summary ?? approval.reason}
-        // A pending gate is the only state the run stream can tell us about:
-        // connecting/connected/denied happen after the host launches OAuth, so
-        // the host owns those transitions (P5b).
-        state="pending"
+        // `pending` is the only state the run stream can report; the other
+        // three happen after the host launches OAuth, in a popup the stream
+        // cannot see. The host's `useConnectorConsentStates` owns those and
+        // supplies them here — absent still means pending, so a host that has
+        // not wired it behaves exactly as before.
+        state={
+          (serverId !== null ? consentStates?.[serverId] : undefined) ??
+          "pending"
+        }
         trust={approval.connectorTrust}
         brandKey={serverId}
         actionable={actionable}
@@ -597,6 +632,18 @@ function renderMcpAuthConnectCard(
         }
         onDeny={() =>
           serverId !== null ? mcpAuthPort?.skipAuth(serverId) : undefined
+        }
+        // Reconsider re-enters OAuth: a denial is a decision the design
+        // deliberately lets the user reverse, so it is the same verb as
+        // Connect, not a separate one.
+        onReconsider={() =>
+          serverId !== null ? mcpAuthPort?.beginAuth(serverId) : undefined
+        }
+        // Cancel is state-only — see `markPending`. Both handlers went
+        // unpassed until now without anyone noticing, because `connecting` and
+        // `denied` were states nothing could reach.
+        onCancel={() =>
+          serverId !== null ? onConsentCancel?.(serverId) : undefined
         }
         connectTestId={`tc-chat-mcp-connect-${approval.approvalId}`}
         denyTestId={`tc-chat-mcp-skip-${approval.approvalId}`}

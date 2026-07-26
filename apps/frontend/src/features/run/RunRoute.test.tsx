@@ -459,6 +459,71 @@ describe("RunRoute (PRD-05)", () => {
     );
   });
 
+  // The other half of the OAuth return: the connector is now connected, and the
+  // card in the replayed transcript has to SAY so.
+  //
+  // Web's flow destroys its own evidence — `beginAuth` full-page-redirects, so
+  // the cockpit that set `connecting` is gone by the time consent is granted and
+  // the remounted one starts with an empty state map. The `mcp_auth_required`
+  // event is still in the append-only log, so the card comes back; without the
+  // host handing the completion down it would come back offering "Connect" for a
+  // connector the user had just finished connecting.
+  it("shows the replayed consent card as connected after the OAuth return", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) => {
+      if (req.path === "/v1/settings/provider-keys") {
+        return { keys: [{ id: "k1" }] };
+      }
+      if (req.path.includes("/messages")) return { messages: [] };
+      if (req.method === "POST" && req.path === "/v1/agent/runs") return {};
+      if (req.path.endsWith("/runs")) return { runs: [] };
+      // The conversation head reports the run whose gate we are replaying.
+      return { latest_run_id: "run-1", status: "running" };
+    };
+    const completed: CompletedMcpAuthAction = {
+      approvalId: "mcp_auth:run-1:seed:linear",
+      serverId: "seed:linear",
+      runId: "run-1",
+      createdAt: "2026-07-22T10:00:00.000Z",
+      completedAt: "2026-07-22T10:01:00.000Z",
+    };
+
+    renderRoute(transport, "conv-1", undefined, completed);
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+
+    act(() => {
+      const raw = JSON.stringify({
+        event_id: "auth-1",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 1,
+        event_type: "mcp_auth_required",
+        activity_kind: "mcp_auth",
+        payload: {
+          approval_id: "mcp_auth:run-1:seed:linear",
+          approval_kind: "mcp_auth",
+          server_id: "seed:linear",
+          server_name: "seed:linear",
+          display_name: "Linear",
+          message: "MCP authentication required",
+        },
+        created_at: "2026-07-22T10:00:00.000Z",
+      });
+      for (const sub of transport.subs) {
+        if (!sub.closed) sub.onMessage?.(raw);
+      }
+    });
+
+    const card = await screen.findByTestId(
+      "tc-chat-connector-mcp_auth:run-1:seed:linear",
+    );
+    expect(card).toHaveAttribute("data-state", "connected");
+    // No stale call to action on an already-connected connector.
+    expect(
+      screen.queryByTestId("tc-chat-mcp-connect-mcp_auth:run-1:seed:linear"),
+    ).toBeNull();
+  });
+
   // R2 degrade: the run terminated during the redirect (or its row was lost to a
   // backend restart). Resolving still yields a conversation → land on it (the
   // completed transcript), never a hung stream.
