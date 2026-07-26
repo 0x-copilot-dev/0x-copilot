@@ -11,6 +11,7 @@ import pytest
 from agent_runtime.api.legacy_migration_service import LegacyMigrationService
 from agent_runtime.artifacts import (
     ArtifactConflictError,
+    ArtifactListPage,
     ArtifactCreateRequest,
     ArtifactNotFoundError,
     ArtifactProvenance,
@@ -60,6 +61,7 @@ class _Run:
     user_id: str = USER
     conversation_id: str = CONVERSATION
     trace_id: str = "trace_e2_migration"
+    latest_sequence_no: int = 0
 
 
 @dataclass(frozen=True)
@@ -147,17 +149,27 @@ class _TransientArtifacts:
         del kwargs
         raise ArtifactNotFoundError()
 
+    async def list_for_run(self, **kwargs: object) -> ArtifactListPage:
+        del kwargs
+        return ArtifactListPage(artifacts=())
+
     async def create_draft_from_bytes(self, **kwargs: object) -> None:
         del kwargs
         self.create_attempts += 1
         raise ArtifactConflictError()
 
 
-def _artifact_service(runs: Sequence[_Run]) -> ArtifactService:
-    coordinator = InMemoryArtifactPublicationCoordinator()
+def _artifact_service(
+    runs: Sequence[_Run],
+    *,
+    coordinator: InMemoryArtifactPublicationCoordinator | None = None,
+    metadata: InMemoryArtifactMetadataStore | None = None,
+    blobs: InMemoryArtifactBlobStore | None = None,
+) -> ArtifactService:
+    coordinator = coordinator or InMemoryArtifactPublicationCoordinator()
     return ArtifactService(
-        metadata=InMemoryArtifactMetadataStore(coordinator),
-        blobs=InMemoryArtifactBlobStore(coordinator),
+        metadata=metadata or InMemoryArtifactMetadataStore(coordinator),
+        blobs=blobs or InMemoryArtifactBlobStore(coordinator),
         run_scopes=_Scopes(runs),
     )
 
@@ -168,6 +180,7 @@ def _draft(
     version: int,
     body: str,
     run_id: str = RUN_1,
+    title: str | None = None,
     created_at: datetime = NOW,
 ) -> DraftRecord:
     return DraftRecord(
@@ -177,7 +190,7 @@ def _draft(
         conversation_id=CONVERSATION,
         run_id=run_id,
         user_id=USER,
-        title=f"Legacy {draft_number}",
+        title=title if title is not None else f"Legacy {draft_number}",
         content_text=body,
         status=DraftStatus.DRAFT,
         created_at=created_at,
@@ -508,7 +521,7 @@ class TestLegacyMigrationService:
         )
         service, event_port, _audit, _checkpoints = _migration_service(
             drafts=drafts,
-            runs=(_Run(RUN_1),),
+            runs=(_Run(RUN_1, latest_sequence_no=1),),
             events=events,
             artifacts=_artifact_service((_Run(RUN_1),)),
         )
@@ -521,6 +534,197 @@ class TestLegacyMigrationService:
         assert report.stages_requiring_fresh_approval == 1
         assert "stages_require_fresh_approval" in report.blockers
         assert event_port.dangerous_calls == 0
+
+    async def test_retained_event_suffix_is_retention_ambiguity_and_blocks_cohort(
+        self,
+    ) -> None:
+        """A pruned prefix must never be treated as an empty safe run."""
+
+        events = _Events(
+            rows={
+                RUN_1: [
+                    _Event(
+                        event_type="run.completed",
+                        sequence_no=2,
+                        payload={},
+                    )
+                ]
+            }
+        )
+        service, event_port, _audit, _checkpoints = _migration_service(
+            drafts=InMemoryDraftStore(),
+            runs=(_Run(RUN_1, latest_sequence_no=2),),
+            events=events,
+            artifacts=_artifact_service((_Run(RUN_1),)),
+        )
+
+        report = await service.apply(
+            org_id=ORG, migration_id="e2_retained_suffix", batch_size=1
+        )
+
+        assert report.source_complete is False
+        assert report.migration_status == LegacyMigrationStatus.BLOCKED.value
+        assert report.cohort_ready is False
+        assert "source_incomplete" in report.blockers
+        assert event_port.dangerous_calls == 0
+
+    async def test_pruned_staged_write_prefix_cannot_clear_fresh_approval_hold(
+        self,
+    ) -> None:
+        """A retained decision without ``write.staged`` stays unresolvable."""
+
+        events = _Events(
+            rows={
+                RUN_1: [
+                    _Event(
+                        event_type="decision.recorded",
+                        sequence_no=2,
+                        payload={
+                            "stage_id": "stage_pruned",
+                            "decision": "approve",
+                        },
+                    )
+                ]
+            }
+        )
+        service, event_port, _audit, _checkpoints = _migration_service(
+            drafts=InMemoryDraftStore(),
+            runs=(_Run(RUN_1, latest_sequence_no=2),),
+            events=events,
+            artifacts=_artifact_service((_Run(RUN_1),)),
+        )
+
+        report = await service.apply(
+            org_id=ORG, migration_id="e2_pruned_stage", batch_size=1
+        )
+
+        assert report.source_complete is False
+        assert report.stages_compatibility_only == 0
+        assert report.migration_status == LegacyMigrationStatus.BLOCKED.value
+        assert report.cohort_ready is False
+        assert event_port.dangerous_calls == 0
+
+    async def test_latest_legacy_title_is_the_verified_canonical_title(self) -> None:
+        drafts = InMemoryDraftStore()
+        await drafts.insert_version(
+            _draft(
+                draft_number=1,
+                version=1,
+                body="title-v1",
+                title="Initial title",
+            )
+        )
+        await drafts.insert_version(
+            _draft(
+                draft_number=1,
+                version=2,
+                body="title-v2",
+                title="Final title",
+                created_at=NOW + timedelta(seconds=1),
+            )
+        )
+        artifacts = _artifact_service((_Run(RUN_1),))
+        service, _events, _audit, _checkpoints = _migration_service(
+            drafts=drafts,
+            runs=(_Run(RUN_1),),
+            artifacts=artifacts,
+        )
+
+        report = await service.apply(
+            org_id=ORG, migration_id="e2_final_title", batch_size=1
+        )
+
+        binding = ArtifactDraftPathBinding(
+            org_id=ORG,
+            user_id=USER,
+            conversation_id=CONVERSATION,
+            run_id=RUN_1,
+            draft_id=f"{1:032x}",
+        )
+        record = await artifacts.get_metadata(
+            org_id=ORG, user_id=USER, artifact_id=binding.artifact_id
+        )
+        assert record.artifact.title == "Final title"
+        assert report.drafts_verified == 1
+        assert report.cohort_ready is True
+
+    async def test_post_merge_rerun_reuses_rekeyed_import_without_duplicate(
+        self,
+    ) -> None:
+        """A merge-invalidated checkpoint re-discovers the preserved import."""
+
+        old_drafts = InMemoryDraftStore()
+        old_draft = _draft(draft_number=1, version=1, body="merged-body")
+        await old_drafts.insert_version(old_draft)
+        coordinator = InMemoryArtifactPublicationCoordinator()
+        metadata = InMemoryArtifactMetadataStore(coordinator)
+        blobs = InMemoryArtifactBlobStore(coordinator)
+        old_run = _Run(RUN_1)
+        old_artifacts = _artifact_service(
+            (old_run,), coordinator=coordinator, metadata=metadata, blobs=blobs
+        )
+        old_service, _events, _audit, _checkpoints = _migration_service(
+            drafts=old_drafts,
+            runs=(old_run,),
+            artifacts=old_artifacts,
+        )
+        first = await old_service.apply(
+            org_id=ORG, migration_id="e2_before_merge", batch_size=1
+        )
+        assert first.cohort_ready is True
+
+        old_binding = ArtifactDraftPathBinding(
+            org_id=ORG,
+            user_id=USER,
+            conversation_id=CONVERSATION,
+            run_id=RUN_1,
+            draft_id=old_draft.draft_id,
+        )
+        stored = metadata._records.pop((ORG, old_binding.artifact_id))  # noqa: SLF001
+        merged_org = "org_e2_survivor"
+        merged_user = "user_e2_survivor"
+        metadata._records[(merged_org, old_binding.artifact_id)] = stored.model_copy(  # noqa: SLF001
+            update={
+                "artifact": stored.artifact.model_copy(
+                    update={"org_id": merged_org, "user_id": merged_user}
+                )
+            }
+        )
+        stored_revision = metadata._revisions.pop(  # noqa: SLF001
+            (ORG, old_binding.artifact_id, 1)
+        )
+        metadata._revisions[(merged_org, old_binding.artifact_id, 1)] = stored_revision  # noqa: SLF001
+
+        merged_run = _Run(
+            RUN_1,
+            org_id=merged_org,
+            user_id=merged_user,
+        )
+        merged_drafts = InMemoryDraftStore()
+        await merged_drafts.insert_version(
+            old_draft.model_copy(update={"org_id": merged_org, "user_id": merged_user})
+        )
+        merged_artifacts = _artifact_service(
+            (merged_run,), coordinator=coordinator, metadata=metadata, blobs=blobs
+        )
+        rerun_service, _events, _audit, _checkpoints = _migration_service(
+            drafts=merged_drafts,
+            runs=(merged_run,),
+            artifacts=merged_artifacts,
+        )
+
+        rerun = await rerun_service.apply(
+            org_id=merged_org, migration_id="e2_after_merge", batch_size=1
+        )
+
+        assert rerun.cohort_ready is True
+        assert len(metadata._records) == 1  # noqa: SLF001
+        recovered = await merged_artifacts.get_metadata(
+            org_id=merged_org,
+            user_id=merged_user,
+            artifact_id=old_binding.artifact_id,
+        )
+        assert recovered.artifact.artifact_id == old_binding.artifact_id
 
     async def test_audit_failure_leaves_evidence_non_enableable(self) -> None:
         drafts = InMemoryDraftStore()

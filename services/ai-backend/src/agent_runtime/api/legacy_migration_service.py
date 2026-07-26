@@ -495,8 +495,9 @@ class LegacyMigrationService:
             except Exception:
                 source_complete = False
                 continue
+            expected_latest = getattr(run, "latest_sequence_no", None)
             if len(events) > self._MAX_EVENTS_PER_RUN or not self._valid_event_run(
-                events
+                events, expected_latest=expected_latest
             ):
                 source_complete = False
                 continue
@@ -641,6 +642,7 @@ class LegacyMigrationService:
             if disposition is not LegacyDraftDisposition.PENDING:
                 return
             first = group.records[0]
+            artifact_id = await self._artifact_id_for_group(group=group)
             binding = ArtifactDraftPathBinding(
                 org_id=first.org_id,
                 user_id=first.user_id,
@@ -652,7 +654,7 @@ class LegacyMigrationService:
                 record = await self._artifacts.get_metadata(
                     org_id=first.org_id,
                     user_id=first.user_id,
-                    artifact_id=binding.artifact_id,
+                    artifact_id=artifact_id,
                 )
             except ArtifactNotFoundError:
                 try:
@@ -662,7 +664,12 @@ class LegacyMigrationService:
                         request=ArtifactCreateRequest(
                             run_id=first.run_id or "",
                             kind=ArtifactKind.DOCUMENT,
-                            title=self._title(first),
+                            # Artifact metadata has one canonical title while
+                            # draft bodies retain immutable revisions.  Import
+                            # the latest legacy title, not the first one, so a
+                            # verified migration never advertises stale title
+                            # metadata for a title-bearing history.
+                            title=self._title(group.records[-1]),
                             media_type="text/markdown",
                             suggested_filename=f"{first.draft_id}.md",
                             expected_digest=group.evidence.versions[0].content_digest,
@@ -679,7 +686,7 @@ class LegacyMigrationService:
                         content=first.content_text.encode(
                             "utf-8", errors="surrogatepass"
                         ),
-                        artifact_id=binding.artifact_id,
+                        artifact_id=artifact_id,
                         created_at=first.created_at,
                     )
                 except ArtifactConflictError:
@@ -696,7 +703,7 @@ class LegacyMigrationService:
                     org_id=next_record.org_id,
                     user_id=next_record.user_id,
                     request=ArtifactRevisionRequest(
-                        artifact_id=binding.artifact_id,
+                        artifact_id=artifact_id,
                         parent_revision=current_revision,
                         expected_digest=group.evidence.versions[
                             current_revision
@@ -731,6 +738,7 @@ class LegacyMigrationService:
         if self._artifacts is None:
             return LegacyDraftDisposition.PENDING
         first = group.records[0]
+        artifact_id = await self._artifact_id_for_group(group=group)
         binding = ArtifactDraftPathBinding(
             org_id=first.org_id,
             user_id=first.user_id,
@@ -742,7 +750,7 @@ class LegacyMigrationService:
             record = await self._artifacts.get_metadata(
                 org_id=first.org_id,
                 user_id=first.user_id,
-                artifact_id=binding.artifact_id,
+                artifact_id=artifact_id,
             )
         except ArtifactNotFoundError:
             return LegacyDraftDisposition.PENDING
@@ -753,7 +761,7 @@ class LegacyMigrationService:
             or record.artifact.run_id != first.run_id
             or record.artifact.kind is not ArtifactKind.DOCUMENT
             or record.artifact.media_type != "text/markdown"
-            or record.artifact.title != self._title(first)
+            or record.artifact.title != self._title(group.records[-1])
             or record.current_revision.revision.source_ref != binding.source_ref
         ):
             return LegacyDraftDisposition.QUARANTINED
@@ -765,13 +773,13 @@ class LegacyMigrationService:
                 stored = await self._artifacts.get_revision_metadata(
                     org_id=source.org_id,
                     user_id=source.user_id,
-                    artifact_id=binding.artifact_id,
+                    artifact_id=artifact_id,
                     revision=expected.version,
                 )
                 _record, _revision, stream = await self._artifacts.stream_revision(
                     org_id=source.org_id,
                     user_id=source.user_id,
-                    artifact_id=binding.artifact_id,
+                    artifact_id=artifact_id,
                     revision=expected.version,
                 )
                 payload = b"".join([chunk async for chunk in stream])
@@ -1094,13 +1102,78 @@ class LegacyMigrationService:
         ):
             raise LegacyMigrationSourceError()
 
+    async def _artifact_id_for_group(self, *, group: _DraftGroup) -> str:
+        """Resolve the canonical artifact without making a second writer.
+
+        Account merge intentionally preserves artifact ids while changing
+        tenant ownership.  The normal draft binding includes that ownership,
+        so its newly-computed id differs after a rekey.  A bounded, trusted
+        provenance lookup lets an invalidated E2 checkpoint resume against
+        that same canonical import instead of creating a duplicate artifact.
+        """
+
+        if self._artifacts is None:
+            raise LegacyMigrationSourceError()
+        first = group.records[0]
+        binding = ArtifactDraftPathBinding(
+            org_id=first.org_id,
+            user_id=first.user_id,
+            conversation_id=first.conversation_id,
+            run_id=first.run_id or "",
+            draft_id=first.draft_id,
+        )
+        try:
+            await self._artifacts.get_metadata(
+                org_id=first.org_id,
+                user_id=first.user_id,
+                artifact_id=binding.artifact_id,
+            )
+            return binding.artifact_id
+        except ArtifactNotFoundError:
+            pass
+
+        cursor: str | None = None
+        candidates: list[str] = []
+        while True:
+            page = await self._artifacts.list_for_run(
+                org_id=first.org_id,
+                user_id=first.user_id,
+                run_id=first.run_id or "",
+                kind=ArtifactKind.DOCUMENT,
+                limit=self._SCAN_PAGE_SIZE,
+                cursor=cursor,
+            )
+            candidates.extend(
+                record.artifact.artifact_id
+                for record in page.artifacts
+                if record.current_revision.revision.source_ref == binding.source_ref
+            )
+            if page.next_cursor is None:
+                break
+            if page.next_cursor == cursor or len(candidates) > 1:
+                raise LegacyMigrationSourceError()
+            cursor = page.next_cursor
+        if len(candidates) > 1:
+            raise LegacyMigrationSourceError()
+        return candidates[0] if candidates else binding.artifact_id
+
     @staticmethod
-    def _valid_event_run(events: Sequence[object]) -> bool:
+    def _valid_event_run(events: Sequence[object], *, expected_latest: object) -> bool:
+        """Accept only a complete prefix fenced by the durable run cursor.
+
+        Runtime-event retention may delete individual event rows.  A sorted
+        collection is therefore insufficient: without the durable
+        ``latest_sequence_no`` fence a pruned ``write.staged`` could be folded
+        away and incorrectly make the E2 cohort enableable.  Missing cursor,
+        gaps, duplicates, non-positive values, and a truncated suffix are all
+        retention ambiguity and fail closed.
+        """
         sequence = tuple(getattr(event, "sequence_no", None) for event in events)
         return (
-            all(isinstance(value, int) and value >= 1 for value in sequence)
-            and tuple(sorted(sequence)) == sequence
-            and len(set(sequence)) == len(sequence)
+            isinstance(expected_latest, int)
+            and not isinstance(expected_latest, bool)
+            and expected_latest >= 0
+            and sequence == tuple(range(1, expected_latest + 1))
         )
 
     @staticmethod
