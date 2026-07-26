@@ -52,6 +52,7 @@ _MIGRATION_TABLES = {
     "runtime_run_usage",
     "runtime_model_call_usage",
     "runtime_usage_attribution_edges",
+    "runtime_workspace_overlay_manifests",
     "runtime_usage_daily_user",
     "runtime_usage_daily_org",
     "runtime_usage_daily_connector",
@@ -75,7 +76,13 @@ _MUTATION_TARGET = re.compile(r"^\s*(?:UPDATE|DELETE\s+FROM)\s+([a-z_]+)", re.I 
 # migration's composite foreign key `ON UPDATE CASCADE`. Account merging must
 # not issue a direct edge update: that would conflict with the link's
 # append-only contract while adding no data integrity benefit.
-_CASCADE_REKEY_TABLES = {"runtime_usage_attribution_edges"}
+_CASCADE_REKEY_TABLES = {
+    "runtime_usage_attribution_edges",
+    # C1 overlays follow their ``agent_runs`` parent through the composite
+    # ``(org_id, run_id)`` foreign key. Keep the immutable manifest body out
+    # of a direct account-merge update.
+    "runtime_workspace_overlay_manifests",
+}
 
 
 class _FakeCursor:
@@ -177,7 +184,8 @@ class TestPostgresAccountMergeSql:
         # usage_budget_state / usage_budget_reservations follow their budget
         # via ON DELETE CASCADE and carry no org column; consumer cursors and
         # model_pricing carry no tenancy at all. Attribution edges follow
-        # runtime_model_call_usage via the composite FK's ON UPDATE CASCADE.
+        # runtime_model_call_usage and C1 overlay manifests via their composite
+        # foreign keys' ON UPDATE CASCADE.
         assert _MIGRATION_TABLES - targets == _CASCADE_REKEY_TABLES
 
     async def test_artifact_tables_use_only_the_dedicated_merge_routine(
