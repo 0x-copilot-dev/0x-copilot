@@ -44,6 +44,10 @@ from agent_runtime.capabilities.sandbox.ports import (
     SandboxSessionStore,
 )
 from agent_runtime.capabilities.sandbox.cleanup_store import SandboxCleanupSchedule
+from agent_runtime.capabilities.sandbox.provisioning import (
+    SandboxGuardedProvisioner,
+    _new_remote_execution_service_authority,
+)
 from agent_runtime.capabilities.sandbox.provider_registry import (
     SandboxProviderRegistry,
 )
@@ -109,6 +113,15 @@ class RemoteExecutionService:
         self._store = session_store
         self._cleanup_store = cleanup_store
         self._events = event_sink or _NullEventSink()
+        self._provisioning_authority = _new_remote_execution_service_authority()
+        provider = self._registry.provider
+        self._guarded_provisioner: SandboxGuardedProvisioner | None = (
+            provider if isinstance(provider, SandboxGuardedProvisioner) else None
+        )
+        if self._guarded_provisioner is not None:
+            self._guarded_provisioner.bind_provisioning_authority(
+                self._provisioning_authority
+            )
 
     async def create(self, request: SandboxCreateRequest) -> ActiveSandbox:
         """Provision a session, record its projection, and wrap it in policy."""
@@ -123,7 +136,13 @@ class RemoteExecutionService:
             )
         self._emit(SandboxEventName.PROVISION_STARTED, request.run_id)
         try:
-            handle: SandboxHandle = await self._registry.provider.create(request)
+            if self._guarded_provisioner is None:
+                handle = await self._registry.provider.create(request)
+                await self._schedule_cleanup(request=request, session=handle.session)
+            else:
+                handle = await self._create_guarded(
+                    request=request, attestation=attestation
+                )
         except SandboxError:
             self._emit(SandboxEventName.FAILED, request.run_id)
             raise
@@ -134,11 +153,6 @@ class RemoteExecutionService:
                 "The sandbox provider could not provision a session.",
             ) from exc
 
-        # Persist a provider-teardown duty *before* the session projection. If
-        # the latter write crashes/fails, a later worker can still terminate an
-        # otherwise unreachable provider session. No in-memory duty is used on
-        # the file-native worker path.
-        await self._schedule_cleanup(request=request, session=handle.session)
         try:
             await self._store.upsert(handle.session)
         except Exception as exc:  # noqa: BLE001 - persistence boundary is unsafe
@@ -207,6 +221,30 @@ class RemoteExecutionService:
         try:
             await self._registry.provider.terminate(provider_session_ref)
         except Exception:  # noqa: BLE001 - janitor will retry a failed cleanup
+            self._emit(SandboxEventName.CLEANUP_PENDING, run_id)
+            return False
+        self._emit(SandboxEventName.CLEANUP_CONFIRMED, run_id)
+        await self._mark_cleanup_cleaned(operation_id)
+        return True
+
+    async def cleanup_provisioning_reservation(
+        self, *, run_id: str, owner_marker: str, operation_id: str | None = None
+    ) -> bool:
+        """Recover a pre-bind durable duty without replaying execution.
+
+        A worker can die after the provider creates a container but before the
+        provider ref is durably bound.  Guarded providers enumerate only the
+        exact operation marker persisted in the reservation and terminate
+        those resources; normal execution is never retried here.
+        """
+
+        guarded = self._guarded_provisioner
+        if guarded is None:
+            return False
+        self._emit(SandboxEventName.CLEANUP_STARTED, run_id)
+        try:
+            await guarded.recover_provisioning(owner_marker)
+        except Exception:  # noqa: BLE001 - janitor keeps the durable duty pending
             self._emit(SandboxEventName.CLEANUP_PENDING, run_id)
             return False
         self._emit(SandboxEventName.CLEANUP_CONFIRMED, run_id)
@@ -284,6 +322,87 @@ class RemoteExecutionService:
                 SandboxErrorCode.SANDBOX_EXECUTION_INDETERMINATE,
                 "The sandbox session cleanup could not be recorded safely.",
             ) from exc
+
+    async def _create_guarded(
+        self,
+        *,
+        request: SandboxCreateRequest,
+        attestation,
+    ) -> SandboxHandle:
+        """Reserve file-native recovery before guarded provisioning is reachable."""
+
+        if self._cleanup_store is None:
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "Guarded sandbox provisioning requires a durable cleanup store.",
+            )
+        guarded = self._guarded_provisioner
+        if guarded is None:  # pragma: no cover - guarded by caller
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED,
+                "Guarded sandbox provisioning is unavailable.",
+            )
+        reservation = SandboxCleanupSchedule(
+            operation_id=request.operation_id,
+            run_id=request.run_id,
+            owner_marker=guarded.cleanup_owner_marker(request),
+            snapshot_digest=request.snapshot.manifest_sha256,
+            state="provisioning",
+        )
+        try:
+            reservation = await self._cleanup_store.schedule(reservation)
+        except Exception as exc:  # noqa: BLE001 - must precede any provider call
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_PROVISION_FAILED,
+                "The sandbox cleanup reservation could not be recorded safely.",
+            ) from exc
+        if reservation.state == "cleaned":
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_LIFECYCLE_CONFLICT,
+                "The sandbox cleanup reservation is already terminal.",
+            )
+        capability = self._provisioning_authority.mint(
+            request=request,
+            attestation=attestation,
+            cleanup=reservation,
+        )
+        if reservation.state == "cleanup_pending":
+            return await guarded.provision_with_capability(capability)
+        try:
+            handle = await guarded.provision_with_capability(capability)
+        except Exception:
+            # The reservation is durable before the provider is ever called.
+            # Preserve it for reaping even when the provider response is lost.
+            await self.cleanup_provisioning_reservation(
+                run_id=request.run_id,
+                owner_marker=reservation.owner_marker or "",
+                operation_id=request.operation_id,
+            )
+            raise
+        try:
+            bound = reservation.model_copy(
+                update={
+                    "provider_session_ref": handle.session.provider_session_ref,
+                    "state": "cleanup_pending",
+                    "transition_no": reservation.transition_no + 1,
+                    "updated_at": datetime.now(UTC),
+                }
+            )
+            await self._cleanup_store.transition(
+                record=bound,
+                expected_transition_no=reservation.transition_no,
+            )
+        except Exception as exc:  # noqa: BLE001 - reservation remains reaper-owned
+            await self.cleanup_provisioning_reservation(
+                run_id=request.run_id,
+                owner_marker=reservation.owner_marker or "",
+                operation_id=request.operation_id,
+            )
+            raise SandboxError(
+                SandboxErrorCode.SANDBOX_EXECUTION_INDETERMINATE,
+                "The sandbox provider session could not be bound to cleanup safely.",
+            ) from exc
+        return handle
 
     async def _terminate_untracked(
         self,

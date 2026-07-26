@@ -22,6 +22,7 @@ A ``LocalShellBackend`` or raw host subprocess is never constructed here.
 
 from __future__ import annotations
 
+import asyncio
 import time
 
 from deepagents.backends.protocol import (
@@ -36,6 +37,7 @@ from agent_runtime.capabilities.sandbox.config import SandboxLimitProfile
 from agent_runtime.capabilities.sandbox.contracts import (
     SandboxError,
     SandboxErrorCode,
+    SandboxRunRequest,
 )
 from agent_runtime.capabilities.sandbox.workspace_transfer import WORKSPACE_ROOT
 
@@ -119,12 +121,45 @@ class PolicyEnforcedSandboxBackend(BaseSandbox):
             self._guard_path(path)
         return self._delegate.upload_files(files)
 
+    async def a_upload_files(
+        self, files: list[tuple[str, bytes]]
+    ) -> list[FileUploadResponse]:
+        """Use a provider's native async transfer when it has one.
+
+        The fallback is the same guarded ``upload_files`` operation on a worker
+        thread; it does not introduce another provider or execution authority.
+        """
+
+        for path, _ in files:
+            self._guard_path(path)
+        upload = getattr(self._delegate, "a_upload_files", None)
+        if callable(upload):
+            return await upload(files)
+        return await asyncio.to_thread(self._delegate.upload_files, files)
+
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Delegate native download after guarding every source path."""
 
         for path in paths:
             self._guard_path(path)
         return self._delegate.download_files(paths)
+
+    async def a_download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Use a provider's native async transfer when it has one."""
+
+        for path in paths:
+            self._guard_path(path)
+        download = getattr(self._delegate, "a_download_files", None)
+        if callable(download):
+            return await download(paths)
+        return await asyncio.to_thread(self._delegate.download_files, paths)
+
+    async def prepare_execution(self, request: SandboxRunRequest) -> None:
+        """Forward one immutable execution envelope to a capable provider."""
+
+        prepare = getattr(self._delegate, "prepare_execution", None)
+        if callable(prepare):
+            await prepare(request)
 
     # -- fs path guards: refuse anything outside /workspace -----------------
 

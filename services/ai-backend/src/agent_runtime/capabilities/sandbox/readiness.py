@@ -29,6 +29,7 @@ class SandboxReadinessReason(StrEnum):
     DISABLED = "disabled"
     PROVIDER_UNAVAILABLE = "provider_unavailable"
     ISOLATION_UNVERIFIED = "isolation_unverified"
+    OPENAI_HOSTED_CONTAINER_CONTROL_GAP = "openai_hosted_container_control_gap"
 
 
 @dataclass(frozen=True)
@@ -62,11 +63,14 @@ class SandboxCapabilityReadiness:
                 config, overrides=provider_overrides
             )
         except SandboxError as exc:
-            reason = (
-                SandboxReadinessReason.ISOLATION_UNVERIFIED
-                if exc.code is SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED
-                else SandboxReadinessReason.PROVIDER_UNAVAILABLE
-            )
+            if config.provider is SandboxProviderId.OPENAI_HOSTED_CONTAINER:
+                reason = SandboxReadinessReason.OPENAI_HOSTED_CONTAINER_CONTROL_GAP
+            else:
+                reason = (
+                    SandboxReadinessReason.ISOLATION_UNVERIFIED
+                    if exc.code is SandboxErrorCode.SANDBOX_POLICY_UNSUPPORTED
+                    else SandboxReadinessReason.PROVIDER_UNAVAILABLE
+                )
             return cls(available=False, reason=reason, provider_id=config.provider)
         return cls(available=True, provider_id=registry.provider_id)
 

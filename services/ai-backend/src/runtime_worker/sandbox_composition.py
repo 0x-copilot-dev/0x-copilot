@@ -44,6 +44,10 @@ from agent_runtime.capabilities.sandbox.ports import (
     SandboxPatchCollectorPort,
     SandboxProviderPort,
 )
+from agent_runtime.capabilities.sandbox.providers.openai_hosted import (
+    OpenAIHostedContainerClient,
+    OpenAIHostedContainerProvider,
+)
 from agent_runtime.capabilities.sandbox.result_publisher import (
     ArtifactServiceSandboxResultPublisher,
 )
@@ -163,6 +167,7 @@ class SandboxWorkerBundle:
         provider_overrides: (
             Mapping[SandboxProviderId, SandboxProviderPort] | None
         ) = None,
+        openai_hosted_container_client: OpenAIHostedContainerClient | None = None,
     ) -> "SandboxWorkerBundle | None":
         """Return the complete factory or ``None`` when any authority is absent.
 
@@ -201,6 +206,7 @@ class SandboxWorkerBundle:
             file_store=file_store,
             env=values,
             provider_overrides=provider_overrides,
+            openai_hosted_container_client=openai_hosted_container_client,
         )
         if runtime is None:
             return None
@@ -314,6 +320,7 @@ class FileSandboxWorkerRuntime:
         provider_overrides: (
             Mapping[SandboxProviderId, SandboxProviderPort] | None
         ) = None,
+        openai_hosted_container_client: OpenAIHostedContainerClient | None = None,
     ) -> "FileSandboxWorkerRuntime | None":
         values = dict(env) if env is not None else _environment()
         if values.get(_DEPLOYMENT_PROFILE_ENV, "") != _DESKTOP_PROFILE:
@@ -325,9 +332,25 @@ class FileSandboxWorkerRuntime:
             config = RemoteSandboxConfig.from_env(values)
             limits = config.resolve_limits()
             cleanup_store = FileSandboxCleanupStore(layout=layout)
+            resolved_overrides = dict(provider_overrides or {})
+            if (
+                config.provider is SandboxProviderId.OPENAI_HOSTED_CONTAINER
+                and SandboxProviderId.OPENAI_HOSTED_CONTAINER not in resolved_overrides
+            ):
+                if (
+                    openai_hosted_container_client is None
+                    or config.openai_hosted_container is None
+                ):
+                    return None
+                resolved_overrides[SandboxProviderId.OPENAI_HOSTED_CONTAINER] = (
+                    OpenAIHostedContainerProvider(
+                        config=config.openai_hosted_container,
+                        client=openai_hosted_container_client,
+                    )
+                )
             service = build_sandbox_backend(
                 config,
-                provider_overrides=provider_overrides,
+                provider_overrides=resolved_overrides,
                 session_store=FileSandboxSessionStore(layout=layout),
                 cleanup_store=cleanup_store,
             )
@@ -360,11 +383,13 @@ class FileSandboxRecoveryReaper:
         provider_overrides: (
             Mapping[SandboxProviderId, SandboxProviderPort] | None
         ) = None,
+        openai_hosted_container_client: OpenAIHostedContainerClient | None = None,
     ) -> "FileSandboxRecoveryReaper | None":
         runtime = FileSandboxWorkerRuntime.compose(
             file_store=file_store,
             env=env,
             provider_overrides=provider_overrides,
+            openai_hosted_container_client=openai_hosted_container_client,
         )
         return cls(runtime=runtime) if runtime is not None else None
 
@@ -374,11 +399,24 @@ class FileSandboxRecoveryReaper:
         for duty in await self.runtime.cleanup_store.list_pending(limit=limit):
             if duty.retry_not_before > now:
                 continue
-            was_cleaned = await self.runtime.service.cleanup_provider_ref(
-                run_id=duty.run_id,
-                provider_session_ref=duty.provider_session_ref,
-                operation_id=duty.operation_id,
-            )
+            if duty.state == "provisioning":
+                was_cleaned = (
+                    await self.runtime.service.cleanup_provisioning_reservation(
+                        run_id=duty.run_id,
+                        owner_marker=duty.owner_marker or "",
+                        operation_id=duty.operation_id,
+                    )
+                )
+            else:
+                if (
+                    duty.provider_session_ref is None
+                ):  # pragma: no cover - contract invariant
+                    continue
+                was_cleaned = await self.runtime.service.cleanup_provider_ref(
+                    run_id=duty.run_id,
+                    provider_session_ref=duty.provider_session_ref,
+                    operation_id=duty.operation_id,
+                )
             if was_cleaned:
                 cleaned.append(duty.operation_id)
                 continue

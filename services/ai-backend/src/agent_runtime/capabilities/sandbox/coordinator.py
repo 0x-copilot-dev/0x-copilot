@@ -135,7 +135,7 @@ class SandboxLifecycleCoordinator:
                 SandboxLifecycleState.RUNNING,
                 execution_started=True,
             )
-            output = await self._runtime.execute(active=active, command=request.command)
+            output = await self._runtime.execute(active=active, request=request)
             lifecycle = await self._transition(
                 lifecycle, SandboxLifecycleState.COLLECTING
             )
