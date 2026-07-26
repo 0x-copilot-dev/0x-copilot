@@ -242,6 +242,23 @@ class InMemoryArtifactMetadataStore:
                 return None
             return record
 
+    async def get_artifact_for_org(
+        self,
+        *,
+        org_id: str,
+        artifact_id: str,
+        include_deleted: bool = False,
+    ) -> ArtifactStoredRecord | None:
+        """Return a same-org record for internal authorization classification."""
+
+        with self._lock:
+            record = self._records.get((org_id, artifact_id))
+            if record is None or (
+                record.artifact.deleted_at is not None and not include_deleted
+            ):
+                return None
+            return record
+
     async def get_revision(
         self,
         *,

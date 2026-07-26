@@ -46,6 +46,7 @@ def _runtime_routers(monkeypatch: pytest.MonkeyPatch) -> tuple[APIRouter, ...]:
     return (
         RuntimeApiRouter.create_router(
             artifact_effects_v2=True,
+            effect_stage_decisions_enabled=True,
             workspace_approval_enabled=True,
         ),
         UsageApiRouter.create_router(),

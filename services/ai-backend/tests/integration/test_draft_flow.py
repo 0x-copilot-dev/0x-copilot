@@ -134,6 +134,13 @@ class _RecordingEventProducer:
         self.calls.append(dict(kwargs))
 
 
+class _EmptyEventStore:
+    """Healthy replay seam for legacy draft-flow integration tests."""
+
+    async def list_events_after(self, **_kwargs: object) -> tuple[object, ...]:
+        return ()
+
+
 # Duck-typed RunRecord; the service + handler only read these four fields.
 _RUN_RECORD = SimpleNamespace(
     run_id=_HOST_RUN,
@@ -182,7 +189,7 @@ def _approval_handler(
 ) -> RuntimeApprovalHandler:
     handler = RuntimeApprovalHandler(
         persistence=persistence,
-        event_store=SimpleNamespace(events=[]),
+        event_store=_EmptyEventStore(),
         draft_store=store,
     )
     return handler

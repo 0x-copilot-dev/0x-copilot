@@ -131,6 +131,8 @@ export type {
   ProposalRef,
   EffectStage,
   EffectDecision,
+  EffectStageDecisionRequest,
+  EffectStageDecisionResponse,
   WorkspaceApprovalDecisionRequest,
   WorkspaceApprovalDecisionReceipt,
   EffectExecutionRequest,

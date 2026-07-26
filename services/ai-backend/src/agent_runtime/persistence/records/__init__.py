@@ -24,6 +24,7 @@ from agent_runtime.persistence.records.budgets import (
 )
 from agent_runtime.persistence.records.citations import CitationRecord
 from agent_runtime.persistence.records.drafts import (
+    DraftEffectSupersession,
     DraftPath,
     DraftRecord,
     DraftStatus,
@@ -157,6 +158,7 @@ __all__ = [
     "AuditLogRecord",
     "CitationRecord",
     "DraftPath",
+    "DraftEffectSupersession",
     "DraftRecord",
     "DraftStatus",
     "BudgetEnforcement",

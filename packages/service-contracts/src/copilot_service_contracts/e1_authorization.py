@@ -173,6 +173,15 @@ E1_SENSITIVE_ROUTES: tuple[E1SensitiveRoute, ...] = (
         foreign_status=404,
     ),
     _route(
+        "effect.mcp_decision",
+        "POST",
+        "/v1/agent/effect-stages/{stage_id}/decision",
+        family="effect",
+        identity_class="member",
+        parent_scope="run_stage",
+        foreign_status=404,
+    ),
+    _route(
         "receipt.export_v1",
         "GET",
         "/v1/agent/runs/{run_id}/receipt/export",
@@ -330,7 +339,7 @@ E1_SENSITIVE_ROUTES: tuple[E1SensitiveRoute, ...] = (
 # A deliberate review checkpoint: adding a sensitive public route must update
 # this canonical inventory and its independent runtime/facade registration
 # tests, rather than silently expanding one side of the boundary.
-E1_SENSITIVE_ROUTE_COUNT = 30
+E1_SENSITIVE_ROUTE_COUNT = 31
 
 E1_SENSITIVE_ROUTE_IDS = frozenset(route.route_id for route in E1_SENSITIVE_ROUTES)
 E1_SENSITIVE_ROUTE_KEYS = frozenset(

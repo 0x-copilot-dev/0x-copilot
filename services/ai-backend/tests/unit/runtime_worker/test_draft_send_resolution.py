@@ -51,6 +51,11 @@ class _StubEventStore:
     def __init__(self) -> None:
         self.events: list[dict] = []
 
+    async def list_events_after(self, **_kwargs: object) -> tuple[object, ...]:
+        """A healthy empty replay explicitly establishes no v2 stage."""
+
+        return ()
+
 
 # Duck-typed RunRecord stand-in. The handler reads only ``org_id``,
 # ``run_id``, ``user_id``, and ``conversation_id`` off the run; full
@@ -127,6 +132,7 @@ class TestDraftSendResolution:
         assert latest is not None
         assert latest.version == 3
         assert latest.status is DraftStatus.SENT
+        assert latest.user_id == "user_sarah"
 
         # Audit chain has draft.send.completed.
         audit_calls = persistence.audit_calls

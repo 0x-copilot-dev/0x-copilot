@@ -7,6 +7,7 @@ from typing import Any
 
 from starlette import status
 
+from agent_runtime.api.artifact_draft_send import ArtifactDraftSendForbidden
 from agent_runtime.api.constants import Keys, Values as ApiValues
 from agent_runtime.capabilities.auth_gate import (
     CapabilityAuthCheck,
@@ -14,7 +15,11 @@ from agent_runtime.capabilities.auth_gate import (
     CapabilityAuthOutcome,
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode, StreamEventSource
-from agent_runtime.persistence.ports import DraftStorePort, OptimisticConflict
+from agent_runtime.persistence.ports import (
+    DraftOwnershipConflict,
+    DraftStorePort,
+    OptimisticConflict,
+)
 from agent_runtime.persistence.records import DraftRecord, DraftStatus
 from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from runtime_api.http.errors import RuntimeApiError
@@ -68,6 +73,7 @@ class DraftService:
         auth_gate: CapabilityAuthGate | None = None,
         event_producer: object | None = None,
         write_stager: object | None = None,
+        artifact_draft_send_stager: object | None = None,
     ) -> None:
         self._store = store
         self._persistence = persistence
@@ -78,6 +84,10 @@ class DraftService:
         # instead of the v1 approval row. ``None`` ⇒ the v1 path regardless of
         # the flag (mirrors the ``event_producer is None`` degrade-open pattern).
         self._write_stager = write_stager
+        # B1/F-006: optionally stages an Artifact revision through the universal
+        # effect path. It returns ``None`` for an unimported legacy row, which
+        # preserves the existing WriteStager migration fallback below.
+        self._artifact_draft_send_stager = artifact_draft_send_stager
 
     # -- read paths ----------------------------------------------------------
 
@@ -112,8 +122,9 @@ class DraftService:
         request: DraftPatchRequest,
     ) -> Draft:
         """Apply a user edit to an existing draft; raises 409 on version conflict or terminal state."""
-        latest = await self._expect(
+        latest = await self._expect_owned_mutable_draft(
             org_id=org_id,
+            user_id=user_id,
             draft_id=draft_id,
             expected_version=request.expected_version,
         )
@@ -122,12 +133,11 @@ class DraftService:
         next_record = self._next_version(
             previous=latest,
             run_id=None,
-            user_id=user_id,
             content_text=request.content_text,
             title_override=request.title,
             status=DraftStatus.DRAFT,
         )
-        persisted = await self._store.insert_version(next_record)
+        persisted = await self._insert_owned_version(next_record)
         await self._audit(
             org_id=org_id,
             user_id=user_id,
@@ -145,13 +155,18 @@ class DraftService:
         request: DraftSendRequest,
     ) -> DraftSendResponse:
         """Initiate a draft send: auth-gate check → insert v+1 → approval row → event."""
-        latest = await self._expect(
+        latest = await self._expect_owned_mutable_draft(
             org_id=org_id,
+            user_id=user_id,
             draft_id=draft_id,
             expected_version=request.expected_version,
         )
         if latest.status in {DraftStatus.SENT, DraftStatus.DISCARDED}:
             raise self._immutable_status_error(latest.status)
+
+        artifact_staging_enabled = (
+            self._artifact_draft_send_stager is not None and SurfacesV2Flag.enabled()
+        )
 
         # 1. Auth pre-check — fail fast BEFORE any DB write.
         await self._enforce_auth_gate(
@@ -166,25 +181,41 @@ class DraftService:
             org_id=org_id, conversation_id=latest.conversation_id, draft=latest
         )
 
-        # 3. Insert the next draft version (status=send_pending_approval).
+        # 3. Prefer the canonical Artifact revision when the B1 cohort has
+        # imported this draft. This happens before a copied ``DraftRecord`` is
+        # created: approval/execution must bind the Artifact ref + digest, not
+        # mutable row bytes. ``None`` signals a legacy row and falls through.
+        if artifact_staging_enabled:
+            artifact_response = await self._stage_send_v2(
+                org_id=org_id,
+                user_id=user_id,
+                host_run_id=host_run_id,
+                draft=latest,
+                request=request,
+            )
+            if artifact_response is not None:
+                return artifact_response
+
+        # 4. Insert the next draft version (status=send_pending_approval).
         next_record = self._next_version(
             previous=latest,
             run_id=host_run_id,
-            user_id=user_id,
             content_text=latest.content_text,
             target_connector=request.target_connector,
             target_metadata=dict(request.target_metadata or {}),
             status=DraftStatus.SEND_PENDING_APPROVAL,
         )
-        persisted = await self._store.insert_version(next_record)
+        persisted = await self._insert_owned_version(next_record)
 
-        # 3b. PRD-D1 branch — when v2 staging is wired AND the flag is on, the
+        # 4b. Legacy PRD-D1 branch — retained only for a row that has not yet
+        # acquired a canonical Artifact revision. New Artifact drafts never
+        # reach this compatibility bridge.
         # write stages on the ledger (write.staged + revision.added rev 1); no
         # v1 approval row, no APPROVAL_REQUESTED event. Nothing executes here.
         # The v1 path (steps 4-6) is byte-identical when the flag is off or the
         # stager is unwired.
         if self._write_stager is not None and SurfacesV2Flag.enabled():
-            return await self._stage_send_v2(
+            return await self._stage_legacy_send_v2(
                 org_id=org_id,
                 user_id=user_id,
                 host_run_id=host_run_id,
@@ -238,8 +269,9 @@ class DraftService:
         request: DraftDiscardRequest,
     ) -> Draft:
         """Mark a draft as discarded; raises 409 if already sent (sent is irreversible)."""
-        latest = await self._expect(
+        latest = await self._expect_owned_mutable_draft(
             org_id=org_id,
+            user_id=user_id,
             draft_id=draft_id,
             expected_version=request.expected_version,
         )
@@ -248,11 +280,10 @@ class DraftService:
         next_record = self._next_version(
             previous=latest,
             run_id=None,
-            user_id=user_id,
             content_text=latest.content_text,
             status=DraftStatus.DISCARDED,
         )
-        persisted = await self._store.insert_version(next_record)
+        persisted = await self._insert_owned_version(next_record)
         await self._audit(
             org_id=org_id,
             user_id=user_id,
@@ -276,14 +307,12 @@ class DraftService:
         host_run_id: str,
         draft: DraftRecord,
         request: DraftSendRequest,
-    ) -> DraftSendResponse:
-        """Stage a v2 write instead of the v1 approval row (flag on + stager wired).
+    ) -> DraftSendResponse | None:
+        """Stage an Artifact-backed send through the standard effect ledger.
 
-        Resolves the host run, delegates to ``WriteStager.stage`` (emits
-        write.staged + revision.added rev 1), keeps the existing
-        ``draft.send.proposed`` audit, and returns the ``stage_id`` so the FE can
-        bind the staged-draft surface. NOTHING executes: no approval row, no
-        APPROVAL_REQUESTED event, no connector call.
+        The injected stager resolves the scope-bound ``draft://`` Artifact
+        binding. ``None`` is the deliberately narrow legacy-migration signal;
+        it is not an approval or execution failure.
         """
 
         run = await self._get_run(org_id=org_id, run_id=host_run_id)
@@ -294,14 +323,71 @@ class DraftService:
                 http_status=status.HTTP_409_CONFLICT,
                 details={"error_code": "no_host_run"},
             )
-        target_op = self._target_op_for(request)
+        try:
+            state = await self._artifact_draft_send_stager.stage(  # type: ignore[union-attr]
+                run=run,
+                org_id=org_id,
+                user_id=user_id,
+                draft_id=draft.draft_id,
+                target_connector=request.target_connector,
+                target_op=self._target_op_for(request),
+                target_metadata=dict(request.target_metadata or {}),
+            )
+        except ArtifactDraftSendForbidden as exc:
+            # Covers a host-run ownership race after the early service check.
+            # It remains an opaque denial, never a compatibility fallback.
+            raise self._opaque_draft_not_found() from exc
+        if state is None:
+            return None
+        await self._audit(
+            org_id=org_id,
+            user_id=user_id,
+            event_type=_AUDIT_DRAFT_SEND_PROPOSED,
+            record=draft,
+            extra_metadata={
+                "stage_id": state.stage_id,
+                "host_run_id": host_run_id,
+                "target_connector": request.target_connector,
+                "artifact_content_ref": state.current_revision.proposal_content_ref,
+                "artifact_content_digest": state.current_revision.proposal_digest,
+                "effect_target_ref": state.target.target_ref,
+                "effect_target_digest": state.target_digest,
+                "artifact_draft_effects_v2": True,
+            },
+        )
+        return DraftSendResponse(
+            draft=_to_draft(draft),
+            approval_id=None,
+            run_id=host_run_id,
+            stage_id=state.stage_id,
+        )
+
+    async def _stage_legacy_send_v2(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        host_run_id: str,
+        draft: DraftRecord,
+        request: DraftSendRequest,
+    ) -> DraftSendResponse:
+        """Stage an unmigrated legacy row through the historical v2 bridge."""
+
+        run = await self._get_run(org_id=org_id, run_id=host_run_id)
+        if run is None:
+            raise RuntimeApiError(
+                code=RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+                safe_message=_NO_HOST_RUN,
+                http_status=status.HTTP_409_CONFLICT,
+                details={"error_code": "no_host_run"},
+            )
         state = await self._write_stager.stage(  # type: ignore[union-attr]
             run=run,
             org_id=org_id,
             run_id=host_run_id,
             draft=draft,
             target_connector=request.target_connector,
-            target_op=target_op,
+            target_op=self._target_op_for(request),
         )
         await self._audit(
             org_id=org_id,
@@ -314,6 +400,7 @@ class DraftService:
                 "host_run_id": host_run_id,
                 "target_connector": request.target_connector,
                 "surfaces_v2": True,
+                "legacy_draft_migration": True,
             },
         )
         return DraftSendResponse(
@@ -553,6 +640,32 @@ class DraftService:
                 },
             ) from exc
 
+    async def _expect_owned_mutable_draft(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        draft_id: str,
+        expected_version: int,
+    ) -> DraftRecord:
+        """Load a mutable draft without leaking a peer's draft existence.
+
+        Draft mutations are per-user actions. This generic service boundary is
+        intentionally independent of Artifact staging, so legacy and
+        feature-off paths cannot mutate another same-org user's draft either.
+        Checking the owner before the optimistic-version check also preserves
+        the opaque 404 response if a peer guesses a stale version.
+        """
+
+        latest = await self._store.latest(org_id=org_id, draft_id=draft_id)
+        if latest is None or latest.user_id != user_id:
+            raise self._opaque_draft_not_found()
+        return await self._expect(
+            org_id=org_id,
+            draft_id=draft_id,
+            expected_version=expected_version,
+        )
+
     @staticmethod
     def _immutable_status_error(current: DraftStatus) -> RuntimeApiError:
         """Build a 409 error indicating the draft is in a final, non-writable state."""
@@ -564,11 +677,20 @@ class DraftService:
         )
 
     @staticmethod
+    def _opaque_draft_not_found() -> RuntimeApiError:
+        """Return the same safe response as an absent draft, without enumeration."""
+
+        return RuntimeApiError(
+            code=RuntimeErrorCode.CAPABILITY_NOT_FOUND,
+            safe_message=_DRAFT_NOT_FOUND,
+            http_status=status.HTTP_404_NOT_FOUND,
+        )
+
+    @staticmethod
     def _next_version(
         *,
         previous: DraftRecord,
         run_id: str | None,
-        user_id: str,
         content_text: str,
         status: DraftStatus,
         title_override: str | None = None,
@@ -593,7 +715,7 @@ class DraftService:
             org_id=previous.org_id,
             conversation_id=previous.conversation_id,
             run_id=run_id,
-            user_id=user_id,
+            user_id=previous.user_id,
             title=title_override or _title_for(content_text, fallback=previous.title),
             content_text=content_text,
             target_connector=resolved_connector,
@@ -603,6 +725,14 @@ class DraftService:
             encryption_version=previous.encryption_version,
             created_at=datetime.now(timezone.utc),
         )
+
+    async def _insert_owned_version(self, record: DraftRecord) -> DraftRecord:
+        """Persist a verified owner-preserving version without exposing races."""
+
+        try:
+            return await self._store.insert_version(record)
+        except DraftOwnershipConflict as exc:
+            raise self._opaque_draft_not_found() from exc
 
     async def _audit(
         self,

@@ -290,11 +290,30 @@ def _url(stage_id: str, *, run_id: str = _RUN) -> str:
     return f"/v1/agent/effect-stages/{stage_id}/decisions?run_id={run_id}"
 
 
+def _generic_url(stage_id: str, *, run_id: str = _RUN) -> str:
+    return f"/v1/agent/effect-stages/{stage_id}/decision?run_id={run_id}"
+
+
 def _event_types(store: InMemoryRuntimeApiStore, run_id: str = _RUN) -> list[str]:
     return [event.event_type.value for event in store.events_by_run.get(run_id, [])]
 
 
 class TestWorkspaceApprovalDecisionReceipt:
+    def test_generic_mcp_route_hides_workspace_stage_as_opaque_404(self) -> None:
+        """Executor kind is an authorization boundary, not a UI hint."""
+
+        bundle = _bundle()
+        stage = bundle.stage_workspace()
+
+        response = bundle.client.post(
+            _generic_url(stage.stage_id), headers=_headers(), json=_body(stage)
+        )
+
+        assert response.status_code == 404
+        assert response.json() == {"detail": "resource not found"}
+        assert _event_types(bundle.store) == ["effect.staged"]
+        assert bundle.store.effect_commit_commands == []
+
     def test_approved_receipt_is_ledger_derived_and_contains_only_safe_fields(
         self,
     ) -> None:

@@ -9,7 +9,7 @@ every tenant-scoped table).
 
 Test plan (mirrors docs/roadmap/15-c5-rls-tenant-isolation.md §3.2):
 
-1. Apply yoyo migrations (0001 .. 0008) and ``staged/do_rls.sql``.
+1. Apply all yoyo migrations (including F-006's 0023) and ``staged/do_rls.sql``.
 2. Connect as ``enterprise_app`` (RLS-enforced).
 3. For every tenant-scoped table:
    - Insert a row with ``app.current_org_id='org_a'``.
@@ -26,6 +26,7 @@ exercised by unit tests; this file is purely about the DB-level guarantee.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from collections.abc import Iterator
@@ -34,6 +35,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+
+from agent_runtime.persistence.records import DraftEffectSupersession
+from runtime_adapters.postgres.draft_store import PostgresDraftStore
+from runtime_adapters.postgres.runtime_api_store import PostgresRuntimeApiStore
 
 
 pytestmark = pytest.mark.skipif(
@@ -106,6 +111,12 @@ def _set_role(conn: Any, role: str | None) -> None:
             "SELECT set_config('app.role', %s, false)",
             (role if role is not None else "",),
         )
+
+
+def _app_database_url(database_url: str) -> str:
+    """Return the RLS-enforced app URL used by the synchronous probe too."""
+
+    return os.environ.get("RUNTIME_RLS_TEST_APP_DATABASE_URL", database_url)
 
 
 class TestRlsIsolationAgentConversations:
@@ -219,3 +230,79 @@ class TestRlsIsolationOutboxWorker:
         _set_org(app_conn, "org_a")
         with app_conn.cursor() as cur:
             cur.execute("DELETE FROM runtime_outbox_events WHERE id = %s", (out_id,))
+
+
+class TestRlsIsolationDraftEffectSupersessions:
+    """F-006's owner-scoped safety correlation is durable and tenant-isolated."""
+
+    def test_effect_supersession_replay_conflict_and_rls_isolation(
+        self,
+        admin_conn: Any,
+        app_conn: Any,
+        database_url: str,
+    ) -> None:
+        org_a = f"org_f006_a_{uuid.uuid4().hex}"
+        org_b = f"org_f006_b_{uuid.uuid4().hex}"
+        draft_id = f"draft_f006_{uuid.uuid4().hex}"
+        record = DraftEffectSupersession(
+            org_id=org_a,
+            user_id="user_f006_owner",
+            draft_id=draft_id,
+            stage_id=f"stg_f006_{uuid.uuid4().hex}",
+            host_run_id=f"run_f006_{uuid.uuid4().hex}",
+            artifact_id=f"art_f006_{uuid.uuid4().hex}",
+            proposal_digest="a" * 64,
+            target_digest="b" * 64,
+        )
+
+        async def exercise_adapter() -> None:
+            async with PostgresRuntimeApiStore(
+                _app_database_url(database_url)
+            ) as runtime_store:
+                store = PostgresDraftStore(runtime_store)
+                first = await store.record_effect_supersession(record)
+                replay = await store.record_effect_supersession(record)
+
+                assert replay == first
+                with pytest.raises(ValueError, match="conflicts"):
+                    await store.record_effect_supersession(
+                        record.model_copy(update={"proposal_digest": "c" * 64})
+                    )
+                assert await store.has_effect_supersession(
+                    org_id=org_a,
+                    user_id=record.user_id,
+                    draft_id=draft_id,
+                )
+                assert not await store.has_effect_supersession(
+                    org_id=org_b,
+                    user_id=record.user_id,
+                    draft_id=draft_id,
+                )
+
+        try:
+            asyncio.run(exercise_adapter())
+
+            # The direct app-role query verifies that 0023's RLS policy makes
+            # the owner correlation invisible to a different organization.
+            _set_org(app_conn, org_b)
+            with app_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT 1
+                      FROM runtime_draft_effect_supersessions
+                     WHERE org_id = %s AND user_id = %s AND draft_id = %s
+                    """,
+                    (org_a, record.user_id, draft_id),
+                )
+                assert cur.fetchone() is None
+        finally:
+            # Test setup uses a BYPASSRLS role because 0023 grants the app
+            # role only SELECT and INSERT, never destructive access.
+            with admin_conn.cursor() as cur:
+                cur.execute(
+                    """
+                    DELETE FROM runtime_draft_effect_supersessions
+                     WHERE org_id = %s AND user_id = %s AND draft_id = %s
+                    """,
+                    (org_a, record.user_id, draft_id),
+                )

@@ -48,6 +48,20 @@ class ArtifactMetadataStorePort(Protocol):
     ) -> ArtifactStoredRecord | None:
         """Return a caller-owned artifact or ``None`` without disclosing scope."""
 
+    async def get_artifact_for_org(
+        self,
+        *,
+        org_id: str,
+        artifact_id: str,
+        include_deleted: bool = False,
+    ) -> ArtifactStoredRecord | None:
+        """Return an artifact for an internal authorization classifier only.
+
+        This must never be exposed on a user-facing read route. It lets a
+        service distinguish an absent legacy binding from a canonical artifact
+        that exists but is inaccessible to the requesting principal.
+        """
+
     async def get_revision(
         self,
         *,

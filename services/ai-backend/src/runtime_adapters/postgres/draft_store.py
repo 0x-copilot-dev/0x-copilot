@@ -7,10 +7,15 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.persistence.encryption import FieldCodec
-from agent_runtime.persistence.ports import OptimisticConflict
-from agent_runtime.persistence.records import DraftRecord, DraftStatus
+from agent_runtime.persistence.ports import DraftOwnershipConflict, OptimisticConflict
+from agent_runtime.persistence.records import (
+    DraftEffectSupersession,
+    DraftRecord,
+    DraftStatus,
+)
 
 _TABLE = "runtime_drafts"
+_EFFECT_SUPERSESSIONS_TABLE = "runtime_draft_effect_supersessions"
 
 
 class PostgresDraftStore:
@@ -47,58 +52,77 @@ class PostgresDraftStore:
             org_id=record.org_id,
         )
         async with self._parent._tenant_connection(org_id=record.org_id) as conn:  # type: ignore[attr-defined]
-            async with conn.cursor() as cur:
-                try:
-                    await cur.execute(
-                        f"""
+            # The owner check and insert must share a transaction-scoped lock.
+            # Without it, concurrent first writes could both observe no history
+            # and establish different owners at different versions.
+            async with conn.transaction():
+                await conn.execute(
+                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                    (f"runtime-draft-owner:{record.org_id}:{record.draft_id}",),
+                )
+                async with conn.cursor() as cur:
+                    try:
+                        await cur.execute(
+                            f"""
                         INSERT INTO {_TABLE}
                             (id, draft_id, version, org_id, conversation_id,
                              run_id, user_id, title, content_text,
                              target_connector, target_metadata, citation_ids,
                              status, encryption_version, created_at)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                         WHERE NOT EXISTS (
+                            SELECT 1
+                              FROM {_TABLE}
+                             WHERE org_id = %s AND draft_id = %s AND user_id <> %s
+                         )
+                        RETURNING id
                         """,
-                        (
-                            record.id,
-                            record.draft_id,
-                            record.version,
-                            record.org_id,
-                            record.conversation_id,
-                            record.run_id,
-                            record.user_id,
-                            (title_encrypted or "").encode("utf-8")
-                            if title_encrypted
-                            else b"",
-                            (content_encrypted or "").encode("utf-8")
-                            if content_encrypted
-                            else b"",
-                            record.target_connector,
-                            json.dumps(metadata_encrypted).encode("utf-8")
-                            if metadata_encrypted is not None
-                            else None,
-                            list(record.citation_ids),
-                            record.status.value,
-                            codec.write_version,
-                            record.created_at,
-                        ),
-                    )
-                except Exception as exc:
-                    # UNIQUE (org_id, draft_id, version) collision means a
-                    # concurrent writer raced us; surface as the typed
-                    # conflict so callers can re-fetch and retry.
-                    if (
-                        "duplicate key" in str(exc).lower()
-                        or "unique" in str(exc).lower()
-                    ):
-                        latest = await self.latest(
-                            org_id=record.org_id, draft_id=record.draft_id
+                            (
+                                record.id,
+                                record.draft_id,
+                                record.version,
+                                record.org_id,
+                                record.conversation_id,
+                                record.run_id,
+                                record.user_id,
+                                (title_encrypted or "").encode("utf-8")
+                                if title_encrypted
+                                else b"",
+                                (content_encrypted or "").encode("utf-8")
+                                if content_encrypted
+                                else b"",
+                                record.target_connector,
+                                json.dumps(metadata_encrypted).encode("utf-8")
+                                if metadata_encrypted is not None
+                                else None,
+                                list(record.citation_ids),
+                                record.status.value,
+                                codec.write_version,
+                                record.created_at,
+                                record.org_id,
+                                record.draft_id,
+                                record.user_id,
+                            ),
                         )
-                        raise OptimisticConflict(
-                            draft_id=record.draft_id,
-                            expected_version=record.version,
-                            actual_version=latest.version if latest else 0,
-                        ) from exc
-                    raise
+                        if await cur.fetchone() is None:
+                            raise DraftOwnershipConflict(draft_id=record.draft_id)
+                    except Exception as exc:
+                        # UNIQUE (org_id, draft_id, version) collision means a
+                        # concurrent writer raced us; surface as the typed
+                        # conflict so callers can re-fetch and retry.
+                        if (
+                            "duplicate key" in str(exc).lower()
+                            or "unique" in str(exc).lower()
+                        ):
+                            latest = await self.latest(
+                                org_id=record.org_id, draft_id=record.draft_id
+                            )
+                            raise OptimisticConflict(
+                                draft_id=record.draft_id,
+                                expected_version=record.version,
+                                actual_version=latest.version if latest else 0,
+                            ) from exc
+                        raise
         return record
 
     async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
@@ -220,6 +244,131 @@ class PostgresDraftStore:
             )
         return latest
 
+    async def record_effect_supersession(
+        self, record: DraftEffectSupersession
+    ) -> DraftEffectSupersession:
+        """Persist a portable owner-scoped F-006 safety correlation.
+
+        The durable key intentionally excludes ``host_run_id``: a legacy draft
+        can move between host runs, but a v1 approval for that owner/draft must
+        remain blocked once an immutable Artifact effect is staged.
+        """
+
+        async with self._parent._tenant_connection(org_id=record.org_id) as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    INSERT INTO {_EFFECT_SUPERSESSIONS_TABLE}
+                        (org_id, user_id, draft_id, stage_id, host_run_id,
+                         artifact_id, proposal_digest, target_digest, created_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (org_id, user_id, draft_id, stage_id)
+                    DO NOTHING
+                    RETURNING org_id, user_id, draft_id, stage_id, host_run_id,
+                              artifact_id, proposal_digest, target_digest, created_at
+                    """,
+                    (
+                        record.org_id,
+                        record.user_id,
+                        record.draft_id,
+                        record.stage_id,
+                        record.host_run_id,
+                        record.artifact_id,
+                        record.proposal_digest,
+                        record.target_digest,
+                        record.created_at,
+                    ),
+                )
+                row = await cur.fetchone()
+                if row is None:
+                    await cur.execute(
+                        f"""
+                        SELECT org_id, user_id, draft_id, stage_id, host_run_id,
+                               artifact_id, proposal_digest, target_digest, created_at
+                          FROM {_EFFECT_SUPERSESSIONS_TABLE}
+                         WHERE org_id = %s AND user_id = %s AND draft_id = %s
+                           AND stage_id = %s
+                        """,
+                        (
+                            record.org_id,
+                            record.user_id,
+                            record.draft_id,
+                            record.stage_id,
+                        ),
+                    )
+                    row = await cur.fetchone()
+        if row is None:
+            raise RuntimeError("effect stage supersession write did not persist")
+        persisted = self._row_to_effect_supersession(row)
+        if not _same_effect_supersession(persisted, record):
+            raise ValueError("effect stage conflicts with an existing draft binding")
+        return persisted
+
+    async def has_effect_supersession(
+        self, *, org_id: str, user_id: str, draft_id: str
+    ) -> bool:
+        """Perform the canonical owner-scoped F-006 safety lookup."""
+
+        async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    SELECT EXISTS(
+                        SELECT 1
+                          FROM {_EFFECT_SUPERSESSIONS_TABLE}
+                         WHERE org_id = %s AND user_id = %s AND draft_id = %s
+                    ) AS exists
+                    """,
+                    (org_id, user_id, draft_id),
+                )
+                row = await cur.fetchone()
+        if isinstance(row, Mapping):
+            return bool(row["exists"])
+        return bool(row[0]) if row is not None else False
+
+    @staticmethod
+    def _row_to_effect_supersession(
+        row: Mapping[str, object] | tuple[object, ...],
+    ) -> DraftEffectSupersession:
+        if isinstance(row, Mapping):
+            values = (
+                row["org_id"],
+                row["user_id"],
+                row["draft_id"],
+                row["stage_id"],
+                row["host_run_id"],
+                row["artifact_id"],
+                row["proposal_digest"],
+                row["target_digest"],
+                row["created_at"],
+            )
+        else:
+            values = row
+        (
+            org_id,
+            user_id,
+            draft_id,
+            stage_id,
+            host_run_id,
+            artifact_id,
+            proposal_digest,
+            target_digest,
+            created_at,
+        ) = values
+        return DraftEffectSupersession(
+            org_id=str(org_id),
+            user_id=str(user_id),
+            draft_id=str(draft_id),
+            stage_id=str(stage_id),
+            host_run_id=str(host_run_id),
+            artifact_id=str(artifact_id),
+            proposal_digest=str(proposal_digest),
+            target_digest=str(target_digest),
+            created_at=created_at
+            if isinstance(created_at, datetime)
+            else datetime.now(timezone.utc),
+        )
+
     def _row_to_record(
         self, row: Mapping[str, object] | tuple[object, ...]
     ) -> DraftRecord:
@@ -324,3 +473,27 @@ class PostgresDraftStore:
             if isinstance(created_at, datetime)
             else datetime.now(timezone.utc),
         )
+
+
+def _same_effect_supersession(
+    left: DraftEffectSupersession, right: DraftEffectSupersession
+) -> bool:
+    return (
+        left.org_id,
+        left.user_id,
+        left.draft_id,
+        left.stage_id,
+        left.host_run_id,
+        left.artifact_id,
+        left.proposal_digest,
+        left.target_digest,
+    ) == (
+        right.org_id,
+        right.user_id,
+        right.draft_id,
+        right.stage_id,
+        right.host_run_id,
+        right.artifact_id,
+        right.proposal_digest,
+        right.target_digest,
+    )

@@ -102,3 +102,33 @@ class DraftRecord(RuntimeContract):
         if isinstance(value, (list, tuple)):
             return tuple(str(item) for item in value)
         raise ValueError("citation_ids must be a list/tuple of strings")
+
+
+class DraftEffectSupersession(RuntimeContract):
+    """Durable proof that a draft has moved onto an immutable effect stage.
+
+    The key is deliberately independent of a draft's mutable ``run_id``.  A
+    legacy ``DraftRecord`` can be edited or re-homed after a v1 approval was
+    created; that older approval must still discover the newer immutable
+    Artifact-backed stage before it can send anything.  ``host_run_id`` is
+    retained for audit and stage lookup, but is not part of the correlation
+    key.
+    """
+
+    org_id: str = Field(min_length=1)
+    user_id: str = Field(min_length=1)
+    draft_id: str = Field(min_length=32, max_length=36)
+    stage_id: str = Field(min_length=1, max_length=128)
+    host_run_id: str = Field(min_length=1, max_length=128)
+    artifact_id: str = Field(min_length=1, max_length=256)
+    proposal_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    target_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @field_validator("draft_id", mode="before")
+    @classmethod
+    def _validate_draft_id(cls, value: str) -> str:
+        try:
+            return UUID(value).hex
+        except ValueError as exc:  # pragma: no cover - exercised through ports
+            raise ValueError("draft_id must be a hex UUID") from exc

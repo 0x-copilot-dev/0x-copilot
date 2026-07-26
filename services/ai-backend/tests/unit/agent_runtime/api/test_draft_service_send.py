@@ -177,6 +177,46 @@ class TestDraftServiceSend:
         assert producer.calls == []
         assert persistence.audit_calls == []
 
+    async def test_non_owner_send_is_opaque_before_legacy_side_effects(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The generic send boundary protects legacy/feature-off draft sends."""
+
+        monkeypatch.setenv("SURFACES_V2", "false")
+        store = InMemoryDraftStore()
+        await store.insert_version(_record(version=1, run_id="run_existing"))
+        gate = _StubAuthGate(CapabilityAuthOutcome.AUTHENTICATED)
+        persistence = _StubPersistence(run_record=_MinimalRun())
+        producer = _CaptureEventProducer()
+        service = DraftService(
+            store=store,
+            persistence=persistence,
+            auth_gate=gate,
+            event_producer=producer,
+            # No Artifact or Write stager: this is the v1 feature-off path.
+        )
+
+        with pytest.raises(RuntimeApiError) as exc:
+            await service.send(
+                org_id="org_acme",
+                user_id="user_peer",
+                draft_id=_draft_id(),
+                # A stale version must not disclose that the owner's draft exists.
+                request=DraftSendRequest(
+                    expected_version=99,
+                    target_connector="slack",
+                    target_metadata={"channel": "#test"},
+                ),
+            )
+
+        assert exc.value.http_status == 404
+        assert exc.value.envelope.safe_message == "Draft was not found for this scope."
+        assert store.versions[("org_acme", _draft_id())][-1].version == 1
+        assert gate.calls == []
+        assert persistence.approvals == []
+        assert producer.calls == []
+        assert persistence.audit_calls == []
+
     async def test_unknown_capability_returns_400(self) -> None:
         store = InMemoryDraftStore()
         await store.insert_version(_record(version=1, run_id="run_existing"))

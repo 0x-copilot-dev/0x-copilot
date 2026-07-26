@@ -1127,6 +1127,29 @@ export interface WorkspaceApprovalDecisionReceipt {
   readonly status: "approved" | "rejected";
 }
 
+/** Request body for the generic MCP A4 effect decision route. */
+export interface EffectStageDecisionRequest {
+  readonly revision: number;
+  readonly decision: "approve" | "reject";
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+}
+
+/**
+ * Canonical response from ``/effect-stages/{id}/decision`` for a standard MCP
+ * effect. It deliberately contains only the reviewed snapshot and its ledger
+ * evidence; the queued A5 worker resolves immutable server material itself.
+ */
+export interface EffectStageDecisionResponse {
+  readonly stage_id: string;
+  readonly revision: number;
+  readonly decision_ledger_id: string;
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+  readonly decision: "approve" | "reject";
+  readonly status: "approved" | "rejected";
+}
+
 export interface EffectExecutionRequest {
   readonly stage_id: string;
   readonly revision: number;

@@ -231,6 +231,32 @@ class TestDraftBackendCrossOrg:
         result = await b_backend.aread(_path())
         assert result.error == "file_not_found"
 
+    async def test_same_org_peer_cannot_overwrite_or_emit_another_users_draft(
+        self,
+    ) -> None:
+        store = InMemoryDraftStore()
+        owner = _backend(store=store)
+        await owner.awrite(_path(), "# Aurora\nowner body")
+        emitted = _CaptureEmit()
+        peer = DraftBackend(
+            store=store,
+            org_id="org_acme",
+            conversation_id="conv_1",
+            run_id="run_peer",
+            user_id="user_peer",
+            emit_event=emitted,
+        )
+
+        result = await peer.awrite(_path(), "# Aurora\npeer takeover")
+
+        assert result.error == "file_not_found"
+        latest = await store.latest(org_id="org_acme", draft_id=_draft_id())
+        assert latest is not None
+        assert latest.version == 1
+        assert latest.user_id == "user_sarah"
+        assert latest.content_text == "# Aurora\nowner body"
+        assert emitted.records == []
+
 
 class TestDraftBackendConcurrency:
     async def test_serializes_writes_to_same_draft(self) -> None:

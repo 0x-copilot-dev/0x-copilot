@@ -11,26 +11,16 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-import hashlib
 import json
 import re
 
-from agent_runtime.api.effect_commit_queue import RuntimeEffectCommitOutbox
-from agent_runtime.api.effect_ledger import RuntimeEffectLedger
+from agent_runtime.api.effect_stage_decision_service import EffectStageDecisionService
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import PersistencePort, RuntimeQueuePort
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
-from agent_runtime.effects.contracts import (
-    EffectActorIdentity,
-    EffectStageScope,
-    EffectStageState,
-)
-from agent_runtime.effects.errors import EffectStageMalformedEvent, EffectStageNotFound
-from agent_runtime.effects.executor import EffectExecutionScope
-from agent_runtime.effects.staging import EffectStager
-from agent_runtime.surfaces_v2.ledger_ids import EffectStageIdCodec
+from agent_runtime.effects.contracts import EffectStageState
+from agent_runtime.effects.errors import EffectStageMalformedEvent
 from agent_runtime.surfaces_v2.ledger_models import (
-    EffectActor,
     EffectDecisionKind,
     EffectExecutorKind,
 )
@@ -67,6 +57,7 @@ class WorkspaceApprovalDecisionService:
     queue: RuntimeQueuePort
     blobs: ArtifactBlobStorePort | None = None
     references: ArtifactReferenceRepositoryPort | None = None
+    decisions: EffectStageDecisionService | None = None
 
     async def record_decision(
         self,
@@ -88,64 +79,38 @@ class WorkspaceApprovalDecisionService:
         unrelated executor kind.
         """
 
-        try:
-            EffectStageIdCodec.parse(stage_id)
-        except ValueError as error:
-            raise EffectStageNotFound() from error
-
-        run = await self._owned_run(org_id=org_id, user_id=user_id, run_id=run_id)
-        owner_ref = f"principal://users/{run.user_id}"
-        stage_scope = EffectStageScope(run_id=run.run_id, owner_ref=owner_ref)
-        stager = EffectStager(
-            ledger=RuntimeEffectLedger(
-                event_producer=self.event_producer,
-                run=run,
-                owner_ref=owner_ref,
-            ),
-            outbox=RuntimeEffectCommitOutbox(
-                queue=self.queue,
-                scope=EffectExecutionScope(
-                    org_id=run.org_id,
-                    user_id=run.user_id,
-                    conversation_id=run.conversation_id,
-                    run_id=run.run_id,
-                    owner_ref=owner_ref,
-                ),
-            ),
+        decisions = self._decision_service()
+        current = await decisions.current_stage(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stage_id=stage_id,
+            allowed_executors=frozenset({EffectExecutorKind.WORKSPACE}),
         )
-        current = await stager.get_state(scope=stage_scope, stage_id=stage_id)
-        if current.executor is not EffectExecutorKind.WORKSPACE:
-            raise EffectStageNotFound()
 
         # Validate the immutable C1 material before changing the stage.  If it
         # is missing, tampered, or not the exact body C2 will prepare, the
         # request must not append a decision or enqueue an A5 command that can
         # never obtain a desktop permit.
         change_set_digest = await self._resolve_change_set_digest(
-            org_id=run.org_id,
-            user_id=run.user_id,
+            org_id=org_id,
+            user_id=user_id,
             state=current,
         )
 
-        state = await stager.decide(
-            scope=stage_scope,
+        state = await decisions.record_decision(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
             stage_id=stage_id,
             revision=revision,
             decision=decision,
             proposal_digest=proposal_digest,
             target_digest=target_digest,
-            actor=EffectActorIdentity(
-                actor=EffectActor.USER,
-                principal_ref=owner_ref,
-            ),
-            idempotency_key=self._decision_key(
-                run_id=run.run_id,
-                stage_id=stage_id,
-                revision=revision,
-                decision=decision,
-                proposal_digest=proposal_digest,
-                target_digest=target_digest,
-            ),
+            allowed_executors=frozenset({EffectExecutorKind.WORKSPACE}),
+            # Preserve C3's established retry key while sharing the A4/A5
+            # authorization and enqueue semantics with other effect routes.
+            idempotency_namespace="workspace-decision",
         )
         return WorkspaceApprovalDecision(
             state=state,
@@ -241,40 +206,16 @@ class WorkspaceApprovalDecisionService:
             ) from None
         return change_set_digest
 
-    async def _owned_run(self, *, org_id: str, user_id: str, run_id: str):
-        """Resolve a run without disclosing whether a foreign run exists."""
+    def _decision_service(self) -> EffectStageDecisionService:
+        """Use app composition when available; retain direct-test compatibility."""
 
-        run = await self.persistence.get_run(org_id=org_id, run_id=run_id)
-        if run is None or run.user_id != user_id:
-            raise EffectStageNotFound()
-        return run
-
-    @staticmethod
-    def _decision_key(
-        *,
-        run_id: str,
-        stage_id: str,
-        revision: int,
-        decision: EffectDecisionKind,
-        proposal_digest: str,
-        target_digest: str,
-    ) -> str:
-        """Derive a stable retry key from the exact reviewed snapshot only."""
-
-        material = json.dumps(
-            {
-                "run_id": run_id,
-                "stage_id": stage_id,
-                "revision": revision,
-                "decision": decision.value,
-                "proposal_digest": proposal_digest,
-                "target_digest": target_digest,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=True,
-        ).encode("utf-8")
-        return f"workspace-decision-{hashlib.sha256(material).hexdigest()}"
+        if self.decisions is not None:
+            return self.decisions
+        return EffectStageDecisionService(
+            persistence=self.persistence,
+            event_producer=self.event_producer,
+            queue=self.queue,
+        )
 
 
 async def _read_bounded(stream: AsyncIterator[bytes], *, limit: int) -> bytes | None:

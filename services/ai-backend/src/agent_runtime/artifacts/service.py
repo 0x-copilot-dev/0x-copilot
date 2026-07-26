@@ -384,6 +384,26 @@ class ArtifactService:
             artifact_id=artifact_id,
         )
 
+    async def get_metadata_for_org(
+        self, *, org_id: str, artifact_id: str
+    ) -> ArtifactStoredRecord:
+        """Classify a canonical binding internally without granting it to a user.
+
+        Callers use this only after a scoped read failed, to decide whether a
+        missing Artifact is genuinely an unmigrated legacy draft or an opaque
+        authorization/provenance failure. Never return this result from a
+        public route.
+        """
+
+        record = await self._metadata.get_artifact_for_org(
+            org_id=org_id,
+            artifact_id=artifact_id,
+            include_deleted=True,
+        )
+        if record is None:
+            raise ArtifactNotFoundError()
+        return record
+
     async def get_revision_metadata(
         self,
         *,

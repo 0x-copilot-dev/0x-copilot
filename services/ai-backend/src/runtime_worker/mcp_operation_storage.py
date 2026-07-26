@@ -17,7 +17,12 @@ import hashlib
 import json
 
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
+from agent_runtime.artifacts import ArtifactService
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.capabilities.backends.artifact_draft_effect import (
+    ArtifactDraftMcpEffectMaterialResolver,
+    ArtifactDraftSendTargetStore,
+)
 from agent_runtime.capabilities.browser.contracts import BrowserEffectBridge
 from agent_runtime.capabilities.browser.effect_adapter import BrowserEffectExecutor
 from agent_runtime.capabilities.mcp.operation_adapter import McpOperationStoredResult
@@ -227,6 +232,10 @@ class RuntimeMcpEffectCoordinatorFactory:
     workspace_sessions: WorkspaceHostSessionRegistryPort | None = None
     workspace_overlay_store: WorkspaceOverlayStorePort | None = None
     browser_bridge: BrowserEffectBridge | None = None
+    # F-006: optional because effect composition also serves deployments where
+    # Artifact drafts are dark. When present, it only adds immutable material
+    # resolution for an already-approved Artifact-revision effect.
+    artifact_service: ArtifactService | None = None
 
     def for_run(self, *, run: RunRecord) -> EffectCoordinator:
         owner_ref = f"principal://users/{run.user_id}"
@@ -254,6 +263,28 @@ class RuntimeMcpEffectCoordinatorFactory:
             org_id=run.org_id,
             user_id=run.user_id,
         )
+        artifact_targets = (
+            ArtifactDraftSendTargetStore(
+                blobs=self.blobs,
+                references=self.references,
+                org_id=run.org_id,
+                user_id=run.user_id,
+            )
+            if self.artifact_service is not None
+            else None
+        )
+        artifact_material = (
+            ArtifactDraftMcpEffectMaterialResolver(
+                artifacts=self.artifact_service,
+                targets=artifact_targets,
+                org_id=run.org_id,
+                user_id=run.user_id,
+                conversation_id=run.conversation_id,
+                run_id=run.run_id,
+            )
+            if self.artifact_service is not None and artifact_targets is not None
+            else None
+        )
         factories = {
             EffectExecutorKind.MCP: lambda active_scope: McpEffectExecutor(
                 scope=active_scope,
@@ -263,7 +294,10 @@ class RuntimeMcpEffectCoordinatorFactory:
                     timeout_seconds=self.timeout_seconds,
                 ),
                 material_resolver=McpOperationArgumentMaterialResolver(
-                    arguments=arguments
+                    arguments=arguments,
+                    additional_material_resolvers=(artifact_material,)
+                    if artifact_material is not None
+                    else (),
                 ),
                 enabled=True,
             ),
@@ -321,6 +355,8 @@ class RuntimeMcpEffectCoordinatorFactory:
                     else None
                 ),
                 browser_plans=browser_plans,
+                artifact_material=artifact_material,
+                artifact_targets=artifact_targets,
             ),
             executors=EffectExecutorRegistry(factories),
         )
@@ -340,12 +376,30 @@ class _EffectImmutableReferences:
     arguments: RuntimeMcpOperationArgumentStore
     browser_plans: RuntimeBrowserActionPlanStore
     workspace: RuntimeWorkspaceProposalStore | None = None
+    artifact_material: ArtifactDraftMcpEffectMaterialResolver | None = None
+    artifact_targets: ArtifactDraftSendTargetStore | None = None
 
     def open(
         self, *, scope: EffectExecutionScope, reference: str
     ) -> AsyncIterator[bytes]:
         async def _stream() -> AsyncIterator[bytes]:
             if scope != self.scope:
+                return
+            if self.artifact_material is not None and reference.startswith(
+                "artifact://"
+            ):
+                async for chunk in self.artifact_material.open_artifact_reference(
+                    reference=reference
+                ):
+                    yield chunk
+                return
+            if self.artifact_targets is not None and reference.startswith(
+                "draft-send-target://"
+            ):
+                async for chunk in self.artifact_targets.open_reference(
+                    reference=reference
+                ):
+                    yield chunk
                 return
             if self.workspace is not None and reference.startswith("workspace-"):
                 async for chunk in self.workspace.open(

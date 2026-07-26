@@ -338,6 +338,19 @@ class RuntimeApiAppFactory:
             _settings.execution.surfaces_v2
             and _settings.execution.workspace_effect_mode.value == "enforce"
         )
+        # F-006 / A5 — MCP stages created by the universal gateway or the
+        # Artifact-draft cohort use the same owner-scoped decision service as
+        # workspace.  The public route remains absent outside those explicit
+        # cohorts; legacy draft approvals therefore retain their wire shape.
+        effect_stage_decisions_enabled = _settings.execution.surfaces_v2 and (
+            _settings.execution.artifact_drafts_v2
+            or _settings.execution.operation_gateway_mode.value == "enforce"
+        )
+        app.state.effect_stage_decision_service = (
+            cls.default_effect_stage_decision_service(app)
+            if effect_stage_decisions_enabled or workspace_approval_enabled
+            else None
+        )
         app.state.workspace_approval_decision_service = (
             cls.default_workspace_approval_decision_service(app)
             if workspace_approval_enabled
@@ -390,6 +403,7 @@ class RuntimeApiAppFactory:
         app.include_router(
             RuntimeApiRouter.create_router(
                 artifact_effects_v2=_settings.execution.artifact_effects_v2,
+                effect_stage_decisions_enabled=effect_stage_decisions_enabled,
                 workspace_approval_enabled=workspace_approval_enabled,
             )
         )
@@ -835,6 +849,45 @@ class RuntimeApiAppFactory:
             auth_gate=cls._draft_auth_gate(app),
             event_producer=event_producer,
             write_stager=cls._default_write_stager(app),
+            artifact_draft_send_stager=cls._default_artifact_draft_send_stager(app),
+        )
+
+    @classmethod
+    def _default_artifact_draft_send_stager(cls, app):  # type: ignore[no-untyped-def]
+        """Compose F-006 only for the explicit Artifact-drafts cohort.
+
+        The stager is intentionally absent outside that cohort.  That retains
+        the legacy DraftRecord + WriteStager behaviour byte-for-byte and lets
+        a read-through imported row choose the Artifact path without changing
+        historical rows that have not yet migrated.
+        """
+
+        from agent_runtime.api.artifact_draft_send import ArtifactDraftSendStager
+        from agent_runtime.api.events import RuntimeEventProducer
+
+        settings = getattr(app.state, "runtime_settings", None)
+        ports = getattr(app.state, "runtime_ports", None)
+        artifacts = getattr(app.state, "artifact_service", None)
+        if (
+            settings is None
+            or not settings.execution.artifact_drafts_v2
+            or ports is None
+            or artifacts is None
+            or getattr(ports, "queue", None) is None
+            or getattr(ports, "artifact_blob_store", None) is None
+            or getattr(ports, "artifact_reference_provider", None) is None
+        ):
+            return None
+        return ArtifactDraftSendStager(
+            artifacts=artifacts,
+            event_producer=RuntimeEventProducer(
+                persistence=ports.persistence,
+                event_store=ports.event_store,
+            ),
+            queue=ports.queue,
+            blobs=ports.artifact_blob_store,
+            references=ports.artifact_reference_provider,
+            supersessions=ports.draft_store,
         )
 
     @classmethod
@@ -895,6 +948,27 @@ class RuntimeApiAppFactory:
         return StageService(stager=stager, persistence=ports.persistence)
 
     @classmethod
+    def default_effect_stage_decision_service(cls, app):  # type: ignore[no-untyped-def]
+        """Compose shared A4/A5 approval semantics without an executor."""
+
+        from agent_runtime.api.effect_stage_decision_service import (
+            EffectStageDecisionService,
+        )
+        from agent_runtime.api.events import RuntimeEventProducer
+
+        ports = getattr(app.state, "runtime_ports", None)
+        if ports is None:
+            return None
+        return EffectStageDecisionService(
+            persistence=ports.persistence,
+            event_producer=RuntimeEventProducer(
+                persistence=ports.persistence,
+                event_store=ports.event_store,
+            ),
+            queue=ports.queue,
+        )
+
+    @classmethod
     def default_workspace_approval_decision_service(cls, app):  # type: ignore[no-untyped-def]
         """Compose C3's canonical workspace decision route without A5 access."""
 
@@ -915,6 +989,7 @@ class RuntimeApiAppFactory:
             queue=ports.queue,
             blobs=getattr(ports, "artifact_blob_store", None),
             references=getattr(ports, "artifact_reference_provider", None),
+            decisions=getattr(app.state, "effect_stage_decision_service", None),
         )
 
     @classmethod

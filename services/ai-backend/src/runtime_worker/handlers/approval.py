@@ -63,7 +63,10 @@ from agent_runtime.execution.factory import (
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import astream_runtime_resume
 from agent_runtime.persistence import with_optimistic_retry
-from agent_runtime.persistence.ports import ConversationToolOrdinalStorePort
+from agent_runtime.persistence.ports import (
+    ConversationToolOrdinalStorePort,
+    DraftOwnershipConflict,
+)
 from agent_runtime.persistence.records import (
     BatchOutcomeStatus,
     BatchTransitionOutcome,
@@ -872,12 +875,18 @@ class RuntimeApprovalHandler:
             return
         metadata = approval.metadata if hasattr(approval, "metadata") else {}
         draft_id = str(metadata.get("draft_id", ""))
+        approval_owner_id = getattr(approval, "user_id", None)
         if not draft_id:
             return
         latest = await self._draft_store.latest(org_id=run.org_id, draft_id=draft_id)
-        if latest is None or latest.status is not DraftStatus.SEND_PENDING_APPROVAL:
+        if (
+            latest is None
+            or latest.user_id != approval_owner_id
+            or latest.status is not DraftStatus.SEND_PENDING_APPROVAL
+        ):
             # State changed since the approval was posted (e.g. a concurrent
-            # discard, or an already-applied send). Idempotent no-op.
+            # discard, owner change attempt, or an already-applied send).
+            # Idempotent no-op; this worker cannot take ownership on approval.
             return
 
         # PRD-D2 flag-flip hardening (WYSIWYG). A v1 draft-send approval created
@@ -910,7 +919,6 @@ class RuntimeApprovalHandler:
 
         next_record = self._next_draft_version(
             previous=latest,
-            decided_by_user_id=decided_by_user_id or run.user_id,
             status=terminal_status,
         )
         applied_edit_keys: list[str] = []
@@ -918,7 +926,12 @@ class RuntimeApprovalHandler:
             next_record, applied_edit_keys = self._apply_edits_to_draft(
                 record=next_record, edits=edits
             )
-        persisted = await self._draft_store.insert_version(next_record)
+        try:
+            persisted = await self._draft_store.insert_version(next_record)
+        except DraftOwnershipConflict:
+            # A direct writer raced this approval with an owner change attempt.
+            # Never emit an event or audit a transition that did not persist.
+            return
         await self._emit_draft_updated(run=run, record=persisted)
         await self._write_draft_audit(
             run=run,
@@ -948,14 +961,15 @@ class RuntimeApprovalHandler:
     async def _draft_superseded_by_v2_stage(
         self, *, run: RunRecord, draft_id: str
     ) -> bool:
-        """Return whether this draft has a ``write.staged`` event on the run's ledger.
+        """Return whether a v2 stage supersedes this legacy draft approval.
 
         A ``write.staged`` for this draft means the write was re-homed onto the v2
         staged-write engine (the WYSIWYG-guarded path); a stale v1 approval must
-        NOT independently send. Scans the run's persisted events for a
-        ``write.staged`` whose ``proposal_ref`` names ``draft_id``. Best-effort: any
-        read failure returns ``False`` (the v1 send proceeds unchanged — the guard
-        never breaks the existing flow, it only refuses a proven-superseded send).
+        NOT independently send. F-006 persists a canonical owner-scoped
+        draft→effect-stage binding before the effect is exposed. That lookup is
+        intentionally independent of mutable ``DraftRecord.run_id`` and is the
+        authority for cross-host-run supersession. Every safety read fails
+        closed: an unavailable proof of safety must never send mutable bytes.
         """
 
         from agent_runtime.surfaces_v2.ledger_models import (  # noqa: PLC0415
@@ -963,23 +977,53 @@ class RuntimeApprovalHandler:
         )
         from agent_runtime.surfaces_v2.staging import DraftRef  # noqa: PLC0415
 
+        supersessions = getattr(self._draft_store, "has_effect_supersession", None)
+        if not callable(supersessions):
+            _LOGGER.error(
+                "draft_send.supersession_lookup_unavailable draft_id=%s run_id=%s",
+                draft_id,
+                run.run_id,
+            )
+            return True
+        try:
+            if await supersessions(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                draft_id=draft_id,
+            ):
+                return True
+        except Exception:  # noqa: BLE001 - approval safety must fail closed.
+            _LOGGER.exception(
+                "draft_send.supersession_lookup_failed draft_id=%s run_id=%s",
+                draft_id,
+                run.run_id,
+            )
+            return True
+
+        # The prior D1 staged-write guard remains run-scoped because D1's
+        # legacy stage facts predate the canonical F-006 correlation. It too
+        # is fail-closed: replay failure cannot authorize a stale v1 send.
         try:
             events = await self.event_store.list_events_after(
                 org_id=run.org_id, run_id=run.run_id, after_sequence=0
             )
-        except Exception:  # noqa: BLE001 — never break the v1 flow on a read error.
-            return False
+        except Exception:  # noqa: BLE001 - approval safety must fail closed.
+            _LOGGER.exception(
+                "draft_send.stage_lookup_failed draft_id=%s run_id=%s",
+                draft_id,
+                run.run_id,
+            )
+            return True
         staged_value = LedgerEventType.WRITE_STAGED.value
         for event in events:
             event_type = getattr(getattr(event, "event_type", None), "value", None)
-            if event_type != staged_value:
-                continue
             payload = getattr(event, "payload", None)
             if not isinstance(payload, Mapping):
                 continue
-            parsed = DraftRef.parse_proposal(payload.get("proposal_ref"))
-            if parsed is not None and parsed[0] == draft_id:
-                return True
+            if event_type == staged_value:
+                parsed = DraftRef.parse_proposal(payload.get("proposal_ref"))
+                if parsed is not None and parsed[0] == draft_id:
+                    return True
         return False
 
     @staticmethod
@@ -1039,7 +1083,6 @@ class RuntimeApprovalHandler:
     def _next_draft_version(
         *,
         previous: object,
-        decided_by_user_id: str,
         status: object,
     ) -> object:
         """Return a new ``DraftRecord`` at ``previous.version + 1`` with the given status."""
@@ -1052,7 +1095,7 @@ class RuntimeApprovalHandler:
             org_id=previous.org_id,
             conversation_id=previous.conversation_id,
             run_id=previous.run_id,
-            user_id=decided_by_user_id,
+            user_id=previous.user_id,
             title=previous.title,
             content_text=previous.content_text,
             target_connector=previous.target_connector,

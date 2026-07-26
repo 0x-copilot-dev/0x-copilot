@@ -8,6 +8,7 @@ from typing import Protocol, runtime_checkable
 
 from agent_runtime.persistence.records import (
     CitationRecord,
+    DraftEffectSupersession,
     DraftRecord,
     DraftStatus,
     ShareRecipientRecord,
@@ -32,6 +33,18 @@ class OptimisticConflict(RuntimeError):
         self.draft_id = draft_id
         self.expected_version = expected_version
         self.actual_version = actual_version
+
+
+class DraftOwnershipConflict(RuntimeError):
+    """Raised when a later draft version would change its established owner.
+
+    A draft's ``user_id`` is immutable after version 1. This repository-level
+    check protects direct writers as well as user-facing lifecycle transitions.
+    """
+
+    def __init__(self, *, draft_id: str) -> None:
+        super().__init__(f"draft {draft_id} cannot change owner")
+        self.draft_id = draft_id
 
 
 class ConversationOrdinalConflict(RuntimeError):
@@ -104,7 +117,35 @@ class RuntimeEventIdempotencyConflict(RuntimeError):
 
 
 @runtime_checkable
-class DraftStorePort(Protocol):
+class DraftEffectSupersessionStorePort(Protocol):
+    """Durable owner-scoped correlation for immutable draft effect stages.
+
+    This intentionally small port keeps F-006's safety boundary portable: the
+    stage adapter needs no mutable DraftRecord body and no particular database.
+    """
+
+    async def record_effect_supersession(
+        self, record: DraftEffectSupersession
+    ) -> DraftEffectSupersession:
+        """Persist immutable F-006 stage binding for one owner-scoped draft.
+
+        Implementations must be idempotent for the same immutable facts and
+        reject a conflicting reuse of the same ``(org, user, draft, stage)``.
+        This record intentionally outlives a mutable draft host-run binding.
+        """
+
+    async def has_effect_supersession(
+        self, *, org_id: str, user_id: str, draft_id: str
+    ) -> bool:
+        """Return whether this principal's draft has any immutable effect stage.
+
+        This is an authorization-sensitive safety lookup.  Callers fail closed
+        if an adapter cannot establish the answer.
+        """
+
+
+@runtime_checkable
+class DraftStorePort(DraftEffectSupersessionStorePort, Protocol):
     """Versioned, append-only draft artifact persistence boundary.
 
     Each successful write inserts one new ``DraftRecord`` row sharing the same
@@ -116,7 +157,9 @@ class DraftStorePort(Protocol):
         """Persist one new draft version. ``version`` must be ``latest+1``.
 
         Raises :class:`OptimisticConflict` if a row with that
-        ``(org_id, draft_id, version)`` already exists.
+        ``(org_id, draft_id, version)`` already exists. Raises
+        :class:`DraftOwnershipConflict` if an existing draft's owner differs
+        from ``record.user_id``.
         """
 
     async def latest(self, *, org_id: str, draft_id: str) -> DraftRecord | None:
