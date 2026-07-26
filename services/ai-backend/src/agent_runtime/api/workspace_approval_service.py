@@ -19,12 +19,21 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import PersistencePort, RuntimeQueuePort
 from agent_runtime.artifacts.ports import ArtifactBlobStorePort
 from agent_runtime.effects.contracts import EffectStageState
-from agent_runtime.effects.errors import EffectStageMalformedEvent
+from agent_runtime.effects.errors import (
+    EffectStageForbidden,
+    EffectStageMalformedEvent,
+)
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectDecisionKind,
     EffectExecutorKind,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes, sha256_hex
+from agent_runtime.rollout import RolloutCapability
+from agent_runtime.rollout_admission import (
+    E2RolloutAdmission,
+    E2RolloutAdmissionDenied,
+    PersistedRunCohortFactsProvider,
+)
 from runtime_adapters.artifact_references import (
     ArtifactReferenceKind,
     ArtifactReferenceRepositoryPort,
@@ -55,6 +64,7 @@ class WorkspaceApprovalDecisionService:
     persistence: PersistencePort
     event_producer: RuntimeEventProducer
     queue: RuntimeQueuePort
+    rollout_admission: E2RolloutAdmission
     blobs: ArtifactBlobStorePort | None = None
     references: ArtifactReferenceRepositoryPort | None = None
     decisions: EffectStageDecisionService | None = None
@@ -87,6 +97,30 @@ class WorkspaceApprovalDecisionService:
             stage_id=stage_id,
             allowed_executors=frozenset({EffectExecutorKind.WORKSPACE}),
         )
+        # ``current_stage`` above proves the requested run/stage belongs to the
+        # authenticated principal and is a workspace executor.  Resolve the
+        # same persisted run before recording a decision: a cohort denial or
+        # emergency rollback must prevent both the ledger mutation and A5
+        # enqueue, not merely suppress this route's UI.
+        run = await self.persistence.get_run(org_id=org_id, run_id=run_id)
+        if run is None or run.user_id != user_id:
+            raise EffectStageForbidden()
+        try:
+            self.rollout_admission.require_all(
+                capabilities=(
+                    RolloutCapability.OPERATION_GATEWAY,
+                    RolloutCapability.EFFECT_STAGER,
+                    RolloutCapability.EFFECT_COMMIT,
+                    RolloutCapability.WORKSPACE_OVERLAY,
+                    RolloutCapability.WORKSPACE_COMMIT,
+                ),
+                facts_provider=PersistedRunCohortFactsProvider(
+                    org_id=run.org_id,
+                    user_id=run.user_id,
+                ),
+            )
+        except E2RolloutAdmissionDenied as exc:
+            raise EffectStageForbidden() from exc
 
         # Validate the immutable C1 material before changing the stage.  If it
         # is missing, tampered, or not the exact body C2 will prepare, the
@@ -215,6 +249,7 @@ class WorkspaceApprovalDecisionService:
             persistence=self.persistence,
             event_producer=self.event_producer,
             queue=self.queue,
+            rollout_admission=self.rollout_admission,
         )
 
 

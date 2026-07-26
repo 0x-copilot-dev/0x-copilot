@@ -80,6 +80,7 @@ def test_approval_resume_uses_the_same_flag_selected_authority() -> None:
     )
     run = SimpleNamespace(
         org_id="org_1",
+        user_id="user_1",
         conversation_id="conv_1",
         run_id="run_1",
         runtime_context=SimpleNamespace(user_id="user_1"),

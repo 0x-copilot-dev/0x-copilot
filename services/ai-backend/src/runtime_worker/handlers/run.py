@@ -89,6 +89,10 @@ from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
 from agent_runtime.rollout import RolloutCapability, RolloutMode
+from agent_runtime.rollout_admission import (
+    E2RolloutAdmission,
+    PersistedRunCohortFactsProvider,
+)
 from agent_runtime.rollout_shadow import (
     ShadowComparisonContext,
     ShadowComparisonService,
@@ -266,6 +270,14 @@ class RuntimeRunHandler:
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
         self.settings = settings or RuntimeSettings.load()
+        # The sole runtime gate for explicitly enabled E2 lanes. It is
+        # deliberately run-scoped: every capability receives persisted
+        # server-owned identity facts before it can appear in dependencies.
+        self._e2_rollout_admission = E2RolloutAdmission(
+            resolution=self.settings.execution.rollout,
+            cohorts=self.settings.execution.rollout_cohorts,
+            kill_switches=self.settings.execution.rollout_kill_switches,
+        )
         # BYOK re-hydration: queue commands round-trip through JSON, which
         # drops the serialization-excluded ``AgentRuntimeContext.provider_keys``
         # field. When a resolver is wired, the handler re-fetches the policy
@@ -495,7 +507,7 @@ class RuntimeRunHandler:
                     ledger_emitter=self._build_operation_ledger_emitter(run),
                     artifact_service=(
                         self.artifact_service
-                        if self._artifact_publication_enabled()
+                        if self._artifact_publication_enabled(run)
                         else None
                     ),
                     mode=self._effective_operation_gateway_mode(mcp_gateway_services),
@@ -573,7 +585,7 @@ class RuntimeRunHandler:
                     value=result,
                 ):
                     result = {self._Fields.ACTION_REQUIRED: True}
-            await self._process_model_artifact_content(result)
+            await self._process_model_artifact_content(result, run=run)
             if self._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -1271,6 +1283,21 @@ class RuntimeRunHandler:
             RuntimeWorkspaceProposalStore,
         )
 
+        # A C3 backend is a v2.1 capability exposure, not merely a UI choice.
+        # If an explicitly enabled E2 cohort or a targeted rollback does not
+        # admit this persisted run, the model receives the tombstone route and
+        # cannot stage an overlay or enqueue a workspace effect.
+        if not self._e2_rollout_admission.permits_all(
+            capabilities=(
+                RolloutCapability.OPERATION_GATEWAY,
+                RolloutCapability.EFFECT_STAGER,
+                RolloutCapability.EFFECT_COMMIT,
+                RolloutCapability.WORKSPACE_OVERLAY,
+                RolloutCapability.WORKSPACE_COMMIT,
+            ),
+            facts_provider=self._rollout_facts_for_run(run),
+        ):
+            return WorkspaceTombstoneBackend()
         if (
             mcp_gateway_services is None
             or self._workspace_host_sessions is None
@@ -1341,11 +1368,24 @@ class RuntimeRunHandler:
         tool_observation_index: ToolObservationIndex,
         *,
         workspace_backend: object | None = None,
-        run: object | None = None,
+        run: RunRecord | None = None,
         mcp_gateway_services: McpOperationGatewayServices | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` augmented with per-run backends (drafts, subagent artifacts, workspace)."""
-        dependencies = self.dependencies_factory(command.runtime_context)
+        rollout_facts = (
+            self._rollout_facts_for_run(run) if isinstance(run, RunRecord) else None
+        )
+        if (
+            isinstance(self.dependencies_factory, DefaultRuntimeDependenciesFactory)
+            and rollout_facts is not None
+        ):
+            dependencies = self.dependencies_factory.for_run(
+                command.runtime_context,
+                rollout_admission=self._e2_rollout_admission,
+                rollout_facts=rollout_facts,
+            )
+        else:
+            dependencies = self.dependencies_factory(command.runtime_context)
         update: dict[str, object] = {
             "subagent_artifacts_backend": self._subagent_artifacts_backend(command),
         }
@@ -1389,6 +1429,8 @@ class RuntimeRunHandler:
             file_store=self._file_backend_store(),
             env=self._capability_env,
             sandbox_tool_factory=self._sandbox_worker_bundle(command.runtime_context),
+            rollout_admission=self._e2_rollout_admission,
+            rollout_facts=rollout_facts,
         )
         code_mode_tool = capability_tools.code_mode_tool()
         if code_mode_tool is not None:
@@ -1406,21 +1448,46 @@ class RuntimeRunHandler:
         )
         if stage_rowset_tool is not None:
             update["stage_rowset_write_tool"] = stage_rowset_tool
-        publish_artifact_tool = self._publish_artifact_tool()
+        publish_artifact_tool = (
+            self._publish_artifact_tool(run) if isinstance(run, RunRecord) else None
+        )
         if publish_artifact_tool is not None:
             update["publish_artifact_tool"] = publish_artifact_tool
         return dependencies.model_copy(update=update)
 
-    def _artifact_publication_enabled(self) -> bool:
+    @staticmethod
+    def _rollout_facts_for_run(run: RunRecord) -> PersistedRunCohortFactsProvider:
+        """Copy cohort identity only from the already-verified run record."""
+
+        return PersistedRunCohortFactsProvider(
+            org_id=run.org_id,
+            user_id=run.user_id,
+        )
+
+    def _artifact_admitted(self, *, org_id: str, user_id: str) -> bool:
+        """Check the artifact-repository lane before composing its writer."""
+
+        return self._e2_rollout_admission.permits_all(
+            capabilities=(RolloutCapability.ARTIFACT_REPOSITORY,),
+            facts_provider=PersistedRunCohortFactsProvider(
+                org_id=org_id,
+                user_id=user_id,
+            ),
+        )
+
+    def _artifact_publication_enabled(self, run: RunRecord) -> bool:
         return bool(
             self.settings.execution.artifact_effects_v2
             and self.artifact_service is not None
+            and self._artifact_admitted(org_id=run.org_id, user_id=run.user_id)
         )
 
-    def _artifact_drafts_enabled(self) -> bool:
+    def _artifact_drafts_enabled(self, *, org_id: str, user_id: str) -> bool:
         return bool(
-            self._artifact_publication_enabled()
+            self.settings.execution.artifact_effects_v2
+            and self.artifact_service is not None
             and self.settings.execution.artifact_drafts_v2
+            and self._artifact_admitted(org_id=org_id, user_id=user_id)
         )
 
     def _drafts_backend(
@@ -1445,7 +1512,7 @@ class RuntimeRunHandler:
             DraftBackend,
         )
 
-        if self._artifact_drafts_enabled():
+        if self._artifact_drafts_enabled(org_id=org_id, user_id=user_id):
             return ArtifactDraftBackend(
                 artifacts=self.artifact_service,
                 org_id=org_id,
@@ -1505,6 +1572,15 @@ class RuntimeRunHandler:
             or self._queue is None
             or self._artifact_blob_store is None
             or self._artifact_reference_store is None
+            or not self._e2_rollout_admission.permits_all(
+                capabilities=(
+                    RolloutCapability.OPERATION_GATEWAY,
+                    RolloutCapability.MCP_GATEWAY,
+                    RolloutCapability.EFFECT_STAGER,
+                    RolloutCapability.EFFECT_COMMIT,
+                ),
+                facts_provider=self._rollout_facts_for_run(run),
+            )
         ):
             return None
         enqueue = getattr(self._queue, "enqueue_effect_commit", None)
@@ -1565,17 +1641,19 @@ class RuntimeRunHandler:
             browser_plans=browser_plans,
         )
 
-    def _publish_artifact_tool(self) -> PublishArtifactTool | None:
-        if not self._artifact_publication_enabled():
+    def _publish_artifact_tool(self, run: RunRecord) -> PublishArtifactTool | None:
+        if not self._artifact_publication_enabled(run):
             return None
         return PublishArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
         )
 
-    async def _process_model_artifact_content(self, result: object) -> None:
+    async def _process_model_artifact_content(
+        self, result: object, *, run: RunRecord
+    ) -> None:
         """Use B1's normalized publication path, or preserve A3 observation."""
 
-        if self._artifact_publication_enabled():
+        if self._artifact_publication_enabled(run):
             await ArtifactContentPartPublisher().publish(result)
             return
         await OperationShadowProbe.observe_model_result(result)

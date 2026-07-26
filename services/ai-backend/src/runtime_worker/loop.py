@@ -36,6 +36,7 @@ from agent_runtime.rollout import (
     RolloutStartupReadiness,
     RolloutStartupValidator,
 )
+from agent_runtime.rollout_admission import E2RolloutAdmission
 from runtime_api.schemas import (
     RuntimeApprovalResolvedCommand,
     RuntimeArtifactEventCommand,
@@ -51,6 +52,10 @@ from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.stage_commit import RuntimeStageCommitHandler
 from runtime_worker.handlers.effect_commit import RuntimeEffectCommitHandler
 from runtime_worker.handlers.effect_reconcile import RuntimeEffectReconcileHandler
+from runtime_worker.e2_rollout_admission import (
+    E2RolloutEffectCommitHandler,
+    EventStoreEffectStageExecutorResolver,
+)
 from runtime_worker.audit import WorkerAuditEmitter
 from runtime_worker.mcp_operation_storage import RuntimeMcpEffectCoordinatorFactory
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
@@ -314,6 +319,23 @@ class RuntimeWorker:
                 claims=claims,
                 coordinator_factory=factory,
                 audit_emitter=WorkerAuditEmitter(persistence=self.persistence),
+            )
+        # The only worker dispatch reference is wrapped even when a test or
+        # host injects the downstream handler. The wrapper validates the
+        # persisted run + stage and applies E2 cohort/kill-switch admission
+        # before the A5 claim/prepare/apply protocol is reachable.
+        if self.effect_commit_handler is not None:
+            self.effect_commit_handler = E2RolloutEffectCommitHandler(
+                delegate=self.effect_commit_handler,
+                persistence=self.persistence,
+                executor_resolver=EventStoreEffectStageExecutorResolver(
+                    event_store=self.event_store
+                ),
+                admission=E2RolloutAdmission(
+                    resolution=self.settings.execution.rollout,
+                    cohorts=self.settings.execution.rollout_cohorts,
+                    kill_switches=self.settings.execution.rollout_kill_switches,
+                ),
             )
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")

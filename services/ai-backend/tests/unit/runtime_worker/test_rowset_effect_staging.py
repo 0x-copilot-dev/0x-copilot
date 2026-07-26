@@ -73,12 +73,35 @@ def _settings(
     *,
     surfaces_v2: bool = True,
 ) -> RuntimeSettings:
-    return RuntimeSettings.load(
-        environ={
-            "SURFACES_V2": "true" if surfaces_v2 else "false",
-            "OPERATION_GATEWAY_MODE": mode.value,
-        }
-    )
+    environment = {
+        "SURFACES_V2": "true" if surfaces_v2 else "false",
+        "OPERATION_GATEWAY_MODE": mode.value,
+    }
+    if mode is OperationGatewayMode.ENFORCE and surfaces_v2:
+        capabilities = (
+            "operation_gateway",
+            "effect_stager",
+            "effect_commit",
+            "mcp_gateway",
+        )
+        environment.update(
+            {
+                "EFFECT_STAGER_MODE": "enforce",
+                "EFFECT_COMMIT_MODE": "enforce",
+                "MCP_GATEWAY_MODE": "enforce",
+                "E2_ROLLOUT_COHORTS_JSON": json.dumps(
+                    [
+                        {
+                            "capability": capability,
+                            "org_id": "org_d2",
+                            "user_id": "user_d2",
+                        }
+                        for capability in capabilities
+                    ]
+                ),
+            }
+        )
+    return RuntimeSettings.load(environ=environment)
 
 
 def _runtime_context() -> AgentRuntimeContext:

@@ -32,6 +32,10 @@ from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
 from agent_runtime.rollout import RolloutCapability, RolloutMode
+from agent_runtime.rollout_admission import (
+    E2RolloutAdmission,
+    PersistedRunCohortFactsProvider,
+)
 from agent_runtime.rollout_shadow import (
     ShadowComparisonContext,
     ShadowComparisonService,
@@ -152,6 +156,11 @@ class RuntimeApprovalHandler:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
+        self._e2_rollout_admission = E2RolloutAdmission(
+            resolution=self.settings.execution.rollout,
+            cohorts=self.settings.execution.rollout_cohorts,
+            kill_switches=self.settings.execution.rollout_kill_switches,
+        )
         self.artifact_service = artifact_service
         # BYOK re-hydration on resume: the persisted run record's context was
         # serialized without ``provider_keys`` (excluded field), so the resumed
@@ -387,7 +396,7 @@ class RuntimeApprovalHandler:
                     ),
                     artifact_service=(
                         self.artifact_service
-                        if self._artifact_publication_enabled()
+                        if self._artifact_publication_enabled(running)
                         else None
                     ),
                     mode=self.settings.execution.operation_gateway_mode,
@@ -414,7 +423,7 @@ class RuntimeApprovalHandler:
                 resume=resume,
                 metrics=metrics,
             )
-            await self._process_model_artifact_content(result)
+            await self._process_model_artifact_content(result, run=running)
             if RuntimeRunHandler._is_action_interrupt(result):
                 await with_optimistic_retry(
                     lambda: self.persistence.update_run_status(
@@ -540,7 +549,23 @@ class RuntimeApprovalHandler:
             desktop broker. The compatibility backend is read-only; stale
         filesystem approvals never resume into a host mutation.
         """
-        if (
+        # A resumed graph is a fresh model invocation.  It must re-evaluate
+        # the same persisted-run cohort and rollback decision as the initial
+        # invocation before mounting any workspace route.  A denial gets the
+        # tombstone; it cannot revive a pre-pause compatibility backend.
+        if not self._e2_rollout_admission.permits_all(
+            capabilities=(
+                RolloutCapability.OPERATION_GATEWAY,
+                RolloutCapability.EFFECT_STAGER,
+                RolloutCapability.EFFECT_COMMIT,
+                RolloutCapability.WORKSPACE_OVERLAY,
+                RolloutCapability.WORKSPACE_COMMIT,
+            ),
+            facts_provider=PersistedRunCohortFactsProvider(
+                org_id=run.org_id,
+                user_id=run.user_id,
+            ),
+        ) or (
             self.settings.execution.workspace_effect_mode
             is OperationGatewayMode.ENFORCE
         ):
@@ -576,7 +601,17 @@ class RuntimeApprovalHandler:
         an approval, exactly as the file-native routes do.
         """
 
-        dependencies = self.dependencies_factory(run.runtime_context)
+        if isinstance(self.dependencies_factory, DefaultRuntimeDependenciesFactory):
+            dependencies = self.dependencies_factory.for_run(
+                run.runtime_context,
+                rollout_admission=self._e2_rollout_admission,
+                rollout_facts=PersistedRunCohortFactsProvider(
+                    org_id=run.org_id,
+                    user_id=run.user_id,
+                ),
+            )
+        else:
+            dependencies = self.dependencies_factory(run.runtime_context)
         update: dict[str, object] = {}
         if workspace_backend is not None:
             update["workspace_backend"] = workspace_backend
@@ -594,15 +629,22 @@ class RuntimeApprovalHandler:
         drafts_backend = self._drafts_backend(run)
         if drafts_backend is not None:
             update["drafts_backend"] = drafts_backend
-        publish_artifact_tool = self._publish_artifact_tool()
+        publish_artifact_tool = self._publish_artifact_tool(run)
         if publish_artifact_tool is not None:
             update["publish_artifact_tool"] = publish_artifact_tool
         return dependencies.model_copy(update=update)
 
-    def _artifact_publication_enabled(self) -> bool:
+    def _artifact_publication_enabled(self, run: RunRecord) -> bool:
         return bool(
             self.settings.execution.artifact_effects_v2
             and self.artifact_service is not None
+            and self._e2_rollout_admission.permits_all(
+                capabilities=(RolloutCapability.ARTIFACT_REPOSITORY,),
+                facts_provider=PersistedRunCohortFactsProvider(
+                    org_id=run.org_id,
+                    user_id=run.user_id,
+                ),
+            )
         )
 
     def _drafts_backend(self, run: RunRecord) -> object | None:
@@ -614,7 +656,7 @@ class RuntimeApprovalHandler:
         )
 
         if (
-            self._artifact_publication_enabled()
+            self._artifact_publication_enabled(run)
             and self.settings.execution.artifact_drafts_v2
         ):
             return ArtifactDraftBackend(
@@ -637,11 +679,15 @@ class RuntimeApprovalHandler:
         )
 
     def _operation_context_required(self) -> bool:
-        return bool(
-            self._artifact_publication_enabled()
-            or self.settings.execution.operation_gateway_mode
-            is not OperationGatewayMode.OFF
-        )
+        """Always bind the canonical context on a resumed model invocation.
+
+        The context is inert in ``off`` mode, but makes a resumed run use the
+        same operation boundary as its initial invocation.  In particular, a
+        paused run cannot discover an unbound direct-client path after a
+        cohort becomes denied or a targeted rollback is applied.
+        """
+
+        return True
 
     def _shadow_comparison_enabled(self) -> bool:
         """D2 has no independent switch; only D1's typed shadow lanes bind it."""
@@ -673,15 +719,17 @@ class RuntimeApprovalHandler:
             run_status=run.status,
         )
 
-    def _publish_artifact_tool(self) -> PublishArtifactTool | None:
-        if not self._artifact_publication_enabled():
+    def _publish_artifact_tool(self, run: RunRecord) -> PublishArtifactTool | None:
+        if not self._artifact_publication_enabled(run):
             return None
         return PublishArtifactTool(
             gateway=OperationGateway(descriptors=DEFAULT_OPERATION_DESCRIPTORS)
         )
 
-    async def _process_model_artifact_content(self, result: object) -> None:
-        if self._artifact_publication_enabled():
+    async def _process_model_artifact_content(
+        self, result: object, *, run: RunRecord
+    ) -> None:
+        if self._artifact_publication_enabled(run):
             await ArtifactContentPartPublisher().publish(result)
             return
         await OperationShadowProbe.observe_model_result(result)

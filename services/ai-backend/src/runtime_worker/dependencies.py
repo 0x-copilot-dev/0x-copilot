@@ -28,6 +28,11 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
+from agent_runtime.rollout import RolloutCapability
+from agent_runtime.rollout_admission import (
+    E2RolloutAdmission,
+    PersistedRunCohortFactsProvider,
+)
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
 
 
@@ -136,14 +141,50 @@ class DefaultRuntimeDependenciesFactory:
         self.mcp_discovery_cache = mcp_discovery_cache
 
     def __call__(self, _context: AgentRuntimeContext) -> RuntimeDependencies:
+        """Build dependencies without an E2 subject-bound browser adapter.
+
+        The regular worker handlers call :meth:`for_run`, which supplies
+        persisted-run facts at the one model-exposure boundary.  Keeping this
+        generic callable conservative prevents another composition root from
+        activating the device browser adapter with request-shaped context.
+        """
+
+        return self._build_dependencies(_context)
+
+    def for_run(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        rollout_admission: E2RolloutAdmission,
+        rollout_facts: PersistedRunCohortFactsProvider,
+    ) -> RuntimeDependencies:
+        """Build dependencies for one persisted, authenticated runtime run."""
+
+        return self._build_dependencies(
+            context,
+            rollout_admission=rollout_admission,
+            rollout_facts=rollout_facts,
+        )
+
+    def _build_dependencies(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        rollout_admission: E2RolloutAdmission | None = None,
+        rollout_facts: PersistedRunCohortFactsProvider | None = None,
+    ) -> RuntimeDependencies:
         """Build and return the full ``RuntimeDependencies`` graph for a worker run.
 
         Tool registries are composed outermost-to-innermost:
         ``ToolErrorPolicyRegistry`` → ``ToolBudgetGuardedRegistry`` →
         ``CitationCapturingRegistry`` → ``WebSearchToolRegistry``.
         """
-        self._validate_capability_mode(_context)
-        mcp_registry = self._mcp_registry(_context)
+        self._validate_capability_mode(context)
+        mcp_registry = self._mcp_registry(
+            context,
+            rollout_admission=rollout_admission,
+            rollout_facts=rollout_facts,
+        )
         tool_registry = ToolErrorPolicyRegistry(
             inner=ToolBudgetGuardedRegistry(
                 inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
@@ -158,7 +199,7 @@ class DefaultRuntimeDependenciesFactory:
             tool_registry=tool_registry,
             mcp_registry=mcp_registry,
             skill_source_config=self._skill_source_config(file_agent_wiring),
-            skill_registry=self._skill_registry(_context),
+            skill_registry=self._skill_registry(context),
             memory_backend_factory=self._memory_backend_factory(file_agent_wiring),
             subagent_catalog=self._subagent_catalog(file_agent_wiring),
             mcp_discovery_cache=self.mcp_discovery_cache,
@@ -303,7 +344,13 @@ class DefaultRuntimeDependenciesFactory:
             correlation_id=context.trace_id,
         )
 
-    def _mcp_registry(self, context: AgentRuntimeContext) -> object:
+    def _mcp_registry(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        rollout_admission: E2RolloutAdmission | None = None,
+        rollout_facts: PersistedRunCohortFactsProvider | None = None,
+    ) -> object:
         """Compose the backend SaaS provider with the gated desktop-browser provider.
 
         The backend SaaS provider is present only when an MCP backend URL is
@@ -323,14 +370,24 @@ class DefaultRuntimeDependenciesFactory:
                     auth_redirect_uri=self.settings.mcp.auth_redirect_uri,
                 )
             )
-        browser_provider = self._browser_provider(context)
+        browser_provider = self._browser_provider(
+            context,
+            rollout_admission=rollout_admission,
+            rollout_facts=rollout_facts,
+        )
         if browser_provider is not None:
             providers.append(browser_provider)
         if not providers:
             return EmptyMcpRegistry()
         return DynamicMcpRegistry(providers=tuple(providers))
 
-    def _browser_provider(self, context: AgentRuntimeContext) -> object | None:
+    def _browser_provider(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        rollout_admission: E2RolloutAdmission | None = None,
+        rollout_facts: PersistedRunCohortFactsProvider | None = None,
+    ) -> object | None:
         """Build the gated device-local browser MCP provider, or ``None``.
 
         Gated OFF by default: the ``build_browser_mcp`` seam returns ``None``
@@ -349,6 +406,22 @@ class DefaultRuntimeDependenciesFactory:
             build_browser_mcp,
         )
 
+        # Browser capability discovery is model-tool exposure.  It is denied
+        # unless the worker supplied a persisted run subject and the entire
+        # operation/effect/browser dependency set is admitted.  There is no
+        # fallback that turns a raw AgentRuntimeContext into rollout facts.
+        if rollout_admission is None or rollout_facts is None:
+            return None
+        if not rollout_admission.permits_all(
+            capabilities=(
+                RolloutCapability.OPERATION_GATEWAY,
+                RolloutCapability.EFFECT_STAGER,
+                RolloutCapability.EFFECT_COMMIT,
+                RolloutCapability.BROWSER_ADAPTER,
+            ),
+            facts_provider=rollout_facts,
+        ):
+            return None
         env = os.environ
         return build_browser_mcp(
             BrowserMcpConfig(
