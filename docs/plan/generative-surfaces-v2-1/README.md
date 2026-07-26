@@ -113,8 +113,11 @@ complete` from historical focused tests alone.
   `c0315a431b412efb5e8769bd6d03855096161ee4` passed `4,977`, skipped `126`,
   and deselected `1` (`python -m pytest -q`, 2026-07-26). Backend, facade,
   TypeScript workspaces, desktop, real Studio, and parity receipts remain
-  **current-main unverified**. F-009, F-010, F-011, and F-014 remain code/static
-  gates until those release commands also exercise them.
+  **current-main unverified**. The same code baseline also has full service
+  receipts for `services/backend` (`1,939 passed`, `47 skipped`) and
+  `services/backend-facade` (`353 passed`, `1 skipped`). F-009, F-010, F-011,
+  and F-014 remain code/static gates until the remaining release commands also
+  exercise them.
 
 ### Legacy v2 E3 clarification
 
