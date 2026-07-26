@@ -111,6 +111,10 @@ The v2.1 Wave E work is E1 and E2 only; any new E3 scope requires a new reviewed
 | F-008 | The integrated full-suite gates are currently non-green.                                                                                                | Current-main audit, 2026-07-26: ai-backend stopped at a credential-gate failure after 1,619 passing tests; `@0x-copilot/chat-surface` failed `RunDestination.sourceOpen.test.tsx`.                        | Diagnose each failure against the current architecture; update the owning contract or fixture, never mask it through a broad skip.                                                                                                          | Open.                            |
 | F-009 | The static no-executor test only scans immediate `agent_runtime/effects/*.py` imports, so indirect model/stager-to-executor reachability can escape it. | Current-main audit, 2026-07-26: `test_effect_no_executor.py`.                                                                                                                                             | Replace the local import scan with a reusable architecture graph gate spanning model adapters, effect staging, runtime workers, and executor registry.                                                                                      | Open.                            |
 | F-010 | Python and TypeScript each reduce presentation lifecycle events independently without a cross-language differential replay fixture.                     | Current-main audit, 2026-07-26: `presentation/lifecycle.py` and `packages/chat-surface/src/destinations/run/canvasLifecycle.ts`.                                                                          | Add a shared lifecycle golden-event corpus and assert byte-equivalent projected state in both implementations.                                                                                                                              | Open.                            |
+| F-011 | Electron production composition installs `UnavailableNativeWorkspaceAuthority`, so C2's native commit helper is reached only by tests.                  | Current-main C/D audit, 2026-07-26: `apps/desktop/main/index.ts` omits the authority passed to `createCapabilityService`; its fallback is selected.                                                       | Compose the existing native authority only behind verified confinement/attestation. Unsupported or unverified environments must remain unavailable; do not create a renderer or ai-backend write fallback.                                  | **Release blocker.**             |
+| F-012 | The C1 raw overlay service remains directly usable outside the enforced gateway, so "every mutation stages" is not structurally universal.              | Current-main C/D audit, 2026-07-26: `agent_runtime/capabilities/workspace/overlay.py` versus enforced `workspace/effects.py` path.                                                                        | Make the raw overlay service an internal primitive and add a graph gate that restricts model-facing mutation to the enforced gateway.                                                                                                       | Open.                            |
+| F-013 | D1 retains MCP-specific ledger/surface coupling and lacks a full post-approval authorization proof.                                                     | Current-main C/D audit, 2026-07-26: `capabilities/mcp/operation_adapter.py` invokes `WorkLedgerEmitter` / `SurfaceProjector`.                                                                             | Move presentation onto the transport-neutral operation contract; add a post-approval authorization adversarial test before dispatcher entry.                                                                                                | Open.                            |
+| F-014 | D2 lacks a repository-wide inventory/canary proving all model-visible tools use approved descriptors and cannot emit bespoke surfaces.                  | Current-main C/D audit, 2026-07-26: builtin catalog/adapter coverage is representative only.                                                                                                              | Add a static inventory and injected negative fixture that fails for an unregistered model-visible capability or direct bespoke surface emission.                                                                                            | Open.                            |
 
 ### No-bandaid operating rule
 
@@ -151,6 +155,44 @@ Focused audit suites passed, but this does **not** override F-008: the full
 ai-backend and chat-surface gates were not green. The remaining PRD waves are
 being audited independently and will be appended here with the same evidence /
 finding / required-action format.
+
+### Audit run — Wave C + D except D3 (2026-07-26)
+
+Audit baseline: `origin/main` at `202364f1`. It was a source and adversarial-test
+evidence review; it did not freshly execute the listed suites. `Proven` therefore
+means that a committed focused test exists, not that a release gate passed.
+
+| Area                   | Current result                                                                                                             | Required next action                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| C1 overlay             | Overlay-first reads, durable mutations, grant rejection, and no host write through the enforced route have focused proof.  | Resolve F-012 and add common adapter/restart conformance.                         |
+| C2 authority           | Main-only protocol, permits, CAS, and journal are implemented; production composition does not activate the authority.     | Resolve F-011, then run a real supervised-desktop confinement and commit smoke.   |
+| C3 product             | Hermetic authority tests prove approve-only writes; live desktop CSV, web fallback, receipts, and parity proof are absent. | Add executable desktop journeys and parity evidence after C2 is composed.         |
+| D1 MCP                 | Canonical classification, staging, and exact dispatch are proven.                                                          | Resolve F-013 and retain auth/reconnect/UI live evidence.                         |
+| D2 built-ins/subagents | Catalog/adapters and representative staging tests exist.                                                                   | Resolve F-014; add exhaustive authority narrowing and retry-attribution coverage. |
+| D4 browser             | Electron-main ownership is structurally present; real browser artifact/upload/effect and security smokes are absent.       | Add a supervised browser-session staged-effect journey and no-bypass graph gate.  |
+
+These findings supersede any earlier claim that C2/C3 is merely awaiting a smoke:
+the desktop authority must first be composed correctly. The audit did not find a
+safe shortcut around Electron-main authority, and none will be added.
+
+### Audit run — Wave E1 + E2 (2026-07-26)
+
+Audit baseline: `origin/main` at `c6734529`. This was static evidence review, so
+`Proven` means implementation plus focused in-tree coverage exists; it is not a new
+release execution receipt.
+
+| Area                   | Current result                                                                                                             | Required next action                                                                                                                            |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| E1 usage/export        | Retry-safe attribution, tamper-evident receipt export, and sensitive-route identity tests are present.                     | Add one cross-language all-prefix conformance gate for receipt, Sources, and Pending projections; finish lifecycle retention/deletion evidence. |
+| E1 repair/operations   | Repair executor and tests exist, while the lifecycle runbook still marks D10–D13 families incomplete.                      | Align the runbook with implemented controls and add scheduled/operational evidence before claiming production completeness.                     |
+| E2 migration           | Migration services and hermetic crash/resume/quarantine tests are present.                                                 | Retain a real-dataset migration report and a retained-export verification receipt.                                                              |
+| E2 rollout/backout     | Cohort and soak policy code exists, but `RolloutCohortPolicy.admit()` has no production caller; rollback is a pure helper. | Wire cohort admission and operational backout control through the production request path; prove rollback cannot restore unsafe writes.         |
+| E2 final conformance   | The D9 runner has strong static checks, but its `ready=true` unit result is not a release invocation.                      | Produce a versioned `--require-all` artifact after the complete D10 journey matrix exists.                                                      |
+| E1/E2 release evidence | Current parity, real supervised Electron Studio, credentialed Playwright, and six continuous Studio scenarios are absent.  | Implement and run the executable journey suite, then run fresh computed-style parity against E1/E2 surfaces.                                    |
+
+Wave E therefore remains **DoD audit incomplete**. A static final-conformance report
+or a fake-model service topology smoke must never be relabeled as the product release
+gate.
 
 ### Required close-out record for every PR
 
