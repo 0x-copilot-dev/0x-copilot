@@ -1085,6 +1085,10 @@ export function SettingsMount({
               approvalPolicy,
               spend,
             }}
+            // The mute's reversal. Same controller as the appetite Select
+            // above it, so the two never disagree about what is muted.
+            mutedConnectors={connectorSuggestions.muted}
+            onUnmuteConnector={connectorSuggestions.unmute}
             cloudModels={mbCloudModels}
             onChange={(patch) => {
               if (patch.defaultModel !== undefined) {

@@ -58,6 +58,7 @@ export {
 // suggestion card writes into the same preference block.
 export {
   useConnectorSuggestions,
+  type MutedConnector,
   DEFAULT_CONNECTOR_SUGGESTIONS,
   type ConnectorSuggestionsController,
 } from "./useConnectorSuggestions";

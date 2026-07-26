@@ -1016,6 +1016,7 @@ export {
   // Connector-suggestion appetite — the sibling preferences controller
   // (same /v1/me/preferences round-trip, hosts pass their transport).
   useConnectorSuggestions,
+  type MutedConnector,
   DEFAULT_CONNECTOR_SUGGESTIONS,
   CONNECTOR_SUGGESTION_MODES,
   ShortcutsPage,

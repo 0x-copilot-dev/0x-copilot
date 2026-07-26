@@ -88,6 +88,12 @@ export interface TcChatApproval {
    * `mcp_auth` gates + `mcp_discovery:` suggestions; null on plain approvals.
    */
   readonly serverId: string | null;
+  /**
+   * WC-P5a: the catalog slug of an uninstalled suggestion, present only when the
+   * discovery lookup fell through to the catalog. Its presence is what makes a
+   * card muteable — see `RunApproval.catalogSlug`.
+   */
+  readonly catalogSlug?: string | null;
   /** Vendor·access pill; null when unknown. */
   readonly category: {
     readonly vendor: string;
@@ -310,6 +316,19 @@ export interface TcChatProps {
    */
   readonly onConnectorConsentCancel?: (serverId: string) => void;
   /**
+   * "Never suggest this again", fired alongside the deny when the card is an
+   * uninstalled CATALOG suggestion. Denying a gate for a connector the user
+   * already installed is a decision about this run; denying an unsolicited
+   * suggestion is a decision about the connector, and the design puts the mute
+   * where that intent forms rather than only in Settings.
+   */
+  readonly onConnectorMute?: (catalogSlug: string) => void;
+  /**
+   * Retry the blocked step as a NEW turn after a mid-run connect. Never a run
+   * restart: that re-emits work the user is reading and re-spends its tokens.
+   */
+  readonly onConnectorRetry?: (serverId: string, displayName: string) => void;
+  /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
    * host uses to mount the full `AssistantComposer` (attachments, `/`-menu,
@@ -375,6 +394,8 @@ export function TcChat(props: TcChatProps): ReactElement {
     mcpAuthPort,
     connectorConsentStates,
     onConnectorConsentCancel,
+    onConnectorMute,
+    onConnectorRetry,
     renderComposer,
   } = props;
   const transport = useTransport();
@@ -505,6 +526,8 @@ export function TcChat(props: TcChatProps): ReactElement {
                         mcpAuthPort,
                         connectorConsentStates,
                         onConnectorConsentCancel,
+                        onConnectorMute,
+                        onConnectorRetry,
                       )
                     : renderConfCard(approval, onApprove, onReject),
             )}
@@ -542,6 +565,8 @@ export function TcChat(props: TcChatProps): ReactElement {
                       mcpAuthPort,
                       connectorConsentStates,
                       onConnectorConsentCancel,
+                      onConnectorMute,
+                      onConnectorRetry,
                     )
                   : renderStudioApprovalCard(approval, onApprove, onReject),
           )}
@@ -600,6 +625,8 @@ function renderMcpAuthConnectCard(
   mcpAuthPort?: McpAuthPort,
   consentStates?: Readonly<Record<string, ConnectorConsentState>>,
   onConsentCancel?: (serverId: string) => void,
+  onMute?: (catalogSlug: string) => void,
+  onRetry?: (serverId: string, displayName: string) => void,
 ): ReactNode {
   const serverId = approval.serverId;
   const actionable = mcpAuthPort !== undefined && serverId !== null;
@@ -630,9 +657,16 @@ function renderMcpAuthConnectCard(
         onConnect={() =>
           serverId !== null ? mcpAuthPort?.beginAuth(serverId) : undefined
         }
-        onDeny={() =>
-          serverId !== null ? mcpAuthPort?.skipAuth(serverId) : undefined
-        }
+        onDeny={() => {
+          if (serverId === null) return;
+          mcpAuthPort?.skipAuth(serverId);
+          // Only a catalog suggestion is muteable; a gate carries no slug, so
+          // this is a no-op there rather than a branch on approval-id prefixes.
+          const slug = approval.catalogSlug ?? null;
+          if (slug !== null) {
+            onMute?.(slug);
+          }
+        }}
         // Reconsider re-enters OAuth: a denial is a decision the design
         // deliberately lets the user reverse, so it is the same verb as
         // Connect, not a separate one.
@@ -644,6 +678,11 @@ function renderMcpAuthConnectCard(
         // `denied` were states nothing could reach.
         onCancel={() =>
           serverId !== null ? onConsentCancel?.(serverId) : undefined
+        }
+        onRetry={
+          onRetry !== undefined && serverId !== null
+            ? () => onRetry(serverId, approval.title)
+            : undefined
         }
         connectTestId={`tc-chat-mcp-connect-${approval.approvalId}`}
         denyTestId={`tc-chat-mcp-skip-${approval.approvalId}`}

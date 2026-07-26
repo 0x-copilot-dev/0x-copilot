@@ -191,6 +191,7 @@ import {
 // degrades to an inert (but visible) gate.
 import type { McpAuthPort } from "./mcpAuthPort";
 import { useConnectorConsentStates } from "./useConnectorConsentStates";
+import { muteConnectorSuggestion } from "./muteConnectorSuggestion";
 // PR-3.11: the empty/idle goal composer (FR-3.25) mounts inside this shell (no
 // separate host remount) and binds a freshly-started run via the `runId` seam.
 import { RunEmptyState, type StartRunError } from "./RunEmptyState";
@@ -2719,6 +2720,33 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     },
     [consentPort],
   );
+
+  // Denying an unsolicited CATALOG suggestion mutes it for good. Fire-and-
+  // forget: the card has already moved to `denied`, and a failed PATCH is not
+  // worth interrupting a live run over — the mute is reversible in Settings,
+  // which is also where a user who missed it can undo one.
+  const handleConnectorMute = useCallback(
+    (catalogSlug: string): void => {
+      void muteConnectorSuggestion(transport, catalogSlug).catch(
+        () => undefined,
+      );
+    },
+    [transport],
+  );
+
+  // A mid-run connect arms the NEXT turn; it never restarts the run. Restarting
+  // would re-emit work the user is reading and re-spend the tokens that made
+  // it, so the choice is theirs and it costs exactly one turn.
+  const handleConnectorRetry = useCallback(
+    (_serverId: string, displayName: string): void => {
+      // Through the ONE start path, so the retry turn gets the same readiness
+      // gate, optimistic echo, and error surfacing as anything the user types.
+      void handleStartRun({
+        goal: `Retry that step, using ${displayName}.`,
+      }).catch(() => undefined);
+    },
+    [handleStartRun],
+  );
   const handleGatePolicyChange = useCallback(
     (gateId: string, serverId: string, policy: LedgerGateWritePolicy): void => {
       setGatePolicies((prev) => {
@@ -3231,6 +3259,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         mcpAuthPort={consentPort}
         connectorConsentStates={connectorConsent.states}
         onConnectorConsentCancel={connectorConsent.markPending}
+        onConnectorMute={handleConnectorMute}
+        onConnectorRetry={handleConnectorRetry}
         // Host composer seam: desktop mounts the full AssistantComposer here. The
         // dispatch-injecting wrapper (§D3) makes its send bind the live session.
         renderComposer={renderComposerWithDispatch}

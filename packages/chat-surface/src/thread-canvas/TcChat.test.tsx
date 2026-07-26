@@ -1304,6 +1304,154 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     ).toHaveAttribute("data-state", "pending");
   });
 
+  // Mute lands on the card because that is where the intent forms. The
+  // distinction that matters: a GATE is a connector the user installed and the
+  // run is blocked on — denying it is a decision about this run. A slugged
+  // SUGGESTION is a connector they never asked for, and denying that is a
+  // decision about the connector.
+  describe("mute-on-deny", () => {
+    it("mutes when denying an uninstalled catalog suggestion", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port, skipAuth } = makePort();
+      const onMute = vi.fn();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[
+              mcpAuthApproval({
+                approvalId: "mcp_discovery:run_1:seed:linear",
+                serverId: "seed:linear",
+                catalogSlug: "linear",
+              }),
+            ]}
+            mcpAuthPort={port}
+            onConnectorMute={onMute}
+          />,
+        ),
+      );
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_discovery:run_1:seed:linear"),
+      );
+      // Both: the run stops asking AND the suggestion never returns.
+      expect(skipAuth).toHaveBeenCalledWith("seed:linear");
+      // Keyed by SLUG, not `server_id` — no server row exists for a connector
+      // the user has not installed.
+      expect(onMute).toHaveBeenCalledWith("linear");
+    });
+
+    it("does NOT mute when denying a gate on an installed connector", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port, skipAuth } = makePort();
+      const onMute = vi.fn();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval()]}
+            mcpAuthPort={port}
+            onConnectorMute={onMute}
+          />,
+        ),
+      );
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
+      );
+      expect(skipAuth).toHaveBeenCalledWith("linear");
+      // "Never suggest this again" is meaningless for something already
+      // installed, and muting it here would quietly hide it from future runs.
+      expect(onMute).not.toHaveBeenCalled();
+    });
+  });
+
+  // Connecting mid-run arms the NEXT turn rather than restarting the run —
+  // a restart re-emits work the user is reading and re-spends its tokens.
+  describe("retry-after-connect", () => {
+    it("offers a named retry once connected", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port } = makePort();
+      const onRetry = vi.fn();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            // `title` is `payload.display_name` in the real projection — the
+            // bare connector name. The shared fixture above predates that and
+            // says "Connect Linear", which would read as "Retry that step with
+            // Connect Linear"; override it so the label is asserted against
+            // what production actually produces.
+            approvals={[mcpAuthApproval({ title: "Linear" })]}
+            mcpAuthPort={port}
+            connectorConsentStates={{ linear: "connected" }}
+            onConnectorRetry={onRetry}
+          />,
+        ),
+      );
+      const retry = screen.getByTestId("cc-retry");
+      // Named after the connector: the user is choosing to spend a turn, and
+      // the label should say what that turn will use.
+      expect(retry).toHaveTextContent("Retry that step with Linear");
+      fireEvent.click(retry);
+      expect(onRetry).toHaveBeenCalledWith("linear", "Linear");
+    });
+
+    it("renders no retry when the host wired none", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port } = makePort();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval()]}
+            mcpAuthPort={port}
+            connectorConsentStates={{ linear: "connected" }}
+          />,
+        ),
+      );
+      // Still a completed connect, just with no next step to offer.
+      expect(screen.queryByTestId("cc-retry")).toBeNull();
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+      ).toHaveAttribute("data-state", "connected");
+    });
+
+    it("offers no retry before the connector is connected", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port } = makePort();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval()]}
+            mcpAuthPort={port}
+            onConnectorRetry={vi.fn()}
+          />,
+        ),
+      );
+      expect(screen.queryByTestId("cc-retry")).toBeNull();
+    });
+  });
+
   it("falls back to pending when the host reports nothing (hook-less host)", () => {
     const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
     const { port } = makePort();
