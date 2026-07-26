@@ -564,6 +564,7 @@ function fleetStarted(): Record<string, unknown> {
       fleet_id: "fleet-1",
       title: "Parallel research",
       agent_ids: ["doc_reader", "press_scout"],
+      task_ids: ["task_alpha", "task_beta"],
     },
   });
 }
@@ -780,6 +781,119 @@ describe("RunDestination — parallel subagents (PR-3.8 / FR-3.17)", () => {
       await screen.findByTestId("agent-activity-row-details-task-history"),
     ).toBeInTheDocument();
     expect(screen.getByText("Prime Checker")).toBeInTheDocument();
+  });
+
+  it("replays completed fleet cards from earlier runs into the conversation transcript", async () => {
+    seqCounter = 0;
+    const transport = new FakeTransport();
+    const historicStarted = event({
+      run_id: "run-history",
+      event_type: "subagent_fleet_started",
+      source: "main_agent",
+      activity_kind: "subagent",
+      payload: {
+        fleet_id: "fleet-history",
+        title: "Prime check",
+        agent_ids: ["prime_checker"],
+        task_ids: ["task-history"],
+      },
+    });
+    const historicFinished = event({
+      run_id: "run-history",
+      event_type: "subagent_fleet_finished",
+      source: "main_agent",
+      activity_kind: "subagent",
+      payload: { fleet_id: "fleet-history", elapsed: "0:02" },
+    });
+    transport.requestHandler = async (req) => {
+      if (req.path.endsWith("/messages")) {
+        return {
+          messages: [
+            {
+              message_id: "historic-user",
+              role: "user",
+              content_text: "Check 97",
+              created_at: new Date(1716000005000).toISOString(),
+            },
+            {
+              message_id: "historic-answer",
+              role: "assistant",
+              content_text: "97 is prime.",
+              created_at: new Date(1716000015000).toISOString(),
+            },
+          ],
+        };
+      }
+      if (req.path.endsWith("/runs/run-history/events")) {
+        return {
+          run_id: "run-history",
+          events: [historicStarted, historicFinished],
+          latest_sequence_no: 2,
+          run_status: "completed",
+          has_more: false,
+        };
+      }
+      if (req.path.endsWith("/runs/run-current/events")) {
+        return {
+          run_id: "run-current",
+          events: [],
+          latest_sequence_no: 0,
+          run_status: "completed",
+          has_more: false,
+        };
+      }
+      if (req.path.endsWith("/subagents")) {
+        return {
+          conversation_id: CONV,
+          truncated: false,
+          subagents: [
+            {
+              task_id: "task-history",
+              parent_run_id: "run-history",
+              subagent_name: "prime_checker",
+              status: "completed",
+              display_title: "Check whether 97 is prime",
+              objective_summary: "Check 97",
+              started_at: new Date(1716000000000).toISOString(),
+              completed_at: new Date(1716000002000).toISOString(),
+              duration_ms: 2000,
+              result_summary: "97 is prime.",
+              safe_error_code: null,
+              safe_error_message: null,
+              token_usage: null,
+            },
+          ],
+        };
+      }
+      if (req.path.endsWith("/runs")) {
+        return {
+          runs: [
+            { run_id: "run-history", status: "completed" },
+            { run_id: "run-current", status: "completed" },
+          ],
+        };
+      }
+      return {
+        latest_run_id: null,
+        latest_run_id_any_status: "run-current",
+      };
+    };
+
+    renderRun(transport, makeStore());
+
+    const historicCard = await screen.findByTestId(
+      "tc-chat-fleet-fleet-history",
+    );
+    expect(historicCard).toHaveTextContent("Dispatched a subagent");
+    const toggle = screen.getByTestId("subagent-fleet-toggle-fleet-history");
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(historicCard).toHaveTextContent("97 is prime.");
+    expect(
+      transport.requests.some((request) =>
+        request.path.endsWith("/runs/run-history/events"),
+      ),
+    ).toBe(true);
   });
 
   it("renders a real subagent tool result in both fleet and Agents expansions from the one run stream", async () => {

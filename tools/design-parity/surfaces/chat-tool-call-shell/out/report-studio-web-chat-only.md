@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-web-chat-only.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-web-chat-only.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 40 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 39 · ⚪ INFO 10
 
-## 🟡 LOW (40)
+## 🟡 LOW (39)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -22,12 +22,12 @@ Design baseline (source of truth) vs live app, by computed style.
 | `chat.column` | Chat | lineHeight | 19.5px → normal |
 | `chat.column` | Chat | transition | all → none |
 | `chat.column` | Chat | width | 583.891px → 584px |
-| `chat.column` | Chat | height | 727.031px → 581px |
+| `chat.column` | Chat | height | 727.031px → 617px |
 | `chat.column` | Chat | tag | <section> → <div> (semantic/default-style change) |
 | `chat.transcript` | Chat | lineHeight | 19.5px → normal |
 | `chat.transcript` | Chat | transition | all → none |
 | `chat.transcript` | Chat | width | 582.891px → 583px |
-| `chat.transcript` | Chat | height | 573.406px → 481.25px |
+| `chat.transcript` | Chat | height | 573.406px → 517.25px |
 | `chat.composer` | Chat | lineHeight | 19.5px → normal |
 | `chat.composer` | Chat | transition | border-color 0.12s → none |
 | `chat.composer` | Chat | width | 562.891px → 583px |
@@ -35,7 +35,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `studio.canvas` | Studio | lineHeight | 19.5px → normal |
 | `studio.canvas` | Studio | transition | all → none |
 | `studio.canvas` | Studio | width | 613.109px → 613px |
-| `studio.canvas` | Studio | height | 727.031px → 624px |
+| `studio.canvas` | Studio | height | 727.031px → 660px |
 | `studio.canvas` | Studio | tag | <section> → <div> (semantic/default-style change) |
 | `tool.web.card` | Web read | transition | all → none |
 | `tool.web.card` | Web read | width | 550.891px → 551px |
@@ -45,11 +45,10 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.web.header` | Web read | width | 548.891px → 549px |
 | `tool.web.header` | Web read | tag | <div> → <summary> (semantic/default-style change) |
 | `web.sources-card` | Web read | transition | all → none |
-| `web.sources-card` | Web read | width | 69.3281px → 69.3125px |
 | `web.chat-only-canvas` | Web read | lineHeight | 19.5px → normal |
 | `web.chat-only-canvas` | Web read | transition | all → none |
 | `web.chat-only-canvas` | Web read | width | 613.109px → 613px |
-| `web.chat-only-canvas` | Web read | height | 695.781px → 624px |
+| `web.chat-only-canvas` | Web read | height | 695.781px → 660px |
 | `web.chat-only-canvas` | Web read | tag | <div> → <section> (semantic/default-style change) |
 
 ## ⚪ INFO (10)

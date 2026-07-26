@@ -128,6 +128,7 @@ function fleet(overrides: Partial<FleetProjection> = {}): FleetProjection {
     title: "Parallel research",
     sub: null,
     agentIds: ["doc_reader", "press_scout"],
+    taskIds: ["task_a", "task_b"],
     total: 2,
     running: 2,
     done: 0,

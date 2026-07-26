@@ -248,6 +248,24 @@ def ensure_fleet_row_interaction(
 ) -> None:
     """The fleet child is a role=button instead of native <details>."""
     host = css_test_id(fleet_id)
+    fleet_card = f"{host} [data-fleet-id]"
+    expanded = s.evaluate(
+        f"(document.querySelector({json.dumps(fleet_card)})||{{}}).getAttribute?.('data-expanded')"
+    )
+    if expanded != "true":
+        actual_fleet_id = s.evaluate(
+            f"(document.querySelector({json.dumps(fleet_card)})||{{}}).getAttribute?.('data-fleet-id')"
+        )
+        assert isinstance(actual_fleet_id, str) and actual_fleet_id, (
+            "parallel fleet card has no stable fleet id"
+        )
+        s.click(css_test_id(f"subagent-fleet-toggle-{actual_fleet_id}"))
+        assert (
+            s.evaluate(
+                f"(document.querySelector({json.dumps(fleet_card)})||{{}}).getAttribute?.('data-expanded')"
+            )
+            == "true"
+        ), "could not expand terminal fleet before inspecting its child"
     row = f"{host} .subagent-fleet-row[data-task-id={json.dumps(task_id)}]"
     timeline = f"{host} .subagent-fleet-row__inline-timeline"
     assert s.present(row), "parallel fleet has no interactive child row"
@@ -318,11 +336,37 @@ def assert_no_ordinary_receipt_tab(s: DriverSession) -> None:
     )
 
 
+def activate_workspace_tab(s: DriverSession, label: str, content: str) -> None:
+    """Select a rail tab after a live run update has settled.
+
+    The right rail remounts its tab buttons while a newly-bound run projects
+    its first events. The real control remains semantic; retry only the
+    automation request itself so this journey still fails if the destination
+    content never appears.
+    """
+    selector = f'[data-testid=run-workspace-rail] button[role=tab]:has-text("{label}")'
+    # `click` uses Playwright's selector engine (which supports `:has-text`),
+    # whereas `wait_for` intentionally runs native `document.querySelector`.
+    # Probe a standard CSS selector before using the richer click selector.
+    assert s.wait_for("[data-testid=run-workspace-rail] button[role=tab]"), (
+        f"{label} tab did not render"
+    )
+    last_error: Exception | None = None
+    for _ in range(3):
+        try:
+            s.click(selector)
+            if s.wait_for(content, 10):
+                return
+        except Exception as exc:  # Driver reports a transient DOM race as HTTP 500.
+            last_error = exc
+        time.sleep(0.5)
+    raise AssertionError(f"{label} tab did not become interactive") from last_error
+
+
 def ensure_agents_panel_interaction(
     s: DriverSession, task_id: str, expected_activity: str
 ) -> None:
-    s.click('[data-testid=tc-focus-panel] button[role=tab]:has-text("Agents")')
-    assert s.wait_for("[data-testid=workspace-agents-tab]"), "Agents tab did not open"
+    activate_workspace_tab(s, "Agents", "[data-testid=workspace-agents-tab]")
     details = css_test_id(f"agent-activity-row-details-{task_id}")
     assert s.present(details), "Agents panel is missing the selected fleet child"
     ensure_native_disclosure(
@@ -336,8 +380,7 @@ def ensure_agents_panel_interaction(
 
 def ensure_completed_agent_is_retained(s: DriverSession, task_id: str) -> None:
     """A later run must not clear terminal children from the Agents history."""
-    s.click('[data-testid=tc-focus-panel] button[role=tab]:has-text("Agents")')
-    assert s.wait_for("[data-testid=workspace-agents-tab]"), "Agents tab did not open"
+    activate_workspace_tab(s, "Agents", "[data-testid=workspace-agents-tab]")
     details = css_test_id(f"agent-activity-row-details-{task_id}")
     assert s.present(details), (
         "completed child from the preceding run vanished when a new message "
@@ -465,6 +508,21 @@ def main() -> int:
         old_task_id = single["childStates"][0]["taskId"]
         assert old_task_id, single
         ensure_completed_agent_is_retained(s, old_task_id)
+        # R10 — the transcript itself is conversation-scoped too. A new live
+        # run must not erase R2's compact, expandable fleet card above it.
+        activate_workspace_tab(s, "Chat", "[data-testid=tc-chat]")
+        historic_single = next(
+            (
+                card
+                for card in card_snapshots(s, "fleet")
+                if card["testId"] == single["testId"]
+            ),
+            None,
+        )
+        assert historic_single is not None, (
+            "completed R2 fleet card vanished when R3 bound a new run"
+        )
+        ensure_fleet_card_interaction(s, single["testId"])
         s.shot("r3-retains-r2-completed-subagent")
         multi = wait_new_card(
             s,
@@ -508,6 +566,7 @@ def main() -> int:
 
         # R4 — direct tool + two delegated agents in ONE sent message.
         log("── R4 web search plus subagents in one message ─────────────")
+        activate_workspace_tab(s, "Chat", "[data-testid=tc-chat]")
         tool_before_ids = {card["testId"] for card in card_snapshots(s, "tool")}
         fleet_before_ids = {card["testId"] for card in card_snapshots(s, "fleet")}
         assistant_before = int(s.evaluate(JS_ASSISTANT_COUNT) or 0)
@@ -536,14 +595,16 @@ def main() -> int:
             for card in card_snapshots(s, "tool")
             if card["testId"] not in tool_before_ids
         ]
+        new_web_tools = [card for card in new_tools if "web_search" in card["text"]]
         new_fleets = [
             card
             for card in card_snapshots(s, "fleet")
             if card["testId"] not in fleet_before_ids
         ]
-        assert len(new_tools) == 1 and new_tools[0]["testId"] == mixed_tool["testId"], (
-            f"mixed prompt required exactly one direct tool call, got {new_tools!r}"
-        )
+        assert (
+            len(new_web_tools) == 1
+            and new_web_tools[0]["testId"] == mixed_tool["testId"]
+        ), f"mixed prompt required exactly one direct web search, got {new_tools!r}"
         assert (
             len(new_fleets) == 1 and new_fleets[0]["testId"] == mixed_fleet["testId"]
         ), f"mixed prompt required exactly one two-agent fleet, got {new_fleets!r}"

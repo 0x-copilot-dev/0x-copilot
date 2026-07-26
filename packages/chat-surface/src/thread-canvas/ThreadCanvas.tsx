@@ -438,8 +438,12 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
   const showMiniTimeline =
     mode === "focus" ||
     (mode === "studio" && !(showSwimlanes && timelineEmpty));
+  // A tab track with no tab is not neutral: it reserves a visibly empty band
+  // below the run header. Only mount both the strip *and* its grid row when
+  // there is a real surface to navigate to.
   const showTabs =
-    mode === "studio" || (mode === "focus" && focusCards === undefined);
+    tabs.length > 0 &&
+    (mode === "studio" || (mode === "focus" && focusCards === undefined));
 
   return (
     <div
@@ -452,7 +456,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
         projection.surface.hasActiveSurfaces ? "true" : "false"
       }
       style={{
-        ...gridStyleFor(mode, railWidthPx),
+        ...gridStyleFor(mode, railWidthPx, showTabs),
         // Kill the 300ms grid-template animation during an active drag so the
         // rail tracks the pointer 1:1 (the animation is for mode switches).
         ...(dragWidth !== null ? { transition: "none" } : null),
@@ -699,31 +703,50 @@ function ModeSwitcherTabs(props: ModeSwitcherTabsProps): ReactElement {
 // Styles (tokens only)
 // ============================================================
 
-function gridStyleFor(mode: ThreadMode, railWidthPx: number): CSSProperties {
+function gridStyleFor(
+  mode: ThreadMode,
+  railWidthPx: number,
+  showTabs: boolean,
+): CSSProperties {
   // Grid template adapts presentationally. Mode switch is a template
   // change, NOT a remount (PRD §3.3 — animation: 300ms grid-template
   // transition; the inner components are invariant).
   if (mode === "studio") {
     // A 1px `handle` column between surface and chat carries the drag divider;
     // the rail (chat column) width is user-controlled (`railWidthPx`).
-    return {
-      ...baseGridStyle,
-      gridTemplateColumns: `minmax(0, 1fr) 1px ${railWidthPx}px`,
-      gridTemplateRows: "auto auto 1fr auto auto",
-      gridTemplateAreas:
-        '"switcher switcher switcher" "tabs tabs tabs" "surface handle chat" "swimlanes swimlanes swimlanes" "mini mini mini"',
-    };
+    return showTabs
+      ? {
+          ...baseGridStyle,
+          gridTemplateColumns: `minmax(0, 1fr) 1px ${railWidthPx}px`,
+          gridTemplateRows: "auto auto 1fr auto auto",
+          gridTemplateAreas:
+            '"switcher switcher switcher" "tabs tabs tabs" "surface handle chat" "swimlanes swimlanes swimlanes" "mini mini mini"',
+        }
+      : {
+          ...baseGridStyle,
+          gridTemplateColumns: `minmax(0, 1fr) 1px ${railWidthPx}px`,
+          gridTemplateRows: "auto 1fr auto auto",
+          gridTemplateAreas:
+            '"switcher switcher switcher" "surface handle chat" "swimlanes swimlanes swimlanes" "mini mini mini"',
+        };
   }
   // focus: the surface column collapses; the `chat` area spans the full width
   // so the injected rail (RunWorkspaceRail) can lay out the design's two-column
   // split internally — Chat (730px centered) | Run-details panel (324/46px). The
   // mini-timeline stays full-width below (WS-F).
-  return {
-    ...baseGridStyle,
-    gridTemplateColumns: "minmax(0, 1fr)",
-    gridTemplateRows: "auto auto 1fr auto",
-    gridTemplateAreas: '"switcher" "tabs" "chat" "mini"',
-  };
+  return showTabs
+    ? {
+        ...baseGridStyle,
+        gridTemplateColumns: "minmax(0, 1fr)",
+        gridTemplateRows: "auto auto 1fr auto",
+        gridTemplateAreas: '"switcher" "tabs" "chat" "mini"',
+      }
+    : {
+        ...baseGridStyle,
+        gridTemplateColumns: "minmax(0, 1fr)",
+        gridTemplateRows: "auto 1fr auto",
+        gridTemplateAreas: '"switcher" "chat" "mini"',
+      };
 }
 
 const baseGridStyle: CSSProperties = {

@@ -26,6 +26,7 @@ The default is `openai`.
 | R7  | Open the right-side **Agents** tab and click/Space/Enter that same child.    | Its native disclosure opens/closes and shows the matching live `web_search` activity, keyed by task id.                                                     | P0       |
 | R8  | Send R3 after the completed R2 single-subagent run.                          | The R2 terminal child remains in **Agents** while the R3 run is active; a new run must not erase conversation history.                                      | P0       |
 | R9  | Complete R2 and use its fleet-card header by click, Space, and Enter.        | The terminal fleet starts compact, expands/collapses semantically, and returns to its compact state without losing child detail.                            | P0       |
+| R10 | Start R3 after the completed R2 single-subagent run.                         | The R2 compact fleet card remains in the **transcript**, reopens with its child result, and is not replaced by the newer run's temporary event stream.      | P0       |
 
 R1–R4 are intentionally strict. The test does **not** downgrade a model that
 ignores “exactly” to a green `BLOCKED` result: an absent card, bad cardinality,

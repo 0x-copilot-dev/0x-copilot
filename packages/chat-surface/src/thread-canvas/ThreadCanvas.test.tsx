@@ -255,9 +255,17 @@ describe("ThreadCanvas", () => {
       expect(screen.getByTestId("tc-mini-timeline-slot")).toBeInTheDocument();
     });
 
-    it("renders the tabs strip in Studio and Focus modes", () => {
-      renderCanvas({ mode: "studio" });
+    it("renders the tabs strip only when there are surface tabs", () => {
+      renderCanvas({ mode: "studio", tabs: SAMPLE_TABS });
       expect(screen.getByTestId("tc-tabs")).toBeInTheDocument();
+    });
+
+    it("does not reserve a tab row when a run has no surface tabs", () => {
+      renderCanvas({ mode: "studio", tabs: [] });
+      expect(screen.queryByTestId("tc-tabs")).not.toBeInTheDocument();
+      expect(screen.getByTestId("thread-canvas")).toHaveStyle({
+        gridTemplateRows: "auto 1fr auto auto",
+      });
     });
   });
 

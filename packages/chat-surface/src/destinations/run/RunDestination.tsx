@@ -68,6 +68,7 @@ import {
   type RunAttachmentRequest,
   type RunId,
   type RunReceiptV2,
+  type RuntimeEventReplayResponse,
   type SourceEntry,
   type SourcesProjectionV2,
   type SubagentEntry,
@@ -95,7 +96,11 @@ import { EditOverlay } from "../../surfaces/edit/EditOverlay";
 import { useTransport } from "../../providers/TransportProvider";
 // PR-3.8: pure selector projecting parallel-subagent + fleet state off the
 // single canonical event stream (no second subscription / projector).
-import { projectSubagentActivities, projectSubagents } from "../../subagents";
+import {
+  projectSubagentActivities,
+  projectSubagents,
+  type FleetProjection,
+} from "../../subagents";
 import {
   ThreadCanvas,
   TcChat,
@@ -233,6 +238,7 @@ const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
   new Map();
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
 const EMPTY_SUBAGENT_ARCHIVE: ReadonlyMap<string, SubagentEntry> = new Map();
+const EMPTY_FLEET_ARCHIVE: readonly FleetProjection[] = [];
 // E2 D3: historic rows are selected through a read-only compatibility reader.
 // Kept stable while the Studio canvas flag is off so the legacy cockpit remains
 // byte-identical and never inspects older surface envelopes on that path.
@@ -251,6 +257,11 @@ interface ConversationSubagentArchive {
   readonly subagents: ReadonlyMap<string, SubagentEntry>;
   readonly loading: boolean;
   readonly error: string | null;
+}
+
+interface ConversationFleetArchive {
+  /** Historic fleet bookends plus the live fleets remembered by this cockpit. */
+  readonly fleets: readonly FleetProjection[];
 }
 
 /**
@@ -342,6 +353,122 @@ function useConversationSubagentArchive(
   }, [archived, rememberedLive, liveSubagents]);
 
   return { subagents, loading, error };
+}
+
+/**
+ * Keep inline fleet cards conversation-scoped, just like the transcript.
+ *
+ * `useRunSession.events` deliberately resets when a newer message binds its
+ * own run. That is correct for the live stream, but it used to make every
+ * completed fleet card above the newest assistant message disappear. The
+ * immutable run ledger is the source of truth for those historic cards, so
+ * replay the lightweight fleet bookends for prior runs and retain any live
+ * fleet already observed before that replay completes.
+ */
+function useConversationFleetArchive(
+  transport: ReturnType<typeof useTransport>,
+  conversationId: ConversationId,
+  runIds: readonly string[],
+  liveFleets: readonly FleetProjection[],
+): ConversationFleetArchive {
+  const [archived, setArchived] =
+    useState<readonly FleetProjection[]>(EMPTY_FLEET_ARCHIVE);
+  const [rememberedLive, setRememberedLive] = useState<
+    ReadonlyMap<string, FleetProjection>
+  >(new Map());
+
+  // `session.runs.map(...)` is intentionally recreated by the shell. Key the
+  // replay effect on a stable primitive so recording an archive does not cause
+  // a refetch loop.
+  const runIdsKey = [...new Set(runIds)].sort().join("\u0000");
+  const replayRunIds = useMemo(
+    () => (runIdsKey === "" ? [] : runIdsKey.split("\u0000")),
+    [runIdsKey],
+  );
+
+  useEffect(() => {
+    setArchived(EMPTY_FLEET_ARCHIVE);
+    setRememberedLive(new Map());
+  }, [conversationId]);
+
+  useEffect(() => {
+    if (conversationId === "new" || liveFleets.length === 0) return;
+    setRememberedLive((previous) => {
+      const next = new Map(previous);
+      let changed = false;
+      for (const fleet of liveFleets) {
+        if (next.get(fleet.fleetId) !== fleet) {
+          next.set(fleet.fleetId, fleet);
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [conversationId, liveFleets]);
+
+  useEffect(() => {
+    if (conversationId === "new") return undefined;
+    if (replayRunIds.length === 0) {
+      setArchived(EMPTY_FLEET_ARCHIVE);
+      return undefined;
+    }
+    let cancelled = false;
+    void Promise.all(
+      replayRunIds.map(async (runId) => {
+        const response = await transport.request<RuntimeEventReplayResponse>({
+          method: "GET",
+          path: `/v1/agent/runs/${encodeURIComponent(runId)}/events`,
+        });
+        return projectSubagents(response.events ?? []).fleets;
+      }),
+    )
+      .then((fleetGroups) => {
+        if (!cancelled) setArchived(fleetGroups.flat());
+      })
+      .catch(() => {
+        // Cards already observed live remain visible. A historical replay is a
+        // progressive enhancement, so a transient failure must not block chat.
+        if (!cancelled) setArchived(EMPTY_FLEET_ARCHIVE);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [transport, conversationId, replayRunIds]);
+
+  const fleets = useMemo(() => {
+    const merged = new Map<string, FleetProjection>();
+    for (const fleet of archived) merged.set(fleet.fleetId, fleet);
+    for (const fleet of rememberedLive.values()) {
+      merged.set(fleet.fleetId, fleet);
+    }
+    for (const fleet of liveFleets) merged.set(fleet.fleetId, fleet);
+    return [...merged.values()].sort((left, right) => {
+      const leftAt = left.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+      const rightAt = right.createdAtMs ?? Number.MAX_SAFE_INTEGER;
+      return leftAt === rightAt
+        ? left.fleetId.localeCompare(right.fleetId)
+        : leftAt - rightAt;
+    });
+  }, [archived, rememberedLive, liveFleets]);
+
+  return { fleets };
+}
+
+/** Add durable subagent records to a replayed fleet whose event log only kept
+ * the fleet bookends. This preserves the compact card immediately and fills
+ * its expandable child rows as the conversation archive arrives. */
+function hydrateFleetChildren(
+  fleets: readonly FleetProjection[],
+  subagents: ReadonlyMap<string, SubagentEntry>,
+): readonly FleetProjection[] {
+  return fleets.map((fleet) => {
+    if (fleet.children.length > 0 || fleet.taskIds.length === 0) return fleet;
+    const children = fleet.taskIds.flatMap((taskId) => {
+      const child = subagents.get(taskId);
+      return child === undefined ? [] : [child];
+    });
+    return children.length > 0 ? { ...fleet, children } : fleet;
+  });
 }
 
 function effectStageUri(stageId: string): string {
@@ -1236,6 +1363,20 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     transport,
     conversationId,
     subagentProjection.subagents,
+  );
+  const conversationFleets = useConversationFleetArchive(
+    transport,
+    conversationId,
+    session.runs.map((run) => run.runId),
+    subagentProjection.fleets,
+  );
+  const transcriptFleets = useMemo(
+    () =>
+      hydrateFleetChildren(
+        conversationFleets.fleets,
+        conversationSubagents.subagents,
+      ),
+    [conversationFleets.fleets, conversationSubagents.subagents],
   );
 
   // The detailed tool/reasoning timeline is another pure view of the same
@@ -2761,7 +2902,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // WC-P6a: the host chip dispatcher (`{ a: MarkdownLink }`) — resolves
         // `[[N]]` / `[c<id>]` anchors against the provider above.
         markdownComponents={markdownComponents}
-        fleets={subagentProjection.fleets}
+        fleets={transcriptFleets}
         subagentActivitiesByTask={subagentActivityProjection.activitiesByTask}
         // Workstream D: inline tool-call cards, interleaved into the transcript
         // by the point each tool ran (running spinner → done/error).

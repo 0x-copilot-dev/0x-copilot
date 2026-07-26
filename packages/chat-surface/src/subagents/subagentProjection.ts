@@ -50,6 +50,8 @@ export interface FleetProjection {
   readonly sub: string | null;
   /** Declared child agent ids from the `subagent_fleet_started` payload. */
   readonly agentIds: readonly string[];
+  /** Declared supervisor task ids, used to hydrate historic child rows. */
+  readonly taskIds: readonly string[];
   /** Head count: live children when we have them, else the declared count. */
   readonly total: number;
   /** In-flight children (queued / running / paused — i.e. not terminal). */
@@ -273,6 +275,7 @@ function buildFleet(
     title: head.title,
     sub: head.sub,
     agentIds: head.agentIds,
+    taskIds: head.taskIds,
     total,
     running,
     done,
