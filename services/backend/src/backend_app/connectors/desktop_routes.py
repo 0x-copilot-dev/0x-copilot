@@ -88,7 +88,7 @@ class DesktopStartOAuthRequestModel(BaseModel):
     callback: _DesktopLoopbackCallbackModel | _DesktopDeepLinkCallbackModel = Field(
         ..., discriminator="kind"
     )
-    requested_product_scope: Literal["read", "draft"] = "read"
+    requested_product_scope: Literal["read", "draft", "write"] = "read"
 
     def to_callback(self) -> DesktopOAuthCallback:
         if self.callback.kind == "desktop_loopback":
