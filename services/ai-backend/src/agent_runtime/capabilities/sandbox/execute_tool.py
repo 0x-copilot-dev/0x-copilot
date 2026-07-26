@@ -1,63 +1,40 @@
-"""The model-facing ``run_in_sandbox`` tool (AC7 execute-only wiring).
+"""The model-facing ``run_in_sandbox`` operation-gateway tool.
 
-A thin LangChain ``StructuredTool`` over :class:`RemoteExecutionService`. It runs
-**one shell command per invocation** in a freshly provisioned remote sandbox and
-tears the session down before returning — the whole call is wrapped in
-``RemoteExecutionService.session_scope`` so provision → execute → guaranteed
-teardown converge even on error or cancellation.
-
-Why a dedicated tool instead of the deepagents composite default backend:
-deepagents' ``execute`` tool is served by ``CompositeBackend.default``, and
-``PolicyEnforcedSandboxBackend`` implements the **full** filesystem surface. If
-it were the composite default, every unrouted path — ``/memories/``,
-``/skills/``, scratch — would relocate into the ephemeral remote sandbox and be
-destroyed at teardown, breaking memory/skill persistence. This tool keeps the
-StateBackend/``/memories/``/``/skills/`` local and untouched: ONLY the explicit
-command the model runs reaches the sandbox.
-
-Like every other model tool, this one is registered into the normal tool set and
-therefore flows through the runtime's ordinary tool-policy / approval / budget
-middleware — it is not privileged. The trusted run identity comes from an
-injected provider, never from the model. Built only by the registration wiring
-when ``RUNTIME_ENABLE_REMOTE_SANDBOX`` + ``single_user_desktop`` are satisfied;
-when the capability is off this module is never imported at runtime.
+This is deliberately only a LangChain boundary.  It records the command and a
+trusted reference-only snapshot as canonical operation arguments, then invokes
+the universal operation gateway.  It does not import or call a provider
+lifecycle service, acquire a provider session, or touch a local file.
+The worker composition root will supply the lifecycle-runner and file-store
+ports once their durable implementations are wired.
 """
 
 from __future__ import annotations
 
 import json
-import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
-from uuid import uuid4
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from agent_runtime.capabilities.sandbox.config import RemoteSandboxConfig
-from agent_runtime.capabilities.sandbox.contracts import (
-    SandboxCreateRequest,
-    SandboxEgressPolicy,
-    SandboxError,
-    SandboxSnapshot,
+from agent_runtime.capabilities.operations.context import OperationRequestFactory
+from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.sandbox.operation_adapter import (
+    SANDBOX_CAPABILITY,
+    SANDBOX_EXECUTE_OPERATION,
+    SandboxOperationAdapter,
 )
-from agent_runtime.capabilities.sandbox.remote_execution_service import (
-    RemoteExecutionService,
-)
+from agent_runtime.capabilities.sandbox.snapshot import SandboxSnapshotPlanProvider
+from agent_runtime.surfaces_v2.ledger_models import OperationOutcome
 
-TOOL_NAME = "run_in_sandbox"
+TOOL_NAME = SANDBOX_EXECUTE_OPERATION
 TOOL_DESCRIPTION = (
-    "Run a single shell command in an isolated, network-restricted remote "
-    "sandbox and return its combined output and exit code. A fresh sandbox is "
-    "provisioned for each call and destroyed immediately after, so no state "
-    "persists between calls and nothing is shared with the local workspace. Use "
-    "it for one-shot computation, scripts, or CLI tools that need a real shell; "
-    "for reading or writing the user's files use the filesystem tools instead."
+    "Run a single shell command in an isolated remote sandbox using only a "
+    "trusted immutable snapshot. The sandbox has no local workspace mount, "
+    "no user credentials, and deny-all network egress. Results remain behind "
+    "operation references; local files are unchanged unless a later reviewed "
+    "workspace patch is applied."
 )
-
-#: A real immutable empty snapshot: unlike the removed sentinel it contains no
-#: workspace/grant/broker facts and its digest is the SHA-256 of zero entries.
-_EMPTY_MANIFEST_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 @dataclass(frozen=True)
@@ -69,13 +46,11 @@ class SandboxRunIdentity:
     user_id: str | None = None
 
 
-#: Supplies the current run identity. Wired to the run context at registration;
-#: the model never influences it.
 SandboxRunIdentityProvider = Callable[[], SandboxRunIdentity]
 
 
 class RunInSandboxInput(BaseModel):
-    """Model-facing schema for :data:`TOOL_NAME` — the command only."""
+    """Model-facing schema: command only, never paths, refs, or provider data."""
 
     command: str = Field(
         min_length=1,
@@ -84,76 +59,94 @@ class RunInSandboxInput(BaseModel):
 
 
 class SandboxExecuteToolFactory:
-    """Builds the ``run_in_sandbox`` StructuredTool bound to a service + identity."""
+    """Build a gateway-routed sandbox tool only when the provider is honest-ready."""
 
     @classmethod
     def build(
         cls,
         *,
-        service: RemoteExecutionService,
+        gateway: OperationGateway,
+        adapter: SandboxOperationAdapter,
         identity_provider: SandboxRunIdentityProvider,
-        config: RemoteSandboxConfig,
-    ) -> StructuredTool:
-        """Return a ``run_in_sandbox`` StructuredTool over a live service."""
+        snapshot_provider: SandboxSnapshotPlanProvider,
+    ) -> StructuredTool | None:
+        """Return ``None`` when verified execution is unavailable.
 
-        limit_profile = config.limit_profile
+        A configuration flag or a provider object is not sufficient to expose
+        a model tool.  A stale already-built tool also rechecks availability
+        before it writes canonical arguments, so it cannot dispatch a command
+        after the provider posture has become unavailable.
+        """
+
+        if not adapter.availability.available:
+            return None
 
         async def _run_in_sandbox(command: str) -> str:
-            identity = identity_provider()
-            request = cls._create_request(identity.run_id, limit_profile)
-            try:
-                async with service.session_scope(request) as active:
-                    response = await active.backend.aexecute(command)
-            except SandboxError as exc:
+            availability = adapter.availability
+            if not availability.available:
                 return json.dumps(
                     {
-                        "status": "failed",
-                        "error_code": exc.code.value,
-                        "message": exc.message,
+                        "status": "unavailable",
+                        "summary": (
+                            "Sandbox execution is unavailable; no command was run."
+                        ),
+                        "reason": availability.reason,
                     }
                 )
-            return json.dumps(
-                {
-                    "status": "completed",
-                    "output": getattr(response, "output", ""),
-                    "exit_code": getattr(response, "exit_code", None),
-                    "truncated": bool(getattr(response, "truncated", False)),
-                }
+            identity = identity_provider()
+            plan = await snapshot_provider.snapshot_for(
+                run_id=identity.run_id,
+                org_id=identity.org_id,
+                user_id=identity.user_id,
             )
+            request = OperationRequestFactory.create(
+                capability=SANDBOX_CAPABILITY,
+                op=SANDBOX_EXECUTE_OPERATION,
+                arguments={
+                    "command": command,
+                    "snapshot": plan.model_dump(mode="json"),
+                },
+            )
+            disposition = await gateway.invoke(request, adapter)
+            output: dict[str, object] = {
+                "status": disposition.outcome.value,
+                "operation_id": disposition.operation_id,
+                "summary": disposition.agent_summary,
+            }
+            if disposition.outcome is OperationOutcome.SUCCEEDED:
+                result = adapter.result_for(disposition.operation_id)
+                if result is None:
+                    # A successful operation without its immutable result ref
+                    # cannot be reported as complete to the model.
+                    return json.dumps(
+                        {
+                            "status": "failed",
+                            "operation_id": disposition.operation_id,
+                            "summary": "Sandbox result storage is unavailable.",
+                        }
+                    )
+                output.update(
+                    {
+                        "status": "completed",
+                        "summary": result.safe_summary,
+                        "result_ref": result.result_ref,
+                    }
+                )
+                if result.artifacts:
+                    output["artifact_refs"] = [
+                        artifact.artifact_ref for artifact in result.artifacts
+                    ]
+                if result.patch is not None:
+                    output["patch_ref"] = result.patch.patch_ref
+            elif disposition.outcome is not OperationOutcome.BLOCKED:
+                output["status"] = "failed"
+            return json.dumps(output)
 
         return StructuredTool.from_function(
             coroutine=_run_in_sandbox,
             name=TOOL_NAME,
             description=TOOL_DESCRIPTION,
             args_schema=RunInSandboxInput,
-        )
-
-    @staticmethod
-    def _create_request(run_id: str, limit_profile: str) -> SandboxCreateRequest:
-        """Build the minimal execute-only provisioning envelope for one call.
-
-        No workspace bytes are transferred (empty manifest), egress stays at the
-        default ``deny_all``, and the ``owner_tag`` / ``idempotency_key`` /
-        ``approval_id`` are per-call run-derived ids — none of it is
-        model-influenced.
-        """
-
-        snapshot = SandboxSnapshot(
-            snapshot_id=f"sandbox:{run_id}",
-            entries=(),
-            total_bytes=0,
-            manifest_sha256=_EMPTY_MANIFEST_SHA256,
-        )
-        return SandboxCreateRequest(
-            run_id=run_id,
-            operation_id=f"sandbox:{run_id}",
-            snapshot=snapshot,
-            egress=SandboxEgressPolicy(),
-            secret_refs=(),
-            limit_profile=limit_profile,
-            approval_id=uuid4().hex,
-            owner_tag=run_id,
-            idempotency_key=uuid4().hex,
         )
 
 
