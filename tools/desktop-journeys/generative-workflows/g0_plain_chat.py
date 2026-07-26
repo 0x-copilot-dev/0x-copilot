@@ -67,6 +67,29 @@ PLAIN_CHAT_EVENT_ACTIVITY_KINDS = {
     "receipt.emitted": "event",
     "run_completed": "run",
 }
+# RuntimeEventEnvelope persists ``source`` plus the projector-owned
+# ``parent_task_id``, ``task_id``, and ``subagent_id`` fields.  These are the
+# production sources for the direct path: queue creation, lifecycle/receipt
+# emitters, and direct model streaming.  A tool or delegated source must never
+# be made to look like plain chat merely by projecting it as ``message``.
+PLAIN_CHAT_EVENT_SOURCES = {
+    "run_queued": "runtime",
+    "run_started": "system",
+    "model_call_started": "system",
+    "model_call_completed": "model",
+    "model_delta": "model",
+    "reasoning_summary": "model",
+    "reasoning_summary_delta": "model",
+    "final_response": "system",
+    "surface.created": "system",
+    "receipt.emitted": "system",
+    "run_completed": "system",
+}
+DELEGATED_PROVENANCE_FIELDS = (
+    "parent_task_id",
+    "task_id",
+    "subagent_id",
+)
 PLAIN_CHAT_IN_FLIGHT_EVENT_TYPES = frozenset(
     {
         "model_call_started",
@@ -300,6 +323,21 @@ def _receipt_surface_id(payload: dict, event_type: str) -> str:
     return surface_id
 
 
+def _assert_direct_agent_provenance(event: dict, event_type: str) -> None:
+    expected_source = PLAIN_CHAT_EVENT_SOURCES[event_type]
+    assert event.get("source") == expected_source, (
+        f"plain chat event {event_type!r} has source {event.get('source')!r}, "
+        f"expected direct-agent source {expected_source!r}"
+    )
+    delegated_fields = [
+        field for field in DELEGATED_PROVENANCE_FIELDS if event.get(field) is not None
+    ]
+    assert not delegated_fields, (
+        f"plain chat event {event_type!r} has delegated provenance fields: "
+        f"{delegated_fields!r}"
+    )
+
+
 def _assert_plain_chat_event_grammar(events: list[dict]) -> str | None:
     """Validate the only persisted sequence that represents a plain answer."""
 
@@ -330,6 +368,7 @@ def _assert_plain_chat_event_grammar(events: list[dict]) -> str | None:
             f"plain chat event {event_type!r} has activity_kind "
             f"{event.get('activity_kind')!r}, expected {expected_activity_kind!r}"
         )
+        _assert_direct_agent_provenance(event, event_type)
         event_types.append(event_type)
 
     assert event_types[0] == "run_queued", (

@@ -75,6 +75,24 @@ class G0PlainChatGrammarTests(unittest.TestCase):
         "receipt.emitted": "event",
         "run_completed": "run",
     }
+    PLAIN_CHAT_SOURCES = {
+        "run_queued": "runtime",
+        "run_started": "system",
+        "model_call_started": "system",
+        "model_call_completed": "model",
+        "model_delta": "model",
+        "reasoning_summary": "model",
+        "reasoning_summary_delta": "model",
+        "final_response": "system",
+        "surface.created": "system",
+        "receipt.emitted": "system",
+        "run_completed": "system",
+    }
+    DELEGATED_PROVENANCE_FIELDS = (
+        "parent_task_id",
+        "task_id",
+        "subagent_id",
+    )
 
     @staticmethod
     def typescript_array_values(constant: str) -> set[str]:
@@ -101,12 +119,14 @@ class G0PlainChatGrammarTests(unittest.TestCase):
         *,
         payload: dict[str, object] | None = None,
         activity_kind: str | None = None,
+        source: str | None = None,
     ) -> dict[str, object]:
         return {
             "sequence_no": 0,
             "event_type": event_type,
             "activity_kind": activity_kind
             or cls.PLAIN_CHAT_ACTIVITY_KINDS.get(event_type, "event"),
+            "source": source or cls.PLAIN_CHAT_SOURCES.get(event_type, "system"),
             **({"payload": payload} if payload is not None else {}),
         }
 
@@ -173,6 +193,24 @@ class G0PlainChatGrammarTests(unittest.TestCase):
         self.assertTrue(
             {"gate.opened.v2", "gate.resolved.v2"}.issubset(runtime_and_ledger_types)
         )
+        self.assertEqual(g0.PLAIN_CHAT_EVENT_SOURCES, self.PLAIN_CHAT_SOURCES)
+        self.assertEqual(
+            g0.DELEGATED_PROVENANCE_FIELDS, self.DELEGATED_PROVENANCE_FIELDS
+        )
+        self.assertTrue(
+            set(g0.PLAIN_CHAT_EVENT_SOURCES.values()).issubset(
+                self.typescript_array_values("RUNTIME_EVENT_SOURCES")
+            )
+        )
+        envelope = re.search(
+            r"export interface RuntimeEventEnvelope \{(.*?)\n\}",
+            API_TYPES.read_text(),
+            flags=re.DOTALL,
+        )
+        assert envelope is not None, "RuntimeEventEnvelope contract is absent"
+        for field in ("source", *self.DELEGATED_PROVENANCE_FIELDS):
+            with self.subTest(field=field):
+                self.assertRegex(envelope.group(1), rf"\b{field}\??:")
 
     def test_accepts_only_plain_model_lifecycle_with_optional_receipt(self) -> None:
         self.assert_replay_passes(
@@ -209,6 +247,45 @@ class G0PlainChatGrammarTests(unittest.TestCase):
                 events[3]["activity_kind"] = activity_kind
                 with self.assertRaisesRegex(AssertionError, "activity_kind"):
                     self.assert_replay_passes(events)
+
+    def test_rejects_each_forbidden_source_on_each_allowed_event_type(self) -> None:
+        direct_events = self.plain_events(
+            receipt_surface_id="receipt://run-g0",
+            include_reasoning=True,
+            close_model_call=True,
+        )
+        known_sources = self.typescript_array_values("RUNTIME_EVENT_SOURCES")
+        forbidden_sources = known_sources - set(g0.PLAIN_CHAT_EVENT_SOURCES.values())
+        self.assertTrue({"tool", "subagent"}.issubset(forbidden_sources))
+        for event_index, event in enumerate(direct_events):
+            for source in sorted(forbidden_sources):
+                with self.subTest(event_type=event["event_type"], source=source):
+                    events = [dict(item) for item in direct_events]
+                    events[event_index]["source"] = source
+                    with self.assertRaisesRegex(AssertionError, "direct-agent source"):
+                        self.assert_replay_passes(
+                            events,
+                            [{"kind": "receipt", "surface_id": "receipt://run-g0"}],
+                        )
+
+    def test_rejects_each_delegated_provenance_field_on_allowed_events(self) -> None:
+        direct_events = self.plain_events(
+            receipt_surface_id="receipt://run-g0",
+            include_reasoning=True,
+            close_model_call=True,
+        )
+        for event_index, event in enumerate(direct_events):
+            for field in g0.DELEGATED_PROVENANCE_FIELDS:
+                with self.subTest(event_type=event["event_type"], field=field):
+                    events = [dict(item) for item in direct_events]
+                    events[event_index][field] = f"{field}-forbidden"
+                    with self.assertRaisesRegex(
+                        AssertionError, "delegated provenance fields"
+                    ):
+                        self.assert_replay_passes(
+                            events,
+                            [{"kind": "receipt", "surface_id": "receipt://run-g0"}],
+                        )
 
     def test_rejects_sequence_ordering_permutations(self) -> None:
         receipt_id = "receipt://run-g0"
