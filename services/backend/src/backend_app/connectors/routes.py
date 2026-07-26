@@ -15,8 +15,6 @@ Endpoint coverage (connectors-prd §4):
 
 * §4.1  ``GET    /v1/connectors``
 * §4.2  ``GET    /v1/connectors/{id}``
-* §4.3  ``POST   /v1/connectors/{slug}/start-oauth`` (alias of existing MCP path)
-* §4.4  ``POST   /v1/connectors/oauth-callback`` (alias of existing MCP path)
 * §4.5  ``POST   /v1/connectors/{id}/refresh``
 * §4.6  ``POST   /v1/connectors/{id}/disconnect``
 * §4.7  ``PATCH  /v1/connectors/{id}/scopes``
@@ -133,18 +131,6 @@ class ConnectorDetailResponseModel(BaseModel):
     consumers: ConnectorConsumersModel
 
 
-class StartOAuthResponseModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    authorization_url: str
-    state: str
-
-
-class OAuthCallbackRequestModel(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    code: str = Field(..., min_length=1)
-    state: str = Field(..., min_length=1)
-
-
 class PatchScopesRequestModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
     scopes: list[ConnectorScopeEntryModel] = Field(..., min_length=0)
@@ -153,14 +139,17 @@ class PatchScopesRequestModel(BaseModel):
 class PatchScopesResponseModel(BaseModel):
     """``202 Accepted`` — the server is requesting a re-OAuth round-trip.
 
-    The destination wraps the existing MCP OAuth start path so the
-    response is the same authorization-URL shape the chat composer
-    consumes.
+    It reports *that* re-auth is needed, not *where* to go. Minting an
+    authorization URL requires the caller's redirect URI, which this route
+    never receives — the previous version papered over that with a stub URL
+    pointing at ``auth.example``, so a scope change sent the user to a page
+    that could not grant anything. The client starts the round-trip on the
+    one OAuth path this product has (``installMcpServer`` →
+    ``startMcpAuth``), which is where its redirect URI is already known.
     """
 
     model_config = ConfigDict(extra="forbid")
-    reauth_url: str
-    state: str
+    reauth_required: bool = True
 
 
 class SetAccessModeRequestModel(BaseModel):
@@ -341,77 +330,6 @@ def register_connector_routes(app: FastAPI, *, service: ConnectorsService) -> No
         )
 
     @app.post(
-        "/v1/connectors/{slug}/start-oauth",
-        response_model=StartOAuthResponseModel,
-        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
-    )
-    def start_oauth(
-        request: Request,
-        slug: str,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
-    ) -> StartOAuthResponseModel:
-        """Alias of the existing MCP OAuth start path.
-
-        Production wiring delegates to
-        :meth:`McpRegistryService.start_auth`; the destination's route
-        is the public surface the FE consumes. In this branch the
-        delegation is a stub returning a deterministic URL so the
-        wiring layer can substitute the real client at boot.
-        """
-
-        BackendServiceAuthenticator.scoped_identity(
-            request, org_id=org_id, user_id=user_id
-        )
-        # The actual OAuth client is wired by the destination's binder
-        # at boot (see ``app.py``). The route returns the substituted
-        # response; in dev / tests the stub returns a deterministic URL
-        # so the FE wizard can render.
-        oauth_client = getattr(
-            request.app.state, "connector_oauth_start", _default_oauth_start
-        )
-        return StartOAuthResponseModel(**oauth_client(slug=slug))
-
-    @app.post(
-        "/v1/connectors/oauth-callback",
-        response_model=ConnectorResponseModel,
-        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
-    )
-    def oauth_callback(
-        request: Request,
-        payload: OAuthCallbackRequestModel,
-        org_id: str = Query(..., min_length=1),
-        user_id: str = Query(..., min_length=1),
-    ) -> ConnectorResponseModel:
-        """Alias of the existing MCP OAuth callback path.
-
-        Production wiring delegates to
-        :meth:`McpRegistryService.complete_auth`; the destination's
-        write-through helper (:meth:`ConnectorsService.write_through_from_mcp`)
-        is the second leg — it denormalizes the row + appends the
-        ``connector.connected`` audit row. The stub here only exercises
-        the second leg so the route's response shape is exercisable
-        without the full OAuth round-trip wired.
-        """
-
-        identity = BackendServiceAuthenticator.scoped_identity(
-            request, org_id=org_id, user_id=user_id
-        )
-        callback = getattr(request.app.state, "connector_oauth_callback", None)
-        if callback is None:
-            raise HTTPException(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "connector_oauth_not_configured",
-            )
-        record = callback(
-            org_id=identity.org_id,
-            user_id=identity.user_id,
-            code=payload.code,
-            state=payload.state,
-        )
-        return _to_wire(record)
-
-    @app.post(
         "/v1/connectors/{connector_id}/refresh",
         response_model=RefreshConnectorResponseModel,
         dependencies=[Depends(RequireScopes(RUNTIME_USE))],
@@ -515,16 +433,10 @@ def register_connector_routes(app: FastAPI, *, service: ConnectorsService) -> No
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, str(exc) or "invalid_request"
             ) from exc
-        # Trigger a re-OAuth flow. Wired through the existing
-        # MCP OAuth start path at boot; the stub returns a deterministic
-        # URL so the wizard can render in tests.
-        oauth_client = getattr(
-            request.app.state, "connector_oauth_start", _default_oauth_start
-        )
-        result = oauth_client(slug=connector_id)
-        return PatchScopesResponseModel(
-            reauth_url=result["authorization_url"], state=result["state"]
-        )
+        # The scope change is persisted; the provider must now re-confirm it.
+        # The client drives that round-trip on the MCP auth path, which owns
+        # the redirect URI this route has no way to know.
+        return PatchScopesResponseModel(reauth_required=True)
 
     @app.patch(
         "/v1/connectors/{connector_id}/access-mode",
@@ -728,19 +640,6 @@ def _to_item_ref(row: dict[str, Any], default_kind: str) -> ItemRefModel:
     )
 
 
-def _default_oauth_start(*, slug: str) -> dict[str, str]:
-    """Deterministic dev / test stub for the OAuth start path.
-
-    Production deploys override this via ``app.state.connector_oauth_start``
-    with the real :class:`McpRegistryService.start_auth` wrapper.
-    """
-
-    return {
-        "authorization_url": f"https://auth.example/{slug}/authorize?state=stub",
-        "state": "stub-state",
-    }
-
-
 __all__ = [
     "ConnectorAuditEntryModel",
     "ConnectorAuditResponseModel",
@@ -751,12 +650,10 @@ __all__ = [
     "ConnectorResponseModel",
     "ConnectorScopeEntryModel",
     "DisconnectConnectorResponseModel",
-    "OAuthCallbackRequestModel",
     "PatchScopesRequestModel",
     "PatchScopesResponseModel",
     "RefreshConnectorResponseModel",
     "SetAccessModeRequestModel",
     "SetAccessModeResponseModel",
-    "StartOAuthResponseModel",
     "register_connector_routes",
 ]

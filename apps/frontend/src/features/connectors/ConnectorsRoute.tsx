@@ -49,10 +49,13 @@ import {
   type ConnectorEventsStream,
   fetchConnectors,
   setConnectorAccessMode,
-  startConnectorOAuth,
   streamConnectorEvents,
 } from "../../api/connectorsApi";
-import { createMcpServer, startMcpAuth } from "../../api/mcpApi";
+import {
+  createMcpServer,
+  installMcpServer,
+  startMcpAuth,
+} from "../../api/mcpApi";
 import { errorMessage } from "../../utils/errors";
 import { applyConnectorEnvelope } from "./adapters";
 
@@ -166,9 +169,16 @@ export function ConnectorsRoute({
   const authorize = useCallback(
     async (request: { slug?: ConnectorSlug; url?: string }): Promise<void> => {
       if (request.slug !== undefined) {
-        const res = await startConnectorOAuth(identity, request.slug);
+        // Install-then-authorize over the MCP path — the SAME two calls the
+        // composer's connect makes. The destination used to POST its own
+        // `/v1/connectors/{slug}/start-oauth`, which no composition root ever
+        // wired: it returned a hardcoded `auth.example` URL, so this popup
+        // opened a page that could never grant anything. There is one OAuth
+        // round-trip in this product and this is it.
+        const server = await installMcpServer(request.slug, identity);
+        const auth = await startMcpAuth(server.server_id, identity);
         if (typeof window !== "undefined") {
-          window.open(res.authorization_url, "_blank", "noopener,noreferrer");
+          window.open(auth.auth_url, "_blank", "noopener,noreferrer");
         }
         return;
       }
@@ -314,9 +324,13 @@ export function ConnectorsRoute({
       if (connector === undefined) return;
       setPendingError(null);
       try {
-        const res = await startConnectorOAuth(identity, connector.slug);
+        // A reconnect re-runs the same round-trip. `installMcpServer` is
+        // idempotent on the slug, so it returns the existing row rather than
+        // minting a second one for a connector the user already has.
+        const server = await installMcpServer(connector.slug, identity);
+        const auth = await startMcpAuth(server.server_id, identity);
         if (typeof window !== "undefined") {
-          window.location.assign(res.authorization_url);
+          window.location.assign(auth.auth_url);
         }
       } catch (error: unknown) {
         setPendingError(errorMessage(error, "Could not start OAuth flow."));

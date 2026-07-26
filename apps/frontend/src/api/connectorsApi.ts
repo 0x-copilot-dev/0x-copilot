@@ -3,14 +3,18 @@
 // Surfaces (sub-PRD §4):
 //   1. `fetchConnectors(identity, opts)`            — GET /v1/connectors.
 //   2. `fetchConnector(identity, id)`               — GET /v1/connectors/{id}.
-//   3. `startConnectorOAuth(identity, slug)`        — POST /v1/connectors/{slug}/start-oauth.
-//   4. `completeConnectorOAuth(identity, body)`     — POST /v1/connectors/oauth-callback.
-//   5. `refreshConnector(identity, id)`             — POST /v1/connectors/{id}/refresh.
-//   6. `disconnectConnector(identity, id)`          — POST /v1/connectors/{id}/disconnect.
-//   7. `patchConnectorScopes(identity, id, body)`   — PATCH /v1/connectors/{id}/scopes.
-//   8. `setConnectorAccessMode(identity, id, body)` — PATCH /v1/connectors/{id}/access-mode.
-//   9. `fetchConnectorAudit(identity, id, opts)`    — GET /v1/connectors/{id}/audit (admin).
-//  10. `streamConnectorEvents({...})`               — GET /v1/connectors/stream (SSE).
+//   3. `refreshConnector(identity, id)`             — POST /v1/connectors/{id}/refresh.
+//   4. `disconnectConnector(identity, id)`          — POST /v1/connectors/{id}/disconnect.
+//   5. `patchConnectorScopes(identity, id, body)`   — PATCH /v1/connectors/{id}/scopes.
+//   6. `setConnectorAccessMode(identity, id, body)` — PATCH /v1/connectors/{id}/access-mode.
+//   7. `fetchConnectorAudit(identity, id, opts)`    — GET /v1/connectors/{id}/audit (admin).
+//   8. `streamConnectorEvents({...})`               — GET /v1/connectors/stream (SSE).
+//
+// Connecting is NOT here. There is one OAuth round-trip in this product and
+// it lives on the MCP path (`api/mcpApi`: installMcpServer -> startMcpAuth).
+// The destination's own `start-oauth` / `oauth-callback` pair was never wired
+// to any composition root and returned a hardcoded `auth.example` URL, so it
+// has been removed rather than given a second implementation to keep in sync.
 //
 // Network rule (apps/frontend/CLAUDE.md): apps call the **facade** only
 // (`/v1/*`). The transport singleton enforces this via the same-origin
@@ -25,7 +29,6 @@ import type {
   ConnectorAuditResponse,
   ConnectorDetailResponse,
   ConnectorListResponse,
-  ConnectorOAuthCallbackRequest,
   ConnectorStatus,
   ConnectorStreamEnvelope,
   ConnectorStreamEventType,
@@ -36,7 +39,6 @@ import type {
   RefreshConnectorResponse,
   SetConnectorAccessModeRequest,
   SetConnectorAccessModeResponse,
-  StartConnectorOAuthResponse,
 } from "@0x-copilot/api-types";
 import type { ConnectorId, ConnectorSlug } from "@0x-copilot/api-types";
 
@@ -109,40 +111,6 @@ export function fetchConnector(
 // ===========================================================================
 // OAUTH — start + callback (alias of the existing MCP path)
 // ===========================================================================
-
-/**
- * POST /v1/connectors/{slug}/start-oauth — kicks off the OAuth round-trip.
- * Returns the `authorization_url` to redirect the user to; the matching
- * `state` is owned server-side and replayed on the callback (connectors-prd
- * §4.3 alias).
- */
-export function startConnectorOAuth(
-  identity: RequestIdentity,
-  slug: ConnectorSlug,
-): Promise<StartConnectorOAuthResponse> {
-  return httpPostQuery<StartConnectorOAuthResponse>(
-    `/v1/connectors/${encodeURIComponent(slug)}/start-oauth`,
-    {},
-    identity,
-  );
-}
-
-/**
- * POST /v1/connectors/oauth-callback — completes the OAuth handshake and
- * inserts the connector row (connectors-prd §4.4 alias). Returns the
- * fresh `Connector` so the destination can drop the OAuth-in-flight
- * placeholder without a re-list.
- */
-export function completeConnectorOAuth(
-  identity: RequestIdentity,
-  body: ConnectorOAuthCallbackRequest,
-): Promise<Connector> {
-  return httpPostQuery<Connector>(
-    "/v1/connectors/oauth-callback",
-    body,
-    identity,
-  );
-}
 
 // ===========================================================================
 // MUTATIONS — refresh / disconnect / scopes

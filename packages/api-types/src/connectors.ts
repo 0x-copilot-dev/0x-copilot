@@ -292,30 +292,9 @@ export interface ConnectorDetailResponse {
 // ---------------------------------------------------------------------------
 
 /**
- * `POST /v1/connectors/{slug}/start-oauth` response.
- *
- * Sends the user to `authorization_url`; the server records the matching
- * `state` against the started session. Reuses the existing MCP OAuth
- * round-trip (connectors-prd §4.3 alias).
- */
-export interface StartConnectorOAuthResponse {
-  readonly authorization_url: string;
-  readonly state: string;
-}
-
-/**
- * `POST /v1/connectors/oauth-callback` request body. Aliases the existing
- * MCP OAuth callback path. Returns the newly-created `Connector`.
- */
-export interface ConnectorOAuthCallbackRequest {
-  readonly code: string;
-  readonly state: string;
-}
-
-/**
  * `PATCH /v1/connectors/{id}/scopes` request body. The server compares
- * `scopes` against the currently-granted set and triggers a re-OAuth flow
- * (response is `202 { reauth_url }`).
+ * `scopes` against the currently-granted set and asks the client to
+ * re-confirm them with the provider (response is `202 { reauth_required }`).
  */
 export interface PatchConnectorScopesRequest {
   readonly scopes: ReadonlyArray<ConnectorScopeEntry>;
@@ -328,8 +307,14 @@ export interface PatchConnectorScopesRequest {
  * confirmation.
  */
 export interface PatchConnectorScopesResponse {
-  readonly reauth_url: string;
-  readonly state: string;
+  /**
+   * The scope change is persisted and the provider must now re-confirm it.
+   * Deliberately NOT an authorization URL: minting one needs the caller's
+   * redirect URI, which this route never receives. The client starts the
+   * round-trip on the one OAuth path this product has (`installMcpServer`
+   * then `startMcpAuth`), where its redirect URI is already known.
+   */
+  readonly reauth_required: boolean;
 }
 
 /**

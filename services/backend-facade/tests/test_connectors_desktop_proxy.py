@@ -205,33 +205,48 @@ class TestDesktopCallbackProxy:
         assert call["json"] == req_body
 
 
-class TestWebFlowUnchanged:
-    """Regression: the shipped web OAuth routes still forward unchanged."""
+class TestDesktopIsTheOnlyConnectorOAuthProxy:
+    """The desktop transport is the only connector-OAuth proxy the facade has.
 
-    def test_web_start_oauth_untouched(self, monkeypatch) -> None:
-        cap = _install(
-            monkeypatch,
-            post_body={"authorization_url": "https://idp/auth", "state": "s"},
-        )
+    This class used to guard the opposite invariant — that a shipped *web*
+    `start-oauth` / `oauth-callback` pair kept forwarding unchanged while the
+    desktop variant was added alongside it. Those web routes proxied backend
+    handlers no composition root ever wired: start returned a hardcoded
+    `auth.example` URL and the callback 503'd. They are gone, and the web
+    client now runs the one OAuth round-trip this product has, on the MCP
+    path. What still needs guarding is that removing them did not disturb the
+    desktop transport, and that nothing quietly re-adds a second web surface.
+    """
+
+    def test_web_start_oauth_is_not_proxied(self, monkeypatch) -> None:
+        _install(monkeypatch, post_body={})
         resp = _client().post(
             "/v1/connectors/gmail/start-oauth",
             headers=_bearer_headers(monkeypatch),
             json={},
         )
-        assert resp.status_code == 200
-        call = next(c for c in cap.calls if c["method"] == "POST")
-        # Still the ORIGINAL web path — no "desktop" segment.
-        assert call["url"].endswith("/v1/connectors/gmail/start-oauth")
-        assert "/desktop/" not in call["url"]
+        assert resp.status_code == 404
 
-    def test_web_oauth_callback_untouched(self, monkeypatch) -> None:
-        cap = _install(monkeypatch, post_body={"id": "conn_1", "slug": "gmail"})
+    def test_web_oauth_callback_is_not_proxied(self, monkeypatch) -> None:
+        _install(monkeypatch, post_body={})
         resp = _client().post(
             "/v1/connectors/oauth-callback",
             headers=_bearer_headers(monkeypatch),
             json={"code": "c", "state": "s"},
         )
+        # 405 when the path falls through to a sibling route that has no POST.
+        assert resp.status_code in {404, 405}
+
+    def test_desktop_start_oauth_still_forwards(self, monkeypatch) -> None:
+        cap = _install(
+            monkeypatch,
+            post_body={"authorization_url": "https://idp/auth", "state": "s"},
+        )
+        resp = _client().post(
+            "/v1/connectors/gmail/desktop/start-oauth",
+            headers=_bearer_headers(monkeypatch),
+            json={},
+        )
         assert resp.status_code == 200
         call = next(c for c in cap.calls if c["method"] == "POST")
-        assert call["url"].endswith("/v1/connectors/oauth-callback")
-        assert "/desktop/" not in call["url"]
+        assert call["url"].endswith("/v1/connectors/gmail/desktop/start-oauth")
