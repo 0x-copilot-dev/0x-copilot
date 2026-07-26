@@ -219,6 +219,19 @@ class RuntimeWorkerEntrypoint:
                     ArtifactCleanupExecutionEnv.LEASE_SECONDS,
                     default=ArtifactCleanupExecutionEnv.DEFAULT_LEASE_SECONDS,
                 )
+                retry_base_seconds = ArtifactCleanupExecutionEnv.env_float(
+                    ArtifactCleanupExecutionEnv.RETRY_BASE_SECONDS,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_RETRY_BASE_SECONDS,
+                )
+                retry_max_seconds = ArtifactCleanupExecutionEnv.env_float(
+                    ArtifactCleanupExecutionEnv.RETRY_MAX_SECONDS,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_RETRY_MAX_SECONDS,
+                )
+                if retry_max_seconds < retry_base_seconds:
+                    raise RuntimeError(
+                        "ARTIFACT_CLEANUP_EXECUTION_RETRY_MAX_SECONDS must be at least "
+                        "ARTIFACT_CLEANUP_EXECUTION_RETRY_BASE_SECONDS"
+                    )
                 artifact_cleanup_execution_loop = ArtifactCleanupExecutionLoop(
                     runner=ArtifactCleanupExecutionRunner(
                         persistence=async_ports.persistence,  # type: ignore[arg-type]
@@ -229,6 +242,8 @@ class RuntimeWorkerEntrypoint:
                         max_orgs=max_orgs,
                         limit_per_org=limit_per_org,
                         lease_seconds=lease_seconds,
+                        retry_base_seconds=retry_base_seconds,
+                        retry_max_seconds=retry_max_seconds,
                     )
                 )
                 await artifact_cleanup_execution_loop.start()
@@ -239,6 +254,8 @@ class RuntimeWorkerEntrypoint:
                         "max_orgs": max_orgs,
                         "limit_per_org": limit_per_org,
                         "lease_seconds": lease_seconds,
+                        "retry_base_seconds": retry_base_seconds,
+                        "retry_max_seconds": retry_max_seconds,
                     },
                 )
             # D12 planning is opt-in.  Execution is a second explicit switch:

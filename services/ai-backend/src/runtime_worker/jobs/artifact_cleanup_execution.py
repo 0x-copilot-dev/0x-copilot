@@ -12,13 +12,17 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import logging
 import os
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 from uuid import uuid4
 
-from agent_runtime.artifacts.cleanup_schedule import ArtifactCleanupScheduleStore
+from agent_runtime.artifacts.cleanup_schedule import (
+    ArtifactCleanupDeferredTenant,
+    ArtifactCleanupLease,
+    ArtifactCleanupScheduleStore,
+)
 
 from agent_runtime.observability.lifecycle_metrics import (
     LifecycleOperationalMetrics,
@@ -38,11 +42,15 @@ class ArtifactCleanupExecutionEnv:
     MAX_ORGS = "ARTIFACT_CLEANUP_EXECUTION_MAX_ORGS"
     LIMIT_PER_ORG = "ARTIFACT_CLEANUP_EXECUTION_LIMIT_PER_ORG"
     LEASE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_LEASE_SECONDS"
+    RETRY_BASE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_RETRY_BASE_SECONDS"
+    RETRY_MAX_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_RETRY_MAX_SECONDS"
 
     DEFAULT_INTERVAL_SECONDS = 900.0
     DEFAULT_MAX_ORGS = 100
     DEFAULT_LIMIT_PER_ORG = 100
     DEFAULT_LEASE_SECONDS = 1_800.0
+    DEFAULT_RETRY_BASE_SECONDS = 60.0
+    DEFAULT_RETRY_MAX_SECONDS = 3_600.0
 
     @classmethod
     def enabled(cls) -> bool:
@@ -112,6 +120,7 @@ class ArtifactCleanupExecutionResult:
     withheld_blobs: int = 0
     already_clean_tenants: int = 0
     failures: int = 0
+    deferred_tenants: int = 0
     audit_failures: int = 0
 
 
@@ -135,12 +144,17 @@ class ArtifactCleanupExecutionRunner:
         max_orgs: int = ArtifactCleanupExecutionEnv.DEFAULT_MAX_ORGS,
         limit_per_org: int = ArtifactCleanupExecutionEnv.DEFAULT_LIMIT_PER_ORG,
         lease_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_LEASE_SECONDS,
+        retry_base_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_RETRY_BASE_SECONDS,
+        retry_max_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_RETRY_MAX_SECONDS,
         metrics: LifecycleOperationalMetrics | None = None,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         if (
             not 1 <= max_orgs <= 500
             or not 1 <= limit_per_org <= 500
             or lease_seconds <= 0
+            or retry_base_seconds <= 0
+            or retry_max_seconds < retry_base_seconds
         ):
             raise ValueError("artifact cleanup execution bounds are invalid")
         self._persistence = persistence
@@ -148,7 +162,10 @@ class ArtifactCleanupExecutionRunner:
         self._max_orgs = max_orgs
         self._limit_per_org = limit_per_org
         self._lease_seconds = lease_seconds
+        self._retry_base_seconds = retry_base_seconds
+        self._retry_max_seconds = retry_max_seconds
         self._owner_id = f"artifact-cleanup-{uuid4().hex}"
+        self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._metrics = (
             metrics if metrics is not None else get_lifecycle_operational_metrics()
         )
@@ -158,30 +175,55 @@ class ArtifactCleanupExecutionRunner:
     ) -> ArtifactCleanupExecutionResult:
         """Run one page without logging tenant, artifact, or content details."""
 
-        reference_now = _utc(now or datetime.now(UTC))
+        fixed_now = _utc(now) if now is not None else None
+
+        def current_time() -> datetime:
+            return fixed_now if fixed_now is not None else _utc(self._clock())
+
+        reference_now = current_time()
         try:
-            acquired = await self._schedule.acquire_lease(
+            lease = await self._schedule.acquire_lease(
                 owner_id=self._owner_id,
                 now=reference_now,
-                expires_at=reference_now + timedelta(seconds=self._lease_seconds),
+                duration_seconds=self._lease_seconds,
             )
         except Exception:
             self._record_metric(outcome="failed")
             _LOGGER.warning("artifact_cleanup_execution_schedule_unavailable")
             return ArtifactCleanupExecutionResult(failures=1)
-        if not acquired:
+        if lease is None:
             return ArtifactCleanupExecutionResult()
 
+        keeper = _ArtifactCleanupLeaseKeeper(
+            schedule=self._schedule,
+            lease=lease,
+            lease_seconds=self._lease_seconds,
+            current_time=current_time,
+            heartbeat_enabled=fixed_now is None,
+        )
+        await keeper.start()
         try:
-            return await self._run_leased(reference_now=reference_now)
+            return await self._run_leased(
+                reference_now=reference_now,
+                current_time=current_time,
+                keeper=keeper,
+            )
         finally:
+            await keeper.stop()
             try:
-                await self._schedule.release_lease(owner_id=self._owner_id)
+                await self._schedule.release_lease(
+                    owner_id=self._owner_id,
+                    fence_token=lease.fence_token,
+                )
             except Exception:
                 _LOGGER.warning("artifact_cleanup_execution_schedule_release_failed")
 
     async def _run_leased(
-        self, *, reference_now: datetime
+        self,
+        *,
+        reference_now: datetime,
+        current_time: Callable[[], datetime],
+        keeper: "_ArtifactCleanupLeaseKeeper",
     ) -> ArtifactCleanupExecutionResult:
         try:
             org_ids = tuple(sorted(set(await self._persistence.list_retention_orgs())))
@@ -195,8 +237,28 @@ class ArtifactCleanupExecutionRunner:
         for org_id in _fair_org_page(
             org_ids=org_ids,
             cursor_after_org_id=cursor,
-            limit=self._max_orgs,
+            limit=len(org_ids),
         ):
+            if result.tenants_scanned >= self._max_orgs:
+                break
+            if not await keeper.renew_now():
+                self._record_metric(outcome="failed")
+                _LOGGER.warning("artifact_cleanup_execution_lease_lost")
+                return _replace(result, failures=result.failures + 1)
+            attempt_now = current_time()
+            try:
+                deferred = await self._schedule.load_deferred_tenant(
+                    owner_id=self._owner_id,
+                    fence_token=keeper.fence_token,
+                    org_id=org_id,
+                    now=attempt_now,
+                )
+            except Exception:
+                self._record_metric(outcome="failed")
+                _LOGGER.warning("artifact_cleanup_execution_lease_lost")
+                return _replace(result, failures=result.failures + 1)
+            if deferred is not None:
+                continue
             try:
                 outcome = await self._persistence.execute_artifact_cleanup(
                     org_id=org_id,
@@ -208,9 +270,25 @@ class ArtifactCleanupExecutionRunner:
                 # Exception text can include a backend path or body-derived
                 # value.  Keep the worker log deliberately body-free.
                 _LOGGER.warning("artifact_cleanup_execution_tenant_failed")
+                try:
+                    deferred = await self._schedule.defer_failed_tenant(
+                        owner_id=self._owner_id,
+                        fence_token=keeper.fence_token,
+                        expected_cursor=cursor,
+                        org_id=org_id,
+                        now=current_time(),
+                        retry_base_seconds=self._retry_base_seconds,
+                        retry_max_seconds=self._retry_max_seconds,
+                    )
+                except Exception:
+                    deferred = None
+                if deferred is None:
+                    self._record_metric(outcome="failed")
+                    _LOGGER.warning("artifact_cleanup_execution_failure_not_deferred")
+                    return _replace(result, failures=result.failures + 1)
                 audit_failed = not await self._write_audit(
                     outcome=ArtifactPhysicalCleanupOutcome(org_id=org_id),
-                    execution_failed=True,
+                    deferred=deferred,
                 )
                 if audit_failed:
                     self._record_metric(outcome="audit_failed")
@@ -218,13 +296,24 @@ class ArtifactCleanupExecutionRunner:
                     result,
                     tenants_scanned=result.tenants_scanned + 1,
                     failures=result.failures + 1,
+                    deferred_tenants=result.deferred_tenants + 1,
                     audit_failures=result.audit_failures + int(audit_failed),
                 )
-                # Do not advance past a tenant whose trusted cleanup did not
-                # complete.  It remains next after the durable cursor and is
-                # retried before later tenants in the next cycle.
-                break
+                # The failed tenant is durably visible with a bounded retry;
+                # its cursor transition is atomic with that defer state, so
+                # later tenants can continue without silently losing it.
+                cursor = org_id
+                continue
 
+            # A long-running lifecycle call may span a heartbeat failure or a
+            # takeover.  Revalidate the exact generation before recording an
+            # audit outcome or changing the fair cursor; the lifecycle
+            # adapter's own idempotent/reference-safe state machine handles a
+            # conservative later retry if ownership was lost mid-call.
+            if not await keeper.renew_now():
+                self._record_metric(outcome="failed")
+                _LOGGER.warning("artifact_cleanup_execution_lease_lost")
+                return _replace(result, failures=result.failures + 1)
             self._record_outcome_metrics(outcome)
             audit_failed = not await self._write_audit(outcome=outcome)
             if audit_failed:
@@ -242,10 +331,12 @@ class ArtifactCleanupExecutionRunner:
                 audit_failures=result.audit_failures + int(audit_failed),
             )
             try:
-                advanced = await self._schedule.advance_cursor(
+                advanced = await self._schedule.complete_tenant(
                     owner_id=self._owner_id,
-                    expected=cursor,
-                    next_cursor=org_id,
+                    fence_token=keeper.fence_token,
+                    expected_cursor=cursor,
+                    org_id=org_id,
+                    now=current_time(),
                 )
             except Exception:
                 self._record_metric(outcome="failed")
@@ -264,13 +355,13 @@ class ArtifactCleanupExecutionRunner:
         self,
         *,
         outcome: ArtifactPhysicalCleanupOutcome,
-        execution_failed: bool = False,
+        deferred: ArtifactCleanupDeferredTenant | None = None,
     ) -> bool:
         """Write aggregate audit evidence only; audit trouble never retries bytes."""
 
         audit_outcome = (
-            "failed"
-            if execution_failed
+            "deferred"
+            if deferred is not None
             else (
                 "withheld"
                 if outcome.withheld_blobs
@@ -295,6 +386,14 @@ class ArtifactCleanupExecutionRunner:
                         "reaped_blobs": outcome.reaped_blobs,
                         "restored_blobs": outcome.restored_blobs,
                         "withheld_blobs": outcome.withheld_blobs,
+                        **(
+                            {
+                                "retry_count": deferred.failure_count,
+                                "retry_not_before": deferred.retry_not_before.isoformat(),
+                            }
+                            if deferred is not None
+                            else {}
+                        ),
                     },
                 },
             )
@@ -321,6 +420,81 @@ class ArtifactCleanupExecutionRunner:
             self._metrics.record_artifact_cleanup_execution(outcome=outcome)
         except Exception:
             return
+
+
+class _ArtifactCleanupLeaseKeeper:
+    """Renew one fenced lease through long-running cleanup awaits.
+
+    Each foreground tenant attempt also renews synchronously.  The heartbeat
+    keeps the same fence generation alive while an authoritative lifecycle
+    adapter is awaiting IO, preventing a second worker from taking the cycle
+    lease merely because one bounded tenant cleanup is slow.
+    """
+
+    def __init__(
+        self,
+        *,
+        schedule: ArtifactCleanupScheduleStore,
+        lease: ArtifactCleanupLease,
+        lease_seconds: float,
+        current_time: Callable[[], datetime],
+        heartbeat_enabled: bool,
+    ) -> None:
+        self._schedule = schedule
+        self._owner_id = lease.owner_id
+        self._fence_token = lease.fence_token
+        self._lease_seconds = lease_seconds
+        self._current_time = current_time
+        self._heartbeat_enabled = heartbeat_enabled
+        self._lost = False
+        self._task: asyncio.Task[None] | None = None
+
+    @property
+    def fence_token(self) -> int:
+        return self._fence_token
+
+    async def start(self) -> None:
+        if not self._heartbeat_enabled:
+            return
+        self._task = asyncio.create_task(
+            self._heartbeat(), name="artifact-cleanup-lease-heartbeat"
+        )
+
+    async def stop(self) -> None:
+        task = self._task
+        self._task = None
+        if task is None:
+            return
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return
+
+    async def renew_now(self) -> bool:
+        if self._lost:
+            return False
+        try:
+            renewed = await self._schedule.renew_lease(
+                owner_id=self._owner_id,
+                fence_token=self._fence_token,
+                now=self._current_time(),
+                duration_seconds=self._lease_seconds,
+            )
+        except Exception:
+            self._lost = True
+            return False
+        if renewed is None or renewed.fence_token != self._fence_token:
+            self._lost = True
+            return False
+        return True
+
+    async def _heartbeat(self) -> None:
+        interval = max(min(self._lease_seconds / 3, 60.0), 0.05)
+        while True:
+            await asyncio.sleep(interval)
+            if not await self.renew_now():
+                return
 
 
 class ArtifactCleanupExecutionLoop:
@@ -391,6 +565,7 @@ def _replace(
             "already_clean_tenants", value.already_clean_tenants
         ),
         failures=changes.get("failures", value.failures),
+        deferred_tenants=changes.get("deferred_tenants", value.deferred_tenants),
         audit_failures=changes.get("audit_failures", value.audit_failures),
     )
 

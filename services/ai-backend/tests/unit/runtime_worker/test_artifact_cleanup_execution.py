@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import logging
 
 import pytest
 
 from runtime_adapters.artifact_lifecycle import ArtifactPhysicalCleanupOutcome
-from runtime_adapters.in_memory.artifact_cleanup_schedule_store import (
-    InMemoryArtifactCleanupScheduleStore,
-)
 from runtime_adapters.file.artifact_cleanup_schedule_store import (
     FileArtifactCleanupScheduleStore,
+)
+from runtime_adapters.in_memory.artifact_cleanup_schedule_store import (
+    InMemoryArtifactCleanupScheduleStore,
 )
 from runtime_worker.jobs.artifact_cleanup_execution import (
     ArtifactCleanupExecutionEnv,
@@ -58,7 +59,7 @@ class _Persistence:
         now: datetime,
         limit: int,
     ) -> ArtifactPhysicalCleanupOutcome:
-        assert now == NOW
+        assert now.tzinfo is not None
         assert limit == 7
         self.calls.append(org_id)
         result = self.plans[org_id].pop(0)
@@ -73,6 +74,37 @@ class _Persistence:
         record: dict[str, object],
     ) -> None:
         self.audits.append((event_type, record))
+
+
+@dataclass
+class _SlowPersistence:
+    started: asyncio.Event
+    release: asyncio.Event
+    calls: list[str] = field(default_factory=list)
+
+    async def list_retention_orgs(self) -> Sequence[str]:
+        return ("org_a",)
+
+    async def execute_artifact_cleanup(
+        self,
+        *,
+        org_id: str,
+        now: datetime,
+        limit: int,
+    ) -> ArtifactPhysicalCleanupOutcome:
+        del now, limit
+        self.calls.append(org_id)
+        self.started.set()
+        await self.release.wait()
+        return _outcome(org_id)
+
+    async def write_audit_log(
+        self,
+        *,
+        event_type: str,
+        record: dict[str, object],
+    ) -> None:
+        del event_type, record
 
 
 def _outcome(org_id: str, **changes: int) -> ArtifactPhysicalCleanupOutcome:
@@ -129,7 +161,7 @@ async def test_runner_is_tenant_bounded_idempotent_and_audits_counts_only() -> N
         assert _SECRET_BODY not in repr(record)
 
 
-async def test_runner_retries_after_failure_without_logging_body_or_advancing_state(
+async def test_runner_defers_failure_without_logging_body_then_retries_when_due(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     persistence = _Persistence(
@@ -148,25 +180,78 @@ async def test_runner_retries_after_failure_without_logging_body_or_advancing_st
         schedule=InMemoryArtifactCleanupScheduleStore(),
         max_orgs=2,
         limit_per_org=7,
+        retry_base_seconds=30,
+        retry_max_seconds=120,
         metrics=metrics,  # type: ignore[arg-type]
     )
 
     with caplog.at_level(logging.WARNING):
         failed = await runner.run_once(now=NOW)
-        retried = await runner.run_once(now=NOW)
-        duplicate_delivery = await runner.run_once(now=NOW)
+        skipped_until_due = await runner.run_once(now=NOW + timedelta(seconds=29))
+        retried = await runner.run_once(now=NOW + timedelta(seconds=30))
+        duplicate_delivery = await runner.run_once(now=NOW + timedelta(seconds=30))
 
     assert failed.failures == 1
-    assert failed.tenants_scanned == 1
+    assert failed.deferred_tenants == 1
+    assert skipped_until_due.tenants_scanned == 0
     assert retried.reaped_blobs == 1
     assert duplicate_delivery.already_clean_tenants == 1
     assert persistence.calls == ["org_retry", "org_retry", "org_retry"]
-    # Failure evidence is aggregate-only, while the second execution is the
-    # sole physical outcome. A duplicate observes durable state as clean.
-    assert len(persistence.audits) == 3
-    assert persistence.audits[0][1]["outcome"] == "failed"
-    assert metrics.outcomes == ["failed", "reaped", "already_clean"]
+    assert [record["outcome"] for _event, record in persistence.audits] == [
+        "deferred",
+        "completed",
+        "already_clean",
+    ]
+    deferred_metadata = persistence.audits[0][1]["metadata"]
+    assert isinstance(deferred_metadata, dict)
+    assert deferred_metadata["retry_count"] == 1
     assert _SECRET_BODY not in caplog.text
+    assert metrics.outcomes == ["failed", "reaped", "already_clean"]
+
+
+async def test_persistent_failure_defers_and_later_tenants_progress_then_retries() -> (
+    None
+):
+    """A failing early tenant never freezes the durable global rotation."""
+
+    persistence = _Persistence(
+        org_ids=("org_a", "org_b", "org_c"),
+        plans={
+            "org_a": [RuntimeError(_SECRET_BODY), _outcome("org_a")],
+            "org_b": [_outcome("org_b"), _outcome("org_b"), _outcome("org_b")],
+            "org_c": [_outcome("org_c"), _outcome("org_c"), _outcome("org_c")],
+        },
+    )
+    schedule = InMemoryArtifactCleanupScheduleStore()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=3,
+        limit_per_org=7,
+        retry_base_seconds=10,
+        retry_max_seconds=40,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    first = await runner.run_once(now=NOW)
+    before_backoff = await runner.run_once(now=NOW + timedelta(seconds=5))
+    after_backoff = await runner.run_once(now=NOW + timedelta(seconds=10))
+
+    assert first.failures == 1
+    assert first.deferred_tenants == 1
+    # A fails, but B/C still run in the same bounded cycle.
+    assert persistence.calls[:3] == ["org_a", "org_b", "org_c"]
+    # A is visible but deferred, so B/C keep rotating while it backs off.
+    assert before_backoff.failures == 0
+    assert before_backoff.tenants_scanned == 2
+    assert persistence.calls[3:5] == ["org_b", "org_c"]
+    # Once due, A re-enters the same fair page before B/C.
+    assert after_backoff.failures == 0
+    assert persistence.calls[5:] == ["org_a", "org_b", "org_c"]
+    assert await schedule.load_cursor() == "org_c"
+    assert all(
+        _SECRET_BODY not in repr(record) for _event, record in persistence.audits
+    )
 
 
 def test_execution_flag_is_explicitly_opt_in(monkeypatch) -> None:
@@ -202,37 +287,6 @@ async def test_runner_rotates_past_continuously_busy_early_tenants() -> None:
     assert await schedule.load_cursor() == "org_d"
 
 
-async def test_failed_tenant_is_retried_before_later_tenants_and_cursor_does_not_skip(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    persistence = _Persistence(
-        org_ids=("org_a", "org_b", "org_c"),
-        plans={
-            "org_a": [_outcome("org_a"), _outcome("org_a")],
-            "org_b": [RuntimeError(_SECRET_BODY), _outcome("org_b")],
-            "org_c": [_outcome("org_c")],
-        },
-    )
-    schedule = InMemoryArtifactCleanupScheduleStore()
-    runner = ArtifactCleanupExecutionRunner(
-        persistence=persistence,
-        schedule=schedule,
-        max_orgs=3,
-        limit_per_org=7,
-        metrics=_Metrics(),  # type: ignore[arg-type]
-    )
-
-    with caplog.at_level(logging.WARNING):
-        failed = await runner.run_once(now=NOW)
-        recovered = await runner.run_once(now=NOW)
-
-    assert failed.failures == 1
-    assert recovered.failures == 0
-    assert persistence.calls == ["org_a", "org_b", "org_b", "org_c", "org_a"]
-    assert await schedule.load_cursor() == "org_a"
-    assert _SECRET_BODY not in caplog.text
-
-
 async def test_concurrent_runner_cannot_take_or_advance_another_lease() -> None:
     persistence = _Persistence(
         org_ids=("org_a",),
@@ -254,17 +308,56 @@ async def test_concurrent_runner_cannot_take_or_advance_another_lease() -> None:
         metrics=_Metrics(),  # type: ignore[arg-type]
     )
 
-    acquired = await schedule.acquire_lease(
+    lease = await schedule.acquire_lease(
         owner_id=first._owner_id,  # noqa: SLF001 - lease adversarial probe
         now=NOW,
-        expires_at=NOW.replace(hour=13),
+        duration_seconds=60,
     )
-    assert acquired
+    assert lease is not None
     skipped = await second.run_once(now=NOW)
     assert skipped.tenants_scanned == 0
     assert persistence.calls == []
     assert await schedule.load_cursor() is None
-    await schedule.release_lease(owner_id=first._owner_id)  # noqa: SLF001
+    await schedule.release_lease(
+        owner_id=first._owner_id,
+        fence_token=lease.fence_token,  # noqa: SLF001
+    )
+
+
+async def test_renewing_lease_prevents_long_running_cleanup_overlap() -> None:
+    """Heartbeat renewal keeps one generation exclusive through slow IO."""
+
+    persistence = _SlowPersistence(started=asyncio.Event(), release=asyncio.Event())
+    schedule = InMemoryArtifactCleanupScheduleStore()
+    first = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        lease_seconds=0.12,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    second = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        lease_seconds=0.12,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    first_task = asyncio.create_task(first.run_once())
+    await asyncio.wait_for(persistence.started.wait(), timeout=1)
+    # This exceeds the original lease. The first worker heartbeats every
+    # 50ms, so a contender still cannot acquire a second generation.
+    await asyncio.sleep(0.2)
+    contender = await second.run_once()
+    assert contender.tenants_scanned == 0
+    assert persistence.calls == ["org_a"]
+
+    persistence.release.set()
+    first_result = await asyncio.wait_for(first_task, timeout=1)
+    assert first_result.tenants_scanned == 1
 
 
 async def test_restart_uses_durable_cursor_contract_after_prior_success() -> None:

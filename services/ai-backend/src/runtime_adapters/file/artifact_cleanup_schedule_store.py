@@ -1,4 +1,4 @@
-"""Restart-safe cursor and lease state for the desktop cleanup scheduler."""
+"""Restart-safe fenced cursor, retry, and lease state for desktop cleanup."""
 
 from __future__ import annotations
 
@@ -6,19 +6,26 @@ import asyncio
 import json
 import os
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterator
 from uuid import uuid4
 
 from agent_runtime.artifacts.cleanup_schedule import (
+    ArtifactCleanupDeferredTenant,
+    ArtifactCleanupLease,
     ArtifactCleanupScheduleStateError,
 )
 from runtime_adapters.file._advisory_lock import acquire_exclusive, release_exclusive
 
 
 class FileArtifactCleanupScheduleStore:
-    """Atomically persisted fair-scheduling state with a cross-process lock."""
+    """Atomically persisted, cross-process-locked scheduler metadata.
+
+    The desktop backend is normally single worker, but this file state still
+    uses an advisory lock and a monotonically increasing fence token so a
+    stale process after expiry cannot overwrite a newer scheduler generation.
+    """
 
     _SUBDIR = "artifact_cleanup_schedule"
     _STATE_FILENAME = "state.json"
@@ -39,59 +46,166 @@ class FileArtifactCleanupScheduleStore:
             with self._exclusive_lock():
                 return self._read()["cursor"]
 
-    async def advance_cursor(
+    async def load_deferred_tenant(
         self,
         *,
         owner_id: str,
-        expected: str | None,
-        next_cursor: str,
-    ) -> bool:
+        fence_token: int,
+        org_id: str,
+        now: datetime,
+    ) -> ArtifactCleanupDeferredTenant | None:
         _validate_id(owner_id)
-        _validate_id(next_cursor)
+        _validate_id(org_id)
+        _validate_time(now)
         async with self._lock:
             with self._exclusive_lock():
                 state = self._read()
-                if state["lease_owner"] != owner_id or state["cursor"] != expected:
+                _require_active_fence(
+                    state=state,
+                    owner_id=owner_id,
+                    fence_token=fence_token,
+                    now=now,
+                )
+                deferred = state["deferred"].get(org_id)
+                return (
+                    deferred
+                    if deferred is not None and not deferred.is_eligible(now=now)
+                    else None
+                )
+
+    async def complete_tenant(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        expected_cursor: str | None,
+        org_id: str,
+        now: datetime,
+    ) -> bool:
+        _validate_id(owner_id)
+        _validate_id(org_id)
+        _validate_time(now)
+        async with self._lock:
+            with self._exclusive_lock():
+                state = self._read()
+                if (
+                    not _active_fence_matches(
+                        state=state,
+                        owner_id=owner_id,
+                        fence_token=fence_token,
+                        now=now,
+                    )
+                    or state["cursor"] != expected_cursor
+                ):
                     return False
-                state["cursor"] = next_cursor
+                state["cursor"] = org_id
+                state["deferred"].pop(org_id, None)
                 self._write(state)
                 return True
+
+    async def defer_failed_tenant(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        expected_cursor: str | None,
+        org_id: str,
+        now: datetime,
+        retry_base_seconds: float,
+        retry_max_seconds: float,
+    ) -> ArtifactCleanupDeferredTenant | None:
+        _validate_id(owner_id)
+        _validate_id(org_id)
+        _validate_time(now)
+        _validate_retry(retry_base_seconds, retry_max_seconds)
+        async with self._lock:
+            with self._exclusive_lock():
+                state = self._read()
+                if (
+                    not _active_fence_matches(
+                        state=state,
+                        owner_id=owner_id,
+                        fence_token=fence_token,
+                        now=now,
+                    )
+                    or state["cursor"] != expected_cursor
+                ):
+                    return None
+                prior = state["deferred"].get(org_id)
+                failure_count = (prior.failure_count if prior is not None else 0) + 1
+                deferred = ArtifactCleanupDeferredTenant(
+                    org_id=org_id,
+                    failure_count=failure_count,
+                    retry_not_before=now
+                    + timedelta(
+                        seconds=_retry_seconds(
+                            failure_count=failure_count,
+                            base_seconds=retry_base_seconds,
+                            max_seconds=retry_max_seconds,
+                        )
+                    ),
+                    last_failed_at=now,
+                )
+                state["deferred"][org_id] = deferred
+                state["cursor"] = org_id
+                self._write(state)
+                return deferred
 
     async def acquire_lease(
         self,
         *,
         owner_id: str,
         now: datetime,
-        expires_at: datetime,
-    ) -> bool:
+        duration_seconds: float,
+    ) -> ArtifactCleanupLease | None:
         _validate_id(owner_id)
-        if now.tzinfo is None or expires_at.tzinfo is None or expires_at <= now:
-            raise ArtifactCleanupScheduleStateError(
-                "cleanup scheduler lease is invalid"
-            )
+        _validate_time(now)
+        _validate_duration(duration_seconds)
         async with self._lock:
             with self._exclusive_lock():
                 state = self._read()
-                active_owner = state["lease_owner"]
-                active_until = state["lease_expires_at"]
-                if (
-                    active_owner is not None
-                    and active_owner != owner_id
-                    and active_until is not None
-                    and active_until > now
-                ):
-                    return False
+                if _lease_is_active(state["lease_expires_at"], now):
+                    return None
+                state["lease_fence_token"] += 1
                 state["lease_owner"] = owner_id
-                state["lease_expires_at"] = expires_at
+                state["lease_expires_at"] = now + timedelta(seconds=duration_seconds)
                 self._write(state)
-                return True
+                return _lease_from_state(state)
 
-    async def release_lease(self, *, owner_id: str) -> None:
+    async def renew_lease(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        now: datetime,
+        duration_seconds: float,
+    ) -> ArtifactCleanupLease | None:
+        _validate_id(owner_id)
+        _validate_time(now)
+        _validate_duration(duration_seconds)
+        async with self._lock:
+            with self._exclusive_lock():
+                state = self._read()
+                if not _active_fence_matches(
+                    state=state,
+                    owner_id=owner_id,
+                    fence_token=fence_token,
+                    now=now,
+                ):
+                    return None
+                state["lease_expires_at"] = now + timedelta(seconds=duration_seconds)
+                self._write(state)
+                return _lease_from_state(state)
+
+    async def release_lease(self, *, owner_id: str, fence_token: int) -> None:
         _validate_id(owner_id)
         async with self._lock:
             with self._exclusive_lock():
                 state = self._read()
-                if state["lease_owner"] != owner_id:
+                if (
+                    state["lease_owner"] != owner_id
+                    or state["lease_fence_token"] != fence_token
+                ):
                     return
                 state["lease_owner"] = None
                 state["lease_expires_at"] = None
@@ -99,29 +213,64 @@ class FileArtifactCleanupScheduleStore:
 
     def _read(self) -> dict[str, Any]:
         if not self._path.exists():
-            return {"cursor": None, "lease_owner": None, "lease_expires_at": None}
+            return _empty_state()
         try:
             raw = json.loads(self._path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict) or set(raw) != {
+            if not isinstance(raw, dict):
+                raise ValueError
+            # 0017 persisted an unfenced lease.  Preserve its cursor on
+            # upgrade, but deliberately discard that legacy ownership: it
+            # cannot safely prove a generation against a newer worker.
+            if set(raw) == {"cursor", "lease_owner", "lease_expires_at"}:
+                cursor = raw["cursor"]
+                if cursor is not None:
+                    _validate_id(cursor)
+                return {
+                    "cursor": cursor,
+                    "lease_owner": None,
+                    "lease_fence_token": 0,
+                    "lease_expires_at": None,
+                    "deferred": {},
+                }
+            if set(raw) != {
                 "cursor",
                 "lease_owner",
+                "lease_fence_token",
                 "lease_expires_at",
+                "deferred",
             }:
                 raise ValueError
             cursor = raw["cursor"]
             owner = raw["lease_owner"]
+            token = raw["lease_fence_token"]
             expires = raw["lease_expires_at"]
+            deferred_raw = raw["deferred"]
             if cursor is not None:
                 _validate_id(cursor)
             if owner is not None:
                 _validate_id(owner)
+            if not isinstance(token, int) or token < 0:
+                raise ValueError
             if expires is not None:
                 expires = datetime.fromisoformat(str(expires))
-                if expires.tzinfo is None:
-                    raise ValueError
+                _validate_time(expires)
             if (owner is None) != (expires is None):
                 raise ValueError
-            return {"cursor": cursor, "lease_owner": owner, "lease_expires_at": expires}
+            if not isinstance(deferred_raw, list):
+                raise ValueError
+            deferred = {
+                row.org_id: row
+                for row in (_deferred_from_json(item) for item in deferred_raw)
+            }
+            if len(deferred) != len(deferred_raw):
+                raise ValueError
+            return {
+                "cursor": cursor,
+                "lease_owner": owner,
+                "lease_fence_token": token,
+                "lease_expires_at": expires,
+                "deferred": deferred,
+            }
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ArtifactCleanupScheduleStateError() from exc
 
@@ -131,11 +280,14 @@ class FileArtifactCleanupScheduleStore:
             payload = {
                 "cursor": state["cursor"],
                 "lease_owner": state["lease_owner"],
-                "lease_expires_at": (
-                    state["lease_expires_at"].isoformat()
-                    if state["lease_expires_at"] is not None
-                    else None
-                ),
+                "lease_fence_token": state["lease_fence_token"],
+                "lease_expires_at": _time_to_json(state["lease_expires_at"]),
+                "deferred": [
+                    _deferred_to_json(row)
+                    for row in sorted(
+                        state["deferred"].values(), key=lambda row: row.org_id
+                    )
+                ],
             }
             encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
             descriptor = os.open(
@@ -187,9 +339,113 @@ class FileArtifactCleanupScheduleStore:
             os.close(descriptor)
 
 
+def _empty_state() -> dict[str, Any]:
+    return {
+        "cursor": None,
+        "lease_owner": None,
+        "lease_fence_token": 0,
+        "lease_expires_at": None,
+        "deferred": {},
+    }
+
+
+def _lease_from_state(state: dict[str, Any]) -> ArtifactCleanupLease:
+    owner = state["lease_owner"]
+    expires_at = state["lease_expires_at"]
+    if not isinstance(owner, str) or not isinstance(expires_at, datetime):
+        raise ArtifactCleanupScheduleStateError("cleanup scheduler lease is invalid")
+    return ArtifactCleanupLease(
+        owner_id=owner,
+        fence_token=state["lease_fence_token"],
+        expires_at=expires_at,
+    )
+
+
+def _active_fence_matches(
+    *, state: dict[str, Any], owner_id: str, fence_token: int, now: datetime
+) -> bool:
+    return (
+        state["lease_owner"] == owner_id
+        and state["lease_fence_token"] == fence_token
+        and _lease_is_active(state["lease_expires_at"], now)
+    )
+
+
+def _require_active_fence(**kwargs: object) -> None:
+    if not _active_fence_matches(**kwargs):  # type: ignore[arg-type]
+        raise ArtifactCleanupScheduleStateError("cleanup scheduler lease is stale")
+
+
+def _lease_is_active(expires_at: datetime | None, now: datetime) -> bool:
+    return expires_at is not None and expires_at > now
+
+
+def _retry_seconds(
+    *, failure_count: int, base_seconds: float, max_seconds: float
+) -> float:
+    return min(base_seconds * (2 ** min(failure_count - 1, 20)), max_seconds)
+
+
+def _deferred_from_json(raw: object) -> ArtifactCleanupDeferredTenant:
+    if not isinstance(raw, dict) or set(raw) != {
+        "org_id",
+        "failure_count",
+        "retry_not_before",
+        "last_failed_at",
+    }:
+        raise ValueError
+    org_id = raw["org_id"]
+    count = raw["failure_count"]
+    _validate_id(org_id)
+    if not isinstance(count, int) or count < 1:
+        raise ValueError
+    retry_not_before = datetime.fromisoformat(str(raw["retry_not_before"]))
+    last_failed_at = datetime.fromisoformat(str(raw["last_failed_at"]))
+    _validate_time(retry_not_before)
+    _validate_time(last_failed_at)
+    return ArtifactCleanupDeferredTenant(
+        org_id=org_id,
+        failure_count=count,
+        retry_not_before=retry_not_before,
+        last_failed_at=last_failed_at,
+    )
+
+
+def _deferred_to_json(value: ArtifactCleanupDeferredTenant) -> dict[str, object]:
+    return {
+        "org_id": value.org_id,
+        "failure_count": value.failure_count,
+        "retry_not_before": value.retry_not_before.isoformat(),
+        "last_failed_at": value.last_failed_at.isoformat(),
+    }
+
+
+def _time_to_json(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
 def _validate_id(value: object) -> None:
     if not isinstance(value, str) or not value or len(value) > 256:
-        raise ValueError("cleanup scheduler identifier is invalid")
+        raise ArtifactCleanupScheduleStateError(
+            "cleanup scheduler identifier is invalid"
+        )
+
+
+def _validate_time(value: datetime) -> None:
+    if value.tzinfo is None:
+        raise ArtifactCleanupScheduleStateError("cleanup scheduler time is invalid")
+
+
+def _validate_duration(value: float) -> None:
+    if value <= 0:
+        raise ArtifactCleanupScheduleStateError("cleanup scheduler duration is invalid")
+
+
+def _validate_retry(base_seconds: float, max_seconds: float) -> None:
+    if base_seconds <= 0 or max_seconds < base_seconds:
+        raise ArtifactCleanupScheduleStateError(
+            "cleanup scheduler retry bounds are invalid"
+        )
 
 
 __all__ = ("FileArtifactCleanupScheduleStore",)

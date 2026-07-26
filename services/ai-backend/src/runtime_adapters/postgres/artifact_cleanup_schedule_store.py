@@ -1,4 +1,4 @@
-"""Postgres cursor and lease adapter for fair artifact cleanup scheduling."""
+"""Postgres cursor, retry, and fenced-lease adapter for artifact cleanup."""
 
 from __future__ import annotations
 
@@ -6,17 +6,20 @@ from collections.abc import Mapping
 from datetime import datetime
 
 from agent_runtime.artifacts.cleanup_schedule import (
+    ArtifactCleanupDeferredTenant,
+    ArtifactCleanupLease,
     ArtifactCleanupScheduleStateError,
 )
 
 
 _TABLE = "runtime_artifact_cleanup_schedule_state"
+_DEFERRED_TABLE = "runtime_artifact_cleanup_deferred_tenants"
 _SOURCE = "artifact_cleanup_execution"
 _WORKER_ROLE = "worker"
 
 
 class PostgresArtifactCleanupScheduleStore:
-    """Worker-owned global cursor/lease state with owner-checked CAS writes."""
+    """Worker-owned global cursor/retry state with DB-time fenced leases."""
 
     def __init__(self, *, store: object) -> None:
         self._store = store
@@ -29,42 +32,185 @@ class PostgresArtifactCleanupScheduleStore:
                     (_SOURCE,),
                 )
                 row = await cursor.fetchone()
-            if row is None:
-                return None
-            return _cursor_from_row(row)
+            return _cursor_from_row(row) if row is not None else None
         except ArtifactCleanupScheduleStateError:
             raise
         except Exception as exc:  # pragma: no cover - database driver failure
             raise ArtifactCleanupScheduleStateError() from exc
 
-    async def advance_cursor(
+    async def load_deferred_tenant(
         self,
         *,
         owner_id: str,
-        expected: str | None,
-        next_cursor: str,
-    ) -> bool:
+        fence_token: int,
+        org_id: str,
+        now: datetime,
+    ) -> ArtifactCleanupDeferredTenant | None:
+        del now  # PostgreSQL lease validity is always judged by clock_timestamp().
         _validate_id(owner_id)
-        _validate_id(next_cursor)
+        _validate_id(org_id)
+        _validate_fence(fence_token)
+        try:
+            async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
+                active = await conn.execute(
+                    f"""
+                    SELECT 1
+                      FROM {_TABLE}
+                     WHERE source = %s
+                       AND lease_owner_id = %s
+                       AND lease_fence_token = %s
+                       AND lease_expires_at > clock_timestamp()
+                    """,
+                    (_SOURCE, owner_id, fence_token),
+                )
+                if await active.fetchone() is None:
+                    raise ArtifactCleanupScheduleStateError(
+                        "cleanup scheduler lease is stale"
+                    )
+                cursor = await conn.execute(
+                    f"""
+                    SELECT org_id, failure_count, retry_not_before, last_failed_at
+                      FROM {_DEFERRED_TABLE}
+                     WHERE source = %s
+                       AND org_id = %s
+                       AND retry_not_before > clock_timestamp()
+                    """,
+                    (_SOURCE, org_id),
+                )
+                row = await cursor.fetchone()
+            return _deferred_from_row(row) if row is not None else None
+        except ArtifactCleanupScheduleStateError:
+            raise
+        except Exception as exc:  # pragma: no cover - database driver failure
+            raise ArtifactCleanupScheduleStateError() from exc
+
+    async def complete_tenant(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        expected_cursor: str | None,
+        org_id: str,
+        now: datetime,
+    ) -> bool:
+        del now  # PostgreSQL lease validity is always judged by clock_timestamp().
+        _validate_id(owner_id)
+        _validate_id(org_id)
+        _validate_fence(fence_token)
         try:
             async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
                 async with conn.transaction():
                     await _ensure_state_row(conn)
-                    row = await _locked_state_row(conn)
-                    if (
-                        _cursor_from_row(row) != expected
-                        or row["lease_owner_id"] != owner_id
-                    ):
-                        return False
-                    await conn.execute(
+                    cursor = await conn.execute(
                         f"""
                         UPDATE {_TABLE}
-                           SET cursor_after_org_id = %s, updated_at = now()
-                         WHERE source = %s AND lease_owner_id = %s
+                           SET cursor_after_org_id = %s, updated_at = clock_timestamp()
+                         WHERE source = %s
+                           AND cursor_after_org_id IS NOT DISTINCT FROM %s
+                           AND lease_owner_id = %s
+                           AND lease_fence_token = %s
+                           AND lease_expires_at > clock_timestamp()
+                        RETURNING source
                         """,
-                        (next_cursor, _SOURCE, owner_id),
+                        (
+                            org_id,
+                            _SOURCE,
+                            expected_cursor,
+                            owner_id,
+                            fence_token,
+                        ),
+                    )
+                    if await cursor.fetchone() is None:
+                        return False
+                    await conn.execute(
+                        f"DELETE FROM {_DEFERRED_TABLE} WHERE source = %s AND org_id = %s",
+                        (_SOURCE, org_id),
                     )
                     return True
+        except ArtifactCleanupScheduleStateError:
+            raise
+        except Exception as exc:  # pragma: no cover - database driver failure
+            raise ArtifactCleanupScheduleStateError() from exc
+
+    async def defer_failed_tenant(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        expected_cursor: str | None,
+        org_id: str,
+        now: datetime,
+        retry_base_seconds: float,
+        retry_max_seconds: float,
+    ) -> ArtifactCleanupDeferredTenant | None:
+        del now  # PostgreSQL retry timestamps are authoritative DB timestamps.
+        _validate_id(owner_id)
+        _validate_id(org_id)
+        _validate_fence(fence_token)
+        _validate_retry(retry_base_seconds, retry_max_seconds)
+        try:
+            async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
+                async with conn.transaction():
+                    await _ensure_state_row(conn)
+                    cursor = await conn.execute(
+                        f"""
+                        UPDATE {_TABLE}
+                           SET cursor_after_org_id = %s, updated_at = clock_timestamp()
+                         WHERE source = %s
+                           AND cursor_after_org_id IS NOT DISTINCT FROM %s
+                           AND lease_owner_id = %s
+                           AND lease_fence_token = %s
+                           AND lease_expires_at > clock_timestamp()
+                        RETURNING source
+                        """,
+                        (
+                            org_id,
+                            _SOURCE,
+                            expected_cursor,
+                            owner_id,
+                            fence_token,
+                        ),
+                    )
+                    if await cursor.fetchone() is None:
+                        return None
+                    cursor = await conn.execute(
+                        f"""
+                        INSERT INTO {_DEFERRED_TABLE} (
+                            source, org_id, failure_count, retry_not_before,
+                            last_failed_at, updated_at
+                        ) VALUES (
+                            %s, %s, 1,
+                            clock_timestamp() + make_interval(secs => LEAST(%s, %s)),
+                            clock_timestamp(), clock_timestamp()
+                        )
+                        ON CONFLICT (source, org_id) DO UPDATE
+                           SET failure_count = {_DEFERRED_TABLE}.failure_count + 1,
+                               retry_not_before = clock_timestamp() + make_interval(
+                                   secs => LEAST(
+                                       %s * power(
+                                           2::double precision,
+                                           LEAST({_DEFERRED_TABLE}.failure_count, 20)
+                                       ),
+                                       %s
+                                   )
+                               ),
+                               last_failed_at = clock_timestamp(),
+                               updated_at = clock_timestamp()
+                        RETURNING org_id, failure_count, retry_not_before, last_failed_at
+                        """,
+                        (
+                            _SOURCE,
+                            org_id,
+                            retry_base_seconds,
+                            retry_max_seconds,
+                            retry_base_seconds,
+                            retry_max_seconds,
+                        ),
+                    )
+                    row = await cursor.fetchone()
+                    if row is None:
+                        raise ArtifactCleanupScheduleStateError()
+                    return _deferred_from_row(row)
         except ArtifactCleanupScheduleStateError:
             raise
         except Exception as exc:  # pragma: no cover - database driver failure
@@ -75,55 +221,88 @@ class PostgresArtifactCleanupScheduleStore:
         *,
         owner_id: str,
         now: datetime,
-        expires_at: datetime,
-    ) -> bool:
+        duration_seconds: float,
+    ) -> ArtifactCleanupLease | None:
+        del now  # Never trust a worker clock for PostgreSQL lease ownership.
         _validate_id(owner_id)
-        if now.tzinfo is None or expires_at.tzinfo is None or expires_at <= now:
-            raise ArtifactCleanupScheduleStateError(
-                "cleanup scheduler lease is invalid"
-            )
+        _validate_duration(duration_seconds)
         try:
             async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
                 async with conn.transaction():
                     await _ensure_state_row(conn)
                     row = await _locked_state_row(conn)
-                    active_owner = row["lease_owner_id"]
-                    active_until = row["lease_expires_at"]
-                    if (
-                        active_owner is not None
-                        and active_owner != owner_id
-                        and isinstance(active_until, datetime)
-                        and active_until > now
-                    ):
-                        return False
-                    await conn.execute(
+                    if _row_lease_active(row):
+                        return None
+                    cursor = await conn.execute(
                         f"""
                         UPDATE {_TABLE}
                            SET lease_owner_id = %s,
-                               lease_expires_at = %s,
-                               updated_at = now()
+                               lease_fence_token = lease_fence_token + 1,
+                               lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                               updated_at = clock_timestamp()
                          WHERE source = %s
+                        RETURNING lease_owner_id, lease_fence_token, lease_expires_at
                         """,
-                        (owner_id, expires_at, _SOURCE),
+                        (owner_id, duration_seconds, _SOURCE),
                     )
-                    return True
+                    updated = await cursor.fetchone()
+                    if updated is None:
+                        raise ArtifactCleanupScheduleStateError()
+                    return _lease_from_row(updated)
         except ArtifactCleanupScheduleStateError:
             raise
         except Exception as exc:  # pragma: no cover - database driver failure
             raise ArtifactCleanupScheduleStateError() from exc
 
-    async def release_lease(self, *, owner_id: str) -> None:
+    async def renew_lease(
+        self,
+        *,
+        owner_id: str,
+        fence_token: int,
+        now: datetime,
+        duration_seconds: float,
+    ) -> ArtifactCleanupLease | None:
+        del now  # Never trust a worker clock for PostgreSQL lease ownership.
         _validate_id(owner_id)
+        _validate_fence(fence_token)
+        _validate_duration(duration_seconds)
+        try:
+            async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
+                cursor = await conn.execute(
+                    f"""
+                    UPDATE {_TABLE}
+                       SET lease_expires_at = clock_timestamp() + make_interval(secs => %s),
+                           updated_at = clock_timestamp()
+                     WHERE source = %s
+                       AND lease_owner_id = %s
+                       AND lease_fence_token = %s
+                       AND lease_expires_at > clock_timestamp()
+                    RETURNING lease_owner_id, lease_fence_token, lease_expires_at
+                    """,
+                    (duration_seconds, _SOURCE, owner_id, fence_token),
+                )
+                row = await cursor.fetchone()
+            return _lease_from_row(row) if row is not None else None
+        except ArtifactCleanupScheduleStateError:
+            raise
+        except Exception as exc:  # pragma: no cover - database driver failure
+            raise ArtifactCleanupScheduleStateError() from exc
+
+    async def release_lease(self, *, owner_id: str, fence_token: int) -> None:
+        _validate_id(owner_id)
+        _validate_fence(fence_token)
         try:
             async with self._store._role_connection(_WORKER_ROLE) as conn:  # noqa: SLF001
                 await conn.execute(
                     f"""
                     UPDATE {_TABLE}
                        SET lease_owner_id = NULL, lease_expires_at = NULL,
-                           updated_at = now()
-                     WHERE source = %s AND lease_owner_id = %s
+                           updated_at = clock_timestamp()
+                     WHERE source = %s
+                       AND lease_owner_id = %s
+                       AND lease_fence_token = %s
                     """,
-                    (_SOURCE, owner_id),
+                    (_SOURCE, owner_id, fence_token),
                 )
         except Exception as exc:  # pragma: no cover - best-effort release
             raise ArtifactCleanupScheduleStateError() from exc
@@ -133,8 +312,9 @@ async def _ensure_state_row(conn: object) -> None:
     await conn.execute(
         f"""
         INSERT INTO {_TABLE} (
-            source, cursor_after_org_id, lease_owner_id, lease_expires_at, updated_at
-        ) VALUES (%s, NULL, NULL, NULL, now())
+            source, cursor_after_org_id, lease_owner_id, lease_fence_token,
+            lease_expires_at, updated_at
+        ) VALUES (%s, NULL, NULL, 0, NULL, clock_timestamp())
         ON CONFLICT (source) DO NOTHING
         """,
         (_SOURCE,),
@@ -144,7 +324,8 @@ async def _ensure_state_row(conn: object) -> None:
 async def _locked_state_row(conn: object) -> Mapping[str, object]:
     cursor = await conn.execute(
         f"""
-        SELECT cursor_after_org_id, lease_owner_id, lease_expires_at
+        SELECT cursor_after_org_id, lease_owner_id, lease_fence_token,
+               lease_expires_at, clock_timestamp() AS db_now
           FROM {_TABLE}
          WHERE source = %s
          FOR UPDATE
@@ -157,6 +338,12 @@ async def _locked_state_row(conn: object) -> Mapping[str, object]:
     return row
 
 
+def _row_lease_active(row: Mapping[str, object]) -> bool:
+    expires = row["lease_expires_at"]
+    now = row["db_now"]
+    return isinstance(expires, datetime) and isinstance(now, datetime) and expires > now
+
+
 def _cursor_from_row(row: Mapping[str, object]) -> str | None:
     value = row["cursor_after_org_id"]
     if value is None:
@@ -165,10 +352,69 @@ def _cursor_from_row(row: Mapping[str, object]) -> str | None:
     return str(value)
 
 
+def _lease_from_row(row: Mapping[str, object]) -> ArtifactCleanupLease:
+    owner = row["lease_owner_id"]
+    token = row["lease_fence_token"]
+    expires_at = row["lease_expires_at"]
+    if (
+        not isinstance(owner, str)
+        or not isinstance(token, int)
+        or not isinstance(expires_at, datetime)
+    ):
+        raise ArtifactCleanupScheduleStateError()
+    _validate_id(owner)
+    _validate_fence(token)
+    return ArtifactCleanupLease(
+        owner_id=owner,
+        fence_token=token,
+        expires_at=expires_at,
+    )
+
+
+def _deferred_from_row(row: Mapping[str, object]) -> ArtifactCleanupDeferredTenant:
+    org_id = row["org_id"]
+    failure_count = row["failure_count"]
+    retry_not_before = row["retry_not_before"]
+    last_failed_at = row["last_failed_at"]
+    if (
+        not isinstance(org_id, str)
+        or not isinstance(failure_count, int)
+        or not isinstance(retry_not_before, datetime)
+        or not isinstance(last_failed_at, datetime)
+    ):
+        raise ArtifactCleanupScheduleStateError()
+    _validate_id(org_id)
+    if failure_count < 1:
+        raise ArtifactCleanupScheduleStateError()
+    return ArtifactCleanupDeferredTenant(
+        org_id=org_id,
+        failure_count=failure_count,
+        retry_not_before=retry_not_before,
+        last_failed_at=last_failed_at,
+    )
+
+
 def _validate_id(value: object) -> None:
     if not isinstance(value, str) or not value or len(value) > 256:
         raise ArtifactCleanupScheduleStateError(
             "cleanup scheduler identifier is invalid"
+        )
+
+
+def _validate_fence(value: int) -> None:
+    if not isinstance(value, int) or value < 1:
+        raise ArtifactCleanupScheduleStateError("cleanup scheduler fence is invalid")
+
+
+def _validate_duration(value: float) -> None:
+    if value <= 0:
+        raise ArtifactCleanupScheduleStateError("cleanup scheduler duration is invalid")
+
+
+def _validate_retry(base_seconds: float, max_seconds: float) -> None:
+    if base_seconds <= 0 or max_seconds < base_seconds:
+        raise ArtifactCleanupScheduleStateError(
+            "cleanup scheduler retry bounds are invalid"
         )
 
 

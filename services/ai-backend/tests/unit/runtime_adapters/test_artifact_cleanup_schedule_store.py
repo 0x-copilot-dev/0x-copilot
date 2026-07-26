@@ -1,4 +1,4 @@
-"""Durability and ownership checks for artifact-cleanup scheduler state."""
+"""Adversarial durability checks for artifact-cleanup scheduler state."""
 
 from __future__ import annotations
 
@@ -35,72 +35,216 @@ def anyio_backend() -> str:
         ),
     ],
 )
-async def test_owner_checked_cursor_cannot_cross_worker_boundary(
+async def test_expiry_takeover_fences_stale_owner_and_renews_exclusively(
     tmp_path, store_factory
 ) -> None:  # noqa: ANN001
     store = store_factory(tmp_path)
-    assert await store.acquire_lease(
+    first = await store.acquire_lease(owner_id="worker_a", now=NOW, duration_seconds=10)
+    assert first is not None
+    assert (
+        await store.acquire_lease(
+            owner_id="worker_b", now=NOW + timedelta(seconds=1), duration_seconds=10
+        )
+        is None
+    )
+
+    # Renewal keeps the same fence generation exclusive past the original
+    # expiry. A second owner cannot acquire while that generation is alive.
+    renewed = await store.renew_lease(
         owner_id="worker_a",
+        fence_token=first.fence_token,
+        now=NOW + timedelta(seconds=8),
+        duration_seconds=10,
+    )
+    assert renewed is not None
+    assert renewed.fence_token == first.fence_token
+    assert (
+        await store.acquire_lease(
+            owner_id="worker_b", now=NOW + timedelta(seconds=11), duration_seconds=10
+        )
+        is None
+    )
+
+    second = await store.acquire_lease(
+        owner_id="worker_b", now=NOW + timedelta(seconds=19), duration_seconds=10
+    )
+    assert second is not None
+    assert second.fence_token > first.fence_token
+
+    # An expired/taken-over worker cannot advance the cursor, defer work, or
+    # release the successor's lease.
+    assert not await store.complete_tenant(
+        owner_id="worker_a",
+        fence_token=first.fence_token,
+        expected_cursor=None,
+        org_id="org_stale",
+        now=NOW + timedelta(seconds=19),
+    )
+    assert (
+        await store.defer_failed_tenant(
+            owner_id="worker_a",
+            fence_token=first.fence_token,
+            expected_cursor=None,
+            org_id="org_stale",
+            now=NOW + timedelta(seconds=19),
+            retry_base_seconds=5,
+            retry_max_seconds=20,
+        )
+        is None
+    )
+    await store.release_lease(owner_id="worker_a", fence_token=first.fence_token)
+    assert (
+        await store.renew_lease(
+            owner_id="worker_b",
+            fence_token=second.fence_token,
+            now=NOW + timedelta(seconds=20),
+            duration_seconds=10,
+        )
+        is not None
+    )
+    assert await store.load_cursor() is None
+
+
+@pytest.mark.parametrize(
+    "store_factory",
+    [
+        pytest.param(
+            lambda path: InMemoryArtifactCleanupScheduleStore(), id="in-memory"
+        ),
+        pytest.param(
+            lambda path: FileArtifactCleanupScheduleStore(root=path), id="file"
+        ),
+    ],
+)
+async def test_deferred_tenant_is_durable_bounded_and_tenant_isolated(
+    tmp_path, store_factory
+) -> None:  # noqa: ANN001
+    store = store_factory(tmp_path)
+    lease = await store.acquire_lease(owner_id="worker_a", now=NOW, duration_seconds=60)
+    assert lease is not None
+
+    first = await store.defer_failed_tenant(
+        owner_id="worker_a",
+        fence_token=lease.fence_token,
+        expected_cursor=None,
+        org_id="org_a",
         now=NOW,
-        expires_at=NOW + timedelta(seconds=30),
+        retry_base_seconds=5,
+        retry_max_seconds=12,
     )
-    assert not await store.acquire_lease(
-        owner_id="worker_b",
-        now=NOW + timedelta(seconds=1),
-        expires_at=NOW + timedelta(seconds=31),
+    assert first is not None
+    assert first.failure_count == 1
+    assert first.retry_not_before == NOW + timedelta(seconds=5)
+    assert await store.complete_tenant(
+        owner_id="worker_a",
+        fence_token=lease.fence_token,
+        expected_cursor="org_a",
+        org_id="org_b",
+        now=NOW,
     )
-    assert not await store.advance_cursor(
-        owner_id="worker_b", expected=None, next_cursor="org_other"
+    assert (
+        await store.load_deferred_tenant(
+            owner_id="worker_a",
+            fence_token=lease.fence_token,
+            org_id="org_b",
+            now=NOW,
+        )
+        is None
     )
-    assert await store.advance_cursor(
-        owner_id="worker_a", expected=None, next_cursor="org_a"
+
+    second = await store.defer_failed_tenant(
+        owner_id="worker_a",
+        fence_token=lease.fence_token,
+        expected_cursor="org_b",
+        org_id="org_a",
+        now=NOW + timedelta(seconds=5),
+        retry_base_seconds=5,
+        retry_max_seconds=12,
     )
-    await store.release_lease(owner_id="worker_b")
-    assert not await store.acquire_lease(
-        owner_id="worker_b",
-        now=NOW + timedelta(seconds=2),
-        expires_at=NOW + timedelta(seconds=32),
+    assert second is not None
+    assert second.failure_count == 2
+    assert second.retry_not_before == NOW + timedelta(seconds=15)
+
+    visible = await store.load_deferred_tenant(
+        owner_id="worker_a",
+        fence_token=lease.fence_token,
+        org_id="org_a",
+        now=NOW + timedelta(seconds=5),
     )
-    await store.release_lease(owner_id="worker_a")
-    assert await store.acquire_lease(
-        owner_id="worker_b",
-        now=NOW + timedelta(seconds=2),
-        expires_at=NOW + timedelta(seconds=32),
+    assert visible == second
+    assert not visible.is_eligible(now=NOW + timedelta(seconds=14))
+    assert visible.is_eligible(now=NOW + timedelta(seconds=15))
+    assert (
+        await store.load_deferred_tenant(
+            owner_id="worker_a",
+            fence_token=lease.fence_token,
+            org_id="org_a",
+            now=NOW + timedelta(seconds=15),
+        )
+        is None
     )
-    assert await store.load_cursor() == "org_a"
 
 
-async def test_file_schedule_cursor_survives_restart_without_tenant_state_leak(
+async def test_file_schedule_restart_preserves_defer_but_not_cross_tenant_state(
     tmp_path,
 ) -> None:
     first = FileArtifactCleanupScheduleStore(root=tmp_path)
-    assert await first.acquire_lease(
+    lease = await first.acquire_lease(
+        owner_id="worker_one", now=NOW, duration_seconds=30
+    )
+    assert lease is not None
+    deferred = await first.defer_failed_tenant(
         owner_id="worker_one",
+        fence_token=lease.fence_token,
+        expected_cursor=None,
+        org_id="org_first",
         now=NOW,
-        expires_at=NOW + timedelta(seconds=30),
+        retry_base_seconds=5,
+        retry_max_seconds=20,
     )
-    assert await first.advance_cursor(
-        owner_id="worker_one", expected=None, next_cursor="org_first"
-    )
-    await first.release_lease(owner_id="worker_one")
+    assert deferred is not None
+    await first.release_lease(owner_id="worker_one", fence_token=lease.fence_token)
 
     restarted = FileArtifactCleanupScheduleStore(root=tmp_path)
-    # The only persisted scheduler fact is the opaque last-completed org id;
-    # it carries no artifact, user, reference, or legal-hold data from that
-    # tenant. A new worker starts after it and can only advance with its lease.
+    resumed = await restarted.acquire_lease(
+        owner_id="worker_two", now=NOW + timedelta(seconds=1), duration_seconds=30
+    )
+    assert resumed is not None
     assert await restarted.load_cursor() == "org_first"
-    assert await restarted.acquire_lease(
-        owner_id="worker_two",
-        now=NOW + timedelta(seconds=1),
-        expires_at=NOW + timedelta(seconds=31),
-    )
-    assert await restarted.advance_cursor(
-        owner_id="worker_two", expected="org_first", next_cursor="org_second"
-    )
-    await restarted.release_lease(owner_id="worker_two")
-
-    assert (tmp_path / "artifact_cleanup_schedule" / "state.json").exists()
     assert (
-        await FileArtifactCleanupScheduleStore(root=tmp_path).load_cursor()
-        == "org_second"
+        await restarted.load_deferred_tenant(
+            owner_id="worker_two",
+            fence_token=resumed.fence_token,
+            org_id="org_first",
+            now=NOW + timedelta(seconds=1),
+        )
+        == deferred
     )
+    assert (
+        await restarted.load_deferred_tenant(
+            owner_id="worker_two",
+            fence_token=resumed.fence_token,
+            org_id="org_other",
+            now=NOW + timedelta(seconds=1),
+        )
+        is None
+    )
+
+
+async def test_file_upgrade_discards_unfenced_legacy_lease_but_keeps_cursor(
+    tmp_path,
+) -> None:
+    state_dir = tmp_path / "artifact_cleanup_schedule"
+    state_dir.mkdir()
+    (state_dir / "state.json").write_text(
+        '{"cursor":"org_legacy","lease_expires_at":"2026-07-26T13:00:00+00:00",'
+        '"lease_owner":"legacy_worker"}',
+        encoding="utf-8",
+    )
+    store = FileArtifactCleanupScheduleStore(root=tmp_path)
+    assert await store.load_cursor() == "org_legacy"
+    lease = await store.acquire_lease(
+        owner_id="fenced_worker", now=NOW, duration_seconds=30
+    )
+    assert lease is not None
+    assert lease.fence_token == 1
