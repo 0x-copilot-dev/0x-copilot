@@ -17,7 +17,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 
 from agent_runtime.capabilities.sandbox.config import RemoteSandboxConfig
-from agent_runtime.capabilities.sandbox.contracts import SandboxError, SandboxProviderId
+from agent_runtime.capabilities.sandbox.contracts import SandboxProviderId
 from agent_runtime.capabilities.sandbox.ports import (
     SandboxEventSink,
     SandboxProviderPort,
@@ -27,6 +27,7 @@ from agent_runtime.capabilities.sandbox.provider_registry import (
     InMemorySandboxSessionStore,
     SandboxProviderRegistry,
 )
+from agent_runtime.capabilities.sandbox.readiness import SandboxCapabilityReadiness
 from agent_runtime.capabilities.sandbox.remote_execution_service import (
     RemoteExecutionService,
 )
@@ -54,16 +55,19 @@ def build_sandbox_backend(
     """
 
     resolved = config if config is not None else RemoteSandboxConfig.from_env()
-    if not resolved.is_active:
-        return None
-    try:
-        registry = SandboxProviderRegistry.from_config(
-            resolved, overrides=provider_overrides
-        )
-    except SandboxError:
-        # An unverified provider is not a degraded sandbox.  Returning None
+    readiness = SandboxCapabilityReadiness.assess(
+        resolved, provider_overrides=provider_overrides
+    )
+    if not readiness.available:
+        # An unverified provider is not a degraded sandbox. Returning None
         # keeps run_in_sandbox out of the model-visible toolset entirely.
         return None
+    # ``assess`` above has already checked this exact construction seam. Build
+    # once more only to retain the registry object the service owns; no remote
+    # session or provider action happens here.
+    registry = SandboxProviderRegistry.from_config(
+        resolved, overrides=provider_overrides
+    )
     return RemoteExecutionService(
         registry=registry,
         config=resolved,

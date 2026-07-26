@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any
 from uuid import uuid4
 
@@ -74,6 +75,22 @@ class BrowserMcpConfig:
     http_client: httpx.AsyncClient | None = None
 
 
+class BrowserReadinessReason(StrEnum):
+    """Bounded, safe reasons a desktop browser cannot be exposed."""
+
+    BROKER_UNAVAILABLE = "broker_unavailable"
+    SESSION_UNAUTHORIZED = "session_unauthorized"
+    READ_PERMISSION_UNAVAILABLE = "read_permission_unavailable"
+
+
+@dataclass(frozen=True)
+class BrowserCapabilityReadiness:
+    """Result of a broker-backed, per-context browser readiness probe."""
+
+    available: bool
+    reason: BrowserReadinessReason | None = None
+
+
 def build_browser_mcp(config: BrowserMcpConfig) -> "DesktopBrowserMcpProvider | None":
     """Seam consumed by the runtime factory (which this change does NOT edit).
 
@@ -114,25 +131,60 @@ class DesktopBrowserMcpProvider:
     )
 
     async def list_server_cards(self) -> tuple[McpServerCard, ...]:
-        """Return the single device-local browser card.
+        """Return a card only after proving broker session + read access.
 
-        The card is static + healthy here; the ``build_browser_mcp`` seam is the
-        gate that decides whether this provider (and therefore its card) exists
-        at all. There is no backend registry fetch — this server is device-local.
+        The URL/token gate in :func:`build_browser_mcp` only proves that an
+        adapter *can* be constructed.  Discovery also requires a current
+        broker handshake and at least one broker-authorized read tool.  This is
+        intentionally retried on each registry refresh: a lost local broker or
+        consent removes the card; recovery makes it discoverable again without
+        a worker restart.
         """
 
-        return (
-            McpServerCard(
-                name=BrowserServer.NAME,
-                display_name=BrowserServer.DISPLAY_NAME,
-                short_description=BrowserServer.SHORT_DESCRIPTION,
-                transport=McpTransport.HTTP,
-                auth_mode=McpAuthMode.NONE,
-                auth_state=McpAuthState.AUTH_SKIPPED,
-                health=McpServerHealth.HEALTHY,
-                load_cost=1,
-                enabled=True,
-            ),
+        if not (await self.readiness()).available:
+            return ()
+        return (self._card(),)
+
+    async def readiness(self) -> BrowserCapabilityReadiness:
+        """Verify the live local session and a non-empty read permission set."""
+
+        client = self.create_client(self._card())
+        try:
+            await client.connect()
+            tools = await client.list_tools()
+        except McpAuthError:
+            return BrowserCapabilityReadiness(
+                available=False,
+                reason=BrowserReadinessReason.SESSION_UNAUTHORIZED,
+            )
+        except McpConnectionError:
+            return BrowserCapabilityReadiness(
+                available=False,
+                reason=BrowserReadinessReason.BROKER_UNAVAILABLE,
+            )
+        if not any(
+            tool.name not in BrowserServer.STAGED_ACTION_TOOLS for tool in tools
+        ):
+            return BrowserCapabilityReadiness(
+                available=False,
+                reason=BrowserReadinessReason.READ_PERMISSION_UNAVAILABLE,
+            )
+        return BrowserCapabilityReadiness(available=True)
+
+    @staticmethod
+    def _card() -> McpServerCard:
+        """Build the stable local card after readiness has been established."""
+
+        return McpServerCard(
+            name=BrowserServer.NAME,
+            display_name=BrowserServer.DISPLAY_NAME,
+            short_description=BrowserServer.SHORT_DESCRIPTION,
+            transport=McpTransport.HTTP,
+            auth_mode=McpAuthMode.NONE,
+            auth_state=McpAuthState.AUTH_SKIPPED,
+            health=McpServerHealth.HEALTHY,
+            load_cost=1,
+            enabled=True,
         )
 
     def create_client(self, card: McpServerCard) -> McpClient:
@@ -187,6 +239,8 @@ class DesktopBrowserMcpClient:
         gateway and A5 composition are both enabled for this run.
         """
 
+        if not self.connected:
+            await self.connect()
         payload = await self._post(
             BrowserBroker.ROUTE_TOOLS_LIST, envelope=self._envelope()
         )
@@ -222,6 +276,8 @@ class DesktopBrowserMcpClient:
         model cannot place any of those authority fields on this envelope.
         """
 
+        if not self.connected:
+            await self.connect()
         if tool_name in BrowserServer.STAGED_ACTION_TOOLS:
             raise McpConnectionError(BrowserMessages.STAGED_ACTION_REQUIRED)
         envelope = self._envelope(

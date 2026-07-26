@@ -21,6 +21,7 @@ import pytest
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from agent_runtime.capabilities.browser import (
+    BrowserReadinessReason,
     BrowserMcpConfig,
     DesktopBrowserMcpProvider,
     build_browser_mcp,
@@ -191,6 +192,50 @@ class TestProviderCard(BrowserProviderFixtures):
         names = [card.name for card in cards]
         assert names == ["desktop_browser"]
 
+    def test_hides_card_when_broker_session_is_unauthorized(self) -> None:
+        provider = self.build_provider(self.fake_broker(unauthorized=True))
+        readiness = asyncio.run(provider.readiness())
+        assert not readiness.available
+        assert readiness.reason is BrowserReadinessReason.SESSION_UNAUTHORIZED
+        assert asyncio.run(provider.list_server_cards()) == ()
+
+    def test_hides_card_when_broker_has_no_read_permission(self) -> None:
+        def handler(request: httpx.Request) -> httpx.Response:
+            if request.url.path == BrowserBroker.ROUTE_HANDSHAKE:
+                return httpx.Response(200, json={"audience": BrowserBroker.AUDIENCE})
+            if request.url.path == BrowserBroker.ROUTE_TOOLS_LIST:
+                return httpx.Response(200, json={"tools": []})
+            return httpx.Response(404, json={})
+
+        provider = self.build_provider(
+            httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        )
+        readiness = asyncio.run(provider.readiness())
+        assert not readiness.available
+        assert readiness.reason is BrowserReadinessReason.READ_PERMISSION_UNAVAILABLE
+        assert asyncio.run(provider.list_server_cards()) == ()
+
+    def test_card_recovers_after_broker_reconnect(self) -> None:
+        online = False
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            if not online:
+                return httpx.Response(503, json={})
+            if request.url.path == BrowserBroker.ROUTE_HANDSHAKE:
+                return httpx.Response(200, json={"audience": BrowserBroker.AUDIENCE})
+            if request.url.path == BrowserBroker.ROUTE_TOOLS_LIST:
+                return httpx.Response(200, json=self.tool_list_payload())
+            return httpx.Response(404, json={})
+
+        provider = self.build_provider(
+            httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        )
+        assert asyncio.run(provider.list_server_cards()) == ()
+        online = True
+        assert [card.name for card in asyncio.run(provider.list_server_cards())] == [
+            "desktop_browser"
+        ]
+
 
 class TestClientTransport(BrowserProviderFixtures):
     def test_connect_verifies_audience(self) -> None:
@@ -201,7 +246,7 @@ class TestClientTransport(BrowserProviderFixtures):
 
     def test_connect_rejects_wrong_audience(self) -> None:
         provider = self.build_provider(self.fake_broker(audience="evil"))
-        client = provider.create_client((asyncio.run(provider.list_server_cards()))[0])
+        client = provider.create_client(provider._card())
         with pytest.raises(McpConnectionError):
             asyncio.run(client.connect())
 
@@ -269,6 +314,29 @@ class TestClientTransport(BrowserProviderFixtures):
 
     def test_auth_failure_raises_typed_error(self) -> None:
         provider = self.build_provider(self.fake_broker(unauthorized=True))
-        card = asyncio.run(provider.list_server_cards())[0]
+        card = provider._card()
         with pytest.raises(McpAuthError):
             asyncio.run(provider.create_client(card).list_tools())
+
+    def test_direct_call_cannot_bypass_broker_handshake(self) -> None:
+        seen_paths: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen_paths.append(request.url.path)
+            if request.url.path == BrowserBroker.ROUTE_HANDSHAKE:
+                return httpx.Response(401, json={})
+            if request.url.path == BrowserBroker.ROUTE_ACTION:
+                pytest.fail("action must not run before a successful handshake")
+            return httpx.Response(404, json={})
+
+        provider = self.build_provider(
+            httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        )
+        with pytest.raises(McpAuthError):
+            asyncio.run(
+                provider.create_client(provider._card()).call_tool(
+                    tool_name="browser_navigate",
+                    arguments={"url": "https://example.com"},
+                )
+            )
+        assert seen_paths == [BrowserBroker.ROUTE_HANDSHAKE]

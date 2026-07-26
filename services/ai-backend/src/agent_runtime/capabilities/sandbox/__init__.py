@@ -76,6 +76,10 @@ from agent_runtime.capabilities.sandbox.remote_execution_service import (
     SandboxEventName,
 )
 from agent_runtime.capabilities.sandbox.seam import build_sandbox_backend
+from agent_runtime.capabilities.sandbox.readiness import (
+    SandboxCapabilityReadiness,
+    SandboxReadinessReason,
+)
 from agent_runtime.capabilities.sandbox.coordinator import SandboxLifecycleCoordinator
 from agent_runtime.capabilities.sandbox.runtime_adapter import DeepAgentSandboxRuntime
 from agent_runtime.capabilities.sandbox.artifact_publisher import (
@@ -113,6 +117,8 @@ __all__ = [
     "SandboxEgressPolicy",
     "SandboxError",
     "SandboxErrorCode",
+    "SandboxCapabilityReadiness",
+    "SandboxReadinessReason",
     "SandboxEvent",
     "SandboxEventName",
     "SandboxEventSink",

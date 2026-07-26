@@ -8,7 +8,9 @@ broker URL + credential.
 from __future__ import annotations
 
 from agent_runtime.capabilities.browser.desktop_browser_provider import (
+    BrowserCapabilityReadiness,
     BrowserMcpConfig,
+    BrowserReadinessReason,
     DesktopBrowserMcpClient,
     DesktopBrowserMcpProvider,
     build_browser_mcp,
@@ -23,7 +25,9 @@ from agent_runtime.capabilities.browser.effect_adapter import (
 from agent_runtime.capabilities.browser.operation_adapter import BrowserOperationAdapter
 
 __all__ = [
+    "BrowserCapabilityReadiness",
     "BrowserMcpConfig",
+    "BrowserReadinessReason",
     "BrowserEffectExecutor",
     "BrowserEffectStageAdapter",
     "BrowserOperationAdapter",
