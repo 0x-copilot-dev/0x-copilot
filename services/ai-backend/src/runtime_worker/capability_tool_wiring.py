@@ -27,7 +27,8 @@ never load on non-desktop images.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from typing import Protocol, runtime_checkable
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
 
@@ -35,6 +36,22 @@ logger = logging.getLogger(__name__)
 
 _DESKTOP_PROFILE = "single_user_desktop"
 _DEPLOYMENT_PROFILE_ENV = "ENTERPRISE_DEPLOYMENT_PROFILE"
+
+
+@runtime_checkable
+class SandboxToolFactoryPort(Protocol):
+    """Worker-owned construction seam for the model-visible sandbox tool.
+
+    The factory is deliberately injected by the run composition root only after
+    it has assembled the operation gateway, immutable snapshot source,
+    filesystem lifecycle/session/usage stores, provider-attested runner, and
+    C1/C3 handoff.  This module must never build a ``RemoteExecutionService``
+    itself: doing so would restore a model-facing direct provider path.
+    """
+
+    def build_tool(self, *, identity_provider: Callable[[], object]) -> object | None:
+        """Return the gateway-routed tool, or ``None`` when not fully ready."""
+        ...
 
 
 class _ContextBudgetGuard:
@@ -104,11 +121,13 @@ class CapabilityToolWiring:
         file_store: object | None = None,
         env: Mapping[str, str] | None = None,
         external_tools_by_name: Mapping[str, object] | None = None,
+        sandbox_tool_factory: SandboxToolFactoryPort | None = None,
     ) -> None:
         self._runtime_context = runtime_context
         self._file_store = file_store
         self._env = env
         self._external_tools_by_name = dict(external_tools_by_name or {})
+        self._sandbox_tool_factory = sandbox_tool_factory
 
     # -- Monty code mode ---------------------------------------------------
 
@@ -202,31 +221,21 @@ class CapabilityToolWiring:
     # -- Remote sandbox execute -------------------------------------------
 
     def sandbox_execute_tool(self) -> object | None:
-        """Build the gated ``run_in_sandbox`` tool, or ``None`` when gated off.
+        """Return the fully composed gateway tool, or honestly omit it.
 
-        Returns ``None`` unless ``RUNTIME_ENABLE_REMOTE_SANDBOX`` + a configured
-        provider are active AND the deployment profile is ``single_user_desktop``.
+        Desktop profile is a necessary condition but not sufficient.  The
+        composition root supplies a factory only after it can prove the D3
+        filesystem-first lifecycle contract and provider isolation.  This keeps
+        the model toolset free of a legacy direct ``session_scope → aexecute``
+        fallback while composition is incomplete.
         """
 
         if not self._is_desktop():
             return None
-        from agent_runtime.capabilities.sandbox import (  # noqa: PLC0415
-            RemoteSandboxConfig,
-            build_sandbox_backend,
-        )
-
-        config = RemoteSandboxConfig.from_env(self._env)
-        service = build_sandbox_backend(config)
-        if service is None:
+        if self._sandbox_tool_factory is None:
             return None
-        from agent_runtime.capabilities.sandbox.execute_tool import (  # noqa: PLC0415
-            SandboxExecuteToolFactory,
-        )
-
-        return SandboxExecuteToolFactory.build(
-            service=service,
+        return self._sandbox_tool_factory.build_tool(
             identity_provider=self._sandbox_identity,
-            config=config,
         )
 
     def _sandbox_identity(self) -> object:
@@ -259,4 +268,4 @@ class CapabilityToolWiring:
         return dict(os.environ)
 
 
-__all__ = ("CapabilityToolWiring",)
+__all__ = ("CapabilityToolWiring", "SandboxToolFactoryPort")
