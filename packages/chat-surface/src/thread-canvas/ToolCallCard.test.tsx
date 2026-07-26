@@ -1,5 +1,5 @@
+import { fireEvent, render, waitFor } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import { render } from "@testing-library/react";
 
 import type { ToolCallEntry } from "./eventProjector";
 import { ToolCallCard } from "./ToolCallCard";
@@ -16,7 +16,7 @@ const detailedToolCall: ToolCallEntry = {
 };
 
 describe("ToolCallCard", () => {
-  it("uses the native disclosure as the compact visual tool header", () => {
+  it("uses the native disclosure as the compact visual tool header", async () => {
     const { container } = render(<ToolCallCard toolCall={detailedToolCall} />);
 
     const summary = container.querySelector("summary");
@@ -31,5 +31,18 @@ describe("ToolCallCard", () => {
     });
     expect(summary.firstElementChild).not.toBeNull();
     expect(summary.firstElementChild).toHaveStyle({ display: "contents" });
+    expect(summary).toHaveAttribute(
+      "aria-label",
+      "Show details for Get Linear issue",
+    );
+
+    fireEvent.click(summary);
+    expect(summary.parentElement).toHaveProperty("open", true);
+    await waitFor(() =>
+      expect(summary).toHaveAttribute(
+        "aria-label",
+        "Hide details for Get Linear issue",
+      ),
+    );
   });
 });

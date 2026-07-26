@@ -2,7 +2,7 @@
 
 This is an authoritative computed-style parity baseline for the supplied **Chat & Tool Calls** Design Compiler walkthrough. It measures the real shipping `RunDestination` / `ThreadCanvas` composition using deterministic persisted-message and SSE fixtures. It does **not** use screenshot assertions.
 
-**Aggregate measured findings:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 229 · ⚪ INFO 56.
+**Aggregate measured findings:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 234 · ⚪ INFO 56.
 
 ## State coverage
 
@@ -22,7 +22,7 @@ The six states are fixture-backed and state-specific: Focus thinking; third-part
 - Supplied design reference: `tools/design-parity/surfaces/chat-tool-call-shell/design/reference.dc.html`
 - Reference SHA-256: `7701b4df85a3d8c45b0505e545c3d30031e9fb21de0b38442e8547f5820f7840`
 - Vendor manifest: [design/PROVENANCE.json](../design/PROVENANCE.json) (source, support runtime, and CSS checksums).
-- Repository commit measured: `5d642a23eee62d6d2ab3cd87b82a52e89b53a37a`; origin/main: `5d642a23eee62d6d2ab3cd87b82a52e89b53a37a`.
+- Repository commit measured: `5e3be45ae1983d2bbd7288bb895736eb156727a2`; origin/main: `653fa07ab694453566c6770e3d1cb8f026fc05cd`.
 - Design capture: Design Compiler state selected at construction from `?state=…`; autoplay disabled; runtime-only `data-parity-anchor` attributes added after mount.
 - Live capture: [render-live-chat-tool-call-shell.test.tsx](../../../lib/render-live-chat-tool-call-shell.test.tsx) mounts the shipping desktop `DesktopWindowFrame` and `DestinationOutlet`, which routes through the real desktop `RunBinder` into `RunDestination` / `ThreadCanvas` with its normal Transport/SSE projection path.
 - Browser extraction: shared [extract-playwright.mjs](../../../lib/extract-playwright.mjs) + [extract-computed.js](../../../lib/extract-computed.js), viewport 1200×816.

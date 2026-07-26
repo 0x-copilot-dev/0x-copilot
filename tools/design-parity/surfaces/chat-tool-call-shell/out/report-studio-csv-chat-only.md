@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-csv-chat-only.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-csv-chat-only.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 40 · ⚪ INFO 9
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 41 · ⚪ INFO 9
 
-## 🟡 LOW (40)
+## 🟡 LOW (41)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -41,6 +41,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.csv.card` | Local CSV read | width | 550.891px → 551px |
 | `tool.csv.card` | Local CSV read | height | 19px → 57.5px |
 | `tool.csv.card` | Local CSV read | tag | <div> → <details> (semantic/default-style change) |
+| `tool.csv.header` | Local CSV read | textAlign | start → left |
 | `tool.csv.header` | Local CSV read | transition | all → none |
 | `tool.csv.header` | Local CSV read | width | 548.891px → 549px |
 | `tool.csv.header` | Local CSV read | tag | <div> → <summary> (semantic/default-style change) |
@@ -58,10 +59,10 @@ Design baseline (source of truth) vs live app, by computed style.
 |---|---|---|---|
 | `shell.frame` | Cockpit shell | text | “” → “.run-destination [data-testid="tc-chat"] { box-sizing: borde…” |
 | `shell.header` | Cockpit shell | text | “” → “0xCopilot—StudioACTIVE RUNClaude Sonnet 4.5 .run-header-puls…” |
-| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
-| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
+| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
+| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
 | `chat.composer` | Chat | text | “” → “Tools1Model” |
 | `studio.canvas` | Studio | text | “” → “RUN IN PROGRESSPreparing this runActivity will appear here i…” |
-| `tool.csv.card` | Local CSV read | text | “” → “@keyframes tc-tool-card-spin { to { transform: rotate(360deg…” |
+| `tool.csv.card` | Local CSV read | text | “” → “.tc-activity-card__head::-webkit-details-marker { display: n…” |
 | `tool.csv.header` | Local CSV read | text | “” → “Ffs.readMCP · Workspaceread820 ms742 rows · 9 columns✓▾” |
 | `csv.chat-only-canvas` | Local CSV read | text | “” → “RUN IN PROGRESSPreparing this runActivity will appear here i…” |

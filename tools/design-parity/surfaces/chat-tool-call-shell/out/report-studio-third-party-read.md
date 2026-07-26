@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-third-party-read.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-third-party-read.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 35 · ⚪ INFO 9
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 36 · ⚪ INFO 9
 
-## 🟡 LOW (35)
+## 🟡 LOW (36)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -40,6 +40,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.linear.card` | Third-party read | transition | all → none |
 | `tool.linear.card` | Third-party read | width | 550.891px → 551px |
 | `tool.linear.card` | Third-party read | tag | <div> → <details> (semantic/default-style change) |
+| `tool.linear.header` | Third-party read | textAlign | start → left |
 | `tool.linear.header` | Third-party read | transition | all → none |
 | `tool.linear.header` | Third-party read | width | 548.891px → 549px |
 | `tool.linear.header` | Third-party read | tag | <div> → <summary> (semantic/default-style change) |
@@ -53,10 +54,10 @@ Design baseline (source of truth) vs live app, by computed style.
 |---|---|---|---|
 | `shell.frame` | Cockpit shell | text | “” → “.run-destination [data-testid="tc-chat"] { box-sizing: borde…” |
 | `shell.header` | Cockpit shell | text | “” → “0xCopilot—StudioACTIVE RUNClaude Sonnet 4.5 .run-header-puls…” |
-| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
-| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
+| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
+| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
 | `chat.composer` | Chat | text | “” → “Tools1Model” |
 | `studio.canvas` | Studio | text | “” → “▦Connected recordENG-142The source returned a record without…” |
-| `tool.linear.card` | Third-party read | text | “” → “@keyframes tc-tool-card-spin { to { transform: rotate(360deg…” |
+| `tool.linear.card` | Third-party read | text | “” → “.tc-activity-card__head::-webkit-details-marker { display: n…” |
 | `tool.linear.header` | Third-party read | text | “” → “Llinear.issues.getMCP · Linearread820 msENG-142 · reconnect …” |
 | `canvas.issue-result` | Third-party read | text | “” → “▦Connected recordENG-142The source returned a record without…” |

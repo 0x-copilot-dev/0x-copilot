@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-write-held.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-write-held.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 39 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 40 · ⚪ INFO 10
 
-## 🟡 LOW (39)
+## 🟡 LOW (40)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -41,6 +41,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.write.card` | Held write | width | 550.891px → 551px |
 | `tool.write.card` | Held write | height | 10.8281px → 57.5px |
 | `tool.write.card` | Held write | tag | <div> → <details> (semantic/default-style change) |
+| `tool.write.header` | Held write | textAlign | start → left |
 | `tool.write.header` | Held write | transition | all → none |
 | `tool.write.header` | Held write | width | 548.891px → 549px |
 | `tool.write.header` | Held write | tag | <div> → <summary> (semantic/default-style change) |
@@ -57,11 +58,11 @@ Design baseline (source of truth) vs live app, by computed style.
 |---|---|---|---|
 | `shell.frame` | Cockpit shell | text | “” → “.run-destination [data-testid="tc-chat"] { box-sizing: borde…” |
 | `shell.header` | Cockpit shell | text | “” → “0xCopilot—StudioACTIVE RUNClaude Sonnet 4.5 .run-header-puls…” |
-| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
-| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
+| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
+| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
 | `chat.composer` | Chat | text | “” → “Tools1Model” |
 | `studio.canvas` | Studio | text | “” → “Workspace stageCreate workspace filerev 1 · YoucreateAwaitin…” |
-| `tool.write.card` | Held write | text | “” → “@keyframes tc-tool-card-spin { to { transform: rotate(360deg…” |
+| `tool.write.card` | Held write | text | “” → “.tc-activity-card__head::-webkit-details-marker { display: n…” |
 | `tool.write.header` | Held write | text | “” → “Ffs.writeMCP · Workspaceread820 msChange staged for approval…” |
 | `write.review-surface` | Held write | text | “” → “Workspace stageCreate workspace filerev 1 · YoucreateAwaitin…” |
 | `write.review-status` | Held write | text | “new file” → “Awaiting review” |

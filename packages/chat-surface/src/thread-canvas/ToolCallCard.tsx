@@ -1,5 +1,16 @@
-import type { CSSProperties, ReactElement } from "react";
+import { useState, type CSSProperties, type ReactElement } from "react";
 
+import {
+  ACTIVITY_CARD_INTERACTION_CSS,
+  activityCardChevronStyle,
+  activityCardDetailStyle,
+  activityCardFrameStyle,
+  activityCardHeaderStyle,
+  activityCardMetaStyle,
+  activityCardStaticHeaderStyle,
+  activityCardTileStyle,
+  activityCardTitleStyle,
+} from "../activity/ActivityCardChrome";
 import type { ToolCallEntry } from "./eventProjector";
 
 /**
@@ -21,12 +32,14 @@ export interface ToolCallCardProps {
  */
 export function ToolCallCard({ toolCall }: ToolCallCardProps): ReactElement {
   const hasDetails = hasToolDetails(toolCall);
+  const [detailsOpen, setDetailsOpen] = useState(false);
   const header = renderHeader(toolCall, hasDetails);
 
   if (!hasDetails) {
     return (
       <div
-        style={cardStyle}
+        className="tc-activity-card"
+        style={activityCardFrameStyle}
         role="group"
         aria-label={`Tool: ${toolCall.title}`}
         data-tool-status={toolCall.status}
@@ -38,15 +51,17 @@ export function ToolCallCard({ toolCall }: ToolCallCardProps): ReactElement {
 
   return (
     <details
-      style={cardStyle}
+      className="tc-activity-card"
+      style={activityCardFrameStyle}
       aria-label={`Tool: ${toolCall.title}`}
       data-tool-status={toolCall.status}
+      onToggle={(event) => setDetailsOpen(event.currentTarget.open)}
     >
-      <style>{TOOL_CALL_CARD_CSS}</style>
+      <style>{`${ACTIVITY_CARD_INTERACTION_CSS}\n${TOOL_CALL_CARD_CSS}`}</style>
       <summary
-        className="tc-tool-card__summary"
-        style={summaryControlStyle}
-        aria-label={`Show details for ${toolCall.title}`}
+        className="tc-tool-card__summary tc-activity-card__head"
+        style={activityCardHeaderStyle}
+        aria-label={`${detailsOpen ? "Hide" : "Show"} details for ${toolCall.title}`}
       >
         {header}
       </summary>
@@ -66,19 +81,21 @@ function renderHeader(
   const duration = formatDuration(toolCall.durationMs);
 
   return (
-    <div style={discloseable ? summaryHeaderStyle : headerStyle}>
-      <span style={tileStyle} aria-hidden="true">
+    <div
+      style={discloseable ? summaryHeaderStyle : activityCardStaticHeaderStyle}
+    >
+      <span style={activityCardTileStyle} aria-hidden="true">
         {toolTileGlyph(toolCall.toolName)}
       </span>
       <span style={headerCopyStyle}>
         <span style={identityLineStyle}>
-          <span style={toolNameStyle}>{toolCall.toolName}</span>
+          <span style={activityCardTitleStyle}>{toolCall.toolName}</span>
           {provenance !== null ? (
             <span style={provenanceStyle}>{provenance}</span>
           ) : null}
           {access !== null ? <span style={toolMetaStyle}>{access}</span> : null}
           {duration !== null ? (
-            <span style={toolDurationStyle}>{duration}</span>
+            <span style={activityCardMetaStyle}>{duration}</span>
           ) : null}
         </span>
         {toolCall.summary !== undefined ? (
@@ -96,8 +113,8 @@ function renderHeader(
       </span>
       {discloseable ? (
         <span
-          className="tc-tool-card__chevron"
-          style={chevronStyle}
+          className="tc-tool-card__chevron tc-activity-card__chevron"
+          style={activityCardChevronStyle}
           aria-hidden="true"
         >
           ▾
@@ -111,7 +128,7 @@ function ToolCallDetails({ toolCall }: ToolCallCardProps): ReactElement {
   const source = sourceLabel(toolCall);
   return (
     <div
-      style={detailBodyStyle}
+      style={activityCardDetailStyle}
       data-testid={`tc-chat-tool-${toolCall.id}-details`}
     >
       {toolCall.args !== undefined ? (
@@ -311,56 +328,10 @@ function formatPayload(value: Record<string, unknown>): {
   };
 }
 
-const cardStyle: CSSProperties = {
-  background: "var(--color-surface)",
-  border: "1px solid var(--color-border)",
-  borderRadius: 10,
-  color: "var(--color-text)",
-  fontSize: 13,
-  lineHeight: "19.5px",
-  margin: 0,
-  overflow: "hidden",
-};
-
-const summaryControlStyle: CSSProperties = {
-  alignItems: "center",
-  cursor: "pointer",
-  display: "flex",
-  gap: 9,
-  listStyle: "none",
-  minWidth: 0,
-  padding: "9px 11px",
-  userSelect: "none",
-};
-
 // `summary` owns the flex layout for discloseable cards. The header wrapper
 // then disappears from layout without changing the child structure used by
 // regular, non-discloseable tool cards.
 const summaryHeaderStyle: CSSProperties = { display: "contents" };
-
-const headerStyle: CSSProperties = {
-  alignItems: "center",
-  display: "flex",
-  gap: 9,
-  minWidth: 0,
-  padding: "9px 11px",
-};
-
-const tileStyle: CSSProperties = {
-  alignItems: "center",
-  background: "var(--color-surface-elevated)",
-  borderRadius: 6,
-  color: "var(--color-accent)",
-  display: "inline-flex",
-  flex: "0 0 auto",
-  fontFamily: "var(--font-sans)",
-  fontSize: 9,
-  fontWeight: 700,
-  height: 22,
-  justifyContent: "center",
-  lineHeight: 1,
-  width: 22,
-};
 
 const headerCopyStyle: CSSProperties = {
   display: "flex",
@@ -375,17 +346,6 @@ const identityLineStyle: CSSProperties = {
   flexWrap: "wrap",
   gap: "3px 7px",
   minWidth: 0,
-};
-
-const toolNameStyle: CSSProperties = {
-  color: "var(--color-text)",
-  fontFamily: "var(--font-mono)",
-  fontSize: 11,
-  fontWeight: 500,
-  lineHeight: "15px",
-  overflow: "hidden",
-  textOverflow: "ellipsis",
-  whiteSpace: "nowrap",
 };
 
 const toolMetaStyle: CSSProperties = {
@@ -425,12 +385,6 @@ const summaryTextStyle: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-const toolDurationStyle: CSSProperties = {
-  ...toolMetaStyle,
-  fontSize: 9,
-  lineHeight: "13.5px",
-};
-
 const statusMarkStyle = (status: ToolCallEntry["status"]): CSSProperties => ({
   alignItems: "center",
   color:
@@ -457,21 +411,6 @@ const spinnerStyle: CSSProperties = {
   boxSizing: "border-box",
   height: 14,
   width: 14,
-};
-
-const chevronStyle: CSSProperties = {
-  color: "var(--color-text-subtle)",
-  flex: "0 0 auto",
-  fontSize: 11,
-  lineHeight: 1,
-  width: 10,
-};
-
-const detailBodyStyle: CSSProperties = {
-  background: "var(--color-bg-elevated)",
-  borderTop: "1px solid var(--color-border)",
-  display: "block",
-  padding: "10px 12px",
 };
 
 const detailRowStyle: CSSProperties = {
@@ -545,19 +484,9 @@ const delegatedLinkStyle: CSSProperties = {
 const TOOL_CALL_CARD_CSS = `
 @keyframes tc-tool-card-spin { to { transform: rotate(360deg); } }
 .tc-tool-card__spinner { animation: tc-tool-card-spin 0.7s linear infinite; }
-.tc-tool-card__summary::-webkit-details-marker { display: none; }
-.tc-tool-card__summary::marker { content: ""; }
-.tc-tool-card__summary:hover { background: var(--color-surface-muted); }
-.tc-tool-card__summary:focus-visible {
-  outline: 2px solid var(--color-accent);
-  outline-offset: -2px;
-}
-.tc-tool-card__summary .tc-tool-card__chevron { transition: transform 120ms ease; }
-details[open] > .tc-tool-card__summary .tc-tool-card__chevron { transform: rotate(180deg); }
 [data-reduce-motion="1"] .tc-tool-card__spinner,
 [data-reduce-motion="always"] .tc-tool-card__spinner { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  .tc-tool-card__spinner,
-  .tc-tool-card__summary .tc-tool-card__chevron { animation: none; transition: none; }
+  .tc-tool-card__spinner { animation: none; }
 }
 `;

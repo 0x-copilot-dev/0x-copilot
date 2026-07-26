@@ -836,16 +836,19 @@
   text-decoration: underline;
 }
 
-/* Compact row within a parallel fleet. */
+/* Compact child activity within an expanded parallel fleet. These stay
+ * deliberately quieter than the parent card: two useful text lines, status,
+ * progress, and duration fit in a roughly 42px row instead of reading as a
+ * second full-size card. */
 .subagent-fleet-row {
   align-items: center;
   background: var(--color-surface-raised, var(--color-surface));
   border: 1px solid var(--color-border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: 8px;
   display: grid;
-  gap: 12px;
-  grid-template-columns: 16px minmax(0, 1fr) 96px auto 64px;
-  padding: 12px 14px;
+  gap: 9px;
+  grid-template-columns: 14px minmax(0, 1fr) 80px auto 42px;
+  padding: 6px 10px;
 }
 
 .subagent-fleet-row--clickable {
@@ -868,11 +871,11 @@
 .subagent-fleet-row__indicator {
   align-items: center;
   display: inline-flex;
-  font-size: var(--font-size-xs);
-  height: 16px;
+  font-size: 10px;
+  height: 14px;
   justify-content: center;
   line-height: 1;
-  width: 16px;
+  width: 14px;
 }
 
 .subagent-fleet-row__indicator[data-status="completed"] {
@@ -900,8 +903,9 @@
 
 .subagent-fleet-row__name {
   color: var(--color-text);
-  font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -909,8 +913,8 @@
 
 .subagent-fleet-row__task {
   color: var(--color-text-muted);
-  font-size: var(--font-size-xs);
-  line-height: 1.35;
+  font-size: 10px;
+  line-height: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -920,7 +924,7 @@
   background: var(--color-surface-raised);
   border-radius: 999px;
   display: block;
-  height: 4px;
+  height: 3px;
   overflow: hidden;
   width: 100%;
 }
@@ -980,7 +984,7 @@
 
 .subagent-fleet-row__elapsed {
   color: var(--color-text-subtle);
-  font-size: var(--font-size-2xs);
+  font-size: 9px;
   font-variant-numeric: tabular-nums;
   text-align: right;
 }
@@ -1102,6 +1106,6 @@
 @media (max-width: 600px) {
   .subagent-fleet-row {
     gap: 8px;
-    grid-template-columns: 16px minmax(0, 1fr) 56px 48px;
+    grid-template-columns: 14px minmax(0, 1fr) 56px 40px;
   }
 }

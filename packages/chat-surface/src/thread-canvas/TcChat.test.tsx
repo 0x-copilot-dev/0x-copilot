@@ -506,7 +506,7 @@ describe("TcChat — inline fleet card (PR-3.8 / FR-3.17a)", () => {
       "data-status",
       "error",
     );
-    expect(card).toHaveTextContent("1 failed · 2/2 done");
+    expect(card).toHaveTextContent("2/2 done · 1 failed");
   });
 
   it("shows canonical subagent tool activity when an inline fleet row is expanded", async () => {

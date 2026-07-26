@@ -21,6 +21,17 @@ import {
   type ReactNode,
 } from "react";
 
+import {
+  ACTIVITY_CARD_INTERACTION_CSS,
+  activityCardChevronStyle,
+  activityCardDetailStyle,
+  activityCardFrameStyle,
+  activityCardHeaderStyle,
+  activityCardMetaStyle,
+  activityCardTileStyle,
+  activityCardTitleStyle,
+} from "../activity/ActivityCardChrome";
+
 export interface SubagentFleetCardProps {
   fleetId: string;
   title: string;
@@ -69,14 +80,7 @@ export function SubagentFleetCard({
     wasRunning.current = !terminal;
   }, [terminal]);
 
-  const headStatus = [
-    running > 0 ? `${running} running` : null,
-    failed > 0 ? `${failed} failed` : null,
-    `${done}/${total} done`,
-    elapsed,
-  ]
-    .filter((part): part is string => part !== null)
-    .join(" · ");
+  const headStatus = fleetMeta({ done, elapsed, failed, running, total });
   const fleetStatus = running > 0 ? "running" : failed > 0 ? "error" : "done";
   const displayTitle =
     total > 0
@@ -86,14 +90,17 @@ export function SubagentFleetCard({
       : title;
   return (
     <section
-      className="aui-fleet-card"
+      className="aui-fleet-card tc-activity-card"
+      style={activityCardFrameStyle}
       data-fleet-id={fleetId}
       data-status={fleetStatus}
       data-expanded={expanded ? "true" : "false"}
     >
+      <style>{ACTIVITY_CARD_INTERACTION_CSS}</style>
       <button
         type="button"
-        className="aui-fleet-card__head"
+        className="tc-activity-card__head"
+        style={activityCardHeaderStyle}
         aria-expanded={expanded}
         aria-controls={detailId}
         aria-label={`${displayTitle}, ${headStatus}. ${
@@ -102,19 +109,58 @@ export function SubagentFleetCard({
         onClick={() => setExpanded((value) => !value)}
         data-testid={`subagent-fleet-toggle-${fleetId}`}
       >
-        <span className="aui-fleet-card__icon" aria-hidden="true">
+        <span style={activityCardTileStyle} aria-hidden="true">
           <FleetBotIcon />
         </span>
-        <span className="aui-fleet-card__title">{displayTitle}</span>
-        <span className="aui-fleet-card__count">{headStatus}</span>
-        <span className="aui-fleet-card__disclosure" aria-hidden="true">
+        <span
+          style={{ ...activityCardTitleStyle, flex: "1 1 auto", minWidth: 0 }}
+        >
+          {displayTitle}
+        </span>
+        <span
+          style={{
+            ...activityCardMetaStyle,
+            flex: "0 1 auto",
+            maxWidth: "42%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {headStatus}
+        </span>
+        <span
+          className="tc-activity-card__chevron"
+          style={activityCardChevronStyle}
+          aria-hidden="true"
+        >
           ▾
         </span>
       </button>
-      <div id={detailId} className="aui-fleet-card__details" hidden={!expanded}>
-        {sub ? <p className="aui-fleet-card__sub">{sub}</p> : null}
+      <div
+        id={detailId}
+        className="aui-fleet-card__details"
+        style={{
+          ...activityCardDetailStyle,
+          display: expanded ? "grid" : "none",
+          gap: 8,
+          maxBlockSize: "min(20rem, 45vh)",
+          overflowY: "auto",
+        }}
+        hidden={!expanded}
+      >
+        {sub ? (
+          <p
+            style={{
+              ...activityCardMetaStyle,
+              margin: 0,
+              whiteSpace: "normal",
+            }}
+          >
+            {sub}
+          </p>
+        ) : null}
         {children ? (
-          <div className="aui-fleet-card__rows">{children}</div>
+          <div style={{ display: "grid", gap: 8 }}>{children}</div>
         ) : null}
         {onOpenWorkspace ? (
           <button
@@ -130,18 +176,46 @@ export function SubagentFleetCard({
   );
 }
 
+function fleetMeta({
+  done,
+  elapsed,
+  failed,
+  running,
+  total,
+}: {
+  readonly done: number;
+  readonly elapsed: string | null | undefined;
+  readonly failed: number;
+  readonly running: number;
+  readonly total: number;
+}): string {
+  if (running > 0) {
+    if (done > 0 || failed > 0) {
+      const completed = [`${done}/${total} done`];
+      if (failed > 0) completed.push(`${failed} failed`);
+      return completed.join(" · ");
+    }
+    return `${running} running`;
+  }
+
+  const terminal = [`${done}/${total} done`];
+  if (failed > 0) terminal.push(`${failed} failed`);
+  if (failed === 0 && elapsed) terminal.push(elapsed);
+  return terminal.join(" · ");
+}
+
 /** Small bot/agent glyph for the fleet card's primary icon. Inline SVG
  *  rather than an emoji so it inherits ``currentColor`` and tracks the
  *  ``--color-accent-strong`` set by ``.aui-fleet-card__icon``. */
 function FleetBotIcon(): ReactElement {
   return (
     <svg
-      width="14"
-      height="14"
+      width="10"
+      height="10"
       viewBox="0 0 16 16"
       fill="none"
       stroke="currentColor"
-      strokeWidth="1.4"
+      strokeWidth="1.6"
       strokeLinecap="round"
       strokeLinejoin="round"
       aria-hidden="true"

@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-web-chat-only.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-web-chat-only.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 40 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 41 · ⚪ INFO 10
 
-## 🟡 LOW (40)
+## 🟡 LOW (41)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -41,6 +41,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.web.card` | Web read | width | 550.891px → 551px |
 | `tool.web.card` | Web read | height | 53.5625px → 57.5px |
 | `tool.web.card` | Web read | tag | <div> → <details> (semantic/default-style change) |
+| `tool.web.header` | Web read | textAlign | start → left |
 | `tool.web.header` | Web read | transition | all → none |
 | `tool.web.header` | Web read | width | 548.891px → 549px |
 | `tool.web.header` | Web read | tag | <div> → <summary> (semantic/default-style change) |
@@ -58,11 +59,11 @@ Design baseline (source of truth) vs live app, by computed style.
 |---|---|---|---|
 | `shell.frame` | Cockpit shell | text | “” → “.run-destination [data-testid="tc-chat"] { box-sizing: borde…” |
 | `shell.header` | Cockpit shell | text | “” → “0xCopilot—StudioACTIVE RUNClaude Sonnet 4.5 .run-header-puls…” |
-| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
-| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
+| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
+| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
 | `chat.composer` | Chat | text | “” → “Tools1Model” |
 | `studio.canvas` | Studio | text | “” → “RUN IN PROGRESSPreparing this runActivity will appear here i…” |
-| `tool.web.card` | Web read | text | “” → “@keyframes tc-tool-card-spin { to { transform: rotate(360deg…” |
+| `tool.web.card` | Web read | text | “” → “.tc-activity-card__head::-webkit-details-marker { display: n…” |
 | `tool.web.header` | Web read | text | “” → “Wweb.searchMCP · Webread820 ms3 sources synthesized in chat✓…” |
 | `web.sources-card` | Web read | text | “SOURCES ·” → “SOURCES · 3” |
 | `web.chat-only-canvas` | Web read | text | “” → “RUN IN PROGRESSPreparing this runActivity will appear here i…” |

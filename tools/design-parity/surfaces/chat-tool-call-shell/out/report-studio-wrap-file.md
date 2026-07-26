@@ -5,9 +5,9 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-wrap-file.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-wrap-file.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 39 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 40 · ⚪ INFO 10
 
-## 🟡 LOW (39)
+## 🟡 LOW (40)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -41,6 +41,7 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.wrap-write.card` | Wrap file | width | 550.891px → 551px |
 | `tool.wrap-write.card` | Wrap file | height | 5.85938px → 57.5px |
 | `tool.wrap-write.card` | Wrap file | tag | <div> → <details> (semantic/default-style change) |
+| `tool.wrap-write.header` | Wrap file | textAlign | start → left |
 | `tool.wrap-write.header` | Wrap file | transition | all → none |
 | `tool.wrap-write.header` | Wrap file | width | 548.891px → 549px |
 | `tool.wrap-write.header` | Wrap file | tag | <div> → <summary> (semantic/default-style change) |
@@ -57,11 +58,11 @@ Design baseline (source of truth) vs live app, by computed style.
 |---|---|---|---|
 | `shell.frame` | Cockpit shell | text | “” → “.run-destination [data-testid="tc-chat"] { box-sizing: borde…” |
 | `shell.header` | Cockpit shell | text | “” → “0xCopilot—StudioACTIVE RUNClaude Sonnet 4.5Writes wait for y…” |
-| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
-| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. @ke…” |
+| `chat.column` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
+| `chat.transcript` | Chat | text | “” → “Catch me up on ENG-142, then prepare the requested file. .tc…” |
 | `chat.composer` | Chat | text | “” → “Tools1Model” |
 | `studio.canvas` | Studio | text | “” → “Workspace stageCreate workspace filerev 1 · YoucreateApplied…” |
-| `tool.wrap-write.card` | Wrap file | text | “” → “@keyframes tc-tool-card-spin { to { transform: rotate(360deg…” |
+| `tool.wrap-write.card` | Wrap file | text | “” → “.tc-activity-card__head::-webkit-details-marker { display: n…” |
 | `tool.wrap-write.header` | Wrap file | text | “” → “Ffs.writeMCP · Workspaceread820 msWorkspace file created✓▾” |
 | `wrap.file-surface` | Wrap file | text | “” → “Workspace stageCreate workspace filerev 1 · YoucreateApplied…” |
 | `wrap.file-status` | Wrap file | text | “new file” → “Applied” |
