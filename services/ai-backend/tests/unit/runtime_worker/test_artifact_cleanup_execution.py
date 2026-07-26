@@ -10,6 +10,12 @@ import logging
 import pytest
 
 from runtime_adapters.artifact_lifecycle import ArtifactPhysicalCleanupOutcome
+from runtime_adapters.in_memory.artifact_cleanup_schedule_store import (
+    InMemoryArtifactCleanupScheduleStore,
+)
+from runtime_adapters.file.artifact_cleanup_schedule_store import (
+    FileArtifactCleanupScheduleStore,
+)
 from runtime_worker.jobs.artifact_cleanup_execution import (
     ArtifactCleanupExecutionEnv,
     ArtifactCleanupExecutionRunner,
@@ -85,6 +91,7 @@ async def test_runner_is_tenant_bounded_idempotent_and_audits_counts_only() -> N
     metrics = _Metrics()
     runner = ArtifactCleanupExecutionRunner(
         persistence=persistence,
+        schedule=InMemoryArtifactCleanupScheduleStore(),
         max_orgs=2,
         limit_per_org=7,
         metrics=metrics,  # type: ignore[arg-type]
@@ -138,6 +145,7 @@ async def test_runner_retries_after_failure_without_logging_body_or_advancing_st
     metrics = _Metrics()
     runner = ArtifactCleanupExecutionRunner(
         persistence=persistence,
+        schedule=InMemoryArtifactCleanupScheduleStore(),
         max_orgs=2,
         limit_per_org=7,
         metrics=metrics,  # type: ignore[arg-type]
@@ -168,3 +176,169 @@ def test_execution_flag_is_explicitly_opt_in(monkeypatch) -> None:
     assert ArtifactCleanupExecutionEnv.enabled() is True
     monkeypatch.setenv(ArtifactCleanupExecutionEnv.ENABLED, "false")
     assert ArtifactCleanupExecutionEnv.enabled() is False
+
+
+async def test_runner_rotates_past_continuously_busy_early_tenants() -> None:
+    persistence = _Persistence(
+        org_ids=("org_a", "org_b", "org_c", "org_d"),
+        plans={
+            org_id: [_outcome(org_id), _outcome(org_id)]
+            for org_id in ("org_a", "org_b", "org_c", "org_d")
+        },
+    )
+    schedule = InMemoryArtifactCleanupScheduleStore()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=2,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    await runner.run_once(now=NOW)
+    await runner.run_once(now=NOW)
+
+    assert persistence.calls == ["org_a", "org_b", "org_c", "org_d"]
+    assert await schedule.load_cursor() == "org_d"
+
+
+async def test_failed_tenant_is_retried_before_later_tenants_and_cursor_does_not_skip(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    persistence = _Persistence(
+        org_ids=("org_a", "org_b", "org_c"),
+        plans={
+            "org_a": [_outcome("org_a"), _outcome("org_a")],
+            "org_b": [RuntimeError(_SECRET_BODY), _outcome("org_b")],
+            "org_c": [_outcome("org_c")],
+        },
+    )
+    schedule = InMemoryArtifactCleanupScheduleStore()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=3,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    with caplog.at_level(logging.WARNING):
+        failed = await runner.run_once(now=NOW)
+        recovered = await runner.run_once(now=NOW)
+
+    assert failed.failures == 1
+    assert recovered.failures == 0
+    assert persistence.calls == ["org_a", "org_b", "org_b", "org_c", "org_a"]
+    assert await schedule.load_cursor() == "org_a"
+    assert _SECRET_BODY not in caplog.text
+
+
+async def test_concurrent_runner_cannot_take_or_advance_another_lease() -> None:
+    persistence = _Persistence(
+        org_ids=("org_a",),
+        plans={"org_a": [_outcome("org_a")]},
+    )
+    schedule = InMemoryArtifactCleanupScheduleStore()
+    first = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    second = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    acquired = await schedule.acquire_lease(
+        owner_id=first._owner_id,  # noqa: SLF001 - lease adversarial probe
+        now=NOW,
+        expires_at=NOW.replace(hour=13),
+    )
+    assert acquired
+    skipped = await second.run_once(now=NOW)
+    assert skipped.tenants_scanned == 0
+    assert persistence.calls == []
+    assert await schedule.load_cursor() is None
+    await schedule.release_lease(owner_id=first._owner_id)  # noqa: SLF001
+
+
+async def test_restart_uses_durable_cursor_contract_after_prior_success() -> None:
+    persistence = _Persistence(
+        org_ids=("org_a", "org_b", "org_c"),
+        plans={
+            "org_a": [_outcome("org_a")],
+            "org_b": [_outcome("org_b")],
+            "org_c": [_outcome("org_c")],
+        },
+    )
+    schedule = InMemoryArtifactCleanupScheduleStore()
+    first = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    restarted = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    await first.run_once(now=NOW)
+    await restarted.run_once(now=NOW)
+
+    assert persistence.calls == ["org_a", "org_b"]
+    assert await schedule.load_cursor() == "org_b"
+
+
+async def test_file_schedule_resume_rotates_after_process_restart(tmp_path) -> None:
+    persistence = _Persistence(
+        org_ids=("org_a", "org_b", "org_c"),
+        plans={
+            "org_a": [_outcome("org_a")],
+            "org_b": [_outcome("org_b")],
+            "org_c": [_outcome("org_c")],
+        },
+    )
+    first = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=FileArtifactCleanupScheduleStore(root=tmp_path),
+        max_orgs=1,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    await first.run_once(now=NOW)
+
+    # A fresh state adapter and runner model a worker restart. It must resume
+    # after org_a rather than restarting at the first lexicographic tenant.
+    restarted = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=FileArtifactCleanupScheduleStore(root=tmp_path),
+        max_orgs=1,
+        limit_per_org=7,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    await restarted.run_once(now=NOW)
+
+    assert persistence.calls == ["org_a", "org_b"]
+
+
+def test_fair_page_does_not_include_a_stale_foreign_cursor() -> None:
+    from runtime_worker.jobs.artifact_cleanup_execution import _fair_org_page
+
+    # The cursor is worker-only metadata. A stale org from a different source
+    # inventory is never returned as a cleanup target or used to skip a local
+    # tenant; the current trusted inventory begins at its first tenant.
+    assert _fair_org_page(
+        org_ids=("org_a", "org_b"),
+        cursor_after_org_id="org_retired_elsewhere",
+        limit=2,
+    ) == ("org_a", "org_b")

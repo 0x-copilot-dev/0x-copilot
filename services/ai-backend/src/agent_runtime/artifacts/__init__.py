@@ -37,6 +37,10 @@ from agent_runtime.artifacts.errors import (
     ArtifactStorageError,
     ArtifactTooLargeError,
 )
+from agent_runtime.artifacts.cleanup_schedule import (
+    ArtifactCleanupScheduleStateError,
+    ArtifactCleanupScheduleStore,
+)
 from agent_runtime.artifacts.ports import (
     ArtifactBlobStorePort,
     ArtifactGarbageCollectorPort,
@@ -58,6 +62,8 @@ __all__ = (
     "ArtifactAppendCommand",
     "ArtifactBlobStat",
     "ArtifactBlobStorePort",
+    "ArtifactCleanupScheduleStateError",
+    "ArtifactCleanupScheduleStore",
     "ArtifactBlobUnavailableError",
     "ArtifactBlobWriteResult",
     "ArtifactConflictError",

@@ -12,10 +12,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import logging
 import os
 from typing import Protocol, runtime_checkable
+from uuid import uuid4
+
+from agent_runtime.artifacts.cleanup_schedule import ArtifactCleanupScheduleStore
 
 from agent_runtime.observability.lifecycle_metrics import (
     LifecycleOperationalMetrics,
@@ -34,10 +37,12 @@ class ArtifactCleanupExecutionEnv:
     INTERVAL_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_INTERVAL_SECONDS"
     MAX_ORGS = "ARTIFACT_CLEANUP_EXECUTION_MAX_ORGS"
     LIMIT_PER_ORG = "ARTIFACT_CLEANUP_EXECUTION_LIMIT_PER_ORG"
+    LEASE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_LEASE_SECONDS"
 
     DEFAULT_INTERVAL_SECONDS = 900.0
     DEFAULT_MAX_ORGS = 100
     DEFAULT_LIMIT_PER_ORG = 100
+    DEFAULT_LEASE_SECONDS = 1_800.0
 
     @classmethod
     def enabled(cls) -> bool:
@@ -126,15 +131,24 @@ class ArtifactCleanupExecutionRunner:
         self,
         *,
         persistence: ArtifactCleanupExecutionPort,
+        schedule: ArtifactCleanupScheduleStore,
         max_orgs: int = ArtifactCleanupExecutionEnv.DEFAULT_MAX_ORGS,
         limit_per_org: int = ArtifactCleanupExecutionEnv.DEFAULT_LIMIT_PER_ORG,
+        lease_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_LEASE_SECONDS,
         metrics: LifecycleOperationalMetrics | None = None,
     ) -> None:
-        if not 1 <= max_orgs <= 500 or not 1 <= limit_per_org <= 500:
+        if (
+            not 1 <= max_orgs <= 500
+            or not 1 <= limit_per_org <= 500
+            or lease_seconds <= 0
+        ):
             raise ValueError("artifact cleanup execution bounds are invalid")
         self._persistence = persistence
+        self._schedule = schedule
         self._max_orgs = max_orgs
         self._limit_per_org = limit_per_org
+        self._lease_seconds = lease_seconds
+        self._owner_id = f"artifact-cleanup-{uuid4().hex}"
         self._metrics = (
             metrics if metrics is not None else get_lifecycle_operational_metrics()
         )
@@ -146,14 +160,43 @@ class ArtifactCleanupExecutionRunner:
 
         reference_now = _utc(now or datetime.now(UTC))
         try:
+            acquired = await self._schedule.acquire_lease(
+                owner_id=self._owner_id,
+                now=reference_now,
+                expires_at=reference_now + timedelta(seconds=self._lease_seconds),
+            )
+        except Exception:
+            self._record_metric(outcome="failed")
+            _LOGGER.warning("artifact_cleanup_execution_schedule_unavailable")
+            return ArtifactCleanupExecutionResult(failures=1)
+        if not acquired:
+            return ArtifactCleanupExecutionResult()
+
+        try:
+            return await self._run_leased(reference_now=reference_now)
+        finally:
+            try:
+                await self._schedule.release_lease(owner_id=self._owner_id)
+            except Exception:
+                _LOGGER.warning("artifact_cleanup_execution_schedule_release_failed")
+
+    async def _run_leased(
+        self, *, reference_now: datetime
+    ) -> ArtifactCleanupExecutionResult:
+        try:
             org_ids = tuple(sorted(set(await self._persistence.list_retention_orgs())))
+            cursor = await self._schedule.load_cursor()
         except Exception:
             self._record_metric(outcome="failed")
             _LOGGER.warning("artifact_cleanup_execution_source_unavailable")
             return ArtifactCleanupExecutionResult(failures=1)
 
         result = ArtifactCleanupExecutionResult()
-        for org_id in org_ids[: self._max_orgs]:
+        for org_id in _fair_org_page(
+            org_ids=org_ids,
+            cursor_after_org_id=cursor,
+            limit=self._max_orgs,
+        ):
             try:
                 outcome = await self._persistence.execute_artifact_cleanup(
                     org_id=org_id,
@@ -177,7 +220,10 @@ class ArtifactCleanupExecutionRunner:
                     failures=result.failures + 1,
                     audit_failures=result.audit_failures + int(audit_failed),
                 )
-                continue
+                # Do not advance past a tenant whose trusted cleanup did not
+                # complete.  It remains next after the durable cursor and is
+                # retried before later tenants in the next cycle.
+                break
 
             self._record_outcome_metrics(outcome)
             audit_failed = not await self._write_audit(outcome=outcome)
@@ -195,6 +241,23 @@ class ArtifactCleanupExecutionRunner:
                 + int(_is_already_clean(outcome)),
                 audit_failures=result.audit_failures + int(audit_failed),
             )
+            try:
+                advanced = await self._schedule.advance_cursor(
+                    owner_id=self._owner_id,
+                    expected=cursor,
+                    next_cursor=org_id,
+                )
+            except Exception:
+                self._record_metric(outcome="failed")
+                _LOGGER.warning("artifact_cleanup_execution_cursor_unavailable")
+                return _replace(result, failures=result.failures + 1)
+            if not advanced:
+                # A lost lease or concurrent successor means the physical
+                # lifecycle may be retried, which is safe; do not speculate
+                # about later cursor positions in this cycle.
+                _LOGGER.warning("artifact_cleanup_execution_cursor_not_advanced")
+                return _replace(result, failures=result.failures + 1)
+            cursor = org_id
         return result
 
     async def _write_audit(
@@ -341,6 +404,36 @@ def _is_already_clean(outcome: ArtifactPhysicalCleanupOutcome) -> bool:
         + outcome.withheld_blobs
         == 0
     )
+
+
+def _fair_org_page(
+    *,
+    org_ids: Sequence[str],
+    cursor_after_org_id: str | None,
+    limit: int,
+) -> tuple[str, ...]:
+    """Return one bounded circular page after the durable completed cursor.
+
+    The source inventory is intentionally re-read every cycle.  A tenant that
+    disappears after completion simply falls out of the next page; a tenant
+    added before the cursor is reached on the wrapped portion.  Duplicate or
+    malformed source values never yield duplicate work.
+    """
+
+    if limit < 1:
+        raise ValueError("artifact cleanup page limit is invalid")
+    ordered = tuple(sorted({org_id for org_id in org_ids if _valid_org_id(org_id)}))
+    if not ordered:
+        return ()
+    if cursor_after_org_id is None or cursor_after_org_id not in ordered:
+        return ordered[:limit]
+    start = ordered.index(cursor_after_org_id) + 1
+    circular = ordered[start:] + ordered[:start]
+    return circular[:limit]
+
+
+def _valid_org_id(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and len(value) <= 256
 
 
 def _utc(value: datetime) -> datetime:

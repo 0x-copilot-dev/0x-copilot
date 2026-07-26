@@ -20,6 +20,9 @@ from runtime_adapters.repair_planning import (
     build_repair_legal_hold_lookup,
     build_repair_planning_snapshot_store,
 )
+from runtime_adapters.artifact_cleanup_schedule import (
+    build_artifact_cleanup_schedule_store,
+)
 from agent_runtime.api.artifact_repository import ArtifactServiceComposition
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.loop import RuntimeWorker
@@ -212,11 +215,20 @@ class RuntimeWorkerEntrypoint:
                     default=ArtifactCleanupExecutionEnv.DEFAULT_LIMIT_PER_ORG,
                     maximum=500,
                 )
+                lease_seconds = ArtifactCleanupExecutionEnv.env_float(
+                    ArtifactCleanupExecutionEnv.LEASE_SECONDS,
+                    default=ArtifactCleanupExecutionEnv.DEFAULT_LEASE_SECONDS,
+                )
                 artifact_cleanup_execution_loop = ArtifactCleanupExecutionLoop(
                     runner=ArtifactCleanupExecutionRunner(
                         persistence=async_ports.persistence,  # type: ignore[arg-type]
+                        schedule=build_artifact_cleanup_schedule_store(
+                            settings=settings,
+                            persistence=async_ports.persistence,
+                        ),
                         max_orgs=max_orgs,
                         limit_per_org=limit_per_org,
+                        lease_seconds=lease_seconds,
                     )
                 )
                 await artifact_cleanup_execution_loop.start()
@@ -226,6 +238,7 @@ class RuntimeWorkerEntrypoint:
                         "interval_seconds": artifact_cleanup_execution_loop._interval,
                         "max_orgs": max_orgs,
                         "limit_per_org": limit_per_org,
+                        "lease_seconds": lease_seconds,
                     },
                 )
             # D12 planning is opt-in.  Execution is a second explicit switch:
