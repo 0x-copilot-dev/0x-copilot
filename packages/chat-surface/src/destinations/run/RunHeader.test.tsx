@@ -101,6 +101,21 @@ describe("RunHeader", () => {
     expect(screen.getByTestId("probe").textContent).toBe("working");
   });
 
+  it("keeps identity visible in the responsive header layer while the mode control owns the flex edge", () => {
+    const { container } = render(
+      <RunHeader
+        goal="A deliberately long run goal that must not move the mode control"
+        mode="studio"
+        onModeChange={() => {}}
+      />,
+    );
+
+    expect(container.querySelector(".run-header-chrome-gutter")).not.toBeNull();
+    expect(container.querySelector(".run-header-identity")).not.toBeNull();
+    expect(screen.getByTestId("run-header-avatar")).not.toBeNull();
+    expect(screen.getByTestId("run-mode-switcher")).not.toBeNull();
+  });
+
   // WC-P6b — the `● working` pulse chip is driven by `runStatus`.
   it("renders the pulsing status dot for an active run, with a per-state label", () => {
     const { rerender } = render(

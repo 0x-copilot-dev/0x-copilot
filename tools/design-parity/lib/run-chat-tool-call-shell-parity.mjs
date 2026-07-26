@@ -217,7 +217,13 @@ function writeAggregate(resultRows) {
           (gap) => `- \`${gap.state}\` · \`${gap.label}\`: ${gap.detail}`,
         )),
     "",
-    "These appear as missing-in-live HIGH rows in their state report. They are listed here so the harness cannot accidentally turn the absence into an expected divergence.",
+    ...(baselineGapsByState.length === 0
+      ? [
+          "Every strict design anchor has a live counterpart; no absence is waived.",
+        ]
+      : [
+          "These appear as missing-in-live HIGH rows in their state report. They are listed here so the harness cannot accidentally turn the absence into an expected divergence.",
+        ]),
     "",
     "## Reproduce",
     "",

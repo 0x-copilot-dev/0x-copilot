@@ -128,25 +128,37 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
 
   return (
     <header data-testid="run-header" style={headerStyle}>
-      <div
+      <style>{RUN_HEADER_LAYOUT_CSS}</style>
+      {/* The compact gutter keeps the mode selector on the same responsive
+          right edge as the desktop window chrome. Identity remains rendered
+          (and accessible) in its own constrained layer instead of consuming
+          the selector's flex space. */}
+      <span
         aria-hidden="true"
-        data-testid="run-header-avatar"
-        style={avatarStyle}
-      >
-        {avatarGlyph}
-      </div>
-      <div style={headingBlockStyle}>
-        <span data-testid="run-header-kicker" style={kickerStyle}>
-          {resolvedKicker}
-        </span>
-        <div style={goalRowStyle}>
-          <h2 data-testid="run-header-goal" style={goalStyle}>
-            {goalText}
-          </h2>
-          <RunStatusPulse runStatus={runStatus} />
-          {status !== undefined && status !== null ? (
-            <span data-testid="run-header-status">{status}</span>
-          ) : null}
+        className="run-header-chrome-gutter"
+        style={chromeGutterStyle}
+      />
+      <div className="run-header-identity" style={identityLayerStyle}>
+        <div
+          aria-hidden="true"
+          data-testid="run-header-avatar"
+          style={avatarStyle}
+        >
+          {avatarGlyph}
+        </div>
+        <div style={headingBlockStyle}>
+          <span data-testid="run-header-kicker" style={kickerStyle}>
+            {resolvedKicker}
+          </span>
+          <div style={goalRowStyle}>
+            <h2 data-testid="run-header-goal" style={goalStyle}>
+              {goalText}
+            </h2>
+            <RunStatusPulse runStatus={runStatus} />
+            {status !== undefined && status !== null ? (
+              <span data-testid="run-header-status">{status}</span>
+            ) : null}
+          </div>
         </div>
       </div>
       <ModeSegmentedControl
@@ -294,6 +306,7 @@ const pulseDotStyle: CSSProperties = {
 
 const headerStyle: CSSProperties = {
   boxSizing: "border-box",
+  position: "relative",
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
@@ -305,6 +318,31 @@ const headerStyle: CSSProperties = {
   color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
 };
+
+const chromeGutterStyle: CSSProperties = {
+  // The design window bar reserves this small leading chrome region. It is a
+  // responsive layout gutter, not a margin on the interactive mode control.
+  flex: "0 0 47px",
+};
+
+const identityLayerStyle: CSSProperties = {
+  position: "absolute",
+  zIndex: 0,
+  left: 13,
+  right: 173,
+  top: 0,
+  bottom: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  minWidth: 0,
+  overflow: "hidden",
+};
+
+const RUN_HEADER_LAYOUT_CSS = `
+  .run-header-chrome-gutter { flex-basis: clamp(40px, 3.9166666667vw, 47px) !important; }
+  .run-header-identity { right: clamp(120px, 14.4166666667vw, 173px) !important; }
+`;
 
 const avatarStyle: CSSProperties = {
   flexShrink: 0,
@@ -325,7 +363,7 @@ const headingBlockStyle: CSSProperties = {
   // header space through its auto margin. This mirrors the cockpit's calm,
   // right-pinned mode control while still allowing long goals to shrink.
   flex: "0 1 auto",
-  maxWidth: "calc(100% - 160px)",
+  maxWidth: "100%",
   minWidth: 0,
   display: "flex",
   flexDirection: "column",

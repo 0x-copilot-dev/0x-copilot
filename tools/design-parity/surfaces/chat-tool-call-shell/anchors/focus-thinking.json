@@ -72,8 +72,8 @@
       "label": "thinking.plan",
       "group": "Focus thinking",
       "design": "[data-parity-anchor=\"focus-plan\"]",
-      "what": "The reference exposes a dedicated plan in Focus; shipping focus details currently do not.",
-      "baselineGap": "No live Focus plan component is mounted by RunDestination."
+      "live": "#parity-frame [data-testid=\"focus-plan\"]",
+      "what": "The shipping FocusPlan rendered inside the Focus activity panel."
     }
   ]
 }
