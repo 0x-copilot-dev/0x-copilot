@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.persistence.encryption import FieldCodec
@@ -163,6 +163,41 @@ class PostgresDraftStore:
                 rows = await cur.fetchall()
         return tuple(self._row_to_record(row) for row in rows)
 
+    async def list_versions_for_migration(
+        self,
+        *,
+        org_id: str,
+        after: tuple[str, int] | None,
+        limit: int,
+    ) -> Sequence[DraftRecord]:
+        """Return a bounded, tenant-scoped keyset page of draft histories."""
+
+        if limit <= 0:
+            return ()
+        where = ""
+        params: list[object] = [org_id]
+        if after is not None:
+            where = "AND (draft_id > %s OR (draft_id = %s AND version > %s))"
+            params.extend((after[0], after[0], after[1]))
+        params.append(limit)
+        async with self._parent._tenant_connection(org_id=org_id) as conn:  # type: ignore[attr-defined]
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    f"""
+                    SELECT id, draft_id, version, org_id, conversation_id,
+                           run_id, user_id, title, content_text,
+                           target_connector, target_metadata, citation_ids,
+                           status, encryption_version, created_at
+                      FROM {_TABLE}
+                     WHERE org_id = %s {where}
+                     ORDER BY draft_id ASC, version ASC
+                     LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = await cur.fetchall()
+        return tuple(self._row_to_record(row) for row in rows)
+
     async def expect_status(
         self,
         *,
@@ -185,26 +220,51 @@ class PostgresDraftStore:
             )
         return latest
 
-    def _row_to_record(self, row: tuple[object, ...]) -> DraftRecord:
-        """Decrypt and unpack a raw Postgres tuple into a :class:`DraftRecord`."""
+    def _row_to_record(
+        self, row: Mapping[str, object] | tuple[object, ...]
+    ) -> DraftRecord:
+        """Decrypt and unpack a runtime-store row into a :class:`DraftRecord`.
+
+        The shared ``PostgresRuntimeApiStore`` configures dict rows, while
+        isolated adapter callers may use tuple rows.  Migration inventory uses
+        the shared store, so accepting both is required for a real Postgres
+        replay rather than merely a unit-test double.
+        """
         codec = self._codec
-        (
-            row_id,
-            draft_id,
-            version,
-            org_id,
-            conversation_id,
-            run_id,
-            user_id,
-            title_blob,
-            content_blob,
-            target_connector,
-            target_metadata_blob,
-            citation_ids,
-            status,
-            encryption_version,
-            created_at,
-        ) = row
+        if isinstance(row, Mapping):
+            row_id = row["id"]
+            draft_id = row["draft_id"]
+            version = row["version"]
+            org_id = row["org_id"]
+            conversation_id = row["conversation_id"]
+            run_id = row["run_id"]
+            user_id = row["user_id"]
+            title_blob = row["title"]
+            content_blob = row["content_text"]
+            target_connector = row["target_connector"]
+            target_metadata_blob = row["target_metadata"]
+            citation_ids = row["citation_ids"]
+            status = row["status"]
+            encryption_version = row["encryption_version"]
+            created_at = row["created_at"]
+        else:
+            (
+                row_id,
+                draft_id,
+                version,
+                org_id,
+                conversation_id,
+                run_id,
+                user_id,
+                title_blob,
+                content_blob,
+                target_connector,
+                target_metadata_blob,
+                citation_ids,
+                status,
+                encryption_version,
+                created_at,
+            ) = row
 
         org_id_str = str(org_id)
         title = codec.decrypt_text(

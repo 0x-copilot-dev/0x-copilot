@@ -24,6 +24,7 @@ import pytest
 # Tables truncated between tests. Listed CASCADE-safely; psycopg runs the
 # TRUNCATE in one statement so order doesn't matter.
 _RUNTIME_TABLES = (
+    "runtime_e2_legacy_migrations",
     "runtime_workspace_overlay_manifests",
     "runtime_artifact_reference_edges",
     "runtime_artifact_gc_quarantine",

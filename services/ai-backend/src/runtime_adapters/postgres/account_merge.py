@@ -205,6 +205,7 @@ class PostgresAccountMergeRekeyer:
                 await self._rekey_memory(conn)
                 await self._rekey_share_recipients(conn)
                 await self._rekey_checkpoints(conn)
+                await self._invalidate_e2_legacy_migrations(conn)
                 for table, key_columns, sum_columns in self._ROLLUP_TABLES:
                     await self._rekey_rollup(conn, table, key_columns, sum_columns)
                 await self._rekey_usage_budgets(conn)
@@ -1294,6 +1295,37 @@ class PostgresAccountMergeRekeyer:
             (self._survivor_org, self._absorbed_org),
         )
         self._count("runtime_checkpoints", moved)
+
+    async def _invalidate_e2_legacy_migrations(
+        self, conn: psycopg.AsyncConnection
+    ) -> None:
+        """Invalidate source-bound E2 evidence across an account merge.
+
+        E2 digests bind tenant ownership and deterministic draft bindings do
+        too.  Re-keying an existing checkpoint would leave it attesting a
+        pre-merge source, while preserving a survivor checkpoint would make a
+        unioned source look like unexplained drift.  Deleting both tenants'
+        resumability rows in this same transaction is an explicit, safe
+        invalidation: an operator must rerun inventory against the merged
+        source.  Imported artifacts remain canonical and are rediscovered by
+        trusted ``draft://`` provenance, so the rerun cannot duplicate them.
+        """
+
+        invalidated = await self._execute(
+            conn,
+            """
+            DELETE FROM runtime_e2_legacy_migrations
+             WHERE org_id IN (%s, %s)
+            """,
+            (self._absorbed_org, self._survivor_org),
+        )
+        if invalidated:
+            self._warn(
+                "runtime_e2_legacy_migrations: invalidated "
+                f"{invalidated} source-bound checkpoint(s) after account merge; "
+                "a fresh E2 inventory is required"
+            )
+            self._count("runtime_e2_legacy_migrations", invalidated)
 
     async def _rekey_rollup(
         self,

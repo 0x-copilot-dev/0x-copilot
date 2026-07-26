@@ -156,10 +156,12 @@ from runtime_api.schemas.account_merge import (
     AccountMergeRequest,
     AccountMergeResponse,
 )
+from runtime_api.schemas.legacy_migration import LegacyMigrationRunRequest
 
 __all__ = [
     "AccountMergeRequest",
     "AccountMergeResponse",
+    "LegacyMigrationRunRequest",
     "ConversationStatus",
     "MessageRole",
     "MessageStatus",

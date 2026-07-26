@@ -29,19 +29,39 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
+from pathlib import Path
 
 import psycopg
 import pytest
 from psycopg.rows import dict_row
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, StreamEventSource
+from agent_runtime.api.artifact_repository import RuntimeArtifactRunScopeResolver
+from agent_runtime.api.legacy_migration_service import LegacyMigrationService
+from agent_runtime.artifacts import ArtifactService
 from agent_runtime.persistence.encryption import (
     CiphertextDecodeError,
     EnvelopeFieldEncryption,
     FieldCodec,
 )
+from agent_runtime.persistence.records import DraftRecord, DraftStatus
+from agent_runtime.surfaces_v2.legacy_migration import (
+    LegacyMigrationCheckpoint,
+    LegacyMigrationStatus,
+)
+from runtime_adapters.file._paths import FileStoreLayout
+from runtime_adapters.file.artifact_blob_store import FileArtifactBlobStore
+from runtime_adapters.file.artifact_publication import (
+    FileArtifactPublicationCoordinator,
+)
 from runtime_adapters.postgres import PostgresRuntimeApiStore
 from runtime_adapters.postgres.account_merge import PostgresAccountMergeRekeyer
+from runtime_adapters.postgres.artifact_store import PostgresArtifactMetadataStore
+from runtime_adapters.postgres.draft_store import PostgresDraftStore
+from runtime_adapters.postgres.legacy_migration_store import (
+    PostgresLegacyMigrationCheckpointStore,
+)
 from runtime_api.schemas import (
     CreateConversationRequest,
     CreateRunRequest,
@@ -110,6 +130,14 @@ _RUNTIME_TABLES = (
     "runtime_consumer_cursors",
     "runtime_outbox_events",
     "runtime_events",
+    "runtime_e2_legacy_migrations",
+    "runtime_drafts",
+    "runtime_artifact_gc_quarantine",
+    "runtime_artifact_gc_candidates",
+    "runtime_artifact_reference_edges",
+    "runtime_artifact_idempotency",
+    "runtime_artifact_revisions",
+    "runtime_artifacts",
     "agent_runs",
     "agent_messages",
     "agent_conversations",
@@ -319,6 +347,33 @@ def _event_rows(raw: psycopg.Connection, org_id: str) -> dict[str, dict[str, obj
         (org_id,),
     )
     return {row["id"]: row for row in cur.fetchall()}
+
+
+def _legacy_migration_service(
+    store: PostgresRuntimeApiStore, *, artifact_root: Path
+) -> tuple[LegacyMigrationService, PostgresLegacyMigrationCheckpointStore]:
+    """Compose E2 with real Postgres metadata and a disposable blob volume."""
+
+    layout = FileStoreLayout(artifact_root)
+    coordinator = FileArtifactPublicationCoordinator(layout)
+    blobs = FileArtifactBlobStore(layout, coordinator)
+    artifacts = ArtifactService(
+        metadata=PostgresArtifactMetadataStore(store, blobs),
+        blobs=blobs,
+        run_scopes=RuntimeArtifactRunScopeResolver(store),
+    )
+    checkpoints = PostgresLegacyMigrationCheckpointStore(store=store)
+    return (
+        LegacyMigrationService(
+            draft_store=PostgresDraftStore(store),
+            run_store=store,
+            event_store=store,
+            artifact_service=artifacts,
+            checkpoints=checkpoints,
+            audit=store,
+        ),
+        checkpoints,
+    )
 
 
 class TestAccountMergeLiveRekey:
@@ -553,4 +608,133 @@ class TestAccountMergeLiveRekey:
         assert (
             survivor_by_role[MessageRole.USER].content_text
             == survivor["user_plaintext"]
+        )
+
+    async def test_e2_evidence_is_invalidated_and_rerun_reuses_artifact_after_merge(
+        self,
+        store: PostgresRuntimeApiStore,
+        raw: psycopg.Connection,
+        tmp_path: Path,
+    ) -> None:
+        """A real rekey invalidates stale E2 rows without duplicate imports.
+
+        The source-bound checkpoint rows for both accounts deliberately lose
+        their authority in the merge transaction.  The subsequent E2 scan
+        must establish fresh evidence under the survivor and rediscover the
+        rekeyed canonical artifact through its immutable ``draft://`` source
+        reference instead of making a second artifact for the same draft.
+        """
+
+        suffix = uuid.uuid4().hex[:12]
+        absorbed_org, absorbed_user = (
+            f"org_e2_absorbed_{suffix}",
+            f"user_e2_absorbed_{suffix}",
+        )
+        survivor_org, survivor_user = (
+            f"org_e2_survivor_{suffix}",
+            f"user_e2_survivor_{suffix}",
+        )
+        absorbed = await _seed_account(
+            store,
+            org_id=absorbed_org,
+            user_id=absorbed_user,
+            marker="e2-absorbed",
+        )
+        await _seed_account(
+            store,
+            org_id=survivor_org,
+            user_id=survivor_user,
+            marker="e2-survivor",
+        )
+
+        migration_id = f"e2_live_merge_{suffix}"
+        draft_id = uuid.uuid4().hex
+        await PostgresDraftStore(store).insert_version(
+            DraftRecord(
+                draft_id=draft_id,
+                version=1,
+                org_id=absorbed_org,
+                conversation_id=str(absorbed["conversation_id"]),
+                run_id=str(absorbed["run_id"]),
+                user_id=absorbed_user,
+                title="E2 merge proof",
+                content_text="This imported draft must remain singular.",
+                status=DraftStatus.DRAFT,
+                created_at=datetime.now(UTC),
+            )
+        )
+        migration, checkpoints = _legacy_migration_service(
+            store, artifact_root=tmp_path / "e2-artifacts"
+        )
+
+        before_merge = await migration.apply(
+            org_id=absorbed_org,
+            migration_id=migration_id,
+            batch_size=1,
+        )
+        assert before_merge.cohort_ready is True
+        absorbed_checkpoint = await checkpoints.load(
+            org_id=absorbed_org, migration_id=migration_id
+        )
+        assert absorbed_checkpoint is not None
+        assert absorbed_checkpoint.status is LegacyMigrationStatus.COMPLETED
+
+        # Deliberately create the PK-collision counterpart.  The account merge
+        # must invalidate both source-bound rows atomically, rather than let a
+        # survivor row win and falsely attest the merged source.
+        stale_survivor = LegacyMigrationCheckpoint(
+            org_id=survivor_org,
+            migration_id=migration_id,
+            source_digest="f" * 64,
+            after_draft_id=None,
+            status=LegacyMigrationStatus.COMPLETED,
+            report_digest="e" * 64,
+            revision=0,
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+        await checkpoints.load_or_create(checkpoint=stale_survivor)
+
+        rekeyer = PostgresAccountMergeRekeyer(store)
+        tables, warnings = await rekeyer.rekey(
+            absorbed_org_id=absorbed_org,
+            absorbed_user_id=absorbed_user,
+            survivor_org_id=survivor_org,
+            survivor_user_id=survivor_user,
+        )
+        assert tables["runtime_e2_legacy_migrations"] == 2
+        assert any("fresh E2 inventory is required" in warning for warning in warnings)
+        checkpoint_rows = raw.execute(
+            "SELECT org_id, migration_id FROM runtime_e2_legacy_migrations "
+            "WHERE org_id IN (%s, %s)",
+            (absorbed_org, survivor_org),
+        ).fetchall()
+        assert checkpoint_rows == []
+
+        after_merge = await migration.apply(
+            org_id=survivor_org,
+            migration_id=migration_id,
+            batch_size=1,
+        )
+        assert after_merge.cohort_ready is True
+        assert after_merge.drafts_verified == 1
+        fresh_checkpoint = await checkpoints.load(
+            org_id=survivor_org, migration_id=migration_id
+        )
+        assert fresh_checkpoint is not None
+        assert fresh_checkpoint.status is LegacyMigrationStatus.COMPLETED
+        assert fresh_checkpoint.source_digest != stale_survivor.source_digest
+
+        artifact_rows = raw.execute(
+            "SELECT artifact_id FROM runtime_artifacts "
+            "WHERE org_id = %s AND run_id = %s ORDER BY artifact_id",
+            (survivor_org, absorbed["run_id"]),
+        ).fetchall()
+        assert len(artifact_rows) == 1
+        assert (
+            raw.execute(
+                "SELECT count(*) AS n FROM runtime_artifacts WHERE org_id = %s",
+                (absorbed_org,),
+            ).fetchone()["n"]
+            == 0
         )

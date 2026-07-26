@@ -53,6 +53,7 @@ _MIGRATION_TABLES = {
     "runtime_model_call_usage",
     "runtime_usage_attribution_edges",
     "runtime_workspace_overlay_manifests",
+    "runtime_e2_legacy_migrations",
     "runtime_usage_daily_user",
     "runtime_usage_daily_org",
     "runtime_usage_daily_connector",
@@ -70,7 +71,9 @@ _MIGRATION_TABLES = {
     "todo_extractions",
 }
 
-_MUTATION_TARGET = re.compile(r"^\s*(?:UPDATE|DELETE\s+FROM)\s+([a-z_]+)", re.I | re.M)
+_MUTATION_TARGET = re.compile(
+    r"^\s*(?:UPDATE|DELETE\s+FROM)\s+([a-z0-9_]+)", re.I | re.M
+)
 
 # The usage-attribution table follows its canonical usage parent through the
 # migration's composite foreign key `ON UPDATE CASCADE`. Account merging must
@@ -240,3 +243,27 @@ class TestPostgresAccountMergeSql:
         assert any(
             "org_absorbed" in repr(params) for _sql, params in artifact_executions
         )
+
+    async def test_e2_checkpoint_evidence_is_atomically_invalidated_for_both_orgs(
+        self,
+    ) -> None:
+        """Source-bound migration evidence cannot survive a tenant re-key."""
+
+        store = _FakeStore(FieldCodec(NullFieldEncryption()))
+        rekeyer = PostgresAccountMergeRekeyer(store)  # type: ignore[arg-type]
+        await rekeyer.rekey(
+            absorbed_org_id="org_absorbed",
+            absorbed_user_id="user_absorbed",
+            survivor_org_id="org_survivor",
+            survivor_user_id="user_survivor",
+        )
+
+        matches = [
+            (sql, params)
+            for sql, params in store.connection.executions
+            if "runtime_e2_legacy_migrations" in sql
+        ]
+        assert len(matches) == 1
+        sql, params = matches[0]
+        assert "DELETE FROM runtime_e2_legacy_migrations" in sql
+        assert params == ("org_absorbed", "org_survivor")

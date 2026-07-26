@@ -19,6 +19,9 @@ from agent_runtime.surfaces_v2.repair_reconciliation import RepairLegalHoldState
 from agent_runtime.surfaces_v2.audit_export_verification import (
     AuditExportVerificationStore,
 )
+from agent_runtime.surfaces_v2.legacy_migration import (
+    LegacyMigrationCheckpointStore,
+)
 
 
 class UnknownRepairLegalHoldLookup:
@@ -224,12 +227,51 @@ def build_audit_export_verification_store(
     return InMemoryAuditExportVerificationStore()
 
 
+def build_legacy_migration_checkpoint_store(
+    *, settings: RuntimeSettings, persistence: object
+) -> LegacyMigrationCheckpointStore:
+    """Select the durable E2 prerequisite checkpoint adapter for this backend."""
+
+    backend = settings.store.backend
+    if backend == "file":
+        root = settings.store.file_store_root
+        if not root:
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "RUNTIME_FILE_STORE_ROOT is required for legacy migration.",
+                retryable=False,
+            )
+        from runtime_adapters.file.legacy_migration_store import (
+            FileLegacyMigrationCheckpointStore,
+        )
+
+        return FileLegacyMigrationCheckpointStore(root=root)
+    if backend == "postgres":
+        if not hasattr(persistence, "_role_connection"):
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "Postgres legacy migration requires the runtime worker store.",
+                retryable=False,
+            )
+        from runtime_adapters.postgres.legacy_migration_store import (
+            PostgresLegacyMigrationCheckpointStore,
+        )
+
+        return PostgresLegacyMigrationCheckpointStore(store=persistence)
+    from runtime_adapters.in_memory.legacy_migration_store import (
+        InMemoryLegacyMigrationCheckpointStore,
+    )
+
+    return InMemoryLegacyMigrationCheckpointStore()
+
+
 __all__ = (
     "FileRepairLegalHoldLookup",
     "PostgresRepairLegalHoldLookup",
     "UnknownRepairLegalHoldLookup",
     "build_effect_claim_store",
     "build_audit_export_verification_store",
+    "build_legacy_migration_checkpoint_store",
     "build_repair_legal_hold_lookup",
     "build_repair_planning_snapshot_store",
 )
