@@ -47,10 +47,29 @@ export interface TcWorkspaceStageSurfaceProps {
 }
 
 const rootStyle: CSSProperties = {
+  background: "var(--color-surface)",
+  border: "1px solid rgba(87, 199, 133, 0.3)",
+  borderRadius: 10,
+  boxShadow: "none",
+  color: "var(--color-text)",
+  display: "block",
+  fontFamily: "var(--font-sans)",
+  fontSize: 13,
+  lineHeight: "19.5px",
+  minWidth: 0,
+  overflow: "hidden",
+  padding: 0,
+};
+
+// The outer card deliberately stays a compact, scan-friendly status surface.
+// Dense preview/diff data lives in this inner flow, so the artifact review
+// remains complete without making every staged write look like a modal.
+const surfaceBodyStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
   gap: "var(--space-md)",
   minWidth: 0,
+  padding: "var(--space-md)",
 };
 
 const headerStyle: CSSProperties = {
@@ -184,6 +203,35 @@ const actionRowStyle: CSSProperties = {
 
 const pledgeStyle: CSSProperties = { flex: "1 1 16rem", margin: 0 };
 
+const statusBadgeStyle: CSSProperties = {
+  borderColor: "rgba(87, 199, 133, 0.35)",
+  borderRadius: 5,
+  color: "var(--color-success)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-mono-8-5)",
+  fontWeight: 400,
+  gap: 4,
+  letterSpacing: "0.04em",
+  lineHeight: "12.75px",
+  padding: "2px 6px",
+};
+
+function stageStatusTone(
+  status: WorkspaceStage["status"],
+): "success" | "warning" | "danger" {
+  switch (status) {
+    case "failed":
+    case "rejected":
+      return "danger";
+    case "held":
+      return "warning";
+    case "staged":
+    case "approved":
+    case "applied":
+      return "success";
+  }
+}
+
 const MAX_PREVIEW_TEXT = 8_000;
 const MAX_CSV_COLUMNS = 8;
 const MAX_CSV_ROWS = 8;
@@ -218,120 +266,130 @@ export function TcWorkspaceStageSurface({
       data-presentation={projected.compact ? "compact" : "full"}
       data-destructive={projected.destructive ? "true" : "false"}
     >
-      <div style={headerStyle}>
-        <div style={titleStackStyle}>
-          <SectionLabel data-testid="tc-workspace-stage-kicker">
-            Workspace stage
-          </SectionLabel>
-          <ItemTitle data-testid="tc-workspace-stage-title">
-            {projected.title}
-          </ItemTitle>
-          <Caption data-testid="tc-workspace-stage-revision">
-            {`rev ${projected.revision ?? "?"} · ${projected.author}`}
-          </Caption>
+      <div style={surfaceBodyStyle}>
+        <div style={headerStyle}>
+          <div style={titleStackStyle}>
+            <SectionLabel data-testid="tc-workspace-stage-kicker">
+              Workspace stage
+            </SectionLabel>
+            <ItemTitle data-testid="tc-workspace-stage-title">
+              {projected.title}
+            </ItemTitle>
+            <Caption data-testid="tc-workspace-stage-revision">
+              {`rev ${projected.revision ?? "?"} · ${projected.author}`}
+            </Caption>
+          </div>
+          <Badge
+            tone={projected.destructive ? "danger" : "warning"}
+            data-testid="tc-workspace-stage-operation"
+          >
+            {projected.operationLabel}
+          </Badge>
+          <Badge
+            tone={stageStatusTone(stage.status)}
+            style={
+              stage.status === "failed" || stage.status === "rejected"
+                ? undefined
+                : statusBadgeStyle
+            }
+            data-testid="tc-workspace-stage-status"
+          >
+            {projected.statusLabel}
+          </Badge>
         </div>
-        <Badge
-          tone={projected.destructive ? "danger" : "warning"}
-          data-testid="tc-workspace-stage-operation"
-        >
-          {projected.operationLabel}
-        </Badge>
-        <Badge tone="neutral" data-testid="tc-workspace-stage-status">
-          {projected.statusLabel}
-        </Badge>
-      </div>
 
-      <dl style={targetGridStyle} data-testid="tc-workspace-stage-target">
-        <dt className="ui-mono-caps" style={termStyle}>
-          Mount
-        </dt>
-        <dd className="ui-body" style={definitionStyle}>
-          {projected.mountLabel}
-        </dd>
-        <dt className="ui-mono-caps" style={termStyle}>
-          Target
-        </dt>
-        <dd
-          className="ui-body"
-          style={definitionStyle}
-          data-testid="tc-workspace-stage-path"
-        >
-          {projected.virtualPath ?? "Virtual target unavailable"}
-        </dd>
-        {projected.sourceVirtualPath !== null ? (
-          <>
-            <dt className="ui-mono-caps" style={termStyle}>
-              From
-            </dt>
-            <dd className="ui-body" style={definitionStyle}>
-              {projected.sourceVirtualPath}
-            </dd>
-          </>
+        <dl style={targetGridStyle} data-testid="tc-workspace-stage-target">
+          <dt className="ui-mono-caps" style={termStyle}>
+            Mount
+          </dt>
+          <dd className="ui-body" style={definitionStyle}>
+            {projected.mountLabel}
+          </dd>
+          <dt className="ui-mono-caps" style={termStyle}>
+            Target
+          </dt>
+          <dd
+            className="ui-body"
+            style={definitionStyle}
+            data-testid="tc-workspace-stage-path"
+          >
+            {projected.virtualPath ?? "Virtual target unavailable"}
+          </dd>
+          {projected.sourceVirtualPath !== null ? (
+            <>
+              <dt className="ui-mono-caps" style={termStyle}>
+                From
+              </dt>
+              <dd className="ui-body" style={definitionStyle}>
+                {projected.sourceVirtualPath}
+              </dd>
+            </>
+          ) : null}
+        </dl>
+
+        {projected.destructive ? (
+          <div
+            style={warningStyle}
+            role="alert"
+            data-testid="tc-workspace-stage-destructive"
+          >
+            <Badge tone="danger">Destructive</Badge>
+            <Caption as="p" style={{ margin: 0 }}>
+              This action can remove or overwrite workspace content. A desktop
+              host may require native confirmation before recording approval.
+            </Caption>
+          </div>
         ) : null}
-      </dl>
 
-      {projected.destructive ? (
-        <div
-          style={warningStyle}
-          role="alert"
-          data-testid="tc-workspace-stage-destructive"
-        >
-          <Badge tone="danger">Destructive</Badge>
-          <Caption as="p" style={{ margin: 0 }}>
-            This action can remove or overwrite workspace content. A desktop
-            host may require native confirmation before recording approval.
+        {projected.resolutionLabel !== null &&
+        projected.resolutionSummary !== null ? (
+          <div
+            style={
+              resolutionTone === "danger"
+                ? destructiveResolutionStyle
+                : resolutionStyle
+            }
+            role="status"
+            data-testid="tc-workspace-stage-resolution"
+            data-resolution={stage.resolution?.state}
+          >
+            <Badge tone={resolutionTone}>{projected.resolutionLabel}</Badge>
+            <Caption as="p" style={{ margin: 0 }}>
+              {projected.resolutionSummary}
+            </Caption>
+          </div>
+        ) : null}
+
+        {!projected.compact ? (
+          <StudioDetails stage={stage} projected={projected} />
+        ) : null}
+
+        <div style={actionRowStyle}>
+          <Caption
+            as="p"
+            style={pledgeStyle}
+            data-testid="tc-workspace-stage-pledge"
+          >
+            {WORKSPACE_STAGE_PLEDGE}
           </Caption>
+          <WorkspaceStageActions
+            stage={stage}
+            revision={projected.revision}
+            destructive={projected.destructive}
+            canDecide={projected.canDecide}
+            canRestore={projected.canRestore}
+            canEdit={projected.canEdit}
+            terminal={terminal}
+            busy={busy}
+            onApprove={onApprove}
+            onReject={onReject}
+            onRestore={onRestore}
+            onEdit={onEdit}
+            editLabel={editLabel}
+            onDownloadArtifact={onDownloadArtifact}
+            actionUnavailable={actionUnavailable}
+          />
         </div>
-      ) : null}
-
-      {projected.resolutionLabel !== null &&
-      projected.resolutionSummary !== null ? (
-        <div
-          style={
-            resolutionTone === "danger"
-              ? destructiveResolutionStyle
-              : resolutionStyle
-          }
-          role="status"
-          data-testid="tc-workspace-stage-resolution"
-          data-resolution={stage.resolution?.state}
-        >
-          <Badge tone={resolutionTone}>{projected.resolutionLabel}</Badge>
-          <Caption as="p" style={{ margin: 0 }}>
-            {projected.resolutionSummary}
-          </Caption>
-        </div>
-      ) : null}
-
-      {!projected.compact ? (
-        <StudioDetails stage={stage} projected={projected} />
-      ) : null}
-
-      <div style={actionRowStyle}>
-        <Caption
-          as="p"
-          style={pledgeStyle}
-          data-testid="tc-workspace-stage-pledge"
-        >
-          {WORKSPACE_STAGE_PLEDGE}
-        </Caption>
-        <WorkspaceStageActions
-          stage={stage}
-          revision={projected.revision}
-          destructive={projected.destructive}
-          canDecide={projected.canDecide}
-          canRestore={projected.canRestore}
-          canEdit={projected.canEdit}
-          terminal={terminal}
-          busy={busy}
-          onApprove={onApprove}
-          onReject={onReject}
-          onRestore={onRestore}
-          onEdit={onEdit}
-          editLabel={editLabel}
-          onDownloadArtifact={onDownloadArtifact}
-          actionUnavailable={actionUnavailable}
-        />
       </div>
     </Card>
   );
@@ -661,9 +719,13 @@ function WorkspaceStageActions({
 }): ReactElement {
   if (terminal) {
     return (
-      <Caption data-testid="tc-workspace-stage-applied">
-        Applied state reported.
-      </Caption>
+      <Badge
+        tone="success"
+        style={statusBadgeStyle}
+        data-testid="tc-workspace-stage-applied"
+      >
+        Applied
+      </Badge>
     );
   }
   if (canRestore && onRestore !== undefined) {

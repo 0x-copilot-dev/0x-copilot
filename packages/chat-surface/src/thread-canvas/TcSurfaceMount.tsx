@@ -14,6 +14,7 @@ import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
 import { useSurfaceRegistry } from "../surfaces/SurfaceRegistryContext";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
 import type { PendingDiff } from "../surfaces/types";
+import { GenericRecordFallback } from "../surfaces/record/GenericRecordFallback";
 import { projectAt, type SurfacePayload } from "./eventProjector";
 
 const RENDER_BUDGET_MS = 100;
@@ -76,6 +77,8 @@ export function reduceTo(
 
 export interface TcSurfaceMountProps {
   readonly uri: string;
+  /** Active tab title, used only by the generic record fallback. */
+  readonly title?: string;
   readonly transport: Transport;
   readonly state?: unknown;
   readonly pendingDiff?: PendingDiffHandle | null;
@@ -244,6 +247,7 @@ function HostControls(props: HostControlsProps): ReactElement {
 export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
   const {
     uri,
+    title,
     state,
     pendingDiff,
     onApprove,
@@ -262,7 +266,17 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
   // sentinel URI is equivalent to passing the original URI for the
   // contractual tier-3 adapter.
   const tier3 = useMemo(() => registry.resolveAdapter(TIER3_URI), [registry]);
-  const placeholder = <FallbackEmpty scheme={scheme} />;
+  // A record is a known generic archetype even if an optional connector
+  // renderer has not been registered yet. Present it as a useful, honest
+  // record state instead of an error-shaped "no adapter" box. Other unknown
+  // schemes keep the explicit technical fallback, which remains important for
+  // diagnosis and existing integrations.
+  const placeholder =
+    scheme === "record" ? (
+      <GenericRecordFallback title={title} state={state} />
+    ) : (
+      <FallbackEmpty scheme={scheme} />
+    );
 
   // No surface tab is active yet — a run has started but the agent has not
   // opened or edited anything. Render a quiet, human empty state instead of
@@ -403,7 +417,9 @@ export function TcSurfaceMount(props: TcSurfaceMountProps): ReactElement {
 const rootStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flex: "1 1 auto",
   gap: 12,
+  minHeight: 0,
   width: "100%",
 };
 
@@ -420,6 +436,7 @@ const surfaceLayerStyle: CSSProperties = {
 const contentStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flex: "1 1 auto",
   minHeight: 0,
 };
 

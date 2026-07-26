@@ -66,7 +66,7 @@ function renderHeader(
   const duration = formatDuration(toolCall.durationMs);
 
   return (
-    <div style={headerStyle}>
+    <div style={discloseable ? summaryHeaderStyle : headerStyle}>
       <span style={tileStyle} aria-hidden="true">
         {toolTileGlyph(toolCall.toolName)}
       </span>
@@ -323,10 +323,20 @@ const cardStyle: CSSProperties = {
 };
 
 const summaryControlStyle: CSSProperties = {
+  alignItems: "center",
   cursor: "pointer",
+  display: "flex",
+  gap: 9,
   listStyle: "none",
+  minWidth: 0,
+  padding: "9px 11px",
   userSelect: "none",
 };
+
+// `summary` owns the flex layout for discloseable cards. The header wrapper
+// then disappears from layout without changing the child structure used by
+// regular, non-discloseable tool cards.
+const summaryHeaderStyle: CSSProperties = { display: "contents" };
 
 const headerStyle: CSSProperties = {
   alignItems: "center",

@@ -373,6 +373,13 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
     // when scrubbed (see PRD §3.7); the surface column shows the diff
     // overlay rather than the live surface during scrub.
   }, [scrubbedSeq, projection.surface, activeUri, resolveSurfaceState]);
+  // A generic record fallback still needs a human label while the payload is
+  // hydrating. The tab title is already the canvas' safe display contract, so
+  // reuse it rather than deriving a label from an opaque URI.
+  const activeSurfaceTitle = useMemo(
+    () => tabs.find((tab) => tab.uri === activeUri)?.title,
+    [tabs, activeUri],
+  );
 
   // SURFACES_V2 (PRD-B2): the v2 canvas is active exactly when the host wired
   // the ledger-hydration resolver (B1's signal). All B2 chrome mounts strictly
@@ -489,6 +496,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
               >
                 <TcSurfaceMount
                   uri={activeUri}
+                  title={activeSurfaceTitle}
                   transport={transport}
                   state={surfaceState}
                   pendingDiff={pendingDiff}
@@ -531,6 +539,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
           ) : (
             <TcSurfaceMount
               uri={activeUri}
+              title={activeSurfaceTitle}
               transport={transport}
               state={surfaceState}
               pendingDiff={pendingDiff}
@@ -736,12 +745,13 @@ const surfaceSlotStyle = (visible: boolean): CSSProperties => ({
   gridArea: "surface",
   display: visible ? "flex" : "none",
   flexDirection: "column",
+  background: "var(--color-bg)",
   minWidth: 0,
   minHeight: 0,
   // The divider is the `handle` grid column (see railHandleStyle) — no border
   // here, or it would double the line next to the handle.
   overflow: "auto",
-  padding: 16,
+  padding: 0,
 });
 
 // The v2 kind-specific surface override fills the surface column and scrolls its
@@ -749,6 +759,7 @@ const surfaceSlotStyle = (visible: boolean): CSSProperties => ({
 const surfaceOverrideStyle: CSSProperties = {
   display: "flex",
   flexDirection: "column",
+  flex: "1 1 auto",
   minWidth: 0,
   minHeight: 0,
 };
