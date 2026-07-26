@@ -76,6 +76,17 @@ body {
   min-height: 0;
 }
 
+/* The frame owns the desktop window boundary. RunDestination also carries a
+   standalone/web card boundary, which would otherwise create a second inset
+   border and shrink the real window bar by two pixels. Keep that standalone
+   treatment outside the desktop host; the frame is the single source of the
+   native-style chrome here. */
+.desktop-window-frame > [data-testid="destination-outlet"] > .run-destination {
+  border: 0 !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
 /* The Run cockpit already owns the transcript-to-composer spacing through its
    chat column. The general standalone composer margin would add a second gap
    only in the desktop host, so the hosted composer stays flush in that slot. */
