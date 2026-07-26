@@ -252,6 +252,37 @@ class CanvasLifecycleProjection:
                     renderer_hint="effect-stage",
                 )
                 continue
+            if event_type == LedgerEventType.EFFECT_REVISED.value:
+                stage_id = cls._text(payload.get("stage_id"))
+                key = effect_keys.get(stage_id or "")
+                if key is not None:
+                    subject = subjects.get(key)
+                    if subject is not None:
+                        revision = cls._positive_int(payload.get("revision"))
+                        if revision is not None:
+                            subject.revision = revision
+                        title = cls._text(payload.get("display_target"))
+                        if title is not None:
+                            subject.title = title
+                        subject.last_sequence_no = seq
+                continue
+            if event_type in {
+                LedgerEventType.DECISION_RECORDED.value,
+                LedgerEventType.EFFECT_DECISION_RECORDED.value,
+            }:
+                stage_id = cls._text(payload.get("stage_id"))
+                key = effect_keys.get(stage_id or "")
+                # A rejected or cancelled proposal no longer awaits a user
+                # decision, but remains a reviewable terminal stage tab.
+                if key is not None and cls._text(payload.get("decision")) in {
+                    "reject",
+                    "cancel",
+                }:
+                    pending_stages.discard(key)
+                    subject = subjects.get(key)
+                    if subject is not None:
+                        subject.last_sequence_no = seq
+                continue
             if event_type in {
                 LedgerEventType.EFFECT_APPLIED.value,
                 LedgerEventType.EFFECT_INDETERMINATE.value,

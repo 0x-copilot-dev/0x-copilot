@@ -1,16 +1,50 @@
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
+import corpus from "../../../../service-contracts/src/copilot_service_contracts/canvas_lifecycle_corpus.json";
+
 import { projectCanvasLifecycle } from "./canvasLifecycle";
+
+type CorpusEvent = {
+  readonly sequence_no: number;
+  readonly event_type: string;
+  readonly payload: Record<string, unknown>;
+};
+
+type CorpusCase = {
+  readonly id: string;
+  readonly events: readonly CorpusEvent[];
+};
+
+// npm runs a workspace script with the package directory as cwd. Unlike
+// `import.meta.url`, this remains a real filesystem path under Vitest's module
+// virtualization.
+const root = resolve(process.cwd(), "../..");
+const pythonRunner = resolve(
+  root,
+  "services/ai-backend/tests/unit/agent_runtime/presentation/lifecycle_corpus_runner.py",
+);
+const workspacePython = resolve(root, "services/ai-backend/.venv/bin/python");
+
+function corpusEvents(events: readonly CorpusEvent[]): RuntimeEventEnvelope[] {
+  return events.map((entry, index) =>
+    event(entry.sequence_no, entry.event_type, entry.payload, index),
+  );
+}
 
 function event(
   sequence_no: number,
   event_type: string,
   payload: Record<string, unknown> = {},
+  sourceIndex = 0,
 ): RuntimeEventEnvelope {
   return {
-    event_id: `evt-${sequence_no}`,
+    event_id: `evt-${sequence_no}-${sourceIndex}`,
     run_id: "run-1",
     conversation_id: "conv-1",
     sequence_no,
@@ -19,6 +53,33 @@ function event(
     payload,
     created_at: new Date(1_700_000_000_000 + sequence_no * 1000).toISOString(),
   };
+}
+
+function projectCorpus() {
+  return {
+    schema_version: corpus.schema_version,
+    cases: (corpus.cases as readonly CorpusCase[]).map((caseItem) => {
+      const events = corpusEvents(caseItem.events);
+      return {
+        id: caseItem.id,
+        prefixes: Array.from({ length: events.length + 1 }, (_, end) =>
+          projectCanvasLifecycle(events.slice(0, end)),
+        ),
+      };
+    }),
+  };
+}
+
+function pythonCorpusProjection() {
+  const python = process.env.PYTHON ?? workspacePython;
+  if (!existsSync(python)) {
+    throw new Error(
+      `Canvas lifecycle differential test requires the ai-backend venv at ${python}`,
+    );
+  }
+  return JSON.parse(
+    execFileSync(python, [pythonRunner], { cwd: root, encoding: "utf8" }),
+  ) as ReturnType<typeof projectCorpus>;
 }
 
 describe("projectCanvasLifecycle (PRD-B3)", () => {
@@ -116,5 +177,12 @@ describe("projectCanvasLifecycle (PRD-B3)", () => {
       );
     }
     expect(projectCanvasLifecycle(events).lifecycle).toBe("presenting");
+  });
+
+  it("differentially matches the Python fold for every shared corpus prefix", () => {
+    // This is deliberately not a checked-in expected projection. The Python
+    // projection is executed now, over the same raw event corpus, so a
+    // semantic drift in either implementation fails with the exact prefix.
+    expect(projectCorpus()).toEqual(pythonCorpusProjection());
   });
 });
