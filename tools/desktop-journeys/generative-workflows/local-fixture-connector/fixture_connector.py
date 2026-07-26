@@ -756,32 +756,60 @@ class FixtureStore:
                 raise FixtureError(
                     "invalid_row", "requested row is not part of this staged rowset"
                 )
+            requested_rows = tuple(sorted(set(requested)))
+            if len(requested_rows) != len(requested):
+                raise FixtureError(
+                    "invalid_argument", "row_keys must not contain duplicates"
+                )
             held = set(stage["holds"])
-            if held.intersection(requested):
+            if held.intersection(requested_rows):
                 raise FixtureError("held_row", "held fixture rows cannot be applied")
+            subset_key = _digest({"row_keys": requested_rows})
+            applied_subsets: dict[str, Json] = stage["applied_subsets"]
+            prior_effect = applied_subsets.get(subset_key)
+            if prior_effect is not None:
+                return {**copy.deepcopy(prior_effect), "idempotent": True}
+            previously_applied = set(stage["applied_rows"])
+            overlap = previously_applied.intersection(requested_rows)
+            if overlap:
+                raise FixtureError(
+                    "rowset_subset_conflict",
+                    "row subset overlaps a previously applied subset; retry the exact subset instead",
+                )
 
-            def apply() -> Json:
-                rows = self._csv_rows(stage["path"])
-                for row in rows:
-                    key = row[stage["row_key"]]
-                    if key in requested:
-                        row.update(stage["changes"][key])
-                content = self._csv_encode(rows, tuple(rows[0]) if rows else ())
-                self._state["workspace"]["files"][stage["path"]] = content
-                return {
-                    "status": "partial"
-                    if set(requested) != set(stage["changes"])
-                    else "applied",
-                    "receipt": self._receipt("workspace-rowset", stage["id"]),
-                    "path": stage["path"],
-                    "applied_rows": sorted(requested),
-                    "held_rows": sorted(held),
-                    "sha256": _digest(content),
-                }
-
-            return self._commit_stage(
-                stage, operation="workspace.apply_rowset", apply=apply
+            rows = self._csv_rows(stage["path"])
+            for row in rows:
+                key = row[stage["row_key"]]
+                if key in requested_rows:
+                    row.update(stage["changes"][key])
+            content = self._csv_encode(rows, tuple(rows[0]) if rows else ())
+            self._state["workspace"]["files"][stage["path"]] = content
+            all_applied = previously_applied.union(requested_rows)
+            pending_rows = set(stage["changes"]).difference(all_applied)
+            status = "partial" if pending_rows else "applied"
+            effect = {
+                "status": status,
+                "receipt": self._receipt(
+                    "workspace-rowset", f"{stage['id']}-{subset_key[:12]}"
+                ),
+                "path": stage["path"],
+                "applied_rows": list(requested_rows),
+                "held_rows": sorted(held),
+                "pending_rows": sorted(pending_rows),
+                "sha256": _digest(content),
+            }
+            applied_subsets[subset_key] = copy.deepcopy(effect)
+            stage["applied_rows"] = sorted(all_applied)
+            stage["status"] = status
+            self._append_audit(
+                "workspace.apply_rowset",
+                {
+                    "stage_id": stage["id"],
+                    "subset_key": subset_key,
+                    **copy.deepcopy(effect),
+                },
             )
+            return effect
         path = self._safe_path(args.get("path"))
         self._known_workspace_path(path)
         target = self._workspace_target(path)
@@ -829,6 +857,12 @@ class FixtureStore:
             "row_key": row_key,
             "changes": normalized_changes,
             "holds": sorted(set(holds)),
+            # Row-set application is not stage-level idempotent. Each exact
+            # subset receives its own result and receipt; an overlapping but
+            # different subset is rejected rather than falsely reported as a
+            # successful replay.
+            "applied_rows": [],
+            "applied_subsets": {},
         }
         self._stages[stage_id] = stage
         self._append_audit(
@@ -906,7 +940,13 @@ class FixtureStore:
         }
         handler = handlers.get(operation)
         if handler is None:
-            self._append_audit("fixture.unknown_operation", {"operation": operation})
+            # MCP tool names are caller-controlled.  They can contain token-like
+            # text, so do not copy them into the immutable audit chain or an
+            # error response.  The fixed category is sufficient for the journey
+            # assertion without creating a secret-retention path.
+            self._append_audit(
+                "fixture.unknown_operation", {"category": "unrecognized_tool"}
+            )
             raise FixtureError(
                 "unknown_operation", "fixture connector does not provide this operation"
             )

@@ -25,6 +25,8 @@ one read-only scenario load, provider credential, or account configuration.
 - The only fault behaviour comes from the checked-in scenario: first workspace
   read returns `grant_expired`, the declared unknown operation returns
   `unknown_operation`, and first Discord publish returns a retryable failure.
+  An unknown caller tool name is never included in an audit payload or error
+  response; the audit records only the fixed `unrecognized_tool` category.
 
 ## Run as MCP stdio
 
@@ -58,7 +60,7 @@ teardown. Do not put this server in the product connector catalog.
 
 All tool inputs are JSON objects. Read operations return source targets so the
 run can show exact provenance. Staged writes create a `stage_id`; effects require
-the same `stage_id`, its exact target, and `approved: true`. Repeating a
+the same `stage_id`, its exact target, and `approved: true`. Repeating the same
 successful effect is idempotent.
 
 | Domain    | Read tools                                           | Stage tools                                          | Approved local effect                                                                |
@@ -78,7 +80,10 @@ successful effect is idempotent.
 - Commit calls take `stage_id`, the same exact `target`, and `approved: true`.
 - Row-set staging takes `path`, `row_key`, `changes`, optional `holds`, and
   target. Applying a held row is rejected; applying an approved subset returns
-  `status: "partial"` and exact held/applied rows.
+  `status: "partial"` and exact held/applied rows. Idempotency is keyed to the
+  exact set of rows: a retried identical subset returns its original receipt;
+  a disjoint subset applies and records its own receipt; an overlapping but
+  non-identical subset is rejected rather than falsely reported as a replay.
 
 The `fixture_manifest` response supplies both allowed roots. The canonical
 workspace root is `fixture://workspace/launch-week`; communication targets are

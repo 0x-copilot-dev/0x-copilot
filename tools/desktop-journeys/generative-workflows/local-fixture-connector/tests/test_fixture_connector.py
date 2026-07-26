@@ -219,6 +219,76 @@ class FixtureStoreTests(unittest.TestCase):
         self.assertEqual(partial["applied_rows"], ["Northstar"])
         self.assertEqual(partial["held_rows"], ["Orbit"])
 
+    def test_csv_rowset_tracks_exact_subsets_and_never_falsely_replays(self) -> None:
+        target = f"{self.workspace}/pipeline.csv"
+        stage = self.call(
+            "workspace_apply_rowset",
+            path="pipeline.csv",
+            row_key="account",
+            changes={
+                "Northstar": {"stage": "approved"},
+                "Acme": {"stage": "review"},
+                "Orbit": {"stage": "approved"},
+            },
+            target=target,
+        )
+        first = self.call(
+            "workspace_apply_rowset",
+            stage_id=stage["stage_id"],
+            target=target,
+            row_keys=["Northstar"],
+            approved=True,
+        )
+        self.assertEqual(first["status"], "partial")
+        self.assertEqual(first["applied_rows"], ["Northstar"])
+        replay = self.call(
+            "workspace_apply_rowset",
+            stage_id=stage["stage_id"],
+            target=target,
+            row_keys=["Northstar"],
+            approved=True,
+        )
+        self.assertTrue(replay["idempotent"])
+        self.assertEqual(replay["receipt"], first["receipt"])
+        second = self.call(
+            "workspace_apply_rowset",
+            stage_id=stage["stage_id"],
+            target=target,
+            row_keys=["Acme"],
+            approved=True,
+        )
+        self.assertEqual(second["status"], "partial")
+        self.assertEqual(second["applied_rows"], ["Acme"])
+        self.assertNotEqual(second["receipt"], first["receipt"])
+        self.assert_error(
+            "rowset_subset_conflict",
+            "workspace_apply_rowset",
+            stage_id=stage["stage_id"],
+            target=target,
+            row_keys=["Northstar", "Orbit"],
+            approved=True,
+        )
+        # A repeated exact subset has no fresh effect/audit, while the two
+        # distinct successful subsets have exact, separate audit rows.
+        effects = [
+            entry
+            for entry in self.store.audit_log()
+            if entry["operation"] == "workspace.apply_rowset"
+        ]
+        self.assertEqual(len(effects), 2)
+        self.assertEqual(effects[0]["payload"]["applied_rows"], ["Northstar"])
+        self.assertEqual(effects[1]["payload"]["applied_rows"], ["Acme"])
+        # Consume the one-shot grant fault and verify both rows really changed.
+        self.assert_error(
+            "grant_expired", "workspace_read", path="pipeline.csv", target=target
+        )
+        content = self.call("workspace_read", path="pipeline.csv", target=target)[
+            "content"
+        ]
+        self.assertIn("Northstar,approved,medium", content)
+        self.assertIn("Acme,review,low", content)
+        self.assertIn("Orbit,review,high", content)
+
     def test_audit_is_hash_chained_detached_and_survives_reset(self) -> None:
         self.call("mail_list_threads")
         before = self.store.audit_log()
@@ -234,10 +304,15 @@ class FixtureStoreTests(unittest.TestCase):
         self.assertTrue(self.store.verify_audit())
 
     def test_unknown_scenario_operation_is_honest(self) -> None:
-        self.assert_error("unknown_operation", "calendar_archive_nonexistent")
+        tool_name_with_secret = "calendar_archive__sk_fixture_do_not_retain"
+        self.assert_error("unknown_operation", tool_name_with_secret)
         audit = self.call("fixture_audit")
         self.assertTrue(audit["valid"])
         self.assertEqual(audit["entries"][-1]["operation"], "fixture.unknown_operation")
+        self.assertEqual(
+            audit["entries"][-1]["payload"], {"category": "unrecognized_tool"}
+        )
+        self.assertNotIn(tool_name_with_secret, json.dumps(audit, sort_keys=True))
 
 
 class McpStdioTests(unittest.TestCase):
@@ -306,6 +381,51 @@ class McpStdioTests(unittest.TestCase):
         self.assertTrue(responses[3]["result"]["isError"])
         self.assertIn(
             "secret_input_rejected", responses[3]["result"]["content"][0]["text"]
+        )
+
+    def test_unknown_mcp_tool_name_never_reaches_error_or_audit(self) -> None:
+        unsafe_name = "unknown__sk_fixture_not_for_retention"
+        transcript = (
+            "\n".join(
+                [
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 1,
+                            "method": "tools/call",
+                            "params": {"name": unsafe_name, "arguments": {}},
+                        }
+                    ),
+                    json.dumps(
+                        {
+                            "jsonrpc": "2.0",
+                            "id": 2,
+                            "method": "tools/call",
+                            "params": {"name": "fixture_audit", "arguments": {}},
+                        }
+                    ),
+                ]
+            )
+            + "\n"
+        )
+        process = subprocess.run(
+            [sys.executable, str(SERVER)],
+            input=transcript,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+            cwd=str(CONNECTOR),
+        )
+        self.assertNotIn(unsafe_name, process.stdout)
+        responses = [json.loads(line) for line in process.stdout.splitlines()]
+        self.assertTrue(responses[0]["result"]["isError"])
+        self.assertIn("unknown_operation", responses[0]["result"]["content"][0]["text"])
+        audit_text = responses[1]["result"]["content"][0]["text"]
+        self.assertNotIn(unsafe_name, audit_text)
+        audit = json.loads(audit_text)
+        self.assertEqual(
+            audit["entries"][0]["payload"], {"category": "unrecognized_tool"}
         )
 
     def test_connector_modules_have_no_network_client_imports(self) -> None:
