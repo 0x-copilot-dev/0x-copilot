@@ -255,19 +255,19 @@ def _invoke(
     )
 
 
-def test_catalog_read_executes_once_persists_result_and_uses_no_legacy_ledger() -> None:
+def test_catalog_read_executes_once_persists_result_and_projects_v2_ledger() -> None:
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
     _context, events, ledger, result_store, operation_token, service_token = (
         fixture.bind_enforced()
     )
-    legacy_rows: list[str] = []
+    presentation_rows: list[str] = []
 
     async def legacy_emit(
         event_type: str, payload: Mapping[str, object], summary: str | None
     ) -> None:
         del payload, summary
-        legacy_rows.append(event_type)
+        presentation_rows.append(event_type)
 
     legacy_token = WorkLedgerEmitter.bind_for_run(WorkLedgerEmitter(emit=legacy_emit))
     try:
@@ -295,9 +295,14 @@ def test_catalog_read_executes_once_persists_result_and_uses_no_legacy_ledger() 
     assert LedgerEventType.READ_EXECUTED.value not in {
         event_type for event_type, _payload in events.rows
     }
-    # The legacy MCP-owned emitter would make a mapping result a surface.  D1
-    # must leave that compatibility projection untouched on the enforce path.
-    assert legacy_rows == []
+    # The canonical adapter, not a direct MCP compatibility branch, projects
+    # the persisted read into the v2 canvas ledger after gateway completion.
+    assert presentation_rows == [
+        LedgerEventType.ACTION_CLASSIFIED.value,
+        LedgerEventType.READ_EXECUTED.value,
+        LedgerEventType.SURFACE_CREATED.value,
+        LedgerEventType.VIEW_DERIVED.value,
+    ]
 
 
 def test_unbound_gateway_holds_before_client_construction() -> None:

@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
+import time
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
 from dataclasses import dataclass, field
@@ -106,6 +108,7 @@ _CONNECTOR_TIMEOUT = "The connector timed out; no external change was made."
 _CONNECTOR_PROTOCOL_ERROR = (
     "The connector reported an error; no external change was made."
 )
+_LOGGER = logging.getLogger(__name__)
 
 
 class McpTargetRef(RuntimeContract):
@@ -308,7 +311,11 @@ class McpOperationAdapter(OperationAdapter):
 
         resolution = await self._resolve_authorized()
         await self._require_current_auth(resolution.card)
+        dispatch_started = time.perf_counter()
         output = await self._dispatch(resolution)
+        dispatch_latency_ms = max(
+            0, int((time.perf_counter() - dispatch_started) * 1000)
+        )
         if McpToolCallOutcome.is_protocol_error(output):
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,
@@ -333,11 +340,81 @@ class McpOperationAdapter(OperationAdapter):
                 "The connector result could not be stored safely.",
                 retryable=True,
             )
+        await self._emit_read_presentation(
+            request=request,
+            output=output,
+            latency_ms=dispatch_latency_ms,
+        )
         return OperationRawResult(
             result_ref=self._stored_result.result_ref,
             safe_summary=f"Fetched {request.op} from {request.capability}.",
             activity_ref=self._stored_result.result_ref,
         )
+
+    async def _emit_read_presentation(
+        self,
+        *,
+        request: OperationRequest,
+        output: Mapping[str, object],
+        latency_ms: int,
+    ) -> None:
+        """Project a canonical read onto the v2 ledger without a legacy branch.
+
+        The gateway already owns the only connector dispatch. This best-effort
+        projection runs *after* the exact result was durably stored, using the
+        operation id as the tool-result call id so ``payload_ref`` always joins
+        to that persisted event. It is intentionally inert unless the worker
+        bound a run-scoped WorkLedgerEmitter.
+        """
+
+        try:
+            # Import at the execution seam. Importing the surfaces package while
+            # the action catalog is initialized would form a package-init cycle;
+            # a canonical operation has already reached a fully composed run.
+            from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter  # noqa: PLC0415
+            from agent_runtime.capabilities.surfaces.generator import (  # noqa: PLC0415
+                GenToolDescriptor,
+                SurfaceGenerationScheduler,
+            )
+            from agent_runtime.capabilities.surfaces.projector import (  # noqa: PLC0415
+                SurfaceProjector,
+            )
+
+            emitter = WorkLedgerEmitter.active()
+            if emitter is None:
+                return
+            scheduler = SurfaceGenerationScheduler.active()
+            projector = (
+                SurfaceProjector(store=scheduler.store, scheduler=scheduler)
+                if scheduler is not None
+                else SurfaceProjector()
+            )
+            envelope = projector.resolve(
+                self._server_name,
+                self._tool_name,
+                output,
+                call_id=request.operation_id,
+                tool_descriptor=GenToolDescriptor(name=self._tool_name),
+            )
+            await emitter.on_tool_result(
+                server_name=self._server_name,
+                tool_name=self._tool_name,
+                call_id=request.operation_id,
+                output=output,
+                surface=(
+                    envelope.model_dump(mode="json", exclude_none=True)
+                    if envelope is not None
+                    else None
+                ),
+                surface_uri=envelope.surface_uri if envelope is not None else None,
+                latency_ms=latency_ms,
+            )
+        except Exception:  # noqa: BLE001 - presentation cannot break a read.
+            _LOGGER.warning(
+                "mcp_canonical_read_presentation_failed",
+                extra={"operation_id": request.operation_id},
+                exc_info=True,
+            )
 
     async def build_proposal(self, request: OperationRequest) -> GatewayProposedEffect:
         """Stage canonical arguments without creating an MCP client."""
