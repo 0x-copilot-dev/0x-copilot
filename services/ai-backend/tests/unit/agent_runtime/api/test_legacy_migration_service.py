@@ -280,6 +280,9 @@ class TestLegacyMigrationService:
         assert "secret two" not in serialized
         event_type, audit_record = audit.records[0]
         assert event_type == "e2_legacy_migration_reported"
+        assert audit_record["actor_type"] == "system"
+        assert audit_record["outcome"] == "success"
+        assert audit_record["metadata"]["migration_status"] == "dry_run"
         assert "content_text" not in repr(audit_record)
 
     async def test_apply_resumes_by_history_and_preserves_immutable_revisions(

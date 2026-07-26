@@ -1020,12 +1020,20 @@ class LegacyMigrationService:
                 record={
                     "org_id": report.org_id,
                     "user_id": "system",
-                    "actor_type": "service",
+                    # ``runtime_audit_log`` has a closed actor-type enum.  An
+                    # E2 control-plane import is an automated system action,
+                    # not a user-authored or model-supplied actor.
+                    "actor_type": "system",
                     "resource_type": "e2_legacy_migration",
                     "resource_id": report.migration_id,
-                    "outcome": report.migration_status,
+                    # ``outcome`` describes this append-only audit action,
+                    # whose success is distinct from the migration's
+                    # (redacted) lifecycle status retained in metadata.  The
+                    # durable audit enum permits only success/failure/denied.
+                    "outcome": "success",
                     "metadata": {
                         "action": action,
+                        "migration_status": report.migration_status,
                         "dry_run": report.dry_run,
                         "source_digest": report.source_digest,
                         "report_digest": report.report_digest,

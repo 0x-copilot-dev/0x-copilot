@@ -1979,7 +1979,7 @@ class PostgresRuntimeApiStore:
                 """
                 SELECT * FROM agent_runs
                  WHERE org_id = %s
-                   AND (%s IS NULL OR id > %s)
+                   AND (%s::text IS NULL OR id > %s::text)
                  ORDER BY id ASC
                  LIMIT %s
                 """,

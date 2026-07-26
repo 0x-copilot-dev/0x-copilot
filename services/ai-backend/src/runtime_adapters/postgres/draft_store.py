@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.persistence.encryption import FieldCodec
@@ -220,26 +220,51 @@ class PostgresDraftStore:
             )
         return latest
 
-    def _row_to_record(self, row: tuple[object, ...]) -> DraftRecord:
-        """Decrypt and unpack a raw Postgres tuple into a :class:`DraftRecord`."""
+    def _row_to_record(
+        self, row: Mapping[str, object] | tuple[object, ...]
+    ) -> DraftRecord:
+        """Decrypt and unpack a runtime-store row into a :class:`DraftRecord`.
+
+        The shared ``PostgresRuntimeApiStore`` configures dict rows, while
+        isolated adapter callers may use tuple rows.  Migration inventory uses
+        the shared store, so accepting both is required for a real Postgres
+        replay rather than merely a unit-test double.
+        """
         codec = self._codec
-        (
-            row_id,
-            draft_id,
-            version,
-            org_id,
-            conversation_id,
-            run_id,
-            user_id,
-            title_blob,
-            content_blob,
-            target_connector,
-            target_metadata_blob,
-            citation_ids,
-            status,
-            encryption_version,
-            created_at,
-        ) = row
+        if isinstance(row, Mapping):
+            row_id = row["id"]
+            draft_id = row["draft_id"]
+            version = row["version"]
+            org_id = row["org_id"]
+            conversation_id = row["conversation_id"]
+            run_id = row["run_id"]
+            user_id = row["user_id"]
+            title_blob = row["title"]
+            content_blob = row["content_text"]
+            target_connector = row["target_connector"]
+            target_metadata_blob = row["target_metadata"]
+            citation_ids = row["citation_ids"]
+            status = row["status"]
+            encryption_version = row["encryption_version"]
+            created_at = row["created_at"]
+        else:
+            (
+                row_id,
+                draft_id,
+                version,
+                org_id,
+                conversation_id,
+                run_id,
+                user_id,
+                title_blob,
+                content_blob,
+                target_connector,
+                target_metadata_blob,
+                citation_ids,
+                status,
+                encryption_version,
+                created_at,
+            ) = row
 
         org_id_str = str(org_id)
         title = codec.decrypt_text(
