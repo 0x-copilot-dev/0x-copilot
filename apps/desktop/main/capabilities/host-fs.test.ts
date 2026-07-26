@@ -906,6 +906,21 @@ describe("HostFs — native atomic open (workspace-fs helper)", () => {
       "needle",
     );
   });
+
+  it("REAL addon rejects literal parent traversal at its N-API boundary", () => {
+    const realNative = loadRealNative();
+    if (realNative === undefined) return;
+    expect(() =>
+      realNative.openBeneath(root, "../outside/secret.txt", {
+        directory: false,
+      }),
+    ).toThrow();
+    expect(() =>
+      realNative.openBeneath(root, "sub/../file.txt", {
+        directory: false,
+      }),
+    ).toThrow();
+  });
 });
 
 // G2 (read/write time): a legitimately-granted folder that CONTAINS a nested
