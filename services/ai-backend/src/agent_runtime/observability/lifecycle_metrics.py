@@ -125,6 +125,7 @@ class ArtifactCleanupExecutionOutcomeLabel:
     ALREADY_CLEAN = "already_clean"
     FAILED = "failed"
     AUDIT_FAILED = "audit_failed"
+    QUARANTINE_CAPACITY_REACHED = "quarantine_capacity_reached"
 
 
 class AuditVerificationFormatLabel:
@@ -257,6 +258,7 @@ _ARTIFACT_CLEANUP_EXECUTION_OUTCOMES: Final[frozenset[str]] = frozenset(
         ArtifactCleanupExecutionOutcomeLabel.ALREADY_CLEAN,
         ArtifactCleanupExecutionOutcomeLabel.FAILED,
         ArtifactCleanupExecutionOutcomeLabel.AUDIT_FAILED,
+        ArtifactCleanupExecutionOutcomeLabel.QUARANTINE_CAPACITY_REACHED,
     }
 )
 _AUDIT_FORMATS: Final[frozenset[str]] = frozenset(

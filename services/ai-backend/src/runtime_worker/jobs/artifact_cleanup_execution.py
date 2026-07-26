@@ -52,6 +52,7 @@ class ArtifactCleanupExecutionEnv:
     TENANT_TIMEOUT_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_TENANT_TIMEOUT_SECONDS"
     CANCEL_GRACE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_CANCEL_GRACE_SECONDS"
     STOP_GRACE_SECONDS = "ARTIFACT_CLEANUP_EXECUTION_STOP_GRACE_SECONDS"
+    MAX_QUARANTINED_EXECUTIONS = "ARTIFACT_CLEANUP_EXECUTION_MAX_QUARANTINED_EXECUTIONS"
 
     DEFAULT_INTERVAL_SECONDS = 900.0
     DEFAULT_MAX_ORGS = 100
@@ -62,6 +63,7 @@ class ArtifactCleanupExecutionEnv:
     DEFAULT_TENANT_TIMEOUT_SECONDS = 300.0
     DEFAULT_CANCEL_GRACE_SECONDS = 10.0
     DEFAULT_STOP_GRACE_SECONDS = 15.0
+    DEFAULT_MAX_QUARANTINED_EXECUTIONS = 4
 
     @classmethod
     def enabled(cls) -> bool:
@@ -134,6 +136,7 @@ class ArtifactCleanupExecutionResult:
     failures: int = 0
     deferred_tenants: int = 0
     hung_tenants: int = 0
+    quarantine_capacity_reached: bool = False
     audit_failures: int = 0
 
 
@@ -178,6 +181,7 @@ class ArtifactCleanupExecutionRunner:
     """
 
     _AUDIT_EVENT_TYPE = "artifact_cleanup.executed"
+    _CAPACITY_AUDIT_EVENT_TYPE = "artifact_cleanup.quarantine_capacity_reached"
 
     def __init__(
         self,
@@ -192,6 +196,9 @@ class ArtifactCleanupExecutionRunner:
         tenant_timeout_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_TENANT_TIMEOUT_SECONDS,
         cancel_grace_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_CANCEL_GRACE_SECONDS,
         stop_grace_seconds: float = ArtifactCleanupExecutionEnv.DEFAULT_STOP_GRACE_SECONDS,
+        max_quarantined_executions: int = (
+            ArtifactCleanupExecutionEnv.DEFAULT_MAX_QUARANTINED_EXECUTIONS
+        ),
         metrics: LifecycleOperationalMetrics | None = None,
         clock: Callable[[], datetime] | None = None,
     ) -> None:
@@ -204,6 +211,7 @@ class ArtifactCleanupExecutionRunner:
             or tenant_timeout_seconds <= 0
             or cancel_grace_seconds <= 0
             or stop_grace_seconds < cancel_grace_seconds
+            or not 1 <= max_quarantined_executions <= 64
         ):
             raise ValueError("artifact cleanup execution bounds are invalid")
         self._persistence = persistence
@@ -216,6 +224,7 @@ class ArtifactCleanupExecutionRunner:
         self._tenant_timeout_seconds = tenant_timeout_seconds
         self._cancel_grace_seconds = cancel_grace_seconds
         self._stop_grace_seconds = stop_grace_seconds
+        self._max_quarantined_executions = max_quarantined_executions
         self._owner_id = f"artifact-cleanup-{uuid4().hex}"
         self._clock = clock if clock is not None else lambda: datetime.now(UTC)
         self._metrics = (
@@ -223,6 +232,7 @@ class ArtifactCleanupExecutionRunner:
         )
         self._stop_requested = asyncio.Event()
         self._lifecycle_tasks: dict[str, _LifecycleTask] = {}
+        self._quarantine_capacity_reported = False
 
     @property
     def stop_grace_seconds(self) -> float:
@@ -235,10 +245,91 @@ class ArtifactCleanupExecutionRunner:
 
         self._stop_requested.set()
 
+    def resume_scheduling(self) -> None:
+        """Prepare a stopped loop for another cycle without dropping fences.
+
+        Quarantined tasks deliberately remain in the registry. A restarted
+        loop still respects their adapter-backed tenant fences and capacity
+        limit instead of treating restart as permission to overlap cleanup.
+        """
+
+        self._stop_requested.clear()
+
+    def _quarantined_tasks(self) -> tuple[_LifecycleTask, ...]:
+        """Return the still-running tasks that retain durable tenant fences."""
+
+        return tuple(
+            sorted(
+                (task for task in self._lifecycle_tasks.values() if task.quarantined),
+                key=lambda task: task.execution.org_id,
+            )
+        )
+
+    def _quarantine_capacity_reached(self) -> bool:
+        """Bound retained execution locks and dedicated adapter connections."""
+
+        reached = len(self._quarantined_tasks()) >= self._max_quarantined_executions
+        if not reached:
+            self._quarantine_capacity_reported = False
+        return reached
+
+    async def _fail_closed_for_quarantine_capacity(
+        self,
+    ) -> ArtifactCleanupExecutionResult:
+        """Emit bounded evidence and admit no new destructive lifecycle pass."""
+
+        audit_failed = not await self._emit_quarantine_capacity_evidence()
+        if audit_failed:
+            self._record_metric(outcome="audit_failed")
+        return ArtifactCleanupExecutionResult(
+            failures=1,
+            hung_tenants=len(self._quarantined_tasks()),
+            quarantine_capacity_reached=True,
+            audit_failures=int(audit_failed),
+        )
+
+    async def _emit_quarantine_capacity_evidence(self) -> bool:
+        """Persist a tenant-scoped health record once per saturated interval."""
+
+        quarantined = self._quarantined_tasks()
+        if len(quarantined) < self._max_quarantined_executions:
+            self._quarantine_capacity_reported = False
+            return True
+        if self._quarantine_capacity_reported:
+            return True
+        self._record_metric(outcome="quarantine_capacity_reached")
+        representative = quarantined[0]
+        try:
+            await self._persistence.write_audit_log(
+                event_type=self._CAPACITY_AUDIT_EVENT_TYPE,
+                record={
+                    "org_id": representative.execution.org_id,
+                    "actor_type": "system",
+                    "action": self._CAPACITY_AUDIT_EVENT_TYPE,
+                    "resource_type": "artifact_cleanup_worker",
+                    "resource_id": "artifact_cleanup_worker",
+                    "outcome": "failure",
+                    "metadata": {
+                        "health": "quarantine_capacity_reached",
+                        "quarantined_execution_count": len(quarantined),
+                        "max_quarantined_executions": self._max_quarantined_executions,
+                    },
+                },
+            )
+        except Exception:
+            _LOGGER.warning("artifact_cleanup_execution_capacity_audit_unavailable")
+            return False
+        self._quarantine_capacity_reported = True
+        _LOGGER.warning("artifact_cleanup_execution_quarantine_capacity_reached")
+        return True
+
     async def run_once(
         self, *, now: datetime | None = None
     ) -> ArtifactCleanupExecutionResult:
         """Run one page without logging tenant, artifact, or content details."""
+
+        if self._quarantine_capacity_reached():
+            return await self._fail_closed_for_quarantine_capacity()
 
         fixed_now = _utc(now) if now is not None else None
 
@@ -469,6 +560,21 @@ class ArtifactCleanupExecutionRunner:
                         _LOGGER.warning(
                             "artifact_cleanup_execution_fence_release_failed"
                         )
+            if (
+                attempt is not None
+                and attempt.state == "quarantined"
+                and self._quarantine_capacity_reached()
+            ):
+                capacity_audit_failed = (
+                    not await self._emit_quarantine_capacity_evidence()
+                )
+                if capacity_audit_failed:
+                    self._record_metric(outcome="audit_failed")
+                return _replace(
+                    result,
+                    quarantine_capacity_reached=True,
+                    audit_failures=result.audit_failures + int(capacity_audit_failed),
+                )
             if self._stop_requested.is_set():
                 return result
         return result
@@ -621,6 +727,7 @@ class ArtifactCleanupExecutionRunner:
                 _LOGGER.warning("artifact_cleanup_execution_fence_release_failed")
             finally:
                 self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
+                self._quarantine_capacity_reached()
 
     async def _write_audit(
         self,
@@ -823,6 +930,12 @@ class ArtifactCleanupExecutionLoop:
 
     async def start(self) -> None:
         if self._task is None:
+            # ``stop`` intentionally asks the runner to cancel a live pass.
+            # A new loop generation must therefore create a fresh local signal
+            # and explicitly resume the scheduler; it never clears retained
+            # quarantined tasks or their tenant execution fences.
+            self._stop = asyncio.Event()
+            self._runner.resume_scheduling()
             self._task = asyncio.create_task(
                 self._run(), name="artifact-cleanup-execution-loop"
             )
@@ -866,7 +979,7 @@ class ArtifactCleanupExecutionLoop:
 
 
 def _replace(
-    value: ArtifactCleanupExecutionResult, **changes: int
+    value: ArtifactCleanupExecutionResult, **changes: int | bool
 ) -> ArtifactCleanupExecutionResult:
     return ArtifactCleanupExecutionResult(
         tenants_scanned=changes.get("tenants_scanned", value.tenants_scanned),
@@ -881,6 +994,9 @@ def _replace(
         failures=changes.get("failures", value.failures),
         deferred_tenants=changes.get("deferred_tenants", value.deferred_tenants),
         hung_tenants=changes.get("hung_tenants", value.hung_tenants),
+        quarantine_capacity_reached=changes.get(
+            "quarantine_capacity_reached", value.quarantine_capacity_reached
+        ),
         audit_failures=changes.get("audit_failures", value.audit_failures),
     )
 

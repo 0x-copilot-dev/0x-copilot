@@ -239,6 +239,13 @@ class RuntimeWorkerEntrypoint:
                     ArtifactCleanupExecutionEnv.STOP_GRACE_SECONDS,
                     default=ArtifactCleanupExecutionEnv.DEFAULT_STOP_GRACE_SECONDS,
                 )
+                max_quarantined_executions = ArtifactCleanupExecutionEnv.env_int(
+                    ArtifactCleanupExecutionEnv.MAX_QUARANTINED_EXECUTIONS,
+                    default=(
+                        ArtifactCleanupExecutionEnv.DEFAULT_MAX_QUARANTINED_EXECUTIONS
+                    ),
+                    maximum=64,
+                )
                 if retry_max_seconds < retry_base_seconds:
                     raise RuntimeError(
                         "ARTIFACT_CLEANUP_EXECUTION_RETRY_MAX_SECONDS must be at least "
@@ -264,6 +271,7 @@ class RuntimeWorkerEntrypoint:
                         tenant_timeout_seconds=tenant_timeout_seconds,
                         cancel_grace_seconds=cancel_grace_seconds,
                         stop_grace_seconds=stop_grace_seconds,
+                        max_quarantined_executions=max_quarantined_executions,
                     )
                 )
                 await artifact_cleanup_execution_loop.start()
@@ -279,6 +287,7 @@ class RuntimeWorkerEntrypoint:
                         "tenant_timeout_seconds": tenant_timeout_seconds,
                         "cancel_grace_seconds": cancel_grace_seconds,
                         "stop_grace_seconds": stop_grace_seconds,
+                        "max_quarantined_executions": max_quarantined_executions,
                     },
                 )
             # D12 planning is opt-in.  Execution is a second explicit switch:

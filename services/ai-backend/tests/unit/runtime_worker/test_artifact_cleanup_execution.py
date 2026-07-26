@@ -253,6 +253,13 @@ def _outcome(org_id: str, **changes: int) -> ArtifactPhysicalCleanupOutcome:
     return ArtifactPhysicalCleanupOutcome(org_id=org_id, **changes)
 
 
+async def _wait_for_call_count(
+    persistence: _CancellationProbePersistence, expected: int
+) -> None:
+    while len(persistence.calls) < expected:
+        await asyncio.sleep(0.001)
+
+
 async def test_runner_is_tenant_bounded_idempotent_and_audits_counts_only() -> None:
     persistence = _Persistence(
         org_ids=("org_b", "org_a", "org_a", "org_c"),
@@ -692,6 +699,87 @@ async def test_hung_tenant_is_quarantined_while_later_tenants_progress() -> None
     )
 
 
+async def test_quarantine_capacity_fails_closed_without_releasing_hung_fences() -> None:
+    """Only bounded hung tasks are admitted; unrelated tenants run below cap."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a", "org_b", "org_c", "org_d"),
+        blocking_org_ids=frozenset({"org_a", "org_c", "org_d"}),
+        ignore_cancellation_org_ids=frozenset({"org_a", "org_c", "org_d"}),
+    )
+    schedule = _ObservingSchedule()
+    metrics = _Metrics()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=4,
+        limit_per_org=7,
+        tenant_timeout_seconds=0.01,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.02,
+        max_quarantined_executions=2,
+        metrics=metrics,  # type: ignore[arg-type]
+    )
+
+    saturated = await asyncio.wait_for(runner.run_once(now=NOW), timeout=1)
+
+    # A is quarantined, B still progresses below the cap, C reaches the cap,
+    # and D is never admitted. This caps retained Postgres advisory-lock
+    # connections as well as file/in-memory tenant locks.
+    assert persistence.calls == ["org_a", "org_b", "org_c"]
+    assert saturated.tenants_scanned == 3
+    assert saturated.hung_tenants == 2
+    assert saturated.quarantine_capacity_reached is True
+    assert await schedule.load_cursor() == "org_c"
+    assert metrics.outcomes.count("quarantine_capacity_reached") == 1
+    assert persistence.audits[-1][0] == "artifact_cleanup.quarantine_capacity_reached"
+    capacity_metadata = persistence.audits[-1][1]["metadata"]
+    assert isinstance(capacity_metadata, dict)
+    assert capacity_metadata == {
+        "health": "quarantine_capacity_reached",
+        "quarantined_execution_count": 2,
+        "max_quarantined_executions": 2,
+    }
+
+    # A saturated worker does not acquire a new global lease or schedule any
+    # additional lifecycle work. It keeps the exact fences for A/C in place.
+    blocked = await runner.run_once(now=NOW)
+    assert blocked.quarantine_capacity_reached is True
+    assert persistence.calls == ["org_a", "org_b", "org_c"]
+    assert metrics.outcomes.count("quarantine_capacity_reached") == 1
+    assert len(persistence.audits) == 4
+
+    successor = await schedule.acquire_lease(
+        owner_id="successor", now=NOW, duration_seconds=60
+    )
+    assert successor is not None
+    for org_id in ("org_a", "org_c"):
+        assert (
+            await schedule.acquire_tenant_execution(
+                owner_id="successor",
+                fence_token=successor.fence_token,
+                org_id=org_id,
+                now=NOW,
+            )
+            is None
+        )
+    await schedule.release_lease(
+        owner_id="successor", fence_token=successor.fence_token, now=NOW
+    )
+
+    # Let the probes exit. Their late callbacks can only release their exact
+    # fences; they cannot add audit rows or move the durable cursor.
+    release_events = {
+        org_id: schedule.release_event(org_id) for org_id in ("org_a", "org_c")
+    }
+    for org_id in ("org_a", "org_c"):
+        persistence.release(org_id)
+        await asyncio.wait_for(persistence.finished[org_id].wait(), timeout=1)
+        await asyncio.wait_for(release_events[org_id].wait(), timeout=1)
+    assert await schedule.load_cursor() == "org_c"
+    assert len(persistence.audits) == 4
+
+
 async def test_loop_stop_is_bounded_with_a_quarantined_lifecycle_task() -> None:
     """Graceful stop cannot await a cancellation-ignoring pass forever."""
 
@@ -740,6 +828,84 @@ async def test_loop_stop_is_bounded_with_a_quarantined_lifecycle_task() -> None:
         fence_token=successor.fence_token,
         now=datetime.now(UTC),
     )
+    released_event = schedule.release_event("org_a")
+    persistence.release("org_a")
+    await asyncio.wait_for(persistence.finished["org_a"].wait(), timeout=1)
+    await asyncio.wait_for(released_event.wait(), timeout=1)
+
+
+async def test_loop_restart_resets_stop_signals_without_dropping_fence_state() -> None:
+    """A cleanly stopped loop can restart via the runner's supervisor seam."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a",),
+        blocking_org_ids=frozenset({"org_a"}),
+        ignore_cancellation_org_ids=frozenset(),
+    )
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=InMemoryArtifactCleanupScheduleStore(),
+        max_orgs=1,
+        limit_per_org=7,
+        retry_base_seconds=0.001,
+        retry_max_seconds=0.001,
+        tenant_timeout_seconds=30,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.05,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    loop = ArtifactCleanupExecutionLoop(runner=runner, interval_seconds=0.001)
+
+    await loop.start()
+    await asyncio.wait_for(persistence.started["org_a"].wait(), timeout=1)
+    await asyncio.wait_for(loop.stop(), timeout=0.2)
+    assert persistence.calls == ["org_a"]
+
+    # The first pass obeyed cancellation and has no retained fence. Reusing
+    # the loop must create fresh stop events and clear only its scheduler-stop
+    # request; it must not rely on constructing a new runner.
+    persistence.release("org_a")
+    await loop.start()
+    await asyncio.wait_for(_wait_for_call_count(persistence, expected=2), timeout=1)
+    await asyncio.wait_for(loop.stop(), timeout=0.2)
+    assert len(persistence.calls) >= 2
+
+
+async def test_loop_restart_preserves_a_quarantined_fence() -> None:
+    """Restart cannot treat a prior stop as permission to overlap a hung pass."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a", "org_b"),
+        blocking_org_ids=frozenset({"org_a"}),
+        ignore_cancellation_org_ids=frozenset({"org_a"}),
+    )
+    schedule = _ObservingSchedule()
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=2,
+        limit_per_org=7,
+        tenant_timeout_seconds=30,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.05,
+        max_quarantined_executions=2,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    loop = ArtifactCleanupExecutionLoop(runner=runner, interval_seconds=0.001)
+
+    await loop.start()
+    await asyncio.wait_for(persistence.started["org_a"].wait(), timeout=1)
+    await asyncio.wait_for(loop.stop(), timeout=0.2)
+    assert persistence.calls == ["org_a"]
+
+    # The restarted loop may progress B because it is still below the cap,
+    # but its fresh stop signal must not clear A's retained tenant fence.
+    await loop.start()
+    await asyncio.wait_for(_wait_for_call_count(persistence, expected=2), timeout=1)
+    await asyncio.wait_for(loop.stop(), timeout=0.2)
+    assert persistence.calls[0:2] == ["org_a", "org_b"]
+    assert persistence.calls.count("org_a") == 1
+
     released_event = schedule.release_event("org_a")
     persistence.release("org_a")
     await asyncio.wait_for(persistence.finished["org_a"].wait(), timeout=1)
