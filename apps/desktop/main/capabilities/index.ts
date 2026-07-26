@@ -46,7 +46,9 @@ export interface WorkspaceAuthorityBootstrap {
   readonly native: NativeWorkspaceAuthority;
   readonly attestation: WorkspaceWriteAttestation;
   readonly production: boolean;
-  readonly profileId: string;
+  readonly profileId?: string;
+  /** Main-only late resolver for the verified signed-in profile. */
+  readonly profileIdResolver?: () => Promise<string | null>;
   readonly deviceId: string;
   /** Stable per-installation secret; required for restart-safe recovery. */
   readonly journalIntegrityKey: Buffer;
@@ -76,6 +78,7 @@ export function createCapabilityService(
       ? (root) => native.rootIdentity(root)
       : undefined,
     profileId: workspace?.profileId,
+    profileIdResolver: workspace?.profileIdResolver,
     deviceId: workspace?.deviceId,
   });
   const authority = new LocalWorkspaceAuthority({

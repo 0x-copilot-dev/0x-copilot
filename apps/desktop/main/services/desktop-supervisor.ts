@@ -45,6 +45,7 @@ import {
 import { ServiceSupervisor, type AllocatedPorts } from "./supervisor";
 import type { BootSecrets } from "./boot-secrets";
 import { LocalServiceIdentityRegistry } from "./local-service-identity";
+import { MacosWorkspaceConfinement } from "./macos-workspace-confinement";
 import type { SecureStorageMode } from "./secure-storage-policy";
 
 // ENOENT -> false (marker absent); any other error propagates so the boot
@@ -94,6 +95,11 @@ export interface DesktopSupervisorConfig {
   readonly arch?: NodeJS.Architecture;
   /** Main-created identities shared with main-owned local-authority brokers. */
   readonly localServiceIdentities?: LocalServiceIdentityRegistry;
+  /**
+   * Present only after the packaged macOS C2 launch gate verified Seatbelt.
+   * Supplying it never falls back to an unconstrained Python child.
+   */
+  readonly workspaceChildConfinement?: MacosWorkspaceConfinement;
 }
 
 // Composes the pure orchestrator (supervisor.ts) with the real OS-facing
@@ -112,6 +118,7 @@ export function createDesktopSupervisor(
   const processEnv = config.processEnv ?? process.env;
   const localServiceIdentities =
     config.localServiceIdentities ?? new LocalServiceIdentityRegistry();
+  const workspaceChildConfinement = config.workspaceChildConfinement;
   const runner = createCommandRunner();
   const logsDir = join(config.userDataDir, "logs");
   const fsAdapter = { readFile, writeFile, mkdir, rm, chmod };
@@ -315,31 +322,43 @@ export function createDesktopSupervisor(
         name === "ai-backend"
           ? (effectiveStoreBackend ?? configuredBackend)
           : undefined;
+      const command = paths.pythonBin;
+      const args = [
+        "-m",
+        "uvicorn",
+        `${UVICORN_MODULES[name]}:app`,
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(port),
+      ] as const;
+      const confined =
+        workspaceChildConfinement === undefined
+          ? { command, args }
+          : workspaceChildConfinement.wrap(command, args);
       return new PythonService({
         name,
-        command: paths.pythonBin,
-        args: [
-          "-m",
-          "uvicorn",
-          `${UVICORN_MODULES[name]}:app`,
-          "--host",
-          "127.0.0.1",
-          "--port",
-          String(port),
-        ],
+        command: confined.command,
+        args: confined.args,
         cwd: paths.serviceDir(name),
         env: buildServiceEnv(
           name,
           envInputs(name, ports, secrets, storeBackendOverride),
         ),
-        spawnFn: spawn as unknown as SpawnFn,
+        spawnFn:
+          workspaceChildConfinement?.spawnFor(
+            name,
+            spawn as unknown as SpawnFn,
+          ) ?? (spawn as unknown as SpawnFn),
         log,
         onFatal,
       });
     },
 
-    waitForHealthy: (name, baseUrl) =>
-      waitForHealthy({ service: name, baseUrl }),
+    waitForHealthy: async (name, baseUrl) => {
+      await waitForHealthy({ service: name, baseUrl });
+      workspaceChildConfinement?.noteHealthy(name);
+    },
   });
 }
 
