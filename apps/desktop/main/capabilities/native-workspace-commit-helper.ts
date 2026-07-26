@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { existsSync } from "node:fs";
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
 import type { Writable } from "node:stream";
@@ -25,7 +25,10 @@ import type {
  */
 const MAX_FRAME_BYTES = 128 * 1024 * 1024;
 const MAC_BYTES = 32;
-const HELPER_PROTOCOL_VERSION = 1;
+const HELPER_PROTOCOL_VERSION = 2;
+const CHANNEL_SEQUENCE_BYTES = 8;
+const CHANNEL_KEY_BYTES = 32;
+const WORKSPACE_HELPER_IDENTIFIER = "com.0x-copilot.workspace-commit-helper";
 
 const enum Request {
   RootIdentity = 1,
@@ -83,11 +86,47 @@ export class NativeWorkspaceCommitHelperError extends Error {
 export interface NativeWorkspaceCommitHelperConfig {
   /** The packaged or development helper executable, resolved by main only. */
   readonly executablePath: string;
+  /**
+   * An already-open, mode-0700 app-private staging directory. It is inherited
+   * by the helper as fd 4; no workspace path or stage filename is ever sent
+   * over the command protocol.
+   */
+  readonly stagingDirectoryFd: number;
+  /**
+   * An already-open, mode-0700 app-private journal directory, inherited as
+   * fd 5. The helper uses it for its authenticated durable lifecycle records.
+   */
+  readonly journalDirectoryFd: number;
+  /** Persistent main-owned HMAC key for durable journal records (fd 6). */
+  readonly journalIntegrityKey: Uint8Array;
+  /**
+   * C2 must never be instantiated when the supervised runtime has not proven
+   * both its process isolation and native primitive availability.
+   */
+  readonly attestation: Readonly<{
+    workspaceWriteIsolation: "enforced";
+    nativeWorkspacePrimitives: "available";
+  }>;
+  /** Require Apple's strict designated-requirement verification at package runtime. */
+  readonly packaged?: boolean;
+  /** Test seam for the macOS verifier; production callers leave this unset. */
+  readonly verifyPackagedExecutable?: (path: string) => boolean;
+  /**
+   * Native-only fault injection for crash-boundary tests. It is a denial-only
+   * input carried on a private inherited fd and is deliberately not wired to
+   * any renderer, service, or production composition.
+   */
+  readonly testCrashBoundary?:
+    | "prepared"
+    | "authorized"
+    | "committing"
+    | "effect";
   readonly timeoutMs?: number;
   readonly randomBytes?: (size: number) => Buffer;
 }
 
 interface PendingResponse {
+  readonly sequence: bigint;
   readonly resolve: (value: Buffer) => void;
   readonly reject: (reason: Error) => void;
   readonly timer: ReturnType<typeof setTimeout>;
@@ -101,22 +140,19 @@ interface PendingResponse {
  */
 export class NativeWorkspaceCommitHelper implements NativeWorkspaceAuthority {
   readonly primitivesAvailable = true;
-  readonly #child: ChildProcessWithoutNullStreams;
+  readonly #child: ChildProcess;
   readonly #key: Buffer;
   readonly #timeoutMs: number;
   #stdout = Buffer.alloc(0);
   #pending: PendingResponse | null = null;
   #closed = false;
+  #nextSequence = 1n;
 
-  private constructor(
-    child: ChildProcessWithoutNullStreams,
-    key: Buffer,
-    timeoutMs: number,
-  ) {
+  private constructor(child: ChildProcess, key: Buffer, timeoutMs: number) {
     this.#child = child;
     this.#key = key;
     this.#timeoutMs = timeoutMs;
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       try {
         this.#onData(chunk);
       } catch {
@@ -132,26 +168,70 @@ export class NativeWorkspaceCommitHelper implements NativeWorkspaceAuthority {
   static async launch(
     config: NativeWorkspaceCommitHelperConfig,
   ): Promise<NativeWorkspaceCommitHelper> {
-    if (process.platform !== "darwin" || !existsSync(config.executablePath)) {
+    if (
+      process.platform !== "darwin" ||
+      !existsSync(config.executablePath) ||
+      config.attestation.workspaceWriteIsolation !== "enforced" ||
+      config.attestation.nativeWorkspacePrimitives !== "available" ||
+      config.journalIntegrityKey.byteLength !== CHANNEL_KEY_BYTES ||
+      !Number.isInteger(config.stagingDirectoryFd) ||
+      !Number.isInteger(config.journalDirectoryFd)
+    ) {
       throw new NativeWorkspaceCommitHelperError("workspace_write_unsupported");
     }
-    const key = (config.randomBytes ?? randomBytes)(32);
-    const child = spawn(config.executablePath, [], {
+    if (
+      config.packaged === true &&
+      !(config.verifyPackagedExecutable ?? verifyPackagedWorkspaceCommitHelper)(
+        config.executablePath,
+      )
+    ) {
+      throw new NativeWorkspaceCommitHelperError("workspace_write_unsupported");
+    }
+    const key = (config.randomBytes ?? randomBytes)(CHANNEL_KEY_BYTES);
+    if (key.byteLength !== CHANNEL_KEY_BYTES) {
+      throw new NativeWorkspaceCommitHelperError("workspace_write_unsupported");
+    }
+    const testFault = config.testCrashBoundary;
+    const stdio: Array<"pipe" | "ignore" | number> = [
+      "pipe",
+      "pipe",
+      "ignore",
+      "pipe",
+      config.stagingDirectoryFd,
+      config.journalDirectoryFd,
+      "pipe",
+      ...(testFault === undefined ? [] : ["pipe" as const]),
+    ];
+    const child: ChildProcess = spawn(config.executablePath, [], {
       // No inherited environment, cwd, shell, or ambient descriptor. stdin and
       // stdout are the private authenticated command channel; fd 3 delivers a
-      // one-time boot key and is immediately closed on both sides.
+      // one-time boot key, fd 4 is private staging, fd 5 is the private
+      // durable journal, and fd 6 delivers a persistent journal HMAC key.
+      // Neither a service nor a renderer receives any of these descriptors.
       cwd: "/",
       env: {},
       shell: false,
       windowsHide: true,
-      stdio: ["pipe", "pipe", "pipe", "pipe"],
+      stdio,
     });
-    const secret = child.stdio[3] as Writable | null | undefined;
-    if (secret === null || secret === undefined) {
+    const handles = child.stdio as Array<Writable | null | undefined>;
+    const secret = handles[3];
+    const journalSecret = handles[6];
+    const fault = handles[7];
+    if (
+      secret === null ||
+      secret === undefined ||
+      journalSecret === null ||
+      journalSecret === undefined ||
+      (testFault !== undefined && (fault === null || fault === undefined))
+    ) {
       child.kill();
       throw new NativeWorkspaceCommitHelperError("workspace_write_unsupported");
     }
     secret.end(key);
+    journalSecret.end(config.journalIntegrityKey);
+    if (testFault !== undefined)
+      fault!.end(Buffer.from([faultCode(testFault)]));
     await Promise.race([
       once(child, "spawn"),
       once(child, "error").then(() => {
@@ -320,7 +400,11 @@ export class NativeWorkspaceCommitHelper implements NativeWorkspaceAuthority {
         new NativeWorkspaceCommitHelperError("workspace_helper_failed"),
       );
     }
+    const sequence = this.#nextSequence++;
+    const sequenceBytes = Buffer.allocUnsafe(CHANNEL_SEQUENCE_BYTES);
+    sequenceBytes.writeBigUInt64BE(sequence);
     const payload = Buffer.concat([
+      sequenceBytes,
       Buffer.from([HELPER_PROTOCOL_VERSION, type]),
       body,
     ]);
@@ -331,8 +415,13 @@ export class NativeWorkspaceCommitHelper implements NativeWorkspaceAuthority {
         this.#child.kill("SIGKILL");
         this.#failPending();
       }, this.#timeoutMs);
-      this.#pending = { resolve, reject, timer };
-      this.#child.stdin.write(frame, (error) => {
+      this.#pending = { sequence, resolve, reject, timer };
+      const stdin = this.#child.stdin;
+      if (stdin === null) {
+        this.#failPending();
+        return;
+      }
+      stdin.write(frame, (error) => {
         if (error !== undefined && error !== null) this.#failPending();
       });
     });
@@ -343,7 +432,10 @@ export class NativeWorkspaceCommitHelper implements NativeWorkspaceAuthority {
     const frame = decodeFrame(this.#key, this.#stdout);
     if (frame === null) return;
     this.#stdout = this.#stdout.subarray(frame.consumed);
-    if (this.#pending === null || frame.payload.byteLength < 2) {
+    if (
+      this.#pending === null ||
+      frame.payload.byteLength < CHANNEL_SEQUENCE_BYTES + 2
+    ) {
       this.#closed = true;
       this.#child.kill("SIGKILL");
       return;
@@ -351,8 +443,17 @@ export class NativeWorkspaceCommitHelper implements NativeWorkspaceAuthority {
     const pending = this.#pending;
     this.#pending = null;
     clearTimeout(pending.timer);
-    const version = frame.payload[0];
-    const status = frame.payload[1];
+    const sequence = frame.payload.readBigUInt64BE(0);
+    if (sequence !== pending.sequence) {
+      this.#closed = true;
+      this.#child.kill("SIGKILL");
+      pending.reject(
+        new NativeWorkspaceCommitHelperError("workspace_helper_failed"),
+      );
+      return;
+    }
+    const version = frame.payload[CHANNEL_SEQUENCE_BYTES];
+    const status = frame.payload[CHANNEL_SEQUENCE_BYTES + 1];
     if (version !== HELPER_PROTOCOL_VERSION) {
       pending.reject(
         new NativeWorkspaceCommitHelperError("workspace_helper_failed"),
@@ -360,10 +461,10 @@ export class NativeWorkspaceCommitHelper implements NativeWorkspaceAuthority {
       return;
     }
     if (status !== 0) {
-      pending.reject(toHelperError(frame.payload[2]));
+      pending.reject(toHelperError(frame.payload[CHANNEL_SEQUENCE_BYTES + 2]));
       return;
     }
-    pending.resolve(frame.payload.subarray(2));
+    pending.resolve(frame.payload.subarray(CHANNEL_SEQUENCE_BYTES + 2));
   }
 
   #failPending(): void {
@@ -396,6 +497,21 @@ export function resolveNativeWorkspaceCommitHelperPath(input: {
         "bin",
         "workspace-commit-helper",
       );
+}
+
+/**
+ * Verify the exact nested helper that the macOS package builder signs. The
+ * designated requirement prevents a merely-valid arbitrary local binary from
+ * inheriting C2 authority when the application is packaged.
+ */
+export function verifyPackagedWorkspaceCommitHelper(path: string): boolean {
+  const requirement = `anchor apple generic and identifier \"${WORKSPACE_HELPER_IDENTIFIER}\"`;
+  const result = spawnSync(
+    "/usr/bin/codesign",
+    ["--verify", "--strict", "--verbose=2", "-R", requirement, path],
+    { stdio: "ignore" },
+  );
+  return result.error === undefined && result.status === 0;
 }
 
 class Encoder {
@@ -564,6 +680,21 @@ function encodeFrame(key: Buffer, payload: Buffer): Buffer {
   length.writeUInt32BE(payload.byteLength);
   const mac = createHmac("sha256", key).update(length).update(payload).digest();
   return Buffer.concat([length, mac, payload]);
+}
+
+function faultCode(
+  boundary: NonNullable<NativeWorkspaceCommitHelperConfig["testCrashBoundary"]>,
+): number {
+  switch (boundary) {
+    case "prepared":
+      return 1;
+    case "authorized":
+      return 2;
+    case "committing":
+      return 3;
+    case "effect":
+      return 4;
+  }
 }
 
 function decodeFrame(

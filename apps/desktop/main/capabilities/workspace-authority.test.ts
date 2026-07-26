@@ -208,6 +208,38 @@ describe("LocalWorkspaceAuthority", () => {
     expect(native.prepared).toBe(0);
   });
 
+  it("rejects Unicode and non-canonical writable path spellings before native prepare", async () => {
+    const { authority, native } = build();
+    const capability = await authority.createReadCapability(FACTS, ["grant_1"]);
+    await expect(
+      authority.prepareChangeSet(
+        capability.capability,
+        changeSet({
+          entries: [
+            {
+              ...changeSet().entries[0]!,
+              relativePath: "notes/cafe\u0301.md",
+            },
+          ],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "workspace_conflict" });
+    await expect(
+      authority.prepareChangeSet(
+        capability.capability,
+        changeSet({
+          entries: [
+            {
+              ...changeSet().entries[0]!,
+              relativePath: "notes/plan copy.md",
+            },
+          ],
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "workspace_conflict" });
+    expect(native.prepared).toBe(0);
+  });
+
   it("stages bytes privately, needs an exact user-issued permit, and commits once", async () => {
     const { authority, native, journal } = build();
     const capability = await authority.createReadCapability(FACTS, ["grant_1"]);

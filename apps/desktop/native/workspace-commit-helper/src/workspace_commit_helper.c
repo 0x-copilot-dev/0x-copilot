@@ -8,23 +8,32 @@
  *   fd 1  authenticated private response pipe (helper -> main)
  *   fd 2  closed by the parent / never used for diagnostics
  *   fd 3  a one-time 32-byte channel key, then closed
+ *   fd 4  app-private staging-directory capability (opened by Electron main)
+ *   fd 5  app-private durable journal-directory capability
+ *   fd 6  persistent 32-byte journal HMAC key, then closed
  *
  * It has no listener, no UDS name, no TMPDIR lookup, no shell, no inherited
  * environment, no Electron/Node API, and no service-visible file descriptor.
  * The helper accepts only root-relative segments during prepare and retains
- * root and parent descriptors until commit/abort. A process crash is always
- * reconciled as indeterminate by main; this helper never replays a mutation.
+ * root and parent descriptors until commit/abort. Staged bytes live only
+ * beneath the inherited private staging descriptor, are retained by inode,
+ * and are re-attested immediately before the no-replace effect. A process
+ * crash is reconciled from an HMAC-protected durable journal; this helper
+ * never replays an indeterminate mutation.
  */
 
 #include <CommonCrypto/CommonDigest.h>
 #include <CommonCrypto/CommonHMAC.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mount.h>
+#include <sys/clonefile.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -33,14 +42,17 @@
 #define O_NOFOLLOW_ANY 0x20000000
 #endif
 
-#define PROTOCOL 1
+#define PROTOCOL 2
 #define KEY_BYTES 32
 #define MAC_BYTES 32
+#define CHANNEL_SEQUENCE_BYTES 8
 #define MAX_FRAME (128u * 1024u * 1024u)
 #define MAX_ENTRIES 256u
 #define MAX_PATH_BYTES 4096u
 #define MAX_SLOT_BYTES 120u
 #define MAX_CLAIM_BYTES 160u
+#define MAX_STAGE_DIR_BYTES 48u
+#define JOURNAL_MAGIC "C2JNLv2"
 
 enum request {
   ROOT_IDENTITY = 1, PREPARE = 2, WRITE = 3, SEAL = 4, COMMIT = 5,
@@ -52,6 +64,10 @@ enum operation { CREATE = 1, REPLACE = 2, DELETE = 3, MOVE = 4, MKDIR = 5 };
 enum outcome { APPLIED = 1, ALREADY_APPLIED = 2, PRECONDITION_DRIFT = 3,
                FAILED = 4, INDETERMINATE = 5 };
 enum failure { INVALID = 1, UNSUPPORTED = 2, CONFLICT = 3, DRIFT = 4, INTERNAL = 5 };
+enum journal_state { JOURNAL_PREPARED = 1, JOURNAL_AUTHORIZED = 2,
+  JOURNAL_COMMITTING = 3, JOURNAL_APPLIED = 4,
+  JOURNAL_INDETERMINATE = 5, JOURNAL_FAILED_BEFORE_EFFECT = 6,
+  JOURNAL_CLEANED = 7 };
 
 struct reader { const uint8_t *data; size_t length; size_t offset; };
 struct writer { uint8_t *data; size_t length; size_t capacity; };
@@ -82,7 +98,9 @@ struct entry {
   uint64_t expected_size;
   uint64_t bytes_written;
   int stage_fd;
-  char *stage_name;
+  char stage_name[80];
+  struct stat sealed_stat;
+  char sealed_digest[65];
   int sealed;
 };
 
@@ -91,16 +109,38 @@ struct prepared {
   int root_fd;
   dev_t root_dev;
   ino_t root_ino;
+  char journal_name[48];
+  char stage_dir[48];
   struct entry *entries;
   uint32_t entry_count;
   struct prepared *next;
 };
 
-struct claim { char *id; enum outcome outcome; struct claim *next; };
+struct journal_record {
+  char magic[8];
+  uint8_t version;
+  uint8_t state;
+  uint8_t outcome;
+  uint8_t cleanup_complete;
+  uint16_t entry_count;
+  char handle[37];
+  char claim[MAX_CLAIM_BYTES + 1];
+  char stage_dir[MAX_STAGE_DIR_BYTES];
+  uint8_t mac[MAC_BYTES];
+};
+
+struct claim { char *id; enum outcome outcome; enum journal_state state;
+  struct claim *next; };
 
 static uint8_t channel_key[KEY_BYTES];
+static uint8_t journal_key[KEY_BYTES];
 static struct prepared *prepared_head = NULL;
 static struct claim *claim_head = NULL;
+static int staging_parent_fd = -1;
+static int staging_run_fd = -1;
+static int journal_fd = -1;
+static char staging_run_name[MAX_STAGE_DIR_BYTES];
+static uint8_t test_crash_boundary = 0;
 
 static int read_all(int fd, void *out, size_t length) {
   uint8_t *cursor = out;
@@ -198,7 +238,7 @@ static void hex(const uint8_t *input, size_t length, char *out) {
 
 static int regular_digest_fd(int fd, char out[65], struct stat *stat_out) {
   CC_SHA256_CTX context; uint8_t buffer[8192], digest[CC_SHA256_DIGEST_LENGTH]; ssize_t count; struct stat before, after;
-  if (fstat(fd, &before) < 0 || !S_ISREG(before.st_mode) || before.st_nlink != 1 || lseek(fd, 0, SEEK_SET) < 0) return 0;
+  if (fstat(fd, &before) < 0 || !S_ISREG(before.st_mode) || lseek(fd, 0, SEEK_SET) < 0) return 0;
   CC_SHA256_Init(&context);
   while ((count = read(fd, buffer, sizeof buffer)) > 0) CC_SHA256_Update(&context, buffer, (CC_LONG)count);
   if (count < 0 || fstat(fd, &after) < 0 || before.st_dev != after.st_dev || before.st_ino != after.st_ino || before.st_size != after.st_size) return 0;
@@ -208,15 +248,36 @@ static int regular_digest_fd(int fd, char out[65], struct stat *stat_out) {
 static int path_is_safe(const char *path) {
   const char *cursor, *segment;
   if (!path || !path[0] || path[0] == '/' || strchr(path, '\\') || strlen(path) > MAX_PATH_BYTES) return 0;
-  cursor = path; segment = path;
+  cursor = path; segment = cursor;
   while (1) {
     if (*cursor == '/' || *cursor == '\0') {
       size_t length = (size_t)(cursor - segment);
       if (length == 0 || (length == 1 && segment[0] == '.') || (length == 2 && segment[0] == '.' && segment[1] == '.')) return 0;
       if (*cursor == '\0') return 1; segment = cursor + 1;
+      cursor++; continue;
     }
+    /* Native writes deliberately support only ASCII portable segments. This
+       rejects every Unicode normalization spelling and lets us require an
+       exact byte-for-byte directory entry at every case-insensitive hop. */
+    if ((unsigned char)*cursor < 0x21 || (unsigned char)*cursor > 0x7e ||
+        !((*cursor >= 'a' && *cursor <= 'z') || (*cursor >= 'A' && *cursor <= 'Z') ||
+          (*cursor >= '0' && *cursor <= '9') || *cursor == '.' || *cursor == '_' || *cursor == '-')) return 0;
     cursor++;
   }
+}
+
+/* APFS/HFS can resolve a differently-cased name. Before we retain a directory
+ * descriptor, enumerate its parent and require the exact requested bytes.
+ * Together with ASCII-only request paths this rejects normalization/case
+ * ambiguity instead of silently canonicalizing an attacker-controlled path. */
+static int directory_has_exact_entry(int parent_fd, const char *name) {
+  DIR *dir; struct dirent *entry; int found = 0;
+  int scan_fd = openat(parent_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY);
+  dir = scan_fd < 0 ? NULL : fdopendir(scan_fd); if (!dir) { if (scan_fd >= 0) close(scan_fd); return 0; }
+  while ((entry = readdir(dir)) != NULL) {
+    if (strcmp(entry->d_name, name) == 0) { found = 1; break; }
+  }
+  closedir(dir); return found;
 }
 
 static int is_hex_digest(const char *digest) {
@@ -260,6 +321,7 @@ static int open_parent(int root_fd, dev_t root_dev, const char *path, char **lea
   segment = copy;
   while (*segment) {
     slash = strchr(segment, '/'); if (slash) *slash = '\0';
+    if (!directory_has_exact_entry(current, segment)) goto fail;
     next = openat(current, segment, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY);
     close(current); current = -1;
     if (next < 0 || fstat(next, &statbuf) < 0 || !S_ISDIR(statbuf.st_mode) || statbuf.st_dev != root_dev) { if (next >= 0) close(next); goto fail; }
@@ -273,6 +335,7 @@ fail:
 static int snapshot_at(int parent_fd, const char *leaf, int expected_exists, int expected_kind, const char *expected_digest, struct snapshot *out) {
   struct stat statbuf; int fd;
   memset(out, 0, sizeof *out);
+  if (expected_exists && !directory_has_exact_entry(parent_fd, leaf)) return 0;
   if (fstatat(parent_fd, leaf, &statbuf, AT_SYMLINK_NOFOLLOW) < 0) return errno == ENOENT && !expected_exists;
   if (!expected_exists || S_ISLNK(statbuf.st_mode) ||
       (S_ISREG(statbuf.st_mode) && statbuf.st_nlink != 1)) return 0;
@@ -298,13 +361,176 @@ static int snapshot_matches(int parent_fd, const char *leaf, const struct snapsh
   return expected->kind != 1 || strcmp(observed.digest, expected->digest) == 0;
 }
 
+static int private_dir_fd(int fd, struct stat *out) {
+  if (!supported_root_fd(fd, out) || out->st_uid != geteuid() ||
+      (out->st_mode & 0077) != 0) return 0;
+  return 1;
+}
+
+static int make_private_run_dir(void) {
+  uint8_t random[16]; struct stat stage, journal;
+  if (!private_dir_fd(4, &stage) || !private_dir_fd(5, &journal)) return 0;
+  staging_parent_fd = dup(4); journal_fd = dup(5);
+  if (staging_parent_fd < 0 || journal_fd < 0) return 0;
+  arc4random_buf(random, sizeof random);
+  snprintf(staging_run_name, sizeof staging_run_name, "c2-%s", "");
+  hex(random, sizeof random, staging_run_name + 3);
+  if (mkdirat(staging_parent_fd, staging_run_name, 0700) < 0) return 0;
+  staging_run_fd = openat(staging_parent_fd, staging_run_name,
+      O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY);
+  return staging_run_fd >= 0 && private_dir_fd(staging_run_fd, &stage);
+}
+
+static void journal_mac(struct journal_record *record, uint8_t out[MAC_BYTES]) {
+  CCHmac(kCCHmacAlgSHA256, journal_key, KEY_BYTES, record,
+      offsetof(struct journal_record, mac), out);
+}
+
+static void claim_journal_name(const char *claim, char out[80]) {
+  uint8_t digest[MAC_BYTES];
+  CCHmac(kCCHmacAlgSHA256, journal_key, KEY_BYTES, claim, strlen(claim), digest);
+  memcpy(out, "c2c-", 4); hex(digest, sizeof digest, out + 4);
+}
+
+static int journal_store(const char *name, struct journal_record *record) {
+  uint8_t random[12], mac[MAC_BYTES]; char temporary[80]; int fd;
+  journal_mac(record, mac); memcpy(record->mac, mac, sizeof mac);
+  arc4random_buf(random, sizeof random);
+  snprintf(temporary, sizeof temporary, ".tmp-%s", "");
+  hex(random, sizeof random, temporary + 5);
+  fd = openat(journal_fd, temporary,
+      O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW_ANY, 0600);
+  if (fd < 0) return 0;
+  if (write_all(fd, record, sizeof *record) || fsync(fd) < 0 || close(fd) < 0 ||
+      renameat(journal_fd, temporary, journal_fd, name) < 0 || fsync(journal_fd) < 0) {
+    unlinkat(journal_fd, temporary, 0); return 0;
+  }
+  return 1;
+}
+
+static int journal_load(const char *name, struct journal_record *record) {
+  uint8_t expected[MAC_BYTES], difference = 0; size_t i; int fd;
+  fd = openat(journal_fd, name, O_RDONLY | O_CLOEXEC | O_NOFOLLOW_ANY);
+  if (fd < 0 || read_all(fd, record, sizeof *record) != 1 || close(fd) < 0) {
+    if (fd >= 0) close(fd); return 0;
+  }
+  journal_mac(record, expected);
+  for (i = 0; i < MAC_BYTES; i++) difference |= (uint8_t)(expected[i] ^ record->mac[i]);
+  return memcmp(record->magic, JOURNAL_MAGIC, 7) == 0 && record->version == 2 &&
+      difference == 0 && record->state >= JOURNAL_PREPARED &&
+      record->state <= JOURNAL_CLEANED;
+}
+
+static struct claim *find_claim(const char *id) {
+  struct claim *cursor = claim_head;
+  while (cursor) { if (strcmp(cursor->id, id) == 0) return cursor; cursor = cursor->next; }
+  return NULL;
+}
+
+static int index_claim(const char *id, enum outcome outcome, enum journal_state state) {
+  struct claim *claim;
+  if (!id[0]) return 1;
+  claim = find_claim(id);
+  if (claim) { claim->outcome = outcome; claim->state = state; return 1; }
+  claim = calloc(1, sizeof *claim); if (!claim) return 0;
+  claim->id = strdup(id); if (!claim->id) { free(claim); return 0; }
+  claim->outcome = outcome; claim->state = state; claim->next = claim_head; claim_head = claim; return 1;
+}
+
+static int journal_transition(struct prepared *prepared, enum journal_state state,
+    enum outcome outcome, const char *claim, int cleanup_complete) {
+  struct journal_record record; char claim_name[80];
+  memset(&record, 0, sizeof record);
+  memcpy(record.magic, JOURNAL_MAGIC, 7); record.version = 2;
+  record.state = (uint8_t)state; record.outcome = (uint8_t)outcome;
+  record.cleanup_complete = cleanup_complete ? 1 : 0;
+  record.entry_count = (uint16_t)prepared->entry_count;
+  snprintf(record.handle, sizeof record.handle, "%s", prepared->handle);
+  snprintf(record.claim, sizeof record.claim, "%s", claim ? claim : "");
+  snprintf(record.stage_dir, sizeof record.stage_dir, "%s", prepared->stage_dir);
+  if (!journal_store(prepared->journal_name, &record)) return 0;
+  if (record.claim[0]) {
+    claim_journal_name(record.claim, claim_name);
+    if (!journal_store(claim_name, &record)) return 0;
+  }
+  if (!index_claim(record.claim, outcome, state)) return 0;
+  if ((state == JOURNAL_PREPARED && test_crash_boundary == 1) ||
+      (state == JOURNAL_AUTHORIZED && test_crash_boundary == 2) ||
+      (state == JOURNAL_COMMITTING && test_crash_boundary == 3)) _exit(86);
+  return 1;
+}
+
+static int journal_outcome_for(const struct claim *claim, enum outcome *out) {
+  if (!claim) return 0;
+  if (claim->state == JOURNAL_APPLIED) *out = APPLIED;
+  else if (claim->state == JOURNAL_COMMITTING || claim->state == JOURNAL_INDETERMINATE) *out = INDETERMINATE;
+  else *out = claim->outcome;
+  return 1;
+}
+
+/* At restart we make a durable conservative decision from the last fsynced
+ * boundary. We never infer/replay an effect from a missing in-memory list. */
+static int journal_reconcile_startup(void) {
+  DIR *dir; struct dirent *entry;
+  { int scan_fd = openat(journal_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY);
+  dir = scan_fd < 0 ? NULL : fdopendir(scan_fd); if (!dir) { if (scan_fd >= 0) close(scan_fd); return 0; } }
+  while ((entry = readdir(dir)) != NULL) {
+    struct journal_record record;
+    if (strncmp(entry->d_name, "c2j-", 4) != 0 && strncmp(entry->d_name, "c2c-", 4) != 0) continue;
+    if (!journal_load(entry->d_name, &record)) { closedir(dir); return 0; }
+    if (record.state == JOURNAL_COMMITTING) {
+      record.state = JOURNAL_INDETERMINATE; record.outcome = INDETERMINATE;
+      if (!journal_store(entry->d_name, &record)) { closedir(dir); return 0; }
+    } else if (record.state == JOURNAL_AUTHORIZED) {
+      record.state = JOURNAL_FAILED_BEFORE_EFFECT; record.outcome = FAILED;
+      if (!journal_store(entry->d_name, &record)) { closedir(dir); return 0; }
+    } else if (record.state == JOURNAL_PREPARED) {
+      /* There is provably no effect boundary before AUTHORIZED. The staged
+       * directory is private/quarantined; leave it if identity cannot be
+       * proven instead of deleting a replacement by name. */
+      record.state = JOURNAL_FAILED_BEFORE_EFFECT; record.outcome = FAILED;
+      if (!journal_store(entry->d_name, &record)) { closedir(dir); return 0; }
+    }
+    if (!index_claim(record.claim, (enum outcome)record.outcome,
+          (enum journal_state)record.state)) { closedir(dir); return 0; }
+  }
+  closedir(dir); return 1;
+}
+
+/* Reconciliation is deliberately disk-backed even after startup. This makes a
+ * claim result independent of an in-memory index and detects a journal that
+ * was replaced/corrupted after the helper booted. */
+static int journal_lookup_claim(const char *claim) {
+  DIR *dir; struct dirent *entry; int found = 0; char name[80]; struct journal_record direct;
+  claim_journal_name(claim, name);
+  if (journal_load(name, &direct)) {
+    if (strcmp(direct.claim, claim) != 0 || !index_claim(direct.claim,
+        (enum outcome)direct.outcome, (enum journal_state)direct.state)) return -1;
+    return 1;
+  }
+  { struct stat named; if (fstatat(journal_fd, name, &named, AT_SYMLINK_NOFOLLOW) == 0) return -1; }
+  { int scan_fd = openat(journal_fd, ".", O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW_ANY);
+    dir = scan_fd < 0 ? NULL : fdopendir(scan_fd); if (!dir) { if (scan_fd >= 0) close(scan_fd); return -1; } }
+  while ((entry = readdir(dir)) != NULL) {
+    struct journal_record record;
+    if (strncmp(entry->d_name, "c2j-", 4) != 0) continue;
+    if (!journal_load(entry->d_name, &record)) { closedir(dir); return -1; }
+    if (strcmp(record.claim, claim) == 0) {
+      if (!index_claim(record.claim, (enum outcome)record.outcome,
+          (enum journal_state)record.state)) { closedir(dir); return -1; }
+      found = 1; break;
+    }
+  }
+  closedir(dir); return found;
+}
+
 static void free_entry(struct entry *entry) {
-  if (entry->stage_name && entry->parent_fd >= 0) unlinkat(entry->parent_fd, entry->stage_name, 0);
   if (entry->stage_fd >= 0) close(entry->stage_fd);
   if (entry->parent_fd >= 0) close(entry->parent_fd);
   if (entry->destination_parent_fd >= 0) close(entry->destination_parent_fd);
   free(entry->relative_path); free(entry->leaf); free(entry->destination_relative_path); free(entry->destination_leaf);
-  free(entry->slot); free(entry->expected_digest); free(entry->stage_name); memset(entry, 0, sizeof *entry); entry->parent_fd = entry->destination_parent_fd = entry->stage_fd = -1;
+  free(entry->slot); free(entry->expected_digest); memset(entry, 0, sizeof *entry);
+  entry->parent_fd = entry->destination_parent_fd = entry->stage_fd = -1;
 }
 
 static void destroy_prepared(struct prepared *prepared) {
@@ -316,26 +542,38 @@ static void destroy_prepared(struct prepared *prepared) {
 }
 
 static struct prepared *find_prepared(const char *handle) {
-  struct prepared *cursor = prepared_head; while (cursor) { if (strcmp(cursor->handle, handle) == 0) return cursor; cursor = cursor->next; } return NULL;
-}
-static struct claim *find_claim(const char *id) {
-  struct claim *cursor = claim_head; while (cursor) { if (strcmp(cursor->id, id) == 0) return cursor; cursor = cursor->next; } return NULL;
-}
-static int record_claim(const char *id, enum outcome outcome) {
-  struct claim *claim = find_claim(id); if (claim) { claim->outcome = outcome; return 1; }
-  claim = calloc(1, sizeof *claim); if (!claim) return 0; claim->id = strdup(id); if (!claim->id) { free(claim); return 0; }
-  claim->outcome = outcome; claim->next = claim_head; claim_head = claim; return 1;
+  struct prepared *cursor = prepared_head;
+  while (cursor) { if (strcmp(cursor->handle, handle) == 0) return cursor; cursor = cursor->next; }
+  return NULL;
 }
 
-static int create_stage(struct entry *entry) {
-  uint8_t random[16]; char token[33]; size_t length;
-  if (entry->stage_fd >= 0) return 1;
-  arc4random_buf(random, sizeof random); hex(random, sizeof random, token);
-  length = strlen(".copilot-stage-") + strlen(token) + 1;
-  entry->stage_name = calloc(length, 1); if (!entry->stage_name) return 0;
-  snprintf(entry->stage_name, length, ".copilot-stage-%s", token);
-  entry->stage_fd = openat(entry->parent_fd, entry->stage_name, O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW_ANY, 0600);
+static int create_stage(struct prepared *prepared, struct entry *entry, uint32_t index) {
+  if (entry->stage_fd >= 0 || staging_run_fd < 0) return entry->stage_fd >= 0;
+  snprintf(entry->stage_name, sizeof entry->stage_name, "s-%s-%u",
+      prepared->handle + 4, index);
+  entry->stage_fd = openat(staging_run_fd, entry->stage_name,
+      O_RDWR | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW_ANY, 0600);
   return entry->stage_fd >= 0;
+}
+
+/* Cleanup is capability-relative and identity-checked. If a filename was
+ * replaced after staging, retain/quarantine it rather than unlinking bytes we
+ * can no longer prove we created. The durable record keeps cleanup_complete=0
+ * for later inspected collection. */
+static int cleanup_prepared_stages(struct prepared *prepared) {
+  uint32_t i;
+  for (i = 0; i < prepared->entry_count; i++) {
+    struct entry *entry = &prepared->entries[i]; struct stat held, named;
+    if (entry->stage_fd < 0) continue;
+    if (fstat(entry->stage_fd, &held) < 0) return 0;
+    if (fstatat(staging_run_fd, entry->stage_name, &named, AT_SYMLINK_NOFOLLOW) < 0) {
+      if (errno == ENOENT) continue;
+      return 0;
+    }
+    if (S_ISLNK(named.st_mode) || held.st_dev != named.st_dev || held.st_ino != named.st_ino ||
+        unlinkat(staging_run_fd, entry->stage_name, 0) < 0) return 0;
+  }
+  return fsync(staging_run_fd) == 0;
 }
 
 static int root_matches(struct prepared *prepared) {
@@ -347,29 +585,38 @@ static int entry_live(const struct entry *entry) {
   return !entry->has_destination || snapshot_matches(entry->destination_parent_fd, entry->destination_leaf, &entry->destination);
 }
 
+static int sealed_stage_matches(struct entry *entry) {
+  char digest[65]; struct stat observed;
+  if (entry->stage_fd < 0 || !entry->sealed || fsync(entry->stage_fd) < 0 ||
+      !regular_digest_fd(entry->stage_fd, digest, &observed)) return 0;
+  return observed.st_dev == entry->sealed_stat.st_dev &&
+      observed.st_ino == entry->sealed_stat.st_ino &&
+      observed.st_size == entry->sealed_stat.st_size &&
+      strcmp(digest, entry->sealed_digest) == 0 &&
+      strcmp(digest, entry->expected_digest) == 0;
+}
+
 static int commit_entry(struct entry *entry) {
-  struct stat source;
   if (entry->operation == CREATE) {
-    if (entry->stage_fd < 0 || !entry->sealed || fsync(entry->stage_fd) < 0 || linkat(entry->parent_fd, entry->stage_name, entry->parent_fd, entry->leaf, 0) < 0 || unlinkat(entry->parent_fd, entry->stage_name, 0) < 0 || fsync(entry->parent_fd) < 0) return 0;
-  } else if (entry->operation == REPLACE) {
-    if (entry->stage_fd < 0 || !entry->sealed || fstatat(entry->parent_fd, entry->leaf, &source, AT_SYMLINK_NOFOLLOW) < 0 || !S_ISREG(source.st_mode) || fchmod(entry->stage_fd, source.st_mode & 0777) < 0 || fsync(entry->stage_fd) < 0 || renameat(entry->parent_fd, entry->stage_name, entry->parent_fd, entry->leaf) < 0 || fsync(entry->parent_fd) < 0) return 0;
-  } else if (entry->operation == DELETE) {
-    uint8_t random[16]; char token[33]; char trash[64];
-    arc4random_buf(random, sizeof random); hex(random, sizeof random, token); snprintf(trash, sizeof trash, ".copilot-trash-%s", token);
-    if (renameatx_np(entry->parent_fd, entry->leaf, entry->parent_fd, trash, RENAME_EXCL) < 0 || fsync(entry->parent_fd) < 0) return 0;
-  } else if (entry->operation == MOVE) {
-    if (renameatx_np(entry->parent_fd, entry->leaf, entry->destination_parent_fd, entry->destination_leaf, RENAME_EXCL) < 0 || fsync(entry->parent_fd) < 0 || fsync(entry->destination_parent_fd) < 0) return 0;
+    /* fclonefileat consumes the retained stage FD, not a mutable filename.
+     * It creates a new destination and fails if a raced target already exists;
+     * The source is an FD and destination is one validated leaf beneath a
+     * retained parent; CLONE_NOFOLLOW refuses a symlink destination. */
+    if (!sealed_stage_matches(entry) ||
+        fclonefileat(entry->stage_fd, entry->parent_fd, entry->leaf,
+          CLONE_NOFOLLOW) < 0 ||
+        fsync(entry->parent_fd) < 0) return 0;
   } else if (entry->operation == MKDIR) {
     if (mkdirat(entry->parent_fd, entry->leaf, 0700) < 0 || fsync(entry->parent_fd) < 0) return 0;
   } else return 0;
   return 1;
 }
 
-static void respond(struct writer *body, uint8_t status, uint8_t failure) {
+static void respond(uint64_t sequence, struct writer *body, uint8_t status, uint8_t failure) {
   uint8_t length[4], mac[MAC_BYTES]; CC_SHA256_CTX unused;
   (void)unused;
   struct writer payload = {0};
-  if (!writer_u8(&payload, PROTOCOL) || !writer_u8(&payload, status) || (status && !writer_u8(&payload, failure))) { writer_free(&payload); return; }
+  if (!writer_u64(&payload, sequence) || !writer_u8(&payload, PROTOCOL) || !writer_u8(&payload, status) || (status && !writer_u8(&payload, failure))) { writer_free(&payload); return; }
   if (body->length && (!writer_reserve(&payload, body->length))) { writer_free(&payload); return; }
   if (body->length) { memcpy(payload.data + payload.length, body->data, body->length); payload.length += body->length; }
   write_be32(length, (uint32_t)payload.length);
@@ -389,7 +636,7 @@ static void respond(struct writer *body, uint8_t status, uint8_t failure) {
   writer_free(&payload);
 }
 
-static int parse_entry(struct reader *reader, int root_fd, dev_t root_dev, struct entry *entry) {
+static int parse_entry(struct reader *reader, struct prepared *prepared, uint32_t index, struct entry *entry) {
   uint8_t operation, has_dest, exists, kind, has_content; char *expected = NULL;
   memset(entry, 0, sizeof *entry); entry->parent_fd = entry->destination_parent_fd = entry->stage_fd = -1;
   if (!reader_u8(reader, &operation) || operation < CREATE || operation > MKDIR || !(entry->relative_path = reader_string(reader, MAX_PATH_BYTES)) || !reader_u8(reader, &has_dest)) goto fail;
@@ -402,11 +649,11 @@ static int parse_entry(struct reader *reader, int root_fd, dev_t root_dev, struc
   if (has_dest) { if (!(entry->destination_relative_path = reader_string(reader, MAX_PATH_BYTES))) goto fail; }
   if (!reader_u8(reader, &exists) || !reader_u8(reader, &kind) || !(expected = reader_string(reader, 64))) goto fail;
   if (!path_is_safe(entry->relative_path) || (entry->destination_relative_path && !path_is_safe(entry->destination_relative_path)) || kind > 2 || strlen(expected) > 64) goto fail;
-  entry->parent_fd = open_parent(root_fd, root_dev, entry->relative_path, &entry->leaf); if (entry->parent_fd < 0) goto fail;
+  entry->parent_fd = open_parent(prepared->root_fd, prepared->root_dev, entry->relative_path, &entry->leaf); if (entry->parent_fd < 0) goto fail;
   if (!snapshot_at(entry->parent_fd, entry->leaf, exists, kind, expected, &entry->source)) goto fail;
   if (entry->operation == MOVE) {
     if (!entry->destination_relative_path) goto fail;
-    entry->destination_parent_fd = open_parent(root_fd, root_dev, entry->destination_relative_path, &entry->destination_leaf); if (entry->destination_parent_fd < 0 || !snapshot_at(entry->destination_parent_fd, entry->destination_leaf, 0, 0, "", &entry->destination)) goto fail;
+    entry->destination_parent_fd = open_parent(prepared->root_fd, prepared->root_dev, entry->destination_relative_path, &entry->destination_leaf); if (entry->destination_parent_fd < 0 || !snapshot_at(entry->destination_parent_fd, entry->destination_leaf, 0, 0, "", &entry->destination)) goto fail;
     entry->has_destination = 1;
   } else if (entry->destination_relative_path) goto fail;
   if ((entry->operation == CREATE || entry->operation == MKDIR) && entry->source.exists) goto fail;
@@ -417,7 +664,7 @@ static int parse_entry(struct reader *reader, int root_fd, dev_t root_dev, struc
     if (!(entry->slot = reader_string(reader, MAX_SLOT_BYTES)) || !(entry->expected_digest = reader_string(reader, 64)) || !reader_u64(reader, &entry->expected_size) || !is_hex_digest(entry->expected_digest)) goto fail;
   }
   if ((entry->operation == CREATE || entry->operation == REPLACE) != (has_content != 0)) goto fail;
-  if (has_content && !create_stage(entry)) goto fail;
+  (void)prepared; (void)index; /* private stages are allocated after handle creation */
   free(expected); return 1;
 fail:
   free(expected); free_entry(entry); return 0;
@@ -443,16 +690,23 @@ static void command_root_identity(struct reader *reader, struct writer *out, uin
 }
 
 static void command_prepare(struct reader *reader, struct writer *out, uint8_t *failure) {
-  char *root_path = reader_string(reader, MAX_PATH_BYTES); uint32_t count, i; struct stat root; struct prepared *prepared = NULL; uint8_t random[16]; char digest[65]; CC_SHA256_CTX digest_ctx;
+  char *root_path = reader_string(reader, MAX_PATH_BYTES); uint32_t count, i; struct stat root, stage; struct prepared *prepared = NULL; uint8_t random[16]; char digest[65]; CC_SHA256_CTX digest_ctx;
   if (!root_path || !reader_u32(reader, &count) || count == 0 || count > MAX_ENTRIES) { free(root_path); *failure = INVALID; return; }
   prepared = calloc(1, sizeof *prepared); if (!prepared) { free(root_path); *failure = INTERNAL; return; }
   prepared->root_fd = open_root(root_path, &root); free(root_path); if (prepared->root_fd < 0) { free(prepared); *failure = UNSUPPORTED; return; }
+  if (staging_run_fd < 0 || fstat(staging_run_fd, &stage) < 0 || stage.st_dev != root.st_dev) { destroy_prepared(prepared); *failure = UNSUPPORTED; return; }
   prepared->root_dev = root.st_dev; prepared->root_ino = root.st_ino; prepared->entry_count = count; prepared->entries = calloc(count, sizeof *prepared->entries);
   if (!prepared->entries) { destroy_prepared(prepared); *failure = INTERNAL; return; }
-  for (i = 0; i < count; i++) if (!parse_entry(reader, prepared->root_fd, prepared->root_dev, &prepared->entries[i])) { destroy_prepared(prepared); *failure = CONFLICT; return; }
+  for (i = 0; i < count; i++) if (!parse_entry(reader, prepared, i, &prepared->entries[i])) { destroy_prepared(prepared); *failure = CONFLICT; return; }
   if (reader->offset != reader->length || !disjoint_entries(prepared->entries, count)) { destroy_prepared(prepared); *failure = CONFLICT; return; }
   arc4random_buf(random, sizeof random); strcpy(prepared->handle, "nwh_"); hex(random, sizeof random, prepared->handle + 4);
+  snprintf(prepared->journal_name, sizeof prepared->journal_name, "c2j-%s", prepared->handle + 4);
+  snprintf(prepared->stage_dir, sizeof prepared->stage_dir, "%s", staging_run_name);
+  /* Recreate deterministic private stage names only after the handle exists. */
+  for (i = 0; i < count; i++) if (prepared->entries[i].slot &&
+      !create_stage(prepared, &prepared->entries[i], i)) { destroy_prepared(prepared); *failure = INTERNAL; return; }
   CC_SHA256_Init(&digest_ctx); for (i = 0; i < count; i++) CC_SHA256_Update(&digest_ctx, prepared->entries[i].relative_path, (CC_LONG)strlen(prepared->entries[i].relative_path)); { uint8_t raw[CC_SHA256_DIGEST_LENGTH]; CC_SHA256_Final(raw, &digest_ctx); hex(raw, sizeof raw, digest); }
+  if (!journal_transition(prepared, JOURNAL_PREPARED, FAILED, "", 0)) { destroy_prepared(prepared); *failure = INTERNAL; return; }
   if (!writer_string(out, prepared->handle) || !writer_string(out, digest)) { destroy_prepared(prepared); *failure = INTERNAL; return; }
   { uint32_t slots = 0; for (i = 0; i < count; i++) if (prepared->entries[i].slot) slots++; if (!writer_u32(out, slots)) { destroy_prepared(prepared); *failure = INTERNAL; return; }
     for (i = 0; i < count; i++) if (prepared->entries[i].slot && (!writer_string(out, prepared->entries[i].slot) || !writer_string(out, prepared->entries[i].expected_digest) || !writer_u64(out, prepared->entries[i].expected_size))) { destroy_prepared(prepared); *failure = INTERNAL; return; }
@@ -476,6 +730,7 @@ static void command_seal(struct reader *reader, struct writer *out, uint8_t *fai
   if (!handle || !slot || reader->offset != reader->length) { free(handle); free(slot); *failure = INVALID; return; }
   prepared = find_prepared(handle); entry = prepared ? find_slot(prepared, slot) : NULL; free(handle); free(slot);
   if (!entry || entry->sealed || entry->stage_fd < 0 || entry->bytes_written != entry->expected_size || !regular_digest_fd(entry->stage_fd, digest, &statbuf) || fsync(entry->stage_fd) < 0 || (uint64_t)statbuf.st_size != entry->expected_size || strcmp(digest, entry->expected_digest) != 0) { *failure = CONFLICT; return; }
+  entry->sealed_stat = statbuf; snprintf(entry->sealed_digest, sizeof entry->sealed_digest, "%s", digest);
   entry->sealed = 1; if (!writer_string(out, digest) || !writer_u64(out, (uint64_t)statbuf.st_size)) *failure = INTERNAL;
 }
 
@@ -487,24 +742,50 @@ static void write_commit_result(struct writer *out, enum outcome outcome, const 
 static void command_commit(struct reader *reader, struct writer *out, uint8_t *failure) {
   char *handle = reader_string(reader, 80), *claim = reader_string(reader, MAX_CLAIM_BYTES); struct prepared *prepared; struct claim *existing; uint32_t i; enum outcome result = APPLIED;
   if (!handle || !claim || reader->offset != reader->length) { free(handle); free(claim); *failure = INVALID; return; }
-  existing = find_claim(claim); if (existing) { write_commit_result(out, existing->outcome == APPLIED ? ALREADY_APPLIED : existing->outcome, claim); free(handle); free(claim); return; }
+  existing = find_claim(claim);
+  if (!existing && journal_lookup_claim(claim) < 0) { free(handle); free(claim); *failure = INTERNAL; return; }
+  existing = find_claim(claim); if (existing) { enum outcome known; journal_outcome_for(existing, &known); write_commit_result(out, known == APPLIED ? ALREADY_APPLIED : known, claim); free(handle); free(claim); return; }
   prepared = find_prepared(handle); free(handle); if (!prepared || !root_matches(prepared)) { write_commit_result(out, INDETERMINATE, claim); free(claim); return; }
-  for (i = 0; i < prepared->entry_count; i++) if (!entry_live(&prepared->entries[i]) || ((prepared->entries[i].operation == CREATE || prepared->entries[i].operation == REPLACE) && !prepared->entries[i].sealed)) { write_commit_result(out, PRECONDITION_DRIFT, claim); free(claim); return; }
+  for (i = 0; i < prepared->entry_count; i++) if (!entry_live(&prepared->entries[i]) || ((prepared->entries[i].operation == CREATE || prepared->entries[i].operation == REPLACE) && !prepared->entries[i].sealed)) {
+    journal_transition(prepared, JOURNAL_FAILED_BEFORE_EFFECT, PRECONDITION_DRIFT, claim, 0);
+    if (cleanup_prepared_stages(prepared)) journal_transition(prepared, JOURNAL_FAILED_BEFORE_EFFECT, PRECONDITION_DRIFT, claim, 1);
+    write_commit_result(out, PRECONDITION_DRIFT, claim); free(claim); return;
+  }
+  if (!journal_transition(prepared, JOURNAL_AUTHORIZED, FAILED, claim, 0) ||
+      !journal_transition(prepared, JOURNAL_COMMITTING, INDETERMINATE, claim, 0)) {
+    write_commit_result(out, INDETERMINATE, claim); free(claim); return;
+  }
   for (i = 0; i < prepared->entry_count; i++) if (!commit_entry(&prepared->entries[i])) { result = INDETERMINATE; break; }
-  if (!record_claim(claim, result)) { result = INDETERMINATE; }
+  if (result == APPLIED) {
+    /* Crash fault boundary: the durable COMMITTING row remains the only
+     * evidence after an effect that completed before APPLIED was fsynced. */
+    if (test_crash_boundary == 4) _exit(86);
+    if (!journal_transition(prepared, JOURNAL_APPLIED, APPLIED, claim, 0)) result = INDETERMINATE;
+    else if (cleanup_prepared_stages(prepared)) journal_transition(prepared, JOURNAL_APPLIED, APPLIED, claim, 1);
+  } else {
+    /* The durable COMMITTING record remains proof that an effect might have
+       * crossed its boundary. Marking indeterminate is conservative and is
+       * never retried automatically. */
+    journal_transition(prepared, JOURNAL_INDETERMINATE, INDETERMINATE, claim, 0);
+  }
   write_commit_result(out, result, claim); destroy_prepared(prepared); free(claim);
 }
 
 static void command_reconcile_claim(struct reader *reader, struct writer *out, uint8_t *failure) {
   char *claim = reader_string(reader, MAX_CLAIM_BYTES); struct claim *existing;
   if (!claim || reader->offset != reader->length) { free(claim); *failure = INVALID; return; }
-  existing = find_claim(claim); write_commit_result(out, existing ? (existing->outcome == APPLIED ? ALREADY_APPLIED : existing->outcome) : INDETERMINATE, claim); free(claim);
+  existing = find_claim(claim);
+  if (!existing && journal_lookup_claim(claim) < 0) { free(claim); *failure = INTERNAL; return; }
+  existing = find_claim(claim);
+  if (existing) { enum outcome known; journal_outcome_for(existing, &known); write_commit_result(out, known == APPLIED ? ALREADY_APPLIED : known, claim); }
+  else write_commit_result(out, INDETERMINATE, claim);
+  free(claim);
 }
 
 static void command_abort_or_recovery(struct reader *reader, struct writer *out, uint8_t *failure, int recovery) {
   char *value = reader_string(reader, recovery ? MAX_CLAIM_BYTES : 80); struct prepared *prepared;
   if (!value || reader->offset != reader->length) { free(value); *failure = INVALID; return; }
-  if (!recovery) { prepared = find_prepared(value); if (prepared) destroy_prepared(prepared); }
+  if (!recovery) { prepared = find_prepared(value); if (prepared) { journal_transition(prepared, JOURNAL_FAILED_BEFORE_EFFECT, FAILED, "", 0); if (cleanup_prepared_stages(prepared)) journal_transition(prepared, JOURNAL_FAILED_BEFORE_EFFECT, FAILED, "", 1); destroy_prepared(prepared); } }
   else { /* No automatic undo after a crash or external edit: always a conflict. */ if (!writer_u8(out, 0)) *failure = INTERNAL; }
   free(value);
 }
@@ -519,16 +800,21 @@ static int verify_frame(const uint8_t length_bytes[4], const uint8_t mac[MAC_BYT
 }
 
 int main(void) {
-  uint8_t length_bytes[4], mac[MAC_BYTES];
-  if (read_all(3, channel_key, KEY_BYTES) != 1) return 1;
-  close(3); close(STDERR_FILENO);
+  uint8_t length_bytes[4], mac[MAC_BYTES]; uint64_t expected_sequence = 1;
+  struct stat private_dir;
+  if (read_all(3, channel_key, KEY_BYTES) != 1 || read_all(6, journal_key, KEY_BYTES) != 1) return 1;
+  if (fcntl(7, F_GETFD) >= 0 && read_all(7, &test_crash_boundary, 1) != 1) return 1;
+  close(3); close(6); if (fcntl(7, F_GETFD) >= 0) close(7); close(STDERR_FILENO);
+  if (!make_private_run_dir() || fstat(staging_run_fd, &private_dir) < 0 ||
+      !private_dir_fd(journal_fd, &private_dir) || !journal_reconcile_startup()) return 1;
   while (1) {
-    uint32_t length; uint8_t *payload; struct reader reader; struct writer out = {0}; uint8_t version, request_type, failure = 0; int read_result;
+    uint32_t length; uint8_t *payload; struct reader reader; struct writer out = {0}; uint8_t version, request_type, failure = 0; uint64_t sequence; int read_result;
     read_result = read_all(STDIN_FILENO, length_bytes, sizeof length_bytes); if (read_result != 1) break;
     length = read_be32(length_bytes); if (length > MAX_FRAME || read_all(STDIN_FILENO, mac, sizeof mac) != 1) break;
     payload = malloc(length ? length : 1); if (!payload || read_all(STDIN_FILENO, payload, length) != 1 || !verify_frame(length_bytes, mac, payload, length)) { free(payload); break; }
     reader.data = payload; reader.length = length; reader.offset = 0;
-    if (!reader_u8(&reader, &version) || !reader_u8(&reader, &request_type) || version != PROTOCOL) failure = INVALID;
+    if (!reader_u64(&reader, &sequence) || sequence != expected_sequence++ ||
+        !reader_u8(&reader, &version) || !reader_u8(&reader, &request_type) || version != PROTOCOL) { free(payload); break; }
     else switch (request_type) {
       case ROOT_IDENTITY: command_root_identity(&reader, &out, &failure); break;
       case PREPARE: command_prepare(&reader, &out, &failure); break;
@@ -539,10 +825,10 @@ int main(void) {
       case ABORT: command_abort_or_recovery(&reader, &out, &failure, 0); break;
       case PROPOSE_RECOVERY: case PROPOSE_RECOVERY_CLAIM: command_abort_or_recovery(&reader, &out, &failure, 1); break;
       case PING: if (reader.offset != reader.length) failure = INVALID; break;
-      case CLOSE_HELPER: if (reader.offset != reader.length) failure = INVALID; else { respond(&out, 0, 0); writer_free(&out); free(payload); return 0; } break;
+      case CLOSE_HELPER: if (reader.offset != reader.length) failure = INVALID; else { respond(sequence, &out, 0, 0); writer_free(&out); free(payload); return 0; } break;
       default: failure = INVALID; break;
     }
-    respond(&out, failure ? 1 : 0, failure); writer_free(&out); free(payload);
+    respond(sequence, &out, failure ? 1 : 0, failure); writer_free(&out); free(payload);
   }
   return 0;
 }

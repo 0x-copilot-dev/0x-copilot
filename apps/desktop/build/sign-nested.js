@@ -19,6 +19,47 @@ const {
   signAndVerifyMacAppBundle,
 } = require("../../../tools/desktop-runtime/macos-signing.cjs");
 
+const WORKSPACE_HELPER_IDENTIFIER = "com.0x-copilot.workspace-commit-helper";
+
+function signAndVerifyWorkspaceCommitHelper(helper, identity) {
+  if (!fs.existsSync(helper) || !isMachO(helper)) {
+    throw new Error(
+      `[sign-nested] required workspace commit helper is absent or not Mach-O: ${helper}`,
+    );
+  }
+  const signed = spawnSync(
+    "codesign",
+    [
+      "--force",
+      "--options",
+      "runtime",
+      "--timestamp",
+      "--identifier",
+      WORKSPACE_HELPER_IDENTIFIER,
+      "--sign",
+      identity,
+      helper,
+    ],
+    { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
+  );
+  if (signed.status !== 0) {
+    throw new Error(
+      `[sign-nested] codesign failed for workspace commit helper: ${signed.stderr}`,
+    );
+  }
+  const requirement = `anchor apple generic and identifier \"${WORKSPACE_HELPER_IDENTIFIER}\"`;
+  const verified = spawnSync(
+    "codesign",
+    ["--verify", "--strict", "--verbose=2", "-R", requirement, helper],
+    { stdio: ["ignore", "ignore", "pipe"], encoding: "utf8" },
+  );
+  if (verified.status !== 0) {
+    throw new Error(
+      `[sign-nested] strict helper signature verification failed: ${verified.stderr}`,
+    );
+  }
+}
+
 // Mach-O + fat-binary magic numbers (first 4 bytes, either endianness).
 const MACH_O_MAGIC = new Set([
   0xfeedface, 0xcefaedfe, 0xfeedfacf, 0xcffaedfe, 0xcafebabe, 0xbebafeca,
@@ -90,11 +131,21 @@ exports.default = async function signNested(context) {
   }
 
   const productFilename = context.packager.appInfo.productFilename;
-  const runtimeDir = path.join(
+  const resourcesDir = path.join(
     context.appOutDir,
     `${productFilename}.app`,
     "Contents",
     "Resources",
+  );
+  const workspaceCommitHelper = path.join(
+    resourcesDir,
+    "workspace-commit-helper",
+    "workspace-commit-helper",
+  );
+  signAndVerifyWorkspaceCommitHelper(workspaceCommitHelper, identity);
+  console.log("[sign-nested] signed and strictly verified workspace commit helper.");
+  const runtimeDir = path.join(
+    resourcesDir,
     "runtime",
   );
   if (!fs.existsSync(runtimeDir)) {
