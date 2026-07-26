@@ -22,6 +22,7 @@ from agent_runtime.capabilities.operations.contracts import (
     OperationEventEmitter,
     OperationGatewayMode,
     OperationMetricsPort,
+    OperationOutcomePresenter,
     OperationRequest,
 )
 from agent_runtime.capabilities.operations.errors import (
@@ -35,6 +36,7 @@ from agent_runtime.capabilities.operations.descriptors import (
 from agent_runtime.capabilities.operations.observability import (
     FailSoftOperationEventEmitter,
     FailSoftOperationMetrics,
+    FailSoftOperationOutcomePresenter,
     OperationGatewayMetrics,
 )
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
@@ -70,6 +72,13 @@ class NullOperationEventEmitter:
         summary: str | None = None,
     ) -> None:
         del event_type, payload, summary
+
+
+class NullOperationOutcomePresenter:
+    """Default operation presentation port for non-UI or test contexts."""
+
+    async def present(self, outcome: object) -> None:
+        del outcome
 
 
 @dataclass(frozen=True)
@@ -142,6 +151,9 @@ class BoundOperationContext:
         default_factory=NullOperationEventEmitter
     )
     artifact_service: ArtifactServicePort | None = None
+    outcome_presenter: OperationOutcomePresenter = field(
+        default_factory=NullOperationOutcomePresenter
+    )
     mode: OperationGatewayMode = OperationGatewayMode.OFF
     metrics: OperationMetricsPort = field(default_factory=OperationGatewayMetrics)
     arguments: OperationArgumentResolver = field(default_factory=OperationArgumentStore)
@@ -152,6 +164,9 @@ class BoundOperationContext:
 
     def __post_init__(self) -> None:
         self.ledger_emitter = FailSoftOperationEventEmitter.wrap(self.ledger_emitter)
+        self.outcome_presenter = FailSoftOperationOutcomePresenter.wrap(
+            self.outcome_presenter
+        )
         self.metrics = FailSoftOperationMetrics.wrap(self.metrics)
 
 
@@ -177,6 +192,7 @@ class OperationContext:
         policy_snapshot: ToolUsePolicySnapshot,
         ledger_emitter: OperationEventEmitter | None,
         artifact_service: ArtifactServicePort | None,
+        outcome_presenter: OperationOutcomePresenter | None = None,
         mode: OperationGatewayMode,
         metrics: OperationMetricsPort | None = None,
         arguments: OperationArgumentResolver | None = None,
@@ -192,6 +208,11 @@ class OperationContext:
                     else NullOperationEventEmitter()
                 ),
                 artifact_service=artifact_service,
+                outcome_presenter=(
+                    outcome_presenter
+                    if outcome_presenter is not None
+                    else NullOperationOutcomePresenter()
+                ),
                 mode=mode,
                 metrics=metrics if metrics is not None else OperationGatewayMetrics(),
                 arguments=(

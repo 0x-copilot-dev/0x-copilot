@@ -41,6 +41,9 @@ from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorRegistry,
 )
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.operations.presentation import (
+    SurfaceLedgerOperationOutcomePresenter,
+)
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
 from agent_runtime.effects.staging import EffectStager
@@ -118,6 +121,14 @@ class _ArgumentStore:
         return stored[1]
 
 
+@dataclass
+class _RecordingOutcomePresenter:
+    outcomes: list[object] = field(default_factory=list)
+
+    async def present(self, outcome: object) -> None:
+        self.outcomes.append(outcome)
+
+
 class _AuthSessions:
     async def create_auth_session(self, *, server_id: str, runtime_context):  # type: ignore[no-untyped-def]
         del runtime_context
@@ -185,7 +196,10 @@ class _Fixture(DynamicMcpLoadingMixin):
         )
 
     def bind_enforced(
-        self, *, mode: OperationGatewayMode = OperationGatewayMode.ENFORCE
+        self,
+        *,
+        mode: OperationGatewayMode = OperationGatewayMode.ENFORCE,
+        outcome_presenter: object | None = None,
     ):  # type: ignore[no-untyped-def]
         context = _runtime_context()
         events = _RecordedOperationEvents()
@@ -202,6 +216,11 @@ class _Fixture(DynamicMcpLoadingMixin):
             ),
             ledger_emitter=events,
             artifact_service=None,
+            outcome_presenter=(
+                outcome_presenter
+                if outcome_presenter is not None
+                else SurfaceLedgerOperationOutcomePresenter()
+            ),
             mode=mode,
             canonical_arguments_durable=True,
         )
@@ -303,6 +322,31 @@ def test_catalog_read_executes_once_persists_result_and_projects_v2_ledger() -> 
         LedgerEventType.SURFACE_CREATED.value,
         LedgerEventType.VIEW_DERIVED.value,
     ]
+
+
+def test_gateway_presents_the_neutral_outcome_after_mcp_result_persistence() -> None:
+    """MCP supplies result facts; the generic gateway owns presentation."""
+
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    presenter = _RecordingOutcomePresenter()
+    _context, _events, _ledger, result_store, operation_token, service_token = (
+        fixture.bind_enforced(outcome_presenter=presenter)
+    )
+    try:
+        result = _invoke(tool, "list_issues", {"team": "ENG"})
+    finally:
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert provider.created_clients == [_SERVER]
+    assert result_store.calls
+    assert len(presenter.outcomes) == 1
+    outcome = presenter.outcomes[0]
+    assert outcome.operation_id == result["output"]["operation_id"]
+    assert outcome.capability == _SERVER
+    assert outcome.op == "list_issues"
+    assert outcome.output == {"items": [{"id": "L-1"}]}
 
 
 def test_unbound_gateway_holds_before_client_construction() -> None:

@@ -39,6 +39,7 @@ from agent_runtime.effects.contracts import (
     EffectStageStatus,
 )
 from agent_runtime.effects.executor import (
+    EffectExecutionAuthorization,
     EffectExecutionScope,
     EffectExecutor,
     PreparedEffect,
@@ -65,6 +66,9 @@ _PAYLOAD_VERSION = 1
 _PUBLIC_UNKNOWN_OUTCOME = "The effect outcome could not be confirmed."
 _PUBLIC_PRECONDITION_DRIFT = "The target changed before the effect was applied."
 _PUBLIC_CANCELLED = "The effect was cancelled before it was applied."
+_PUBLIC_AUTHORIZATION_REVOKED = (
+    "Authorization is no longer available; no external change was made."
+)
 
 
 class EffectCoordinatorStatus(StrEnum):
@@ -415,6 +419,38 @@ class EffectCoordinator:
             await self._recorder.record_completion(scope=stage_scope, claim=stored)
             return _result_from_claim(stored, status=EffectCoordinatorStatus.CANCELLED)
 
+        authorization = await self._authorize(executor=executor, prepared=prepared)
+        if not authorization.allowed:
+            await _abort_safely(executor, prepared)
+            denied = _completed_claim(
+                claim=claim,
+                result=EffectExecutionResult(
+                    outcome=EffectOutcome.FAILED,
+                    retryable=False,
+                    safe_message=_PUBLIC_AUTHORIZATION_REVOKED,
+                ),
+                state=EffectClaimState.COMPLETED,
+            )
+            stored = await self._claims.update(claim=denied)
+            await self._recorder.record_completion(scope=stage_scope, claim=stored)
+            await self._audit.record(
+                action="effect.commit.authorization_denied",
+                facts={
+                    **_audit_facts(
+                        command=command, state=state, claim_id=stored.claim_id
+                    ),
+                    "authorization_code": authorization.safe_code,
+                },
+            )
+            return EffectCoordinatorResult(
+                status=EffectCoordinatorStatus.REFUSED,
+                stage_id=command.stage_id,
+                revision=command.revision,
+                claim_id=stored.claim_id,
+                outcome=EffectOutcome.FAILED,
+                safe_code=authorization.safe_code,
+            )
+
         try:
             result = await executor.apply(prepared)
         except (asyncio.TimeoutError, TimeoutError):
@@ -568,6 +604,35 @@ class EffectCoordinator:
             return await executor.prepare(request)
         except Exception:  # noqa: BLE001 - no claim means no external effect.
             return None
+
+    @staticmethod
+    async def _authorize(
+        *, executor: EffectExecutor, prepared: PreparedEffect
+    ) -> EffectExecutionAuthorization:
+        """Contain a live authorization check before the sole ``apply`` call.
+
+        The stage fold proves the historical approval.  This second contract
+        lets a transport observe revocation that happened after approval but
+        before worker dispatch, without creating another dispatcher path.
+        Exceptions deny by default so a broken authority lookup cannot become
+        permission to send.
+        """
+
+        try:
+            decision = await executor.authorize(prepared)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001 - authorization is fail closed.
+            return EffectExecutionAuthorization(
+                allowed=False,
+                safe_code="authorization_unavailable",
+            )
+        if not isinstance(decision, EffectExecutionAuthorization):
+            return EffectExecutionAuthorization(
+                allowed=False,
+                safe_code="authorization_invalid",
+            )
+        return decision
 
     async def _existing_claim_result(
         self, *, scope: EffectStageScope, claim: EffectClaim

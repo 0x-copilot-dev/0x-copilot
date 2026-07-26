@@ -88,6 +88,9 @@ from agent_runtime.capabilities.operations.contracts import OperationGatewayMode
 from agent_runtime.capabilities.operations.probes import OperationShadowProbe
 from agent_runtime.capabilities.operations.catalog import DEFAULT_OPERATION_DESCRIPTORS
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.operations.presentation import (
+    SurfaceLedgerOperationOutcomePresenter,
+)
 from agent_runtime.rollout import RolloutCapability, RolloutMode
 from agent_runtime.rollout_admission import (
     E2RolloutAdmission,
@@ -510,6 +513,7 @@ class RuntimeRunHandler:
                         if self._artifact_publication_enabled(run)
                         else None
                     ),
+                    outcome_presenter=SurfaceLedgerOperationOutcomePresenter(),
                     mode=self._effective_operation_gateway_mode(mcp_gateway_services),
                     canonical_arguments_durable=mcp_gateway_services is not None,
                 )

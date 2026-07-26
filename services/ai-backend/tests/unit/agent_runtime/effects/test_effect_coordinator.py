@@ -14,7 +14,11 @@ from agent_runtime.effects.coordinator import (
     EffectExecutionScope,
     EffectReconcileCommand,
 )
-from agent_runtime.effects.executor import PreparedEffect, RecordingEffectExecutor
+from agent_runtime.effects.executor import (
+    EffectExecutionAuthorization,
+    PreparedEffect,
+    RecordingEffectExecutor,
+)
 from agent_runtime.effects.executor_registry import EffectExecutorRegistry
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.surfaces_v2.entities import EffectExecutionResult
@@ -81,6 +85,8 @@ def _matching_executor(
     on_apply: Callable[[PreparedEffect], Awaitable[EffectExecutionResult]]
     | None = None,
     on_reconcile: Callable[[object], Awaitable[EffectExecutionResult]] | None = None,
+    on_authorize: Callable[[PreparedEffect], Awaitable[EffectExecutionAuthorization]]
+    | None = None,
 ) -> RecordingEffectExecutor:
     async def _on_prepare(request: object) -> PreparedEffect:
         assert hasattr(request, "stage_id")
@@ -93,6 +99,7 @@ def _matching_executor(
         on_prepare=_on_prepare,
         on_apply=on_apply,
         on_reconcile=on_reconcile,  # type: ignore[arg-type]
+        on_authorize=on_authorize,
     )
 
 
@@ -188,7 +195,7 @@ async def test_prepare_claim_apply_complete_in_that_order() -> None:
     ).handle(command)
 
     assert result.status is EffectCoordinatorStatus.APPLIED
-    assert executor.calls == ["prepare", "apply"]
+    assert executor.calls == ["prepare", "authorize", "apply"]
     assert executor.prepared_requests[0].proposal_ref == (
         f"proposal://{command.stage_id}/revisions/{command.revision}"
     )
@@ -225,10 +232,48 @@ async def test_duplicate_delivery_never_calls_apply_twice() -> None:
     assert first.status is EffectCoordinatorStatus.APPLIED
     assert replay.status is EffectCoordinatorStatus.REPLAYED
     assert executor.calls.count("prepare") == 1
+    assert executor.calls.count("authorize") == 1
     assert executor.calls.count("apply") == 1
     assert [
         event.event_type for event in ledger.events_by_stage[command.stage_id]
     ].count("effect.applied") == 1
+
+
+@pytest.mark.asyncio
+async def test_post_approval_authorization_loss_aborts_before_apply() -> None:
+    """A historical approval cannot survive a revocable transport grant."""
+
+    command, ledger, references = await _approved_command()
+    claims = InMemoryEffectClaimStore()
+
+    async def _deny(
+        prepared: PreparedEffect,
+    ) -> EffectExecutionAuthorization:
+        del prepared
+        return EffectExecutionAuthorization(
+            allowed=False,
+            safe_code="authorization_revoked",
+        )
+
+    executor = _matching_executor(on_authorize=_deny)
+    result = await _coordinator(
+        ledger=ledger,
+        references=references,
+        claims=claims,
+        executor=executor,
+    ).handle(command)
+
+    assert result.status is EffectCoordinatorStatus.REFUSED
+    assert result.safe_code == "authorization_revoked"
+    assert executor.calls == ["prepare", "authorize", "abort"]
+    assert executor.applied_prepared == []
+    claim = await claims.get(
+        org_id="org_effect_test",
+        executor=EffectExecutorKind.BUILTIN,
+        idempotency_key=command.idempotency_key,
+    )
+    assert claim is not None and claim.state is EffectClaimState.COMPLETED
+    assert claim.outcome is EffectOutcome.FAILED
 
 
 @pytest.mark.asyncio

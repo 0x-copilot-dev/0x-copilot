@@ -15,6 +15,7 @@ from typing import Protocol, cast
 from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
 from agent_runtime.effects.claims import EffectClaim
 from agent_runtime.effects.executor import (
+    EffectExecutionAuthorization,
     EffectExecutionScope,
     EffectExecutorCapabilities,
     PreparedEffect,
@@ -146,6 +147,35 @@ class McpEffectExecutor:
             outcome=EffectOutcome.APPLIED,
             retryable=False,
             safe_message=_APPLIED,
+        )
+
+    async def authorize(self, prepared: PreparedEffect) -> EffectExecutionAuthorization:
+        """Re-check live connector authority after approval, before dispatch.
+
+        This generic executor hook is called by ``EffectCoordinator`` directly
+        before its only ``apply`` invocation.  ``McpStageCommitConnector``
+        repeats the check inside ``execute`` to make client construction safe
+        even if the card changes in the narrow interval after this verdict.
+        """
+
+        try:
+            material = await self._resolve_exact_material(prepared.request)
+            await self._connector.authorize(
+                self._stage_commit_request(
+                    request=prepared.request,
+                    material=material,
+                )
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return EffectExecutionAuthorization(
+                allowed=False,
+                safe_code="mcp_authorization_revoked",
+            )
+        return EffectExecutionAuthorization(
+            allowed=True,
+            safe_code="mcp_authorized",
         )
 
     async def reconcile(self, claim: EffectClaim) -> EffectExecutionResult:

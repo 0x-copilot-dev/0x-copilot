@@ -27,7 +27,7 @@ import asyncio
 from collections.abc import Callable
 from typing import Any
 
-from agent_runtime.capabilities.mcp.cards import McpLoadError
+from agent_runtime.capabilities.mcp.cards import McpAuthState, McpLoadError
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
     McpClientError,
@@ -35,6 +35,8 @@ from agent_runtime.capabilities.mcp.client import (
     McpTimeoutError,
 )
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
+from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
+from agent_runtime.capabilities.mcp.registry import RegisteredMcpServer
 from agent_runtime.capabilities.surfaces.commit import (
     ConnectorCommitResult,
     RemoteState,
@@ -55,6 +57,9 @@ _UNRESOLVED_SERVER = "The target connector could not be resolved."
 _NO_REGISTRY = "No MCP registry is configured for this deployment."
 _PROTOCOL_ERROR = "The connector reported an error applying the write."
 _DISPATCH_FAILED = "The connector dispatch failed."
+_AUTHORIZATION_REVOKED = (
+    "Authorization is no longer available; no external change was made."
+)
 
 # Keys we may lift from an untrusted connector result as the external receipt id.
 _EXTERNAL_REF_KEYS = ("external_ref", "id", "message_id", "ref")
@@ -90,18 +95,12 @@ class McpStageCommitConnector:
     async def execute(self, request: StageCommitRequest) -> ConnectorCommitResult:
         """Dispatch exactly the approved revision; raise typed errors on failure."""
 
-        registry = self._dependencies_factory(self._runtime_context).mcp_registry
-        resolve = getattr(registry, "resolve_server", None)
-        if resolve is None:
-            # No providers configured (``EmptyMcpRegistry``) — fail closed.
-            raise StageCommitConnectorError(_NO_REGISTRY)
-
-        resolution = await resolve(request.target_connector)
-        if isinstance(resolution, McpLoadError):
-            raise StageCommitConnectorError(
-                resolution.safe_message or _UNRESOLVED_SERVER
-            )
-
+        # This is deliberately the final authorization observation before the
+        # only MCP client is constructed.  The generic A5 coordinator also
+        # invokes this check through the executor contract after approval, but
+        # the transport repeats it here to close the race between that check
+        # and ``create_client``.
+        resolution = await self.authorize(request)
         try:
             client = resolution.provider.create_client(resolution.card)
             output = await asyncio.wait_for(
@@ -136,6 +135,33 @@ class McpStageCommitConnector:
             # The raw connector output is UNTRUSTED — never echoed into the event.
             detail={},
         )
+
+    async def authorize(self, request: StageCommitRequest) -> RegisteredMcpServer:
+        """Resolve current connector authorization without constructing a client.
+
+        ``StageCommitRequest`` contains only server-generated target data.  The
+        method re-composes the registry and checks the card currently exposed
+        to the worker, so a connector disabled/revoked after approval cannot
+        reach even ``create_client``.
+        """
+
+        registry = self._dependencies_factory(self._runtime_context).mcp_registry
+        resolve = getattr(registry, "resolve_server", None)
+        if resolve is None:
+            # No providers configured (``EmptyMcpRegistry``) — fail closed.
+            raise StageCommitConnectorError(_NO_REGISTRY)
+
+        resolution = await resolve(request.target_connector)
+        if isinstance(resolution, McpLoadError):
+            raise StageCommitConnectorError(_UNRESOLVED_SERVER)
+        if (
+            not McpPermissionPolicy.is_server_card_visible(
+                self._runtime_context, resolution.card
+            )
+            or resolution.card.auth_state is not McpAuthState.AUTHENTICATED
+        ):
+            raise StageCommitConnectorError(_AUTHORIZATION_REVOKED)
+        return resolution
 
     @staticmethod
     def _external_ref(output: object) -> str | None:

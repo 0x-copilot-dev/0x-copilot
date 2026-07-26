@@ -11,6 +11,8 @@ from typing import Any
 from agent_runtime.capabilities.operations.contracts import (
     OperationEventEmitter,
     OperationMetricsPort,
+    OperationOutcomePresenter,
+    OperationPresentationOutcome,
 )
 from agent_runtime.surfaces_v2.ledger_models import LedgerEventType
 
@@ -59,6 +61,36 @@ class FailSoftOperationEventEmitter:
             _LOGGER.debug("operation_gateway.event_emitter_failed")
         except Exception:
             _LOGGER.debug("operation_gateway.event_emitter_failed")
+
+
+@dataclass(frozen=True)
+class FailSoftOperationOutcomePresenter:
+    """Keep a display-only presentation failure out of operation execution.
+
+    A result is durable before the gateway invokes this port.  The wrapper
+    preserves that execution invariant and prevents individual transport
+    adapters from inventing their own best-effort ledger/surface branches.
+    """
+
+    delegate: OperationOutcomePresenter
+
+    @classmethod
+    def wrap(
+        cls, presenter: OperationOutcomePresenter
+    ) -> FailSoftOperationOutcomePresenter:
+        if isinstance(presenter, cls):
+            return presenter
+        return cls(delegate=presenter)
+
+    async def present(self, outcome: OperationPresentationOutcome) -> None:
+        try:
+            await self.delegate.present(outcome)
+        except asyncio.CancelledError:
+            if _TelemetryFailurePolicy.task_is_cancelling():
+                raise
+            _LOGGER.debug("operation_gateway.outcome_presentation_failed")
+        except Exception:
+            _LOGGER.debug("operation_gateway.outcome_presentation_failed")
 
 
 @dataclass(frozen=True)
@@ -317,6 +349,7 @@ class OperationGatewayMetrics:
 
 __all__ = (
     "FailSoftOperationEventEmitter",
+    "FailSoftOperationOutcomePresenter",
     "FailSoftOperationMetrics",
     "OperationGatewayMetrics",
 )

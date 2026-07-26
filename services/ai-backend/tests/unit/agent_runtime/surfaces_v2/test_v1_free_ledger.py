@@ -43,6 +43,9 @@ from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorRegistry,
 )
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.operations.presentation import (
+    SurfaceLedgerOperationOutcomePresenter,
+)
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 from agent_runtime.effects.contracts import EffectActorIdentity, EffectStageScope
 from agent_runtime.effects.staging import EffectStager
@@ -174,6 +177,7 @@ class TestV1FreeLedger(DynamicMcpLoadingMixin):
             ),
             ledger_emitter=handler._build_operation_ledger_emitter(run),
             artifact_service=None,
+            outcome_presenter=SurfaceLedgerOperationOutcomePresenter(),
             mode=OperationGatewayMode.ENFORCE,
             canonical_arguments_durable=True,
         )

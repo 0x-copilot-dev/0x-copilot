@@ -23,6 +23,7 @@ from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
 )
 from agent_runtime.effects.claims import EffectClaim
 from agent_runtime.effects.executor import (
+    EffectExecutionAuthorization,
     EffectExecutionScope,
     EffectExecutorCapabilities,
     PreparedEffect,
@@ -233,6 +234,39 @@ class BuiltinRowSetEffectExecutor:
             outcome=EffectOutcome.APPLIED,
             retryable=False,
             safe_message="The approved row-set was applied.",
+        )
+
+    async def authorize(self, prepared: PreparedEffect) -> EffectExecutionAuthorization:
+        """Observe current connector authority before any approved row sends."""
+
+        try:
+            material = await self._resolve_exact_material(prepared.request)
+            first_sendable = next(
+                (
+                    row
+                    for row in material.rows
+                    if row.row_key not in material.held_row_keys
+                ),
+                None,
+            )
+            if first_sendable is not None:
+                await self._connector.authorize(
+                    self._request_for_row(
+                        request=prepared.request,
+                        material=material,
+                        row=first_sendable,
+                    )
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            return EffectExecutionAuthorization(
+                allowed=False,
+                safe_code="builtin_authorization_revoked",
+            )
+        return EffectExecutionAuthorization(
+            allowed=True,
+            safe_code="builtin_authorized",
         )
 
     async def reconcile(self, claim: EffectClaim) -> EffectExecutionResult:

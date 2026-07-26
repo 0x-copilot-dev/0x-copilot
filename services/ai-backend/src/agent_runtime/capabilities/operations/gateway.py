@@ -217,6 +217,12 @@ class OperationGateway:
                     proposed = await adapter.build_proposal(request)
                     raw_result = None
 
+            if raw_result is not None and raw_result.presentation is not None:
+                # Presentation is a generic, best-effort operation outcome
+                # hand-off.  Transport adapters return facts only; they never
+                # import a ledger emitter or surface projector themselves.
+                await context.outcome_presenter.present(raw_result.presentation)
+
             result_summary = self._result_summary(
                 raw_result=raw_result,
                 proposed=proposed,
