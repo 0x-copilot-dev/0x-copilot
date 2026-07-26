@@ -85,6 +85,16 @@ from agent_runtime.capabilities.sandbox.runtime_adapter import DeepAgentSandboxR
 from agent_runtime.capabilities.sandbox.artifact_publisher import (
     ArtifactServiceSandboxPublisher,
 )
+from agent_runtime.capabilities.sandbox.operation_runner import (
+    SandboxLifecycleCoordinatorPort,
+    SandboxLifecycleOperationRunner,
+    SandboxSnapshotStoreContentSource,
+)
+from agent_runtime.capabilities.sandbox.result_publisher import (
+    ArtifactServiceSandboxResultPublisher,
+    SandboxResultPublication,
+    SandboxResultPublisherPort,
+)
 from agent_runtime.capabilities.sandbox.usage_meter import (
     FileSandboxUsageMeter,
     InMemorySandboxUsageMeter,
@@ -111,6 +121,7 @@ __all__ = [
     "ActiveSandbox",
     "ArtifactRef",
     "ArtifactServiceSandboxPublisher",
+    "ArtifactServiceSandboxResultPublisher",
     "DeepAgentSandboxRuntime",
     "FileSandboxUsageMeter",
     "FileSandboxSessionStore",
@@ -141,6 +152,8 @@ __all__ = [
     "SandboxLifecycleState",
     "SandboxLifecycleStore",
     "SandboxLifecycleCoordinator",
+    "SandboxLifecycleCoordinatorPort",
+    "SandboxLifecycleOperationRunner",
     "SandboxLifecycleTransitionError",
     "SandboxLimitProfile",
     "SandboxLimitProfiles",
@@ -160,9 +173,12 @@ __all__ = [
     "SandboxCleanupSchedule",
     "SandboxCleanupScheduleError",
     "SandboxSnapshot",
+    "SandboxSnapshotStoreContentSource",
     "SandboxSnapshotContentPort",
     "SandboxUsageAttribution",
     "SandboxUsageMeterPort",
+    "SandboxResultPublication",
+    "SandboxResultPublisherPort",
     "WorkspaceManifestBuilder",
     "WorkspacePatchBuilder",
     "WorkspacePatchEntry",

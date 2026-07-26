@@ -38,6 +38,7 @@ from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 from agent_runtime.surfaces_v2.ledger_models import OperationOutcome
 
 _ARTIFACT = "artifact://art_550e8400-e29b-41d4-a716-446655440000/revisions/1"
+_RESULT_ARTIFACT = "artifact://art_550e8400-e29b-41d4-a716-446655440001/revisions/1"
 
 
 @dataclass
@@ -77,7 +78,7 @@ class _Runner(SandboxOperationRunnerPort):
         return SandboxOperationRunResult(
             run_id=request.run_id,
             operation_id=request.operation_id,
-            result_ref=f"sandbox-result://operations/{request.operation_id}",
+            result_ref=_RESULT_ARTIFACT,
             safe_summary="Sandbox command completed.",
         )
 
@@ -123,6 +124,15 @@ def _gateway() -> OperationGateway:
 
 
 class TestSandboxOperationAdapter:
+    def test_result_reference_must_be_an_immutable_artifact_revision(self) -> None:
+        with pytest.raises(ValidationError, match="logical reference"):
+            SandboxOperationRunResult(
+                run_id="run_sandbox",
+                operation_id="operation_sandbox",
+                result_ref="sandbox-result://operations/operation_sandbox",
+                safe_summary="Sandbox command completed.",
+            )
+
     def test_unavailable_reason_must_be_a_safe_code(self) -> None:
         with pytest.raises(ValidationError):
             SandboxOperationAvailability(available=False, reason="file:///secret")
