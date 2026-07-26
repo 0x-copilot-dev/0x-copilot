@@ -141,6 +141,12 @@ export {
   type EncryptedWorkspaceJournalConfig,
 } from "./workspace-journal";
 export {
+  NativeWorkspaceCommitHelper,
+  NativeWorkspaceCommitHelperError,
+  resolveNativeWorkspaceCommitHelperPath,
+  type NativeWorkspaceCommitHelperConfig,
+} from "./native-workspace-commit-helper";
+export {
   AddonNativeWorkspaceAuthority,
   UnavailableNativeWorkspaceAuthority,
   hasNativeWorkspaceV2Bindings,

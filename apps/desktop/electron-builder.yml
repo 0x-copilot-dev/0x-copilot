@@ -38,6 +38,13 @@ extraResources:
     to: runtime
     filter:
       - "**/*"
+  # C2's native commit helper is outside asar so Electron main can spawn it
+  # through inherited private descriptors. Missing build output is a packaging
+  # failure, never a writable Node filesystem fallback.
+  - from: native/workspace-commit-helper/bin
+    to: workspace-commit-helper
+    filter:
+      - "workspace-commit-helper"
 
 # Icons are committed binaries generated from build/icon-source.svg by
 # build/generate-icons.mjs (macOS host). Regenerate them when the mark changes.

@@ -7,6 +7,27 @@ import {
 import { FsError, normalizeVirtualPath } from "./path-validation";
 import type { Grant, GrantProvider } from "./types";
 
+/**
+ * Writable C2 paths are stricter than the read-only virtual-path grammar.
+ * macOS filesystems can normalize Unicode and match case-insensitively, which
+ * makes a request spelling a non-authoritative identifier. The native helper
+ * independently enforces this rule and exact directory-entry bytes; keeping
+ * it here prevents an ambiguous proposal from ever receiving a permit.
+ */
+export function assertNativeWorkspaceCanonicalPath(raw: string): string[] {
+  const segments = normalizeVirtualPath(raw);
+  if (
+    segments.length === 0 ||
+    segments.some((segment) => !/^[A-Za-z0-9._-]+$/u.test(segment))
+  ) {
+    throw new FsError(
+      "invalid_path",
+      "writable workspace paths must use canonical ASCII segments",
+    );
+  }
+  return segments;
+}
+
 // The v2 workspace authority is deliberately separate from HostFs.  HostFs is
 // the read-only compatibility surface; this module is the *only* path allowed
 // to prepare or commit an effect to a user-granted host workspace.  It performs
@@ -872,9 +893,9 @@ export class LocalWorkspaceAuthority {
             "workspace entry needs a leaf path",
           );
         }
-        normalizeVirtualPath(entry.relativePath);
+        assertNativeWorkspaceCanonicalPath(entry.relativePath);
         if (entry.destinationRelativePath !== undefined)
-          normalizeVirtualPath(entry.destinationRelativePath);
+          assertNativeWorkspaceCanonicalPath(entry.destinationRelativePath);
       } catch (error) {
         if (error instanceof FsError)
           throw new WorkspaceAuthorityError("workspace_conflict");
