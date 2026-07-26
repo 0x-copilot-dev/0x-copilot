@@ -164,6 +164,7 @@ class ArtifactGarbageCollectorPort(Protocol):
         org_id: str,
         candidate: ArtifactGcCandidate,
         grace_before: datetime,
+        quarantined_at: datetime | None = None,
     ) -> bool:
         """Quarantine one candidate only after an authoritative final recheck.
 
@@ -172,7 +173,9 @@ class ArtifactGarbageCollectorPort(Protocol):
         must cancel or restore quarantine before its metadata transaction
         commits. Immediate unlink based on a caller-supplied snapshot is
         forbidden; tombstoned artifact revisions remain references until their
-        retention purge removes the metadata.
+        retention purge removes the metadata. ``quarantined_at`` is the
+        lifecycle operation timestamp, not wall-clock observation time, so
+        deterministic retention/reap windows remain adapter-parity safe.
         """
 
 

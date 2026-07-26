@@ -12,6 +12,7 @@ from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupLease,
     ArtifactCleanupScheduleStateError,
     ArtifactCleanupTenantExecutionLease,
+    ArtifactCleanupTrackedExecution,
 )
 
 
@@ -31,6 +32,7 @@ class InMemoryArtifactCleanupScheduleStore:
         self._deferred: dict[str, ArtifactCleanupDeferredTenant] = {}
         self._tenant_locks: dict[str, asyncio.Lock] = {}
         self._tenant_executions: dict[str, ArtifactCleanupTenantExecutionLease] = {}
+        self._tracked_executions: dict[str, ArtifactCleanupTrackedExecution] = {}
 
     async def load_cursor(self) -> str | None:
         with self._lock:
@@ -211,10 +213,12 @@ class InMemoryArtifactCleanupScheduleStore:
         fence_token: int,
         org_id: str,
         now: datetime,
+        maximum_active_executions: int = 4,
     ) -> ArtifactCleanupTenantExecutionLease | None:
         _validate_id(owner_id)
         _validate_id(org_id)
         _validate_time(now)
+        _validate_maximum_active_executions(maximum_active_executions)
         with self._lock:
             if not _active_fence_matches(
                 owner_id=owner_id,
@@ -240,6 +244,9 @@ class InMemoryArtifactCleanupScheduleStore:
             ):
                 lock.release()
                 return None
+            if len(self._tracked_executions) >= maximum_active_executions:
+                lock.release()
+                return None
             execution = ArtifactCleanupTenantExecutionLease(
                 org_id=org_id,
                 owner_id=owner_id,
@@ -247,6 +254,9 @@ class InMemoryArtifactCleanupScheduleStore:
                 execution_token=uuid4().hex,
             )
             self._tenant_executions[execution.execution_token] = execution
+            self._tracked_executions[execution.execution_token] = (
+                ArtifactCleanupTrackedExecution(execution=execution, state="active")
+            )
             return execution
 
     async def validate_tenant_execution(
@@ -270,14 +280,106 @@ class InMemoryArtifactCleanupScheduleStore:
 
     async def release_tenant_execution(
         self, *, execution: ArtifactCleanupTenantExecutionLease
-    ) -> None:
+    ) -> bool:
         with self._lock:
             if self._tenant_executions.get(execution.execution_token) != execution:
-                return
-            self._tenant_executions.pop(execution.execution_token, None)
+                return False
             lock = self._tenant_locks.get(execution.org_id)
             if lock is not None and lock.locked():
                 lock.release()
+            self._tenant_executions.pop(execution.execution_token, None)
+            self._tracked_executions.pop(execution.execution_token, None)
+            return True
+
+    async def mark_tenant_execution_quarantined(
+        self, *, execution: ArtifactCleanupTenantExecutionLease, now: datetime
+    ) -> bool:
+        _validate_time(now)
+        with self._lock:
+            tracked = self._tracked_executions.get(execution.execution_token)
+            if tracked is None or tracked.execution != execution:
+                return False
+            self._tracked_executions[execution.execution_token] = (
+                ArtifactCleanupTrackedExecution(
+                    execution=execution,
+                    state="quarantined",
+                    release_failure_count=tracked.release_failure_count,
+                )
+            )
+            return True
+
+    async def mark_tenant_execution_release_pending(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+        retry_base_seconds: float,
+        retry_max_seconds: float,
+    ) -> ArtifactCleanupTrackedExecution | None:
+        _validate_time(now)
+        _validate_retry(retry_base_seconds, retry_max_seconds)
+        with self._lock:
+            tracked = self._tracked_executions.get(execution.execution_token)
+            if tracked is None or tracked.execution != execution:
+                return None
+            failures = tracked.release_failure_count + 1
+            pending = ArtifactCleanupTrackedExecution(
+                execution=execution,
+                state="release_pending",
+                release_failure_count=failures,
+                retry_not_before=now
+                + timedelta(
+                    seconds=_retry_seconds(
+                        failure_count=failures,
+                        base_seconds=retry_base_seconds,
+                        max_seconds=retry_max_seconds,
+                    )
+                ),
+            )
+            self._tracked_executions[execution.execution_token] = pending
+            return pending
+
+    async def load_tenant_execution_release_pending(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+    ) -> ArtifactCleanupTrackedExecution | None:
+        _validate_time(now)
+        with self._lock:
+            tracked = self._tracked_executions.get(execution.execution_token)
+            if (
+                tracked is None
+                or tracked.execution != execution
+                or tracked.state != "release_pending"
+                or tracked.retry_not_before is None
+                or tracked.retry_not_before > now
+            ):
+                return None
+            return tracked
+
+    async def list_tracked_tenant_executions(
+        self,
+    ) -> tuple[ArtifactCleanupTrackedExecution, ...]:
+        with self._lock:
+            return tuple(
+                sorted(
+                    self._tracked_executions.values(),
+                    key=lambda value: value.execution.execution_token,
+                )
+            )
+
+    async def reconcile_orphaned_tenant_executions(self) -> int:
+        with self._lock:
+            orphaned = [
+                token
+                for token, tracked in self._tracked_executions.items()
+                if token not in self._tenant_executions
+                or self._tenant_executions[token] != tracked.execution
+            ]
+            for token in orphaned:
+                self._tracked_executions.pop(token, None)
+            return len(orphaned)
 
 
 def _lease(
@@ -338,6 +440,13 @@ def _validate_time(value: datetime) -> None:
 def _validate_duration(value: float) -> None:
     if value <= 0:
         raise ArtifactCleanupScheduleStateError("cleanup scheduler duration is invalid")
+
+
+def _validate_maximum_active_executions(value: int) -> None:
+    if not isinstance(value, int) or not 1 <= value <= 64:
+        raise ArtifactCleanupScheduleStateError(
+            "cleanup scheduler execution capacity is invalid"
+        )
 
 
 def _validate_retry(base_seconds: float, max_seconds: float) -> None:

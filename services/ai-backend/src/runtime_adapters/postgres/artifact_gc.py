@@ -112,12 +112,14 @@ class PostgresArtifactGarbageCollector:
         org_id: str,
         candidate: ArtifactGcCandidate,
         grace_before: datetime,
+        quarantined_at: datetime | None = None,
     ) -> bool:
         if candidate.unreferenced_since > grace_before:
             return False
         coordinator = self._blob_store.coordinator
         active = coordinator.layout.object_path(candidate.blob_key)
         quarantine = coordinator.quarantine_path(candidate.blob_key)
+        recorded_at = quarantined_at if quarantined_at is not None else grace_before
         moved = False
         try:
             async with self._parent._role_connection("worker") as conn:  # type: ignore[attr-defined]
@@ -203,14 +205,14 @@ class PostgresArtifactGarbageCollector:
                             moved = True
                             coordinator.mark_quarantined_locked(
                                 blob_key=candidate.blob_key,
-                                quarantined_at=datetime.now(timezone.utc),
+                                quarantined_at=recorded_at,
                             )
                     await conn.execute(
                         """
                         INSERT INTO runtime_artifact_gc_quarantine (
                             blob_key, provenance_org_id, candidate_since,
                             quarantined_at, reaping_at
-                        ) VALUES (%s, %s, %s, now(), NULL)
+                        ) VALUES (%s, %s, %s, %s, NULL)
                         ON CONFLICT (blob_key) DO UPDATE
                             SET provenance_org_id =
                                     EXCLUDED.provenance_org_id,
@@ -218,13 +220,17 @@ class PostgresArtifactGarbageCollector:
                                     runtime_artifact_gc_quarantine.candidate_since,
                                     EXCLUDED.candidate_since
                                 ),
-                                quarantined_at = EXCLUDED.quarantined_at,
+                                quarantined_at = LEAST(
+                                    runtime_artifact_gc_quarantine.quarantined_at,
+                                    EXCLUDED.quarantined_at
+                                ),
                                 reaping_at = NULL
                         """,
                         (
                             candidate.blob_key,
                             org_id,
                             candidate.unreferenced_since,
+                            recorded_at,
                         ),
                     )
             return True
@@ -246,7 +252,7 @@ class PostgresArtifactGarbageCollector:
                 """
                 SELECT blob_key
                   FROM runtime_artifact_gc_quarantine
-                 WHERE quarantined_at < %s
+                 WHERE quarantined_at <= %s
                    AND (%s IS NULL OR provenance_org_id = %s)
                  ORDER BY quarantined_at ASC, blob_key ASC
                  LIMIT %s
@@ -307,7 +313,7 @@ class PostgresArtifactGarbageCollector:
                         (blob_key, provenance_org_id, provenance_org_id),
                     )
                     state = await cursor.fetchone()
-                    if state is None or state["quarantined_at"] >= older_than:
+                    if state is None or state["quarantined_at"] > older_than:
                         return None
                     has_reference, has_hold = await self._revalidation_state(
                         conn, blob_key=blob_key

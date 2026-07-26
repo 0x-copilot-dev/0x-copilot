@@ -392,6 +392,7 @@ class ArtifactLifecycleJobs:
         candidate_grace_before: datetime,
         quarantine_older_than: datetime,
         limit: int,
+        quarantine_recorded_at: datetime | None = None,
         execution_fence: ArtifactCleanupExecutionFence | None = None,
     ) -> ArtifactRetentionJobResult:
         await _require_execution_fence(execution_fence)
@@ -438,6 +439,7 @@ class ArtifactLifecycleJobs:
                 org_id=scope.org_id,
                 candidate=candidate,
                 grace_before=candidate_grace_before,
+                quarantined_at=quarantine_recorded_at,
             )
             if collected:
                 quarantined.append(candidate.blob_key)
@@ -485,6 +487,7 @@ class ArtifactLifecycleJobs:
             candidate_grace_before=now - schedule.candidate_grace,
             quarantine_older_than=now - schedule.quarantine_grace,
             limit=max(1, limit or schedule.limit),
+            quarantine_recorded_at=now,
             execution_fence=execution_fence,
         )
 

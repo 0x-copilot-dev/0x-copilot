@@ -23,6 +23,7 @@ from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupLease,
     ArtifactCleanupScheduleStore,
     ArtifactCleanupTenantExecutionLease,
+    ArtifactCleanupTrackedExecution,
 )
 
 from agent_runtime.observability.lifecycle_metrics import (
@@ -151,7 +152,9 @@ class _LifecycleTask:
 
     execution: ArtifactCleanupTenantExecutionLease
     task: asyncio.Task[ArtifactPhysicalCleanupOutcome]
+    current_time: Callable[[], datetime]
     quarantined: bool = False
+    release_pending: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -182,6 +185,8 @@ class ArtifactCleanupExecutionRunner:
 
     _AUDIT_EVENT_TYPE = "artifact_cleanup.executed"
     _CAPACITY_AUDIT_EVENT_TYPE = "artifact_cleanup.quarantine_capacity_reached"
+    _RELEASE_PENDING_AUDIT_EVENT_TYPE = "artifact_cleanup.execution_release_pending"
+    _RELEASE_RESOLVED_AUDIT_EVENT_TYPE = "artifact_cleanup.execution_release_resolved"
 
     def __init__(
         self,
@@ -255,55 +260,66 @@ class ArtifactCleanupExecutionRunner:
 
         self._stop_requested.clear()
 
-    def _quarantined_tasks(self) -> tuple[_LifecycleTask, ...]:
-        """Return the still-running tasks that retain durable tenant fences."""
+    async def _tracked_executions(
+        self,
+    ) -> tuple[ArtifactCleanupTrackedExecution, ...] | None:
+        """Read the globally durable admission state; unavailable means stop."""
 
-        return tuple(
-            sorted(
-                (task for task in self._lifecycle_tasks.values() if task.quarantined),
-                key=lambda task: task.execution.org_id,
-            )
+        try:
+            return await self._schedule.list_tracked_tenant_executions()
+        except Exception:
+            self._record_metric(outcome="failed")
+            _LOGGER.warning("artifact_cleanup_execution_admission_unavailable")
+            return None
+
+    async def _global_capacity_reached(self) -> tuple[bool, int, str | None]:
+        tracked = await self._tracked_executions()
+        if tracked is None:
+            # Admission state must fail closed; the caller reports a regular
+            # failure rather than trusting a stale in-memory count.
+            return True, self._max_quarantined_executions, None
+        count = len(tracked)
+        if count < self._max_quarantined_executions:
+            self._quarantine_capacity_reported = False
+        return (
+            count >= self._max_quarantined_executions,
+            count,
+            tracked[0].execution.org_id if tracked else None,
         )
 
-    def _quarantine_capacity_reached(self) -> bool:
-        """Bound retained execution locks and dedicated adapter connections."""
-
-        reached = len(self._quarantined_tasks()) >= self._max_quarantined_executions
-        if not reached:
-            self._quarantine_capacity_reported = False
-        return reached
-
     async def _fail_closed_for_quarantine_capacity(
-        self,
+        self, *, count: int, representative_org_id: str | None
     ) -> ArtifactCleanupExecutionResult:
         """Emit bounded evidence and admit no new destructive lifecycle pass."""
 
-        audit_failed = not await self._emit_quarantine_capacity_evidence()
+        audit_failed = not await self._emit_quarantine_capacity_evidence(
+            count=count, representative_org_id=representative_org_id
+        )
         if audit_failed:
             self._record_metric(outcome="audit_failed")
         return ArtifactCleanupExecutionResult(
             failures=1,
-            hung_tenants=len(self._quarantined_tasks()),
+            hung_tenants=count,
             quarantine_capacity_reached=True,
             audit_failures=int(audit_failed),
         )
 
-    async def _emit_quarantine_capacity_evidence(self) -> bool:
+    async def _emit_quarantine_capacity_evidence(
+        self, *, count: int, representative_org_id: str | None
+    ) -> bool:
         """Persist a tenant-scoped health record once per saturated interval."""
 
-        quarantined = self._quarantined_tasks()
-        if len(quarantined) < self._max_quarantined_executions:
+        if count < self._max_quarantined_executions:
             self._quarantine_capacity_reported = False
             return True
         if self._quarantine_capacity_reported:
             return True
         self._record_metric(outcome="quarantine_capacity_reached")
-        representative = quarantined[0]
         try:
             await self._persistence.write_audit_log(
                 event_type=self._CAPACITY_AUDIT_EVENT_TYPE,
                 record={
-                    "org_id": representative.execution.org_id,
+                    "org_id": representative_org_id or "artifact_cleanup_worker",
                     "actor_type": "system",
                     "action": self._CAPACITY_AUDIT_EVENT_TYPE,
                     "resource_type": "artifact_cleanup_worker",
@@ -311,7 +327,7 @@ class ArtifactCleanupExecutionRunner:
                     "outcome": "failure",
                     "metadata": {
                         "health": "quarantine_capacity_reached",
-                        "quarantined_execution_count": len(quarantined),
+                        "quarantined_execution_count": count,
                         "max_quarantined_executions": self._max_quarantined_executions,
                     },
                 },
@@ -323,18 +339,145 @@ class ArtifactCleanupExecutionRunner:
         _LOGGER.warning("artifact_cleanup_execution_quarantine_capacity_reached")
         return True
 
+    async def _retry_due_release_pending(self, *, now: datetime) -> None:
+        """Retry only locally-held, durably due release-pending fences.
+
+        An adapter handle never crosses a process boundary.  Orphaned records
+        are first reconciled by the store; this worker then retries only exact
+        handles it still owns.  The bounded slice prevents a release outage
+        from monopolising a scheduler cycle.
+        """
+
+        for tracked in tuple(self._lifecycle_tasks.values())[
+            : self._max_quarantined_executions
+        ]:
+            if not tracked.release_pending:
+                continue
+            due = await self._schedule.load_tenant_execution_release_pending(
+                execution=tracked.execution, now=now
+            )
+            if due is None:
+                continue
+            await self._release_execution_or_mark_pending(
+                tracked=tracked, now=now, from_retry=True
+            )
+
+    async def _release_execution_or_mark_pending(
+        self,
+        *,
+        tracked: _LifecycleTask,
+        now: datetime,
+        from_retry: bool = False,
+    ) -> bool:
+        """Release a stopped exact fence or retain it in durable retry state."""
+
+        released = False
+        try:
+            released = await self._schedule.release_tenant_execution(
+                execution=tracked.execution
+            )
+        except Exception:
+            _LOGGER.warning("artifact_cleanup_execution_fence_release_failed")
+        if released:
+            was_pending = tracked.release_pending
+            self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
+            if was_pending:
+                await self._write_execution_health(
+                    event_type=self._RELEASE_RESOLVED_AUDIT_EVENT_TYPE,
+                    execution=tracked.execution,
+                    outcome="resolved",
+                    release_failure_count=0,
+                )
+            return True
+
+        tracked.release_pending = True
+        try:
+            pending = await self._schedule.mark_tenant_execution_release_pending(
+                execution=tracked.execution,
+                now=now,
+                retry_base_seconds=self._retry_base_seconds,
+                retry_max_seconds=self._retry_max_seconds,
+            )
+        except Exception:
+            pending = None
+        if pending is None:
+            # The original admission record still exists (or the store is
+            # unavailable). Keep the in-process handle and consume capacity;
+            # attempting a new lifecycle pass would be unsafe.
+            self._record_metric(outcome="failed")
+            _LOGGER.warning("artifact_cleanup_execution_release_pending_unavailable")
+            return False
+        self._record_metric(outcome="release_pending")
+        await self._write_execution_health(
+            event_type=self._RELEASE_PENDING_AUDIT_EVENT_TYPE,
+            execution=tracked.execution,
+            outcome="pending" if not from_retry else "retry_failed",
+            release_failure_count=pending.release_failure_count,
+            retry_not_before=pending.retry_not_before,
+        )
+        return False
+
+    async def _write_execution_health(
+        self,
+        *,
+        event_type: str,
+        execution: ArtifactCleanupTenantExecutionLease,
+        outcome: str,
+        release_failure_count: int,
+        retry_not_before: datetime | None = None,
+    ) -> None:
+        """Best-effort, body-free health evidence for fence release state."""
+
+        try:
+            await self._persistence.write_audit_log(
+                event_type=event_type,
+                record={
+                    "org_id": execution.org_id,
+                    "actor_type": "system",
+                    "action": event_type,
+                    "resource_type": "artifact_cleanup_execution_fence",
+                    "resource_id": execution.execution_token,
+                    "outcome": outcome,
+                    "metadata": {
+                        "release_failure_count": release_failure_count,
+                        **(
+                            {"retry_not_before": retry_not_before.isoformat()}
+                            if retry_not_before is not None
+                            else {}
+                        ),
+                    },
+                },
+            )
+        except Exception:
+            self._record_metric(outcome="audit_failed")
+            _LOGGER.warning("artifact_cleanup_execution_release_audit_unavailable")
+
     async def run_once(
         self, *, now: datetime | None = None
     ) -> ArtifactCleanupExecutionResult:
         """Run one page without logging tenant, artifact, or content details."""
 
-        if self._quarantine_capacity_reached():
-            return await self._fail_closed_for_quarantine_capacity()
-
         fixed_now = _utc(now) if now is not None else None
 
         def current_time() -> datetime:
             return fixed_now if fixed_now is not None else _utc(self._clock())
+
+        try:
+            await self._schedule.reconcile_orphaned_tenant_executions()
+            await self._retry_due_release_pending(now=current_time())
+        except Exception:
+            self._record_metric(outcome="failed")
+            _LOGGER.warning("artifact_cleanup_execution_admission_reconcile_failed")
+            return ArtifactCleanupExecutionResult(failures=1)
+        (
+            at_capacity,
+            count,
+            representative_org_id,
+        ) = await self._global_capacity_reached()
+        if at_capacity:
+            return await self._fail_closed_for_quarantine_capacity(
+                count=count, representative_org_id=representative_org_id
+            )
 
         reference_now = current_time()
         try:
@@ -426,12 +569,29 @@ class ArtifactCleanupExecutionRunner:
                     fence_token=keeper.fence_token,
                     org_id=org_id,
                     now=current_time(),
+                    maximum_active_executions=self._max_quarantined_executions,
                 )
             except Exception:
                 self._record_metric(outcome="failed")
                 _LOGGER.warning("artifact_cleanup_execution_fence_unavailable")
                 return _replace(result, failures=result.failures + 1)
             if execution is None:
+                (
+                    at_capacity,
+                    count,
+                    representative_org_id,
+                ) = await self._global_capacity_reached()
+                if at_capacity:
+                    capacity = await self._fail_closed_for_quarantine_capacity(
+                        count=count, representative_org_id=representative_org_id
+                    )
+                    return _replace(
+                        result,
+                        failures=result.failures + capacity.failures,
+                        hung_tenants=max(result.hung_tenants, capacity.hung_tenants),
+                        quarantine_capacity_reached=True,
+                        audit_failures=result.audit_failures + capacity.audit_failures,
+                    )
                 # A paused predecessor still owns this tenant's durable
                 # execution fence. Leave its cursor position untouched and
                 # continue the fair page; starting a second destructive pass
@@ -552,29 +712,42 @@ class ArtifactCleanupExecutionRunner:
                 cursor = org_id
             finally:
                 if attempt is None or attempt.release_execution:
-                    try:
-                        await self._schedule.release_tenant_execution(
-                            execution=execution
+                    tracked = self._lifecycle_tasks.get(execution.execution_token)
+                    if tracked is None:
+                        # A failure before task construction has no running
+                        # lifecycle to retain, but still needs exact release.
+                        tracked = _LifecycleTask(
+                            execution=execution,
+                            task=asyncio.create_task(
+                                _completed_cleanup_task(),
+                                name="artifact-cleanup-empty-release",
+                            ),
+                            current_time=current_time,
                         )
-                    except Exception:
-                        _LOGGER.warning(
-                            "artifact_cleanup_execution_fence_release_failed"
+                        self._lifecycle_tasks[execution.execution_token] = tracked
+                    await self._release_execution_or_mark_pending(
+                        tracked=tracked, now=current_time()
+                    )
+            if attempt is not None and attempt.state == "quarantined":
+                (
+                    at_capacity,
+                    count,
+                    representative_org_id,
+                ) = await self._global_capacity_reached()
+                if at_capacity:
+                    capacity_audit_failed = (
+                        not await self._emit_quarantine_capacity_evidence(
+                            count=count, representative_org_id=representative_org_id
                         )
-            if (
-                attempt is not None
-                and attempt.state == "quarantined"
-                and self._quarantine_capacity_reached()
-            ):
-                capacity_audit_failed = (
-                    not await self._emit_quarantine_capacity_evidence()
-                )
-                if capacity_audit_failed:
-                    self._record_metric(outcome="audit_failed")
-                return _replace(
-                    result,
-                    quarantine_capacity_reached=True,
-                    audit_failures=result.audit_failures + int(capacity_audit_failed),
-                )
+                    )
+                    if capacity_audit_failed:
+                        self._record_metric(outcome="audit_failed")
+                    return _replace(
+                        result,
+                        quarantine_capacity_reached=True,
+                        audit_failures=result.audit_failures
+                        + int(capacity_audit_failed),
+                    )
             if self._stop_requested.is_set():
                 return result
         return result
@@ -609,7 +782,9 @@ class ArtifactCleanupExecutionRunner:
             ),
             name=f"artifact-cleanup-lifecycle-{execution.execution_token}",
         )
-        tracked = _LifecycleTask(execution=execution, task=task)
+        tracked = _LifecycleTask(
+            execution=execution, task=task, current_time=current_time
+        )
         self._lifecycle_tasks[execution.execution_token] = tracked
         stop_waiter = asyncio.create_task(
             self._stop_requested.wait(), name="artifact-cleanup-stop-waiter"
@@ -624,7 +799,7 @@ class ArtifactCleanupExecutionRunner:
                 return self._consume_lifecycle_task(tracked)
             reason = "shutdown" if stop_waiter in done else "deadline"
             return await self._cancel_or_quarantine_lifecycle_task(
-                tracked=tracked, reason=reason
+                tracked=tracked, reason=reason, current_time=current_time
             )
         except asyncio.CancelledError:
             # A caller may be cancelled during process teardown.  Convert that
@@ -632,7 +807,7 @@ class ArtifactCleanupExecutionRunner:
             # it is never safe for the surrounding finally to drop this fence
             # while the lifecycle task may still be executing.
             return await self._cancel_or_quarantine_lifecycle_task(
-                tracked=tracked, reason="shutdown"
+                tracked=tracked, reason="shutdown", current_time=current_time
             )
         finally:
             if not stop_waiter.done():
@@ -645,7 +820,6 @@ class ArtifactCleanupExecutionRunner:
     def _consume_lifecycle_task(self, tracked: _LifecycleTask) -> _LifecycleAttempt:
         """Consume a conclusively stopped task; its fence may now be released."""
 
-        self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
         try:
             return _LifecycleAttempt(state="completed", outcome=tracked.task.result())
         except ArtifactCleanupExecutionFenceLostError:
@@ -656,7 +830,11 @@ class ArtifactCleanupExecutionRunner:
             return _LifecycleAttempt(state="failed")
 
     async def _cancel_or_quarantine_lifecycle_task(
-        self, *, tracked: _LifecycleTask, reason: Literal["deadline", "shutdown"]
+        self,
+        *,
+        tracked: _LifecycleTask,
+        reason: Literal["deadline", "shutdown"],
+        current_time: Callable[[], datetime],
     ) -> _LifecycleAttempt:
         """Cancel a pass, then quarantine it if it survives the grace bound."""
 
@@ -669,12 +847,24 @@ class ArtifactCleanupExecutionRunner:
             # the task happened to return normally during its cancellation
             # grace. Its effects are lifecycle-idempotent and it will be
             # reconciled on the later durable retry.
-            self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
             self._discard_lifecycle_task_result(task)
             return _LifecycleAttempt(
                 state="timed_out" if reason == "deadline" else "cancelled"
             )
         tracked.quarantined = True
+        try:
+            marked = await self._schedule.mark_tenant_execution_quarantined(
+                execution=tracked.execution, now=current_time()
+            )
+        except Exception:
+            marked = False
+        if not marked:
+            # The admission row was created before lifecycle work began; if a
+            # state transition cannot be persisted it remains "active" and
+            # still consumes global capacity.  Retain the fence locally and
+            # never admit new work on the strength of an in-memory count.
+            self._record_metric(outcome="failed")
+            _LOGGER.warning("artifact_cleanup_execution_quarantine_unavailable")
         task.add_done_callback(self._on_quarantined_lifecycle_task_done)
         return _LifecycleAttempt(state="quarantined", release_execution=False)
 
@@ -719,15 +909,9 @@ class ArtifactCleanupExecutionRunner:
             # log arbitrary adapter exception text from a late task.
             _LOGGER.warning("artifact_cleanup_execution_quarantined_task_failed")
         finally:
-            try:
-                await self._schedule.release_tenant_execution(
-                    execution=tracked.execution
-                )
-            except Exception:
-                _LOGGER.warning("artifact_cleanup_execution_fence_release_failed")
-            finally:
-                self._lifecycle_tasks.pop(tracked.execution.execution_token, None)
-                self._quarantine_capacity_reached()
+            await self._release_execution_or_mark_pending(
+                tracked=tracked, now=tracked.current_time()
+            )
 
     async def _write_audit(
         self,
@@ -936,9 +1120,11 @@ class ArtifactCleanupExecutionLoop:
             # quarantined tasks or their tenant execution fences.
             self._stop = asyncio.Event()
             self._runner.resume_scheduling()
-            self._task = asyncio.create_task(
+            task = asyncio.create_task(
                 self._run(), name="artifact-cleanup-execution-loop"
             )
+            self._task = task
+            task.add_done_callback(self._clear_completed_task)
 
     async def stop(self) -> None:
         self._stop.set()
@@ -961,6 +1147,12 @@ class ArtifactCleanupExecutionLoop:
         else:
             if self._task is task:
                 self._task = None
+
+    def _clear_completed_task(self, completed: asyncio.Task[None]) -> None:
+        """Make a timed-out shutdown restartable only after its tail stops."""
+
+        if self._task is completed:
+            self._task = None
 
     async def _run(self) -> None:
         while not self._stop.is_set():
@@ -1021,6 +1213,12 @@ def _execution_state_for_attempt(attempt: _LifecycleAttempt) -> str:
         "timed_out": "deadline_cancelled",
         "quarantined": "hung_quarantined",
     }.get(attempt.state, "failed")
+
+
+async def _completed_cleanup_task() -> ArtifactPhysicalCleanupOutcome:
+    """Placeholder only for a pre-task setup failure that still owns a fence."""
+
+    return ArtifactPhysicalCleanupOutcome(org_id="artifact_cleanup_worker")
 
 
 def _fair_org_page(

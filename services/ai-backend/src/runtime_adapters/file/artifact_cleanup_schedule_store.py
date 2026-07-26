@@ -17,6 +17,7 @@ from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupLease,
     ArtifactCleanupScheduleStateError,
     ArtifactCleanupTenantExecutionLease,
+    ArtifactCleanupTrackedExecution,
 )
 from runtime_adapters.file._advisory_lock import (
     acquire_exclusive,
@@ -232,10 +233,12 @@ class FileArtifactCleanupScheduleStore:
         fence_token: int,
         org_id: str,
         now: datetime,
+        maximum_active_executions: int = 4,
     ) -> ArtifactCleanupTenantExecutionLease | None:
         _validate_id(owner_id)
         _validate_id(org_id)
         _validate_time(now)
+        _validate_maximum_active_executions(maximum_active_executions)
         async with self._lock:
             with self._exclusive_lock():
                 state = self._read()
@@ -266,22 +269,38 @@ class FileArtifactCleanupScheduleStore:
                         release_exclusive(descriptor)
                         os.close(descriptor)
                         return None
-                execution = ArtifactCleanupTenantExecutionLease(
-                    org_id=org_id,
-                    owner_id=owner_id,
-                    fence_token=fence_token,
-                    execution_token=uuid4().hex,
-                )
+                    if len(state["executions"]) >= maximum_active_executions:
+                        release_exclusive(descriptor)
+                        os.close(descriptor)
+                        return None
+                    execution = ArtifactCleanupTenantExecutionLease(
+                        org_id=org_id,
+                        owner_id=owner_id,
+                        fence_token=fence_token,
+                        execution_token=uuid4().hex,
+                    )
+                    state["executions"][execution.execution_token] = (
+                        ArtifactCleanupTrackedExecution(
+                            execution=execution, state="active"
+                        )
+                    )
+                    self._write(state)
                 self._tenant_execution_handles[execution.execution_token] = (
                     execution,
                     descriptor,
                 )
                 return execution
-            except OSError as exc:
+            except Exception as exc:
+                try:
+                    release_exclusive(descriptor)
+                except OSError:
+                    pass
                 try:
                     os.close(descriptor)
                 except OSError:
                     pass
+                if isinstance(exc, ArtifactCleanupScheduleStateError):
+                    raise
                 raise ArtifactCleanupScheduleStateError() from exc
 
     async def validate_tenant_execution(
@@ -306,16 +325,143 @@ class FileArtifactCleanupScheduleStore:
 
     async def release_tenant_execution(
         self, *, execution: ArtifactCleanupTenantExecutionLease
-    ) -> None:
+    ) -> bool:
         async with self._lock:
             handle = self._tenant_execution_handles.get(execution.execution_token)
             if handle is None or handle[0] != execution:
-                return
+                return False
+            # Do not drop the in-process handle until the platform fence has
+            # actually been released.  A caller can therefore retain this
+            # exact handle in durable release-pending state after a failure.
+            release_exclusive(handle[1])
+            os.close(handle[1])
+            # The OS fence is conclusively gone. A following metadata-write
+            # failure is reconciled from durable state rather than retried
+            # through a closed descriptor.
             self._tenant_execution_handles.pop(execution.execution_token, None)
-            try:
-                release_exclusive(handle[1])
-            finally:
-                os.close(handle[1])
+            with self._exclusive_lock():
+                state = self._read()
+                tracked = state["executions"].get(execution.execution_token)
+                if tracked is None or tracked.execution != execution:
+                    return False
+                state["executions"].pop(execution.execution_token, None)
+                self._write(state)
+            return True
+
+    async def mark_tenant_execution_quarantined(
+        self, *, execution: ArtifactCleanupTenantExecutionLease, now: datetime
+    ) -> bool:
+        _validate_time(now)
+        async with self._lock:
+            with self._exclusive_lock():
+                state = self._read()
+                tracked = state["executions"].get(execution.execution_token)
+                if tracked is None or tracked.execution != execution:
+                    return False
+                state["executions"][execution.execution_token] = (
+                    ArtifactCleanupTrackedExecution(
+                        execution=execution,
+                        state="quarantined",
+                        release_failure_count=tracked.release_failure_count,
+                    )
+                )
+                self._write(state)
+                return True
+
+    async def mark_tenant_execution_release_pending(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+        retry_base_seconds: float,
+        retry_max_seconds: float,
+    ) -> ArtifactCleanupTrackedExecution | None:
+        _validate_time(now)
+        _validate_retry(retry_base_seconds, retry_max_seconds)
+        async with self._lock:
+            with self._exclusive_lock():
+                state = self._read()
+                tracked = state["executions"].get(execution.execution_token)
+                if tracked is None or tracked.execution != execution:
+                    return None
+                failures = tracked.release_failure_count + 1
+                pending = ArtifactCleanupTrackedExecution(
+                    execution=execution,
+                    state="release_pending",
+                    release_failure_count=failures,
+                    retry_not_before=now
+                    + timedelta(
+                        seconds=_retry_seconds(
+                            failure_count=failures,
+                            base_seconds=retry_base_seconds,
+                            max_seconds=retry_max_seconds,
+                        )
+                    ),
+                )
+                state["executions"][execution.execution_token] = pending
+                self._write(state)
+                return pending
+
+    async def load_tenant_execution_release_pending(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+    ) -> ArtifactCleanupTrackedExecution | None:
+        _validate_time(now)
+        async with self._lock:
+            with self._exclusive_lock():
+                tracked = self._read()["executions"].get(execution.execution_token)
+                if (
+                    tracked is None
+                    or tracked.execution != execution
+                    or tracked.state != "release_pending"
+                    or tracked.retry_not_before is None
+                    or tracked.retry_not_before > now
+                ):
+                    return None
+                return tracked
+
+    async def list_tracked_tenant_executions(
+        self,
+    ) -> tuple[ArtifactCleanupTrackedExecution, ...]:
+        async with self._lock:
+            with self._exclusive_lock():
+                return tuple(
+                    sorted(
+                        self._read()["executions"].values(),
+                        key=lambda value: value.execution.execution_token,
+                    )
+                )
+
+    async def reconcile_orphaned_tenant_executions(self) -> int:
+        async with self._lock:
+            with self._exclusive_lock():
+                state = self._read()
+                reclaimed: list[str] = []
+                for token, tracked in tuple(state["executions"].items()):
+                    descriptor = os.open(
+                        self._tenant_execution_lock_path(tracked.execution.org_id),
+                        os.O_CREAT | os.O_RDWR,
+                        self._FILE_MODE,
+                    )
+                    acquired = False
+                    try:
+                        if not try_acquire_exclusive(descriptor):
+                            continue
+                        acquired = True
+                        reclaimed.append(token)
+                    finally:
+                        try:
+                            if acquired:
+                                release_exclusive(descriptor)
+                        finally:
+                            os.close(descriptor)
+                for token in reclaimed:
+                    state["executions"].pop(token, None)
+                if reclaimed:
+                    self._write(state)
+                return len(reclaimed)
 
     def _read(self) -> dict[str, Any]:
         if not self._path.exists():
@@ -337,13 +483,23 @@ class FileArtifactCleanupScheduleStore:
                     "lease_fence_token": 0,
                     "lease_expires_at": None,
                     "deferred": {},
+                    "executions": {},
                 }
+            if set(raw) == {
+                "cursor",
+                "lease_owner",
+                "lease_fence_token",
+                "lease_expires_at",
+                "deferred",
+            }:
+                raw = {**raw, "executions": []}
             if set(raw) != {
                 "cursor",
                 "lease_owner",
                 "lease_fence_token",
                 "lease_expires_at",
                 "deferred",
+                "executions",
             }:
                 raise ValueError
             cursor = raw["cursor"]
@@ -351,6 +507,7 @@ class FileArtifactCleanupScheduleStore:
             token = raw["lease_fence_token"]
             expires = raw["lease_expires_at"]
             deferred_raw = raw["deferred"]
+            executions_raw = raw["executions"]
             if cursor is not None:
                 _validate_id(cursor)
             if owner is not None:
@@ -364,11 +521,21 @@ class FileArtifactCleanupScheduleStore:
                 raise ValueError
             if not isinstance(deferred_raw, list):
                 raise ValueError
+            if not isinstance(executions_raw, list):
+                raise ValueError
             deferred = {
                 row.org_id: row
                 for row in (_deferred_from_json(item) for item in deferred_raw)
             }
             if len(deferred) != len(deferred_raw):
+                raise ValueError
+            executions = {
+                row.execution.execution_token: row
+                for row in (
+                    _tracked_execution_from_json(item) for item in executions_raw
+                )
+            }
+            if len(executions) != len(executions_raw):
                 raise ValueError
             return {
                 "cursor": cursor,
@@ -376,6 +543,7 @@ class FileArtifactCleanupScheduleStore:
                 "lease_fence_token": token,
                 "lease_expires_at": expires,
                 "deferred": deferred,
+                "executions": executions,
             }
         except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
             raise ArtifactCleanupScheduleStateError() from exc
@@ -392,6 +560,13 @@ class FileArtifactCleanupScheduleStore:
                     _deferred_to_json(row)
                     for row in sorted(
                         state["deferred"].values(), key=lambda row: row.org_id
+                    )
+                ],
+                "executions": [
+                    _tracked_execution_to_json(row)
+                    for row in sorted(
+                        state["executions"].values(),
+                        key=lambda row: row.execution.execution_token,
                     )
                 ],
             }
@@ -456,6 +631,7 @@ def _empty_state() -> dict[str, Any]:
         "lease_fence_token": 0,
         "lease_expires_at": None,
         "deferred": {},
+        "executions": {},
     }
 
 
@@ -530,6 +706,69 @@ def _deferred_to_json(value: ArtifactCleanupDeferredTenant) -> dict[str, object]
     }
 
 
+def _tracked_execution_from_json(raw: object) -> ArtifactCleanupTrackedExecution:
+    if not isinstance(raw, dict) or set(raw) != {
+        "org_id",
+        "owner_id",
+        "fence_token",
+        "execution_token",
+        "state",
+        "release_failure_count",
+        "retry_not_before",
+    }:
+        raise ValueError
+    org_id = raw["org_id"]
+    owner_id = raw["owner_id"]
+    fence_token = raw["fence_token"]
+    execution_token = raw["execution_token"]
+    state = raw["state"]
+    release_failure_count = raw["release_failure_count"]
+    retry_not_before_raw = raw["retry_not_before"]
+    _validate_id(org_id)
+    _validate_id(owner_id)
+    _validate_id(execution_token)
+    if not isinstance(fence_token, int) or fence_token < 1:
+        raise ValueError
+    if state not in {"active", "quarantined", "release_pending"}:
+        raise ValueError
+    if not isinstance(release_failure_count, int) or release_failure_count < 0:
+        raise ValueError
+    retry_not_before = (
+        None
+        if retry_not_before_raw is None
+        else datetime.fromisoformat(str(retry_not_before_raw))
+    )
+    if retry_not_before is not None:
+        _validate_time(retry_not_before)
+    if (state == "release_pending") != (retry_not_before is not None):
+        raise ValueError
+    return ArtifactCleanupTrackedExecution(
+        execution=ArtifactCleanupTenantExecutionLease(
+            org_id=org_id,
+            owner_id=owner_id,
+            fence_token=fence_token,
+            execution_token=execution_token,
+        ),
+        state=state,
+        release_failure_count=release_failure_count,
+        retry_not_before=retry_not_before,
+    )
+
+
+def _tracked_execution_to_json(
+    value: ArtifactCleanupTrackedExecution,
+) -> dict[str, object]:
+    return {
+        "org_id": value.execution.org_id,
+        "owner_id": value.execution.owner_id,
+        "fence_token": value.execution.fence_token,
+        "execution_token": value.execution.execution_token,
+        "state": value.state,
+        "release_failure_count": value.release_failure_count,
+        "retry_not_before": _time_to_json(value.retry_not_before),
+    }
+
+
 def _time_to_json(value: datetime | None) -> str | None:
     return value.isoformat() if value is not None else None
 
@@ -549,6 +788,13 @@ def _validate_time(value: datetime) -> None:
 def _validate_duration(value: float) -> None:
     if value <= 0:
         raise ArtifactCleanupScheduleStateError("cleanup scheduler duration is invalid")
+
+
+def _validate_maximum_active_executions(value: int) -> None:
+    if not isinstance(value, int) or not 1 <= value <= 64:
+        raise ArtifactCleanupScheduleStateError(
+            "cleanup scheduler execution capacity is invalid"
+        )
 
 
 def _validate_retry(base_seconds: float, max_seconds: float) -> None:

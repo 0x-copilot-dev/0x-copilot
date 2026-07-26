@@ -72,6 +72,7 @@ class InMemoryArtifactGarbageCollector:
         org_id: str,
         candidate: ArtifactGcCandidate,
         grace_before: datetime,
+        quarantined_at: datetime | None = None,
     ) -> bool:
         with self.coordinator.lock:
             if candidate.unreferenced_since > grace_before:
@@ -99,7 +100,10 @@ class InMemoryArtifactGarbageCollector:
                 InMemoryArtifactQuarantineState(
                     body=body,
                     created_at=created_at,
-                    quarantined_at=datetime.now(timezone.utc),
+                    quarantined_at=_quarantine_timestamp(
+                        quarantined_at=quarantined_at,
+                        grace_before=grace_before,
+                    ),
                 )
             )
             return True
@@ -129,7 +133,7 @@ class InMemoryArtifactGarbageCollector:
                     or candidate.provenance_org_id != provenance_org_id
                 ):
                     continue
-                if state.quarantined_at >= older_than:
+                if state.quarantined_at > older_than:
                     continue
                 attempted += 1
                 if self.metadata_store.has_revision_reference_locked(
@@ -153,3 +157,16 @@ class InMemoryArtifactGarbageCollector:
 
 
 __all__ = ("InMemoryArtifactGarbageCollector",)
+
+
+def _quarantine_timestamp(
+    *, quarantined_at: datetime | None, grace_before: datetime
+) -> datetime:
+    """Use the explicit lifecycle clock; direct collector callers use grace."""
+
+    value = quarantined_at if quarantined_at is not None else grace_before
+    return (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )

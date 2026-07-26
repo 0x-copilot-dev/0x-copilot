@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 
 
 class ArtifactCleanupScheduleStateError(RuntimeError):
@@ -54,6 +54,16 @@ class ArtifactCleanupTenantExecutionLease:
     owner_id: str
     fence_token: int
     execution_token: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactCleanupTrackedExecution:
+    """Durable global admission and release state for a tenant execution fence."""
+
+    execution: ArtifactCleanupTenantExecutionLease
+    state: Literal["active", "quarantined", "release_pending"]
+    release_failure_count: int = 0
+    retry_not_before: datetime | None = None
 
 
 @runtime_checkable
@@ -140,8 +150,9 @@ class ArtifactCleanupScheduleStore(Protocol):
         fence_token: int,
         org_id: str,
         now: datetime,
+        maximum_active_executions: int = 4,
     ) -> ArtifactCleanupTenantExecutionLease | None:
-        """Acquire the tenant-exclusive lifecycle execution lock if available."""
+        """Atomically reserve global capacity and acquire one tenant fence."""
 
     async def validate_tenant_execution(
         self,
@@ -153,13 +164,45 @@ class ArtifactCleanupScheduleStore(Protocol):
 
     async def release_tenant_execution(
         self, *, execution: ArtifactCleanupTenantExecutionLease
-    ) -> None:
-        """Release only this execution handle after its lifecycle pass ends."""
+    ) -> bool:
+        """Release only this handle and report whether its durable record cleared."""
+
+    async def mark_tenant_execution_quarantined(
+        self, *, execution: ArtifactCleanupTenantExecutionLease, now: datetime
+    ) -> bool:
+        """Record that this still-running fence consumes global capacity."""
+
+    async def mark_tenant_execution_release_pending(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+        retry_base_seconds: float,
+        retry_max_seconds: float,
+    ) -> ArtifactCleanupTrackedExecution | None:
+        """Retain capacity after a failed release and set its bounded retry."""
+
+    async def load_tenant_execution_release_pending(
+        self,
+        *,
+        execution: ArtifactCleanupTenantExecutionLease,
+        now: datetime,
+    ) -> ArtifactCleanupTrackedExecution | None:
+        """Return this execution only when its durable release retry is due."""
+
+    async def list_tracked_tenant_executions(
+        self,
+    ) -> tuple[ArtifactCleanupTrackedExecution, ...]:
+        """Return every capacity-consuming execution in deterministic order."""
+
+    async def reconcile_orphaned_tenant_executions(self) -> int:
+        """Remove records only after proving their adapter fence is absent."""
 
 
 __all__ = (
     "ArtifactCleanupDeferredTenant",
     "ArtifactCleanupLease",
+    "ArtifactCleanupTrackedExecution",
     "ArtifactCleanupTenantExecutionLease",
     "ArtifactCleanupScheduleStateError",
     "ArtifactCleanupScheduleStore",

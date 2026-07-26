@@ -313,6 +313,65 @@ async def test_file_schedule_restart_preserves_defer_but_not_cross_tenant_state(
     )
 
 
+async def test_file_restart_observes_global_execution_admission_until_exact_release(
+    tmp_path,
+) -> None:
+    """A second worker cannot bypass a quarantined fence after lease handoff."""
+
+    first = FileArtifactCleanupScheduleStore(root=tmp_path)
+    lease_one = await first.acquire_lease(
+        owner_id="worker_one", now=NOW, duration_seconds=5
+    )
+    assert lease_one is not None
+    execution = await first.acquire_tenant_execution(
+        owner_id="worker_one",
+        fence_token=lease_one.fence_token,
+        org_id="org_a",
+        now=NOW,
+        maximum_active_executions=1,
+    )
+    assert execution is not None
+    assert await first.mark_tenant_execution_quarantined(execution=execution, now=NOW)
+    pending = await first.mark_tenant_execution_release_pending(
+        execution=execution,
+        now=NOW,
+        retry_base_seconds=5,
+        retry_max_seconds=20,
+    )
+    assert pending is not None
+    assert pending.state == "release_pending"
+
+    restarted = FileArtifactCleanupScheduleStore(root=tmp_path)
+    lease_two = await restarted.acquire_lease(
+        owner_id="worker_two", now=NOW + timedelta(seconds=6), duration_seconds=30
+    )
+    assert lease_two is not None
+    tracked = await restarted.list_tracked_tenant_executions()
+    assert len(tracked) == 1
+    assert tracked[0].state == "release_pending"
+    assert (
+        await restarted.acquire_tenant_execution(
+            owner_id="worker_two",
+            fence_token=lease_two.fence_token,
+            org_id="org_b",
+            now=NOW + timedelta(seconds=6),
+            maximum_active_executions=1,
+        )
+        is None
+    )
+
+    assert await first.release_tenant_execution(execution=execution)
+    admitted = await restarted.acquire_tenant_execution(
+        owner_id="worker_two",
+        fence_token=lease_two.fence_token,
+        org_id="org_b",
+        now=NOW + timedelta(seconds=6),
+        maximum_active_executions=1,
+    )
+    assert admitted is not None
+    assert await restarted.release_tenant_execution(execution=admitted)
+
+
 async def test_file_upgrade_discards_unfenced_legacy_lease_but_keeps_cursor(
     tmp_path,
 ) -> None:

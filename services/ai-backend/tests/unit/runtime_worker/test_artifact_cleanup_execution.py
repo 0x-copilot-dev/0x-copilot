@@ -244,9 +244,48 @@ class _ObservingSchedule(InMemoryArtifactCleanupScheduleStore):
     def release_event(self, org_id: str) -> asyncio.Event:
         return self.execution_released.setdefault(org_id, asyncio.Event())
 
-    async def release_tenant_execution(self, *, execution) -> None:  # noqa: ANN001
-        await super().release_tenant_execution(execution=execution)
+    async def release_tenant_execution(self, *, execution) -> bool:  # noqa: ANN001
+        released = await super().release_tenant_execution(execution=execution)
         self.release_event(execution.org_id).set()
+        return released
+
+
+class _ReleaseFailsOnceSchedule(_ObservingSchedule):
+    """Keep the exact in-memory fence live while the first release fails."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.remaining_release_failures = 1
+        self.release_failed = asyncio.Event()
+
+    async def release_tenant_execution(self, *, execution) -> bool:  # noqa: ANN001
+        if self.remaining_release_failures:
+            self.remaining_release_failures -= 1
+            self.release_failed.set()
+            raise RuntimeError("release transport unavailable")
+        return await super().release_tenant_execution(execution=execution)
+
+
+@dataclass
+class _StopTailPersistence:
+    """Blocks the actual runner after the loop has begun a cycle."""
+
+    entered: asyncio.Event
+    allow_return: asyncio.Event
+    calls: int = 0
+
+    async def list_retention_orgs(self) -> Sequence[str]:
+        self.calls += 1
+        if self.calls == 1:
+            self.entered.set()
+            await self.allow_return.wait()
+        return ()
+
+    async def execute_artifact_cleanup(self, **kwargs):  # noqa: ANN003
+        raise AssertionError("no tenant lifecycle should be entered")
+
+    async def write_audit_log(self, **kwargs) -> None:  # noqa: ANN003
+        return None
 
 
 def _outcome(org_id: str, **changes: int) -> ArtifactPhysicalCleanupOutcome:
@@ -780,6 +819,116 @@ async def test_quarantine_capacity_fails_closed_without_releasing_hung_fences() 
     assert len(persistence.audits) == 4
 
 
+async def test_durable_quarantine_cap_blocks_a_second_runner_after_lease_handoff() -> (
+    None
+):
+    """A process-local task map cannot bypass the shared admission cap."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a", "org_b"),
+        blocking_org_ids=frozenset({"org_a"}),
+        ignore_cancellation_org_ids=frozenset({"org_a"}),
+    )
+    schedule = _ObservingSchedule()
+    first = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        tenant_timeout_seconds=0.01,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.02,
+        max_quarantined_executions=1,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    second = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        max_quarantined_executions=1,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    first_result = await first.run_once(now=NOW)
+    assert first_result.quarantine_capacity_reached is True
+    assert persistence.calls == ["org_a"]
+    assert len(await schedule.list_tracked_tenant_executions()) == 1
+
+    # A new runner owns no local lifecycle tasks, but it observes the same
+    # durable admission record and cannot start unrelated B while the global
+    # cap is full.
+    blocked = await second.run_once(now=NOW)
+    assert blocked.quarantine_capacity_reached is True
+    assert persistence.calls == ["org_a"]
+
+    released = schedule.release_event("org_a")
+    persistence.release("org_a")
+    await asyncio.wait_for(released.wait(), timeout=1)
+    assert await schedule.list_tracked_tenant_executions() == ()
+
+
+async def test_release_failure_retains_capacity_until_bounded_retry_succeeds() -> None:
+    """A failed release keeps the exact handle/record and later frees it once."""
+
+    persistence = _CancellationProbePersistence(
+        org_ids=("org_a", "org_b"),
+        blocking_org_ids=frozenset({"org_a"}),
+        ignore_cancellation_org_ids=frozenset({"org_a"}),
+    )
+    schedule = _ReleaseFailsOnceSchedule()
+    first = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        tenant_timeout_seconds=0.01,
+        cancel_grace_seconds=0.01,
+        stop_grace_seconds=0.02,
+        retry_base_seconds=5,
+        retry_max_seconds=20,
+        max_quarantined_executions=1,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    second = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=schedule,
+        max_orgs=1,
+        limit_per_org=7,
+        retry_base_seconds=5,
+        retry_max_seconds=20,
+        max_quarantined_executions=1,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+
+    await first.run_once(now=NOW)
+    persistence.release("org_a")
+    await asyncio.wait_for(schedule.release_failed.wait(), timeout=1)
+    # The completed task has a failed release, so it remains globally visible
+    # as release-pending and B is still denied to a second worker.
+    tracked = await schedule.list_tracked_tenant_executions()
+    assert len(tracked) == 1
+    assert tracked[0].state == "release_pending"
+    assert tracked[0].release_failure_count == 1
+    assert (await second.run_once(now=NOW)).quarantine_capacity_reached is True
+    assert persistence.calls == ["org_a"]
+
+    # The retry is skipped before its durable backoff, then succeeds after it.
+    assert (
+        await first.run_once(now=NOW + timedelta(seconds=4))
+    ).quarantine_capacity_reached
+    resumed = await first.run_once(now=NOW + timedelta(seconds=5))
+    assert resumed.tenants_scanned == 1
+    assert persistence.calls == ["org_a", "org_b"]
+    assert await schedule.list_tracked_tenant_executions() == ()
+    assert [event for event, _record in persistence.audits].count(
+        "artifact_cleanup.execution_release_pending"
+    ) == 1
+    assert [event for event, _record in persistence.audits].count(
+        "artifact_cleanup.execution_release_resolved"
+    ) == 1
+
+
 async def test_loop_stop_is_bounded_with_a_quarantined_lifecycle_task() -> None:
     """Graceful stop cannot await a cancellation-ignoring pass forever."""
 
@@ -832,6 +981,50 @@ async def test_loop_stop_is_bounded_with_a_quarantined_lifecycle_task() -> None:
     persistence.release("org_a")
     await asyncio.wait_for(persistence.finished["org_a"].wait(), timeout=1)
     await asyncio.wait_for(released_event.wait(), timeout=1)
+
+
+async def test_loop_timeout_tail_clears_generation_before_restart() -> None:
+    """A timed-out loop is restartable only after its original tail exits."""
+
+    persistence = _StopTailPersistence(
+        entered=asyncio.Event(), allow_return=asyncio.Event()
+    )
+    runner = ArtifactCleanupExecutionRunner(
+        persistence=persistence,
+        schedule=InMemoryArtifactCleanupScheduleStore(),
+        max_orgs=1,
+        limit_per_org=7,
+        cancel_grace_seconds=0.005,
+        stop_grace_seconds=0.01,
+        metrics=_Metrics(),  # type: ignore[arg-type]
+    )
+    loop = ArtifactCleanupExecutionLoop(runner=runner, interval_seconds=0.001)
+    await loop.start()
+    await asyncio.wait_for(persistence.entered.wait(), timeout=1)
+
+    await asyncio.wait_for(loop.stop(), timeout=0.1)
+    old_task = loop._task  # noqa: SLF001 - supervisor tail regression probe
+    assert old_task is not None
+    assert not old_task.done()
+    # A second start while the original pass unwinds is inert.
+    await loop.start()
+    assert loop._task is old_task  # noqa: SLF001
+
+    persistence.allow_return.set()
+    await asyncio.wait_for(old_task, timeout=1)
+    for _ in range(20):
+        if loop._task is None:  # noqa: SLF001
+            break
+        await asyncio.sleep(0)
+    assert loop._task is None  # noqa: SLF001
+
+    await loop.start()
+    for _ in range(20):
+        if persistence.calls >= 2:
+            break
+        await asyncio.sleep(0.001)
+    assert persistence.calls >= 2
+    await asyncio.wait_for(loop.stop(), timeout=0.2)
 
 
 async def test_loop_restart_resets_stop_signals_without_dropping_fence_state() -> None:

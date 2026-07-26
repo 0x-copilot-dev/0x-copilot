@@ -76,6 +76,7 @@ class FileArtifactGarbageCollector:
         org_id: str,
         candidate: ArtifactGcCandidate,
         grace_before: datetime,
+        quarantined_at: datetime | None = None,
     ) -> bool:
         with self.coordinator.locked():
             if candidate.unreferenced_since > grace_before:
@@ -104,7 +105,10 @@ class FileArtifactGarbageCollector:
             self.coordinator._fsync_directory(quarantine.parent)
             self.coordinator.mark_quarantined_locked(
                 blob_key=candidate.blob_key,
-                quarantined_at=datetime.now(timezone.utc),
+                quarantined_at=_quarantine_timestamp(
+                    quarantined_at=quarantined_at,
+                    grace_before=grace_before,
+                ),
             )
             return True
 
@@ -133,7 +137,7 @@ class FileArtifactGarbageCollector:
                     or candidate.provenance_org_id != provenance_org_id
                 ):
                     continue
-                if state.quarantined_at >= older_than:
+                if state.quarantined_at > older_than:
                     continue
                 attempted += 1
                 if self.reference_store.has_reference_locked(blob_key=blob_key):
@@ -181,3 +185,16 @@ class FileArtifactGarbageCollector:
 
 
 __all__ = ("FileArtifactGarbageCollector",)
+
+
+def _quarantine_timestamp(
+    *, quarantined_at: datetime | None, grace_before: datetime
+) -> datetime:
+    """Use the explicit lifecycle clock; direct collector callers use grace."""
+
+    value = quarantined_at if quarantined_at is not None else grace_before
+    return (
+        value.replace(tzinfo=timezone.utc)
+        if value.tzinfo is None
+        else value.astimezone(timezone.utc)
+    )
