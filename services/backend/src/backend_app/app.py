@@ -1246,12 +1246,19 @@ def create_app(
             org_id=identity.org_id, user_id=identity.user_id
         )
         overrides: dict[str, bool] = {}
+        # Absent preferences mean the shipped default appetite, not "off" —
+        # a user who has never opened Settings should still hear a
+        # suggestion that would unblock their run.
+        suggestion_mode: str = "unblock_only"
         if prefs_record is not None:
             stored = (
                 prefs_record.preferences.get("discoverable_connectors", {})
                 if isinstance(prefs_record.preferences, dict)
                 else {}
             )
+            raw_mode = stored.get("mode") if isinstance(stored, dict) else None
+            if isinstance(raw_mode, str):
+                suggestion_mode = raw_mode
             raw_overrides = (
                 stored.get("overrides", {}) if isinstance(stored, dict) else {}
             )
@@ -1264,6 +1271,7 @@ def create_app(
             user_id=identity.user_id,
             exclude_paused=excluded,
             user_overrides=overrides,
+            mode=suggestion_mode,
         )
 
     @app.post(
