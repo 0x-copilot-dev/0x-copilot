@@ -12,12 +12,7 @@ import {
 import type { AddressInfo } from "node:net";
 
 import { HostFs } from "./host-fs";
-import {
-  FS_LIMITS,
-  FsError,
-  modeSatisfies,
-  type FsErrorCode,
-} from "./path-validation";
+import { FsError, modeSatisfies, type FsErrorCode } from "./path-validation";
 import { RunContextStore } from "./run-context";
 import {
   LOCAL_BROKER_AUDIENCE,
@@ -59,16 +54,12 @@ import type { WorkspaceApprovalPermitHandoff } from "./workspace-approval";
 //
 // SLICE 1 exposed ONLY grant-management reads (handshake / list / snapshot).
 // SLICE 2 added the filesystem READ ops (stat/list/read/glob/grep).
-// SLICE 3 (this change) adds the filesystem WRITE ops (write/edit/mkdir/delete/
-// move) and the per-run grant snapshot (runs/begin + runs/end). Each FS op
-// resolves its `grant_id` — against the CURRENT active snapshot, OR, when the
-// request carries a `run_capability_context`, against the immutable snapshot
-// PINNED when that run started — then gates on the required grant MODE for the
-// route (reads: read_only; write/edit/mkdir: read_write_no_delete; delete/move:
-// read_write; fail-closed for an unknown mode) and runs `HostFs`, whose
-// path-validation layer performs the traversal / symlink / junction / ADS /
-// TOCTOU checks. Host absolute paths NEVER appear in any response body —
-// results carry only root-relative virtual paths.
+// Legacy filesystem access is read-only. Workspace mutation is exclusively the
+// C2 prepared/attested protocol below; no bearer-authorized v1 mutation route
+// can be restored by a rollout or rollback setting. `HostFs` still performs the
+// traversal / symlink / junction / ADS / TOCTOU checks for reads. Host absolute
+// paths NEVER appear in any response body — results carry only root-relative
+// virtual paths.
 //
 // G1: the grant-management routes are ALSO path-free. `grants/list` and
 // `grants/snapshot` return a `BrokerGrant` projection (grantId + mode + label
@@ -83,10 +74,6 @@ export const CAPABILITY_BROKER_AUDIENCE = LOCAL_BROKER_AUDIENCE.capability;
 
 const TOKEN_BYTES = 32; // 256-bit
 const MAX_BODY_BYTES = 64 * 1024;
-// Write routes carry file content in the request body, so they get a larger
-// cap sized to hold `FS_LIMITS.maxWriteBytes` (8 MiB) as base64 plus JSON
-// overhead. Every OTHER route keeps the tight 64 KiB cap.
-const MAX_WRITE_BODY_BYTES = 12 * 1024 * 1024;
 const MAX_WORKSPACE_UPLOAD_BYTES = 128 * 1024 * 1024;
 
 const ROUTES = {
@@ -100,22 +87,11 @@ const ROUTES = {
   fsRead: "/v1/fs/read",
   fsGlob: "/v1/fs/glob",
   fsGrep: "/v1/fs/grep",
-  fsWrite: "/v1/fs/write",
-  fsEdit: "/v1/fs/edit",
-  fsMkdir: "/v1/fs/mkdir",
-  fsDelete: "/v1/fs/delete",
-  fsMove: "/v1/fs/move",
   workspacePrepare: "/internal/workspace/v2/prepare",
   workspaceHostSessions: "/internal/workspace/v2/host-sessions",
   workspaceCommit: "/internal/workspace/v2/prepared",
   workspaceClaims: "/internal/workspace/v2/claims",
 } as const;
-
-// Routes whose request body may carry file content (larger body cap).
-const WRITE_BODY_ROUTES: ReadonlySet<string> = new Set([
-  ROUTES.fsWrite,
-  ROUTES.fsEdit,
-]);
 
 // The capability methods this broker advertises to a handshaking child.
 const ADVERTISED_METHODS = [
@@ -128,30 +104,12 @@ const ADVERTISED_METHODS = [
   "readFile",
   "glob",
   "grep",
-  "writeFile",
-  "editFile",
-  "makeDir",
-  "deletePath",
-  "movePath",
   "prepareWorkspaceEffect",
   "uploadWorkspaceContent",
   "commitWorkspaceEffect",
   "reconcileWorkspaceClaim",
   "abortWorkspaceEffect",
 ] as const;
-
-const LEGACY_FILESYSTEM_METHODS = new Set<string>([
-  "statPath",
-  "listDir",
-  "readFile",
-  "glob",
-  "grep",
-  "writeFile",
-  "editFile",
-  "makeDir",
-  "deletePath",
-  "movePath",
-]);
 
 const WORKSPACE_V2_METHODS = new Set<string>([
   "prepareWorkspaceEffect",
@@ -161,22 +119,14 @@ const WORKSPACE_V2_METHODS = new Set<string>([
   "abortWorkspaceEffect",
 ]);
 
-// The minimum grant MODE each FS route requires. Fail-closed: an unknown route
-// defaults to the highest bar (`read_write`), and `modeSatisfies` fails closed
-// for an unknown grant mode. Reads need only `read_only`; a mutation that only
-// creates/modifies needs `read_write_no_delete`; a mutation that can REMOVE a
-// path (delete, or move which renames the source away) needs `read_write`.
+// The legacy read routes require only an active read grant. No v1 mutation is
+// present in this map, so changing a grant mode cannot restore a write path.
 const FS_ROUTE_REQUIRED_MODE: Record<string, GrantMode> = {
   [ROUTES.fsStat]: "read_only",
   [ROUTES.fsList]: "read_only",
   [ROUTES.fsRead]: "read_only",
   [ROUTES.fsGlob]: "read_only",
   [ROUTES.fsGrep]: "read_only",
-  [ROUTES.fsWrite]: "read_write_no_delete",
-  [ROUTES.fsEdit]: "read_write_no_delete",
-  [ROUTES.fsMkdir]: "read_write_no_delete",
-  [ROUTES.fsDelete]: "read_write",
-  [ROUTES.fsMove]: "read_write",
 };
 
 export interface CapabilityBrokerConfig {
@@ -194,9 +144,8 @@ export interface CapabilityBrokerConfig {
    */
   readonly runContexts?: RunContextStore;
   /**
-   * The v2 authority. Its presence withdraws every legacy filesystem endpoint;
-   * this is intentionally distinct from the boot bearer, which carries no
-   * filesystem right.
+   * The v2 authority. It gates all host mutation through the prepared/attested
+   * protocol; legacy filesystem reads remain independently available.
    */
   readonly workspaceAuthority?: LocalWorkspaceAuthority;
   /**
@@ -456,14 +405,10 @@ export class CapabilityBroker {
       await this.#handleWorkspaceUpload(upload, req, res);
       return;
     }
-    // 6) Body (size-capped, JSON). Write routes carry file content, so they get
-    //    the larger cap; every other route keeps the tight 64 KiB cap.
-    const bodyCap = WRITE_BODY_ROUTES.has(pathname)
-      ? MAX_WRITE_BODY_BYTES
-      : MAX_BODY_BYTES;
+    // 6) Body (size-capped, JSON). Host mutation never uses this envelope.
     let body: unknown;
     try {
-      body = await readJsonBody(req, bodyCap);
+      body = await readJsonBody(req, MAX_BODY_BYTES);
     } catch (err) {
       if (err instanceof BodyTooLargeError) {
         respondJson(res, 413, { error: "payload_too_large" });
@@ -542,11 +487,6 @@ export class CapabilityBroker {
       case ROUTES.fsRead:
       case ROUTES.fsGlob:
       case ROUTES.fsGrep:
-      case ROUTES.fsWrite:
-      case ROUTES.fsEdit:
-      case ROUTES.fsMkdir:
-      case ROUTES.fsDelete:
-      case ROUTES.fsMove:
         await this.#handleFs(pathname, body, res);
         return;
       default:
@@ -558,27 +498,23 @@ export class CapabilityBroker {
           await this.#handleWorkspaceClaimRoute(pathname, body, res);
           return;
         }
+        // D7: do not redirect a legacy mutation into v2. Only the C2 host
+        // session, prepared binding, and verified permit can reach commit.
+        if (pathname.startsWith("/v1/fs/")) {
+          respondJson(res, 410, { error: "capability_retired" });
+          return;
+        }
         respondJson(res, 404, { error: "not_found" });
         return;
     }
   }
 
-  /**
-   * Dispatch an AC5 legacy filesystem operation. Once the v2 authority is
-   * installed, ALL of these paths are withdrawn — including reads — because a
-   * process-wide boot bearer is not a workspace read capability. C2's native
-   * read-capability port is the only permitted successor; until that platform
-   * primitive is available we fail closed rather than retain a weaker route.
-   */
+  /** Dispatch one legacy read-only filesystem operation. */
   async #handleFs(
     route: string,
     body: unknown,
     res: ServerResponse,
   ): Promise<void> {
-    if (this.#workspaceAuthority !== null) {
-      respondJson(res, 404, { error: "unsupported" });
-      return;
-    }
     // Fail closed if no executor was wired.
     if (this.#hostFs === null) {
       respondJson(res, 404, { error: "unsupported" });
@@ -901,7 +837,6 @@ export class CapabilityBroker {
     const authority = this.#workspaceAuthority;
     if (authority === null) return ADVERTISED_METHODS;
     return ADVERTISED_METHODS.filter((method) => {
-      if (LEGACY_FILESYSTEM_METHODS.has(method)) return false;
       if (WORKSPACE_V2_METHODS.has(method))
         return authority.writableAvailable();
       return true;
@@ -967,14 +902,6 @@ const FS_ROUTE_HANDLERS: Record<
       flags: optionalString(p, "flags"),
       maxMatches: optionalInt(p, "max_matches"),
     }),
-  [ROUTES.fsWrite]: (hostFs, root, p) =>
-    hostFs.write(root, requirePath(p), requireContent(p)),
-  [ROUTES.fsEdit]: (hostFs, root, p) =>
-    hostFs.edit(root, requirePath(p), requireContent(p)),
-  [ROUTES.fsMkdir]: (hostFs, root, p) => hostFs.mkdir(root, requirePath(p)),
-  [ROUTES.fsDelete]: (hostFs, root, p) => hostFs.delete(root, requirePath(p)),
-  [ROUTES.fsMove]: (hostFs, root, p) =>
-    hostFs.move(root, requireString(p, "from"), requireString(p, "to")),
 };
 
 function runFsOp(
@@ -1227,21 +1154,6 @@ function requirePath(params: object): string {
     throw new FsError("invalid_request", "missing path");
   }
   return value;
-}
-
-// Decode the base64 `content_base64` write payload into a Buffer, enforcing the
-// decoded-size ceiling BEFORE it reaches HostFs (HostFs re-checks — defence in
-// depth). Absence or a non-string is `invalid_request`.
-function requireContent(params: object): Buffer {
-  const value = (params as Record<string, unknown>).content_base64;
-  if (typeof value !== "string") {
-    throw new FsError("invalid_request", "missing content_base64");
-  }
-  const buf = Buffer.from(value, "base64");
-  if (buf.length > FS_LIMITS.maxWriteBytes) {
-    throw new FsError("too_large", "content exceeds the write byte ceiling");
-  }
-  return buf;
 }
 
 function optionalString(params: object, key: string): string | undefined {

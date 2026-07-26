@@ -22,6 +22,7 @@ from agent_runtime.capabilities.mcp.annotations import (
 )
 from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
 from agent_runtime.capabilities.mcp.cards import McpAuthState
+from agent_runtime.capabilities.mcp.client import McpAuthError
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
 from agent_runtime.capabilities.mcp.operation_adapter import (
     McpOperationArgumentMaterialResolver,
@@ -139,6 +140,14 @@ class _RejectedInterrupt:
         return {"decision": "rejected"}
 
 
+class _ExpiredClient:
+    async def call_tool(
+        self, *, tool_name: str, arguments: Mapping[str, object]
+    ) -> object:
+        del tool_name, arguments
+        raise McpAuthError("credentials expired")
+
+
 class _Fixture(DynamicMcpLoadingMixin):
     def make_call_tool(
         self,
@@ -175,7 +184,9 @@ class _Fixture(DynamicMcpLoadingMixin):
             provider,
         )
 
-    def bind_enforced(self):  # type: ignore[no-untyped-def]
+    def bind_enforced(
+        self, *, mode: OperationGatewayMode = OperationGatewayMode.ENFORCE
+    ):  # type: ignore[no-untyped-def]
         context = _runtime_context()
         events = _RecordedOperationEvents()
         operation_token = OperationContext.bind_for_run(
@@ -191,7 +202,7 @@ class _Fixture(DynamicMcpLoadingMixin):
             ),
             ledger_emitter=events,
             artifact_service=None,
-            mode=OperationGatewayMode.ENFORCE,
+            mode=mode,
             canonical_arguments_durable=True,
         )
         descriptors = OperationDescriptorRegistry()
@@ -289,6 +300,22 @@ def test_catalog_read_executes_once_persists_result_and_uses_no_legacy_ledger() 
     assert legacy_rows == []
 
 
+def test_unbound_gateway_holds_before_client_construction() -> None:
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+
+    result = _invoke(tool, "list_issues", {"team": "ENG"})
+
+    assert provider.created_clients == []
+    assert result["output"] == {
+        "status": "held",
+        "summary": (
+            "The connector operation is held until the canonical operation gateway "
+            "is available; no connector call was made."
+        ),
+    }
+
+
 def test_catalog_write_stages_exact_arguments_without_creating_an_mcp_client() -> None:
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
@@ -354,6 +381,25 @@ def test_unknown_and_destructive_mcp_operations_stage_fail_closed_without_dispat
     }
 
 
+def test_gateway_mode_off_cannot_restore_direct_write_or_unknown_dispatch() -> None:
+    fixture = _Fixture()
+    tool, provider = fixture.make_call_tool()
+    _context, _events, ledger, _result_store, operation_token, service_token = (
+        fixture.bind_enforced(mode=OperationGatewayMode.OFF)
+    )
+    try:
+        write = _invoke(tool, "update_issue", {"issue_id": "L-1"})
+        unknown = _invoke(tool, "unlisted_operation", {"issue_id": "L-2"})
+    finally:
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert provider.created_clients == []
+    assert write["output"]["status"] == "staged"
+    assert unknown["output"]["status"] == "staged"
+    assert len(ledger.events_by_stage) == 2
+
+
 def test_missing_auth_parks_the_classified_read_before_client_creation() -> None:
     fixture = _Fixture()
     interrupt = _RejectedInterrupt()
@@ -382,7 +428,43 @@ def test_missing_auth_parks_the_classified_read_before_client_creation() -> None
     assert result["output"]["status"] == "failed"
 
 
-def test_explicit_flag_off_keeps_the_legacy_mcp_result_even_if_services_are_bound(
+def test_auth_expiry_reparks_the_canonical_read_without_replay() -> None:
+    fixture = _Fixture()
+    interrupt = _RejectedInterrupt()
+    runtime_context = _runtime_context()
+    gate = ToolAccessGate(
+        auth_session_creator=_AuthSessions(),
+        runtime_context=runtime_context,
+        interrupt_handler=interrupt,
+        classifier=None,
+    )
+    card = fixture.make_card(name=_SERVER).model_copy(
+        update={"auth_state": McpAuthState.AUTHENTICATED, "server_id": "srv_linear"}
+    )
+    provider = fixture.FakeMcpProvider(
+        cards=(card,), clients={_SERVER: _ExpiredClient()}
+    )
+    tool = CallMcpTool(
+        registry=DynamicMcpRegistry(providers=(provider,)),
+        loader=McpLoader(DynamicMcpRegistry(providers=(provider,))),
+        runtime_context=runtime_context,
+        gate=gate,
+    )
+    _context, _events, _ledger, _result_store, operation_token, service_token = (
+        fixture.bind_enforced()
+    )
+    try:
+        result = _invoke(tool, "list_issues", {})
+    finally:
+        McpOperationGatewayContext.unbind(service_token)
+        OperationContext.unbind(operation_token)
+
+    assert interrupt.calls == 1
+    assert provider.created_clients == [_SERVER]
+    assert result["output"]["status"] == "failed"
+
+
+def test_explicit_flag_off_keeps_reads_on_the_canonical_gateway(
     monkeypatch,
 ) -> None:
     fixture = _Fixture()
@@ -398,26 +480,23 @@ def test_explicit_flag_off_keeps_the_legacy_mcp_result_even_if_services_are_boun
         OperationContext.unbind(operation_token)
 
     assert provider.created_clients == [_SERVER]
-    assert result == {
-        "server_name": _SERVER,
-        "tool_name": "list_issues",
-        "output": {"items": [{"id": "L-1"}]},
-    }
-    assert events.rows == []
+    assert result["output"]["status"] == "completed"
+    assert result["output"]["result"] == {"items": [{"id": "L-1"}]}
+    assert [event_type for event_type, _payload in events.rows] == [
+        LedgerEventType.OPERATION_REQUESTED.value,
+        LedgerEventType.OPERATION_CLASSIFIED.value,
+        LedgerEventType.OPERATION_COMPLETED.value,
+    ]
     assert ledger.events_by_stage == {}
-    assert result_store.calls == []
+    assert result_store.calls == [
+        (result["output"]["operation_id"], {"items": [{"id": "L-1"}]})
+    ]
 
 
-def test_legacy_gateway_cannot_dispatch_model_originated_write_or_unknown_operation(
+def test_flag_off_gateway_cannot_dispatch_model_originated_write_or_unknown_operation(
     monkeypatch,
 ) -> None:
-    """D9 P0 canary: default-off has no direct effect escape hatch.
-
-    A compatibility read is still present until D7 retirement.  A write or an
-    unknown operation is instead rejected before registry resolution, so it
-    cannot reach ``create_client`` / ``call_tool`` without the canonical
-    descriptor → stage → decision/claim → coordinator route.
-    """
+    """D9 canary: rollback holds model MCP work without a direct escape hatch."""
 
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
@@ -427,12 +506,8 @@ def test_legacy_gateway_cannot_dispatch_model_originated_write_or_unknown_operat
     unknown = _invoke(tool, "unlisted_operation", {"id": "L-2"})
 
     assert provider.created_clients == []
-    assert write["error"]["code"] == "permission_denied"
-    assert unknown["error"]["code"] == "permission_denied"
-    assert write["error"]["safe_message"] == (
-        "This connector change requires the canonical review pipeline."
-    )
-    assert unknown["error"]["safe_message"] == write["error"]["safe_message"]
+    assert write["output"]["status"] == "held"
+    assert unknown["output"]["status"] == "held"
 
 
 @pytest.mark.parametrize(
@@ -443,11 +518,11 @@ def test_legacy_gateway_cannot_dispatch_model_originated_write_or_unknown_operat
         McpToolAnnotations(read_only_hint=True, destructive_hint=True),
     ),
 )
-def test_legacy_catalog_read_refuses_registered_tightening_annotations_before_client_creation(
+def test_unbound_gateway_holds_catalog_read_regardless_of_tightening_annotations(
     monkeypatch,
     annotations: McpToolAnnotations,
 ) -> None:
-    """D9 P1: hints can tighten the default-off compatibility branch only."""
+    """D9 canary: annotations cannot revive a direct read compatibility path."""
 
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
@@ -460,13 +535,10 @@ def test_legacy_catalog_read_refuses_registered_tightening_annotations_before_cl
         McpToolAnnotationsRegistry.unbind(registry_token)
 
     assert provider.created_clients == []
-    assert result["error"]["code"] == "permission_denied"
-    assert result["error"]["safe_message"] == (
-        "This connector change requires the canonical review pipeline."
-    )
+    assert result["output"]["status"] == "held"
 
 
-def test_legacy_catalog_read_keeps_only_non_tightening_annotation(monkeypatch) -> None:
+def test_unbound_gateway_holds_even_a_read_only_annotation(monkeypatch) -> None:
     fixture = _Fixture()
     tool, provider = fixture.make_call_tool()
     monkeypatch.setenv("SURFACES_V2", "false")
@@ -481,8 +553,8 @@ def test_legacy_catalog_read_keeps_only_non_tightening_annotation(monkeypatch) -
     finally:
         McpToolAnnotationsRegistry.unbind(registry_token)
 
-    assert provider.created_clients == [_SERVER]
-    assert result["output"] == {"items": [{"id": "L-1"}]}
+    assert provider.created_clients == []
+    assert result["output"]["status"] == "held"
 
 
 def test_material_resolver_returns_only_the_exact_canonical_stage_arguments() -> None:

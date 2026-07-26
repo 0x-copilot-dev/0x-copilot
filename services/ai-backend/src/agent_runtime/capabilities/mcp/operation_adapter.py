@@ -6,10 +6,9 @@ executor and exposes no approval or apply operation.  Reads are the only branch
 which can create an MCP client; write, destructive, and unknown operations stage
 the exact canonical argument bytes already held by :class:`OperationContext`.
 
-The runtime worker binds :class:`McpOperationGatewayServices` only for an
-enforced cohort.  An unbound context is therefore not an accidental partial
-cutover: ``CallMcpTool`` keeps its legacy/shadow behaviour until all durable
-dependencies are supplied by the composition root.
+The runtime worker binds :class:`McpOperationGatewayServices` whenever durable
+composition is available. An unbound context is fail-closed: ``CallMcpTool``
+holds the request rather than restoring a retired direct-dispatch path.
 """
 
 from __future__ import annotations
@@ -57,16 +56,12 @@ from agent_runtime.capabilities.operations.contracts import (
     GateResolution,
     OperationAdapter,
     OperationClassification,
-    OperationGatewayMode,
     OperationRawResult,
     OperationRequest,
     ProposedEffect as GatewayProposedEffect,
 )
 from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorRegistry,
-)
-from agent_runtime.capabilities.operations.catalog import (
-    DEFAULT_OPERATION_DESCRIPTORS,
 )
 from agent_runtime.capabilities.operations.errors import (
     OperationGatewayError,
@@ -86,7 +81,6 @@ from agent_runtime.surfaces_v2.canonical_json import (
     canonical_json_bytes,
     sha256_hex,
 )
-from agent_runtime.surfaces_v2.config import SurfacesV2Flag
 from agent_runtime.surfaces_v2.entities import EffectTarget, OperationDescriptor
 from agent_runtime.surfaces_v2.ledger_ids import OperationArgsRefCodec
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -195,7 +189,7 @@ class McpOperationArgumentStorePort(Protocol):
 
 @dataclass(frozen=True)
 class McpOperationGatewayServices:
-    """Trusted per-run dependencies for an enforced MCP cohort.
+    """Trusted per-run dependencies for the canonical MCP route.
 
     The worker composition root creates the stage ledger/outbox and durable
     operation-argument resolver.  Model-facing code receives this only through
@@ -266,48 +260,14 @@ class McpOperationGatewayContext:
         return _MCP_OPERATION_SERVICES.get()
 
     @classmethod
-    def enforced(cls) -> McpOperationGatewayServices | None:
-        """Return services only for a durable, explicitly enforced operation run."""
+    def canonical(cls) -> McpOperationGatewayServices | None:
+        """Return complete durable services for the canonical MCP route."""
 
         context = OperationContext.active()
         services = cls.active()
-        if (
-            context is None
-            or not SurfacesV2Flag.enabled()
-            or context.mode is not OperationGatewayMode.ENFORCE
-            or not context.canonical_arguments_durable
-        ):
+        if context is None or not context.canonical_arguments_durable:
             return None
         return services
-
-    @staticmethod
-    def legacy_direct_read_allowed(*, capability: str, op: str) -> bool:
-        """Allow the D7 compatibility branch to dispatch only reviewed reads.
-
-        The branch is intentionally transitional and remains a D9 release
-        blocker until D7 deletes it.  Its safety property is nevertheless
-        immediate: an unbound/default-off model tool cannot create an MCP
-        client for a write, destructive, or unknown operation.  Those calls
-        must be retried in the fully composed gateway, where canonical
-        arguments are retained, a stage is recorded, and the worker
-        coordinator claims the approved effect before dispatch.
-        """
-
-        descriptor = DEFAULT_OPERATION_DESCRIPTORS.resolve(capability, op)
-        annotations = McpToolAnnotationsRegistry.get(capability, op)
-        # The legacy branch has no canonical stage to preserve a tightened
-        # intent, so it must be stricter than the gateway's catalog-first
-        # classification. A provider hint can never grant a read here; either
-        # write-tightening hint vetoes direct dispatch, including a conflicting
-        # ``readOnlyHint=true`` / ``destructiveHint=true`` pair.
-        if annotations is not None and (
-            annotations.destructive_hint is True or annotations.read_only_hint is False
-        ):
-            return False
-        return descriptor is not None and descriptor.effect_class in {
-            EffectClass.NONE,
-            EffectClass.INTERNAL_REVERSIBLE,
-        }
 
 
 class McpOperationAdapter(OperationAdapter):
@@ -713,9 +673,9 @@ class McpOperationArgumentMaterialResolver:
 
 
 def is_enforced_mcp_gateway_active() -> bool:
-    """Return whether the current model call is on the D1 enforce path."""
+    """Compatibility predicate for the now-unconditional canonical MCP route."""
 
-    return McpOperationGatewayContext.enforced() is not None
+    return McpOperationGatewayContext.canonical() is not None
 
 
 __all__ = [

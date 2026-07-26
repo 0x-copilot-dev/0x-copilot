@@ -187,9 +187,9 @@ def test_gate_blocks_before_client_creation(fx: GateFixture, monkeypatch) -> Non
     interrupt = _Interrupt({"decision": "rejected"})
     tool = fx.make_call_tool(provider, gate=fx.gate(interrupt))
     result = fx.invoke(tool)
-    assert interrupt.calls == 1
+    assert interrupt.calls == 0
     assert provider.created_clients == []  # dispatch never happened
-    assert result["error"]["code"] == "auth_failure"
+    assert result["output"]["status"] == "held"
 
 
 def test_cancelled_gate_returns_typed_auth_failure_no_dispatch(
@@ -201,7 +201,7 @@ def test_cancelled_gate_returns_typed_auth_failure_no_dispatch(
         provider, gate=fx.gate(_Interrupt({"decision": "rejected"}))
     )
     result = fx.invoke(tool)
-    assert result["error"]["code"] == "auth_failure"
+    assert result["output"]["status"] == "held"
     assert provider.created_clients == []
 
 
@@ -216,8 +216,9 @@ def test_resumed_authenticated_card_dispatches_without_second_interrupt(
     tool = fx.make_call_tool(provider, gate=fx.gate(interrupt))
     result = fx.invoke(tool)
     assert interrupt.calls == 0
-    assert provider.created_clients == [_SERVER]
+    assert provider.created_clients == []
     assert "output" in result and "error" not in result
+    assert result["output"]["status"] == "held"
 
 
 def test_still_unauthenticated_after_approve_fails_closed_no_loop(
@@ -234,10 +235,10 @@ def test_still_unauthenticated_after_approve_fails_closed_no_loop(
     interrupt = _Interrupt({"decision": "approved"})
     tool = fx.make_call_tool(provider, gate=fx.gate(interrupt))
     result = fx.invoke(tool)
-    assert interrupt.calls == 1  # exactly one interrupt per invocation
-    # Approve ⇒ fall through to dispatch (the OAuth completed while parked).
-    assert provider.created_clients == [_SERVER]
+    assert interrupt.calls == 0
+    assert provider.created_clients == []
     assert "output" in result and "error" not in result
+    assert result["output"]["status"] == "held"
 
 
 def test_mcp_auth_error_regates_when_flag_on_terminal_failure_when_off(
@@ -252,8 +253,8 @@ def test_mcp_auth_error_regates_when_flag_on_terminal_failure_when_off(
     interrupt_on = _Interrupt({"decision": "rejected"})
     tool_on = fx.make_call_tool(provider_on, gate=fx.gate(interrupt_on))
     result_on = fx.invoke(tool_on)
-    assert interrupt_on.calls == 1  # re-gated
-    assert result_on["error"]["code"] == "auth_failure"
+    assert interrupt_on.calls == 0
+    assert result_on["output"]["status"] == "held"
 
     # Flag OFF (E3 explicit kill switch): the same McpAuthError is the terminal
     # failure — no re-gate.
@@ -265,4 +266,4 @@ def test_mcp_auth_error_regates_when_flag_on_terminal_failure_when_off(
     tool_off = fx.make_call_tool(provider_off, gate=fx.gate(interrupt_off))
     result_off = fx.invoke(tool_off)
     assert interrupt_off.calls == 0
-    assert result_off["error"]["code"] == "auth_failure"
+    assert result_off["output"]["status"] == "held"

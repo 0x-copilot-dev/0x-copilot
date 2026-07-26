@@ -27,7 +27,7 @@ describe("createCapabilityService workspace composition", () => {
     rmSync(userDataDir, { recursive: true, force: true });
   });
 
-  it("installs a fail-closed v2 authority by default and retires boot-bearer filesystem access", async () => {
+  it("installs a fail-closed v2 authority by default and retires boot-bearer filesystem mutation", async () => {
     const service = createCapabilityService({
       userDataDir,
       safeStorage: safeStorage(),
@@ -54,16 +54,18 @@ describe("createCapabilityService workspace composition", () => {
           content_base64: "eA==",
         }),
       });
-      expect(response.status).toBe(404);
-      expect(await response.json()).toEqual({ error: "unsupported" });
+      expect(response.status).toBe(410);
+      expect(await response.json()).toEqual({ error: "capability_retired" });
 
       const read = await fetch(`${broker.baseUrl}/v1/fs/read`, {
         method: "POST",
         headers,
         body: JSON.stringify({ grant_id: "grant_1", path: "must-not-read.md" }),
       });
-      expect(read.status).toBe(404);
-      expect(await read.json()).toEqual({ error: "unsupported" });
+      // The legacy route is intentionally read-only, but an arbitrary bearer
+      // still has no filesystem right without an active folder grant.
+      expect(read.status).toBe(403);
+      expect(await read.json()).toEqual({ error: "grant_required" });
 
       const handshake = await fetch(`${broker.baseUrl}/v1/handshake`, {
         method: "POST",
@@ -73,7 +75,7 @@ describe("createCapabilityService workspace composition", () => {
       const advertised = (await handshake.json()) as {
         methods: readonly string[];
       };
-      expect(advertised.methods).not.toContain("readFile");
+      expect(advertised.methods).toContain("readFile");
       expect(advertised.methods).not.toContain("writeFile");
       expect(advertised.methods).not.toContain("prepareWorkspaceEffect");
     } finally {
