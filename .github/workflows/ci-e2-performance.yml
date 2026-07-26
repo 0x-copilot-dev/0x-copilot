@@ -1,0 +1,82 @@
+name: ci-e2-performance
+
+# The deterministic half is a PR gate.  PostgreSQL EXPLAIN is intentionally
+# dispatched only by the release drill: it needs a disposable, migrated DB and
+# must never make ordinary contributor CI depend on live infrastructure.
+on:
+  pull_request:
+    paths:
+      - "services/ai-backend/src/agent_runtime/surfaces_v2/**"
+      - "services/ai-backend/tests/performance/e2/**"
+      - "tools/e2-performance/**"
+      - ".github/workflows/ci-e2-performance.yml"
+  push:
+    branches: [main]
+    paths:
+      - "services/ai-backend/src/agent_runtime/surfaces_v2/**"
+      - "services/ai-backend/tests/performance/e2/**"
+      - "tools/e2-performance/**"
+      - ".github/workflows/ci-e2-performance.yml"
+  workflow_dispatch:
+    inputs:
+      run_postgres_explain:
+        description: "Run the opt-in plan gate against a disposable migrated database"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  deterministic-capacity:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: services/ai-backend/requirements.txt
+      - name: Install deterministic gate dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./packages/service-contracts ./packages/audit-chain
+          python -m pip install -r services/ai-backend/requirements.txt
+      - name: Run deterministic E2 capacity gate and emit report
+        run: |
+          PYTHONPATH="packages/service-contracts/src:packages/audit-chain/src:services/ai-backend/src" \
+            python tools/e2-performance/run.py --output artifacts/e2-performance
+      - name: Upload capacity report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2-performance-capacity-report
+          path: artifacts/e2-performance/
+
+  postgres-explain-release-drill:
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run_postgres_explain }}
+    runs-on: ubuntu-latest
+    # A release environment provides this only for a disposable, migrated DB.
+    environment: release-drill
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: "3.13"
+      - name: Install release-drill dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install ./packages/service-contracts ./packages/audit-chain
+          python -m pip install -r services/ai-backend/requirements.txt
+      - name: Run deterministic and PostgreSQL EXPLAIN capacity gates
+        env:
+          E2_PERFORMANCE_LIVE_TEST_DATABASE_URL: ${{ secrets.E2_PERFORMANCE_LIVE_TEST_DATABASE_URL }}
+          PYTHONPATH: packages/service-contracts/src:packages/audit-chain/src:services/ai-backend/src
+        run: python tools/e2-performance/run.py --with-postgres --output artifacts/e2-performance
+      - name: Upload release-drill capacity report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: e2-performance-capacity-release-drill-report
+          path: artifacts/e2-performance/
