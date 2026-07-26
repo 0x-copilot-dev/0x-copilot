@@ -89,4 +89,34 @@ describe("projectLegacyV2Replay", () => {
       quarantined: [],
     });
   });
+
+  it("keeps a terminal receipt out of the legacy presentation replay", () => {
+    const projection = projectLegacyV2Replay([
+      {
+        event_id: "receipt-surface",
+        event_type: "surface.created",
+        sequence_no: 1,
+        payload: {
+          v: 1,
+          surface_id: "receipt://run-1",
+          kind: "receipt",
+          source: { connector: "runtime", op: "receipt" },
+          title: "Run receipt",
+          payload_ref: "ledger://run-1@0",
+        },
+      },
+      {
+        event_id: "receipt-emitted",
+        event_type: "receipt.emitted",
+        sequence_no: 2,
+        payload: {
+          v: 1,
+          surface_id: "receipt://run-1",
+          fold_ref: "ledger://run-1@0",
+        },
+      },
+    ]);
+
+    expect(projection).toMatchObject({ mode: "legacy_v2", surfaces: [] });
+  });
 });

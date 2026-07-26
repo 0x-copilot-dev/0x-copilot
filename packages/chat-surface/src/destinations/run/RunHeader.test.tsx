@@ -20,6 +20,16 @@ describe("RunHeader", () => {
     expect(screen.getByTestId("run-header-goal").textContent).toBe(
       "Ship the renewal batch",
     );
+    expect(screen.getByTestId("run-header")).toHaveStyle({
+      minHeight: "58px",
+      padding: "8px 20px",
+    });
+    expect(screen.getByTestId("run-header-kicker")).toHaveStyle({
+      lineHeight: "14px",
+    });
+    expect(screen.getByTestId("run-header-goal")).toHaveStyle({
+      lineHeight: "20px",
+    });
   });
 
   it("falls back to idle copy when the goal is null/empty (never a blank h2, and the kicker never claims a run)", () => {

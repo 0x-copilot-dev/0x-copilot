@@ -193,9 +193,10 @@ desktop session:
 | Retained history   | after the next message starts, the completed prior subagent remains in the Agents panel    |
 
 It then verifies the actual desktop controls: tool-card disclosure by pointer,
-Space, and Enter; a **live** fleet-child expansion by pointer, Space, and Enter;
-and the same keyboard contract for that exact task in the Agents-side-panel row.
-Both subagent disclosures must render the real nested tool timeline. A missing
+Space, and Enter; a terminal fleet-card disclosure by pointer, Space, and Enter;
+a **live** fleet-child expansion by pointer, Space, and Enter; and the same
+keyboard contract for that exact task in the Agents-side-panel row. Both
+subagent disclosures must render the real nested tool timeline. A missing
 required card, wrong cardinality, failure status, stale arguments, missing nested
 activity, missing payload, vanished completed child, or reintroduced multi-run
 selector is a test failure. It is not reported as a benign

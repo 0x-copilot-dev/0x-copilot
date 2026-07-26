@@ -297,9 +297,9 @@ const headerStyle: CSSProperties = {
   flexShrink: 0,
   display: "flex",
   alignItems: "center",
-  gap: 12,
-  height: 38,
-  padding: "0 13px",
+  gap: 14,
+  minHeight: 58,
+  padding: "8px 20px",
   borderBottom: "1px solid var(--color-border)",
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
@@ -308,8 +308,8 @@ const headerStyle: CSSProperties = {
 
 const avatarStyle: CSSProperties = {
   flexShrink: 0,
-  width: 32,
-  height: 32,
+  width: 40,
+  height: 40,
   borderRadius: "50%",
   display: "grid",
   placeItems: "center",
@@ -317,7 +317,7 @@ const avatarStyle: CSSProperties = {
   color: "var(--color-accent, #5fb2ec)",
   border: "1px solid var(--color-accent-line, rgba(95,178,236,.35))",
   fontWeight: 600,
-  fontSize: "var(--font-size-sm, 13px)",
+  fontSize: "var(--font-size-md, 15px)",
 };
 
 const headingBlockStyle: CSSProperties = {
@@ -329,7 +329,7 @@ const headingBlockStyle: CSSProperties = {
   minWidth: 0,
   display: "flex",
   flexDirection: "column",
-  gap: 2,
+  gap: 4,
 };
 
 const kickerStyle: CSSProperties = {
@@ -338,6 +338,7 @@ const kickerStyle: CSSProperties = {
   letterSpacing: "0.08em",
   textTransform: "uppercase",
   color: "var(--color-text-muted, #9aa0a6)",
+  lineHeight: "14px",
 };
 
 const goalRowStyle: CSSProperties = {
@@ -352,6 +353,7 @@ const goalStyle: CSSProperties = {
   fontFamily: "var(--font-display, var(--font-sans))",
   fontSize: "var(--font-size-md, 15px)",
   fontWeight: 600,
+  lineHeight: "20px",
   letterSpacing: "-0.01em",
   color: "var(--color-text, #f4f5f6)",
   overflow: "hidden",

@@ -279,6 +279,45 @@ def ensure_fleet_row_interaction(
     log("PASS  fleet child: pointer, Space, and Enter expansion contract")
 
 
+def ensure_fleet_card_interaction(s: DriverSession, fleet_host_test_id: str) -> None:
+    """Terminal fleets must fold, then expose their details semantically."""
+    host = css_test_id(fleet_host_test_id)
+    fleet_id = s.evaluate(
+        f"(document.querySelector({json.dumps(host)})?.querySelector('[data-fleet-id]')||{{}}).getAttribute?.('data-fleet-id')"
+    )
+    assert isinstance(fleet_id, str) and fleet_id, "fleet card has no fleet id"
+    toggle = css_test_id(f"subagent-fleet-toggle-{fleet_id}")
+
+    def expanded() -> str | None:
+        return s.evaluate(
+            f"(document.querySelector({json.dumps(toggle)})||{{}}).getAttribute?.('aria-expanded')"
+        )
+
+    assert s.present(toggle), "fleet card has no semantic disclosure control"
+    assert expanded() == "false", "terminal fleet should start compact"
+    s.click(toggle)
+    assert expanded() == "true", "fleet-card pointer click did not expand details"
+    s.press(toggle, "Space")
+    assert expanded() == "false", "fleet-card Space did not collapse details"
+    s.press(toggle, "Enter")
+    assert expanded() == "true", "fleet-card Enter did not expand details"
+    s.press(toggle, "Space")
+    assert expanded() == "false", "fleet-card final Space did not restore compact state"
+    assert s.present(host), "fleet card vanished after its disclosure interaction"
+    log("PASS  fleet card: terminal compact state plus pointer, Space, and Enter")
+
+
+def assert_no_ordinary_receipt_tab(s: DriverSession) -> None:
+    """A terminal ledger receipt must not silently become a Studio tab."""
+    labels = s.evaluate(
+        "JSON.stringify([...document.querySelectorAll('[data-testid=tc-tabs] [role=tab]')].map((tab)=>tab.innerText.trim()))"
+    )
+    tabs = json.loads(labels) if labels else []
+    assert all(label.casefold() != "run receipt" for label in tabs), (
+        f"ordinary subagent work created a receipt tab: {tabs!r}"
+    )
+
+
 def ensure_agents_panel_interaction(
     s: DriverSession, task_id: str, expected_activity: str
 ) -> None:
@@ -405,6 +444,11 @@ def main() -> int:
         assert not s.present("[data-testid=run-multi-select]"), (
             "the retired multi-run selector returned after a second run"
         )
+        assert not s.present("[data-testid=receipt-v2-launch]"), (
+            "ordinary subagent work surfaced an audit receipt in the cockpit"
+        )
+        assert_no_ordinary_receipt_tab(s)
+        ensure_fleet_card_interaction(s, single["testId"])
         s.shot("r2-one-subagent-complete")
         log(
             "PASS  exactly one subagent rendered as a singular 1/1 fleet; no run selector"

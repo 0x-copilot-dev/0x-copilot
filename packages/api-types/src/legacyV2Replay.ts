@@ -248,6 +248,11 @@ function isLegacySurfaceCreated(
   legacyStreamProven: boolean,
 ): boolean {
   const payloadRef = text(event.payload.payload_ref);
+  // A terminal receipt is durable audit/export evidence, never a historic
+  // presentation subject. `receipt.emitted` is intentionally a legacy-proof
+  // event, so without this guard the compatibility reader retrofits every
+  // modern receipt into a full Studio canvas tab.
+  if (text(event.payload.kind) === "receipt") return false;
   if (payloadRef?.startsWith("operation://")) return false;
   const subjectId = text(event.payload.surface_id);
   return (

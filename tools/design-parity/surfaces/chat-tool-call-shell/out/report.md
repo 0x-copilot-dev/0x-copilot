@@ -2,18 +2,18 @@
 
 This is an authoritative computed-style parity baseline for the supplied **Chat & Tool Calls** Design Compiler walkthrough. It measures the real shipping `RunDestination` / `ThreadCanvas` composition using deterministic persisted-message and SSE fixtures. It does **not** use screenshot assertions.
 
-**Aggregate measured findings:** 🔴 HIGH 50 · 🟠 MEDIUM 174 · 🟡 LOW 276 · ⚪ INFO 61.
+**Aggregate measured findings:** 🔴 HIGH 13 · 🟠 MEDIUM 75 · 🟡 LOW 234 · ⚪ INFO 54.
 
 ## State coverage
 
 | Walkthrough state | Design anchors | Live anchors | HIGH | MEDIUM | State report |
 |---|---:|---:|---:|---:|---|
-| `focus-thinking` | 10/10 | 9/9 | 7 | 18 | [report-focus-thinking.md](./report-focus-thinking.md) |
-| `studio-third-party-read` | 10/10 | 10/10 | 8 | 29 | [report-studio-third-party-read.md](./report-studio-third-party-read.md) |
-| `studio-web-chat-only` | 11/11 | 10/10 | 8 | 29 | [report-studio-web-chat-only.md](./report-studio-web-chat-only.md) |
-| `studio-csv-chat-only` | 11/11 | 10/10 | 8 | 29 | [report-studio-csv-chat-only.md](./report-studio-csv-chat-only.md) |
-| `studio-write-held` | 11/11 | 11/11 | 9 | 33 | [report-studio-write-held.md](./report-studio-write-held.md) |
-| `studio-wrap-file` | 11/11 | 11/11 | 10 | 36 | [report-studio-wrap-file.md](./report-studio-wrap-file.md) |
+| `focus-thinking` | 10/10 | 9/9 | 2 | 8 | [report-focus-thinking.md](./report-focus-thinking.md) |
+| `studio-third-party-read` | 10/10 | 10/10 | 1 | 11 | [report-studio-third-party-read.md](./report-studio-third-party-read.md) |
+| `studio-web-chat-only` | 11/11 | 10/10 | 4 | 17 | [report-studio-web-chat-only.md](./report-studio-web-chat-only.md) |
+| `studio-csv-chat-only` | 11/11 | 10/10 | 4 | 17 | [report-studio-csv-chat-only.md](./report-studio-csv-chat-only.md) |
+| `studio-write-held` | 11/11 | 11/11 | 1 | 11 | [report-studio-write-held.md](./report-studio-write-held.md) |
+| `studio-wrap-file` | 11/11 | 11/11 | 1 | 11 | [report-studio-wrap-file.md](./report-studio-wrap-file.md) |
 
 The six states are fixture-backed and state-specific: Focus thinking; third-party Linear read; web chat-only read; local CSV chat-only read; held local-file write; and completed wrap-file result.
 
@@ -22,7 +22,7 @@ The six states are fixture-backed and state-specific: Focus thinking; third-part
 - Supplied design reference: `tools/design-parity/surfaces/chat-tool-call-shell/design/reference.dc.html`
 - Reference SHA-256: `7701b4df85a3d8c45b0505e545c3d30031e9fb21de0b38442e8547f5820f7840`
 - Vendor manifest: [design/PROVENANCE.json](../design/PROVENANCE.json) (source, support runtime, and CSS checksums).
-- Repository commit measured: `c97b61770f949cfa6119879edfa36d4069d61aed`; origin/main: `c97b61770f949cfa6119879edfa36d4069d61aed`.
+- Repository commit measured: `1fc7e34d8ce2a130e5487975fdc8ba6b55a4b4ee`; origin/main: `736ba1a15e2d0442ba1783a88f104181e768b0ae`.
 - Design capture: Design Compiler state selected at construction from `?state=…`; autoplay disabled; runtime-only `data-parity-anchor` attributes added after mount.
 - Live capture: [render-live-chat-tool-call-shell.test.tsx](../../../lib/render-live-chat-tool-call-shell.test.tsx) mounts actual `RunDestination` with `surfacesV2`, real `ThreadCanvas`, real `Composer`, and its normal Transport/SSE projection path.
 - Browser extraction: shared [extract-playwright.mjs](../../../lib/extract-playwright.mjs) + [extract-computed.js](../../../lib/extract-computed.js), viewport 1200×816.

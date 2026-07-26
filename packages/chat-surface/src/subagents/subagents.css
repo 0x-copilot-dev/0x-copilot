@@ -19,8 +19,12 @@
   align-items: start;
   display: grid;
   gap: var(--space-sm);
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) max-content;
   position: relative;
+}
+
+.aui-tool-card__timeline-item > div {
+  min-width: 0;
 }
 
 .aui-tool-card__timeline-item::before {
@@ -47,7 +51,12 @@
 .aui-tool-card__timeline-item > span {
   color: var(--color-text-subtle);
   font-size: var(--font-size-2xs);
+  max-width: min(8.5rem, 40%);
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 /* Agents workspace tab. */
@@ -199,10 +208,6 @@
 
 .agent-activity-row:has(.agent-activity-row__details[open]) {
   flex-wrap: wrap;
-}
-
-.agent-activity-row[data-depth] {
-  margin-left: 18px;
 }
 
 .agent-activity-row__lifecycle {
@@ -424,15 +429,36 @@
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-lg);
   display: grid;
-  gap: var(--space-sm);
-  padding: var(--space-md);
+  gap: var(--space-xs);
+  padding: var(--space-sm);
 }
 
 .aui-fleet-card__head {
   align-items: center;
+  appearance: none;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: inherit;
+  cursor: pointer;
   display: grid;
   gap: var(--space-sm);
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  min-width: 0;
+  padding: var(--space-2xs);
+  text-align: left;
+  width: 100%;
+}
+
+.aui-fleet-card__head:hover,
+.aui-fleet-card__head:focus-visible {
+  background: var(--color-surface-elevated);
+  outline: none;
+}
+
+.aui-fleet-card__head:focus-visible {
+  outline: 2px solid var(--color-accent-strong);
+  outline-offset: 2px;
 }
 
 .aui-fleet-card__icon {
@@ -450,7 +476,7 @@
 
 .aui-fleet-card__title {
   color: var(--color-text);
-  font-size: var(--font-size-lg);
+  font-size: var(--font-size-md);
   font-weight: 650;
   min-width: 0;
   overflow: hidden;
@@ -466,6 +492,17 @@
   white-space: nowrap;
 }
 
+.aui-fleet-card__disclosure {
+  color: var(--color-text-subtle);
+  font-size: var(--font-size-sm);
+  line-height: 1;
+  transition: transform 120ms ease;
+}
+
+.aui-fleet-card[data-expanded="true"] .aui-fleet-card__disclosure {
+  transform: rotate(180deg);
+}
+
 /* A terminal fleet only reads as successful when every child completed. */
 .aui-fleet-card[data-status="error"] .aui-fleet-card__count {
   color: var(--color-danger);
@@ -477,49 +514,39 @@
   margin: 0;
 }
 
+.aui-fleet-card__details {
+  display: grid;
+  gap: var(--space-sm);
+  padding: 0 var(--space-2xs) var(--space-2xs);
+}
+
+/* The detail region is a native disclosure target. The component's grid
+ * declaration would otherwise override the browser's `[hidden]` rule, leaving
+ * completed fleet rows visibly expanded even though the toggle says closed. */
+.aui-fleet-card__details[hidden] {
+  display: none;
+}
+
 .aui-fleet-card__rows {
   display: grid;
   gap: 10px;
-  margin-top: 4px;
-}
-
-.aui-fleet-card__foot {
-  align-items: center;
-  color: var(--color-text-muted);
-  display: flex;
-  flex-wrap: wrap;
-  font-size: var(--font-size-xs);
-  gap: var(--space-sm);
-}
-
-.aui-fleet-card__foot > span:first-child {
-  flex: 1 1 auto;
-  min-width: min(16rem, 100%);
-}
-
-.aui-fleet-card__foot-text {
-  align-items: center;
-  display: inline-flex;
-  gap: 6px;
-}
-
-.aui-fleet-card__foot-text > svg {
-  color: var(--color-text-muted);
-  flex: none;
 }
 
 .aui-fleet-card__link {
+  align-self: start;
   background: transparent;
   border: 0;
   color: var(--color-accent-strong);
   cursor: pointer;
-  font: inherit;
-  font-weight: var(--font-weight-semibold);
+  font: var(--font-weight-semibold) var(--font-size-xs) / 1.3 var(--font-sans);
   padding: 0;
 }
 
-.aui-fleet-card__link:hover {
+.aui-fleet-card__link:hover,
+.aui-fleet-card__link:focus-visible {
   color: var(--color-accent);
+  outline: none;
+  text-decoration: underline;
 }
 
 .aui-fleet-card .subagent-card {

@@ -5,7 +5,7 @@
 // transport, clipboard, filesystem, clock, or browser access. The Studio host
 // decides whether an explicit user action turns it into a canvas tab.
 
-import type { ReactElement, ReactNode } from "react";
+import type { CSSProperties, ReactElement, ReactNode } from "react";
 
 import { Badge, Caption, SectionLabel } from "@0x-copilot/design-system";
 import type { RunReceiptV2 } from "@0x-copilot/api-types";
@@ -65,30 +65,49 @@ export function ReceiptV2Surface({
   );
 }
 
-/** A compact, explicit Studio affordance. It never opens itself. */
+/**
+ * A deliberately quiet receipt affordance. Receipts are audit material, not a
+ * second primary conversation surface: the cockpit only mounts this control
+ * for consequential work and never turns it into a large explanatory card.
+ */
 export function ReceiptV2LaunchCard(props: {
   readonly receipt: RunReceiptV2;
   readonly onOpen: () => void;
 }): ReactElement {
   return (
-    <section className="ui-card ui-card--muted" data-testid="receipt-v2-launch">
-      <SectionLabel>Run receipt ready</SectionLabel>
+    <section data-testid="receipt-v2-launch" style={launchStyle}>
+      <span style={launchLabelStyle}>Run receipt</span>
       <Badge tone="neutral">{statusLabel(props.receipt.status)}</Badge>
-      <Caption as="p">
-        This receipt was assembled from the run ledger. It opens only when you
-        choose to review it.
-      </Caption>
       <button
         type="button"
         className="ui-button ui-button--ghost"
         onClick={props.onOpen}
         data-testid="receipt-v2-open"
       >
-        Open receipt
+        Review
       </button>
     </section>
   );
 }
+
+const launchStyle: CSSProperties = {
+  alignItems: "center",
+  alignSelf: "flex-start",
+  border: "1px solid var(--color-border-subtle)",
+  borderRadius: "var(--radius-md)",
+  display: "flex",
+  gap: "var(--space-xs)",
+  padding: "var(--space-2xs) var(--space-xs)",
+};
+
+const launchLabelStyle: CSSProperties = {
+  color: "var(--color-text-muted)",
+  fontFamily: "var(--font-mono)",
+  fontSize: "var(--font-size-2xs)",
+  fontWeight: 600,
+  letterSpacing: "var(--tracking-label)",
+  textTransform: "uppercase",
+};
 
 function ReceiptMetric(props: {
   readonly label: string;

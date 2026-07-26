@@ -67,6 +67,7 @@ import {
   type ModelSelectionRequest,
   type RunAttachmentRequest,
   type RunId,
+  type RunReceiptV2,
   type SourceEntry,
   type SourcesProjectionV2,
   type SubagentEntry,
@@ -205,6 +206,29 @@ const EMPTY_RECEIPT_V2: ReceiptV2Projection = {
   chatOnly: false,
   shouldAutoOpen: false,
 };
+
+/**
+ * Receipt data remains durable/exportable for every run, but the cockpit only
+ * offers a visual receipt when it records a consequential outcome. Ordinary
+ * chat, tool, and subagent runs already have their useful detail in the
+ * transcript and Agents tab; showing a second canvas card for them is noise.
+ */
+function needsCockpitReceipt(receipt: RunReceiptV2): boolean {
+  const { artifacts, effects, gates } = receipt;
+  return (
+    artifacts.promoted > 0 ||
+    effects.proposed > 0 ||
+    effects.approved > 0 ||
+    effects.applied > 0 ||
+    effects.rejected > 0 ||
+    effects.partial > 0 ||
+    effects.held > 0 ||
+    effects.indeterminate > 0 ||
+    gates.opened > 0 ||
+    gates.resolved > 0 ||
+    gates.pending > 0
+  );
+}
 const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
   new Map();
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
@@ -1715,6 +1739,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         : EMPTY_RECEIPT_V2,
     [surfacesV2, session.runId, session.events, session.runStatus],
   );
+  const receiptV2Visible =
+    receiptV2Projection.receipt !== null &&
+    needsCockpitReceipt(receiptV2Projection.receipt);
   const sourcesV2Projection = useMemo<SourcesProjectionV2 | null>(
     () =>
       surfacesV2 && session.runId !== null
@@ -1765,7 +1792,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     if (
       !surfacesV2 ||
       !receiptV2Opened ||
-      receiptV2Projection.receipt === null ||
+      !receiptV2Visible ||
       session.runId === null
     ) {
       return null;
@@ -1778,7 +1805,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   }, [
     surfacesV2,
     receiptV2Opened,
-    receiptV2Projection.receipt,
+    receiptV2Visible,
     session.runId,
     ledger.lastLedgerSeq,
   ]);
@@ -2303,11 +2330,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // from Studio; Focus deliberately remains chat + activity, so a terminal
   // receipt cannot occupy its review-card stack or steal the canvas.
   const handleOpenReceiptV2 = useCallback((): void => {
-    if (
-      !surfacesV2 ||
-      receiptV2Projection.receipt === null ||
-      session.runId === null
-    ) {
+    if (!surfacesV2 || !receiptV2Visible || session.runId === null) {
       return;
     }
     const uri = receiptV2Uri(session.runId);
@@ -2320,7 +2343,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     });
     setPinnedUri(uri);
     setMode("studio");
-  }, [surfacesV2, receiptV2Projection.receipt, session.runId, setMode]);
+  }, [surfacesV2, receiptV2Visible, session.runId, setMode]);
 
   // E1 D5: only the opaque source id crosses the UI boundary. The facade route
   // rechecks the run owner, refolds canonical provenance, and asks the artifact
@@ -2411,6 +2434,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       }
       if (
         isReceiptV2Uri(uri, session.runId) &&
+        receiptV2Visible &&
         receiptV2Projection.receipt !== null
       ) {
         return <ReceiptV2Surface receipt={receiptV2Projection.receipt} />;
@@ -2512,6 +2536,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       session.retry,
       session.runId,
       receiptV2Projection.receipt,
+      receiptV2Visible,
       handleRowDecision,
       handleStageApply,
       handleStageEdit,
@@ -2879,9 +2904,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // `canvasEl` bare below.
   const v2CanvasBody = (
     <div data-testid="run-v2-canvas-body" style={v2CanvasBodyStyle}>
-      {mode === "studio" &&
-      receiptV2Projection.receipt !== null &&
-      !receiptV2Opened ? (
+      {mode === "studio" && receiptV2Visible && !receiptV2Opened ? (
         <ReceiptV2LaunchCard
           receipt={receiptV2Projection.receipt}
           onOpen={handleOpenReceiptV2}

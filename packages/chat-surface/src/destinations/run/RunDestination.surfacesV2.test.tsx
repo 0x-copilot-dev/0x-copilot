@@ -304,7 +304,7 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     ).toBe(false);
   });
 
-  it("E1 D4: a terminal zero-op run presents its receipt in Studio and opens it only on request", async () => {
+  it("keeps an ordinary terminal run out of the Studio canvas and tab strip", async () => {
     seq = 0;
     const transport = new FakeTransport();
     renderRun(transport, makeStore(), true);
@@ -312,32 +312,116 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
 
     stream(transport, [
       {
-        event_id: "terminal-zero-op",
+        // The worker emits this canonical lifecycle pair at every terminal
+        // state. It is durable audit/export data, not a Studio tab for an
+        // ordinary chat/subagent run.
+        event_id: "terminal-zero-op-receipt-surface",
         run_id: "run-1",
         conversation_id: "conv-1",
         sequence_no: 1,
+        event_type: "surface.created",
+        activity_kind: "surface",
+        payload: {
+          v: 1,
+          surface_id: "receipt://run-1",
+          kind: "receipt",
+          source: { connector: "runtime", op: "receipt" },
+          title: "Run receipt",
+          payload_ref: "ledger://run-1@0",
+        },
+        created_at: new Date(1_700_000_001_000).toISOString(),
+      },
+      {
+        event_id: "terminal-zero-op-receipt-emitted",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 2,
+        event_type: "receipt.emitted",
+        activity_kind: "system",
+        payload: {
+          v: 1,
+          surface_id: "receipt://run-1",
+          fold_ref: "ledger://run-1@0",
+        },
+        created_at: new Date(1_700_000_002_000).toISOString(),
+      },
+      {
+        event_id: "terminal-zero-op",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 3,
         event_type: "run_completed",
         activity_kind: "run",
         payload: { status: "completed" },
-        created_at: new Date(1_700_000_001_000).toISOString(),
+        created_at: new Date(1_700_000_003_000).toISOString(),
       },
     ]);
 
-    await screen.findByTestId("receipt-v2-launch");
+    await waitFor(() =>
+      expect(screen.queryByTestId("receipt-v2-launch")).toBeNull(),
+    );
     expect(screen.getByTestId("run-destination")).toHaveAttribute(
       "data-mode",
       "studio",
     );
-    // The zero-op receipt stays out of the lifecycle tabs until explicitly opened.
+    // The durable ledger receipt still exists, but ordinary chat/subagent runs
+    // do not get a second primary surface in the cockpit.
     expect(surfaceTabs()).toHaveLength(0);
     expect(screen.queryByTestId("receipt-v2-surface")).toBeNull();
+  });
 
+  it("offers a compact receipt review only for consequential work", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+
+    stream(transport, [
+      {
+        event_id: "effect-staged",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 1,
+        event_type: "effect.staged",
+        activity_kind: "tool",
+        payload: {
+          v: 1,
+          stage_id: "stg_018f47a6-7b2c-7c10-8f21-12345678c005",
+          operation_id: "op_018f47a6-7b2c-7a10-8f21-12345678a005",
+          executor: "workspace",
+          target_ref: "workspace-target://grant_05/pathToken_05",
+          target_digest:
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          proposal_ref:
+            "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c005/revisions/1",
+          proposal_digest:
+            "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+          policy: "ask",
+        },
+        created_at: new Date(1_700_000_001_000).toISOString(),
+      },
+      {
+        event_id: "terminal-consequential",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 2,
+        event_type: "run_completed",
+        activity_kind: "run",
+        payload: { status: "completed" },
+        created_at: new Date(1_700_000_002_000).toISOString(),
+      },
+    ]);
+
+    const launcher = await screen.findByTestId("receipt-v2-launch");
+    expect(launcher).toHaveTextContent("Run receipt");
+    expect(launcher).toHaveTextContent("Review");
+    expect(launcher).not.toHaveTextContent("This receipt was assembled");
     fireEvent.click(screen.getByTestId("receipt-v2-open"));
     await screen.findByTestId("receipt-v2-surface");
     expect(screen.queryByTestId("receipt-v2-launch")).toBeNull();
   });
 
-  it("E1 D4: a terminal receipt is absent from Focus and opens only in Studio", async () => {
+  it("keeps the consequential receipt out of Focus and opens it only from Studio", async () => {
     seq = 0;
     const transport = new FakeTransport();
     renderRun(transport, makeStore(), true);
@@ -345,14 +429,37 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
 
     stream(transport, [
       {
-        event_id: "terminal-focus-receipt",
+        event_id: "effect-staged-focus",
         run_id: "run-1",
         conversation_id: "conv-1",
         sequence_no: 1,
+        event_type: "effect.staged",
+        activity_kind: "tool",
+        payload: {
+          v: 1,
+          stage_id: "stg_018f47a6-7b2c-7c10-8f21-12345678c006",
+          operation_id: "op_018f47a6-7b2c-7a10-8f21-12345678a006",
+          executor: "workspace",
+          target_ref: "workspace-target://grant_06/pathToken_06",
+          target_digest:
+            "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          proposal_ref:
+            "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c006/revisions/1",
+          proposal_digest:
+            "85fa12d00a9e3d3fee0f86fa9d03757562e5d0e0b758c16cae83cdf72794ebbc",
+          policy: "ask",
+        },
+        created_at: new Date(1_700_000_002_000).toISOString(),
+      },
+      {
+        event_id: "terminal-focus-receipt",
+        run_id: "run-1",
+        conversation_id: "conv-1",
+        sequence_no: 2,
         event_type: "run_completed",
         activity_kind: "run",
         payload: { status: "completed" },
-        created_at: new Date(1_700_000_002_000).toISOString(),
+        created_at: new Date(1_700_000_003_000).toISOString(),
       },
     ]);
 

@@ -55,6 +55,12 @@ describe("ReceiptV2Surface", () => {
     render(<ReceiptV2LaunchCard receipt={receipt()} onOpen={onOpen} />);
 
     expect(onOpen).not.toHaveBeenCalled();
+    expect(screen.getByTestId("receipt-v2-launch")).toHaveTextContent(
+      "Run receipt",
+    );
+    expect(screen.getByTestId("receipt-v2-launch")).not.toHaveTextContent(
+      "This receipt was assembled",
+    );
     fireEvent.click(screen.getByTestId("receipt-v2-open"));
     expect(onOpen).toHaveBeenCalledOnce();
   });
