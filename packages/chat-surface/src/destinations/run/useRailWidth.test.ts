@@ -6,7 +6,11 @@ import {
   MIN_RAIL_WIDTH,
   clampRailWidth,
 } from "../../thread-canvas";
-import { RAIL_WIDTH_KEY, readRailWidth } from "./useRailWidth";
+import {
+  COCKPIT_DEFAULT_RAIL_WIDTH,
+  RAIL_WIDTH_KEY,
+  readRailWidth,
+} from "./useRailWidth";
 
 describe("clampRailWidth", () => {
   it("keeps an in-range value (rounded)", () => {
@@ -30,7 +34,7 @@ describe("readRailWidth", () => {
   });
 
   it("returns the default when nothing is persisted", () => {
-    expect(readRailWidth(storeOf(null))).toBe(DEFAULT_RAIL_WIDTH);
+    expect(readRailWidth(storeOf(null))).toBe(COCKPIT_DEFAULT_RAIL_WIDTH);
   });
 
   it("parses and clamps a persisted value", () => {
@@ -39,6 +43,8 @@ describe("readRailWidth", () => {
   });
 
   it("falls back to the default for an unparseable value", () => {
-    expect(readRailWidth(storeOf("not-a-number"))).toBe(DEFAULT_RAIL_WIDTH);
+    expect(readRailWidth(storeOf("not-a-number"))).toBe(
+      COCKPIT_DEFAULT_RAIL_WIDTH,
+    );
   });
 });
