@@ -5,7 +5,13 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-wrap-file.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-wrap-file.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 40 · ⚪ INFO 10
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 1 · 🟡 LOW 40 · ⚪ INFO 10
+
+## 🟠 MEDIUM (1)
+
+| Element | Group | Property | Design → Live |
+|---|---|---|---|
+| `shell.mode-switcher` | Cockpit shell | margin | 0px 0px 0px 982.969px → 0px 0px 0px 1043.97px |
 
 ## 🟡 LOW (40)
 

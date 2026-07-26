@@ -1,8 +1,9 @@
 // RunHeader — the desktop Run cockpit's window bar (PR-3.5).
 //
 // Source: docs/plan/desktop-redesign/design-reference/DESIGN-SPEC.md §2
-//   Header `.mw-bar`: macOS traffic-light dots, the centred `0xCopilot — mode`
-//   identity, and a right-aligned **mode segmented control** (Focus / Studio).
+//   Header `.mw-bar`: a centred `0xCopilot — mode` identity and a right-aligned
+//   **mode segmented control** (Focus / Studio). Native window controls belong
+//   to the desktop host, never to this shared surface.
 //
 // Ownership: RunHeader is presentation only. The *mode value* is owned by
 // `useRunMode` (KeyValueStore-backed); this component renders the current mode
@@ -132,7 +133,6 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
 
   return (
     <header data-testid="run-header" style={headerStyle}>
-      <WindowDots />
       <div data-testid="run-header-title" style={titleLayerStyle}>
         <b style={productNameStyle}>
           <span style={productMarkStyle}>0x</span>Copilot
@@ -158,20 +158,6 @@ export function RunHeader(props: RunHeaderProps): ReactElement {
         onModeChange={onModeChange}
       />
     </header>
-  );
-}
-
-function WindowDots(): ReactElement {
-  return (
-    <div
-      aria-hidden="true"
-      data-testid="run-header-window-dots"
-      style={windowDotsStyle}
-    >
-      <span style={{ ...windowDotStyle, background: "#ff5f57" }} />
-      <span style={{ ...windowDotStyle, background: "#febc2e" }} />
-      <span style={{ ...windowDotStyle, background: "#28c840" }} />
-    </div>
   );
 }
 
@@ -322,20 +308,6 @@ const headerStyle: CSSProperties = {
   background: "var(--color-bg-elevated)",
   color: "var(--color-text)",
   fontFamily: "var(--font-sans)",
-};
-
-const windowDotsStyle: CSSProperties = {
-  zIndex: 2,
-  display: "flex",
-  gap: 8,
-  alignItems: "center",
-};
-
-const windowDotStyle: CSSProperties = {
-  width: 11,
-  height: 11,
-  borderRadius: "50%",
-  border: "0.5px solid rgba(0,0,0,.2)",
 };
 
 const titleLayerStyle: CSSProperties = {

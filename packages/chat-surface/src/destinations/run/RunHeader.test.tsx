@@ -28,9 +28,7 @@ describe("RunHeader", () => {
     expect(screen.getByTestId("run-header-title").textContent).toBe(
       "0xCopilot—Studio",
     );
-    expect(screen.getByTestId("run-header-window-dots").children).toHaveLength(
-      3,
-    );
+    expect(screen.queryByTestId("run-header-window-dots")).toBeNull();
   });
 
   it("falls back to idle copy when the goal is null/empty (never a blank h2, and the kicker never claims a run)", () => {
@@ -111,7 +109,7 @@ describe("RunHeader", () => {
       />,
     );
 
-    expect(screen.getByTestId("run-header-window-dots")).not.toBeNull();
+    expect(screen.queryByTestId("run-header-window-dots")).toBeNull();
     expect(screen.getByTestId("run-header-title")).toHaveStyle({
       position: "absolute",
       pointerEvents: "none",
