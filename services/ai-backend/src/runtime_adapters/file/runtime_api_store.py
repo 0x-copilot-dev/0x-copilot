@@ -2190,6 +2190,12 @@ class FileRuntimeApiStore:
         run = await self.get_run(org_id=org_id, run_id=run_id)
         if run is None:
             return ()
+        conversation = self.conversations.get(run.conversation_id)
+        if conversation is not None and conversation.deleted_at is not None:
+            # Keep tombstoned history unavailable through the public replay
+            # port. Lifecycle scans remain separate and retain the canonical
+            # JSONL records until the owning deletion authority purges them.
+            return ()
         docs = self._index.list_events_after(
             run_id=run_id, after_sequence=after_sequence
         )
