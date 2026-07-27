@@ -290,6 +290,21 @@ subagent authority intersection.
 10. **Feature off is honest.** No empty in-memory fallback masquerades as
     durable production behavior.
 
+## F1–F12 implementation program
+
+The twelve Wave F feature PRDs are implemented through one ordered production
+architecture:
+
+- [F1–F12 production integration implementation PRD](./IMPLEMENTATION-PRD-F1-F12-PRODUCTION-INTEGRATION.md)
+- [Implementation history and resolved/open ARQ record](./IMPLEMENTATION-BACKLOG.md)
+
+The implementation PRD contains the normative checkbox queue. Work proceeds in
+order and a step is not marked complete until its code, adapters, tests,
+rollout controls, recovery, and Definition of Done pass. It preserves one
+Deep Agents graph, one Operation Gateway, one run event journal, desktop
+file-native runtime state, backend-owned MCP credentials/sessions, and
+desktop-owned host mutation authority.
+
 ## Complete PRD index
 
 ### Wave F — Harness quality and efficiency
