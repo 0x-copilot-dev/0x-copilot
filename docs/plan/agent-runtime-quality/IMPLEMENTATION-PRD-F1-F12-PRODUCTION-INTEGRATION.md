@@ -72,7 +72,7 @@ create a second planning queue.
   - [x] Full Step 0 regression and exit criteria (`cb9174c8`; isolated committed
         tree: 5,425 passed, 127 skipped, 1 live-eval deselected; 58 focused
         hermetic collection/dependency tests).
-- [ ] **Step 1:** Persist and rehydrate the immutable run control snapshot.
+- [x] **Step 1:** Persist and rehydrate the immutable run control snapshot.
   - [x] Immutable snapshot/budget/revision/decision contracts, strict internal
         event payloads, canonical event-journal ports, and in-memory/file/
         Postgres runtime composition (`4f86cb4b`; 42 focused contract, replay,
@@ -84,7 +84,9 @@ create a second planning queue.
         pre-model bind, approval/restart rehydration, legacy-safe migration,
         and live narrowing (`16bc0a07`; 18 focused worker-boundary, restart,
         migration, scope, and live-narrowing tests).
-  - [ ] Full Step 1 regression suite and exit-criteria check.
+  - [x] Full Step 1 regression suite and exit-criteria check (isolated committed
+        tree: 5,463 passed, 127 skipped, 1 live-eval deselected; 14 pre-existing
+        deprecation warnings).
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
 - [ ] **Step 3:** Complete the local F1 evaluation, assignment, report, and
