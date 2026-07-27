@@ -6,6 +6,14 @@ from agent_runtime.control_plane.contracts import (
     RunControlSnapshot,
     RunPolicyRevisions,
 )
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    RunControlContext,
+    RunSerialAdmission,
+    RuntimeToolControlOutcome,
+    RuntimeToolControlTerminalRecord,
+    RuntimeToolLifecycleReducer,
+)
 from agent_runtime.control_plane.feature_modes import (
     AGENT_QUALITY_FEATURE_POLICIES,
     AgentQualityFeature,
@@ -45,6 +53,12 @@ __all__ = [
     "RunControlDecisionConflict",
     "RunControlDecisionStorePort",
     "RunControlDecisionWrite",
+    "RunControlBinding",
+    "RunControlContext",
+    "RunSerialAdmission",
+    "RuntimeToolControlOutcome",
+    "RuntimeToolControlTerminalRecord",
+    "RuntimeToolLifecycleReducer",
     "RunControlJournalCorruption",
     "RunControlScopeConflict",
     "RunControlSnapshot",

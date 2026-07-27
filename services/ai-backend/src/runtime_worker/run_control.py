@@ -9,7 +9,6 @@ the snapshot's feature modes.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from contextvars import ContextVar, Token
 from datetime import datetime, timezone
 import hashlib
 import hmac
@@ -21,10 +20,12 @@ from agent_runtime.control_plane.contracts import (
     RunControlSnapshot,
     RunPolicyRevisions,
 )
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    RunControlContext,
+)
 from agent_runtime.control_plane.feature_modes import (
     AgentQualityFeature,
-    FeatureMode,
-    FeatureModeDecision,
     FeatureModeResolver,
     FeatureModeSet,
 )
@@ -149,46 +150,6 @@ class LiveRunControlConstraints(RuntimeContract):
 
     modes: Mapping[AgentQualityFeature, object] = {}
     kill_switches: frozenset[AgentQualityFeature] = frozenset()
-
-
-class RunControlBinding(RuntimeContract):
-    """Immutable snapshot plus its authority-narrowed effective feature modes."""
-
-    snapshot: RunControlSnapshot
-    effective_modes: FeatureModeSet
-    decisions: tuple[FeatureModeDecision, ...]
-
-    def mode_for(self, feature: AgentQualityFeature) -> FeatureMode:
-        return self.effective_modes.mode_for(feature)
-
-
-_CURRENT_BINDING: ContextVar[RunControlBinding | None] = ContextVar(
-    "runtime_worker_run_control_binding",
-    default=None,
-)
-
-
-class RunControlContext:
-    """Read-only run-local access to the verified immutable binding."""
-
-    @staticmethod
-    def bind_for_run(binding: RunControlBinding) -> Token[RunControlBinding | None]:
-        return _CURRENT_BINDING.set(binding)
-
-    @staticmethod
-    def current() -> RunControlBinding | None:
-        return _CURRENT_BINDING.get()
-
-    @staticmethod
-    def require_current() -> RunControlBinding:
-        binding = _CURRENT_BINDING.get()
-        if binding is None:
-            raise RuntimeError("run control is not bound")
-        return binding
-
-    @staticmethod
-    def unbind(token: Token[RunControlBinding | None]) -> None:
-        _CURRENT_BINDING.reset(token)
 
 
 LiveConstraintsProvider = Callable[[], LiveRunControlConstraints]

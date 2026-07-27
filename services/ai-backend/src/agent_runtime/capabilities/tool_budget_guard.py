@@ -33,6 +33,7 @@ from agent_runtime.capabilities.task_policy import (
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.execution.call_identity import RuntimeCallContext
 from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
 from runtime_api.schemas import RuntimeApiEventType, RunRecord
 
@@ -176,7 +177,8 @@ class ToolBudgetGuard:
     def record_started(self, *, tool_name: str, estimated_input_tokens: int) -> str:
         """Open a ledger entry for an admitted call. Returns the call id."""
 
-        call_id = uuid4().hex
+        identity = RuntimeCallContext.current()
+        call_id = identity.control_call_id if identity is not None else uuid4().hex
         self._ledger.started(
             call_id,
             tool_name=tool_name,
@@ -278,8 +280,13 @@ class ToolBudgetGuard:
                 capability_id=tool_name,
                 arguments={"args": list(args), "kwargs": kwargs},
             )
+            call_identity = RuntimeCallContext.current()
             intent = ToolUseIntent(
-                operation_id=f"tool-policy-{uuid4().hex}",
+                operation_id=(
+                    call_identity.operation_id
+                    if call_identity is not None
+                    else f"tool-policy-{uuid4().hex}"
+                ),
                 capability_id=tool_name,
                 canonical_request_fingerprint=fingerprint,
             )
@@ -427,7 +434,10 @@ class ToolBudgetGuardedTool(DelegatingTool):
     ) -> Any:
         """Sync gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
-        if guard is None:
+        if guard is None or RuntimeCallContext.current() is not None:
+            # The graph-wide middleware is authoritative when its call context
+            # is present. This wrapper remains a shadow-compatibility adapter
+            # and must not charge or admit the same model-visible call twice.
             return self.delegate(*args, config=config, **kwargs)
         policy_intent = guard.admit_task_policy(
             tool_name=self.name, args=args, kwargs=kwargs
@@ -467,7 +477,9 @@ class ToolBudgetGuardedTool(DelegatingTool):
     ) -> Any:
         """Async gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
-        if guard is None:
+        if guard is None or RuntimeCallContext.current() is not None:
+            # See the synchronous path: wrapper enforcement is dormant behind
+            # the canonical middleware seam during shadow compatibility.
             return await self.adelegate(*args, config=config, **kwargs)
         policy_intent = guard.admit_task_policy(
             tool_name=self.name, args=args, kwargs=kwargs

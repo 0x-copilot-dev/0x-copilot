@@ -24,14 +24,11 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.fake_model import FakeModelProvider
 from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
-
-WEB_EXCLUDED_DEEP_AGENT_TOOLS = frozenset(
-    {
-        "edit_file",
-        "execute",
-        "write_file",
-    }
+from agent_runtime.execution.tool_surface import (
+    DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES,
 )
+
+WEB_EXCLUDED_DEEP_AGENT_TOOLS = DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES
 _WEB_HARNESS_PROFILE_KEYS = (
     "anthropic",
     # Hermetic runtime tests use this provider identity. Keeping it on the
@@ -193,11 +190,29 @@ _UNIVERSAL_MIDDLEWARE_FACTORIES: ContextVar[
     "universal_deep_agent_middleware_factories",
     default=(),
 )
+_UNIVERSAL_CHILD_GRAPHS_REMAINING: ContextVar[int | None] = ContextVar(
+    "universal_deep_agent_child_graphs_remaining",
+    # ``None`` retains compatibility for direct callers that supply only the
+    # historical universal factories. Canonical factory builds set an exact
+    # child count and pass the reviewed root sequence explicitly.
+    default=None,
+)
 
 
 def _materialize_universal_middleware() -> tuple[AgentMiddleware, ...]:
-    """Build a fresh universal middleware stack for one compiled agent."""
+    """Build a fresh universal stack for one local child graph.
 
+    Pinned Deep Agents materializes harness middleware for declarative children
+    before it assembles the supervisor. Canonical builds pass the supervisor
+    sequence through ``create_deep_agent(middleware=...)`` and set an exact
+    child-materialization count here, preventing duplicate root admission.
+    """
+
+    remaining = _UNIVERSAL_CHILD_GRAPHS_REMAINING.get()
+    if remaining is not None:
+        if remaining <= 0:
+            return ()
+        _UNIVERSAL_CHILD_GRAPHS_REMAINING.set(remaining - 1)
     return tuple(factory() for factory in _UNIVERSAL_MIDDLEWARE_FACTORIES.get())
 
 
@@ -317,15 +332,35 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
         kwargs["permissions"] = list(request.permissions)
     if request.checkpointer is not None:
         kwargs["checkpointer"] = request.checkpointer
-    if request.middleware:
-        kwargs["middleware"] = list(request.middleware)
+    # Always exercise the reviewed public seam, including an intentionally
+    # empty immutable sequence on compatibility/test builds.
+    kwargs["middleware"] = list(request.middleware)
     middleware_token = _UNIVERSAL_MIDDLEWARE_FACTORIES.set(
         request.universal_middleware_factories
+    )
+    child_count_token = _UNIVERSAL_CHILD_GRAPHS_REMAINING.set(
+        (_local_subagent_graph_count(request.subagents) if request.middleware else None)
     )
     try:
         return create_deep_agent(**kwargs)
     finally:
+        _UNIVERSAL_CHILD_GRAPHS_REMAINING.reset(child_count_token)
         _UNIVERSAL_MIDDLEWARE_FACTORIES.reset(middleware_token)
+
+
+def _local_subagent_graph_count(subagents: Sequence[object]) -> int:
+    """Return pinned Deep Agents' harness-middleware materialization count."""
+
+    declarative = 0
+    has_explicit_general_purpose = False
+    for spec in subagents:
+        if not isinstance(spec, Mapping) or "graph_id" in spec:
+            continue
+        if str(spec.get("name", "")).strip() == "general-purpose":
+            has_explicit_general_purpose = True
+        if "runnable" not in spec:
+            declarative += 1
+    return declarative + (0 if has_explicit_general_purpose else 1)
 
 
 def runtime_checkpointer(checkpointer: object | None = None) -> object:

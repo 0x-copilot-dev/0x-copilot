@@ -6,11 +6,13 @@ from agent_runtime.capabilities.middleware.display_metadata import (
     wrap_tools_with_display,
 )
 from agent_runtime.capabilities.middleware.runtime_tool_control import (
+    RuntimeControlMiddleware,
     RuntimeToolControlMiddleware,
 )
 
 __all__ = [
     "DisplayMetadataMiddleware",
+    "RuntimeControlMiddleware",
     "RuntimeToolControlMiddleware",
     "wrap_tool_with_display",
     "wrap_tools_with_display",

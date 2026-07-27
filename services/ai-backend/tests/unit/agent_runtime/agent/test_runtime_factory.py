@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
+from langchain_core.tools import StructuredTool
 
-from agent_runtime.capabilities.middleware import RuntimeToolControlMiddleware
+from agent_runtime.capabilities.middleware import RuntimeControlMiddleware
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -60,7 +61,9 @@ async def test_factory_propagates_permissions_to_runtime_ports(
     assert "ask_a_question" in tool_names
     assert call.subagents == ("researcher",)
     assert call.memory_backend is None
-    assert call.universal_middleware_factories == (RuntimeToolControlMiddleware,)
+    assert len(call.middleware) == 1
+    assert isinstance(call.middleware[0], RuntimeControlMiddleware)
+    assert call.universal_middleware_factories == (RuntimeControlMiddleware,)
     assert not any(isinstance(tool, ToolBudgetGuardedTool) for tool in call.tools)
 
 
@@ -82,6 +85,74 @@ class FakeMcpProvider:
 
     def create_client(self, _name: str) -> object:
         return object()
+
+
+class _FullyEnabledMcpRegistry(FakeMcpRegistry):
+    async def resolve_server(self, _name: str) -> object:
+        return object()
+
+
+class _FullyEnabledSkillRegistry:
+    async def list_available_skills(self, _context: object) -> tuple[object, ...]:
+        return ()
+
+    async def load_skill_by_name(self, _name: str) -> object:
+        return object()
+
+
+def _category_tool(name: str) -> StructuredTool:
+    async def invoke(value: str = "") -> str:
+        return value
+
+    return StructuredTool.from_function(
+        coroutine=invoke,
+        name=name,
+        description=f"Exercise the {name} runtime category.",
+    )
+
+
+async def test_factory_composes_all_runtime_tool_categories_behind_one_stack(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    """The final factory request has one root stack for every owned category."""
+
+    builder = CapturingAgentBuilder()
+    dependencies = fake_dependencies.model_copy(
+        update={
+            "tool_registry": FakeToolRegistry(
+                tools=(_category_tool("registry_search"),)
+            ),
+            "mcp_registry": _FullyEnabledMcpRegistry(),
+            "skill_registry": _FullyEnabledSkillRegistry(),
+            "prior_tool_result_loader": object(),
+            "code_mode_tool": _category_tool("invoke_capability"),
+            "sandbox_execute_tool": _category_tool("execute_dataflow"),
+        }
+    )
+
+    await acreate_agent_runtime(
+        context=runtime_context_admin,
+        dependencies=dependencies,
+        agent_builder=builder,
+    )
+
+    call = builder.calls[0]
+    tool_names = tuple(str(getattr(tool, "name", "")) for tool in call.tools)
+    assert {
+        "registry_search",
+        "load_mcp_server",
+        "call_mcp_tool",
+        "load_skill",
+        "load_prior_tool_result",
+        "ask_a_question",
+        "suggest_mcp_connector",
+        "invoke_capability",
+        "execute_dataflow",
+    }.issubset(tool_names)
+    assert len(call.middleware) == 1
+    assert isinstance(call.middleware[0], RuntimeControlMiddleware)
+    assert call.universal_middleware_factories == (RuntimeControlMiddleware,)
 
 
 async def test_factory_wraps_dynamic_loader_adapters_as_langchain_tools(
