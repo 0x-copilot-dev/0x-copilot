@@ -119,6 +119,12 @@ describe("TcStagedDraftSurface", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("tc-staged-draft-edit"));
+    expect(screen.getByTestId("tc-approve-bar")).toHaveAttribute(
+      "data-suspended",
+      "true",
+    );
+    expect(screen.getByTestId("tc-approve-bar-approve")).toBeDisabled();
+    expect(screen.getByTestId("tc-approve-bar-reject")).not.toBeDisabled();
     const editor = screen.getByTestId("tc-staged-draft-editor");
     fireEvent.change(editor, {
       target: { value: "Dear team, launch Tuesday." },
@@ -129,6 +135,29 @@ describe("TcStagedDraftSurface", () => {
       1, // base_rev = current latest
       "Dear team, launch Tuesday.",
     );
+  });
+
+  it("renders safe message metadata and quoted context when supplied", () => {
+    render(
+      <TcStagedDraftSurface
+        stage={stage()}
+        bodyText={body}
+        presentation={{
+          from: "alex@example.com",
+          to: "Priya <priya@example.com>",
+          subject: "Re: Checkout fix",
+          quotedLabel: "Yesterday — Priya wrote",
+          quotedBody: "Any update?",
+        }}
+        onSubmitEdit={noop}
+        onApprove={noop}
+        onReject={noop}
+        onRestore={noop}
+      />,
+    );
+    expect(screen.getByText("alex@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Re: Checkout fix")).toBeInTheDocument();
+    expect(screen.getByText("Any update?")).toBeInTheDocument();
   });
 
   it("rejected surface dims the body and offers Restore", () => {

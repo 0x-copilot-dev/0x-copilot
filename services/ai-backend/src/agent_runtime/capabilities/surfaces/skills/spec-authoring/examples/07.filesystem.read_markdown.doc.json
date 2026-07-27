@@ -1,0 +1,38 @@
+{
+  "tool_descriptor": {
+    "name": "read_markdown",
+    "description": "Read a Markdown document from the local workspace.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "path": { "type": "string" } }
+    },
+    "output_shape": {
+      "type": "object",
+      "properties": { "document": { "type": "object" } }
+    }
+  },
+  "sample_output": {
+    "document": {
+      "path": "/workspace/launch-plan.md",
+      "title": "Launch plan",
+      "language": "markdown",
+      "body": "# Launch plan\n\nOwners, milestones, and rollout checks.",
+      "modified_at": "2026-07-24T06:30:00Z"
+    }
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "doc",
+    "source": { "server": "seed:filesystem", "tool": "read_markdown" },
+    "title_path": "document.title",
+    "subtitle_path": "document.path",
+    "fields": [
+      { "label": "Content", "path": "document.body" },
+      {
+        "label": "Modified",
+        "path": "document.modified_at",
+        "format": "datetime"
+      }
+    ]
+  }
+}

@@ -123,6 +123,7 @@ import {
   type PendingDiffHandle,
   type LedgerGateWritePolicy,
   type LedgerStagedWrite,
+  type StagedMessagePresentation,
   type LedgerViewTier,
   type LedgerShapeRequestState,
 } from "../../thread-canvas";
@@ -769,6 +770,87 @@ function draftBodyText(payload: unknown): string {
     }
   }
   return "";
+}
+
+function displayContact(value: unknown): string | undefined {
+  if (typeof value === "string" && value.trim() !== "") return value;
+  if (Array.isArray(value)) {
+    const contacts = value
+      .map(displayContact)
+      .filter((item): item is string => item !== undefined);
+    return contacts.length > 0 ? contacts.join(", ") : undefined;
+  }
+  const record = plainRecord(value);
+  if (record === null) return undefined;
+  const name =
+    typeof record.name === "string" && record.name.trim() !== ""
+      ? record.name
+      : undefined;
+  const address =
+    typeof record.email === "string" && record.email.trim() !== ""
+      ? record.email
+      : typeof record.address === "string" && record.address.trim() !== ""
+        ? record.address
+        : undefined;
+  if (name !== undefined && address !== undefined) {
+    return `${name} <${address}>`;
+  }
+  return name ?? address;
+}
+
+/**
+ * Reads only presentation-safe message metadata from a hydrated surface.
+ * `presentation` is the canonical connector-neutral shape; conservative
+ * aliases keep older draft payloads useful without inventing addresses,
+ * subjects, or quoted context.
+ */
+function draftMessagePresentation(
+  payload: unknown,
+): StagedMessagePresentation | undefined {
+  const root = plainRecord(payload);
+  if (root === null) return undefined;
+  const data = plainRecord(root.data) ?? root;
+  const canonical = plainRecord(data.presentation);
+  const metadata = canonical ?? plainRecord(data.metadata) ?? data;
+  const quoted =
+    plainRecord(metadata.quoted) ??
+    plainRecord(metadata.quoted_message) ??
+    plainRecord(metadata.previous_message);
+
+  const from =
+    displayContact(metadata.from) ??
+    displayContact(metadata.sender) ??
+    displayContact(metadata.from_address);
+  const to =
+    displayContact(metadata.to) ??
+    displayContact(metadata.recipients) ??
+    displayContact(metadata.to_address);
+  const subject =
+    typeof metadata.subject === "string" && metadata.subject.trim() !== ""
+      ? metadata.subject
+      : undefined;
+  const quotedBody =
+    quoted !== null
+      ? draftBodyText(quoted)
+      : typeof metadata.quoted_body === "string"
+        ? metadata.quoted_body
+        : undefined;
+  const quotedLabel =
+    quoted !== null && typeof quoted.label === "string"
+      ? quoted.label
+      : typeof metadata.quoted_label === "string"
+        ? metadata.quoted_label
+        : undefined;
+
+  if (
+    from === undefined &&
+    to === undefined &&
+    subject === undefined &&
+    quotedBody === undefined
+  ) {
+    return undefined;
+  }
+  return { from, to, subject, quotedLabel, quotedBody };
 }
 
 // WC-P3 (AD-4): a run is still cancellable in these non-terminal states — the
@@ -2987,6 +3069,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           return (
             <TcStagedTableSurface
               stage={stage}
+              title={ledger.surfaces.get(id)?.title}
               onRowDecision={handleRowDecision}
               onApply={handleStageApply}
             />
@@ -2996,6 +3079,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           <TcStagedDraftSurface
             stage={stage}
             bodyText={draftBodyText(hydration.stateFor(id))}
+            presentation={draftMessagePresentation(hydration.stateFor(id))}
             onSubmitEdit={handleStageEdit}
             onApprove={handleStageApprove}
             onReject={handleStageReject}
@@ -3007,6 +3091,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     },
     [
       stageBySurfaceId,
+      ledger,
       hydration,
       displayedCanvasLifecycle,
       session.retry,

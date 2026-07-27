@@ -79,7 +79,7 @@ describe("TcApproveBar", () => {
       "Exactly this draft — rev 2 — is what sends.",
     );
     expect(screen.getByTestId("tc-approve-bar-approve")).toHaveTextContent(
-      "Approve rev 2",
+      "Approve & send",
     );
   });
 
@@ -130,6 +130,27 @@ describe("TcApproveBar", () => {
     expect(screen.getByTestId("tc-approve-bar-approve")).toBeDisabled();
     expect(screen.getByTestId("tc-approve-bar-approve")).toHaveTextContent(
       "Approved",
+    );
+  });
+
+  it("stays visible but suspends effect actions while an edit is active", () => {
+    render(
+      <TcApproveBar
+        stage={stage()}
+        onApprove={vi.fn()}
+        onReject={vi.fn()}
+        onRestore={vi.fn()}
+        suspended
+      />,
+    );
+    expect(screen.getByTestId("tc-approve-bar")).toHaveAttribute(
+      "data-suspended",
+      "true",
+    );
+    expect(screen.getByTestId("tc-approve-bar-approve")).toBeDisabled();
+    expect(screen.getByTestId("tc-approve-bar-reject")).not.toBeDisabled();
+    expect(screen.getByTestId("tc-approve-bar-copy")).toHaveTextContent(
+      "Exactly this draft — rev 1 — is what sends.",
     );
   });
 });

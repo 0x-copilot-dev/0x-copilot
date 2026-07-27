@@ -294,7 +294,18 @@ for (const label of labels) {
     if (!c) continue;
     // A declared, property-scoped divergence is intent, not a defect — file it
     // as INFO but keep the measured delta in the detail so it stays auditable.
-    const reason = expect[prop];
+    // Width is intrinsically copy-dependent for inline/flex content. When the
+    // two fixtures intentionally carry different runtime text, report the copy
+    // and its resulting width together as INFO instead of double-counting the
+    // same dynamic-data difference as a visual defect. Fixed-size/layout width
+    // comparisons remain fully scored whenever the copy matches.
+    const dynamicCopyWidth =
+      prop === "width" && d.text != null && l.text != null && d.text !== l.text;
+    const reason =
+      expect[prop] ||
+      (dynamicCopyWidth
+        ? "intrinsic width follows dynamic runtime copy"
+        : null);
     findings.push({
       label,
       group,
@@ -350,7 +361,7 @@ for (const sev of ["high", "medium", "low", "info"]) {
   md += `\n`;
 }
 
-writeFileSync(outPath, md);
+writeFileSync(outPath, `${md.trimEnd()}\n`);
 writeFileSync(
   outPath.replace(/\.md$/, ".json"),
   JSON.stringify({ state, counts, findings }, null, 2),

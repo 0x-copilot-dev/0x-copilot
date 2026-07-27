@@ -940,9 +940,9 @@ function applyWriteApplied(
 }
 
 /** Fold a row-set `write.applied` (PRD-D3) — only legitimate from apply_pending.
- *  `applied` ⇒ applied; `partial` ⇒ partially_applied (both terminal, per-row
- *  outcomes from `row_results`); `failed` ⇒ back to `staged` (apply consumed,
- *  stances intact); any other current state ⇒ `corrupt` (fail-closed). */
+ *  `applied` ⇒ applied; `partial` ⇒ partially_applied. A failed first attempt
+ *  returns to staged; a failed recovery stays partially_applied because rows
+ *  already applied by a prior attempt are immutable. */
 function applyRowsetTerminal(
   acc: StageAccumulator,
   result: unknown,
@@ -954,18 +954,22 @@ function applyRowsetTerminal(
       typeof result === "string" ? (result as LedgerApplyResult) : null;
     return;
   }
+  // Fold outcomes before selecting the aggregate state so an all-failed retry
+  // still observes rows applied by the earlier partial attempt.
+  foldRowResults(acc, payload.row_results);
   if (result === "applied") {
     acc.status = "applied";
     acc.applyResult = "applied";
-    foldRowResults(acc, payload.row_results);
   } else if (result === "partial") {
     acc.status = "partially_applied";
     acc.applyResult = "partial";
-    foldRowResults(acc, payload.row_results);
   } else if (result === "failed") {
-    acc.status = "staged";
+    const hasApplied = [...acc.rowApplyOutcomes.values()].some(
+      (outcome) => outcome === "applied",
+    );
+    acc.status = hasApplied ? "partially_applied" : "staged";
     acc.approvedRev = null;
-    acc.applyResult = "failed";
+    acc.applyResult = hasApplied ? "partial" : "failed";
   } else {
     acc.status = "corrupt";
     acc.applyResult =

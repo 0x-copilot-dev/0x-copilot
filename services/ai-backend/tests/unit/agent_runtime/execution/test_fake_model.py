@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from agent_runtime.execution.contracts import RuntimeErrorCode
@@ -15,12 +17,13 @@ from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
 
 
-def _keyless_settings() -> RuntimeSettings:
+def _keyless_settings(tmp_path: Path) -> RuntimeSettings:
     return RuntimeSettings.load(
+        env_file=tmp_path / "missing.env",
         environ={
             "RUNTIME_DEFAULT_PROVIDER": "openai",
             "RUNTIME_DEFAULT_MODEL": "gpt-5.4-mini",
-        }
+        },
     )
 
 
@@ -65,21 +68,29 @@ class TestFakeModelStreaming:
 
 
 class TestBuildChatModelFakeBranch:
-    def test_returns_fake_when_enabled(self, monkeypatch) -> None:
+    def test_returns_fake_when_enabled(self, monkeypatch, tmp_path: Path) -> None:
         monkeypatch.setenv(FakeModelProvider.ENV_FLAG, "1")
-        config = ModelConfigResolver(_keyless_settings()).resolve()
+        config = ModelConfigResolver(_keyless_settings(tmp_path)).resolve()
         model = build_chat_model(config)
         assert isinstance(model, DeterministicFakeChatModel)
 
 
 class TestCredentialGateBypass:
-    def test_gate_still_fires_without_key_and_without_fake(self, monkeypatch) -> None:
+    def test_gate_still_fires_without_key_and_without_fake(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
         monkeypatch.delenv(FakeModelProvider.ENV_FLAG, raising=False)
         with pytest.raises(AgentRuntimeError) as excinfo:
-            ModelConfigResolver(_keyless_settings()).resolve()
+            ModelConfigResolver(_keyless_settings(tmp_path)).resolve()
         assert excinfo.value.code is RuntimeErrorCode.CONFIGURATION_ERROR
 
-    def test_gate_bypassed_in_fake_mode_without_key(self, monkeypatch) -> None:
+    def test_gate_bypassed_in_fake_mode_without_key(
+        self,
+        monkeypatch,
+        tmp_path: Path,
+    ) -> None:
         monkeypatch.setenv(FakeModelProvider.ENV_FLAG, "1")
-        config = ModelConfigResolver(_keyless_settings()).resolve()
+        config = ModelConfigResolver(_keyless_settings(tmp_path)).resolve()
         assert config.provider == "openai"

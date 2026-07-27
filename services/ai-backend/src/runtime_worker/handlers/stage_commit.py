@@ -270,14 +270,19 @@ class RuntimeStageCommitHandler:
         if not apply_ok:
             return False
         by_key = {row.row_key: row for row in state.rows or ()}
+        prior_outcomes: set[str | None] = set()
         for row_key in commanded:
             row = by_key.get(row_key)
-            # Every commanded row must fold will_apply and have NO prior outcome.
+            # Every commanded row must still be approved. A fresh apply covers
+            # rows with no outcome; a recovery apply covers rows whose prior
+            # outcome is failed. Never mix the two modes, and never redispatch
+            # a row that already applied.
             if row is None or row.stance is not RowStance.WILL_APPLY:
                 return False
-            if row.apply_outcome is not None:
+            if row.apply_outcome not in (None, Values.ROW_OUTCOME_FAILED):
                 return False
-        return True
+            prior_outcomes.add(row.apply_outcome)
+        return len(prior_outcomes) == 1
 
     def _build_rowset_request(
         self,

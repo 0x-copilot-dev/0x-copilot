@@ -196,6 +196,51 @@ describe("projectLedger — bulk row-sets (PRD-D3)", () => {
     expect(s.rows!.find((r) => r.rowKey === "b")!.applyOutcome).toBe("failed");
   });
 
+  it("folds a successful retry of the failed subset to applied", () => {
+    seq = 0;
+    const p = projectLedger([
+      staged(2),
+      rowsetRev(["a", "b"]),
+      applyDecision(["a", "b"]),
+      applied(
+        "partial",
+        ["a", "b"],
+        [
+          { row_key: "a", outcome: "applied" },
+          { row_key: "b", outcome: "failed" },
+        ],
+      ),
+      applyDecision(["b"]),
+      applied("applied", ["b"], [{ row_key: "b", outcome: "applied" }]),
+    ]);
+    const s = p.stages.get(STAGE)!;
+    expect(s.status).toBe("applied");
+    expect(s.rowCounts).toMatchObject({ applied: 2, failed: 0 });
+  });
+
+  it("keeps a failed retry partial when an earlier row already applied", () => {
+    seq = 0;
+    const p = projectLedger([
+      staged(2),
+      rowsetRev(["a", "b"]),
+      applyDecision(["a", "b"]),
+      applied(
+        "partial",
+        ["a", "b"],
+        [
+          { row_key: "a", outcome: "applied" },
+          { row_key: "b", outcome: "failed" },
+        ],
+      ),
+      applyDecision(["b"]),
+      applied("failed", ["b"], [{ row_key: "b", outcome: "failed" }]),
+    ]);
+    const s = p.stages.get(STAGE)!;
+    expect(s.status).toBe("partially_applied");
+    expect(s.applyResult).toBe("partial");
+    expect(s.rowCounts).toMatchObject({ applied: 1, failed: 1 });
+  });
+
   it("returns to staged (apply consumed) on an all-failed terminal", () => {
     seq = 0;
     const p = projectLedger([

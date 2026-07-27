@@ -12,9 +12,7 @@
 // (design-system recipes + tokens); no raw font-size / letter-spacing.
 
 import { useEffect, useState } from "react";
-import type { CSSProperties, ReactElement, ReactNode } from "react";
-
-import { Badge } from "@0x-copilot/design-system";
+import type { ReactElement, ReactNode } from "react";
 
 import { TcApproveBar } from "./TcApproveBar";
 import type {
@@ -22,10 +20,20 @@ import type {
   LedgerStagedWrite,
 } from "./ledgerProjection";
 
+export interface StagedMessagePresentation {
+  readonly from?: string;
+  readonly to?: string;
+  readonly subject?: string;
+  readonly quotedLabel?: string;
+  readonly quotedBody?: string;
+}
+
 export interface TcStagedDraftSurfaceProps {
   readonly stage: LedgerStagedWrite;
   /** Hydrated body text of the latest revision (host reads the draft snapshot). */
   readonly bodyText: string;
+  /** Safe, connector-neutral display metadata; absent fields are not invented. */
+  readonly presentation?: StagedMessagePresentation;
   /** Submit a free-form full-body edit against `baseRev` (host POSTs `/revisions`). */
   readonly onSubmitEdit: (
     stageId: string,
@@ -37,62 +45,6 @@ export interface TcStagedDraftSurfaceProps {
   readonly onRestore: (stageId: string) => void;
   readonly busy?: boolean;
 }
-
-const rootStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "var(--space-sm)",
-};
-
-const headerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-sm)",
-  flexWrap: "wrap",
-  padding: "var(--space-md) var(--space-md) 0",
-};
-
-const spacerStyle: CSSProperties = { flex: "1 1 auto" };
-
-const bodyStyle: CSSProperties = {
-  whiteSpace: "pre-wrap",
-  padding: "0 var(--space-md)",
-  margin: 0,
-};
-
-const rejectedBodyStyle: CSSProperties = { ...bodyStyle, opacity: 0.5 };
-
-const editAreaStyle: CSSProperties = {
-  width: "100%",
-  minHeight: 120,
-  resize: "vertical",
-  margin: "0 var(--space-md)",
-};
-
-const editActionsStyle: CSSProperties = {
-  display: "flex",
-  gap: "var(--space-sm)",
-  padding: "0 var(--space-md)",
-};
-
-const footerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-sm)",
-  padding: "6px var(--space-md)",
-  borderTop: "1px solid var(--color-border-subtle)",
-};
-
-const spanMarkStyle: CSSProperties = {
-  background: "var(--color-highlight, rgba(255, 214, 0, 0.28))",
-  borderRadius: 2,
-};
-
-const failedWarningStyle: CSSProperties = {
-  padding: "0 var(--space-md)",
-  margin: 0,
-  color: "var(--color-text-warning, var(--color-text-secondary))",
-};
 
 /** Split `text` into segments, wrapping only the user-authored spans in a
  *  highlighted mark ("edited by you"). Agent regions stay plain. Spans are
@@ -123,7 +75,7 @@ export function renderAuthorshipSpans(
     out.push(
       <mark
         key={key++}
-        style={spanMarkStyle}
+        className="tc-review-draft__user-edit"
         data-testid="tc-staged-edit-span"
         title="edited by you"
       >
@@ -138,9 +90,46 @@ export function renderAuthorshipSpans(
   return out;
 }
 
+function paragraphRanges(text: string): readonly {
+  readonly text: string;
+  readonly start: number;
+}[] {
+  const ranges: { text: string; start: number }[] = [];
+  const separator = /\n{2,}/g;
+  let start = 0;
+  for (const match of text.matchAll(separator)) {
+    const end = match.index ?? start;
+    ranges.push({ text: text.slice(start, end), start });
+    start = end + match[0].length;
+  }
+  ranges.push({ text: text.slice(start), start });
+  return ranges.filter((range) => range.text !== "");
+}
+
+function spansForParagraph(
+  spans: readonly LedgerAuthorshipSpan[],
+  start: number,
+  length: number,
+): readonly LedgerAuthorshipSpan[] {
+  const end = start + length;
+  return spans.flatMap((span) => {
+    const overlapStart = Math.max(span.start, start);
+    const overlapEnd = Math.min(span.end, end);
+    if (overlapEnd <= overlapStart) return [];
+    return [
+      {
+        start: overlapStart - start,
+        end: overlapEnd - start,
+        author: span.author,
+      },
+    ];
+  });
+}
+
 export function TcStagedDraftSurface({
   stage,
   bodyText,
+  presentation,
   onSubmitEdit,
   onApprove,
   onReject,
@@ -166,121 +155,193 @@ export function TcStagedDraftSurface({
   const latest = stage.latestRevision;
   const spans = latest?.authorshipSpans ?? [];
   const editable = stage.status === "staged" && !applyFailed && !busy;
+  const hasMessageMetadata =
+    presentation?.from !== undefined ||
+    presentation?.to !== undefined ||
+    presentation?.subject !== undefined;
 
   return (
-    <div className="ui-card" style={rootStyle} data-testid="tc-staged-draft">
-      <div style={headerStyle}>
-        <span className="ui-section-label" data-testid="tc-staged-draft-title">
-          {stage.target.connector !== "" ? stage.target.connector : "Draft"}
-        </span>
-        <Badge tone="warning" data-testid="tc-staged-draft-rev">
-          {`rev ${stage.latestRev}`}
-        </Badge>
-        <span style={spacerStyle} aria-hidden="true" />
-        {editable && !editing ? (
-          <button
-            type="button"
-            className="ui-button"
-            onClick={() => setEditing(true)}
-            data-testid="tc-staged-draft-edit"
-          >
-            Edit
-          </button>
-        ) : null}
+    <div
+      className="tc-review-surface tc-review-surface--draft"
+      data-testid="tc-staged-draft"
+      data-state={stage.status}
+    >
+      <div className="tc-review-surface__scroll">
+        <div
+          className={`tc-review-draft__frame${
+            isRejected ? " tc-review-draft__frame--rejected" : ""
+          }`}
+        >
+          <article className="tc-review-draft__message">
+            {hasMessageMetadata ? (
+              <header className="tc-review-draft__metadata">
+                {presentation?.from !== undefined ? (
+                  <div className="tc-review-draft__metadata-row">
+                    <span className="tc-review-draft__metadata-label">
+                      From
+                    </span>
+                    <span>{presentation.from}</span>
+                  </div>
+                ) : null}
+                {presentation?.to !== undefined ? (
+                  <div className="tc-review-draft__metadata-row">
+                    <span className="tc-review-draft__metadata-label">To</span>
+                    <span>{presentation.to}</span>
+                  </div>
+                ) : null}
+                {presentation?.subject !== undefined ? (
+                  <div className="tc-review-draft__metadata-row">
+                    <span className="tc-review-draft__metadata-label">
+                      Subject
+                    </span>
+                    <strong>{presentation.subject}</strong>
+                  </div>
+                ) : null}
+              </header>
+            ) : null}
+
+            {presentation?.quotedBody !== undefined ? (
+              <blockquote className="tc-review-draft__quote">
+                {presentation.quotedLabel !== undefined ? (
+                  <cite>{presentation.quotedLabel}</cite>
+                ) : null}
+                <p>{presentation.quotedBody}</p>
+              </blockquote>
+            ) : null}
+
+            <div className="tc-review-draft__content">
+              <div className="tc-review-draft__header">
+                <span
+                  className="tc-review-draft__revision"
+                  data-testid="tc-staged-draft-rev"
+                >
+                  {`DRAFT · rev ${stage.latestRev}`}
+                </span>
+                <span className="tc-review-draft__authorship">
+                  <span aria-hidden="true" />
+                  0xCopilot wrote
+                </span>
+              </div>
+
+              {editing ? (
+                <div className="tc-review-draft__editor-wrap">
+                  <textarea
+                    className="ui-input tc-review-draft__editor"
+                    value={draft}
+                    onChange={(e) => setDraft(e.target.value)}
+                    disabled={busy}
+                    data-testid="tc-staged-draft-editor"
+                  />
+                  <div className="tc-review-draft__editor-actions">
+                    <button
+                      type="button"
+                      className="ui-button ui-button--sm ui-button--ghost"
+                      disabled={busy}
+                      onClick={() => {
+                        setDraft(bodyText);
+                        setEditing(false);
+                      }}
+                      data-testid="tc-staged-draft-cancel"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      className="ui-button ui-button--sm"
+                      disabled={busy || draft === bodyText}
+                      onClick={() =>
+                        onSubmitEdit(stage.stageId, stage.latestRev, draft)
+                      }
+                      data-testid="tc-staged-draft-save"
+                    >
+                      Done editing
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="tc-review-draft__body-group">
+                  {paragraphRanges(bodyText).map((paragraph, index, all) => (
+                    <p
+                      key={`${paragraph.start}-${index}`}
+                      className={`tc-review-draft__body${
+                        index === all.length - 1
+                          ? " tc-review-draft__body--last"
+                          : ""
+                      }`}
+                      data-testid={
+                        index === 0 ? "tc-staged-draft-body" : undefined
+                      }
+                    >
+                      {renderAuthorshipSpans(
+                        paragraph.text,
+                        spansForParagraph(
+                          spans,
+                          paragraph.start,
+                          paragraph.text.length,
+                        ),
+                      )}
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              {applyFailed ? (
+                <p
+                  className="tc-review-draft__warning"
+                  data-testid="tc-staged-draft-failed"
+                  role="status"
+                >
+                  {`Apply refused — nothing was sent${
+                    stage.applyFailureCode ? ` (${stage.applyFailureCode})` : ""
+                  }.`}
+                </p>
+              ) : null}
+            </div>
+          </article>
+        </div>
       </div>
 
-      {editing ? (
-        <>
-          <textarea
-            className="ui-input"
-            style={editAreaStyle}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            disabled={busy}
-            data-testid="tc-staged-draft-editor"
-          />
-          <div style={editActionsStyle}>
-            <button
-              type="button"
-              className="ui-button ui-button--primary"
-              disabled={busy || draft === bodyText}
-              onClick={() =>
-                onSubmitEdit(stage.stageId, stage.latestRev, draft)
-              }
-              data-testid="tc-staged-draft-save"
-            >
-              Save as rev {stage.latestRev + 1}
-            </button>
-            <button
-              type="button"
-              className="ui-button"
-              disabled={busy}
-              onClick={() => {
-                setDraft(bodyText);
-                setEditing(false);
-              }}
-              data-testid="tc-staged-draft-cancel"
-            >
-              Cancel
-            </button>
-          </div>
-        </>
-      ) : (
-        <p
-          className="ui-body"
-          style={isRejected ? rejectedBodyStyle : bodyStyle}
-          data-testid="tc-staged-draft-body"
-        >
-          {renderAuthorshipSpans(bodyText, spans)}
-        </p>
-      )}
-
-      {applyFailed ? (
-        <p
-          className="ui-caption"
-          style={failedWarningStyle}
-          data-testid="tc-staged-draft-failed"
-          role="status"
-        >
-          {`Apply refused — nothing was sent${
-            stage.applyFailureCode ? ` (${stage.applyFailureCode})` : ""
-          }.`}
-        </p>
-      ) : null}
-
-      <div style={footerStyle}>
-        <Badge
-          tone={isApplied ? "success" : "warning"}
-          data-testid="tc-staged-draft-access"
-        >
-          {isApplied ? "write · sent" : "write · held"}
-        </Badge>
-        <span className="ui-mono-caps" data-testid="tc-staged-draft-ledger-id">
-          {stage.ledgerId}
-        </span>
-        <span style={spacerStyle} aria-hidden="true" />
-        {isApplied ? (
-          <span className="ui-caption" data-testid="tc-staged-draft-applied">
-            Sent — exactly the revision you approved.
-          </span>
-        ) : isApproved ? (
-          <span className="ui-caption" data-testid="tc-staged-draft-decided">
-            Approved — held for send.
-          </span>
-        ) : null}
-      </div>
-
-      {/* Terminal `applied` drops the approve bar (nothing left to decide); a
-          failed apply keeps it so a fresh approve can retry. */}
-      {!editing && !isApplied ? (
+      {/* The rev-pinned safety context remains mounted during editing. Its
+          effect actions are suspended until the edit is saved or cancelled. */}
+      {!isApplied ? (
         <TcApproveBar
           stage={stage}
           onApprove={onApprove}
           onReject={onReject}
           onRestore={onRestore}
+          onEdit={editable ? () => setEditing(true) : undefined}
           busy={busy}
+          suspended={editing}
         />
       ) : null}
+
+      <footer className="tc-review-provenance">
+        <span className="tc-review-provenance__kind">Message</span>
+        <span
+          className="tc-review-provenance__detail"
+          data-testid="tc-staged-draft-access"
+        >
+          {`${stage.target.connector}.${stage.target.op} · ${
+            isApplied ? "write · sent" : "write · held for approval"
+          } · `}
+          <span data-testid="tc-staged-draft-ledger-id">{stage.ledgerId}</span>
+        </span>
+        {isApplied ? (
+          <span
+            className="tc-review-provenance__result"
+            data-testid="tc-staged-draft-applied"
+          >
+            Sent — exactly the revision you approved.
+          </span>
+        ) : isApproved ? (
+          <span
+            className="tc-review-provenance__result"
+            data-testid="tc-staged-draft-decided"
+          >
+            Approved — held for send.
+          </span>
+        ) : null}
+      </footer>
     </div>
   );
 }

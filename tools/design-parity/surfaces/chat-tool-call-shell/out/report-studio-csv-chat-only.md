@@ -5,7 +5,7 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/chat-tool-call-shell/out/design-studio-csv-chat-only.json`
 - Live: `surfaces/chat-tool-call-shell/out/live-studio-csv-chat-only.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 1 · 🟡 LOW 41 · ⚪ INFO 9
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 1 · 🟡 LOW 40 · ⚪ INFO 9
 
 ## 🟠 MEDIUM (1)
 
@@ -13,7 +13,7 @@ Design baseline (source of truth) vs live app, by computed style.
 |---|---|---|---|
 | `shell.mode-switcher` | Cockpit shell | margin | 0px 0px 0px 982.969px → 0px 0px 0px 1043.97px |
 
-## 🟡 LOW (41)
+## 🟡 LOW (40)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
@@ -52,7 +52,6 @@ Design baseline (source of truth) vs live app, by computed style.
 | `tool.csv.header` | Local CSV read | width | 548.891px → 549px |
 | `tool.csv.header` | Local CSV read | tag | <div> → <summary> (semantic/default-style change) |
 | `csv.summary-card` | Local CSV read | transition | all → none |
-| `csv.summary-card` | Local CSV read | width | 90.0156px → 90px |
 | `csv.chat-only-canvas` | Local CSV read | lineHeight | 19.5px → normal |
 | `csv.chat-only-canvas` | Local CSV read | transition | all → none |
 | `csv.chat-only-canvas` | Local CSV read | width | 613.109px → 613px |

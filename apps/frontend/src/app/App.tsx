@@ -13,6 +13,9 @@ import "../styles.css";
 import "@0x-copilot/chat-surface/src/subagents/subagents.css";
 // Consent cards — same stylesheet desktop loads, so the two hosts cannot drift.
 import "@0x-copilot/chat-surface/src/approvals/approvals.css";
+// Staged message/table review surfaces share one semantic visual grammar with
+// desktop; host-private CSS must not restyle their approval boundaries.
+import "@0x-copilot/chat-surface/src/thread-canvas/review-surfaces.css";
 import { decideApproval } from "../api/agentApi";
 import type { RequestIdentity } from "../api/config";
 import { completeMcpOAuth } from "../api/mcpApi";

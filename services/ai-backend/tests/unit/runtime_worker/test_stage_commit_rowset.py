@@ -262,6 +262,58 @@ class TestRowsetDispatch:
         assert state.row_counts.applied == 2
         assert state.row_counts.failed == 1
 
+    async def test_retry_dispatches_only_failed_rows_and_reaches_applied(self) -> None:
+        h = Harness(connector=_SpyConnector(fail_keys={"row1"}))
+        state = await h.stage(_rows(3))
+        await h.apply(state.stage_id, 1, ["row0", "row1", "row2"])
+        await h.handler.handle(h.command)
+        assert h.fold().status is StagedWriteStatus.PARTIALLY_APPLIED
+
+        # The connector recovers. The fresh decision sequence creates fresh
+        # idempotency keys, but only the failed row is eligible for dispatch.
+        h.connector._fail.clear()
+        await h.apply(state.stage_id, 1, ["row1"])
+        retry_command = h.command
+        assert retry_command.row_keys == ("row1",)
+        await h.handler.handle(retry_command)
+
+        assert [call.row_key for call in h.connector.execute_calls] == [
+            "row0",
+            "row1",
+            "row2",
+            "row1",
+        ]
+        folded = h.fold()
+        assert folded.status is StagedWriteStatus.APPLIED
+        assert folded.row_counts.applied == 3
+        assert folded.row_counts.failed == 0
+        assert [event.payload["result"] for event in h.write_applied_events()] == [
+            "partial",
+            "applied",
+        ]
+
+    async def test_failed_retry_stays_partial_and_never_resends_applied_rows(
+        self,
+    ) -> None:
+        h = Harness(connector=_SpyConnector(fail_keys={"row1"}))
+        state = await h.stage(_rows(2))
+        await h.apply(state.stage_id, 1, ["row0", "row1"])
+        await h.handler.handle(h.command)
+
+        await h.apply(state.stage_id, 1, ["row1"])
+        await h.handler.handle(h.command)
+
+        assert [call.row_key for call in h.connector.execute_calls] == [
+            "row0",
+            "row1",
+            "row1",
+        ]
+        folded = h.fold()
+        assert folded.status is StagedWriteStatus.PARTIALLY_APPLIED
+        assert folded.apply_result == "partial"
+        assert folded.row_counts.applied == 1
+        assert folded.row_counts.failed == 1
+
     async def test_all_rows_failed_yields_failed_and_stage_returns_to_staged(
         self,
     ) -> None:

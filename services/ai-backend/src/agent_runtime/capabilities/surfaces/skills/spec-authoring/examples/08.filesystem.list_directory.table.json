@@ -1,0 +1,53 @@
+{
+  "tool_descriptor": {
+    "name": "list_directory",
+    "description": "List files and folders in a local workspace directory.",
+    "input_schema": {
+      "type": "object",
+      "properties": { "path": { "type": "string" } }
+    },
+    "output_shape": {
+      "type": "object",
+      "properties": { "entries": { "type": "array" } }
+    }
+  },
+  "sample_output": {
+    "directory": { "path": "/workspace/research" },
+    "entries": [
+      {
+        "name": "interviews.md",
+        "kind": "file",
+        "size_bytes": 18420,
+        "modified_at": "2026-07-24T06:30:00Z"
+      },
+      {
+        "name": "raw-notes",
+        "kind": "directory",
+        "size_bytes": 4096,
+        "modified_at": "2026-07-23T14:10:00Z"
+      }
+    ]
+  },
+  "spec": {
+    "spec_version": 1,
+    "archetype": "table",
+    "source": { "server": "seed:filesystem", "tool": "list_directory" },
+    "title_path": "directory.path",
+    "items_path": "entries",
+    "columns": [
+      { "label": "Name", "path": "name", "align": "start" },
+      { "label": "Kind", "path": "kind", "format": "badge" },
+      {
+        "label": "Size",
+        "path": "size_bytes",
+        "format": "number",
+        "align": "end"
+      },
+      {
+        "label": "Modified",
+        "path": "modified_at",
+        "format": "datetime"
+      }
+    ]
+  }
+}

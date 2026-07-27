@@ -47,6 +47,30 @@ DRAFT_APPROVED → send MCP tool → DRAFT_SENT
 DRAFT_REJECTED → discard / revise
 ```
 
+## Generative Surfaces v2 staging
+
+Studio mode uses the v2 staged-write ledger when `SURFACES_V2` is enabled.
+Staging and applying are separate boundaries:
+
+1. `write.staged` and `revision.added` capture reviewable content.
+2. `decision.recorded` captures the exact revision or row keys approved.
+3. A durable commit command re-folds the ledger before any external effect.
+4. `write.applied` records the connector outcome.
+
+Single-artifact drafts render the message/document content and approval controls
+from the same staged state. The SurfaceSpec maps content only; the shared
+renderer owns the approval bar, edit mode, diff treatment, provenance, spacing,
+and typography.
+
+For row-set writes, a partial apply is recoverable without resending successful
+rows. The only legal retry scope is the exact set of rows whose latest outcome
+is `failed`. Already-applied and held rows are rejected at both the staging
+service and worker gates. A retry emits a fresh decision and durable commit
+command, so replay and audit history remain complete.
+
+The legacy draft flow below remains the compatibility path when v2 staging is
+not active.
+
 ---
 
 ## `DraftBackend`

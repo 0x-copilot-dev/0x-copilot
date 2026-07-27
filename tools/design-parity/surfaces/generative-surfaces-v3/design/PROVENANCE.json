@@ -1,0 +1,10 @@
+{
+  "source": "user-supplied Downloads/Copilot project folder copy",
+  "generated_by": "prepare-generative-surfaces-v3-reference.mjs",
+  "files": {
+    "reference.dc.html": "8f72d0e0a2f8cc25ae3311083a451a0be7ac046bad4e497077451e65b64f5e86",
+    "support.js": "c60c49083997f51a592df118c0068475337afd20b8cfd8e1cd9d5eb0c7e254f6",
+    "copilot-v3.css": "8fa1c5037da7ba965a3bb3782b0ecd9e482eb80242d01b6f006c4f2d18d70848",
+    "copilot.css": "ec9299c38cfd092e946c919627fd19d6e2a11d4597066879d22a21d5037c107b"
+  }
+}

@@ -25,6 +25,8 @@ import "@0x-copilot/chat-surface/src/subagents/subagents.css";
 // cockpit's approval card rendered as a bare frame. Shipping them from the
 // package is what keeps both hosts on one copy.
 import "@0x-copilot/chat-surface/src/approvals/approvals.css";
+// Staged message/table review surfaces — shared verbatim with the web host.
+import "@0x-copilot/chat-surface/src/thread-canvas/review-surfaces.css";
 import "./desktop.css";
 
 import {

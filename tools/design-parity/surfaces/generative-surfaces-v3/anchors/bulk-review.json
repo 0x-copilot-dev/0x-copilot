@@ -1,0 +1,63 @@
+{
+  "surface": "generative-surfaces-v3",
+  "state": "bulk-review",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "Supplied v3 per-row bulk review compared with the real staged-table surface. No divergences are waived.",
+  "elements": [
+    {
+      "label": "bulk.root",
+      "group": "Bulk review",
+      "design": "[data-parity-anchor=\"surface-root\"]",
+      "live": "[data-testid=\"tc-staged-table\"]"
+    },
+    {
+      "label": "bulk.title",
+      "group": "Bulk review",
+      "design": "[data-parity-anchor=\"bulk-title\"]",
+      "live": "[data-testid=\"tc-staged-table-connector\"]"
+    },
+    {
+      "label": "bulk.status",
+      "group": "Bulk review",
+      "design": "[data-parity-anchor=\"bulk-status\"]",
+      "live": "[data-testid=\"tc-staged-table-access\"]"
+    },
+    {
+      "label": "bulk.row",
+      "group": "Row diff",
+      "design": "[data-parity-anchor=\"bulk-row\"]",
+      "live": "[data-testid=\"tc-table-row\"]"
+    },
+    {
+      "label": "bulk.row-change",
+      "group": "Row diff",
+      "design": "[data-parity-anchor=\"bulk-row-change\"]",
+      "live": "[data-testid=\"tc-table-row-change-value\"]"
+    },
+    {
+      "label": "bulk.row-hold",
+      "group": "Row decision",
+      "design": "[data-parity-anchor=\"bulk-row-hold\"]",
+      "live": "[data-testid=\"tc-table-row-hold\"]"
+    },
+    {
+      "label": "bulk.held-reason",
+      "group": "Row decision",
+      "design": "[data-parity-anchor=\"bulk-held-reason\"]",
+      "live": "[data-testid=\"tc-table-row-reason\"]"
+    },
+    {
+      "label": "bulk.review-copy",
+      "group": "Apply",
+      "design": "[data-parity-anchor=\"bulk-review-copy\"]",
+      "live": "[data-testid=\"tc-staged-table-counts\"]"
+    },
+    {
+      "label": "bulk.action",
+      "group": "Apply",
+      "design": "[data-parity-anchor=\"bulk-action\"]",
+      "live": "[data-testid=\"tc-bulk-apply\"]"
+    }
+  ]
+}
