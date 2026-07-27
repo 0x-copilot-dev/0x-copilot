@@ -152,3 +152,67 @@
   line-height: 1.6;
   padding: 40px 20px;
 }
+
+/* Canonical Run Sources rail.
+ *
+ * This is the v3 `.side-body` / sources-panel composition expressed through
+ * the shared Row / RowList / SectionHeader primitives. The semantic class owns
+ * only the rail-specific density: 13x14 panel padding, 12px vertical rhythm,
+ * 9x11 compact rows, and the mono 11px source name. Every source kind shares
+ * this recipe; no connector- or artifact-specific selectors live here. */
+.atlas-sources-panel {
+  flex: 1 1 auto;
+  gap: 12px;
+  line-height: var(--line-height-base);
+  padding: 13px 14px;
+}
+
+.atlas-sources-panel--empty {
+  align-items: stretch;
+  justify-content: flex-start;
+  text-align: center;
+}
+
+.atlas-sources-panel__note {
+  color: var(--color-text-muted);
+  font-size: var(--font-size-11);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.atlas-sources-panel__empty {
+  align-items: center;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 9px;
+  color: var(--color-text-subtle);
+  display: flex;
+  font-size: var(--font-size-xs);
+  justify-content: center;
+  margin: 0;
+  padding: 13px;
+}
+
+.atlas-sources-panel__status {
+  margin: 0;
+}
+
+.atlas-sources-panel__group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.atlas-sources-panel__group-header {
+  color: var(--color-text-subtle);
+  line-height: var(--line-height-base);
+  margin: 6px 0 -3px;
+}
+
+.atlas-sources-panel__row-title {
+  align-items: center;
+  display: flex;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-11);
+  gap: var(--space-sm);
+  line-height: var(--line-height-base);
+}
