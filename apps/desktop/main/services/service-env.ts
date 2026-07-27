@@ -135,6 +135,54 @@ export function aiFileStoreV1Root(userDataDir: string): string {
   return join(userDataDir, ...AI_FILE_STORE_V1_SEGMENTS);
 }
 
+/**
+ * Resolve the release posture for Studio's artifact and local-workspace
+ * lifecycle. These are *supervisor-owned* settings: the desktop process may
+ * take an explicit operator kill-switch from its launch environment, but only
+ * the ai-backend child receives the resolved values. They must never join the
+ * global passthrough allowlist, which is shared by all three services.
+ *
+ * Desktop ships the review-first artifact lane on by default. An explicit
+ * falsey artifact setting is the rollback path. Workspace effects additionally
+ * require the main-owned workspace broker; without it the agent can still make
+ * reviewable artifacts but cannot stage a host filesystem mutation.
+ */
+export function resolveDesktopStudioRuntimeEnv(
+  processEnv: Readonly<Record<string, string | undefined>>,
+  opts: { readonly workspaceBrokerEnabled: boolean },
+): Readonly<Record<string, string>> {
+  const readBoolean = (name: string, defaultValue: boolean): boolean => {
+    const raw = processEnv[name]?.trim().toLowerCase();
+    if (raw === undefined || raw === "") return defaultValue;
+    return new Set(["1", "true", "yes", "on", "enabled"]).has(raw);
+  };
+  const readMode = (name: string, defaultValue: string): string => {
+    const raw = processEnv[name]?.trim().toLowerCase();
+    return raw === undefined || raw === "" ? defaultValue : raw;
+  };
+
+  const artifactEffects = readBoolean("ARTIFACT_EFFECTS_V2", true);
+  // Never pass an invalid drafts-without-repository combination to the child.
+  // `ARTIFACT_EFFECTS_V2=false` is the single explicit rollback switch.
+  const artifactDrafts =
+    artifactEffects && readBoolean("ARTIFACT_DRAFTS_V2", true);
+  const operationGateway = readMode("OPERATION_GATEWAY_MODE", "enforce");
+  const workspaceEffect = readMode(
+    "WORKSPACE_EFFECT_MODE",
+    opts.workspaceBrokerEnabled && operationGateway === "enforce"
+      ? "enforce"
+      : "off",
+  );
+
+  return Object.freeze({
+    SURFACES_V2: readBoolean("SURFACES_V2", true) ? "true" : "false",
+    ARTIFACT_EFFECTS_V2: artifactEffects ? "true" : "false",
+    ARTIFACT_DRAFTS_V2: artifactDrafts ? "true" : "false",
+    OPERATION_GATEWAY_MODE: operationGateway,
+    WORKSPACE_EFFECT_MODE: workspaceEffect,
+  });
+}
+
 export interface ServiceEnvInputs {
   readonly secrets: BootSecrets;
   readonly pgPort: number;
@@ -284,6 +332,16 @@ export function buildServiceEnv(
     }
     case "ai-backend": {
       env.RUNTIME_ENVIRONMENT = "production";
+      // The Desktop Studio policy is calculated once in Electron main's
+      // supervised environment and injected only here. Keeping this outside
+      // ENV_PASSTHROUGH_ALLOWLIST prevents accidental widening to backend or
+      // facade children, while preserving explicit per-boot kill switches.
+      Object.assign(
+        env,
+        resolveDesktopStudioRuntimeEnv(inputs.processEnv, {
+          workspaceBrokerEnabled: inputs.workspaceBroker?.enabled === true,
+        }),
+      );
       const browser = inputs.browserBroker;
       if (
         browser?.enabled === true &&

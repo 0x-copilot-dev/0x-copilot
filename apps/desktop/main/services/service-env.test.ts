@@ -13,6 +13,7 @@ import {
   buildServiceEnv,
   databaseUrl,
   ENV_PASSTHROUGH_ALLOWLIST,
+  resolveDesktopStudioRuntimeEnv,
   resolveAiStoreBackend,
   migrateDatabaseUrl,
   pythonPathValue,
@@ -53,6 +54,49 @@ describe("pythonPathValue", () => {
   it("joins src and site-packages with the platform delimiter", () => {
     expect(pythonPathValue(":")).toBe("src:site-packages");
     expect(pythonPathValue(";")).toBe("src;site-packages");
+  });
+});
+
+describe("resolveDesktopStudioRuntimeEnv", () => {
+  it("ships artifacts and review-first operations by default", () => {
+    expect(
+      resolveDesktopStudioRuntimeEnv({}, { workspaceBrokerEnabled: false }),
+    ).toEqual({
+      SURFACES_V2: "true",
+      ARTIFACT_EFFECTS_V2: "true",
+      ARTIFACT_DRAFTS_V2: "true",
+      OPERATION_GATEWAY_MODE: "enforce",
+      WORKSPACE_EFFECT_MODE: "off",
+    });
+  });
+
+  it("derives workspace enforcement from main-owned broker availability", () => {
+    expect(
+      resolveDesktopStudioRuntimeEnv({}, { workspaceBrokerEnabled: true }),
+    ).toMatchObject({
+      OPERATION_GATEWAY_MODE: "enforce",
+      WORKSPACE_EFFECT_MODE: "enforce",
+    });
+  });
+
+  it("keeps explicit kill switches local to the desktop boot", () => {
+    expect(
+      resolveDesktopStudioRuntimeEnv(
+        {
+          SURFACES_V2: "false",
+          ARTIFACT_EFFECTS_V2: "off",
+          ARTIFACT_DRAFTS_V2: "true",
+          OPERATION_GATEWAY_MODE: "off",
+        },
+        { workspaceBrokerEnabled: true },
+      ),
+    ).toEqual({
+      SURFACES_V2: "false",
+      ARTIFACT_EFFECTS_V2: "false",
+      ARTIFACT_DRAFTS_V2: "false",
+      OPERATION_GATEWAY_MODE: "off",
+      WORKSPACE_EFFECT_MODE: "off",
+    });
   });
 });
 
@@ -191,6 +235,42 @@ describe("buildServiceEnv(ai-backend)", () => {
     // Backend-only settings do not leak.
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
     expect(env.BACKEND_ENVIRONMENT).toBeUndefined();
+    // Studio is a desktop-owned release lane. The artifact/review lifecycle is
+    // available to this child by default, while host filesystem staging stays
+    // off until Electron main has started its private workspace broker.
+    expect(env.SURFACES_V2).toBe("true");
+    expect(env.ARTIFACT_EFFECTS_V2).toBe("true");
+    expect(env.ARTIFACT_DRAFTS_V2).toBe("true");
+    expect(env.OPERATION_GATEWAY_MODE).toBe("enforce");
+    expect(env.WORKSPACE_EFFECT_MODE).toBe("off");
+  });
+
+  it("enables workspace staging only when Electron main supplied its broker", () => {
+    const env = buildServiceEnv("ai-backend", {
+      ...inputs(),
+      workspaceBroker: {
+        enabled: true,
+        baseUrl: "http://127.0.0.1:54322",
+        token: "workspace-broker-secret",
+        audience: "desktop-capability-broker",
+      },
+    });
+
+    expect(env.WORKSPACE_EFFECT_MODE).toBe("enforce");
+    expect(env.OPERATION_GATEWAY_MODE).toBe("enforce");
+  });
+
+  it("honors a desktop artifact kill switch without constructing invalid settings", () => {
+    const env = buildServiceEnv(
+      "ai-backend",
+      inputs({
+        ARTIFACT_EFFECTS_V2: "false",
+        ARTIFACT_DRAFTS_V2: "true",
+      }),
+    );
+
+    expect(env.ARTIFACT_EFFECTS_V2).toBe("false");
+    expect(env.ARTIFACT_DRAFTS_V2).toBe("false");
   });
 
   it("pins the Postgres store (full DB contract) on explicit opt-out", () => {
@@ -220,6 +300,24 @@ describe("buildServiceEnv(ai-backend)", () => {
       const env = buildServiceEnv(name, inputs());
       expect(env.RUNTIME_LOCAL_MODELS_MANAGE_RUNTIME).toBeUndefined();
       expect(env.RUNTIME_ENABLE_LOCAL_MODELS).toBeUndefined();
+    }
+  });
+
+  it("does not leak desktop Studio rollout controls to sibling services", () => {
+    const hostile = inputs({
+      SURFACES_V2: "false",
+      ARTIFACT_EFFECTS_V2: "true",
+      ARTIFACT_DRAFTS_V2: "true",
+      OPERATION_GATEWAY_MODE: "enforce",
+      WORKSPACE_EFFECT_MODE: "enforce",
+    });
+    for (const name of ["backend", "backend-facade"] as const) {
+      const env = buildServiceEnv(name, hostile);
+      expect(env.SURFACES_V2).toBeUndefined();
+      expect(env.ARTIFACT_EFFECTS_V2).toBeUndefined();
+      expect(env.ARTIFACT_DRAFTS_V2).toBeUndefined();
+      expect(env.OPERATION_GATEWAY_MODE).toBeUndefined();
+      expect(env.WORKSPACE_EFFECT_MODE).toBeUndefined();
     }
   });
 
