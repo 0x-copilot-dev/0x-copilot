@@ -56,7 +56,7 @@ create a second planning queue.
         (`905d1252`).
   - [x] F12 protected answer material, provenance/trust/confidence/validity,
         and unique-claim accounting (`695c1de6`).
-  - [ ] Golden baseline traces.
+  - [x] Golden baseline traces (`c2ea9f9c`).
   - [ ] Machine-readable cross-authority contract map.
   - [ ] Pinned Deep Agents/LangChain middleware signature tests.
   - [ ] Model-construction and final model-visible-tool topology enforcement.
