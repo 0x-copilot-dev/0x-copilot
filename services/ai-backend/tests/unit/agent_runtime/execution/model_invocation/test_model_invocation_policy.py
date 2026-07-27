@@ -27,6 +27,7 @@ from agent_runtime.execution.model_invocation import (
     ModelPrivacyFeature,
     ModelRecoveryScope,
     ModelRouteExclusionReason,
+    ModelRouteEntry,
     ModelRoutePlan,
     ModelRoutePolicy,
     ModelStreamState,
@@ -46,7 +47,8 @@ def _descriptor(
         {ModelCapability.STREAMING, ModelCapability.TOOLS}
     ),
     max_input_tokens: int = 200_000,
-    regions: frozenset[str] = frozenset({"us-east"}),
+    max_output_tokens: int = 32_000,
+    region: str = "us-east",
     credential_modes: frozenset[ModelCredentialMode] = frozenset(
         {ModelCredentialMode.DEPLOYMENT}
     ),
@@ -59,16 +61,19 @@ def _descriptor(
 ) -> ModelDeploymentDescriptor:
     return ModelDeploymentDescriptor(
         deployment_id=deployment_id,
+        endpoint_ref="endpoint_00000000000000000000000000000001",
         provider=provider,
         model_name=model_name,
         capabilities=capabilities,
         max_input_tokens=max_input_tokens,
-        regions=regions,
+        max_output_tokens=max_output_tokens,
+        region=region,
         credential_modes=credential_modes,
         privacy_features=privacy_features,
         qualified_task_families=qualified_task_families,
         health=health,
         enabled=enabled,
+        price_revision="price-2026-07",
         descriptor_revision="catalog-7",
     )
 
@@ -113,8 +118,23 @@ def _plan(
     deployments: tuple[str, ...] = ("primary",),
     budget: ModelInvocationBudget | None = None,
 ) -> ModelRoutePlan:
-    return ModelRoutePlan(
-        deployment_ids=deployments,
+    return ModelRoutePlan.create(
+        routes=tuple(
+            ModelRouteEntry(
+                deployment_id=deployment_id,
+                descriptor_revision="catalog-7",
+                endpoint_ref="endpoint_00000000000000000000000000000001",
+                provider="openai",
+                model_name="gpt-5",
+                region="us-east",
+                credential_mode=ModelCredentialMode.DEPLOYMENT,
+                price_revision="price-2026-07",
+                max_input_tokens=200_000,
+                max_output_tokens=32_000,
+            )
+            for deployment_id in deployments
+        ),
+        exclusions=(),
         fallback_policy=(
             ModelFallbackPolicy.SAME_MODEL
             if len(deployments) > 1
@@ -222,6 +242,92 @@ def test_route_plan_is_invariant_to_descriptor_enumeration_order() -> None:
     assert first.deployment_ids == ("primary", "same-model-a", "same-model-b")
 
 
+def test_route_entry_binds_non_secret_execution_facts_and_digest() -> None:
+    descriptor = _descriptor(
+        "primary",
+        credential_modes=frozenset(
+            {ModelCredentialMode.DEPLOYMENT, ModelCredentialMode.BYOK}
+        ),
+        max_output_tokens=64_000,
+    )
+    requirements = _requirements(
+        available_credential_modes=frozenset(
+            {ModelCredentialMode.DEPLOYMENT, ModelCredentialMode.BYOK}
+        )
+    )
+
+    plan = ModelRoutePolicy().plan(requirements, (descriptor,))
+
+    assert plan.policy_revision == "model-route-policy.v2"
+    assert plan.route_digest.startswith("sha256:")
+    assert len(plan.routes) == 1
+    route = plan.routes[0]
+    assert route.deployment_id == "primary"
+    assert route.descriptor_revision == "catalog-7"
+    assert route.endpoint_ref == "endpoint_00000000000000000000000000000001"
+    assert route.region == "us-east"
+    assert route.credential_mode is ModelCredentialMode.BYOK
+    assert route.price_revision == "price-2026-07"
+    assert route.max_output_tokens == 64_000
+    serialized = plan.model_dump(mode="json")
+    assert "api_key" not in serialized["routes"][0]
+    assert "endpoint_url" not in serialized["routes"][0]
+
+
+def test_byok_disallowed_selects_non_byok_mode_on_same_route() -> None:
+    descriptor = _descriptor(
+        "primary",
+        credential_modes=frozenset(
+            {ModelCredentialMode.DEPLOYMENT, ModelCredentialMode.BYOK}
+        ),
+    )
+    requirements = _requirements(
+        available_credential_modes=frozenset(
+            {ModelCredentialMode.DEPLOYMENT, ModelCredentialMode.BYOK}
+        ),
+        byok_policy=ByokPolicy.DISALLOWED,
+    )
+
+    plan = ModelRoutePolicy().plan(requirements, (descriptor,))
+
+    assert plan.routes[0].credential_mode is ModelCredentialMode.DEPLOYMENT
+
+
+def test_route_digest_rejects_bound_fact_tampering() -> None:
+    plan = ModelRoutePolicy().plan(
+        _requirements(),
+        (_descriptor("primary"),),
+    )
+    payload = plan.model_dump(mode="json")
+    payload["routes"][0]["price_revision"] = "forged-price"
+
+    with pytest.raises(ValidationError, match="route_digest"):
+        ModelRoutePlan.model_validate(payload)
+
+
+def test_route_digest_changes_with_descriptor_price_and_output_limit() -> None:
+    requirements = _requirements()
+    baseline = ModelRoutePolicy().plan(
+        requirements,
+        (_descriptor("primary"),),
+    )
+    changed_price = ModelRoutePolicy().plan(
+        requirements,
+        (
+            _descriptor("primary").model_copy(
+                update={"price_revision": "price-2026-08"}
+            ),
+        ),
+    )
+    changed_output = ModelRoutePolicy().plan(
+        requirements,
+        (_descriptor("primary").model_copy(update={"max_output_tokens": 16_000}),),
+    )
+
+    assert baseline.route_digest != changed_price.route_digest
+    assert baseline.route_digest != changed_output.route_digest
+
+
 def test_route_plan_intersects_capability_region_credential_privacy_and_health() -> (
     None
 ):
@@ -230,7 +336,7 @@ def test_route_plan_intersects_capability_region_credential_privacy_and_health()
             "unsafe",
             capabilities=frozenset({ModelCapability.STREAMING}),
             max_input_tokens=50_000,
-            regions=frozenset({"eu-west"}),
+            region="eu-west",
             credential_modes=frozenset({ModelCredentialMode.DEPLOYMENT}),
             privacy_features=frozenset(),
             health=ModelDeploymentHealth.OPEN_CIRCUIT,

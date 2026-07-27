@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+import hashlib
+import json
 from typing import Self
 
 from pydantic import (
@@ -203,19 +205,27 @@ class ModelDeploymentDescriptor(RuntimeContract):
     """Versioned, non-secret facts about one callable model deployment."""
 
     deployment_id: str = Field(min_length=1, max_length=255)
+    endpoint_ref: str = Field(pattern=r"^endpoint_[0-9a-f]{32}$")
     provider: str = Field(min_length=1, max_length=64)
     model_name: str = Field(min_length=1, max_length=200)
     capabilities: frozenset[ModelCapability] = Field(default_factory=frozenset)
     max_input_tokens: PositiveInt = Field(le=2_000_000)
-    regions: frozenset[str] = Field(default_factory=frozenset)
+    max_output_tokens: PositiveInt = Field(le=2_000_000)
+    region: str = Field(min_length=1, max_length=64)
     credential_modes: frozenset[ModelCredentialMode] = Field(min_length=1)
     privacy_features: frozenset[ModelPrivacyFeature] = Field(default_factory=frozenset)
     qualified_task_families: frozenset[str] = Field(default_factory=frozenset)
     health: ModelDeploymentHealth = ModelDeploymentHealth.AVAILABLE
     enabled: bool = True
+    price_revision: str = Field(min_length=1, max_length=255)
     descriptor_revision: str = Field(min_length=1, max_length=255)
 
-    @field_validator("deployment_id", "model_name", "descriptor_revision")
+    @field_validator(
+        "deployment_id",
+        "model_name",
+        "price_revision",
+        "descriptor_revision",
+    )
     @classmethod
     def _normalize_identifier(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
         return _nonempty(value, info.field_name)
@@ -225,10 +235,15 @@ class ModelDeploymentDescriptor(RuntimeContract):
     def _normalize_provider(cls, value: str) -> str:
         return _slug(value, "provider")
 
-    @field_validator("regions", "qualified_task_families", mode="before")
+    @field_validator("qualified_task_families", mode="before")
     @classmethod
     def _normalize_slug_sets(cls, value: object, info) -> frozenset[str]:  # type: ignore[no-untyped-def]
         return ValueNormalizer.normalize_slug_set(value, info.field_name)
+
+    @field_validator("region")
+    @classmethod
+    def _normalize_region(cls, value: str) -> str:
+        return _slug(value, "region")
 
 
 class ModelInvocationBudget(RuntimeContract):
@@ -379,14 +394,101 @@ class ModelRouteExclusion(RuntimeContract):
     reasons: tuple[ModelRouteExclusionReason, ...] = Field(min_length=1)
 
 
-class ModelRoutePlan(RuntimeContract):
-    """Ordered eligible deployment identifiers and every rejected descriptor."""
+class ModelRouteEntry(RuntimeContract):
+    """One fully bound, non-secret provider attempt route."""
 
-    policy_revision: str = Field(default="model-route-policy.v1", min_length=1)
-    deployment_ids: tuple[str, ...]
+    deployment_id: str = Field(min_length=1, max_length=255)
+    descriptor_revision: str = Field(min_length=1, max_length=255)
+    endpoint_ref: str = Field(pattern=r"^endpoint_[0-9a-f]{32}$")
+    provider: str = Field(min_length=1, max_length=64)
+    model_name: str = Field(min_length=1, max_length=200)
+    region: str = Field(min_length=1, max_length=64)
+    credential_mode: ModelCredentialMode
+    price_revision: str = Field(min_length=1, max_length=255)
+    max_input_tokens: PositiveInt = Field(le=2_000_000)
+    max_output_tokens: PositiveInt = Field(le=2_000_000)
+
+    @field_validator(
+        "deployment_id",
+        "descriptor_revision",
+        "model_name",
+        "price_revision",
+    )
+    @classmethod
+    def _normalize_identifiers(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
+        return _nonempty(value, info.field_name)
+
+    @field_validator("provider", "region")
+    @classmethod
+    def _normalize_slugs(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
+        return _slug(value, info.field_name)
+
+    @classmethod
+    def from_descriptor(
+        cls,
+        descriptor: ModelDeploymentDescriptor,
+        *,
+        credential_mode: ModelCredentialMode,
+    ) -> "ModelRouteEntry":
+        """Project a trusted descriptor and selected credential class."""
+
+        if credential_mode not in descriptor.credential_modes:
+            raise ValueError("selected credential mode is not supported by deployment")
+        return cls(
+            deployment_id=descriptor.deployment_id,
+            descriptor_revision=descriptor.descriptor_revision,
+            endpoint_ref=descriptor.endpoint_ref,
+            provider=descriptor.provider,
+            model_name=descriptor.model_name,
+            region=descriptor.region,
+            credential_mode=credential_mode,
+            price_revision=descriptor.price_revision,
+            max_input_tokens=descriptor.max_input_tokens,
+            max_output_tokens=descriptor.max_output_tokens,
+        )
+
+
+class ModelRoutePlan(RuntimeContract):
+    """Ordered, fully bound routes and every rejected descriptor."""
+
+    policy_revision: str = Field(default="model-route-policy.v2", min_length=1)
+    routes: tuple[ModelRouteEntry, ...]
     exclusions: tuple[ModelRouteExclusion, ...] = ()
     fallback_policy: ModelFallbackPolicy
     budget: ModelInvocationBudget
+    route_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @property
+    def deployment_ids(self) -> tuple[str, ...]:
+        """Compatibility projection used by attempt admission."""
+
+        return tuple(route.deployment_id for route in self.routes)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        routes: tuple[ModelRouteEntry, ...],
+        exclusions: tuple[ModelRouteExclusion, ...],
+        fallback_policy: ModelFallbackPolicy,
+        budget: ModelInvocationBudget,
+        policy_revision: str = "model-route-policy.v2",
+    ) -> "ModelRoutePlan":
+        digest = cls._digest(
+            policy_revision=policy_revision,
+            routes=routes,
+            exclusions=exclusions,
+            fallback_policy=fallback_policy,
+            budget=budget,
+        )
+        return cls(
+            policy_revision=policy_revision,
+            routes=routes,
+            exclusions=exclusions,
+            fallback_policy=fallback_policy,
+            budget=budget,
+            route_digest=digest,
+        )
 
     @model_validator(mode="after")
     def _descriptor_sets_are_well_formed(self) -> Self:
@@ -397,7 +499,42 @@ class ModelRoutePlan(RuntimeContract):
             raise ValueError("route exclusion deployment_ids must be unique")
         if set(self.deployment_ids).intersection(excluded_ids):
             raise ValueError("eligible and excluded deployment_ids must be disjoint")
+        expected_digest = self._digest(
+            policy_revision=self.policy_revision,
+            routes=self.routes,
+            exclusions=self.exclusions,
+            fallback_policy=self.fallback_policy,
+            budget=self.budget,
+        )
+        if self.route_digest != expected_digest:
+            raise ValueError("route_digest does not match the bound route plan")
         return self
+
+    @staticmethod
+    def _digest(
+        *,
+        policy_revision: str,
+        routes: tuple[ModelRouteEntry, ...],
+        exclusions: tuple[ModelRouteExclusion, ...],
+        fallback_policy: ModelFallbackPolicy,
+        budget: ModelInvocationBudget,
+    ) -> str:
+        canonical = json.dumps(
+            {
+                "policy_revision": policy_revision,
+                "routes": [route.model_dump(mode="json") for route in routes],
+                "exclusions": [
+                    exclusion.model_dump(mode="json") for exclusion in exclusions
+                ],
+                "fallback_policy": fallback_policy.value,
+                "budget": budget.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
 
 
 class ProviderFailureObservation(RuntimeContract):
@@ -498,6 +635,7 @@ __all__ = (
     "ModelRecoveryScope",
     "ModelRouteExclusion",
     "ModelRouteExclusionReason",
+    "ModelRouteEntry",
     "ModelRoutePlan",
     "ModelStreamState",
     "ProviderFailureObservation",
