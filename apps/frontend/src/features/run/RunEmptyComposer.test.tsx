@@ -160,6 +160,23 @@ describe("RunEmptyComposer (web)", () => {
     expect(arg.model).toBeTruthy();
   });
 
+  it("includes the connector that just completed OAuth in the next run", async () => {
+    const ctx = makeCtx({ autoActivateConnectorId: "linear" });
+    const { container } = renderEmpty(ctx);
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+    fireEvent.change(textarea(container) as HTMLTextAreaElement, {
+      target: { value: "Show my open Linear issues" },
+    });
+    fireEvent.click(
+      container.querySelector(
+        "button[aria-label='Send message']",
+      ) as HTMLButtonElement,
+    );
+    await waitFor(() => expect(ctx.onStartRun).toHaveBeenCalledTimes(1));
+    const arg = (ctx.onStartRun as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(arg.connectorScopes).toEqual({ linear: [] });
+  });
+
   it("stays LIVE with no model configured — the send still reaches the cockpit seam", async () => {
     const ctx = makeCtx({ modelReady: false });
     const { container } = renderEmpty(ctx);

@@ -143,6 +143,7 @@ export function RunEmptyComposer(props: RunEmptyComposerProps): ReactElement {
       connectorsPort,
       onAddCustom: onShowConnectors,
       disabled: ctx.submitting,
+      autoActivateConnectorId: ctx.autoActivateConnectorId,
     });
 
   // Send → start the first run through the cockpit seam. The model pill's

@@ -1461,83 +1461,58 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     });
   });
 
-  // Connecting mid-run arms the NEXT turn rather than restarting the run —
-  // a restart re-emits work the user is reading and re-spends its tokens.
-  describe("retry-after-connect", () => {
-    it("offers a named retry once connected", () => {
+  describe("connected receipt", () => {
+    it("collapses to the action-free connected card", () => {
       const { transport } = makeTransport(() =>
         Promise.resolve(SAMPLE_RESPONSE),
       );
       const { port } = makePort();
-      const onRetry = vi.fn();
       render(
         withTransport(
           transport,
           <TcChat
             conversationId="c"
             mode="studio"
-            // `title` is `payload.display_name` in the real projection — the
-            // bare connector name. The shared fixture above predates that and
-            // says "Connect Linear", which would read as "Retry that step with
-            // Connect Linear"; override it so the label is asserted against
-            // what production actually produces.
             approvals={[mcpAuthApproval({ title: "Linear" })]}
             mcpAuthPort={port}
             connectorConsentStates={{ linear: "connected" }}
-            onConnectorRetry={onRetry}
           />,
         ),
       );
-      const retry = screen.getByTestId("cc-retry");
-      // Named after the connector: the user is choosing to spend a turn, and
-      // the label should say what that turn will use.
-      expect(retry).toHaveTextContent("Retry that step with Linear");
-      fireEvent.click(retry);
-      expect(onRetry).toHaveBeenCalledWith("linear", "Linear");
+      const card = screen.getByTestId(
+        "tc-chat-connector-mcp_auth:run_1:linear",
+      );
+      expect(card).toHaveAttribute("data-state", "connected");
+      expect(card).toHaveTextContent("Linear connected");
+      expect(card.querySelector("button")).toBeNull();
     });
 
-    it("renders no retry when the host wired none", () => {
+    it("retains the same connected card after the next run clears the approval projection", () => {
       const { transport } = makeTransport(() =>
         Promise.resolve(SAMPLE_RESPONSE),
       );
-      const { port } = makePort();
       render(
         withTransport(
           transport,
           <TcChat
             conversationId="c"
             mode="studio"
-            approvals={[mcpAuthApproval()]}
-            mcpAuthPort={port}
-            connectorConsentStates={{ linear: "connected" }}
+            approvals={[]}
+            connectedConnectorReceipt={{
+              approvalId: "mcp_auth:run_1:linear",
+              serverId: "linear",
+              displayName: "Linear",
+            }}
           />,
         ),
       );
-      // Still a completed connect, just with no next step to offer.
-      expect(screen.queryByTestId("cc-retry")).toBeNull();
-      expect(
-        screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
-      ).toHaveAttribute("data-state", "connected");
-    });
 
-    it("offers no retry before the connector is connected", () => {
-      const { transport } = makeTransport(() =>
-        Promise.resolve(SAMPLE_RESPONSE),
+      const card = screen.getByTestId(
+        "tc-chat-connector-mcp_auth:run_1:linear",
       );
-      const { port } = makePort();
-      render(
-        withTransport(
-          transport,
-          <TcChat
-            conversationId="c"
-            mode="studio"
-            approvals={[mcpAuthApproval()]}
-            mcpAuthPort={port}
-            onConnectorRetry={vi.fn()}
-          />,
-        ),
-      );
-      expect(screen.queryByTestId("cc-retry")).toBeNull();
+      expect(card).toHaveAttribute("data-state", "connected");
+      expect(card).toHaveTextContent("Linear connected");
+      expect(card.querySelector("button")).toBeNull();
     });
   });
 

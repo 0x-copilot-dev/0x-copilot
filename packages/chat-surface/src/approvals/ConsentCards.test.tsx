@@ -264,6 +264,7 @@ describe("ConnectorConsentCard — four states", () => {
     expect(
       screen.getByText("· 14 tools available to this run"),
     ).toBeInTheDocument();
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("stays silent about tool count when the host has none", () => {

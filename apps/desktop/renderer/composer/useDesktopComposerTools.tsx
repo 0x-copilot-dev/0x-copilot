@@ -4,7 +4,13 @@
 // trigger uses a body portal, so the 300px controls panel remains clickable
 // above the overflow-hidden desktop composer frame.
 
-import { useCallback, useMemo, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 
 import {
   ComposerToolsTrigger,
@@ -26,6 +32,11 @@ export interface UseDesktopComposerToolsOptions {
    * unnoticed. Hosts wire it to their notification surface.
    */
   readonly onConnectError?: (displayName: string, message: string) => void;
+  /**
+   * Connector whose OAuth flow just completed. Seed it into the run-scoped
+   * active set once; subsequent manual toggles remain authoritative.
+   */
+  readonly autoActivateConnectorId?: string | null;
 }
 
 export interface DesktopComposerTools {
@@ -38,11 +49,26 @@ export interface DesktopComposerTools {
 export function useDesktopComposerTools(
   options: UseDesktopComposerToolsOptions,
 ): DesktopComposerTools {
-  const { connectorsPort, disabled, onAddCustom, onConnectError } = options;
+  const {
+    connectorsPort,
+    disabled,
+    onAddCustom,
+    onConnectError,
+    autoActivateConnectorId = null,
+  } = options;
   const [webOn, setWebOn] = useState(true);
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
-  >([]);
+  >(() => (autoActivateConnectorId === null ? [] : [autoActivateConnectorId]));
+
+  useEffect(() => {
+    if (autoActivateConnectorId === null) return;
+    setActiveConnectorIds((current) =>
+      current.includes(autoActivateConnectorId)
+        ? current
+        : [...current, autoActivateConnectorId],
+    );
+  }, [autoActivateConnectorId]);
 
   const handleToggleConnector = useCallback(
     (serverId: string, active: boolean): void => {

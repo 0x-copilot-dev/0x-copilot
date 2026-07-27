@@ -1352,6 +1352,32 @@ describe("RunDestination — empty/idle + multi-run (PR-3.11 / FR-3.25/3.26)", (
     expect(screen.queryByTestId("thread-canvas")).toBeNull();
   });
 
+  it("hands OAuth completion to the injected composer's Tools state", async () => {
+    const transport = new FakeTransport();
+    transport.requestHandler = async (req) =>
+      req.path.includes("/messages") ? { messages: [] } : { runs: [] };
+
+    render(
+      <TransportProvider transport={transport}>
+        <KeyValueStoreProvider store={makeStore()}>
+          <RunDestination
+            conversationId={CONV}
+            connectedConnectorServerId="linear"
+            renderEmptyComposer={(ctx) => (
+              <div data-testid="auto-connector">
+                {ctx.autoActivateConnectorId}
+              </div>
+            )}
+          />
+        </KeyValueStoreProvider>
+      </TransportProvider>,
+    );
+
+    expect(await screen.findByTestId("auto-connector")).toHaveTextContent(
+      "linear",
+    );
+  });
+
   it("the rich composer's onStartRun forwards the full payload and binds empty→live without a shell remount", async () => {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
@@ -2145,6 +2171,15 @@ describe("buildRunCreateBody", () => {
     });
   });
 
+  it("attaches an idempotency key for a product-generated user turn", () => {
+    expect(
+      buildRunCreateBody(CONV, {
+        goal: "Linear is connected.",
+        idempotencyKey: "mcp-connected:mcp_discovery:run-1:linear",
+      }).idempotency_key,
+    ).toBe("mcp-connected:mcp_discovery:run-1:linear");
+  });
+
   it("attaches composer attachments only when present", () => {
     const attachments = [
       { id: "a1", type: "file", name: "airdrop-claims.csv", content: [] },
@@ -2363,10 +2398,24 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     showConnected: (serverId: string) => void;
   } {
     const transport = new FakeTransport();
-    transport.requestHandler = async (req) =>
-      req.path.includes("/messages")
-        ? { messages: [] }
-        : runningRun("Connect the connector");
+    transport.requestHandler = async (req) => {
+      if (req.path.includes("/messages")) return { messages: [] };
+      if (req.method === "POST" && req.path === "/v1/agent/runs") {
+        return { run_id: "run-connected" };
+      }
+      if (req.path.endsWith("/runs")) {
+        return {
+          runs: [
+            {
+              run_id: "run-1",
+              status: "completed",
+              model_name: "claude-haiku-4-5",
+            },
+          ],
+        };
+      }
+      return runningRun("Connect the connector");
+    };
     // One store instance across rerenders; a fresh one would remount the
     // provider and take the cockpit's mode/collapse state with it.
     const store = makeStore();
@@ -2665,7 +2714,7 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     ).toBe(false);
   });
 
-  it("retry after a mid-run connect starts a NEW turn, never restarting the run", async () => {
+  it("OAuth completion sends one idempotent user turn and leaves no retry action", async () => {
     seqCounter = 0;
     const { transport, showConnected } = renderRunWithPort({
       beginAuth: vi.fn(),
@@ -2688,11 +2737,6 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     // host does, by re-rendering with the completed connector.
     showConnected("linear");
 
-    const retry = await screen.findByTestId("cc-retry");
-    act(() => {
-      fireEvent.click(retry);
-    });
-
     await waitFor(() => {
       expect(
         transport.requests.some(
@@ -2703,10 +2747,26 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     const started = transport.requests.find(
       (r) => r.method === "POST" && r.path === "/v1/agent/runs",
     );
-    // A new turn carrying the user's intent — NOT a re-execution of the run
-    // they are reading, which would re-emit its output and re-spend its tokens.
-    expect(JSON.stringify(started?.body)).toContain("Retry that step");
-    expect(JSON.stringify(started?.body)).toContain("Linear");
+    expect(started?.body).toMatchObject({
+      conversation_id: CONV,
+      user_input: "Linear is connected.",
+      idempotency_key: "mcp-connected:mcp_auth:run-1:linear",
+      model: { model_name: "claude-haiku-4-5" },
+      request_context: {
+        connector_scopes: { linear: [] },
+      },
+    });
+    // Role is server-owned: create_run persists user_input as MessageRole.USER,
+    // so the untrusted client never gets a role selector.
+    expect((started?.body as Record<string, unknown>).role).toBeUndefined();
+    const card = screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear");
+    expect(card).toHaveAttribute("data-state", "connected");
+    expect(card.querySelector("button")).toBeNull();
+    expect(
+      transport.requests.filter(
+        (r) => r.method === "POST" && r.path === "/v1/agent/runs",
+      ),
+    ).toHaveLength(1);
   });
 
   it("still POSTs `/decision` for a plain tool_action approval (no regression)", async () => {

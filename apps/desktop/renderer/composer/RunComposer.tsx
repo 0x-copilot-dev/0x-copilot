@@ -84,6 +84,8 @@ export interface RunComposerProps {
   readonly providerKeysPort?: ProviderKeysPort;
   /** Bumped after a Settings → Provider keys write so the mounted catalog reloads. */
   readonly catalogRefreshKey?: number;
+  /** Newly authenticated connector to enable in the run-scoped Tools state. */
+  readonly autoActivateConnectorId?: string | null;
 }
 
 /**
@@ -116,6 +118,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
     connectorsPort,
     providerKeysPort,
     catalogRefreshKey,
+    autoActivateConnectorId,
   } = props;
 
   // The last run-create failure, surfaced inline above the composer. The
@@ -175,6 +178,7 @@ export function RunComposer(props: RunComposerProps): ReactElement {
       connectorsPort,
       onAddCustom: onShowConnectors,
       disabled,
+      autoActivateConnectorId,
     });
 
   // Older hosts without the connector adapter keep their single flat link.

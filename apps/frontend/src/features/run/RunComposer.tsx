@@ -66,6 +66,8 @@ export interface RunComposerCtx {
   readonly running: boolean;
   /** WC-P3 — cancel the bound run (cockpit-owned best-effort POST). */
   readonly onCancel: () => void;
+  /** Newly authenticated connector to enable in the run-scoped Tools state. */
+  readonly autoActivateConnectorId?: string | null;
 }
 
 export interface RunComposerProps {
@@ -88,7 +90,7 @@ export function RunComposer({
     providerKeysPort,
     toolsTrigger,
     buildRunStartRequest,
-  } = useWebRunComposerTools(identity);
+  } = useWebRunComposerTools(identity, ctx.autoActivateConnectorId ?? null);
 
   // The last run-create failure, surfaced inline above the composer. A rejected
   // `ctx.dispatch` propagates to `onSubmitError` (the single chat-surface error
