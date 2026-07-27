@@ -95,6 +95,10 @@ from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
+from runtime_worker.run_control import (
+    RunControlContext,
+    RunControlPlaneBuilder,
+)
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
@@ -163,6 +167,7 @@ class RuntimeApprovalHandler:
         mcp_discovery_cache: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         artifact_service: object | None = None,
+        run_control_builder: RunControlPlaneBuilder | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -173,6 +178,7 @@ class RuntimeApprovalHandler:
             kill_switches=self.settings.execution.rollout_kill_switches,
         )
         self.artifact_service = artifact_service
+        self._run_control_builder = run_control_builder
         # BYOK re-hydration on resume: the persisted run record's context was
         # serialized without ``provider_keys`` (excluded field), so the resumed
         # harness re-fetches them in memory only — same seam as the run handler.
@@ -337,6 +343,14 @@ class RuntimeApprovalHandler:
         # refuses the resume outright — the run would die holding a decision the
         # user already made.
         interrupt_id = self._native_interrupt_id_for(metadata, outcome=outcome)
+        run_control_snapshot = (
+            await self._run_control_builder.ensure_snapshot(
+                run=run,
+                trace_id=run.trace_id,
+            )
+            if self._run_control_builder is not None
+            else None
+        )
         running = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=run.run_id,
@@ -399,7 +413,15 @@ class RuntimeApprovalHandler:
             if tool_admission_guard is not None
             else None
         )
+        run_control_token: object | None = None
         try:
+            if (
+                self._run_control_builder is not None
+                and run_control_snapshot is not None
+            ):
+                run_control_token = RunControlContext.bind_for_run(
+                    self._run_control_builder.binding_for(run_control_snapshot)
+                )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
                     resolution=self.settings.execution.rollout
@@ -493,6 +515,8 @@ class RuntimeApprovalHandler:
             await self._observe_e2_shadow_projections(failed)
             raise
         finally:
+            if run_control_token is not None:
+                RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
                 ShadowComparisonContext.unbind(shadow_comparison_token)  # type: ignore[arg-type]
             if operation_context_token is not None:
