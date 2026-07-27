@@ -87,7 +87,7 @@ create a second planning queue.
   - [x] Full Step 1 regression suite and exit-criteria check (isolated committed
         tree: 5,463 passed, 127 skipped, 1 live-eval deselected; 14 pre-existing
         deprecation warnings).
-- [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
+- [x] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
   - [x] Domain-owned immutable run/call context, restart-stable model/tool/
         operation identity, and exactly-once lifecycle reducer (`b0e3e97e`;
@@ -106,7 +106,10 @@ create a second planning queue.
         (`b0e3e97e`; provider-bound tool sets equal the controller canary,
         reviewed exclusions are applied, legacy graph wrappers are removed at
         canonical assembly, and feature-off output/event parity is preserved).
-  - [ ] Full Step 2 regression suite and exit-criteria check.
+  - [x] Full Step 2 regression suite and exit-criteria check (`e84f231d`
+        updates the static topology proof for the exact root/child controller;
+        isolated committed tree: 5,506 passed, 127 skipped, 1 live-eval
+        deselected; 14 pre-existing deprecation warnings).
 - [ ] **Step 3:** Complete the local F1 evaluation, assignment, report, and
       signed-promotion spine.
 - [ ] **Step 4:** Bind F4 task policy, tool plan, budgets, fingerprints, and
