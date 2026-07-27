@@ -63,7 +63,9 @@ create a second planning queue.
   - [x] Pinned Deep Agents/LangChain/LangGraph middleware signatures, harness
         profile surface, and isolated private Atlas seam (`070d75f3`; 28
         focused graph/middleware tests).
-  - [ ] Model-construction and final model-visible-tool topology enforcement.
+  - [x] Model-construction and graph-construction funnel enforcement plus exact
+        final supervisor/subagent model-visible-tool topology
+        (`f2f7f921`; 32 focused, live-graph, and release-conformance tests).
   - [x] `off`/`shadow`/`enforce` modes, authority-narrowing kill switches, and
         conservative unknown-mode defaults (`d93ac11a`; 30 focused and E2
         compatibility tests).
