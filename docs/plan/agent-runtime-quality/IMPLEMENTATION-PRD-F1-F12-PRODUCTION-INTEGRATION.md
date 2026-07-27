@@ -79,9 +79,10 @@ create a second planning queue.
         collision, adapter, and type-parity tests plus TypeScript typecheck).
   - [ ] Deletion visibility, physical-retention parity, desktop file recovery,
         and explicit non-CAS budget-reference ownership.
-  - [ ] Verified-boundary builder, stable HMAC assignment, typed run context,
+  - [x] Verified-boundary builder, stable HMAC assignment, typed run context,
         pre-model bind, approval/restart rehydration, legacy-safe migration,
-        and live narrowing.
+        and live narrowing (`16bc0a07`; 18 focused worker-boundary, restart,
+        migration, scope, and live-narrowing tests).
   - [ ] Full Step 1 regression suite and exit-criteria check.
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
