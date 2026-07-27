@@ -330,6 +330,39 @@ class TestMcpDiscoveryCache(DiscoveryCacheMixin):
 
         asyncio.run(run())
 
+    def test_invalidation_generation_blocks_in_flight_load_publication(self) -> None:
+        """A revoked cold load cannot republish after invalidation returns."""
+
+        async def run() -> None:
+            cache = McpDiscoveryCache()
+            key = self.make_key()
+            load_started = asyncio.Event()
+            release_load = asyncio.Event()
+
+            async def slow_load() -> LoadedMcpServer:
+                load_started.set()
+                await release_load.wait()
+                return self.make_loaded()
+
+            pending = asyncio.create_task(cache.get_or_load(key, slow_load))
+            await load_started.wait()
+
+            removed = await cache.invalidate(
+                server_name=key.server_name,
+                org_id=key.org_id,
+                user_id=key.user_id,
+            )
+            release_load.set()
+
+            assert removed == 0
+            assert await pending is None
+            assert await cache.get(key) is None
+
+            reloaded = await cache.get_or_load(key, slow_load)
+            assert reloaded is not None
+
+        asyncio.run(run())
+
     def test_stats_track_invalidations(self) -> None:
         """``invalidate`` increments the ``invalidations`` counter by the removed count."""
 

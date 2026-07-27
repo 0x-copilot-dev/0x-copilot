@@ -29,8 +29,11 @@ from agent_runtime.capabilities.mcp.client import (
     McpClientError,
     McpClientFactory,
     McpConnectionError,
+    McpResourceDiscoveryPage,
     McpTimeoutError,
+    McpToolDiscoveryPage,
     McpUnsupportedMethodError,
+    PaginatedMcpClient,
 )
 from agent_runtime.capabilities.mcp.discovery_cache import (
     McpDiscoveryCache,
@@ -101,6 +104,7 @@ __all__ = [
     "McpLoadWarning",
     "McpLoader",
     "McpResourceAccessPolicy",
+    "McpResourceDiscoveryPage",
     "McpResourceDescriptor",
     "McpRiskLevel",
     "McpServerCard",
@@ -110,8 +114,10 @@ __all__ = [
     "McpToolCallRequest",
     "McpToolCallResult",
     "McpToolDescriptor",
+    "McpToolDiscoveryPage",
     "McpTransport",
     "McpUnsupportedMethodError",
     "McpWarningCode",
+    "PaginatedMcpClient",
     "RevisionAwareMcpDiscoveryCache",
 ]

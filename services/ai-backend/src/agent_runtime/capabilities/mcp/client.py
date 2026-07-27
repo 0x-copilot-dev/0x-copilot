@@ -5,17 +5,60 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any, Protocol, runtime_checkable
 
+from pydantic import Field, field_validator
+
 from agent_runtime.capabilities.mcp.cards import (
     McpConnectionMetadata,
     McpResourceDescriptor,
     McpServerCard,
     McpToolDescriptor,
 )
+from agent_runtime.execution.contracts import RuntimeContract
 
 RawMcpConnectionMetadata = McpConnectionMetadata | Mapping[str, object] | None
 RawMcpToolDescriptor = McpToolDescriptor | Mapping[str, object]
 RawMcpResourceDescriptor = McpResourceDescriptor | Mapping[str, object]
 RawMcpToolCallResult = Mapping[str, Any]
+
+
+class McpToolDiscoveryPage(RuntimeContract):
+    """One bounded MCP tools/list page with an opaque continuation cursor."""
+
+    items: tuple[RawMcpToolDescriptor, ...] = Field(
+        default_factory=tuple,
+        max_length=1_000,
+    )
+    next_cursor: str | None = Field(default=None, max_length=2_048)
+
+    @field_validator("next_cursor")
+    @classmethod
+    def _normalize_cursor(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("next_cursor must be non-blank when present")
+        return normalized
+
+
+class McpResourceDiscoveryPage(RuntimeContract):
+    """One bounded MCP resources/list page with an opaque continuation cursor."""
+
+    items: tuple[RawMcpResourceDescriptor, ...] = Field(
+        default_factory=tuple,
+        max_length=1_000,
+    )
+    next_cursor: str | None = Field(default=None, max_length=2_048)
+
+    @field_validator("next_cursor")
+    @classmethod
+    def _normalize_cursor(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if not normalized:
+            raise ValueError("next_cursor must be non-blank when present")
+        return normalized
 
 
 class McpClientError(Exception):
@@ -58,6 +101,25 @@ class McpClient(Protocol):
         arguments: Mapping[str, Any],
     ) -> RawMcpToolCallResult:
         """Invoke a selected MCP tool and return the raw JSON-RPC result."""
+
+
+@runtime_checkable
+class PaginatedMcpClient(Protocol):
+    """Optional complete-discovery extension for cursor-aware MCP adapters."""
+
+    async def list_tools_page(
+        self,
+        *,
+        cursor: str | None,
+    ) -> McpToolDiscoveryPage:
+        """Return exactly one tools/list page."""
+
+    async def list_resources_page(
+        self,
+        *,
+        cursor: str | None,
+    ) -> McpResourceDiscoveryPage:
+        """Return exactly one resources/list page."""
 
 
 @runtime_checkable

@@ -32,7 +32,9 @@ from __future__ import annotations
 import asyncio
 import time
 from collections import OrderedDict
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 from pydantic import Field, NonNegativeInt
 
@@ -63,6 +65,14 @@ class McpDiscoveryCacheStats(RuntimeContract):
     expired: NonNegativeInt = 0
     invalidations: NonNegativeInt = 0
     current_size: NonNegativeInt = 0
+
+
+@dataclass(slots=True)
+class _KeyLock:
+    """Reference-counted lock so invalidation cannot split one load cohort."""
+
+    lock: asyncio.Lock
+    users: int = 0
 
 
 class McpDiscoveryCache:
@@ -104,9 +114,12 @@ class McpDiscoveryCache:
         self._entries: OrderedDict[
             McpDiscoveryCacheKey, tuple[float, LoadedMcpServer]
         ] = OrderedDict()
-        # Per-key lazily-allocated locks. Removed when the entry expires or
-        # is evicted so a long-lived cache doesn't accumulate dead locks.
-        self._locks: dict[McpDiscoveryCacheKey, asyncio.Lock] = {}
+        # Per-key lazily-allocated, reference-counted locks. Each is removed
+        # when its active/waiting load cohort exits.
+        self._locks: dict[McpDiscoveryCacheKey, _KeyLock] = {}
+        # Monotonic per-key epochs form an invalidation barrier. A cold load
+        # captures its epoch before I/O and may publish only if it is unchanged.
+        self._generations: dict[McpDiscoveryCacheKey, int] = {}
         # Coarse guard around the OrderedDict + lock-table mutations so the
         # per-key fast path doesn't race with eviction or invalidation.
         self._mutex = asyncio.Lock()
@@ -132,7 +145,6 @@ class McpDiscoveryCache:
             if self._clock() >= expiry:
                 # Stale — evict before we hand out a stale copy.
                 self._entries.pop(key, None)
-                self._locks.pop(key, None)
                 self._expired += 1
                 self._misses += 1
                 return None
@@ -155,7 +167,8 @@ class McpDiscoveryCache:
             self._entries[key] = (expiry, stored)
             while len(self._entries) > self._max_entries:
                 evicted_key, _ = self._entries.popitem(last=False)
-                self._locks.pop(evicted_key, None)
+                if evicted_key not in self._locks:
+                    self._generations.pop(evicted_key, None)
                 self._evictions += 1
 
     async def get_or_load(
@@ -183,16 +196,24 @@ class McpDiscoveryCache:
         cached = await self.get(key)
         if cached is not None:
             return cached
-        lock = await self._lock_for(key)
-        async with lock:
+        async with self._lock_for(key):
             # Re-check: another waiter may have loaded and populated.
             cached = await self.get(key)
             if cached is not None:
                 return cached
+            generation = await self._generation_for(key)
             loaded = await load()
             if loaded is None:
                 return None
-            await self.put(key, loaded)
+            if not await self._put_if_generation(
+                key,
+                loaded,
+                expected_generation=generation,
+            ):
+                # Invalidation raced the I/O. The just-loaded value may be
+                # returned by the caller's live path, but it must never be
+                # published back into discovery state.
+                return None
             # Return a fresh defensive copy via the ``get`` path so
             # callers and the cache hold independent objects.
             return await self.get(key)
@@ -214,20 +235,26 @@ class McpDiscoveryCache:
         Returns the number of entries removed.
         """
         async with self._mutex:
-            to_remove: list[McpDiscoveryCacheKey] = []
-            for cached_key in self._entries:
+            known_keys = set(self._entries).union(self._locks)
+            matching_keys: list[McpDiscoveryCacheKey] = []
+            for cached_key in known_keys:
                 if server_name is not None and cached_key.server_name != server_name:
                     continue
                 if org_id is not None and cached_key.org_id != org_id:
                     continue
                 if user_id is not None and cached_key.user_id != user_id:
                     continue
-                to_remove.append(cached_key)
-            for cached_key in to_remove:
+                matching_keys.append(cached_key)
+            removed = 0
+            for cached_key in matching_keys:
+                self._generations[cached_key] = self._generations.get(cached_key, 0) + 1
+                if cached_key in self._entries:
+                    removed += 1
                 self._entries.pop(cached_key, None)
-                self._locks.pop(cached_key, None)
-            self._invalidations += len(to_remove)
-            return len(to_remove)
+                if cached_key not in self._locks:
+                    self._generations.pop(cached_key, None)
+            self._invalidations += removed
+            return removed
 
     def stats(self) -> McpDiscoveryCacheStats:
         """Return a snapshot of counters for observability."""
@@ -240,11 +267,54 @@ class McpDiscoveryCache:
             current_size=len(self._entries),
         )
 
-    async def _lock_for(self, key: McpDiscoveryCacheKey) -> asyncio.Lock:
-        """Return (and lazily allocate) the per-key async lock."""
+    async def _generation_for(self, key: McpDiscoveryCacheKey) -> int:
         async with self._mutex:
-            lock = self._locks.get(key)
-            if lock is None:
-                lock = asyncio.Lock()
-                self._locks[key] = lock
-            return lock
+            return self._generations.get(key, 0)
+
+    async def _put_if_generation(
+        self,
+        key: McpDiscoveryCacheKey,
+        record: LoadedMcpServer,
+        *,
+        expected_generation: int,
+    ) -> bool:
+        """Atomically publish only if no matching invalidation raced the load."""
+        async with self._mutex:
+            if self._generations.get(key, 0) != expected_generation:
+                return False
+            expiry = self._clock() + self._ttl_seconds
+            self._entries[key] = (expiry, record.model_copy(deep=True))
+            self._entries.move_to_end(key)
+            while len(self._entries) > self._max_entries:
+                evicted_key, _ = self._entries.popitem(last=False)
+                if evicted_key not in self._locks:
+                    self._generations.pop(evicted_key, None)
+                self._evictions += 1
+            return True
+
+    @asynccontextmanager
+    async def _lock_for(
+        self,
+        key: McpDiscoveryCacheKey,
+    ) -> AsyncIterator[None]:
+        """Acquire a reference-counted per-key lock for one load cohort."""
+        async with self._mutex:
+            key_lock = self._locks.get(key)
+            if key_lock is None:
+                key_lock = _KeyLock(lock=asyncio.Lock())
+                self._locks[key] = key_lock
+            key_lock.users += 1
+        acquired = False
+        try:
+            await key_lock.lock.acquire()
+            acquired = True
+            yield
+        finally:
+            if acquired:
+                key_lock.lock.release()
+            async with self._mutex:
+                key_lock.users -= 1
+                if key_lock.users == 0:
+                    self._locks.pop(key, None)
+                    if key not in self._entries:
+                        self._generations.pop(key, None)
