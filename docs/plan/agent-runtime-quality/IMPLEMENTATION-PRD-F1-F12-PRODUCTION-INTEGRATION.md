@@ -110,27 +110,47 @@ create a second planning queue.
         updates the static topology proof for the exact root/child controller;
         isolated committed tree: 5,506 passed, 127 skipped, 1 live-eval
         deselected; 14 pre-existing deprecation warnings).
-- [ ] **Step 3:** Complete the local F1 evaluation, assignment, report, and
+- [x] **Step 3:** Complete the local F1 evaluation, assignment, report, and
       signed-promotion spine.
-  - [ ] Domain-owned immutable case, fixture-catalog, suite-run, trajectory,
+  - [x] Domain-owned immutable case, fixture-catalog, suite-run, trajectory,
         result, paired-report, decision, and signed `HarnessManifest`
-        contracts behind an `EvaluationRepositoryPort`.
-  - [ ] Desktop file/CAS and hermetic in-memory repository adapters with
+        contracts behind an `EvaluationRepositoryPort` (`bff56c0b`; every
+        result binds exact case, variant, fixture, model, prompt, tool, policy,
+        scorer, and code revisions).
+  - [x] Desktop file/CAS and hermetic in-memory repository adapters with
         idempotency conflicts, bounded quota, crash recovery, export, deletion,
-        and protected-reference ownership.
-  - [ ] Consent-gated, bounded, resumable terminal projection jobs that reuse
+        and protected-reference ownership (`bff56c0b`; shared-CAS reachability
+        fencing, source-run tombstones/cascade, atomic pointer/job CAS, and
+        restart recovery).
+  - [x] Consent-gated, bounded, resumable terminal projection jobs that reuse
         the canonical event journal, never delay run termination, and remain
-        disabled for ordinary production profiles.
-  - [ ] Fixture-only resumable suite execution with hard per-case and per-suite
+        disabled for ordinary production profiles (`bff56c0b`; O(1)
+        post-terminal scheduling after the terminal event is durable, bounded
+        O(E) background projection, leases/attempts, durable skip/failure
+        reasons, and observer-failure isolation).
+  - [x] Fixture-only resumable suite execution with hard per-case and per-suite
         cost, model-turn, tool-call, token, and wall-time ceilings plus the
-        operational corpus and deterministic hard-gate scorers.
-  - [ ] Paired candidate/control reports with explicit missing-data treatment,
+        operational corpus and deterministic hard-gate scorers (`bff56c0b`;
+        18 synthetic families including connector/MCP auth, web/library
+        evidence, bulk filtering, parallel reads, conflicting writes, long
+        context, subagents, workspace edits, provider failures, and evidence
+        validity).
+  - [x] Paired candidate/control reports with explicit missing-data treatment,
         sample/confidence/protected-family/quality/cost/latency gates, and
-        optional bounded model graders that cannot override hard gates.
-  - [ ] Signed release-manifest verification, immutable run assignment,
+        optional bounded model graders that cannot override hard gates
+        (`bff56c0b`; paired revision/suite integrity gates plus attributable
+        grader/scorer/model/prompt revisions, tokens, and cost).
+  - [x] Signed release-manifest verification, immutable run assignment,
         development/dogfood override, atomic rollback, local export, and
-        development-only loopback CLI/API without runtime self-promotion.
-  - [ ] Full Step 3 regression suite and exit-criteria check.
+        development-only loopback CLI/API without runtime self-promotion
+        (`bff56c0b`; Ed25519 verify-only bootstrap, deployment-owned catalog,
+        configured-scope service, strict service token, bounded no-follow CLI
+        I/O, restart-required mutation contract, content-free diagnostics,
+        backout, and operations runbook).
+  - [x] Full Step 3 regression suite and exit-criteria check (`bff56c0b`; 204
+        focused Step 3 tests; isolated committed tree: 5,628 passed, 127
+        skipped, 1 live-eval deselected; ruff, Prettier, repository pre-commit,
+        and `git diff --check` passed).
 - [ ] **Step 4:** Bind F4 task policy, tool plan, budgets, fingerprints, and
       restart-safe controller state.
 - [ ] **Step 5:** Complete F2 effective-prompt assembly, single cache ownership,
