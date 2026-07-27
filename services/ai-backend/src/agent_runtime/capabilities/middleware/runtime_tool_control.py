@@ -11,13 +11,20 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from dataclasses import replace
-from threading import Lock
-from typing import Any
+from typing import Annotated, Any
 
 from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import ToolCallRequest
+from langchain.agents.middleware.types import (
+    AgentState,
+    ModelRequest,
+    ModelResponse,
+    PrivateStateAttr,
+    ToolCallRequest,
+)
 from langchain_core.messages import ToolMessage
+from langgraph.errors import GraphInterrupt
 from langgraph.types import Command
 
 from agent_runtime.capabilities.tool_budget_guard import (
@@ -30,9 +37,26 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetWarn,
 )
 from agent_runtime.capabilities.tools.tool_use_enforcement import PolicyBlockedTool
+from agent_runtime.control_plane.context import (
+    RunControlContext,
+    RunSerialAdmission,
+    RuntimeToolControlOutcome,
+    RuntimeToolLifecycleReducer,
+)
 from agent_runtime.execution.tool_errors import BudgetExceeded
 from agent_runtime.execution.tool_errors import ToolBudgetRejected
 from agent_runtime.execution.tool_error_policy import DefaultToolErrorPolicy
+from agent_runtime.execution.tool_surface import (
+    DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES,
+)
+from agent_runtime.execution.call_identity import (
+    RuntimeCallContext,
+    RuntimeToolCallIdentity,
+)
+from agent_runtime.delegation.subagents.operation_identity import (
+    SUPERVISOR_TASK_CALL_ID_KEY,
+)
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 
 ToolHandlerItem = ToolMessage | Command[Any]
@@ -44,18 +68,190 @@ AsyncToolHandler = Callable[
 ]
 
 
-class RuntimeToolControlMiddleware(AgentMiddleware):
-    """Enforce F4/F5 controls and conservative F6 ordering on the final graph."""
+class RuntimeModelTurnReducer:
+    """Checkpoint-safe monotonic reducer for the current model turn."""
 
-    name = "0xCopilotRuntimeToolControlMiddleware"
+    @staticmethod
+    def reduce(current: int, update: int) -> int:
+        """Keep the greatest observed turn across replayed node updates."""
 
-    def __init__(self) -> None:
-        # One middleware instance is materialized per compiled agent. LangChain
-        # may submit siblings from one model response concurrently; these locks
-        # make the default schedule serial until a persisted F6 permit says
-        # otherwise. The async and sync paths are intentionally separate.
-        self._async_serial_gate = asyncio.Lock()
-        self._sync_serial_gate = Lock()
+        return max(current, update)
+
+
+class RuntimeControlState(AgentState, total=False):
+    """Private checkpointed state contributed by the runtime middleware."""
+
+    runtime_control_model_turn: Annotated[
+        int,
+        RuntimeModelTurnReducer.reduce,
+        PrivateStateAttr,
+    ]
+
+
+@dataclass(frozen=True)
+class RuntimeToolSurfaceSnapshot:
+    """Content-free canary observation of the final model-visible tools."""
+
+    tool_names: tuple[str, ...]
+    surface_digest: str
+
+    @classmethod
+    def from_tools(cls, tools: Sequence[object]) -> "RuntimeToolSurfaceSnapshot":
+        """Enumerate the exact post-assembly tool names in model order."""
+
+        names = tuple(str(getattr(tool, "name", "")).strip() for tool in tools)
+        if any(not name for name in names):
+            raise RuntimeError("final model-visible tool surface has an unnamed tool")
+        if len(names) != len(set(names)):
+            raise RuntimeError("final model-visible tool surface has duplicate names")
+        return cls(
+            tool_names=names,
+            surface_digest=canonical_json_sha256({"tool_names": list(names)}),
+        )
+
+
+class RuntimeControlMiddleware(AgentMiddleware):
+    """Canonical model/tool seam for one compiled Deep Agents graph.
+
+    The async lifecycle hooks are intentionally present even where a later
+    F-series step owns the behavior. This pins one supported composition point
+    for prompt/model planning, tool-group planning, graph-wide tool control,
+    and final observations without patching LangGraph nodes.
+    """
+
+    name = "0xCopilotRuntimeControlMiddleware"
+    state_schema = RuntimeControlState
+
+    def __init__(
+        self,
+        *,
+        excluded_tool_names: frozenset[str] = (DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES),
+    ) -> None:
+        # Legacy/test graphs may not have a verified run-control binding. Their
+        # fallback stays instance-local; production uses the one run-scoped
+        # admission object inherited by supervisor and local subagents.
+        self._excluded_tool_names = frozenset(excluded_tool_names)
+        self._fallback_serial_admission = RunSerialAdmission()
+        self._fallback_lifecycle_reducer = RuntimeToolLifecycleReducer()
+        self._final_tool_surface: RuntimeToolSurfaceSnapshot | None = None
+
+    @property
+    def final_tool_surface(self) -> RuntimeToolSurfaceSnapshot | None:
+        """Return the latest post-assembly tool-surface canary observation."""
+
+        return self._final_tool_surface
+
+    def before_model(
+        self,
+        state: RuntimeControlState,
+        runtime: object,
+    ) -> dict[str, Any]:
+        """Synchronous compatibility adapter for the canonical async hook."""
+
+        del runtime
+        return self._before_model_update(state)
+
+    async def abefore_model(
+        self,
+        state: RuntimeControlState,
+        runtime: object,
+    ) -> dict[str, Any]:
+        """Advance one checkpointed model turn before provider dispatch."""
+
+        del runtime
+        return self._before_model_update(state)
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], ModelResponse[Any]],
+    ) -> ModelResponse[Any]:
+        """Synchronous compatibility adapter with identical observation."""
+
+        provider_request = self._provider_visible_request(request)
+        self._observe_final_tool_surface(provider_request)
+        return handler(provider_request)
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest[Any],
+        handler: Callable[[ModelRequest[Any]], Awaitable[ModelResponse[Any]]],
+    ) -> ModelResponse[Any]:
+        """Apply reviewed exclusions, observe the surface, then delegate."""
+
+        provider_request = self._provider_visible_request(request)
+        self._observe_final_tool_surface(provider_request)
+        return await handler(provider_request)
+
+    def after_model(
+        self,
+        state: RuntimeControlState,
+        runtime: object,
+    ) -> None:
+        """Synchronous compatibility adapter for the reserved seam."""
+
+        del state, runtime
+        return None
+
+    async def aafter_model(
+        self,
+        state: RuntimeControlState,
+        runtime: object,
+    ) -> None:
+        """Reserved supported seam for Step 6 tool-group planning."""
+
+        del state, runtime
+        return None
+
+    def after_agent(
+        self,
+        state: RuntimeControlState,
+        runtime: object,
+    ) -> None:
+        """Synchronous compatibility adapter for completion observation."""
+
+        del state, runtime
+        return None
+
+    async def aafter_agent(
+        self,
+        state: RuntimeControlState,
+        runtime: object,
+    ) -> None:
+        """Reserved content-free completion observation seam."""
+
+        del state, runtime
+        return None
+
+    @classmethod
+    def _before_model_update(
+        cls,
+        state: RuntimeControlState,
+    ) -> dict[str, Any]:
+        return {
+            "runtime_control_model_turn": cls._model_turn(state) + 1,
+        }
+
+    def _observe_final_tool_surface(self, request: ModelRequest[Any]) -> None:
+        self._final_tool_surface = RuntimeToolSurfaceSnapshot.from_tools(
+            request.tools or []
+        )
+
+    def _provider_visible_request(
+        self,
+        request: ModelRequest[Any],
+    ) -> ModelRequest[Any]:
+        """Apply the reviewed profile exclusion at the supported model seam."""
+
+        tools = list(request.tools or [])
+        provider_tools = [
+            tool
+            for tool in tools
+            if str(getattr(tool, "name", "")).strip() not in self._excluded_tool_names
+        ]
+        if len(provider_tools) == len(tools):
+            return request
+        return request.override(tools=provider_tools)
 
     def wrap_tool_call(
         self,
@@ -64,12 +260,22 @@ class RuntimeToolControlMiddleware(AgentMiddleware):
     ) -> ToolHandlerResult:
         """Synchronously execute one graph-visible tool under the common gate."""
 
-        with self._sync_serial_gate:
-            if isinstance(request.tool, PolicyBlockedTool):
-                # User policy is the outer admission boundary. A blocked call
-                # returns its fixed safe message without consuming run budget.
-                return handler(request)
-            return self._execute(request=request, handler=handler)
+        admission = (
+            RunControlContext.serial_admission() or self._fallback_serial_admission
+        )
+        with admission.sync_permit():
+            identity = self._call_identity(request)
+            with RuntimeCallContext.bind(identity):
+                execute = (
+                    (lambda: handler(request))
+                    if isinstance(request.tool, PolicyBlockedTool)
+                    else (lambda: self._execute(request=request, handler=handler))
+                )
+                return self._observe_sync_tool_lifecycle(
+                    request=request,
+                    identity=identity,
+                    execute=execute,
+                )
 
     async def awrap_tool_call(
         self,
@@ -78,12 +284,252 @@ class RuntimeToolControlMiddleware(AgentMiddleware):
     ) -> ToolHandlerResult:
         """Asynchronously execute one graph-visible tool under the common gate."""
 
-        async with self._async_serial_gate:
-            if isinstance(request.tool, PolicyBlockedTool):
-                # Keep parity with the synchronous path and the normative
-                # policy → budget → execution ordering.
-                return await handler(request)
-            return await self._aexecute(request=request, handler=handler)
+        admission = (
+            RunControlContext.serial_admission() or self._fallback_serial_admission
+        )
+        async with admission.async_permit():
+            identity = self._call_identity(request)
+            with RuntimeCallContext.bind(identity):
+
+                async def execute() -> ToolHandlerResult:
+                    if isinstance(request.tool, PolicyBlockedTool):
+                        # User policy is the outer rejection gate. A blocked
+                        # call never reaches budget admission.
+                        return await handler(request)
+                    return await self._aexecute(request=request, handler=handler)
+
+                return await self._observe_async_tool_lifecycle(
+                    request=request,
+                    identity=identity,
+                    execute=execute,
+                )
+
+    def _observe_sync_tool_lifecycle(
+        self,
+        *,
+        request: ToolCallRequest,
+        identity: RuntimeToolCallIdentity | None,
+        execute: Callable[[], ToolHandlerResult],
+    ) -> ToolHandlerResult:
+        reducer, attempt_id = self._open_lifecycle(request, identity)
+        try:
+            result = execute()
+        except GraphInterrupt:
+            self._settle_lifecycle(
+                reducer,
+                identity=identity,
+                attempt_id=attempt_id,
+                outcome=RuntimeToolControlOutcome.INTERRUPT,
+            )
+            raise
+        except asyncio.CancelledError:
+            self._settle_lifecycle(
+                reducer,
+                identity=identity,
+                attempt_id=attempt_id,
+                outcome=RuntimeToolControlOutcome.CANCELLED,
+            )
+            raise
+        except BaseException:
+            self._settle_lifecycle(
+                reducer,
+                identity=identity,
+                attempt_id=attempt_id,
+                outcome=RuntimeToolControlOutcome.ERROR,
+            )
+            raise
+        self._settle_lifecycle(
+            reducer,
+            identity=identity,
+            attempt_id=attempt_id,
+            outcome=self._result_outcome(
+                result,
+                policy_blocked=isinstance(
+                    request.tool,
+                    PolicyBlockedTool,
+                ),
+            ),
+        )
+        return result
+
+    async def _observe_async_tool_lifecycle(
+        self,
+        *,
+        request: ToolCallRequest,
+        identity: RuntimeToolCallIdentity | None,
+        execute: Callable[[], Awaitable[ToolHandlerResult]],
+    ) -> ToolHandlerResult:
+        reducer, attempt_id = self._open_lifecycle(request, identity)
+        try:
+            result = await execute()
+        except GraphInterrupt:
+            self._settle_lifecycle(
+                reducer,
+                identity=identity,
+                attempt_id=attempt_id,
+                outcome=RuntimeToolControlOutcome.INTERRUPT,
+            )
+            raise
+        except asyncio.CancelledError:
+            self._settle_lifecycle(
+                reducer,
+                identity=identity,
+                attempt_id=attempt_id,
+                outcome=RuntimeToolControlOutcome.CANCELLED,
+            )
+            raise
+        except BaseException:
+            self._settle_lifecycle(
+                reducer,
+                identity=identity,
+                attempt_id=attempt_id,
+                outcome=RuntimeToolControlOutcome.ERROR,
+            )
+            raise
+        self._settle_lifecycle(
+            reducer,
+            identity=identity,
+            attempt_id=attempt_id,
+            outcome=self._result_outcome(
+                result,
+                policy_blocked=isinstance(
+                    request.tool,
+                    PolicyBlockedTool,
+                ),
+            ),
+        )
+        return result
+
+    def _open_lifecycle(
+        self,
+        request: ToolCallRequest,
+        identity: RuntimeToolCallIdentity | None,
+    ) -> tuple[RuntimeToolLifecycleReducer | None, str | None]:
+        if identity is None:
+            return (None, None)
+        reducer = (
+            RunControlContext.lifecycle_reducer() or self._fallback_lifecycle_reducer
+        )
+        attempt_id = self._attempt_id(request)
+        reducer.observe_open(
+            control_call_id=identity.control_call_id,
+            attempt_id=attempt_id,
+        )
+        return (reducer, attempt_id)
+
+    @staticmethod
+    def _settle_lifecycle(
+        reducer: RuntimeToolLifecycleReducer | None,
+        *,
+        identity: RuntimeToolCallIdentity | None,
+        attempt_id: str | None,
+        outcome: RuntimeToolControlOutcome,
+    ) -> None:
+        if reducer is None or identity is None or attempt_id is None:
+            return
+        reducer.observe_terminal(
+            control_call_id=identity.control_call_id,
+            attempt_id=attempt_id,
+            operation_id=identity.operation_id,
+            execution_scope=identity.execution_scope,
+            outcome=outcome,
+        )
+
+    @classmethod
+    def _attempt_id(cls, request: ToolCallRequest) -> str:
+        execution_info = getattr(request.runtime, "execution_info", None)
+        facts: dict[str, object] = {}
+        if execution_info is not None:
+            for key in (
+                "checkpoint_id",
+                "checkpoint_ns",
+                "task_id",
+                "node_attempt",
+            ):
+                value = getattr(execution_info, key, None)
+                if isinstance(value, (str, int)) and not isinstance(value, bool):
+                    facts[key] = value
+        if not facts:
+            config = getattr(request.runtime, "config", None)
+            if isinstance(config, Mapping):
+                configurable = config.get("configurable")
+                metadata = config.get("metadata")
+                for key in ("checkpoint_id", "checkpoint_ns"):
+                    if isinstance(configurable, Mapping):
+                        value = configurable.get(key)
+                        if isinstance(value, str) and value:
+                            facts[key] = value
+                for key in (
+                    "langgraph_checkpoint_ns",
+                    "langgraph_step",
+                    "langgraph_task_idx",
+                ):
+                    if isinstance(metadata, Mapping):
+                        value = metadata.get(key)
+                        if isinstance(value, (str, int)) and not isinstance(
+                            value,
+                            bool,
+                        ):
+                            facts[key] = value
+        if not facts:
+            facts["compatibility_attempt"] = 1
+        return "runtime-attempt:" + canonical_json_sha256(
+            {"framework_execution": facts}
+        )
+
+    @staticmethod
+    def _result_outcome(
+        result: ToolHandlerResult,
+        *,
+        policy_blocked: bool,
+    ) -> RuntimeToolControlOutcome:
+        if policy_blocked:
+            return RuntimeToolControlOutcome.ERROR
+        if isinstance(result, Command) or (
+            isinstance(result, list)
+            and any(isinstance(item, Command) for item in result)
+        ):
+            return RuntimeToolControlOutcome.COMMAND
+        if not _succeeded(result):
+            return RuntimeToolControlOutcome.ERROR
+        return RuntimeToolControlOutcome.SUCCESS
+
+    @classmethod
+    def _call_identity(
+        cls,
+        request: ToolCallRequest,
+    ) -> RuntimeToolCallIdentity | None:
+        tool_call_id = str(request.tool_call.get("id", "")).strip()
+        if not tool_call_id:
+            raise BudgetExceeded("Tool call is missing its model call id.")
+        return RuntimeToolCallIdentity.from_current(
+            execution_scope=cls._execution_scope(request),
+            model_turn=max(cls._model_turn(request.state), 1),
+            model_tool_call_id=tool_call_id,
+        )
+
+    @staticmethod
+    def _execution_scope(request: ToolCallRequest) -> str:
+        config = getattr(request.runtime, "config", None)
+        if not isinstance(config, Mapping):
+            return "supervisor"
+        metadata = config.get("metadata")
+        configurable = config.get("configurable")
+        for container in (metadata, configurable):
+            if not isinstance(container, Mapping):
+                continue
+            value = container.get(SUPERVISOR_TASK_CALL_ID_KEY)
+            if isinstance(value, str) and value.strip():
+                return f"subagent:{value.strip()}"
+        return "supervisor"
+
+    @staticmethod
+    def _model_turn(state: object) -> int:
+        if isinstance(state, Mapping):
+            value = state.get("runtime_control_model_turn", 0)
+        else:
+            value = getattr(state, "runtime_control_model_turn", 0)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
 
     @staticmethod
     def _execute(
@@ -336,4 +782,15 @@ def _tool_messages(result: ToolHandlerResult) -> tuple[ToolMessage, ...]:
     return ()
 
 
-__all__ = ("RuntimeToolControlMiddleware",)
+# Compatibility alias retained while legacy wrappers and external tests run in
+# shadow parity. New composition code uses ``RuntimeControlMiddleware``.
+RuntimeToolControlMiddleware = RuntimeControlMiddleware
+
+
+__all__ = (
+    "RuntimeControlMiddleware",
+    "RuntimeControlState",
+    "RuntimeModelTurnReducer",
+    "RuntimeToolControlMiddleware",
+    "RuntimeToolSurfaceSnapshot",
+)

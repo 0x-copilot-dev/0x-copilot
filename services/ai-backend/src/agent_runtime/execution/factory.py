@@ -45,7 +45,11 @@ from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
 )
-from agent_runtime.capabilities.middleware import RuntimeToolControlMiddleware
+from agent_runtime.capabilities.middleware import (
+    RuntimeControlMiddleware,
+    wrap_tools_with_display,
+)
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -245,7 +249,7 @@ async def _assemble_harness(
 
     try:
         model_tools = _model_visible_tools(
-            tools=tools,
+            tools=tuple(_canonical_graph_tool(tool) for tool in tools),
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
@@ -256,6 +260,11 @@ async def _assemble_harness(
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             runtime_context=runtime_context,
         )
+        # Display-schema decoration precedes policy wrapping so a rejected
+        # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
+        # builder repeats this idempotently for direct callers; preserving the
+        # blocked wrapper lets RuntimeControlMiddleware reject before budget.
+        model_tools = tuple(wrap_tools_with_display(model_tools))
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
         # ``call_mcp_tool`` (and any future gated umbrella tool) is routed to
         # the SAME human-approval interrupt for ask/require, blocked with a safe
@@ -354,7 +363,8 @@ async def _assemble_harness(
                 permissions=(),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
-                universal_middleware_factories=(RuntimeToolControlMiddleware,),
+                middleware=(RuntimeControlMiddleware(),),
+                universal_middleware_factories=(RuntimeControlMiddleware,),
             )
         )
     except AgentRuntimeError:
@@ -513,6 +523,14 @@ def _model_visible_tools(
             _structured_tool(publish_artifact_tool, PublishArtifactInput)
         )
     return tuple(model_tools)
+
+
+def _canonical_graph_tool(tool: object) -> object:
+    """Remove the legacy budget adapter at the canonical graph boundary."""
+
+    while isinstance(tool, ToolBudgetGuardedTool):
+        tool = tool.inner
+    return tool
 
 
 def _prompt_assembly_plan(
