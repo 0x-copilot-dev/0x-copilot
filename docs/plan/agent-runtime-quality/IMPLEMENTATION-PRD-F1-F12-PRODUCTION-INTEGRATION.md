@@ -58,7 +58,9 @@ create a second planning queue.
         and unique-claim accounting (`695c1de6`).
   - [x] Golden baseline traces (`c2ea9f9c`).
   - [ ] Machine-readable cross-authority contract map.
-  - [ ] Pinned Deep Agents/LangChain middleware signature tests.
+  - [x] Pinned Deep Agents/LangChain/LangGraph middleware signatures, harness
+        profile surface, and isolated private Atlas seam (`070d75f3`; 28
+        focused graph/middleware tests).
   - [ ] Model-construction and final model-visible-tool topology enforcement.
   - [x] `off`/`shadow`/`enforce` modes, authority-narrowing kill switches, and
         conservative unknown-mode defaults (`d93ac11a`; 30 focused and E2
