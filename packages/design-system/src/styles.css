@@ -695,6 +695,467 @@ textarea {
   );
 }
 
+/* Backward-compatible generic composition recipes used by fixed renderers.
+ * These names predate the semantic artifact recipes below; defining them here
+ * prevents a code/file renderer from falling back to browser-default layout. */
+.ui-title {
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.ui-toolbar {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ui-table-wrap {
+  min-width: 0;
+  overflow: auto;
+}
+
+/* Artifact + dataset surface recipes
+ * -------------------------------------------------------------------------
+ * Artifacts previously assembled a generic padded card inside another generic
+ * padded card, while their renderer emitted ui-title/ui-toolbar/ui-table-wrap
+ * class names that had no definitions. The result was browser-default tables,
+ * 16px controls, and un-sized buttons. These recipes are the connector-neutral
+ * artifact grammar shared by Studio hosts. They intentionally use the same
+ * compact registers as the v3 staged-review sheet: 10px/16px chrome, 9–12.5px
+ * metadata and 24px row controls.
+ */
+.ui-artifact-surface {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-subtle);
+  color: var(--color-text);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  width: 100%;
+}
+
+.ui-artifact-surface .ui-button {
+  border-radius: 6px;
+  flex: none;
+  font-size: 11.5px;
+  gap: 6px;
+  justify-content: normal;
+  line-height: normal;
+  min-height: 0;
+  padding: 4px 9px;
+  transition:
+    background 0.12s,
+    border-color 0.12s;
+  white-space: nowrap;
+}
+
+.ui-artifact-header {
+  align-items: center;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex: none;
+  gap: 10px;
+  line-height: 1.5;
+  min-width: 0;
+  padding: 10px 16px;
+}
+
+.ui-artifact-header__identity {
+  align-items: center;
+  display: flex;
+  flex: none;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ui-artifact-title {
+  color: var(--color-text);
+  font-family: var(--font-display);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.5;
+  margin: 0;
+  max-width: 24rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-artifact-header .ui-badge {
+  flex: none;
+  font-weight: var(--font-weight-regular);
+  padding: 2px 8px;
+}
+
+.ui-artifact-meta {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10);
+  margin: 0 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-artifact-header__actions {
+  display: flex;
+  flex: none;
+}
+
+.ui-artifact-download {
+  align-items: center;
+  display: inline-flex;
+  gap: 8px;
+}
+
+.ui-artifact-content {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.ui-artifact-subpanel {
+  background: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  display: grid;
+  font-size: var(--font-size-xs);
+  gap: 8px;
+  padding: 10px 16px;
+}
+
+.ui-artifact-history {
+  background: var(--color-bg-elevated);
+  border-top: 1px solid var(--color-border);
+  flex: none;
+  padding: 8px 16px;
+}
+
+.ui-artifact-history__heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+
+.ui-artifact-history__heading p {
+  margin: 0;
+}
+
+.ui-artifact-history__count,
+.ui-artifact-history__meta {
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+}
+
+.ui-artifact-history__count {
+  margin-left: auto;
+}
+
+.ui-artifact-history__list {
+  display: grid;
+  gap: 2px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.ui-artifact-history__row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ui-artifact-history__meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-artifact-history__actions {
+  display: flex;
+  flex: none;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.ui-dataset-surface,
+.ui-dataset-editor {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+
+.ui-dataset-notice,
+.ui-dataset-helper,
+.ui-dataset-status {
+  background: var(--color-bg-elevated);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  flex: none;
+  font-size: 11px;
+  line-height: 1.55;
+  margin: 0;
+  padding: 8px 16px;
+}
+
+.ui-dataset-notice--warning,
+.ui-dataset-status--warning {
+  background: color-mix(in srgb, var(--color-warning) 5%, transparent);
+  color: var(--color-warning);
+}
+
+.ui-dataset-status--danger {
+  background: color-mix(in srgb, var(--color-danger) 5%, transparent);
+  color: var(--color-danger);
+}
+
+.ui-dataset-helper {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+.ui-dataset-helper__status {
+  color: var(--color-text-subtle);
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+  margin-left: auto;
+}
+
+.ui-dataset-toolbar,
+.ui-dataset-window-controls {
+  align-items: end;
+  border-bottom: 1px solid var(--color-border);
+  display: flex;
+  flex: none;
+  gap: 8px;
+  padding: 8px 16px;
+}
+
+.ui-dataset-field {
+  color: var(--color-text-subtle);
+  display: grid;
+  flex: 0 1 210px;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  gap: 4px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.ui-dataset-field--filter {
+  flex-basis: 320px;
+}
+
+.ui-dataset-field .ui-input,
+.ui-dataset-field .ui-select {
+  border-color: var(--color-border-strong);
+  border-radius: 6px;
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  height: 28px;
+  letter-spacing: normal;
+  padding: 4px 8px;
+  text-transform: none;
+}
+
+.ui-dataset-window-controls {
+  align-items: center;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-9-5);
+}
+
+.ui-dataset-window-controls > span {
+  margin-right: auto;
+}
+
+.ui-dataset-table-wrap {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+}
+
+.ui-dataset-table {
+  border-collapse: collapse;
+  min-width: 640px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.ui-dataset-table__header {
+  background: var(--color-bg);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-subtle);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0.1em;
+  padding: 8px 10px;
+  position: sticky;
+  text-align: left;
+  text-transform: uppercase;
+  top: 0;
+  z-index: 2;
+}
+
+.ui-dataset-table__cell {
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-strong);
+  font-size: 12px;
+  height: 36px;
+  overflow: hidden;
+  padding: 8px 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ui-dataset-table__header + .ui-dataset-table__header,
+.ui-dataset-table__cell + .ui-dataset-table__cell {
+  border-left: 1px solid var(--color-border);
+}
+
+.ui-dataset-table--editable .ui-dataset-table__header,
+.ui-dataset-table--editable .ui-dataset-table__cell {
+  padding: 0;
+}
+
+.ui-dataset-cell-input {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0;
+  color: var(--color-text-strong);
+  display: block;
+  font-family: var(--font-mono);
+  font-size: var(--font-size-mono-10-5);
+  height: 35px;
+  min-width: 0;
+  outline: none;
+  padding: 8px 10px;
+  width: 100%;
+}
+
+.ui-dataset-cell-input--header {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-3xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ui-dataset-cell-input:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-surface-muted) 58%, transparent);
+}
+
+.ui-dataset-cell-input:focus {
+  background: var(--color-bg-elevated);
+  border-color: var(--color-accent);
+  border-radius: 4px;
+}
+
+.ui-dataset-cell-input[data-modified="true"] {
+  background: color-mix(in srgb, var(--color-warning) 9%, transparent);
+  box-shadow: inset 2px 0 var(--color-warning);
+}
+
+.ui-dataset-cell-input:disabled {
+  color: var(--color-text-muted);
+  opacity: 0.72;
+}
+
+.ui-dataset-action-bar {
+  align-items: center;
+  background: rgba(232, 180, 94, 0.05);
+  border-top: 1px solid rgba(232, 180, 94, 0.28);
+  display: flex;
+  flex: none;
+  gap: 11px;
+  line-height: 1.5;
+  padding: 10px 16px;
+}
+
+.ui-dataset-action-bar__copy {
+  color: var(--color-text-strong);
+  font-size: 12px;
+}
+
+.ui-dataset-action-bar > .ui-button--primary {
+  margin-left: auto;
+}
+
+.ui-dataset-confirmation {
+  align-items: center;
+  background: color-mix(in srgb, var(--color-warning) 5%, transparent);
+  border-top: 1px solid
+    color-mix(in srgb, var(--color-warning) 28%, transparent);
+  color: var(--color-text-muted);
+  display: flex;
+  font-size: 11.5px;
+  gap: 12px;
+  padding: 10px 16px;
+}
+
+.ui-dataset-confirmation p {
+  margin: 0;
+}
+
+.ui-dataset-confirmation__actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  margin-left: auto;
+}
+
+@media (max-width: 760px) {
+  .ui-artifact-header,
+  .ui-dataset-toolbar,
+  .ui-dataset-action-bar {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .ui-artifact-meta {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .ui-artifact-header__actions {
+    margin-left: auto;
+  }
+
+  .ui-dataset-field {
+    flex: 1 1 10rem;
+  }
+
+  .ui-dataset-action-bar__copy {
+    flex: 1 1 100%;
+    margin-right: 0;
+  }
+}
+
 /* design `.chip` — mono, bordered, NO fill. A quiet outlined pill that hugs its
    text; tone variants recolour the text + border, never a fill. */
 .ui-badge {

@@ -1,4 +1,4 @@
-# Artifact dataset parity target — source gap
+# Artifact dataset parity target — exact-state gap, shared v3 grammar covered
 
 State: `editor`.
 
@@ -6,11 +6,22 @@ The requested path (`/Users/parthpahwa/Downloads/copilot-project-folder-copy/Cha
 
 That file contains a compact `forecast_q1.csv` analysis result, but not an artifact table/editor: it reports row/column counts and summary statistics in chat. It has no grid, filtering/sorting, virtual window, editable cells, or immutable revision controls. Treating that card as an exact design equivalent would manufacture parity evidence.
 
-This target therefore records an explicit scoped fallback:
+The repository now also includes the supplied Generative Surfaces v3 bulk-review
+design. It is not an honest exact-state equivalent for a standalone CSV
+artifact editor, but it does define the shared sheet chrome and action language
+that the editor must reuse.
 
-- `lib/render-live-artifact-dataset.test.tsx` renders the real `DatasetArtifactRenderer` into `live/editor.html` using the shipping design-system stylesheet.
-- `anchors.json` defines stable production anchors for the card, view controls, virtualized grid, and revision actions, each marked as source-unmapped.
-- There is intentionally no design extraction, comparison report, or zero-drift claim until a B2 artifact table/editor design source is supplied.
+- `lib/render-live-artifact-dataset.test.tsx` renders the real `ArtifactFrame`,
+  `DatasetArtifactRenderer`, and revision history into `live/editor.html` using
+  the shipping design-system stylesheet.
+- `anchors-v3-shared.json` maps the roles genuinely shared with the v3 design:
+  sheet header, title, action bar, safety copy, and primary action.
+- `out/report-v3-shared.md` is the computed-style result for those shared roles.
+  It must have zero missing, HIGH, and MEDIUM findings.
+- `anchors.json` retains stable production anchors for dataset-only filter,
+  editable-grid, virtual-window, and revision controls. Those remain
+  source-unmapped; this repository does not fabricate a full 1:1 design claim
+  for controls absent from the supplied mock.
 
 Generate the deterministic live target from the repository root:
 

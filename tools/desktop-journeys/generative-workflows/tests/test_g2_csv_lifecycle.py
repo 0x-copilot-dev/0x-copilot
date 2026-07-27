@@ -151,14 +151,14 @@ class G2CsvLifecycleTests(unittest.TestCase):
 
     def test_native_dialog_commands_are_argument_safe(self) -> None:
         fixture_root = Path("/private/tmp/g2 fixture; no shell")
-        picker = g2._folder_picker_command(fixture_root)
-        approval = g2._approval_command()
+        picker = g2._folder_picker_command(fixture_root, 4242)
+        approval = g2._approval_command(4242)
         self.assertEqual(picker[:2], ["/usr/bin/osascript", "-e"])
         self.assertEqual(picker[3], "--")
         self.assertEqual(picker[4], str(fixture_root))
         self.assertNotIn(str(fixture_root), picker[2])
         self.assertNotIn("sh -c", " ".join(picker))
-        self.assertEqual(approval[3:], ["--", g2.APP_PROCESS_NAME])
+        self.assertEqual(approval[3:], ["--", "4242"])
         self.assertIn('button "Approve"', approval[2])
 
     def test_journey_environment_removes_plaintext_provider_key(self) -> None:

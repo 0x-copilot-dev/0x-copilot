@@ -68,6 +68,7 @@
         mark(byText("button", "Cancel", root), "draft-cancel");
       }
     } else {
+      mark(root.firstElementChild, "bulk-header");
       mark(byText("span", "8 opportunities", root), "bulk-title");
       mark(byText("span", "staged, not applied", root), "bulk-status");
       mark(root.querySelector(".sheet-scroll"), "bulk-table");
@@ -81,7 +82,9 @@
       mark(byText("div", "agent pre-held", root), "bulk-held-reason");
       if (state === "bulk-review") {
         mark(byText("span", "approved", root), "bulk-review-copy");
-        mark(byText("button", "Apply", root), "bulk-action");
+        const action = mark(byText("button", "Apply", root), "bulk-action");
+        mark(action?.parentElement, "bulk-action-bar");
+        mark(action?.parentElement?.querySelector("span"), "bulk-action-copy");
       } else {
         mark(byText("span", "nothing lost", root), "bulk-partial-copy");
         mark(byText("button", "Retry", root), "bulk-retry");

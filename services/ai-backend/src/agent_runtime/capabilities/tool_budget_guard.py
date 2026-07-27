@@ -475,6 +475,27 @@ class ToolBudgetGuardedTool(DelegatingTool):
         # Settled first, so the count the model reads includes this call.
         return self._model_visible_result(result, guard=guard, call_id=call_id)
 
+    def _run_inner(self, *args: Any, config: RunnableConfig, **kwargs: Any) -> Any:
+        """Forward LangChain runtime config only when a caller supplied it.
+
+        Direct unit-level ``_run`` callers historically omit ``config``.  The
+        public LangChain dispatch path always supplies it for this typed
+        wrapper, and config-aware inner tools require that propagation.
+        """
+
+        if config:
+            return self.inner._run(*args, config=config, **kwargs)
+        return self.inner._run(*args, **kwargs)
+
+    async def _arun_inner(
+        self, *args: Any, config: RunnableConfig, **kwargs: Any
+    ) -> Any:
+        """Async counterpart of :meth:`_run_inner`."""
+
+        if config:
+            return await self.inner._arun(*args, config=config, **kwargs)
+        return await self.inner._arun(*args, **kwargs)
+
     def _model_visible_result(
         self,
         result: object,
