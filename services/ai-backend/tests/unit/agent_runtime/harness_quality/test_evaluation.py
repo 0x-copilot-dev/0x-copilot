@@ -8,14 +8,17 @@ from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.harness_quality import (
     DeterministicEvaluationRunner,
     EvaluationCase,
+    EvaluationResult,
     EvaluationStatus,
     FixtureMiss,
     FixtureResponse,
     FixtureToolExecutor,
     HarnessVariant,
     InMemoryEvaluationRepository,
+    PromotionAssessment,
     PromotionGate,
     PromotionStatus,
+    PromotionThresholds,
     ProjectionPolicy,
     RuntimeTrajectoryProjector,
     ScorerResult,
@@ -41,9 +44,9 @@ def _case() -> EvaluationCase:
     )
 
 
-def _variant() -> HarnessVariant:
+def _variant(variant_id: str = "control") -> HarnessVariant:
     return HarnessVariant(
-        variant_id="control",
+        variant_id=variant_id,
         revision="r1",
         prompt_plan_revision="prompt_r1",
         capability_policy_revision="capability_r1",
@@ -82,6 +85,18 @@ def test_projector_retains_only_observable_identifiers_and_digest() -> None:
     assert manifest.ordered_steps[0].payload_digest == canonical_json_sha256(payload)
     assert "private raw customer query" not in manifest.model_dump_json()
     assert "must-not-project" not in manifest.model_dump_json()
+
+
+def test_projector_rejects_a_gap_in_the_canonical_event_timeline() -> None:
+    with pytest.raises(ValueError, match=r"expected 2, got 3"):
+        TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+            run_id="run_1",
+            variant_id="control",
+            events=(
+                _event(1, {"tool_name": "drive.search"}),
+                _event(3, {"tool_name": "drive.open"}),
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -154,11 +169,33 @@ async def test_hard_gate_failure_blocks_promotion() -> None:
         executor=executor,
         scorers=(_PassingScorer(), _FailingScorer()),
         clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
-    ).run(case=_case(), variant=_variant(), fixtures=FixtureToolExecutor(()))
+    ).run(
+        case=_case(),
+        variant=_variant("candidate"),
+        fixtures=FixtureToolExecutor(()),
+    )
 
     assert result.status is EvaluationStatus.FAILED
     assert result.hard_gate_failures == ("unauthorized_effect",)
-    decision = PromotionGate().decide(
+    gate = PromotionGate()
+    assessment = gate.evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=(result,),
+        control_results=(
+            _result(
+                case_id=result.case_id,
+                variant_id="control",
+                status=EvaluationStatus.SUCCEEDED,
+            ),
+        ),
+        case_task_families={result.case_id: "connector_selection"},
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=1,
+        ),
+    )
+    decision = gate.decide(
         decision_id="decision_1",
         candidate_variant_id="candidate",
         control_variant_id="control",
@@ -167,9 +204,11 @@ async def test_hard_gate_failure_blocks_promotion() -> None:
         report_ref="artifact_report_1",
         actor="user_1",
         rationale="Synthetic safety suite.",
-        candidate_results=(result,),
+        assessment=assessment,
     )
+    assert "candidate_hard_gate_failure" in assessment.reason_codes
     assert decision.status is PromotionStatus.REJECTED
+    assert decision.assessment_digest == assessment.assessment_digest
 
 
 @pytest.mark.asyncio
@@ -230,3 +269,169 @@ async def test_runtime_projection_is_opt_in_and_reads_existing_event_store() -> 
     assert projected is not None
     assert projected.run_id == "run_1"
     assert store.calls == 1
+
+
+def _result(
+    *,
+    case_id: str,
+    variant_id: str,
+    status: EvaluationStatus = EvaluationStatus.SUCCEEDED,
+    hard_gate_failures: tuple[str, ...] = (),
+    total_cost: float = 1,
+    end_to_end_ms: int = 100,
+) -> EvaluationResult:
+    values: dict[str, object] = {
+        "evaluation_run_id": f"eval_{variant_id}_{case_id}",
+        "case_id": case_id,
+        "variant_id": variant_id,
+        "status": status,
+        "scorer_results": (),
+        "hard_gate_failures": hard_gate_failures,
+        "total_cost": total_cost,
+        "model_turns": 1,
+        "tool_calls": 1,
+        "end_to_end_ms": end_to_end_ms,
+        "first_useful_answer_ms": end_to_end_ms,
+    }
+    return EvaluationResult(
+        **values,
+        result_digest=EvaluationResult.digest_for(**values),
+    )
+
+
+def test_promotion_assessment_requires_exact_paired_cases() -> None:
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=(_result(case_id="case_1", variant_id="candidate"),),
+        control_results=(_result(case_id="case_2", variant_id="control"),),
+        case_task_families={
+            "case_1": "connector_selection",
+            "case_2": "connector_selection",
+        },
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=1,
+        ),
+    )
+
+    assert not assessment.passed
+    assert assessment.paired_case_count == 0
+    assert "unpaired_case_set" in assessment.reason_codes
+    assert "minimum_paired_cases_not_met" in assessment.reason_codes
+
+
+def test_promotion_assessment_passes_non_regressing_candidate() -> None:
+    candidate = tuple(
+        _result(
+            case_id=f"case_{index}",
+            variant_id="candidate",
+            total_cost=0.9,
+            end_to_end_ms=90,
+        )
+        for index in range(1, 6)
+    )
+    control = tuple(
+        _result(case_id=f"case_{index}", variant_id="control") for index in range(1, 6)
+    )
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=candidate,
+        control_results=control,
+        case_task_families={
+            f"case_{index}": "connector_selection" for index in range(1, 6)
+        },
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=5,
+            protected_task_families=frozenset({"connector_selection"}),
+        ),
+    )
+
+    assert assessment.passed
+    assert assessment.reason_codes == ()
+    assert assessment.success_rate_delta_lower_bound == 0
+    assert assessment.protected_family_lower_bounds == {"connector_selection": 0}
+    assert assessment.mean_cost_ratio == pytest.approx(0.9)
+    assert assessment.p95_latency_ratio == pytest.approx(0.9)
+
+
+def test_promotion_assessment_rejects_quality_cost_and_latency_regressions() -> None:
+    candidate = (
+        _result(
+            case_id="case_1",
+            variant_id="candidate",
+            status=EvaluationStatus.FAILED,
+            total_cost=2,
+            end_to_end_ms=300,
+        ),
+        _result(
+            case_id="case_2",
+            variant_id="candidate",
+            total_cost=2,
+            end_to_end_ms=300,
+        ),
+    )
+    control = (
+        _result(case_id="case_1", variant_id="control"),
+        _result(case_id="case_2", variant_id="control"),
+    )
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=candidate,
+        control_results=control,
+        case_task_families={
+            "case_1": "protected",
+            "case_2": "protected",
+        },
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=2,
+            protected_task_families=frozenset({"protected"}),
+        ),
+    )
+
+    assert not assessment.passed
+    assert {
+        "success_regression",
+        "protected_family_regression",
+        "mean_cost_ratio_exceeded",
+        "p95_latency_ratio_exceeded",
+    }.issubset(assessment.reason_codes)
+
+
+def test_promotion_decision_rejects_mismatched_assessment_binding() -> None:
+    values: dict[str, object] = {
+        "candidate_variant_id": "other_candidate",
+        "control_variant_id": "control",
+        "thresholds_revision": "thresholds_r1",
+        "paired_case_count": 1,
+        "candidate_success_rate": 1,
+        "control_success_rate": 1,
+        "success_rate_delta": 0,
+        "success_rate_delta_lower_bound": 0,
+        "mean_cost_ratio": 1,
+        "p95_latency_ratio": 1,
+        "protected_family_lower_bounds": {},
+        "reason_codes": (),
+        "passed": True,
+    }
+    assessment = PromotionAssessment(
+        **values,
+        assessment_digest=PromotionAssessment.digest_for(**values),
+    )
+
+    with pytest.raises(ValueError, match="candidate variant"):
+        PromotionGate().decide(
+            decision_id="decision_1",
+            candidate_variant_id="candidate",
+            control_variant_id="control",
+            suite_revisions=("r1",),
+            thresholds_revision="thresholds_r1",
+            report_ref="artifact_report_1",
+            actor="user_1",
+            rationale="Binding test.",
+            assessment=assessment,
+        )

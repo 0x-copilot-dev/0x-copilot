@@ -226,6 +226,87 @@ class EvaluationResult(RuntimeContract):
         return _digest_json_safe(values)
 
 
+class PromotionThresholds(RuntimeContract):
+    """Versioned fail-closed thresholds for a paired promotion report."""
+
+    revision: Revision
+    minimum_paired_cases: Annotated[int, Field(ge=1, le=100_000)] = 20
+    confidence_level: Annotated[float, Field(gt=0.5, lt=1)] = 0.95
+    maximum_success_rate_regression: Annotated[float, Field(ge=0, le=1)] = 0
+    maximum_protected_family_regression: Annotated[float, Field(ge=0, le=1)] = 0
+    maximum_mean_cost_ratio: Annotated[float, Field(gt=0)] = 1.1
+    maximum_p95_latency_ratio: Annotated[float, Field(gt=0)] = 1.1
+    protected_task_families: frozenset[str] = frozenset()
+
+
+class PromotionAssessment(RuntimeContract):
+    """Content-free paired candidate/control assessment.
+
+    The report contains aggregate values and reason codes only. Case inputs,
+    prompts, outputs, and scorer rationales remain in their owning protected
+    fixture/result records.
+    """
+
+    candidate_variant_id: OpaqueId
+    control_variant_id: OpaqueId
+    thresholds_revision: Revision
+    paired_case_count: Annotated[int, Field(ge=0)]
+    candidate_success_rate: Annotated[float, Field(ge=0, le=1)]
+    control_success_rate: Annotated[float, Field(ge=0, le=1)]
+    success_rate_delta: Annotated[float, Field(ge=-1, le=1)]
+    success_rate_delta_lower_bound: Annotated[float, Field(ge=-1, le=1)]
+    mean_cost_ratio: Annotated[float, Field(ge=0)] | None = None
+    p95_latency_ratio: Annotated[float, Field(ge=0)] | None = None
+    protected_family_lower_bounds: dict[str, float] = Field(default_factory=dict)
+    reason_codes: tuple[str, ...]
+    passed: bool
+    assessment_digest: Sha256
+
+    @field_validator("reason_codes")
+    @classmethod
+    def _reason_codes_are_canonical(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value != tuple(sorted(set(value))):
+            raise ValueError("reason_codes must be unique and sorted")
+        return value
+
+    @field_validator("protected_family_lower_bounds")
+    @classmethod
+    def _family_bounds_are_valid(cls, value: dict[str, float]) -> dict[str, float]:
+        for family, bound in value.items():
+            if not family.strip():
+                raise ValueError("protected task family must be non-empty")
+            if bound < -1 or bound > 1:
+                raise ValueError("protected family lower bound must be within [-1, 1]")
+        return value
+
+    @model_validator(mode="after")
+    def _assessment_digest_matches(self) -> "PromotionAssessment":
+        expected = self.digest_for(
+            candidate_variant_id=self.candidate_variant_id,
+            control_variant_id=self.control_variant_id,
+            thresholds_revision=self.thresholds_revision,
+            paired_case_count=self.paired_case_count,
+            candidate_success_rate=self.candidate_success_rate,
+            control_success_rate=self.control_success_rate,
+            success_rate_delta=self.success_rate_delta,
+            success_rate_delta_lower_bound=self.success_rate_delta_lower_bound,
+            mean_cost_ratio=self.mean_cost_ratio,
+            p95_latency_ratio=self.p95_latency_ratio,
+            protected_family_lower_bounds=self.protected_family_lower_bounds,
+            reason_codes=self.reason_codes,
+            passed=self.passed,
+        )
+        if self.assessment_digest != expected:
+            raise ValueError(
+                "assessment_digest does not match canonical assessment content"
+            )
+        return self
+
+    @staticmethod
+    def digest_for(**values: object) -> str:
+        return _digest_json_safe(values)
+
+
 class PromotionDecision(RuntimeContract):
     decision_id: OpaqueId
     candidate_variant_id: OpaqueId
@@ -233,6 +314,7 @@ class PromotionDecision(RuntimeContract):
     suite_revisions: tuple[Revision, ...]
     thresholds_revision: Revision
     report_ref: OpaqueId
+    assessment_digest: Sha256
     status: PromotionStatus
     actor: OpaqueId
     decided_at: datetime
