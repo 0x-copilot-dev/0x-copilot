@@ -77,8 +77,9 @@ create a second planning queue.
         event payloads, canonical event-journal ports, and in-memory/file/
         Postgres runtime composition (`4f86cb4b`; 42 focused contract, replay,
         collision, adapter, and type-parity tests plus TypeScript typecheck).
-  - [ ] Deletion visibility, physical-retention parity, desktop file recovery,
-        and explicit non-CAS budget-reference ownership.
+  - [x] Deletion visibility, physical-retention parity, desktop file recovery,
+        and explicit non-CAS budget-reference ownership (`8d23ce71`; 12 focused
+        lifecycle cases plus 832 adapter-conformance/worker tests, 47 skipped).
   - [x] Verified-boundary builder, stable HMAC assignment, typed run context,
         pre-model bind, approval/restart rehydration, legacy-safe migration,
         and live narrowing (`16bc0a07`; 18 focused worker-boundary, restart,
