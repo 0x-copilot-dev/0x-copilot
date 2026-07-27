@@ -172,6 +172,7 @@ const ENTITY_KEYS = {
     "proposal_digest",
     "actor",
     "decision_ledger_id",
+    "row_keys",
   ),
   EffectExecutionResult: exactKeys<EffectExecutionResult>()(
     "outcome",
@@ -179,6 +180,7 @@ const ENTITY_KEYS = {
     "result_digest",
     "retryable",
     "safe_message",
+    "row_results",
   ),
 } as const;
 

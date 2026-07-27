@@ -253,11 +253,16 @@
         "actor",
         "decision_ledger_id"
       ],
-      "optional": []
+      "optional": ["row_keys"]
     },
     "EffectExecutionResult": {
       "required": ["outcome", "retryable"],
-      "optional": ["receipt_ref", "result_digest", "safe_message"]
+      "optional": [
+        "receipt_ref",
+        "result_digest",
+        "safe_message",
+        "row_results"
+      ]
     }
   },
   "events": {
@@ -517,7 +522,7 @@
         "proposal_digest",
         "target_digest"
       ],
-      "optional": ["actor_ref", "decided_at"],
+      "optional": ["actor_ref", "decided_at", "row_keys"],
       "enum_fields": {
         "decision": "effect_decision",
         "actor": "effect_actor"
@@ -537,7 +542,7 @@
     },
     "effect.applied": {
       "required": ["v", "stage_id", "revision", "outcome"],
-      "optional": ["receipt_ref", "result_digest"],
+      "optional": ["receipt_ref", "result_digest", "row_results"],
       "enum_fields": { "outcome": "effect_outcome" }
     },
     "effect.indeterminate": {
@@ -566,6 +571,21 @@
       "optional": [],
       "enum_fields": {
         "decision": "gate_decision",
+        "actor": "effect_actor"
+      }
+    },
+    "effect.row_decisions_recorded": {
+      "required": [
+        "v",
+        "stage_id",
+        "revision",
+        "decisions",
+        "actor",
+        "proposal_digest",
+        "target_digest"
+      ],
+      "optional": ["actor_ref", "decided_at"],
+      "enum_fields": {
         "actor": "effect_actor"
       }
     }

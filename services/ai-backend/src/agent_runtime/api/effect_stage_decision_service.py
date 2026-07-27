@@ -9,6 +9,7 @@ workspace dependency.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 import hashlib
 import json
@@ -19,11 +20,17 @@ from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.ports import PersistencePort, RuntimeQueuePort
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
+    EffectCommitCommand,
     EffectStageScope,
     EffectStageState,
 )
-from agent_runtime.effects.errors import EffectStageForbidden, EffectStageNotFound
+from agent_runtime.effects.errors import (
+    EffectStageForbidden,
+    EffectStageInvalidTransition,
+    EffectStageNotFound,
+)
 from agent_runtime.effects.executor import EffectExecutionScope
+from agent_runtime.effects.ports import StructuralEvent
 from agent_runtime.effects.rollout import effect_execution_capabilities
 from agent_runtime.effects.staging import EffectStager
 from agent_runtime.rollout_admission import (
@@ -37,6 +44,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectDecisionKind,
     EffectExecutorKind,
+    LedgerEventType,
 )
 
 
@@ -77,6 +85,36 @@ class EffectStageDecisionService:
         del _run, _scope, stager
         return current
 
+    async def stage_history(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+        stage_id: str,
+        allowed_executors: frozenset[EffectExecutorKind],
+    ) -> tuple[EffectStageState, tuple[StructuralEvent, ...]]:
+        """Return the owner-scoped stage and its append-only event history.
+
+        Review projections use this read seam instead of reaching into the
+        decision service's private composition.  It preserves the same
+        owner/executor indistinguishability boundary as ``current_stage``.
+        """
+
+        _run, scope, stager, current = await self._owned_stage(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stage_id=stage_id,
+            allowed_executors=allowed_executors,
+        )
+        del _run
+        events = await stager.ledger.list_stage_events(
+            scope=scope,
+            stage_id=stage_id,
+        )
+        return current, tuple(events)
+
     async def record_decision(
         self,
         *,
@@ -88,6 +126,7 @@ class EffectStageDecisionService:
         decision: EffectDecisionKind,
         proposal_digest: str,
         target_digest: str,
+        row_keys: tuple[str, ...] | None = None,
         allowed_executors: frozenset[EffectExecutorKind],
         idempotency_namespace: str = "effect-decision",
     ) -> EffectStageState:
@@ -127,11 +166,125 @@ class EffectStageDecisionService:
                 decision=decision,
                 proposal_digest=proposal_digest,
                 target_digest=target_digest,
+                row_keys=row_keys,
             ),
+            row_keys=row_keys,
             governed_capabilities=(
                 governed_lane.capabilities if governed_lane is not None else None
             ),
         )
+
+    async def record_row_decisions(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+        stage_id: str,
+        revision: int,
+        decisions: dict[str, str],
+        proposal_digest: str,
+        target_digest: str,
+        allowed_executors: frozenset[EffectExecutorKind],
+        idempotency_key: str,
+    ) -> EffectStageState:
+        """Persist user row posture through the canonical effect ledger."""
+
+        run, scope, stager, _current = await self._owned_stage(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stage_id=stage_id,
+            allowed_executors=allowed_executors,
+        )
+        return await stager.record_row_decisions(
+            scope=scope,
+            stage_id=stage_id,
+            revision=revision,
+            decisions=decisions,
+            proposal_digest=proposal_digest,
+            target_digest=target_digest,
+            actor=EffectActorIdentity(
+                actor=EffectActor.USER,
+                principal_ref=f"principal://users/{run.user_id}",
+            ),
+            idempotency_key=idempotency_key,
+        )
+
+    async def enqueue_rowset_retry(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        run_id: str,
+        stage_id: str,
+        revision: int,
+        proposal_digest: str,
+        target_digest: str,
+        row_keys: tuple[str, ...],
+        basis_ledger_id: str,
+        allowed_executors: frozenset[EffectExecutorKind],
+    ) -> EffectStageState:
+        """Enqueue only the exact failed scope from the latest durable result."""
+
+        run, scope, stager, current = await self._owned_stage(
+            org_id=org_id,
+            user_id=user_id,
+            run_id=run_id,
+            stage_id=stage_id,
+            allowed_executors=allowed_executors,
+        )
+        decision = current.decision
+        if (
+            decision is None
+            or decision.decision is not EffectDecisionKind.APPROVE
+            or decision.row_keys is None
+            or current.current_revision.revision != revision
+            or current.current_revision.proposal_digest != proposal_digest
+            or current.target_digest != target_digest
+        ):
+            raise EffectStageInvalidTransition()
+        events = await stager.ledger.list_stage_events(
+            scope=scope,
+            stage_id=stage_id,
+        )
+        failed = _latest_failed_scope(events=events, basis_ledger_id=basis_ledger_id)
+        if (
+            failed is None
+            or set(row_keys) != set(failed)
+            or not set(row_keys).issubset(decision.row_keys)
+        ):
+            raise EffectStageInvalidTransition()
+        governed_lane = self._admit_rollout_lane(
+            run=run,
+            executor=current.executor,
+        )
+        idempotency_key = self._retry_key(
+            run_id=run.run_id,
+            stage_id=stage_id,
+            revision=revision,
+            proposal_digest=proposal_digest,
+            target_digest=target_digest,
+            row_keys=row_keys,
+            basis_ledger_id=basis_ledger_id,
+        )
+        await stager.outbox.enqueue_after_decision(
+            EffectCommitCommand(
+                run_id=run.run_id,
+                stage_id=stage_id,
+                revision=revision,
+                decision_ledger_id=decision.ledger_id,
+                proposal_digest=proposal_digest,
+                target_digest=target_digest,
+                idempotency_key=idempotency_key,
+                row_keys=row_keys,
+                retry_basis_ledger_id=basis_ledger_id,
+                governed_capabilities=(
+                    governed_lane.capabilities if governed_lane is not None else None
+                ),
+            )
+        )
+        return current
 
     async def _owned_stage(
         self,
@@ -214,6 +367,7 @@ class EffectStageDecisionService:
         decision: EffectDecisionKind,
         proposal_digest: str,
         target_digest: str,
+        row_keys: tuple[str, ...] | None = None,
     ) -> str:
         """Derive one stable retry key from the exact reviewed snapshot."""
 
@@ -225,12 +379,76 @@ class EffectStageDecisionService:
                 "decision": decision.value,
                 "proposal_digest": proposal_digest,
                 "target_digest": target_digest,
+                "row_keys": row_keys,
             },
             sort_keys=True,
             separators=(",", ":"),
             ensure_ascii=True,
         ).encode("utf-8")
         return f"{namespace}-{hashlib.sha256(material).hexdigest()}"
+
+    @staticmethod
+    def _retry_key(
+        *,
+        run_id: str,
+        stage_id: str,
+        revision: int,
+        proposal_digest: str,
+        target_digest: str,
+        row_keys: tuple[str, ...],
+        basis_ledger_id: str,
+    ) -> str:
+        material = json.dumps(
+            {
+                "run_id": run_id,
+                "stage_id": stage_id,
+                "revision": revision,
+                "proposal_digest": proposal_digest,
+                "target_digest": target_digest,
+                "row_keys": sorted(row_keys),
+                "basis_ledger_id": basis_ledger_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=True,
+        ).encode("utf-8")
+        return f"effect-rowset-retry-{hashlib.sha256(material).hexdigest()}"
+
+
+def _latest_failed_scope(
+    *,
+    events: Sequence[StructuralEvent],
+    basis_ledger_id: str,
+) -> tuple[str, ...] | None:
+    applied = [
+        event
+        for event in events
+        if event.event_type == LedgerEventType.EFFECT_APPLIED.value
+        and isinstance(event.payload.get("row_results"), list | tuple)
+    ]
+    if not applied:
+        return None
+    latest = max(applied, key=lambda event: (event.sequence_no, event.ledger_id))
+    if latest.ledger_id != basis_ledger_id:
+        return None
+    failed: list[str] = []
+    seen: set[str] = set()
+    for item in latest.payload.get("row_results", ()):
+        if not isinstance(item, dict):
+            return None
+        row_key = item.get("row_key")
+        outcome = item.get("outcome")
+        if (
+            not isinstance(row_key, str)
+            or not row_key
+            or row_key in seen
+            or outcome not in {"applied", "failed"}
+        ):
+            return None
+        seen.add(row_key)
+        if outcome == "failed":
+            failed.append(row_key)
+    return tuple(failed) if failed else None
 
 
 __all__ = ["EffectStageDecisionService"]

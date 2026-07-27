@@ -482,7 +482,7 @@ export function ThreadCanvas(props: ThreadCanvasProps): ReactElement {
           data-testid="run-canvas-slot"
           data-canvas-slot-testid="tc-surface-slot"
           data-visible={showSurfaceColumn ? "true" : "false"}
-          style={surfaceSlotStyle(showSurfaceColumn)}
+          style={surfaceSlotStyle(showSurfaceColumn, surfaceOverride !== null)}
         >
           {surfaceOverride !== null ? (
             <div
@@ -765,7 +765,10 @@ const tabsRowStyle: CSSProperties = {
   minHeight: 0,
 };
 
-const surfaceSlotStyle = (visible: boolean): CSSProperties => ({
+const surfaceSlotStyle = (
+  visible: boolean,
+  ownsOverflow: boolean,
+): CSSProperties => ({
   gridArea: "surface",
   display: visible ? "flex" : "none",
   flexDirection: "column",
@@ -774,7 +777,9 @@ const surfaceSlotStyle = (visible: boolean): CSSProperties => ({
   minHeight: 0,
   // The divider is the `handle` grid column (see railHandleStyle) — no border
   // here, or it would double the line next to the handle.
-  overflow: "auto",
+  // A kind-specific v2 surface owns its bounded body overflow. Generic/v1
+  // surfaces retain the historic slot scroller.
+  overflow: ownsOverflow ? "hidden" : "auto",
   padding: 0,
 });
 

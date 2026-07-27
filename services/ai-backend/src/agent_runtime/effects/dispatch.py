@@ -261,6 +261,7 @@ def _claim_from(
         proposal_content_ref=request.proposal_content_ref,
         actor=request.actor,
         decision_ledger_id=request.decision_ledger_id,
+        row_keys=request.row_keys,
     )
 
 
@@ -284,6 +285,7 @@ def _claim_matches(
         and claim.proposal_content_ref == request.proposal_content_ref
         and claim.actor is request.actor
         and claim.decision_ledger_id == request.decision_ledger_id
+        and claim.row_keys == request.row_keys
     )
 
 
@@ -338,6 +340,11 @@ def _completed(
             "receipt_ref": result.receipt_ref,
             "result_digest": result.result_digest,
             "safe_message": _safe_message(result.safe_message),
+            "row_results": (
+                [item.model_dump(mode="json") for item in result.row_results]
+                if result.row_results is not None
+                else None
+            ),
             "updated_at": datetime.now(UTC).isoformat(),
         }
     )

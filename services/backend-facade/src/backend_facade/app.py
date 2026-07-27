@@ -1516,6 +1516,76 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/effect-stages/{stage_id}/rowset/review")
+    async def get_rowset_effect_review(
+        request: Request,
+        stage_id: str,
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/effect-stages/{stage_id}/rowset/review",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/effect-stages/{stage_id}/rowset/decisions")
+    async def record_rowset_effect_decisions(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/effect-stages/{stage_id}/rowset/decisions",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/effect-stages/{stage_id}/rowset/apply")
+    async def apply_rowset_effect(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/effect-stages/{stage_id}/rowset/apply",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
+    @app.post("/v1/agent/effect-stages/{stage_id}/rowset/retry")
+    async def retry_failed_rowset_effect(
+        request: Request,
+        stage_id: str,
+        payload: dict[str, object],
+        run_id: str = Query(..., min_length=1),
+    ) -> dict[str, object]:
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "POST",
+            f"/v1/agent/effect-stages/{stage_id}/rowset/retry",
+            target="ai_backend",
+            params=identity.scoped_params({"run_id": run_id}),
+            json=payload,
+            identity=identity,
+        )
+
     @app.post("/v1/agent/stages/{stage_id}/apply")
     async def apply_stage_rows(
         request: Request,

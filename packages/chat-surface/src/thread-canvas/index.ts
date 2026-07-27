@@ -142,6 +142,45 @@ export {
   bulkRetryPledge,
   type TcBulkApplyBarProps,
 } from "./TcBulkApplyBar";
+export {
+  projectCanonicalRowsetReviewModel,
+  projectRowsetReviewModel,
+  rowsetApplyLabel,
+  rowsetApplyPledge,
+  rowsetCountsSummary,
+  rowsetRecoveryPledge,
+  rowsetResultSummary,
+  rowsetRetryLabel,
+  type ApplyContext,
+  type DiffValueModel,
+  type RecoveryContext,
+  type ReviewProvenance,
+  type ReviewStatusModel,
+  type ReviewTone,
+  type RowsetActionContext,
+  type RowsetApplyOutcome,
+  type RowsetDecision,
+  type RowsetDecisionContext,
+  type RowsetReviewCounts,
+  type RowsetReviewModel,
+  type RowsetReviewProjectionOptions,
+  type RowsetReviewRow,
+  type RowsetReviewStatus,
+} from "./rowsetReviewModel";
+export {
+  DecisionBar,
+  DiffValue,
+  RecoveryBar,
+  ReviewFooter,
+  ReviewHeader,
+  ReviewSurface,
+  ReviewTable,
+  StatusMark,
+  type DiffValueProps,
+  type ReviewHeaderProps,
+  type ReviewSurfaceProps,
+  type ReviewTableProps,
+} from "./ReviewSurface";
 // === end PRD-D3 ===
 
 // === Surfaces v2.1 — PRD-C3 shared workspace-stage review surface ===

@@ -82,6 +82,8 @@ def _material() -> BuiltinRowSetEffectMaterial:
 
 def _request(
     material: BuiltinRowSetEffectMaterial | None = None,
+    *,
+    row_keys: tuple[str, ...] | None = None,
 ) -> EffectExecutionRequest:
     value = material or _material()
     return EffectExecutionRequest(
@@ -95,6 +97,7 @@ def _request(
         proposal_digest=value.proposal_digest,
         actor="user",
         decision_ledger_id="rbuiltin·0001",
+        row_keys=row_keys,
     )
 
 
@@ -144,7 +147,9 @@ async def test_only_exact_unheld_rows_reach_the_existing_connector_lane() -> Non
     prepared = await executor.prepare(_request(material))
     result = await executor.apply(prepared)
 
-    assert result.outcome is EffectOutcome.PARTIAL
+    # A held row is deliberately outside the approved scope, not a failed
+    # apply. Applying every selected row is therefore terminal success.
+    assert result.outcome is EffectOutcome.APPLIED
     assert result.retryable is False
     assert len(connector.requests) == 1
     dispatched = connector.requests[0]
@@ -185,6 +190,48 @@ async def test_timeout_is_indeterminate_and_stops_without_a_second_dispatch() ->
     assert result.retryable is False
     assert len(connector.requests) == 1
     assert "provider detail" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_explicit_approved_scope_can_override_an_agent_hold() -> None:
+    material = _material()
+    connector = _Connector()
+    executor = _executor(resolver=_Resolver([material]), connector=connector)
+
+    result = await executor.apply(
+        await executor.prepare(_request(material, row_keys=("issue-2",)))
+    )
+
+    assert result.outcome is EffectOutcome.APPLIED
+    assert [request.row_key for request in connector.requests] == ["issue-2"]
+    assert [item.model_dump(mode="json") for item in result.row_results or ()] == [
+        {"row_key": "issue-2", "outcome": "applied", "detail": None}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_row_failures_return_exact_partial_results_without_stopping_successes() -> (
+    None
+):
+    material = _material()
+    connector = _Connector(
+        outcomes=[None, StageCommitConnectorError("safe provider failure")]
+    )
+    executor = _executor(resolver=_Resolver([material]), connector=connector)
+
+    result = await executor.apply(
+        await executor.prepare(_request(material, row_keys=("issue-1", "issue-2")))
+    )
+
+    assert result.outcome is EffectOutcome.PARTIAL
+    assert result.retryable is True
+    assert [request.row_key for request in connector.requests] == [
+        "issue-1",
+        "issue-2",
+    ]
+    assert [
+        (item.row_key, item.outcome.value) for item in result.row_results or ()
+    ] == [("issue-1", "applied"), ("issue-2", "failed")]
 
 
 @pytest.mark.asyncio

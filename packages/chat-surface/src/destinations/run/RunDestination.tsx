@@ -62,6 +62,7 @@ import {
 import type { QuestionAnswer } from "../../approvals";
 
 import {
+  isRowSetEffectReview,
   isSourceOpenResultV2,
   type AgentRunStatus,
   type ArtifactKind,
@@ -72,6 +73,7 @@ import {
   type RunAttachmentRequest,
   type RunId,
   type RunReceiptV2,
+  type RowSetEffectReview,
   type RuntimeEventReplayResponse,
   type SourceEntry,
   type SourcesProjectionV2,
@@ -116,6 +118,7 @@ import {
   projectSurfaceTabs,
   projectToolCalls,
   projectLedger,
+  projectCanonicalRowsetReviewModel,
   surfaceIdForTabUri,
   tabUriForSurface,
   type TcTab,
@@ -123,6 +126,8 @@ import {
   type PendingDiffHandle,
   type LedgerGateWritePolicy,
   type LedgerStagedWrite,
+  type RowsetActionContext,
+  type RowsetDecisionContext,
   type StagedMessagePresentation,
   type LedgerViewTier,
   type LedgerShapeRequestState,
@@ -247,6 +252,9 @@ function needsCockpitReceipt(receipt: RunReceiptV2): boolean {
   );
 }
 const EMPTY_GATE_POLICIES: ReadonlyMap<string, LedgerGateWritePolicy> =
+  new Map();
+const EMPTY_STAGE_SEQUENCES: ReadonlyMap<string, number> = new Map();
+const EMPTY_ROWSET_EFFECT_REVIEWS: ReadonlyMap<string, RowSetEffectReview> =
   new Map();
 const EMPTY_WORKSPACE_STAGE_REVIEWS: WorkspaceStageReviewProjection = new Map();
 const EMPTY_MCP_EFFECT_STAGE_REVIEWS: ReadonlyMap<
@@ -731,6 +739,16 @@ function plainRecord(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+function sameStringScope(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
 function workspaceStageActionMessage(
   review: WorkspaceStageReview,
   host: WorkspaceStageHost,
@@ -1194,6 +1212,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setGatePolicies(EMPTY_GATE_POLICIES);
     setEffectStageBusyId(null);
     setEffectStageMessages(new Map());
+    setPendingRowsetActions(EMPTY_STAGE_SEQUENCES);
+    setRowsetActionNotices(new Map());
+    setRowsetEffectReviews(EMPTY_ROWSET_EFFECT_REVIEWS);
+    setRowsetReviewErrors(new Map());
     setUpgradedSurface(null);
     prevTierRef.current = new Map();
   }, [conversationId]);
@@ -1282,6 +1304,21 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const [effectStageMessages, setEffectStageMessages] = useState<
     ReadonlyMap<string, string>
   >(() => new Map());
+  // PRD-12: preserve the exact row-set presentation snapshot across the
+  // request→ledger gap. The button stays disabled until replay advances past
+  // the sequence the reviewer acted on; no optimistic row outcome is invented.
+  const [pendingRowsetActions, setPendingRowsetActions] = useState<
+    ReadonlyMap<string, number>
+  >(EMPTY_STAGE_SEQUENCES);
+  const [rowsetActionNotices, setRowsetActionNotices] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
+  const [rowsetEffectReviews, setRowsetEffectReviews] = useState<
+    ReadonlyMap<string, RowSetEffectReview>
+  >(EMPTY_ROWSET_EFFECT_REVIEWS);
+  const [rowsetReviewErrors, setRowsetReviewErrors] = useState<
+    ReadonlyMap<string, string>
+  >(() => new Map());
   // E2/F3: a monotonic nonce the "N waiting" counter chip bumps to command the
   // rail onto the Approvals tab (one-directional; the rail reacts to increases).
   const [approvalsFocusSignal, setApprovalsFocusSignal] = useState(0);
@@ -1306,6 +1343,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setWorkspaceStageMessages(new Map());
     setEffectStageBusyId(null);
     setEffectStageMessages(new Map());
+    setPendingRowsetActions(EMPTY_STAGE_SEQUENCES);
+    setRowsetActionNotices(new Map());
+    setRowsetEffectReviews(EMPTY_ROWSET_EFFECT_REVIEWS);
+    setRowsetReviewErrors(new Map());
     setReceiptV2Opened(false);
     setExplicitArtifactTabs(EMPTY_EXPLICIT_ARTIFACT_TABS);
     setOpeningSourceId(null);
@@ -1543,6 +1584,10 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       setGatePolicies(EMPTY_GATE_POLICIES);
       setEffectStageBusyId(null);
       setEffectStageMessages(new Map());
+      setPendingRowsetActions(EMPTY_STAGE_SEQUENCES);
+      setRowsetActionNotices(new Map());
+      setRowsetEffectReviews(EMPTY_ROWSET_EFFECT_REVIEWS);
+      setRowsetReviewErrors(new Map());
       setPendingWorkV2Review(null);
       setUpgradedSurface(null);
       prevTierRef.current = new Map();
@@ -1762,7 +1807,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           ? { decision: "approve_with_edits", edits }
           : { decision };
       void transport
-        .request({
+        .request<unknown>({
           method: "POST",
           path: `/v1/agent/approvals/${approvalId}/decision`,
           body,
@@ -2030,6 +2075,96 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
           ),
     [surfacesV2, scrubbedSeq, session.events],
   );
+  const rowsetEffectStageIds = useMemo(
+    () =>
+      displayedCanvasLifecycle === null
+        ? []
+        : displayedCanvasLifecycle.tabs
+            .filter(
+              (subject) =>
+                subject.kind === "effect" &&
+                subject.rendererHint === "effect-rowset",
+            )
+            .map((subject) => subject.subjectId),
+    [displayedCanvasLifecycle],
+  );
+  const rowsetEffectStageKey = rowsetEffectStageIds.join("\u0000");
+  const latestRunSequence =
+    session.events.length === 0
+      ? 0
+      : (session.events[session.events.length - 1]?.sequence_no ?? 0);
+  useEffect(() => {
+    const runId = session.runId;
+    if (!surfacesV2 || runId === null || rowsetEffectStageIds.length === 0) {
+      setRowsetEffectReviews(EMPTY_ROWSET_EFFECT_REVIEWS);
+      setRowsetReviewErrors(new Map());
+      return undefined;
+    }
+    let cancelled = false;
+    void Promise.all(
+      rowsetEffectStageIds.map(async (stageId) => {
+        try {
+          const response = await transport.request<unknown>({
+            method: "GET",
+            path: `/v1/agent/effect-stages/${encodeURIComponent(
+              stageId,
+            )}/rowset/review?run_id=${encodeURIComponent(runId)}`,
+          });
+          return isRowSetEffectReview(response)
+            ? ({ stageId, review: response } as const)
+            : ({
+                stageId,
+                error: "The row review response was invalid.",
+              } as const);
+        } catch {
+          return {
+            stageId,
+            error: "The row review is temporarily unavailable.",
+          } as const;
+        }
+      }),
+    ).then((results) => {
+      if (cancelled) return;
+      const reviews = new Map<string, RowSetEffectReview>();
+      const errors = new Map<string, string>();
+      for (const result of results) {
+        if ("review" in result && result.review !== undefined)
+          reviews.set(result.stageId, result.review);
+        else if ("error" in result) errors.set(result.stageId, result.error);
+      }
+      setRowsetEffectReviews(reviews);
+      setRowsetReviewErrors(errors);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    surfacesV2,
+    session.runId,
+    latestRunSequence,
+    rowsetEffectStageKey,
+    transport,
+  ]);
+  useEffect(() => {
+    setPendingRowsetActions((previous) => {
+      if (previous.size === 0) return previous;
+      let changed = false;
+      const next = new Map<string, number>();
+      for (const [stageId, basisSequence] of previous) {
+        const review = rowsetEffectReviews.get(stageId);
+        if (
+          review !== undefined &&
+          review.last_sequence_no <= basisSequence &&
+          review.status !== "apply_pending"
+        ) {
+          next.set(stageId, basisSequence);
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? next : previous;
+    });
+  }, [rowsetEffectReviews]);
   const stageById = useMemo(() => {
     const map = new Map<string, LedgerStagedWrite>();
     if (!surfacesV2) return map;
@@ -2472,10 +2607,83 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       postStageDecision(stageId, { decision: "restore" }),
     [postStageDecision],
   );
-  const handleRowDecision = useCallback(
-    (stageId: string, decision: "approve" | "hold", rowKey: string): void =>
-      postStageDecision(stageId, { decision, row_keys: [rowKey] }),
-    [postStageDecision],
+  const handleRowsetDecision = useCallback(
+    (command: RowsetDecisionContext): void => {
+      const runId = session.runId;
+      const current = rowsetEffectReviews.get(command.stageId);
+      if (
+        runId === null ||
+        current === undefined ||
+        current.revision !== command.revision ||
+        current.proposal_digest !== command.proposalDigest ||
+        current.target_digest !== command.targetDigest ||
+        current.last_sequence_no !== command.basisSequence ||
+        !current.rows.some(
+          (row) => row.row_key === command.rowKey && row.can_decide,
+        )
+      ) {
+        setRowsetActionNotices((previous) => {
+          const next = new Map(previous);
+          next.set(
+            command.stageId,
+            "This review changed before the row decision was submitted. Review the current rows.",
+          );
+          return next;
+        });
+        return;
+      }
+      setPendingRowsetActions((previous) => {
+        const next = new Map(previous);
+        next.set(command.stageId, command.basisSequence);
+        return next;
+      });
+      void transport
+        .request<unknown>({
+          method: "POST",
+          path: `/v1/agent/effect-stages/${encodeURIComponent(
+            command.stageId,
+          )}/rowset/decisions?run_id=${encodeURIComponent(runId)}`,
+          body: {
+            revision: command.revision,
+            proposal_digest: command.proposalDigest,
+            target_digest: command.targetDigest,
+            decisions: { [command.rowKey]: command.decision },
+          },
+        })
+        .then((response) => {
+          if (!isRowSetEffectReview(response)) {
+            throw new Error("invalid row-set review response");
+          }
+          setRowsetEffectReviews((previous) => {
+            const next = new Map(previous);
+            next.set(command.stageId, response);
+            return next;
+          });
+          setRowsetActionNotices((previous) => {
+            if (!previous.has(command.stageId)) return previous;
+            const next = new Map(previous);
+            next.delete(command.stageId);
+            return next;
+          });
+        })
+        .catch(() => {
+          setPendingRowsetActions((previous) => {
+            if (!previous.has(command.stageId)) return previous;
+            const next = new Map(previous);
+            next.delete(command.stageId);
+            return next;
+          });
+          setRowsetActionNotices((previous) => {
+            const next = new Map(previous);
+            next.set(
+              command.stageId,
+              "The row decision was not accepted. No rows were changed.",
+            );
+            return next;
+          });
+        });
+    },
+    [rowsetEffectReviews, session.runId, transport],
   );
   const handleStageEdit = useCallback(
     (stageId: string, baseRev: number, contentText: string): void => {
@@ -2494,22 +2702,96 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     },
     [transport, stageRunId],
   );
-  const handleStageApply = useCallback(
-    (stageId: string, rev: number, rowKeys: readonly string[]): void => {
-      if (stageRunId === null || stageRunId === "") return;
+  const handleRowsetAction = useCallback(
+    (action: RowsetActionContext): void => {
+      const runId = session.runId;
+      const current = rowsetEffectReviews.get(action.stageId);
+      const currentAction = current?.action;
+      if (
+        runId === null ||
+        action.disabled ||
+        current === undefined ||
+        currentAction === null ||
+        currentAction === undefined ||
+        current.revision !== action.revision ||
+        current.proposal_digest !== action.proposalDigest ||
+        current.target_digest !== action.targetDigest ||
+        currentAction.kind !== action.kind ||
+        currentAction.basis_sequence_no !== action.basisSequence ||
+        currentAction.basis_ledger_id !== action.basisLedgerId ||
+        !sameStringScope(currentAction.row_keys, action.rowKeys)
+      ) {
+        setRowsetActionNotices((previous) => {
+          const next = new Map(previous);
+          next.set(
+            action.stageId,
+            "This review changed before the action could be submitted. Review the current rows.",
+          );
+          return next;
+        });
+        return;
+      }
+
+      setPendingRowsetActions((previous) => {
+        const next = new Map(previous);
+        next.set(action.stageId, action.basisSequence);
+        return next;
+      });
+      setRowsetActionNotices((previous) => {
+        if (!previous.has(action.stageId)) return previous;
+        const next = new Map(previous);
+        next.delete(action.stageId);
+        return next;
+      });
       void transport
-        .request({
+        .request<unknown>({
           method: "POST",
-          path: `/v1/agent/stages/${encodeURIComponent(
-            stageId,
-          )}/apply?run_id=${encodeURIComponent(stageRunId)}`,
-          body: { rev, row_keys: rowKeys },
+          path: `/v1/agent/effect-stages/${encodeURIComponent(
+            action.stageId,
+          )}/rowset/${
+            action.kind === "retry_failed" ? "retry" : "apply"
+          }?run_id=${encodeURIComponent(runId)}`,
+          // Copy the immutable projected scope unchanged. No click-time row
+          // filtering is allowed here.
+          body: {
+            revision: action.revision,
+            proposal_digest: action.proposalDigest,
+            target_digest: action.targetDigest,
+            row_keys: action.rowKeys,
+            basis_sequence_no: action.basisSequence,
+            basis_ledger_id: action.basisLedgerId,
+          },
+        })
+        .then((response) => {
+          if (!isRowSetEffectReview(response)) {
+            throw new Error("invalid row-set review response");
+          }
+          setRowsetEffectReviews((previous) => {
+            const next = new Map(previous);
+            next.set(action.stageId, response);
+            return next;
+          });
         })
         .catch(() => {
-          /* optimistic: the trailing write.applied frame is the authority */
+          setPendingRowsetActions((previous) => {
+            if (!previous.has(action.stageId)) return previous;
+            const next = new Map(previous);
+            next.delete(action.stageId);
+            return next;
+          });
+          setRowsetActionNotices((previous) => {
+            const next = new Map(previous);
+            next.set(
+              action.stageId,
+              action.kind === "retry_failed"
+                ? "The retry request was not accepted. Successful and held rows were not touched."
+                : "The apply request was not accepted. No rows were changed.",
+            );
+            return next;
+          });
         });
     },
-    [transport, stageRunId],
+    [rowsetEffectReviews, session.runId, transport],
   );
 
   const setWorkspaceStageMessage = useCallback(
@@ -3003,6 +3285,36 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       if (v2CanvasTabs.legacyUris.has(uri)) return null;
       const effectStageId = effectStageIdForUri(uri);
       if (effectStageId !== null) {
+        const subject = displayedCanvasLifecycle?.tabs.find(
+          (item) => item.kind === "effect" && item.subjectId === effectStageId,
+        );
+        if (subject?.rendererHint === "effect-rowset") {
+          const review = rowsetEffectReviews.get(effectStageId);
+          if (review === undefined) {
+            return (
+              <EffectStageCard
+                stageId={effectStageId}
+                title={subject.title}
+                busy
+                message={
+                  rowsetReviewErrors.get(effectStageId) ??
+                  "Loading the exact row review…"
+                }
+              />
+            );
+          }
+          const model = projectCanonicalRowsetReviewModel(review, {
+            actionPending: pendingRowsetActions.has(effectStageId),
+            actionNotice: rowsetActionNotices.get(effectStageId),
+          });
+          return (
+            <TcStagedTableSurface
+              model={model}
+              onRowDecision={handleRowsetDecision}
+              onApply={handleRowsetAction}
+            />
+          );
+        }
         const workspaceReview = workspaceStageReviews.get(effectStageId);
         if (workspaceReview !== undefined && workspaceStageHost !== undefined) {
           const artifactFallback = workspaceReview.artifactFallback;
@@ -3041,9 +3353,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             />
           );
         }
-        const subject = displayedCanvasLifecycle?.tabs.find(
-          (item) => item.kind === "effect" && item.subjectId === effectStageId,
-        );
         const mcpReview = mcpEffectStageReviews.get(effectStageId);
         return (
           <EffectStageCard
@@ -3066,14 +3375,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       const stage = stageBySurfaceId.get(id);
       if (stage !== undefined) {
         if (stage.rows !== null) {
-          return (
-            <TcStagedTableSurface
-              stage={stage}
-              title={ledger.surfaces.get(id)?.title}
-              onRowDecision={handleRowDecision}
-              onApply={handleStageApply}
-            />
-          );
+          // Historical `write.staged` rowsets are compatibility-read only.
+          // Canonical row review/actions mount exclusively on `effect.staged`.
+          return null;
         }
         return (
           <TcStagedDraftSurface
@@ -3098,8 +3402,6 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       session.runId,
       receiptV2Projection.receipt,
       receiptV2Visible,
-      handleRowDecision,
-      handleStageApply,
       handleStageEdit,
       handleStageApprove,
       handleStageReject,
@@ -3118,6 +3420,12 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       handleWorkspaceArtifactEdit,
       handleWorkspaceArtifactDownload,
       v2CanvasTabs,
+      pendingRowsetActions,
+      rowsetActionNotices,
+      rowsetEffectReviews,
+      rowsetReviewErrors,
+      handleRowsetDecision,
+      handleRowsetAction,
     ],
   );
 

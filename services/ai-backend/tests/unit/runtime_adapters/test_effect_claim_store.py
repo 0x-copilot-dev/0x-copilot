@@ -16,6 +16,8 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectExecutorKind,
     EffectOutcome,
+    RowOutcome,
+    WriteAppliedRowResult,
 )
 from runtime_adapters.in_memory.effect_claim_store import InMemoryEffectClaimStore
 from runtime_adapters.postgres.effect_claim_store import (
@@ -138,6 +140,51 @@ def test_postgres_column_mapping_round_trips_both_proposal_references() -> None:
     assert len(columns) == len(values)
     assert columns.index("proposal_ref") + 1 == columns.index("proposal_content_ref")
     assert _claim_from_row(dict(zip(columns, values, strict=True))) == claim
+
+
+def test_postgres_mapping_round_trips_exact_row_scope_and_outcomes() -> None:
+    claimed = _claim().model_copy(update={"row_keys": ("row-a", "row-b")})
+    completed = claimed.model_copy(
+        update={
+            "state": EffectClaimState.COMPLETED,
+            "outcome": EffectOutcome.PARTIAL,
+            "row_results": (
+                WriteAppliedRowResult(
+                    row_key="row-a",
+                    outcome=RowOutcome.APPLIED,
+                ),
+                WriteAppliedRowResult(
+                    row_key="row-b",
+                    outcome=RowOutcome.FAILED,
+                ),
+            ),
+        }
+    )
+    columns = tuple(
+        column.strip()
+        for column in _CLAIM_COLUMNS.replace("\n", " ").split(",")
+        if column.strip()
+    )
+
+    assert (
+        _claim_from_row(dict(zip(columns, _claim_values(completed), strict=True)))
+        == completed
+    )
+
+
+def test_completed_rowset_claim_requires_exact_outcome_coverage() -> None:
+    claimed = _claim().model_copy(update={"row_keys": ("row-a", "row-b")})
+    payload = claimed.model_dump(mode="json")
+    payload.update(
+        {
+            "state": "completed",
+            "outcome": "partial",
+            "row_results": [{"row_key": "row-a", "outcome": "failed"}],
+        }
+    )
+
+    with pytest.raises(ValidationError):
+        EffectClaim.model_validate(payload)
 
 
 @pytest.mark.asyncio

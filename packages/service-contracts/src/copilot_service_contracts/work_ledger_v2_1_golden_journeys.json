@@ -1403,6 +1403,132 @@
       }
     },
     {
+      "id": "builtin_rowset_review_posture",
+      "description": "A builtin row-set is staged and records per-row review posture without executing.",
+      "events": [
+        {
+          "event_type": "operation.requested",
+          "run_id": "run_v21_rowset",
+          "sequence_no": 1,
+          "created_at": "2026-07-24T00:10:11Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a014",
+            "producer": "model",
+            "capability": "linear",
+            "op": "update_issue",
+            "args_digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+          }
+        },
+        {
+          "event_type": "effect.staged",
+          "run_id": "run_v21_rowset",
+          "sequence_no": 2,
+          "created_at": "2026-07-24T00:10:12Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c014",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a014",
+            "executor": "builtin",
+            "target_ref": "rowset-target://44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c014/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "policy": "ask",
+            "capability": "linear",
+            "op": "update_issue",
+            "display_target": "update_issue on linear",
+            "proposal_kind": "row_set",
+            "proposal_content_ref": "operation://op_018f47a6-7b2c-7a10-8f21-12345678a014/args",
+            "proposal_media_type": "application/vnd.0xcopilot.row-set+json"
+          }
+        },
+        {
+          "event_type": "effect.row_decisions_recorded",
+          "run_id": "run_v21_rowset",
+          "sequence_no": 3,
+          "created_at": "2026-07-24T00:10:13Z",
+          "payload": {
+            "v": 1,
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c014",
+            "revision": 1,
+            "decisions": [
+              { "row_key": "ENG-14", "decision": "approve" },
+              { "row_key": "ENG-15", "decision": "hold" }
+            ],
+            "actor": "user",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+          }
+        },
+        {
+          "event_type": "operation.completed",
+          "run_id": "run_v21_rowset",
+          "sequence_no": 4,
+          "created_at": "2026-07-24T00:10:14Z",
+          "payload": {
+            "v": 1,
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a014",
+            "outcome": "staged"
+          }
+        }
+      ],
+      "expected": {
+        "artifacts": [],
+        "stages": [
+          {
+            "stage_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c014",
+            "operation_id": "op_018f47a6-7b2c-7a10-8f21-12345678a014",
+            "executor": "builtin",
+            "target_ref": "rowset-target://44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "target_digest": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+            "proposal_ref": "proposal://stg_018f47a6-7b2c-7c10-8f21-12345678c014/revisions/1",
+            "proposal_digest": "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9",
+            "revision": 1,
+            "status": "staged",
+            "policy": "ask",
+            "decision": null,
+            "claim_id": null,
+            "outcome": null
+          }
+        ],
+        "canvas": [
+          {
+            "subject_type": "stage",
+            "subject_id": "stg_018f47a6-7b2c-7c10-8f21-12345678c014",
+            "surface_id": null
+          }
+        ],
+        "receipt": {
+          "operations": {
+            "requested": 1,
+            "succeeded": 0,
+            "staged": 1,
+            "blocked": 0,
+            "cancelled": 0,
+            "failed": 0
+          },
+          "effects": {
+            "staged": 1,
+            "applied": 0,
+            "partial": 0,
+            "failed": 0,
+            "cancelled": 0,
+            "indeterminate": 0,
+            "already_applied": 0,
+            "precondition_drift": 0
+          },
+          "gates": { "opened": 0, "resolved": 0 }
+        },
+        "pending_work": [
+          {
+            "kind": "effect",
+            "id": "stg_018f47a6-7b2c-7c10-8f21-12345678c014"
+          }
+        ]
+      }
+    },
+    {
       "id": "destructive_effect_held",
       "description": "A destructive effect stays staged even when the connector posture is allow_always.",
       "policy_context": {

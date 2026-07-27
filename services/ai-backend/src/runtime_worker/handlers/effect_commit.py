@@ -114,6 +114,8 @@ class RuntimeEffectCommitHandler:
             proposal_digest=command.proposal_digest,
             target_digest=command.target_digest,
             idempotency_key=command.idempotency_key,
+            row_keys=command.row_keys,
+            retry_basis_ledger_id=command.retry_basis_ledger_id,
         )
         coordinator = self._coordinator_factory.for_run(run=run)
         await coordinator.handle(pure_command)

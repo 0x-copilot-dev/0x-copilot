@@ -36,6 +36,11 @@ def test_openapi_includes_core_product_paths() -> None:
         "/v1/agent/runs/{run_id}/sources/{source_id}/open",
         # Generative Surfaces v2 (PRD-B4) — user-invited "Suggest a shape".
         "/v1/agent/surfaces/{surface_id}/shape-request",
+        # PRD-12 — canonical owner-scoped row-set review and exact actions.
+        "/v1/agent/effect-stages/{stage_id}/rowset/review",
+        "/v1/agent/effect-stages/{stage_id}/rowset/decisions",
+        "/v1/agent/effect-stages/{stage_id}/rowset/apply",
+        "/v1/agent/effect-stages/{stage_id}/rowset/retry",
         # C2 — Electron-main-only signed capability statement. The endpoint
         # requires the host service token (not a renderer bearer) and forwards
         # only to ai-backend for verification.

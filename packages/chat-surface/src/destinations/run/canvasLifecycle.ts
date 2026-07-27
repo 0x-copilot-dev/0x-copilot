@@ -219,6 +219,10 @@ export function projectCanvasLifecycle(
     if (type === "write.staged" || type === EFFECT_STAGED) {
       const stageId = text(payload.stage_id);
       if (stageId === null) continue;
+      const rowSetEffect =
+        type === EFFECT_STAGED &&
+        payload.executor === "builtin" &&
+        payload.proposal_kind === "row_set";
       const key = `effect:${stageId}`;
       effectKeys.set(stageId, key);
       pendingStages.add(key);
@@ -230,7 +234,7 @@ export function projectCanvasLifecycle(
         revision: positiveInt(payload.revision),
         lastSeq: seq,
         priority: 400,
-        rendererHint: "effect-stage",
+        rendererHint: rowSetEffect ? "effect-rowset" : "effect-stage",
       });
       continue;
     }

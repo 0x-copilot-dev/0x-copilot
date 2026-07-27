@@ -87,6 +87,7 @@ class LedgerEventType(StrEnum):
     EFFECT_RECONCILED = "effect.reconciled"
     GATE_OPENED_V2 = "gate.opened.v2"
     GATE_RESOLVED_V2 = "gate.resolved.v2"
+    EFFECT_ROW_DECISIONS_RECORDED = "effect.row_decisions_recorded"
 
 
 # ---------------------------------------------------------------------------
@@ -869,12 +870,57 @@ class EffectDecisionRecordedPayload(LedgerPayload):
     target_digest: Sha256Hex
     actor_ref: str | None = None
     decided_at: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+    row_keys: tuple[Annotated[str, Field(min_length=1, max_length=256)], ...] | None = (
+        None
+    )
 
     @field_validator("actor_ref")
     @classmethod
     def _actor_ref_is_safe(cls, value: str | None) -> str | None:
         _validate_opaque_safe_uri(value, "actor_ref")
         return value
+
+    @field_validator("row_keys")
+    @classmethod
+    def _row_keys_are_unique(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is not None and (not value or len(value) != len(set(value))):
+            raise ValueError("row_keys must contain unique row keys")
+        return value
+
+
+class EffectRowDecision(RuntimeContract):
+    """One connector-neutral row review decision."""
+
+    row_key: Annotated[str, Field(min_length=1, max_length=256)]
+    decision: Literal["approve", "hold"]
+
+
+class EffectRowDecisionsRecordedPayload(LedgerPayload):
+    """A digest-pinned update to one row-set review selection."""
+
+    stage_id: EffectStageIdText
+    revision: SafePositiveInt
+    decisions: tuple[EffectRowDecision, ...]
+    actor: EffectActor
+    proposal_digest: Sha256Hex
+    target_digest: Sha256Hex
+    actor_ref: str | None = None
+    decided_at: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+
+    @field_validator("actor_ref")
+    @classmethod
+    def _actor_ref_is_safe(cls, value: str | None) -> str | None:
+        _validate_opaque_safe_uri(value, "actor_ref")
+        return value
+
+    @model_validator(mode="after")
+    def _decisions_are_unique(self) -> EffectRowDecisionsRecordedPayload:
+        keys = tuple(item.row_key for item in self.decisions)
+        if not keys or len(keys) != len(set(keys)):
+            raise ValueError("row decisions require unique row keys")
+        return self
 
 
 class EffectClaimedPayload(LedgerPayload):
@@ -891,6 +937,7 @@ class EffectAppliedPayload(LedgerPayload):
     outcome: EffectOutcome
     receipt_ref: str | None = None
     result_digest: Sha256Hex | None = None
+    row_results: tuple[WriteAppliedRowResult, ...] | None = None
 
     @model_validator(mode="after")
     def _receipt_ref_matches(self) -> EffectAppliedPayload:
@@ -1121,6 +1168,9 @@ class WorkLedgerVocabulary:
         LedgerEventType.EFFECT_RECONCILED: EffectReconciledPayload,
         LedgerEventType.GATE_OPENED_V2: GateOpenedV2Payload,
         LedgerEventType.GATE_RESOLVED_V2: GateResolvedV2Payload,
+        LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED: (
+            EffectRowDecisionsRecordedPayload
+        ),
     }
 
     # enum-key (SSOT ``enums`` key) → StrEnum. Single source for the parity test.
@@ -1232,6 +1282,8 @@ __all__ = [
     "EffectClass",
     "EffectDecisionKind",
     "EffectDecisionRecordedPayload",
+    "EffectRowDecision",
+    "EffectRowDecisionsRecordedPayload",
     "EffectExecutorKind",
     "EffectIndeterminatePayload",
     "EffectOutcome",

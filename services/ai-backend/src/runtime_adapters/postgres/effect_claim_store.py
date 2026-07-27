@@ -36,7 +36,8 @@ _CLAIM_COLUMNS = """
     org_id, run_id, stage_id, revision, claim_id, idempotency_key, executor,
     proposal_digest, target_digest, state, attempt, prepared_ref, receipt_ref,
     outcome, result_digest, safe_message, target_ref, proposal_ref,
-    proposal_content_ref, actor, decision_ledger_id, created_at, updated_at
+    proposal_content_ref, actor, decision_ledger_id, row_keys, row_results,
+    created_at, updated_at
 """
 
 
@@ -69,7 +70,8 @@ class PostgresEffectClaimStore:
                         INSERT INTO {_TABLE} ({_CLAIM_COLUMNS})
                         VALUES (
                             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                            %s, %s
                         )
                         ON CONFLICT (org_id, executor, idempotency_key)
                         DO NOTHING
@@ -181,6 +183,7 @@ class PostgresEffectClaimStore:
                                outcome = %s,
                                result_digest = %s,
                                safe_message = %s,
+                               row_results = %s,
                                updated_at = %s
                          WHERE org_id = %s
                            AND executor = %s
@@ -196,6 +199,7 @@ class PostgresEffectClaimStore:
                             claim.outcome.value if claim.outcome is not None else None,
                             claim.result_digest,
                             claim.safe_message,
+                            _json_value(claim.row_results),
                             claim.updated_at,
                             claim.org_id,
                             claim.executor.value,
@@ -333,6 +337,8 @@ def _claim_values(claim: EffectClaim) -> tuple[object, ...]:
         claim.proposal_content_ref,
         claim.actor.value,
         claim.decision_ledger_id,
+        _json_value(claim.row_keys),
+        _json_value(claim.row_results),
         claim.created_at,
         claim.updated_at,
     )
@@ -350,6 +356,17 @@ def _claim_from_row(row: Mapping[str, object]) -> EffectClaim:
         )
     except Exception as exc:
         raise EffectClaimStorageError("A stored effect claim is invalid.") from exc
+
+
+def _json_value(value: object) -> object:
+    if value is None:
+        return None
+    if isinstance(value, tuple):
+        return [
+            item.model_dump(mode="json") if hasattr(item, "model_dump") else item
+            for item in value
+        ]
+    return value
 
 
 __all__ = ["PostgresEffectClaimStore"]

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 
 import {
   TcStagedTableSurface,
@@ -7,11 +7,15 @@ import {
   resultLine,
 } from "./TcStagedTableSurface";
 import type { LedgerStagedRow, LedgerStagedWrite } from "./ledgerProjection";
+import { projectRowsetReviewModel } from "./rowsetReviewModel";
 
-function row(overrides: Partial<LedgerStagedRow> = {}): LedgerStagedRow {
+function row(
+  rowKey = "r1",
+  overrides: Partial<LedgerStagedRow> = {},
+): LedgerStagedRow {
   return {
-    rowKey: "r1",
-    title: "Acme renewal",
+    rowKey,
+    title: `Acme renewal ${rowKey}`,
     changes: [{ field: "priority", old: 1, new: 2 }],
     stance: "will_apply",
     agentHoldReason: null,
@@ -21,8 +25,10 @@ function row(overrides: Partial<LedgerStagedRow> = {}): LedgerStagedRow {
   };
 }
 
-function stage(overrides: Partial<LedgerStagedWrite> = {}): LedgerStagedWrite {
-  const rows = overrides.rows ?? [row()];
+function stage(
+  rows: readonly LedgerStagedRow[] = [row()],
+  overrides: Partial<LedgerStagedWrite> = {},
+): LedgerStagedWrite {
   return {
     stageId: "stage_1",
     surfaceId: "surf_1",
@@ -42,10 +48,10 @@ function stage(overrides: Partial<LedgerStagedWrite> = {}): LedgerStagedWrite {
     rows,
     rowCounts: {
       total: rows.length,
-      willApply: rows.filter((r) => r.stance === "will_apply").length,
-      held: rows.filter((r) => r.stance === "held").length,
-      applied: rows.filter((r) => r.applyOutcome === "applied").length,
-      failed: rows.filter((r) => r.applyOutcome === "failed").length,
+      willApply: rows.filter((item) => item.stance === "will_apply").length,
+      held: rows.filter((item) => item.stance === "held").length,
+      applied: rows.filter((item) => item.applyOutcome === "applied").length,
+      failed: rows.filter((item) => item.applyOutcome === "failed").length,
     },
     ...overrides,
   };
@@ -54,151 +60,166 @@ function stage(overrides: Partial<LedgerStagedWrite> = {}): LedgerStagedWrite {
 const noop = () => {};
 
 describe("TcStagedTableSurface", () => {
-  it("renders per-row title + old→new field diff", () => {
+  it("renders semantic title, old→new diff, and provenance", () => {
     render(
       <TcStagedTableSurface
-        stage={stage()}
+        model={projectRowsetReviewModel(stage(), {
+          title: "Renewal changes",
+        })}
         onRowDecision={noop}
         onApply={noop}
       />,
     );
-    expect(screen.getByTestId("tc-table-row-title").textContent).toBe(
-      "Acme renewal",
+    expect(screen.getByTestId("tc-staged-table-connector")).toHaveTextContent(
+      "Renewal changes",
     );
-    const change = screen.getByTestId("tc-table-row-change").textContent ?? "";
-    const previous = screen.getByTestId("tc-table-row-old").textContent ?? "";
-    expect(change).toContain("priority");
-    expect(previous).toContain("1");
-    expect(change).toContain("2");
+    expect(screen.getByTestId("tc-table-row-old")).toHaveTextContent("1");
+    expect(screen.getByTestId("tc-table-row-change")).toHaveTextContent(
+      "priority",
+    );
+    expect(screen.getByTestId("tc-table-row-change")).toHaveTextContent("2");
+    expect(screen.getByTestId("tc-staged-table-ledger-id")).toHaveTextContent(
+      "linear.update_issue · per-row approval · rrun1·002",
+    );
   });
 
-  it("row Hold toggle sends the row_key", () => {
+  it("sends one row decision using the model identity", () => {
     const onRowDecision = vi.fn();
     render(
       <TcStagedTableSurface
-        stage={stage()}
+        model={projectRowsetReviewModel(stage())}
         onRowDecision={onRowDecision}
         onApply={noop}
       />,
     );
     fireEvent.click(screen.getByTestId("tc-table-row-hold"));
-    expect(onRowDecision).toHaveBeenCalledWith("stage_1", "hold", "r1");
+    expect(onRowDecision).toHaveBeenCalledWith({
+      stageId: "stage_1",
+      revision: 1,
+      proposalDigest: "",
+      targetDigest: "",
+      rowKey: "r1",
+      decision: "hold",
+      basisSequence: 3,
+    });
   });
 
-  it("row Approve toggle appears for a held row and sends the row_key", () => {
-    const onRowDecision = vi.fn();
+  it("keeps the sticky agent hold reason after override", () => {
     render(
       <TcStagedTableSurface
-        stage={stage({
-          rows: [row({ stance: "held", agentHoldReason: "recent reply" })],
-        })}
-        onRowDecision={onRowDecision}
-        onApply={noop}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("tc-table-row-approve"));
-    expect(onRowDecision).toHaveBeenCalledWith("stage_1", "approve", "r1");
-  });
-
-  it("shows the agent pre-hold chip `{reason} — agent pre-held` before AND after override", () => {
-    // Held (before override).
-    const { rerender } = render(
-      <TcStagedTableSurface
-        stage={stage({
-          rows: [
-            row({
-              stance: "held",
-              agentHoldReason: "call yesterday",
-              decidedBy: "agent",
-            }),
-          ],
-        })}
-        onRowDecision={noop}
-        onApply={noop}
-      />,
-    );
-    expect(screen.getByTestId("tc-table-row-reason").textContent).toBe(
-      "call yesterday — agent pre-held",
-    );
-    // After override: stance flips to will_apply but the reason STAYS (FR-C7).
-    rerender(
-      <TcStagedTableSurface
-        stage={stage({
-          rows: [
-            row({
+        model={projectRowsetReviewModel(
+          stage([
+            row("r1", {
               stance: "will_apply",
               agentHoldReason: "call yesterday",
               decidedBy: "user",
             }),
-          ],
-        })}
+          ]),
+        )}
         onRowDecision={noop}
         onApply={noop}
       />,
     );
-    expect(screen.getByTestId("tc-table-row-reason").textContent).toBe(
+    expect(screen.getByTestId("tc-table-row-reason")).toHaveTextContent(
       "call yesterday — agent pre-held",
     );
   });
 
-  it("counts header tracks will-apply and held", () => {
+  it("keeps header, exact recovery, and provenance outside the row viewport", () => {
+    const model = projectRowsetReviewModel(
+      stage(
+        [
+          row("applied", { applyOutcome: "applied" }),
+          row("failed", { applyOutcome: "failed" }),
+          row("held", { stance: "held" }),
+        ],
+        { status: "partially_applied", applyResult: "partial" },
+      ),
+    );
     render(
       <TcStagedTableSurface
-        stage={stage({
-          rows: [row({ rowKey: "a" }), row({ rowKey: "b", stance: "held" })],
-        })}
+        model={model}
         onRowDecision={noop}
         onApply={noop}
       />,
     );
-    expect(screen.getByTestId("tc-staged-table-counts").textContent).toBe(
-      countsHeader(1, 1),
-    );
+
+    const surface = screen.getByTestId("tc-staged-table");
+    const viewport = screen.getByTestId("tc-review-table-viewport");
+    const recovery = screen.getByTestId("tc-bulk-apply-bar");
+    const provenance = screen
+      .getByTestId("tc-staged-table-ledger-id")
+      .closest("footer");
+
+    expect(viewport.parentElement).toBe(surface);
+    expect(recovery.parentElement).toBe(surface);
+    expect(provenance?.parentElement).toBe(surface);
+    expect(viewport.contains(recovery)).toBe(false);
+    expect(viewport.contains(provenance)).toBe(false);
+    expect(viewport).toHaveAttribute("tabindex", "0");
+    expect(viewport).toHaveAttribute("role", "region");
   });
 
-  it("renders the FR-C9 result line when applied (N updated · M held, untouched)", () => {
+  it("renders 200 wide rows inside one bounded viewport", () => {
+    const rows = Array.from({ length: 200 }, (_, index) =>
+      row(`row-${index}`, {
+        title: `Customer with a deliberately long title ${index} ${"x".repeat(120)}`,
+        changes: [
+          {
+            field: "a_very_long_column_name",
+            old: `old-${index}-${"y".repeat(100)}`,
+            new: `new-${index}-${"z".repeat(100)}`,
+          },
+        ],
+      }),
+    );
     render(
       <TcStagedTableSurface
-        stage={stage({
-          status: "applied",
-          rows: [
-            row({ rowKey: "a", applyOutcome: "applied" }),
-            row({ rowKey: "b", stance: "held" }),
-          ],
-        })}
+        model={projectRowsetReviewModel(stage(rows))}
         onRowDecision={noop}
         onApply={noop}
       />,
     );
-    expect(screen.getByTestId("tc-staged-table-counts").textContent).toBe(
-      resultLine(1, 1),
+
+    const viewport = screen.getByTestId("tc-review-table-viewport");
+    expect(within(viewport).getAllByTestId("tc-table-row")).toHaveLength(200);
+    expect(screen.getByTestId("tc-bulk-apply")).toHaveTextContent(
+      "Apply 200 changes",
     );
-    expect(resultLine(1, 1)).toBe("1 updated · 1 held, untouched");
-    // The apply bar drops at a terminal state.
-    expect(screen.queryByTestId("tc-bulk-apply-bar")).toBeNull();
   });
 
-  it("shows a partial state with per-row outcomes", () => {
+  it("submits the same exact failed-key action projected by the model", () => {
+    const model = projectRowsetReviewModel(
+      stage(
+        [
+          row("success", { applyOutcome: "applied" }),
+          row("failed-a", { applyOutcome: "failed" }),
+          row("held", { stance: "held" }),
+          row("failed-b", { applyOutcome: "failed" }),
+        ],
+        { status: "partially_applied", applyResult: "partial" },
+      ),
+    );
     const onApply = vi.fn();
     render(
       <TcStagedTableSurface
-        stage={stage({
-          status: "partially_applied",
-          rows: [
-            row({ rowKey: "a", applyOutcome: "applied" }),
-            row({ rowKey: "b", applyOutcome: "failed" }),
-          ],
-        })}
+        model={model}
         onRowDecision={noop}
         onApply={onApply}
       />,
     );
-    const outcomes = screen.getAllByTestId("tc-table-row-outcome");
-    expect(outcomes.map((o) => o.textContent)).toEqual(["updated", "failed"]);
-    expect(screen.getByTestId("tc-bulk-retry")).toHaveTextContent(
-      "Retry 1 failed",
-    );
     fireEvent.click(screen.getByTestId("tc-bulk-retry"));
-    expect(onApply).toHaveBeenCalledWith("stage_1", 1, ["b"]);
+
+    expect(model.action).toMatchObject({
+      kind: "retry_failed",
+      rowKeys: ["failed-a", "failed-b"],
+    });
+    expect(onApply).toHaveBeenCalledWith(model.action);
+    expect(onApply.mock.calls[0][0]).toBe(model.action);
+  });
+
+  it("preserves public summary helper behavior", () => {
+    expect(countsHeader(6, 2)).toBe("6 will apply · 2 held");
+    expect(resultLine(7, 1)).toBe("7 updated · 1 held, untouched");
   });
 });

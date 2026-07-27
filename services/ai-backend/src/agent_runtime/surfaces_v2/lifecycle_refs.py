@@ -1231,6 +1231,9 @@ class LifecycleReferenceEnumerator:
             LifecycleReferenceField.AUTHOR_REF,
         ),
         LedgerEventType.EFFECT_DECISION_RECORDED: (LifecycleReferenceField.ACTOR_REF,),
+        LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED: (
+            LifecycleReferenceField.ACTOR_REF,
+        ),
         LedgerEventType.EFFECT_APPLIED: (LifecycleReferenceField.RECEIPT_REF,),
         LedgerEventType.EFFECT_RECONCILED: (LifecycleReferenceField.RECEIPT_REF,),
     }

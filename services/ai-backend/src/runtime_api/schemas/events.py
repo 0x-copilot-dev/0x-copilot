@@ -246,6 +246,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.EFFECT_APPLIED,
             RuntimeApiEventType.EFFECT_INDETERMINATE,
             RuntimeApiEventType.EFFECT_RECONCILED,
+            RuntimeApiEventType.EFFECT_ROW_DECISIONS_RECORDED,
         }:
             return cls._effect_ledger_payload(
                 event_type=event_type,
@@ -396,6 +397,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.EFFECT_APPLIED,
             RuntimeApiEventType.EFFECT_INDETERMINATE,
             RuntimeApiEventType.EFFECT_RECONCILED,
+            RuntimeApiEventType.EFFECT_ROW_DECISIONS_RECORDED,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never

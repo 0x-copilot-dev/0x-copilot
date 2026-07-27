@@ -41,7 +41,12 @@ from agent_runtime.surfaces_v2.commit_engine import (
     StageCommitTimeout,
 )
 from agent_runtime.surfaces_v2.entities import EffectExecutionResult
-from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind, EffectOutcome
+from agent_runtime.surfaces_v2.ledger_models import (
+    EffectExecutorKind,
+    EffectOutcome,
+    RowOutcome,
+    WriteAppliedRowResult,
+)
 from agent_runtime.surfaces_v2.rowset import (
     RowsetValidationError,
     RowsetValidator,
@@ -195,13 +200,9 @@ class BuiltinRowSetEffectExecutor:
                 safe_message=_UNAVAILABLE,
             )
 
-        dispatched = 0
-        for row in material.rows:
-            # An agent hold is sticky until a later row-scoped canonical stage
-            # exists. This generic stage has no authority to silently override
-            # it merely because its parent was approved.
-            if row.row_key in material.held_row_keys:
-                continue
+        selected_rows = self._selected_rows(request=request, material=material)
+        row_results: list[WriteAppliedRowResult] = []
+        for row in selected_rows:
             try:
                 await self._connector.execute(
                     self._request_for_row(request=request, material=material, row=row)
@@ -211,27 +212,38 @@ class BuiltinRowSetEffectExecutor:
             except StageCommitTimeout:
                 return self._unknown_result()
             except StageCommitConnectorError:
-                return EffectExecutionResult(
-                    outcome=(
-                        EffectOutcome.PARTIAL if dispatched else EffectOutcome.FAILED
-                    ),
-                    retryable=False,
-                    safe_message=_PARTIAL if dispatched else _CONNECTOR_FAILED,
+                row_results.append(
+                    WriteAppliedRowResult(
+                        row_key=row.row_key,
+                        outcome=RowOutcome.FAILED,
+                        detail=_CONNECTOR_FAILED,
+                    )
                 )
+                continue
             except Exception:
                 return self._unknown_result()
-            dispatched += 1
-
-        if dispatched != len(material.rows):
-            return EffectExecutionResult(
-                outcome=EffectOutcome.PARTIAL,
-                retryable=False,
-                safe_message=_PARTIAL,
+            row_results.append(
+                WriteAppliedRowResult(
+                    row_key=row.row_key,
+                    outcome=RowOutcome.APPLIED,
+                )
             )
+
+        failed = sum(item.outcome is RowOutcome.FAILED for item in row_results)
+        if failed == 0:
+            outcome = EffectOutcome.APPLIED
+            message = "The approved row-set was applied."
+        elif failed == len(row_results):
+            outcome = EffectOutcome.FAILED
+            message = _CONNECTOR_FAILED
+        else:
+            outcome = EffectOutcome.PARTIAL
+            message = _PARTIAL
         return EffectExecutionResult(
-            outcome=EffectOutcome.APPLIED,
-            retryable=False,
-            safe_message="The approved row-set was applied.",
+            outcome=outcome,
+            retryable=failed > 0,
+            safe_message=message,
+            row_results=tuple(row_results),
         )
 
     async def authorize(self, prepared: PreparedEffect) -> EffectExecutionAuthorization:
@@ -239,14 +251,9 @@ class BuiltinRowSetEffectExecutor:
 
         try:
             material = await self._resolve_exact_material(prepared.request)
-            first_sendable = next(
-                (
-                    row
-                    for row in material.rows
-                    if row.row_key not in material.held_row_keys
-                ),
-                None,
-            )
+            first_sendable = self._selected_rows(
+                request=prepared.request, material=material
+            )[0]
             if first_sendable is not None:
                 await self._connector.authorize(
                     self._request_for_row(
@@ -331,6 +338,30 @@ class BuiltinRowSetEffectExecutor:
             row_key=row.row_key,
             row_args=args,  # type: ignore[arg-type] -- canonical JSON object.
         )
+
+    @staticmethod
+    def _selected_rows(
+        *,
+        request: EffectDispatchRequest,
+        material: BuiltinRowSetEffectMaterial,
+    ) -> tuple[StagedRow, ...]:
+        """Return the exact approved order or fail before connector construction."""
+
+        if request.row_keys is None:
+            selected = tuple(
+                row
+                for row in material.rows
+                if row.row_key not in material.held_row_keys
+            )
+        else:
+            requested = frozenset(request.row_keys)
+            known = {row.row_key for row in material.rows}
+            if not requested or not requested.issubset(known):
+                raise BuiltinRowSetMaterialError()
+            selected = tuple(row for row in material.rows if row.row_key in requested)
+        if not selected:
+            raise BuiltinRowSetMaterialError()
+        return selected
 
     @staticmethod
     def _unknown_result() -> EffectExecutionResult:

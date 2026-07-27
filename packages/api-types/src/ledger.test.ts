@@ -9,6 +9,7 @@ import {
   isLedgerEventType,
   isPendingWorkResponse,
   isPendingWorkV2Response,
+  isRowSetEffectReview,
   isSurfaceEventV2,
   parseLedgerId,
   type ActionClass,
@@ -274,8 +275,8 @@ describe("LEDGER_EVENT_TYPES", () => {
     expect([...LEDGER_EVENT_TYPES]).toEqual(Object.keys(contract.events));
   });
 
-  it("covers all 33 event types", () => {
-    expect(LEDGER_EVENT_TYPES).toHaveLength(33);
+  it("covers all 34 event types", () => {
+    expect(LEDGER_EVENT_TYPES).toHaveLength(34);
   });
 
   it("isLedgerEventType accepts every listed type and rejects others", () => {
@@ -525,6 +526,87 @@ describe("isPendingWorkV2Response (E1 D6)", () => {
       isPendingWorkV2Response({
         ...response,
         warnings: [{ ...response.warnings[0], run_id: "../../foreign" }],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isRowSetEffectReview (PRD-12)", () => {
+  const review = {
+    stage_id: "stg_1",
+    revision: 1,
+    proposal_digest: "a".repeat(64),
+    target_digest: "b".repeat(64),
+    title: "Reprioritize",
+    source_connector: "linear",
+    source_op: "update_issue",
+    status: "partial",
+    rows: [
+      {
+        row_key: "row-a",
+        title: "Acme renewal",
+        changes: [{ field: "priority", old: 1, new: 2 }],
+        decision: "approve",
+        decision_source: "user",
+        hold_reason: null,
+        apply_outcome: "failed",
+        can_decide: false,
+      },
+    ],
+    counts: { total: 1, approved: 1, held: 0, applied: 0, failed: 1 },
+    action: {
+      kind: "retry_failed",
+      row_keys: ["row-a"],
+      basis_sequence_no: 7,
+      basis_ledger_id: "rrun·007",
+    },
+    ledger_id: "rrun·007",
+    last_sequence_no: 7,
+  };
+
+  it("accepts a semantically consistent exact-retry response", () => {
+    expect(isRowSetEffectReview(review)).toBe(true);
+  });
+
+  it("rejects inconsistent counts, duplicate scope, or invented diff fields", () => {
+    expect(
+      isRowSetEffectReview({
+        ...review,
+        counts: { ...review.counts, failed: 0 },
+      }),
+    ).toBe(false);
+    expect(
+      isRowSetEffectReview({
+        ...review,
+        action: { ...review.action, row_keys: ["row-a", "row-a"] },
+      }),
+    ).toBe(false);
+    expect(
+      isRowSetEffectReview({
+        ...review,
+        rows: [{ ...review.rows[0], changes: [{ old: 1, new: 2 }] }],
+      }),
+    ).toBe(false);
+  });
+
+  it("requires retry basis and forbids it on an initial apply", () => {
+    expect(
+      isRowSetEffectReview({
+        ...review,
+        action: { ...review.action, basis_ledger_id: null },
+      }),
+    ).toBe(false);
+    expect(
+      isRowSetEffectReview({
+        ...review,
+        status: "staged",
+        rows: [{ ...review.rows[0], apply_outcome: null }],
+        counts: { ...review.counts, failed: 0 },
+        action: {
+          ...review.action,
+          kind: "apply",
+          basis_ledger_id: "rrun·007",
+        },
       }),
     ).toBe(false);
   });
