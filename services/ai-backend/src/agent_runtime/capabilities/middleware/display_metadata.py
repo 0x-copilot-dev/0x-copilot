@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Mapping
-from typing import Any, ClassVar, Callable, get_type_hints
+from typing import Annotated, Any, ClassVar, Callable, get_type_hints
 
 from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import InjectedToolCallId
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
@@ -399,12 +400,14 @@ class _DisplayFields(BaseModel):
             "Leave null if the tool's deterministic title is already clear."
         ),
     )
-    # ``tool_call_id`` is deliberately NOT declared here. Declaring
-    # ``Annotated[str, InjectedToolCallId]`` forces every caller — including
-    # tests that bypass LangGraph — to use a full ToolCall envelope. Instead,
-    # the wrap coroutine captures it via ``*, tool_call_id: str = ""`` and the
-    # inner schema inherits it through Pydantic model inheritance when the
-    # inner tool already declares it (e.g. citation-capturing MCP tools).
+    # This is injected by LangGraph and omitted from the model-visible schema.
+    # It is the provider's correlation id, not a user argument. Every display
+    # wrapper must declare it: the BaseTool-delegation branch returns the
+    # inner ToolMessage directly, and therefore needs the exact id to build
+    # the nested ToolCall envelope. Leaving this as an ordinary defaulted
+    # coroutine parameter silently produced ``ToolMessage(tool_call_id="")``
+    # for tools whose original schema did not already declare the injection.
+    tool_call_id: Annotated[str, InjectedToolCallId] = ""
 
 
 def wrap_args_schema(args_schema: type[BaseModel] | None) -> type[BaseModel]:

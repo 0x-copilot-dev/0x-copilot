@@ -712,17 +712,30 @@ def test_wrap_tool_with_display_extends_structured_tool_schema() -> None:
     schema = wrapped.args_schema.model_json_schema()
     assert "query" in schema["properties"]
     assert DISPLAY_TITLE_KEY in schema["properties"]
+    # ``args_schema`` retains the injection marker for LangGraph, while the
+    # model-visible tool-call schema does not expose an implementation detail.
+    assert (
+        "tool_call_id" not in wrapped.tool_call_schema.model_json_schema()["properties"]
+    )
 
-    # Underlying adapter never sees ``_display_*`` — the wrap strips first.
+    # Production model tools are always called with an envelope. The injected
+    # id is hidden from the model schema but remains required at the runtime
+    # boundary so a ToolMessage can be correlated to the provider call.
     result = asyncio.run(
         wrapped.ainvoke(
             {
-                "query": "Q1 launch",
-                DISPLAY_TITLE_KEY: "Looking up Q1 launch tickets",
+                "args": {
+                    "query": "Q1 launch",
+                    DISPLAY_TITLE_KEY: "Looking up Q1 launch tickets",
+                },
+                "name": "search_docs",
+                "id": "call_display_schema",
+                "type": "tool_call",
             }
         )
     )
-    assert result == "got query='Q1 launch'"
+    assert result.content == "got query='Q1 launch'"
+    assert result.tool_call_id == "call_display_schema"
     assert received == [{"query": "Q1 launch"}]
 
 
@@ -769,12 +782,18 @@ def test_wrap_tool_with_display_preserves_runnable_config_through_budget_wrapper
 
     result = asyncio.run(
         wrapped.ainvoke(
-            {"path": "report.csv", DISPLAY_TITLE_KEY: "Creating report"},
+            {
+                "args": {"path": "report.csv", DISPLAY_TITLE_KEY: "Creating report"},
+                "name": "publish_artifact",
+                "id": "call_publish_artifact",
+                "type": "tool_call",
+            },
             config=config,
         )
     )
 
-    assert result == "published"
+    assert result.content == "published"
+    assert result.tool_call_id == "call_publish_artifact"
     assert received[0][0] == "report.csv"
     assert received[0][1]["configurable"] == config["configurable"]
 
@@ -961,8 +980,16 @@ def test_wrap_tool_preserves_sync_func_when_present() -> None:
     )
 
     wrapped = wrap_tool_with_display(tool)
-    wrapped.invoke({"query": "x", DISPLAY_TITLE_KEY: "ignored by underlying func"})
+    result = wrapped.invoke(
+        {
+            "args": {"query": "x", DISPLAY_TITLE_KEY: "ignored by underlying func"},
+            "name": "sync_tool",
+            "id": "call_sync_tool",
+            "type": "tool_call",
+        }
+    )
 
+    assert result.tool_call_id == "call_sync_tool"
     assert received == [{"query": "x"}]
 
 
@@ -997,7 +1024,17 @@ def test_wrap_tool_does_not_break_invocation_when_agent_omits_display() -> None:
     )
 
     wrapped = wrap_tool_with_display(tool)
-    asyncio.run(wrapped.ainvoke({"query": "x"}))
+    result = asyncio.run(
+        wrapped.ainvoke(
+            {
+                "args": {"query": "x"},
+                "name": "t",
+                "id": "call_no_display",
+                "type": "tool_call",
+            }
+        )
+    )
+    assert result.tool_call_id == "call_no_display"
     # Underlying adapter received only ``query`` — no display keys.
     assert received == [{"query": "x"}]
 
@@ -1083,6 +1120,7 @@ def test_delegation_wrap_forwards_tool_call_id_through_envelope() -> None:
 
     assert isinstance(result, ToolMessage)
     assert result.content == "got query='x' tool_call_id='call_test_envelope'"
+    assert result.tool_call_id == "call_test_envelope"
     # The injected id reached the inner — proves the wrap forwards through
     # ``_DispatchEnvelope`` instead of calling ``ainvoke`` with a plain dict.
     assert observed == [{"query": "x", "tool_call_id": "call_test_envelope"}]
@@ -1128,15 +1166,22 @@ def test_delegation_wrap_forwards_envelope_to_inner_without_injected_id() -> Non
 
     wrapped = wrap_tool_with_display(PlainInnerTool())
 
-    # The wrap ALWAYS forwards via envelope internally, so the value
-    # returned by ``inner.ainvoke(envelope)`` is a ``ToolMessage`` — the
-    # outer ``BaseTool.ainvoke`` passes it through. This holds whether
-    # the outer is invoked with a plain dict (tests) or an envelope
-    # (production / LangGraph). The contract is: the wrap surfaces a
-    # ``ToolMessage`` whose ``.content`` is the inner's raw return.
-    plain_result = asyncio.run(wrapped.ainvoke({"query": "x"}))
-    assert isinstance(plain_result, ToolMessage)
-    assert plain_result.content == "got query='x'"
+    # The wrapper's schema owns the provider correlation id, so model-facing
+    # invocations are envelope-only. The inner ToolMessage must retain that
+    # exact id; otherwise the provider rejects the next model turn.
+    first_result = asyncio.run(
+        wrapped.ainvoke(
+            {
+                "args": {"query": "x"},
+                "name": "plain",
+                "id": "call_abc",
+                "type": "tool_call",
+            }
+        )
+    )
+    assert isinstance(first_result, ToolMessage)
+    assert first_result.content == "got query='x'"
+    assert first_result.tool_call_id == "call_abc"
 
     envelope_result = asyncio.run(
         wrapped.ainvoke(
@@ -1150,8 +1195,77 @@ def test_delegation_wrap_forwards_envelope_to_inner_without_injected_id() -> Non
     )
     assert isinstance(envelope_result, ToolMessage)
     assert envelope_result.content == "got query='y'"
-    # Inner observed both invocations exactly once each, in order.
+    assert envelope_result.tool_call_id == "call_xyz"
     assert observed == [{"query": "x"}, {"query": "y"}]
+
+
+def test_tool_node_preserves_provider_tool_call_id_through_display_delegation() -> None:
+    """The actual LangGraph path must return the provider correlation id.
+
+    This guards the exact failure that made OpenAI reject the continuation
+    after a successful ``publish_artifact``: a delegated BaseTool returned a
+    nested ToolMessage with ``tool_call_id=''``. Running a compiled graph here
+    exercises ToolNode's production envelope injection rather than merely
+    calling a wrapper directly.
+    """
+
+    import asyncio
+    import json
+
+    from langchain_core.messages import AIMessage
+    from langchain_core.tools import BaseTool
+    from langgraph.graph import END, START, MessagesState, StateGraph
+    from langgraph.prebuilt import ToolNode
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        wrap_tool_with_display,
+    )
+
+    class ArtifactArgs(BaseModel):
+        content: str
+
+    class ArtifactTool(BaseTool):
+        name: str = "publish_artifact"
+        description: str = "Create a reviewable artifact."
+        args_schema: type[BaseModel] = ArtifactArgs
+
+        def _run(self, content: str) -> dict[str, str]:  # type: ignore[override]
+            return {"status": "created", "content": content}
+
+        async def _arun(self, content: str) -> dict[str, str]:  # type: ignore[override]
+            return {"status": "created", "content": content}
+
+    graph = StateGraph(MessagesState)
+    graph.add_node("tools", ToolNode([wrap_tool_with_display(ArtifactTool())]))
+    graph.add_edge(START, "tools")
+    graph.add_edge("tools", END)
+
+    state = asyncio.run(
+        graph.compile().ainvoke(
+            {
+                "messages": [
+                    AIMessage(
+                        content="",
+                        tool_calls=[
+                            {
+                                "name": "publish_artifact",
+                                "args": {"content": "month,bookings\\n2026-01,120"},
+                                "id": "call_openai_csv_123",
+                                "type": "tool_call",
+                            }
+                        ],
+                    )
+                ]
+            }
+        )
+    )
+
+    tool_result = state["messages"][-1]
+    assert tool_result.tool_call_id == "call_openai_csv_123"
+    payload = json.loads(tool_result.content)
+    assert payload["status"] == "created"
+    assert payload["content"] == "month,bookings\\n2026-01,120"
 
 
 def test_dispatch_envelope_keys_are_canonical() -> None:
