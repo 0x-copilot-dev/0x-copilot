@@ -13,20 +13,20 @@ dependencies = [
   # AC6 Monty code mode: embedded Python-subset interpreter (experimental).
   # Gated OFF by default via RUNTIME_ENABLE_MONTY; imported only by the
   # Monty adapter, lazily, behind the InterpreterPort.
-  "pydantic-monty==0.0.18",
-  "fastapi==0.139.2",
+  "pydantic-monty==0.0.19",
+  "fastapi==0.140.1",
   "langchain==1.3.14",
   "langchain-community==0.4.2",
-  "langchain-openai==1.3.5",
-  "langchain-anthropic==1.4.8",
-  "langchain-google-genai==4.2.7",
+  "langchain-openai==1.4.1",
+  "langchain-anthropic==1.5.2",
+  "langchain-google-genai==4.3.1",
   "langgraph==1.2.9",
   # SQLite-backed LangGraph checkpointer for the single_user_desktop file store
   # (durable graph/approval continuation across worker restart). Desktop path
   # only; postgres/in-memory keep InMemorySaver. Pulls in aiosqlite.
   "langgraph-checkpoint-sqlite==3.1.0",
-  "openai==2.46.0",
-  "anthropic==0.117.0",
+  "openai==2.48.0",
+  "anthropic==0.120.0",
   "pydantic==2.13.4",
   "python-dotenv==1.2.2",
   "python-multipart==0.0.32",
