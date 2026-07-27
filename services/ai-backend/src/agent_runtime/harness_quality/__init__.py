@@ -29,9 +29,15 @@ from agent_runtime.harness_quality.evaluation_contracts import (
     ScorerResult,
     TrajectoryManifest,
 )
+from agent_runtime.harness_quality.golden_traces import (
+    BASELINE_JOURNEY_IDS,
+    GoldenTrace,
+    GoldenTraceCatalog,
+)
 
 __all__ = [
     "DeterministicEvaluationRunner",
+    "BASELINE_JOURNEY_IDS",
     "EvaluationCase",
     "EvaluationMode",
     "EvaluationResult",
@@ -40,6 +46,8 @@ __all__ = [
     "FixtureResponse",
     "FixtureToolExecutor",
     "HarnessVariant",
+    "GoldenTrace",
+    "GoldenTraceCatalog",
     "InMemoryEvaluationRepository",
     "PromotionAssessment",
     "PromotionDecision",
