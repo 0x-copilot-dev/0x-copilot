@@ -55,27 +55,24 @@ lands so the design history remains auditable.
   every policy-admitted `BaseTool` is budget-governed. Regression coverage
   proves the wrapper is idempotent and policy decoration remains visible.
 
-## Open
-
-### ARQ-004 — Desktop tool-result offload happens after model context admission
+### ARQ-004 — Desktop tool-result offload happened after model context admission
 
 - **Found in:** F2–F6 implementation audit; verified in
   `runtime_worker/tool_result_offload.py`.
-- **Impact:** offload reduces persisted event/UI payload size but occurs after
-  the raw tool result has already reached the current agent graph. A single
-  oversized result can therefore still exhaust the model context.
-- **Required architectural fix:** move bounded-result representation to the
-  common tool-result boundary before the result becomes a model `ToolMessage`.
-  F5's `ContextBudgeter` and evidence hydration contract will own this, with
-  the current file-backed content-addressed store retained as the backing ref.
-- **Status:** partially addressed. `ToolResultAdmissionAdapter` now owns
-  deterministic serialization, bounded model content, content-addressed
-  offload, and the worker's persisted-event projection. The governed
-  `BaseTool` wrapper invokes it before a successful result becomes a
-  `ToolMessage` when a writer/adapter is bound. The production worker still
-  does not construct that desktop adapter or bind it for a run, so the
-  production current-turn context remains unbounded. This stays open and
-  blocks F5 context enforcement.
+- **Impact:** offload originally reduced only persisted event/UI payload size;
+  one oversized result could still reach the current model context.
+- **Architectural fix:** the desktop file-runtime now constructs one shared
+  `FileOffloadWriter → ToolResultAdmissionAdapter → ToolResultOffloader`
+  pipeline per handler. An admission-carrying empty-budget guard is active even
+  when no budget rows exist, so every successful guarded tool result is bounded
+  before its `ToolMessage`. The stream projector consumes that exact bounded
+  decision once, and approval resume uses the same boundary. Writer failures
+  remain fail-closed; non-file behavior is unchanged.
+- **Status:** resolved for the desktop file runtime; regression coverage proves
+  the model sees bounded content, the event gets the same reference, and the
+  original content is stored once in the content-addressed object store.
+
+## Open
 
 ### ARQ-005 — Generic worker retry can replay a completed portion of a run
 
@@ -129,25 +126,35 @@ unshipped feature as a regression.
 
 ### ARQ-008 — F5 admission adapter is not at the LangChain tool boundary
 
-- **Current state:** `ToolResultAdmissionAdapter` has the correct bounded,
-  fail-closed representation and the worker event projector reuses it. The
-  governed `BaseTool` wrapper now admits successful returns before they go
-  back to LangChain, when a desktop writer/adapter is bound to the run.
-- **Remaining work:** construct and bind the adapter with the desktop
-  `OffloadWriter` in the worker; project its one decision into the durable
-  event/metrics path without a second offload decision; route opaque refs
-  through the authorized evidence/read-back path; add an end-to-end
-  current-turn `ToolMessage` test.
-- **Status:** open; production binding is required to close ARQ-004.
+- **Current state:** the desktop file runtime now binds the adapter at the
+  common pre-`ToolMessage` wrapper even with zero tool-budget rows. Its
+  run-keyed bounded projection is consumed once by the event path, and the
+  approval-resume path shares that behavior. The desktop regression test proves
+  a large raw result is not returned to the model while the exact bytes remain
+  in the content-addressed store.
+- **Remaining work:** add the equivalent governed writer for future hosted/B2C
+  runtime stores; turn the one admission decision into a durable raw-free
+  metrics/event fact; route opaque refs through the general authorized evidence
+  reader; and add full graph-level current-turn coverage across every tool type.
+- **Status:** open only for cross-store F5 completion; ARQ-004 is closed for
+  the desktop runtime.
 
-### ARQ-009 — F10 has no attempt-level reliability control plane
+### ARQ-009 — F10 attempt policy is not attached to live provider invocation
 
 - **Current state:** generic worker replay after run-handler entry is blocked.
-- **Remaining work:** persist model invocation/route/attempt lineage; classify
-  provider failures; permit only stream-safe provider-attempt retry/fallback;
-  reconcile ambiguous post-crash attempts; aggregate cost/deadline across
-  attempts; add circuit breakers and route-policy evaluation.
-- **Status:** open; provider fallback remains disabled by design.
+  The pure F10 control plane now constructs versioned deployment,
+  requirements, credential, and budget contracts; deterministically derives
+  route eligibility and stable exclusions; classifies sanitized failures; and
+  admits bounded attempts. It denies whole-run replay, retries after visible
+  output, and ambiguous provider state.
+- **Remaining work:** adapt the current model catalog/enablement and verified
+  region/privacy/BYOK facts into deployment descriptors; persist invocation,
+  route, and attempt lineage; add provider-specific error adapters and
+  attempt-scoped invocation/usage metering; preserve streaming discontinuities;
+  reconcile ambiguous post-crash attempts; add circuit health and
+  F1-qualified equivalent routes. Worker retries must remain outside this
+  policy and must never replay a run.
+- **Status:** open; no live provider fallback or routing behavior has changed.
 
 ### ARQ-010 — F6 planner is not yet an execution control plane
 
@@ -245,3 +252,22 @@ unshipped feature as a regression.
   generation behind a separately reviewed A4/A5 flag.
 - **Status:** open; this validator does not execute code, perform I/O, or
   expose an agent tool.
+
+### ARQ-017 — F12 verifier is not yet part of authoritative finalization
+
+- **Current state:** F12 now has a content-safe answer envelope, requirement,
+  claim, evidence, conflict, and trusted-fact contract plus a deterministic
+  verifier. The report carries only safe IDs/digests/reason codes and checks
+  requirement completion, material support, authorization, revocation,
+  freshness, locator validity, conflicts, and externally supplied secret-scan
+  findings.
+- **Remaining work:** compile requirements from F4; add structured-envelope
+  parsing/tagged fallback and synthesis prompt wiring; resolve/re-authorize
+  evidence and locators in batches; buffer and verify before authoritative
+  final-response persistence; add one bounded repair controller plus degraded
+  and blocked finalizers; project citations to shared surfaces; persist the
+  envelope/ledger/report through runtime ports with crash replay/deletion; and
+  connect effect receipts, secret scanning, F1 evaluation, metrics, flags, and
+  fault/performance tests.
+- **Status:** open; this module performs no I/O, model invocation, or response
+  publication.

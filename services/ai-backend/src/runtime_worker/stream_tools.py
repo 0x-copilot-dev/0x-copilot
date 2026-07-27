@@ -229,7 +229,10 @@ class StreamMessageProcessor:
                 and payload[Keys.Field.TOOL_NAME] != Values.Tool.TASK
             ):
                 payload = self._tool_result_offloader.apply(
-                    payload, trace_id=run.trace_id or run.run_id
+                    payload,
+                    trace_id=run.trace_id or run.run_id,
+                    projection_key=run.run_id,
+                    projection_content=StreamMessageParser.raw_content(message),
                 )
             if payload[Keys.Field.TOOL_NAME] == Values.Tool.TASK:
                 state = self.tool_call_state_for_payload(run.run_id, payload)

@@ -19,6 +19,12 @@ so it never loads on those images.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
+    from runtime_worker.tool_result_offload import ToolResultOffloader
+
 
 class FileStoreWorkerWiring:
     """Gate + builders for the desktop file-store offloader and read backends.
@@ -29,6 +35,8 @@ class FileStoreWorkerWiring:
 
     def __init__(self, event_store: object) -> None:
         self._event_store = event_store
+        self._tool_result_admission: ToolResultAdmissionAdapter | None = None
+        self._tool_result_offloader: ToolResultOffloader | None = None
 
     def file_store(self) -> object | None:
         """Return the active file store, or ``None`` on non-file backends.
@@ -43,20 +51,50 @@ class FileStoreWorkerWiring:
             return store
         return None
 
-    def tool_result_offloader(self) -> object | None:
+    def tool_result_offloader(self) -> ToolResultOffloader | None:
         """Construct the file-store tool-result offloader, or ``None`` elsewhere."""
 
         store = self.file_store()
         if store is None:
             return None
+        self._ensure_tool_result_admission(store)
+        return self._tool_result_offloader
+
+    def tool_result_admission(self) -> ToolResultAdmissionAdapter | None:
+        """Return the pre-model admission adapter, or ``None`` elsewhere."""
+
+        store = self.file_store()
+        if store is None:
+            return None
+        self._ensure_tool_result_admission(store)
+        return self._tool_result_admission
+
+    def discard_tool_result_projections(self, *, run_id: str) -> None:
+        """Release bounded projection records left by an interrupted run."""
+
+        adapter = self._tool_result_admission
+        discard = getattr(adapter, "discard_projections", None)
+        if callable(discard):
+            discard(projection_key=run_id)
+
+    def _ensure_tool_result_admission(self, store: object) -> None:
+        """Build one writer/adapter/projector pipeline for this worker."""
+
+        if self._tool_result_admission is not None:
+            return
         # Lazy imports: the file adapter (and its sqlite/object-store deps) must
         # not load on the web/postgres images.
+        from agent_runtime.context.tool_result_admission import (  # noqa: PLC0415
+            ToolResultAdmissionAdapter,
+        )
         from runtime_adapters.file import FileOffloadWriter  # noqa: PLC0415
         from runtime_worker.tool_result_offload import (  # noqa: PLC0415
             ToolResultOffloader,
         )
 
-        return ToolResultOffloader(FileOffloadWriter(store.object_store))
+        adapter = ToolResultAdmissionAdapter(FileOffloadWriter(store.object_store))
+        self._tool_result_admission = adapter
+        self._tool_result_offloader = ToolResultOffloader(admission_adapter=adapter)
 
     def subagent_artifacts_backend(
         self, *, org_id: str, conversation_id: str

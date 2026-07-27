@@ -41,20 +41,36 @@ class ToolResultOffloader:
 
     def __init__(
         self,
-        offload_writer: OffloadWriter,
+        offload_writer: OffloadWriter | None = None,
         *,
         policy: TokenBudgetPolicy | None = None,
+        admission_adapter: ToolResultAdmissionAdapter | None = None,
     ) -> None:
+        if (offload_writer is None) == (admission_adapter is None):
+            raise ValueError(
+                "provide exactly one of offload_writer or admission_adapter"
+            )
         effective_policy = policy or TokenBudgetPolicy(
             max_input_tokens=int(self.INLINE_TOKEN_BUDGET / self._RECENT_RATIO),
             recent_context_ratio=self._RECENT_RATIO,
         )
-        self._admission_adapter = ToolResultAdmissionAdapter(
-            offload_writer,
-            policy=effective_policy,
-        )
+        if admission_adapter is not None:
+            self._admission_adapter = admission_adapter
+        else:
+            assert offload_writer is not None  # narrowed by the xor guard above
+            self._admission_adapter = ToolResultAdmissionAdapter(
+                offload_writer,
+                policy=effective_policy,
+            )
 
-    def apply(self, payload: JsonObject, *, trace_id: str) -> JsonObject:
+    def apply(
+        self,
+        payload: JsonObject,
+        *,
+        trace_id: str,
+        projection_key: str | None = None,
+        projection_content: object | None = None,
+    ) -> JsonObject:
         """Return ``payload`` unchanged, or with its output offloaded when large.
 
         The returned mapping keeps ``tool_name`` / ``call_id`` / ``status`` /
@@ -68,10 +84,22 @@ class ToolResultOffloader:
         if output == "":
             return payload
 
-        admitted = self._admission_adapter.admit(
-            output,
-            trace_id=trace_id,
+        admitted = (
+            self._admission_adapter.consume_projection(
+                output if projection_content is None else projection_content,
+                projection_key=projection_key,
+            )
+            if projection_key is not None
+            else None
         )
+        # Legacy/direct stream paths do not cross the pre-model wrapper.  Keep
+        # their existing post-hoc offload behavior, while the production bound
+        # path projects the exact earlier admission and never decides twice.
+        if admitted is None:
+            admitted = self._admission_adapter.admit(
+                output,
+                trace_id=trace_id,
+            )
         if admitted.output_ref is None:
             return payload
 

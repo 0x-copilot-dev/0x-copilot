@@ -224,7 +224,11 @@ class ToolBudgetGuard:
         adapter = self._tool_result_admission
         if adapter is None:
             return result
-        return adapter.admit(result, trace_id=call_id).model_content
+        return adapter.admit(
+            result,
+            trace_id=call_id,
+            projection_key=self._run.run_id if self._run is not None else None,
+        ).model_content
 
     def admit_task_policy(
         self,
