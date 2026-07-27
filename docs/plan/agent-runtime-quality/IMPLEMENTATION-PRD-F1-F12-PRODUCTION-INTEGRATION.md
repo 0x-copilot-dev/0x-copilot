@@ -36,7 +36,7 @@ control, documentation, and exit criteria pass. Discoveries during
 implementation are resolved inside the active step's architecture; they do not
 create a second planning queue.
 
-- [ ] **Step 0:** Correct foundation contracts and pin baseline/framework
+- [x] **Step 0:** Correct foundation contracts and pin baseline/framework
       conformance.
   - [x] F1 promotion gates and event sequence-gap detection
         (`08c36358`).
@@ -69,7 +69,9 @@ create a second planning queue.
   - [x] `off`/`shadow`/`enforce` modes, authority-narrowing kill switches, and
         conservative unknown-mode defaults (`d93ac11a`; 30 focused and E2
         compatibility tests).
-  - [ ] Full Step 0 regression suite and exit-criteria check.
+  - [x] Full Step 0 regression and exit criteria (`cb9174c8`; isolated committed
+        tree: 5,425 passed, 127 skipped, 1 live-eval deselected; 58 focused
+        hermetic collection/dependency tests).
 - [ ] **Step 1:** Persist and rehydrate the immutable run control snapshot.
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
