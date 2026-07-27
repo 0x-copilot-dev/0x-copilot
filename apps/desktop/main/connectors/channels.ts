@@ -30,6 +30,29 @@ export const CONNECTOR_CHANNELS = {
   authorize: "connector.authorize",
 } as const;
 
+/**
+ * What `connector.authorize` resolves with — the payload half of the same
+ * contract, and it lives HERE for the same reason the channel names do: main,
+ * preload, and the renderer must agree on it from one source, and this is the
+ * only connector module the service-boundary check lets the renderer import
+ * (`tools/check_service_boundaries.py`, `_DESKTOP_MAIN_IPC_CONTRACTS`). It stays
+ * dependency-free — declaring it beside the coordinator would drag
+ * main-process code into the renderer bundle, which is exactly what that check
+ * exists to stop.
+ *
+ * Not `packages/api-types`: that package mirrors the public HTTP surface, and
+ * this shape is synthesized by main for an IPC reply. It is deliberately
+ * narrower than the profile route's own HTTP result, because it must describe
+ * BOTH OAuth topologies honestly — the MCP route knows the server it authorized
+ * and nothing more, so `auth_state` and `connector_slug` are nullable rather
+ * than padded with a plausible value.
+ */
+export interface ConnectorAuthorizationResult {
+  readonly server_id: string;
+  readonly connector_slug: string | null;
+  readonly auth_state: string | null;
+}
+
 export type ConnectorChannelName =
   (typeof CONNECTOR_CHANNELS)[keyof typeof CONNECTOR_CHANNELS];
 

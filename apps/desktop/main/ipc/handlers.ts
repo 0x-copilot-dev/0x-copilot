@@ -22,8 +22,10 @@ import {
 } from "../capabilities/schemas";
 import type { RendererGrant } from "../capabilities/types";
 import type { WorkspaceApprovalHostPort } from "../capabilities/workspace-approval";
-import { CONNECTOR_CHANNELS } from "../connectors/channels";
-import type { ConnectorAuthorizationResult } from "../connectors/connector-service";
+import {
+  CONNECTOR_CHANNELS,
+  type ConnectorAuthorizationResult,
+} from "../connectors/channels";
 import {
   AuthorizeParamsSchema,
   ConnectorAuthorizationResultSchema,

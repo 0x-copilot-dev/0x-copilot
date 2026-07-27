@@ -12,6 +12,7 @@ import type {
   DesktopRequestedProductScope,
 } from "@0x-copilot/api-types";
 
+import type { ConnectorAuthorizationResult } from "./channels";
 import {
   ConnectorOAuthCoordinator,
   ConnectorOAuthError,
@@ -20,19 +21,10 @@ import {
 
 export interface ConnectorServiceDeps extends ConnectorOAuthDeps {}
 
-/**
- * What a completed authorization reports back — the same shape for both OAuth
- * topologies, so a caller never learns which route ran.
- *
- * `auth_state` is nullable rather than defaulted: the MCP route records the
- * outcome on the server's own row and has nothing truthful to say here, and a
- * fabricated "connected" would be worse than an honest absence.
- */
-export interface ConnectorAuthorizationResult {
-  readonly server_id: string;
-  readonly connector_slug: string | null;
-  readonly auth_state: string | null;
-}
+// `ConnectorAuthorizationResult` is declared in `./channels` — the one connector
+// module the renderer is allowed to import — so both sides of the IPC read the
+// same shape without pulling this file into the renderer bundle.
+export type { ConnectorAuthorizationResult };
 
 export class ConnectorService {
   private readonly facadeBaseUrl: string;

@@ -27,8 +27,10 @@ import type {
   McpAuthPort,
 } from "@0x-copilot/chat-surface";
 
-import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
-import type { ConnectorAuthorizationResult } from "../main/connectors/connector-service";
+import {
+  CONNECTOR_CHANNELS,
+  type ConnectorAuthorizationResult,
+} from "../main/connectors/channels";
 
 /**
  * Host plumbing the desktop {@link McpAuthPort} drives. Injected rather than
