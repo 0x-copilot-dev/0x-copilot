@@ -442,21 +442,93 @@ export function ConnectorsBinder({
   });
   markConnectedRef.current = flow.markConnected;
 
-  // Reconnect a broken connector by re-authorizing its slug through the same
-  // main-brokered path.
+  // Connect (or reconnect) a broken connector.
+  //
+  // Two authorities can own a row and they need different OAuth routes. A row
+  // backed by a desktop profile (gmail / gdrive / outlook / atlassian) goes
+  // through the main-brokered slug path. Everything else — a catalog seed, or a
+  // custom server added by URL — has no profile, and asking that path for one
+  // answers 404 connector_profile_unavailable. Those authorize by MCP server id
+  // instead, so resolve the row to its server first and only fall back to the
+  // slug path when no server matches.
+  //
+  // Slug↔server correspondence mirrors the backend's `mcp_connector_slug`:
+  // `seed:<slug>` for a catalog install, else the server `name` (which both
+  // mint paths write as `slug.replace("-", "_")`).
   const handleReconnect = useCallback(
     (id: ConnectorId): void => {
       const connector = connectorsRef.current.find((c) => c.id === id);
       if (connector === undefined) return;
-      void authorize({ slug: connector.slug }).catch((error: unknown) => {
+      const fail = (error: unknown): void => {
         notify({
           tone: "error",
-          title: `Couldn’t reconnect ${connector.display_name}`,
+          title: `Couldn’t connect ${connector.display_name}`,
           body: messageFromError(error),
         });
-      });
+      };
+      void (async () => {
+        try {
+          const servers = await port.listServers();
+          const underscored = connector.slug.replace(/-/g, "_");
+          const server = servers.find(
+            (s) =>
+              s.server_id === `seed:${connector.slug}` ||
+              s.name === connector.slug ||
+              s.name === underscored,
+          );
+          if (server !== undefined) {
+            const win = window as unknown as { bridge?: Window["bridge"] };
+            if (win.bridge !== undefined) {
+              await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorizeServer, {
+                serverId: server.server_id,
+              });
+              retry();
+              return;
+            }
+          }
+          await authorize({ slug: connector.slug });
+        } catch (error: unknown) {
+          fail(error);
+        }
+      })();
     },
-    [authorize, notify],
+    [authorize, notify, port, retry],
+  );
+
+  // Remove a connector for good. The row is a read-model projection of an MCP
+  // server, so the delete targets the server: DELETE /v1/mcp/servers/{id}, whose
+  // `mcp_auth_connections` FK is ON DELETE CASCADE, so the stored auth
+  // connection is removed with it rather than being left behind. The row is
+  // confirmed in the surface before this runs.
+  const handleRemove = useCallback(
+    (id: ConnectorId): void => {
+      const connector = connectorsRef.current.find((c) => c.id === id);
+      if (connector === undefined) return;
+      void (async () => {
+        try {
+          const servers = await port.listServers();
+          const underscored = connector.slug.replace(/-/g, "_");
+          const server = servers.find(
+            (s) =>
+              s.server_id === `seed:${connector.slug}` ||
+              s.name === connector.slug ||
+              s.name === underscored,
+          );
+          if (server === undefined) {
+            throw new Error("No MCP server backs this connector.");
+          }
+          await port.deleteServer(server.server_id);
+          retry();
+        } catch (error: unknown) {
+          notify({
+            tone: "error",
+            title: `Couldn’t remove ${connector.display_name}`,
+            body: messageFromError(error),
+          });
+        }
+      })();
+    },
+    [notify, port, retry],
   );
 
   const catalog = useMemo<ReadonlyArray<ConnectorCatalogEntry>>(
@@ -469,7 +541,10 @@ export function ConnectorsBinder({
       <ConnectorsDestination
         items={result}
         onConnect={flow.openConnect}
+        catalog={catalog}
+        onConnectEntry={(slug) => flow.onSelectEntry(slug)}
         onReconnect={handleReconnect}
+        onRemove={handleRemove}
         accessPort={accessPort}
         onOpenApprovalSettings={onOpenApprovalSettings}
         onRetry={retry}

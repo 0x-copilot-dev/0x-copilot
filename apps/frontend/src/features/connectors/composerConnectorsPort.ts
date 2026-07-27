@@ -28,6 +28,7 @@ import {
   installMcpServer,
   listMcpCatalog,
   listMcpServers,
+  deleteMcpServer,
   startMcpAuth,
 } from "../../api/mcpApi";
 
@@ -62,6 +63,9 @@ export function createComposerConnectorsPort(
     async beginAuth(serverId: string): Promise<void> {
       const auth = await startMcpAuth(serverId, identity);
       window.location.href = auth.auth_url;
+    },
+    async deleteServer(serverId: string): Promise<void> {
+      await deleteMcpServer(serverId, identity);
     },
   };
 }

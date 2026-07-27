@@ -255,6 +255,155 @@ export class ConnectorOAuthCoordinator {
     }
     return (await response.json()) as DesktopConnectorConnectionResult;
   }
+
+  // -- MCP-server OAuth (seeds + custom servers) ------------------------------
+  //
+  // `connect()` above resolves a slug against `desktop_profiles.yaml`, which
+  // knows four connectors. Everything else the Tools popover lists comes from
+  // `mcp_catalog.DEFAULT_CATALOG` and has no profile, so routing those through
+  // `connect()` returns 404 connector_profile_unavailable — a dead button.
+  //
+  // Those servers authenticate through the MCP OAuth routes instead, which
+  // support discovery + dynamic client registration and therefore need no
+  // pre-registered client. The shape is the same as above (loopback → browser →
+  // callback); only the endpoints differ:
+  //
+  //   POST {facade}/v1/mcp/servers/{id}/auth/start  { redirect_uri }  → auth_url
+  //   GET  {facade}/v1/mcp/oauth/callback?state&code                  → server
+  //
+  // `McpAuthStartResponse` carries no `state` field — the state is minted into
+  // the `auth_url` query, so it is read back out of the URL to arm the loopback
+  // and the deep-link demux. `redirect_uri` is client-supplied and validated
+  // server-side with `allow_localhost=True`, which is what makes the desktop
+  // loopback a first-class callback rather than a workaround.
+  async connectMcpServer(serverId: string): Promise<void> {
+    const bearer = await this.getBearer();
+    if (bearer === null) {
+      throw new ConnectorOAuthError("start", "not signed in");
+    }
+
+    const handle: LoopbackHandle = await this.loopback({
+      callbackPath: DESKTOP_CONNECTOR_LOOPBACK_PATH,
+      timeoutMs: this.timeoutMs,
+      randomPorts: {},
+    });
+
+    let registeredState: string | null = null;
+    try {
+      const start = await this.startMcpAuth(
+        serverId,
+        handle.redirectUri,
+        bearer,
+      );
+      const state = extractOAuthState(start.auth_url);
+
+      const received = new Promise<{ code: string; state: string }>(
+        (resolve) => {
+          this.pending.set(state, { slug: serverId, resolve });
+        },
+      );
+      registeredState = state;
+      handle.armState(state);
+
+      await this.openExternal(start.auth_url);
+
+      let delivered: { code: string; state: string };
+      try {
+        delivered = await Promise.race([received, handle.codePromise]);
+      } catch (err) {
+        throw new ConnectorOAuthError(
+          "redirect",
+          err instanceof Error ? err.message : String(err),
+        );
+      }
+      if (delivered.state !== state) {
+        throw new ConnectorOAuthError("redirect", "oauth state mismatch");
+      }
+
+      await this.completeMcpAuth(delivered.state, delivered.code, bearer);
+    } finally {
+      if (registeredState !== null) this.pending.delete(registeredState);
+      handle.close();
+    }
+  }
+
+  private async startMcpAuth(
+    serverId: string,
+    redirectUri: string,
+    bearer: string,
+  ): Promise<{ readonly auth_url: string }> {
+    const response = await this.doFetch(
+      `${this.facadeBaseUrl}/v1/mcp/servers/${encodeURIComponent(serverId)}/auth/start`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          authorization: `Bearer ${bearer}`,
+        },
+        // Identity is server-derived from the bearer; only the callback is ours.
+        body: JSON.stringify({ redirect_uri: redirectUri }),
+      },
+    );
+    if (!response.ok) {
+      throw new ConnectorOAuthError(
+        "start",
+        `mcp auth/start failed: ${response.status} ${await safeText(response)}`,
+      );
+    }
+    const start = (await response.json()) as { auth_url?: string };
+    if (!start.auth_url) {
+      throw new ConnectorOAuthError("start", "mcp auth/start returned no url");
+    }
+    return { auth_url: start.auth_url };
+  }
+
+  /** Hand the provider's code back.
+   *
+   *  The BACKEND's callback is a public route — `state` is its trust anchor,
+   *  because a provider can redirect a browser straight to it with no session.
+   *  The FACADE's is not: it runs `FacadeAuthenticator.authenticate_request`
+   *  and answers 401 "Missing bearer token" without one. Desktop always reaches
+   *  the facade, and the redirect lands on our own loopback rather than in a
+   *  browser tab, so this call is ours to make and is authenticated as the user
+   *  — strictly better than relying on `state` alone. */
+  private async completeMcpAuth(
+    state: string,
+    code: string,
+    bearer: string,
+  ): Promise<void> {
+    const url = new URL(`${this.facadeBaseUrl}/v1/mcp/oauth/callback`);
+    url.searchParams.set("state", state);
+    url.searchParams.set("code", code);
+    const response = await this.doFetch(url.toString(), {
+      method: "GET",
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${bearer}`,
+      },
+    });
+    if (!response.ok) {
+      throw new ConnectorOAuthError(
+        "callback",
+        `mcp oauth/callback failed: ${response.status} ${await safeText(response)}`,
+      );
+    }
+  }
+}
+
+/** Read the `state` the backend minted into the authorization URL. */
+function extractOAuthState(authUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(authUrl);
+  } catch {
+    throw new ConnectorOAuthError("start", "auth_url is not a valid URL");
+  }
+  const state = parsed.searchParams.get("state");
+  if (state === null || state.length === 0) {
+    throw new ConnectorOAuthError("start", "auth_url carries no state");
+  }
+  return state;
 }
 
 function trimTrailingSlash(url: string): string {

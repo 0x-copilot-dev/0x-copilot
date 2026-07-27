@@ -11,6 +11,7 @@ function port(): FirstRunConnectorsPort {
     installFromCatalog: vi.fn(),
     addCustomServer: vi.fn(),
     beginAuth: vi.fn(),
+    deleteServer: vi.fn(),
   };
 }
 

@@ -15,6 +15,12 @@ export const CONNECTOR_CHANNELS = {
   listCatalog: "connector.list-catalog",
   /** Renderer → main: begin the system-browser OAuth connect flow for a slug. */
   connect: "connector.connect",
+  /**
+   * Renderer → main: begin the system-browser OAuth flow for an MCP server by
+   * id. `connect` resolves a slug against the four desktop profiles; this is
+   * the path for the catalog seeds and custom servers that have no profile.
+   */
+  authorizeServer: "connector.authorize-server",
 } as const;
 
 export type ConnectorChannelName =
