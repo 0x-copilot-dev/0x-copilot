@@ -537,7 +537,7 @@ class ToolBudgetGuardedRegistry:
         """Wrap ``tool`` in a ``ToolBudgetGuardedTool``; return non-BaseTool entries unchanged."""
         if not isinstance(tool, BaseTool):
             return tool
-        if isinstance(tool, ToolBudgetGuardedTool):
+        if ToolBudgetGuardedRegistry._contains_guard(tool):
             return tool
         return ToolBudgetGuardedTool(
             name=tool.name,
@@ -545,6 +545,31 @@ class ToolBudgetGuardedRegistry:
             args_schema=tool.args_schema,
             inner=tool,
         )
+
+    @staticmethod
+    def _contains_guard(tool: BaseTool) -> bool:
+        """Return whether a wrapper chain already contains the budget gate.
+
+        Cross-cutting tool decorators compose through an ``inner`` attribute.
+        Registry tools arrive as ``ErrorPolicy(Budget(tool))`` while tools
+        injected later by the factory may arrive undecorated. Looking only at
+        the outermost type therefore double-wrapped registry tools and placed a
+        new budget gate outside their error policy. A hard rejection from that
+        outer gate escaped the graph instead of becoming a model-visible tool
+        result.
+
+        Walk the wrapper chain defensively so the complete-surface pass remains
+        idempotent regardless of which other decorators are already present.
+        """
+
+        current: object = tool
+        seen: set[int] = set()
+        while isinstance(current, BaseTool) and id(current) not in seen:
+            if isinstance(current, ToolBudgetGuardedTool):
+                return True
+            seen.add(id(current))
+            current = getattr(current, "inner", None)
+        return False
 
 
 def guard_model_tools(tools: tuple[object, ...] | list[object]) -> tuple[object, ...]:
