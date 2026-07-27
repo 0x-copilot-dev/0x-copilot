@@ -51,6 +51,43 @@ class ToolUseDisposition(StrEnum):
     BLOCKED = "blocked"
 
 
+class TaskPolicySelectionReason(StrEnum):
+    """Content-free reason explaining a server-side profile selection."""
+
+    EFFECT_INTENT = "effect_intent"
+    DELEGATION_INTENT = "delegation_intent"
+    SERVER_SELECTED_FAMILY = "server_selected_family"
+    CAPABILITY_HINT = "capability_hint"
+    CONSERVATIVE_DEFAULT = "conservative_default"
+
+
+class ToolPlanCreator(StrEnum):
+    """Closed set of plan producers; neither value conveys authority."""
+
+    MODEL = "model"
+    DETERMINISTIC = "deterministic"
+
+
+class ToolPlanStatus(StrEnum):
+    """Public run-plan lifecycle states."""
+
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
+    CANCELLED = "cancelled"
+
+
+class ToolPlanStepStatus(StrEnum):
+    """Public step lifecycle states."""
+
+    PENDING = "pending"
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    BLOCKED = "blocked"
+    SKIPPED = "skipped"
+
+
 class TaskPolicyProfile(RuntimeContract):
     """A versioned, bounded profile selected by trusted runtime context."""
 
@@ -80,14 +117,157 @@ class TaskPolicyProfile(RuntimeContract):
 
         return self.tool_call_limits.get(capability_id, self.tool_call_limits.get("*"))
 
+    @classmethod
+    def conservative_unknown(cls, *, revision: str) -> "TaskPolicyProfile":
+        """Build the bounded fallback used when no task signal matches.
+
+        The profile remains subordinate to platform and capability budgets.
+        Requiring a short plan, checking duplicates, and allowing at most three
+        calls per capability keeps an unclassified run useful without silently
+        inheriting a more permissive specialized profile.
+        """
+
+        return cls(
+            profile_id="unknown.general",
+            revision=revision,
+            task_family=TaskFamily.UNKNOWN,
+            planning_requirement=PlanningRequirement.REQUIRED,
+            model_turn_limit=8,
+            tool_call_limits={"*": 3},
+            checkpoint_interval=1,
+            enforce_exact_duplicates=True,
+            enforce_unchanged_errors=True,
+        )
+
 
 class TaskPolicyRequest(RuntimeContract):
-    """Trusted, content-free routing facts available before the first tool call."""
+    """Server-derived, content-free signals available before the first tool call.
 
-    explicit_family: TaskFamily | None = None
+    These fields must be assembled from verified route, capability, and effect
+    metadata. Model output is intentionally not represented here. The policy
+    revision is persisted with the run and must match the resolver bundle.
+    """
+
+    run_id: str = Field(min_length=1, max_length=160)
+    policy_revision: str = Field(min_length=1, max_length=160)
+    server_selected_family: TaskFamily | None = None
     capability_hints: frozenset[str] = Field(default_factory=frozenset)
     has_effect_intent: bool = False
     has_subagent_intent: bool = False
+
+    @field_validator("capability_hints")
+    @classmethod
+    def _normalize_capability_hints(cls, value: frozenset[str]) -> frozenset[str]:
+        if len(value) > 32:
+            raise ValueError("capability_hints must contain at most 32 values")
+        normalized = frozenset(hint.strip().lower() for hint in value if hint.strip())
+        if any(len(hint) > 80 for hint in normalized):
+            raise ValueError("capability_hints values must be at most 80 characters")
+        return normalized
+
+
+class TaskPolicySelection(RuntimeContract):
+    """Immutable profile identity bound to one run before model execution."""
+
+    run_id: str = Field(min_length=1, max_length=160)
+    profile_id: str = Field(min_length=1, max_length=160)
+    profile_revision: str = Field(min_length=1, max_length=160)
+    task_family: TaskFamily
+    planning_requirement: PlanningRequirement
+    selection_reason: TaskPolicySelectionReason
+
+
+class ToolPlanStep(RuntimeContract):
+    """One concise, user-visible step; it contains no private reasoning."""
+
+    step_id: str = Field(min_length=1, max_length=160)
+    label: str = Field(min_length=1, max_length=240)
+    expected_evidence_kinds: tuple[str, ...] = Field(
+        default_factory=tuple, max_length=16
+    )
+    status: ToolPlanStepStatus = ToolPlanStepStatus.PENDING
+
+    @field_validator("expected_evidence_kinds")
+    @classmethod
+    def _validate_evidence_kinds(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        normalized = tuple(kind.strip() for kind in value)
+        if any(not kind or len(kind) > 80 for kind in normalized):
+            raise ValueError(
+                "expected_evidence_kinds must be non-empty and at most 80 characters"
+            )
+        if len(set(normalized)) != len(normalized):
+            raise ValueError("expected_evidence_kinds must be unique")
+        return normalized
+
+
+class SuccessEvidenceRequirement(RuntimeContract):
+    """Content-free success criterion for a public plan."""
+
+    evidence_kind: str = Field(min_length=1, max_length=80)
+    minimum_count: int = Field(default=1, ge=1, le=1_000)
+    description: str | None = Field(default=None, max_length=240)
+
+
+class RunToolPlan(RuntimeContract):
+    """Bounded public plan associated with the selected run policy."""
+
+    plan_id: str = Field(min_length=1, max_length=160)
+    run_id: str = Field(min_length=1, max_length=160)
+    profile_id: str = Field(min_length=1, max_length=160)
+    profile_revision: str = Field(min_length=1, max_length=160)
+    task_family: TaskFamily
+    objective: str = Field(min_length=1, max_length=512)
+    steps: tuple[ToolPlanStep, ...] = Field(min_length=1, max_length=32)
+    success_evidence: tuple[SuccessEvidenceRequirement, ...] = Field(
+        min_length=1, max_length=16
+    )
+    created_by: ToolPlanCreator
+    status: ToolPlanStatus = ToolPlanStatus.PENDING
+
+    @model_validator(mode="after")
+    def _validate_plan_state(self) -> "RunToolPlan":
+        step_ids = [step.step_id for step in self.steps]
+        if len(step_ids) != len(set(step_ids)):
+            raise ValueError("plan step_id values must be unique")
+        active_steps = sum(
+            step.status is ToolPlanStepStatus.ACTIVE for step in self.steps
+        )
+        if active_steps > 1:
+            raise ValueError("a plan can have at most one active step")
+        if self.status is ToolPlanStatus.COMPLETED and any(
+            step.status
+            not in {ToolPlanStepStatus.COMPLETED, ToolPlanStepStatus.SKIPPED}
+            for step in self.steps
+        ):
+            raise ValueError("a completed plan cannot contain unfinished steps")
+        return self
+
+    @classmethod
+    def for_selection(
+        cls,
+        *,
+        selection: TaskPolicySelection,
+        plan_id: str,
+        objective: str,
+        steps: tuple[ToolPlanStep, ...],
+        success_evidence: tuple[SuccessEvidenceRequirement, ...],
+        created_by: ToolPlanCreator,
+        status: ToolPlanStatus = ToolPlanStatus.PENDING,
+    ) -> "RunToolPlan":
+        """Construct a plan whose run/profile identity cannot drift."""
+
+        return cls(
+            plan_id=plan_id,
+            run_id=selection.run_id,
+            profile_id=selection.profile_id,
+            profile_revision=selection.profile_revision,
+            task_family=selection.task_family,
+            objective=objective,
+            steps=steps,
+            success_evidence=success_evidence,
+            created_by=created_by,
+            status=status,
+        )
 
 
 class ToolUseIntent(RuntimeContract):
@@ -139,11 +319,12 @@ class ToolOperationOutcome(RuntimeContract):
 
 
 class TaskPolicyResolver:
-    """Resolve profiles deterministically; caller-provided explicit family wins.
+    """Resolve one revisioned policy bundle from server-derived signals.
 
-    The resolver accepts a fixed, deployment-owned mapping. It never consumes
-    model text and does not look at permissions, so it cannot act as an
-    authorization or capability-discovery path.
+    Effect and delegation facts take precedence over a server-selected family,
+    preventing an explicit route from weakening the policy for a sensitive
+    operation. It never consumes model text and is not an authorization or
+    capability-discovery path.
     """
 
     _HINT_FAMILIES: tuple[tuple[frozenset[str], TaskFamily], ...] = (
@@ -157,34 +338,94 @@ class TaskPolicyResolver:
         (frozenset({"calculate", "transform"}), TaskFamily.TRANSFORMATION),
     )
 
-    def __init__(self, profiles: Sequence[TaskPolicyProfile]) -> None:
+    def __init__(
+        self,
+        profiles: Sequence[TaskPolicyProfile],
+        *,
+        policy_revision: str | None = None,
+    ) -> None:
+        revisions = {profile.revision for profile in profiles}
+        if policy_revision is None:
+            if len(revisions) != 1:
+                raise ValueError(
+                    "policy_revision is required unless profiles share one revision"
+                )
+            policy_revision = next(iter(revisions))
+        if not policy_revision.strip():
+            raise ValueError("policy_revision must be non-empty")
+        if revisions.difference({policy_revision}):
+            raise ValueError("all profiles must match the resolver policy_revision")
+
         by_family: dict[TaskFamily, TaskPolicyProfile] = {}
         for profile in profiles:
             if profile.task_family in by_family:
                 raise ValueError("exactly one task policy profile per task family")
             by_family[profile.task_family] = profile
         if TaskFamily.UNKNOWN not in by_family:
-            raise ValueError("an unknown task policy profile is required")
+            by_family[TaskFamily.UNKNOWN] = TaskPolicyProfile.conservative_unknown(
+                revision=policy_revision
+            )
+        self._policy_revision = policy_revision
         self._by_family = by_family
 
     def resolve(self, request: TaskPolicyRequest) -> TaskPolicyProfile:
-        if request.explicit_family is not None:
-            return self._by_family.get(
-                request.explicit_family, self._by_family[TaskFamily.UNKNOWN]
+        """Return the selected profile after enforcing revision affinity."""
+
+        profile, _ = self._resolve_with_reason(request)
+        return profile
+
+    def resolve_selection(self, request: TaskPolicyRequest) -> TaskPolicySelection:
+        """Return the immutable, persistable run/profile binding."""
+
+        profile, reason = self._resolve_with_reason(request)
+        return TaskPolicySelection(
+            run_id=request.run_id,
+            profile_id=profile.profile_id,
+            profile_revision=profile.revision,
+            task_family=profile.task_family,
+            planning_requirement=profile.planning_requirement,
+            selection_reason=reason,
+        )
+
+    def _resolve_with_reason(
+        self, request: TaskPolicyRequest
+    ) -> tuple[TaskPolicyProfile, TaskPolicySelectionReason]:
+        if request.policy_revision != self._policy_revision:
+            raise ValueError(
+                "task policy request revision does not match the resolver bundle"
             )
         if request.has_effect_intent:
-            return self._by_family.get(
-                TaskFamily.EFFECT_PROPOSAL, self._by_family[TaskFamily.UNKNOWN]
+            return (
+                self._by_family.get(
+                    TaskFamily.EFFECT_PROPOSAL, self._by_family[TaskFamily.UNKNOWN]
+                ),
+                TaskPolicySelectionReason.EFFECT_INTENT,
             )
         if request.has_subagent_intent:
-            return self._by_family.get(
-                TaskFamily.DELEGATED_ANALYSIS, self._by_family[TaskFamily.UNKNOWN]
+            return (
+                self._by_family.get(
+                    TaskFamily.DELEGATED_ANALYSIS, self._by_family[TaskFamily.UNKNOWN]
+                ),
+                TaskPolicySelectionReason.DELEGATION_INTENT,
             )
-        hints = {hint.strip().lower() for hint in request.capability_hints}
+        if request.server_selected_family is not None:
+            return (
+                self._by_family.get(
+                    request.server_selected_family, self._by_family[TaskFamily.UNKNOWN]
+                ),
+                TaskPolicySelectionReason.SERVER_SELECTED_FAMILY,
+            )
+        hints = request.capability_hints
         for matching_hints, family in self._HINT_FAMILIES:
             if hints.intersection(matching_hints):
-                return self._by_family.get(family, self._by_family[TaskFamily.UNKNOWN])
-        return self._by_family[TaskFamily.UNKNOWN]
+                return (
+                    self._by_family.get(family, self._by_family[TaskFamily.UNKNOWN]),
+                    TaskPolicySelectionReason.CAPABILITY_HINT,
+                )
+        return (
+            self._by_family[TaskFamily.UNKNOWN],
+            TaskPolicySelectionReason.CONSERVATIVE_DEFAULT,
+        )
 
 
 class RequestFingerprint:
@@ -376,10 +617,18 @@ class ToolUseController:
 __all__ = (
     "PlanningRequirement",
     "RequestFingerprint",
+    "RunToolPlan",
+    "SuccessEvidenceRequirement",
     "TaskFamily",
     "TaskPolicyProfile",
     "TaskPolicyRequest",
     "TaskPolicyResolver",
+    "TaskPolicySelection",
+    "TaskPolicySelectionReason",
+    "ToolPlanCreator",
+    "ToolPlanStatus",
+    "ToolPlanStep",
+    "ToolPlanStepStatus",
     "ToolOperationOutcome",
     "ToolPolicyRejected",
     "ToolUseController",

@@ -209,3 +209,39 @@ unshipped feature as a regression.
   D3 integration remains blocked on the C1 snapshot/export/import authority
   prerequisites and must not be enabled before they exist.
 - **Status:** open; F11's production edit path does not exist yet.
+
+### ARQ-014 — F4 policy selection and plans are not bound to production runs
+
+- **Current state:** the existing F4 module now derives a closed,
+  revision-bound `TaskPolicySelection` from server-derived signals, prevents
+  effect/delegation facts from being downgraded by a selected route, and
+  supplies a bounded `unknown.general` fallback. `RunToolPlan` is bound to that
+  selection and validates public steps and success-evidence requirements. The
+  optional duplicate controller remains behind the common guarded-tool seam.
+- **Remaining work:** construct the resolver from a deployment-owned versioned
+  profile bundle during run creation; persist selection and plan facts and
+  reconstruct them after restart; bind the selected controller/fingerprint to
+  every governed tool guard; emit profile, plan, feedback, and budget events;
+  enforce the planning/model-turn/cost/wall-time hierarchy; add a progress
+  projector; and cover rollout/F1 quality evaluation. Profile selection must
+  never become an authorization or capability-discovery path.
+- **Status:** open; no production run currently selects, persists, or displays
+  a task policy plan.
+
+### ARQ-015 — F7 dataflow has no executor, evidence path, or model surface
+
+- **Current state:** F7 now has a source-free, closed `dataflow.v1` AST and a
+  deterministic validator. It checks canonical DAG/reachability, expression
+  and static-call bounds, exact opaque capability bindings with descriptor
+  revisions, no-effect-only invocation, and explicit trusted F6 concurrency
+  metadata for a batch. The plan digest includes the trusted descriptor facts.
+- **Remaining work:** add quota-enforcing execution with durable
+  snapshot/resume/cancellation; re-resolve authorized input and capability
+  bindings through F3/F8 and A3 for every child call; replace coarse static
+  types with bounded schema checking; integrate the F6 executor and rate
+  limits; store intermediates, output, and evidence manifests through existing
+  runtime refs/offload; emit typed events/usage/citation/audit facts; then add
+  a feature-gated `run_dataflow` tool and model contract. Keep mutation batch
+  generation behind a separately reviewed A4/A5 flag.
+- **Status:** open; this validator does not execute code, perform I/O, or
+  expose an agent tool.
