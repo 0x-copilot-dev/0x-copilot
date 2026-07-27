@@ -28,6 +28,18 @@
   position: relative;
 }
 
+/* `display: none` at rest is load-bearing, not tidiness (real bug): a
+ * `visibility: hidden` box still takes part in layout, and an absolutely
+ * positioned descendant still contributes to the nearest scroll container's
+ * SCROLLABLE OVERFLOW. The composer's send button sits flush against the chat
+ * column's right edge, so its resting "Send message" tooltip — 84px wide,
+ * centred on a 28px button — pushed ~16px past the column's content box and
+ * turned the Run cockpit's whole chat panel into a horizontal scroller: the
+ * transcript AND the composer could be dragged sideways (and a Tab to the send
+ * button scrolled them there programmatically). Not rendering the tooltip until
+ * it is wanted removes the phantom overflow at the source, for every icon
+ * button in every scroll container. `allow-discrete` + `@starting-style` (below)
+ * keep the fade the discrete `display` flip would otherwise skip. */
 .aui-icon-button[data-tooltip]::after,
 .aui-footer-icon-button[data-tooltip]::after,
 .aui-send-button[data-tooltip]::after {
@@ -38,6 +50,7 @@
   box-shadow: 0 8px 24px rgb(0 0 0 / 0.24);
   color: var(--color-text);
   content: attr(data-tooltip);
+  display: none;
   font: 500 0.75rem/1.2 var(--font-sans);
   left: 50%;
   max-width: min(12rem, calc(100vw - 2rem));
@@ -50,7 +63,8 @@
   transform: translateX(-50%) translateY(0.125rem);
   transition:
     opacity 120ms ease,
-    transform 120ms ease;
+    transform 120ms ease,
+    display 120ms allow-discrete;
   visibility: hidden;
   white-space: nowrap;
   width: max-content;
@@ -95,9 +109,24 @@
 .aui-footer-icon-button[data-tooltip]:focus-visible::after,
 .aui-send-button[data-tooltip]:hover::after,
 .aui-send-button[data-tooltip]:focus-visible::after {
+  display: block;
   opacity: 1;
   transform: translateX(-50%) translateY(0);
   visibility: visible;
+}
+
+/* The from-state for the entry transition. Without it the tooltip is a freshly
+ * rendered box and the fade is skipped entirely (engines that don't support
+ * `@starting-style` simply show it instantly — no layout consequence). */
+@starting-style {
+  .aui-icon-button[data-tooltip]:hover::after,
+  .aui-icon-button[data-tooltip]:focus-visible::after,
+  .aui-footer-icon-button[data-tooltip]:hover::after,
+  .aui-footer-icon-button[data-tooltip]:focus-visible::after,
+  .aui-send-button[data-tooltip]:hover::after,
+  .aui-send-button[data-tooltip]:focus-visible::after {
+    opacity: 0;
+  }
 }
 
 .aui-icon-button[data-tooltip-align="start"]:hover::after,

@@ -138,6 +138,23 @@ describe("AssistantComposer bottom row (v3 parity)", () => {
     expect(left?.contains(model)).toBe(true);
   });
 
+  // The row's outermost controls align their tooltips inward. A centred
+  // tooltip on the flush-right send button hangs past the composer — and in the
+  // Run cockpit's chat column that overflow is what turned the whole column
+  // (transcript included) into a horizontal scroller.
+  it("aligns the edge controls' tooltips inward", () => {
+    renderComposer();
+    expect(
+      screen.getByRole("button", { name: /Open attachment and tools menu/i }),
+    ).toHaveAttribute("data-tooltip-align", "start");
+    expect(
+      screen.getByRole("button", { name: /Voice input/i }),
+    ).toHaveAttribute("data-tooltip-align", "end");
+    expect(
+      screen.getByRole("button", { name: /Send message/i }),
+    ).toHaveAttribute("data-tooltip-align", "end");
+  });
+
   it("renders no tools divider (row 5)", () => {
     const container = renderComposer();
     expect(container.querySelector(".aui-composer-tools-spacer")).toBeNull();
