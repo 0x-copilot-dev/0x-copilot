@@ -21,6 +21,14 @@ export const ConnectParamsSchema = z
 
 export type ConnectParams = z.infer<typeof ConnectParamsSchema>;
 
+/** Only an MCP server id crosses into main — never a redirect URI or token;
+ *  main derives the loopback callback itself, exactly as for `connect`. */
+export const AuthorizeServerParamsSchema = z
+  .object({ serverId: z.string().min(1) })
+  .strict();
+
+export type AuthorizeServerParams = z.infer<typeof AuthorizeServerParamsSchema>;
+
 // -- Outbound (main → renderer) — SAFE views only ---------------------------
 
 export const ConnectorConnectionResultSchema = z

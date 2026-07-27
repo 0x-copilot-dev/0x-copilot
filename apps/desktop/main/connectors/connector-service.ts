@@ -67,6 +67,14 @@ export class ConnectorService {
   ): Promise<DesktopConnectorConnectionResult> {
     return this.coordinator.connect(slug, options);
   }
+
+  /** Begin the system-browser OAuth flow for an MCP server by id — the path for
+   *  catalog seeds and custom servers, which have no desktop profile and so
+   *  cannot go through `connect()`. Returns nothing: the server's own row
+   *  reports the resulting auth state. */
+  authorizeServer(serverId: string): Promise<void> {
+    return this.coordinator.connectMcpServer(serverId);
+  }
 }
 
 function trimTrailingSlash(url: string): string {

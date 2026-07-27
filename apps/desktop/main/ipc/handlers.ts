@@ -24,6 +24,7 @@ import type { RendererGrant } from "../capabilities/types";
 import type { WorkspaceApprovalHostPort } from "../capabilities/workspace-approval";
 import { CONNECTOR_CHANNELS } from "../connectors/channels";
 import {
+  AuthorizeServerParamsSchema,
   ConnectorCatalogResponseSchema,
   ConnectorConnectionResultSchema,
   ConnectParamsSchema,
@@ -98,6 +99,9 @@ export interface ConnectorHandlers {
     slug: string,
     options: { readonly productScope?: DesktopRequestedProductScope },
   ): Promise<DesktopConnectorConnectionResult>;
+  /** OAuth an MCP server by id — catalog seeds and custom servers, which have
+   *  no desktop profile and therefore cannot go through `connect`. */
+  authorizeServer(serverId: string): Promise<void>;
 }
 
 export interface IpcLogger {
@@ -494,6 +498,21 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       // Only the SAFE connection metadata may cross to the renderer.
       return ConnectorConnectionResultSchema.parse(result);
     });
+
+    ipcMain.handle(
+      CONNECTOR_CHANNELS.authorizeServer,
+      async (_event, raw: unknown) => {
+        const params = parseOrThrow(
+          CONNECTOR_CHANNELS.authorizeServer,
+          AuthorizeServerParamsSchema,
+          raw,
+        );
+        // Resolves once the OAuth round-trip completes. Nothing is returned:
+        // the server's own row carries the resulting auth state, so no token
+        // or provider metadata needs to cross back to the renderer.
+        await connectors.authorizeServer(params.serverId);
+      },
+    );
   }
 
   return () => {

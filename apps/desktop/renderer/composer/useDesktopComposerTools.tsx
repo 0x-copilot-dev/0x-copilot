@@ -20,6 +20,12 @@ export interface UseDesktopComposerToolsOptions {
   readonly disabled?: boolean;
   /** Route Custom MCP and pre-registered catalog entries to Tools settings. */
   readonly onAddCustom?: () => void;
+  /**
+   * Report a failed 1-click connect. Without this the failure is invisible:
+   * the row simply stops responding, which is how the seed-vs-profile 404 went
+   * unnoticed. Hosts wire it to their notification surface.
+   */
+  readonly onConnectError?: (displayName: string, message: string) => void;
 }
 
 export interface DesktopComposerTools {
@@ -32,7 +38,7 @@ export interface DesktopComposerTools {
 export function useDesktopComposerTools(
   options: UseDesktopComposerToolsOptions,
 ): DesktopComposerTools {
-  const { connectorsPort, disabled, onAddCustom } = options;
+  const { connectorsPort, disabled, onAddCustom, onConnectError } = options;
   const [webOn, setWebOn] = useState(true);
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
@@ -52,6 +58,17 @@ export function useDesktopComposerTools(
   );
 
   // Electron MAIN brokers OAuth in the system browser. No token crosses IPC.
+  //
+  // The popover lists `mcp_catalog` seeds, so a catalog row is installed as an
+  // MCP SERVER and then authorized by server id. It must NOT go through
+  // `CONNECTOR_CHANNELS.connect`, which resolves a slug against the four
+  // entries in `desktop_profiles.yaml` and answers 404
+  // connector_profile_unavailable for everything else — which is exactly what
+  // made this button do nothing for Linear and Notion.
+  //
+  // Failures are reported. The previous `.catch(() => {})` swallowed them, so a
+  // 404 presented as a button that did not respond, with no error anywhere and
+  // no request in the HTTP logs.
   const handleConnectCatalog = useCallback(
     (entry: FirstRunInstallableConnector): void => {
       if (entry.requiresPreRegisteredClient) {
@@ -59,14 +76,23 @@ export function useDesktopComposerTools(
         return;
       }
       const win = window as unknown as { bridge?: Window["bridge"] };
-      if (win.bridge === undefined) return;
-      void win.bridge.ipc
-        .invoke(CONNECTOR_CHANNELS.connect, { slug: entry.slug })
-        .catch(() => {
-          /* first-use authorization is best effort */
-        });
+      if (win.bridge === undefined || connectorsPort === undefined) return;
+      const bridge = win.bridge;
+      void (async () => {
+        try {
+          const server = await connectorsPort.installFromCatalog(entry.slug);
+          await bridge.ipc.invoke(CONNECTOR_CHANNELS.authorizeServer, {
+            serverId: server.server_id,
+          });
+        } catch (error: unknown) {
+          onConnectError?.(
+            entry.displayName,
+            error instanceof Error ? error.message : String(error),
+          );
+        }
+      })();
     },
-    [onAddCustom],
+    [connectorsPort, onAddCustom, onConnectError],
   );
 
   const connectorScopes = useMemo<

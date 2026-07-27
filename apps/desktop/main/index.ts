@@ -983,6 +983,8 @@ function wireTransportAndIpc(
             listCatalog: () => connectorService!.listCatalog(),
             connect: (slug, options) =>
               connectorService!.connect(slug, options),
+            authorizeServer: (serverId) =>
+              connectorService!.authorizeServer(serverId),
           },
   });
 
