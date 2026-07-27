@@ -70,10 +70,12 @@ lands so the design history remains auditable.
   the current file-backed content-addressed store retained as the backing ref.
 - **Status:** partially addressed. `ToolResultAdmissionAdapter` now owns
   deterministic serialization, bounded model content, content-addressed
-  offload, and the worker's persisted-event projection. It is not yet called
-  by the Deep Agents/LangChain tool wrapper before its result becomes a
-  `ToolMessage`, so the production current-turn context remains unbounded.
-  This stays open and blocks F5 context enforcement.
+  offload, and the worker's persisted-event projection. The governed
+  `BaseTool` wrapper invokes it before a successful result becomes a
+  `ToolMessage` when a writer/adapter is bound. The production worker still
+  does not construct that desktop adapter or bind it for a run, so the
+  production current-turn context remains unbounded. This stays open and
+  blocks F5 context enforcement.
 
 ### ARQ-005 — Generic worker retry can replay a completed portion of a run
 
@@ -160,3 +162,50 @@ unshipped feature as a regression.
   curated connector opt-ins. Do not enable graph-level parallel execution
   until those controls and F1 evaluation are present.
 - **Status:** open; F6 remains serial in production.
+
+### ARQ-011 — F8 descriptor freshness has no authoritative revision feed or session reuse
+
+- **Current state:** `RevisionAwareMcpDiscoveryCache` layers opaque
+  subject-scoped revisions, a separate maximum-staleness ceiling, exact
+  invalidation, and cancellation-safe per-key load coalescing over the existing
+  TTL/LRU cache. It fails closed for legacy entries without revision metadata.
+- **Remaining work:** add a backend-owned authoritative revision source and
+  durable cursor; coordinate revision invalidation with the F3 catalog;
+  introduce an in-flight invalidation generation barrier before wiring a feed;
+  add cache/refresh metrics and diagnostics; and implement or explicitly
+  verify backend-owned remote MCP session pooling, isolation, keepalive, and
+  reconnect behavior. ai-backend must not own credentials or a remote session
+  pool.
+- **Status:** open; the wrapper is not yet wired into descriptor loading and
+  provides no cross-process freshness convergence.
+
+### ARQ-012 — F9 coordinator is not on the production Atlas dispatch path
+
+- **Current state:** `DelegationCoordinator` now creates compact,
+  transcript-free packets, validates dependency DAGs, reserves aggregate
+  budgets, enforces server-derived depth/child/deadline constraints, and emits
+  deterministic topological waves without dispatching a child.
+- **Remaining work:** route the existing Atlas task tool through this one
+  coordinator; derive remaining budget/deadline from server state and reserve
+  them atomically with reconciliation; persist admission, packet, plan, and
+  lifecycle facts; reauthorize evidence refs; verify typed child results and
+  resolve contradictions; and recover idempotently after restart. Do not add a
+  second subagent implementation.
+- **Status:** open; this is the implementation slice required to close
+  ARQ-006.
+
+### ARQ-013 — F11 patch plans are not an atomic workspace edit workflow
+
+- **Current state:** `WorkspacePatchSetValidator` admits a closed patch-plan
+  vocabulary with a frozen target set, exact base preconditions, immutable
+  content refs, case-alias protection, deterministic operation order, and
+  non-overlapping digest-bound hunk metadata. It neither reads content nor
+  mutates the workspace.
+- **Remaining work:** build target discovery and bounded edit context; resolve
+  immutable refs; re-verify byte spans/anchors and apply a complete patch set
+  atomically through `WorkspaceOverlayStorePort.append_revision`; apply effect,
+  policy, and budget admission; run cheap validation profiles; persist
+  structured diagnostics; bound repairs; and project review/evaluation facts.
+  D3 integration remains blocked on the C1 snapshot/export/import authority
+  prerequisites and must not be enabled before they exist.
+- **Status:** open; F11's production edit path does not exist yet.
