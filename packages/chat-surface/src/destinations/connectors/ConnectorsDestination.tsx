@@ -352,8 +352,16 @@ function ConnectorRow({
   onAccessModeChange,
   renderIcon,
 }: ConnectorRowProps): ReactElement {
-  const needsReconnect = c.status === "error" || c.status === "expired";
-  const broken = needsReconnect || c.status === "disconnected";
+  // `disconnected` belongs in BOTH sets. It used to be counted as broken (so the
+  // row showed a "Disconnected" pill) but excluded from `needsReconnect`, which
+  // gates the only affordance that can fix it — leaving a row flagged as broken
+  // with no way to act on it. That is the state a freshly added custom MCP
+  // server lands in: registered, unauthenticated, and unconnectable from here.
+  const needsReconnect =
+    c.status === "error" ||
+    c.status === "expired" ||
+    c.status === "disconnected";
+  const broken = needsReconnect;
 
   // PRD-11 D3 — the default identity tile no longer depends on a host binding:
   // AppIcon keyed on the slug, neutral tone, 30px squircle. A host may override
@@ -417,7 +425,7 @@ function ConnectorRow({
               onClick={() => onReconnect(c.id)}
               data-testid="connector-reconnect"
             >
-              Reconnect
+              {c.status === "disconnected" ? "Connect" : "Reconnect"}
             </Button>
           ) : null}
           {accessMode !== undefined ? (
