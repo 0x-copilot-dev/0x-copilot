@@ -45,6 +45,7 @@ from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
 )
+from agent_runtime.capabilities.middleware import RuntimeToolControlMiddleware
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -87,7 +88,6 @@ from agent_runtime.prompts import (
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
-from agent_runtime.capabilities.tool_budget_guard import guard_model_tools
 
 # Replace deepagents' built-in `task` tool builder with ours so each
 # subagent's RunnableConfig metadata carries `supervisor_task_call_id`.
@@ -256,12 +256,6 @@ async def _assemble_harness(
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             runtime_context=runtime_context,
         )
-        # Registry decoration alone cannot cover tools injected below the
-        # registry boundary (MCP, skills, prior results, and desktop tools).
-        # Apply the idempotent wrapper to the complete surface before policy
-        # decoration: a policy-blocked call must not consume budget, while every
-        # policy-admitted BaseTool still crosses the same hard gate.
-        model_tools = guard_model_tools(list(model_tools))
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
         # ``call_mcp_tool`` (and any future gated umbrella tool) is routed to
         # the SAME human-approval interrupt for ask/require, blocked with a safe
@@ -360,6 +354,7 @@ async def _assemble_harness(
                 permissions=(),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
+                universal_middleware_factories=(RuntimeToolControlMiddleware,),
             )
         )
     except AgentRuntimeError:

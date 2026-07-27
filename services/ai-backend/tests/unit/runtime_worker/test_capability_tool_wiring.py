@@ -196,7 +196,7 @@ class TestContextBudgetGuard:
 
     async def test_admits_when_no_guard_bound(self) -> None:
         # Non-desktop / eval runs install no guard; parity with
-        # ToolBudgetGuardedTool's ``guard is None`` path → admit.
+        # The graph-wide runtime boundary's ``guard is None`` path → admit.
         from runtime_worker.capability_tool_wiring import _ContextBudgetGuard
 
         guard = _ContextBudgetGuard()

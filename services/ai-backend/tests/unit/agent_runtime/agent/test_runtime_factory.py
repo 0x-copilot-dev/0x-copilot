@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from agent_runtime.capabilities.middleware import RuntimeToolControlMiddleware
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -9,6 +10,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness, acreate_agent_runtime
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from tests.unit.agent_runtime.agent.helpers import CapturingAgentBuilder
@@ -58,6 +60,8 @@ async def test_factory_propagates_permissions_to_runtime_ports(
     assert "ask_a_question" in tool_names
     assert call.subagents == ("researcher",)
     assert call.memory_backend is None
+    assert call.universal_middleware_factories == (RuntimeToolControlMiddleware,)
+    assert not any(isinstance(tool, ToolBudgetGuardedTool) for tool in call.tools)
 
 
 class FakeMcpProvider:

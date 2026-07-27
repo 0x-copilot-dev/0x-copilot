@@ -232,6 +232,28 @@ class ToolBudgetGuard:
             projection_key=self._run.run_id if self._run is not None else None,
         ).model_content
 
+    def admit_model_visible_result(
+        self,
+        result: object,
+        *,
+        tool_name: str,
+        call_id: str,
+    ) -> object:
+        """Annotate and bound one exact result before model-context admission."""
+
+        note = self.usage_note(tool_name=tool_name)
+        annotated = result
+        if note is not None:
+            try:
+                annotated = ToolResultNote.append(
+                    result,
+                    note=note,
+                    dict_key=_TOOL_BUDGET_NOTE_KEY,
+                )
+            except Exception:  # noqa: BLE001 - optional annotation fails soft.
+                _LOGGER.warning("tool_budget_note_failed", exc_info=True)
+        return self.admit_tool_result(annotated, call_id=call_id)
+
     def admit_task_policy(
         self,
         *,
@@ -382,6 +404,12 @@ class _Estimator:
         return str(value)
 
 
+def estimate_tool_input_tokens(arguments: dict[str, Any]) -> int:
+    """Return the canonical pre-dispatch estimate used by every tool boundary."""
+
+    return _Estimator.estimate((), arguments)
+
+
 class ToolBudgetGuardedTool(DelegatingTool):
     """LangChain ``BaseTool`` wrapper that gates calls through the active guard.
 
@@ -505,26 +533,11 @@ class ToolBudgetGuardedTool(DelegatingTool):
     ) -> object:
         """Annotate, then bound, the exact value returned to LangChain."""
 
-        annotated = self._with_usage_note(result, guard=guard)
-        return guard.admit_tool_result(annotated, call_id=call_id)
-
-    def _with_usage_note(self, result: object, *, guard: ToolBudgetGuard) -> object:
-        """Append the remaining-calls note to ``result`` when one is due.
-
-        Best-effort: annotating a result must never fail the tool call that
-        already succeeded, so any failure here returns the result untouched.
-        """
-
-        try:
-            note = guard.usage_note(tool_name=self.name)
-            if note is None:
-                return result
-            return ToolResultNote.append(
-                result, note=note, dict_key=_TOOL_BUDGET_NOTE_KEY
-            )
-        except Exception:  # noqa: BLE001 — an annotation is never worth a failure
-            _LOGGER.warning("tool_budget_note_failed", exc_info=True)
-            return result
+        return guard.admit_model_visible_result(
+            result,
+            tool_name=self.name,
+            call_id=call_id,
+        )
 
     @staticmethod
     def _schedule_warning(*, guard: ToolBudgetGuard, decision: ToolBudgetWarn) -> None:
@@ -620,5 +633,6 @@ __all__ = (
     "ToolBudgetGuard",
     "ToolBudgetGuardedRegistry",
     "ToolBudgetGuardedTool",
+    "estimate_tool_input_tokens",
     "guard_model_tools",
 )
