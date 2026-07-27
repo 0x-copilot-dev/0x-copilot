@@ -4,11 +4,16 @@
 // `actionable` was false and Connect/Deny were disabled. Nothing failed — which
 // is exactly why it went unnoticed. These tests pin the behaviours that would
 // regress silently the same way.
+//
+// The earlier version of this file asserted the port "connects by SLUG, not
+// server id" because "there is no server-keyed entry point to call". That was
+// false — `connector.authorize-server` existed — and believing it is what made
+// Connect a dead button for every catalog seed. The port now sends BOTH
+// identities and main picks the route, so the tests pin THAT instead.
 
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  NO_CATALOG_IDENTITY,
   createDesktopMcpAuthPort,
   type DesktopMcpAuthPortDeps,
 } from "./desktopMcpAuthPort";
@@ -16,16 +21,15 @@ import {
 function makeDeps(
   overrides: Partial<DesktopMcpAuthPortDeps> = {},
 ): DesktopMcpAuthPortDeps & {
-  connect: ReturnType<typeof vi.fn>;
+  authorize: ReturnType<typeof vi.fn>;
   recordSkip: ReturnType<typeof vi.fn>;
   onConnected: ReturnType<typeof vi.fn>;
   onError: ReturnType<typeof vi.fn>;
 } {
   const deps = {
-    connect: vi.fn(async (slug: string) => ({
-      server_id: `seed:${slug}`,
-      connector_slug: slug,
-      display_group: "Work",
+    authorize: vi.fn(async (target: { slug?: string; serverId?: string }) => ({
+      server_id: target.serverId ?? `seed:${target.slug ?? ""}`,
+      connector_slug: target.slug ?? null,
       auth_state: "authenticated",
     })),
     recordSkip: vi.fn(async () => undefined),
@@ -39,30 +43,57 @@ function makeDeps(
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
 describe("createDesktopMcpAuthPort", () => {
-  it("connects by SLUG, not server id", async () => {
-    // The whole reason this port exists. Desktop's flow is slug-keyed all the
-    // way down: the backend reconstructs the loopback redirect from a validated
-    // port rather than accepting one from the client, so there is no
-    // server-keyed entry point to call.
+  it("sends BOTH identities so main can pick the OAuth route", async () => {
+    // The regression that made this port worth rewriting. Linear is a catalog
+    // seed with no `desktop_profiles.yaml` entry, so a slug-only request went
+    // down the profile route and 404'd before any browser opened. Passing the
+    // server id too is what lets main authorize it over MCP OAuth instead.
     const deps = makeDeps();
     const port = createDesktopMcpAuthPort(deps);
 
     port.beginAuth("seed:linear", { connectorSlug: "linear" });
     await flush();
 
-    expect(deps.connect).toHaveBeenCalledWith("linear");
+    expect(deps.authorize).toHaveBeenCalledWith({
+      serverId: "seed:linear",
+      slug: "linear",
+    });
   });
 
-  it("reports the connected server id the backend confirmed", async () => {
+  it("authorizes a gate that names no connector, by server id alone", async () => {
+    // A custom MCP server added by URL has no catalog identity. That used to be
+    // refused outright, on the reasoning that a slug-keyed call would 404 — but
+    // the server id IS a usable identity on the MCP route, so the honest answer
+    // is to authorize with it rather than to give up.
+    const deps = makeDeps();
+    const port = createDesktopMcpAuthPort(deps);
+
+    port.beginAuth("custom:abc123", { connectorSlug: null });
+    await flush();
+
+    expect(deps.authorize).toHaveBeenCalledWith({ serverId: "custom:abc123" });
+    expect(deps.onError).not.toHaveBeenCalled();
+  });
+
+  it("treats a missing options bag the same as an absent slug", async () => {
+    const deps = makeDeps();
+    const port = createDesktopMcpAuthPort(deps);
+
+    port.beginAuth("custom:abc123");
+    await flush();
+
+    expect(deps.authorize).toHaveBeenCalledWith({ serverId: "custom:abc123" });
+  });
+
+  it("reports the connected server id main confirmed", async () => {
     // For an uninstalled suggestion the server row is minted DURING the
-    // connect, so the id the card knew is not necessarily the one that exists
-    // afterwards. The consent machine is keyed by server id, so using the
-    // stale one would leave the card stuck at `connecting`.
+    // authorize, so the id the card knew is not necessarily the one that exists
+    // afterwards. The consent machine is keyed by server id, so using the stale
+    // one would leave the card stuck at `connecting`.
     const deps = makeDeps({
-      connect: vi.fn(async () => ({
+      authorize: vi.fn(async () => ({
         server_id: "seed:notion",
         connector_slug: "notion",
-        display_group: "Work",
         auth_state: "authenticated",
       })),
     } as never);
@@ -74,40 +105,14 @@ describe("createDesktopMcpAuthPort", () => {
     expect(deps.onConnected).toHaveBeenCalledWith("seed:notion");
   });
 
-  it("says so when a gate names no connector, instead of guessing", async () => {
-    // A custom MCP server (added by URL) has no catalog identity. Falling back
-    // to the server id would 404 on the profile lookup — a broken button rather
-    // than an honestly absent one.
-    const deps = makeDeps();
-    const port = createDesktopMcpAuthPort(deps);
-
-    port.beginAuth("custom:abc123", { connectorSlug: null });
-    await flush();
-
-    expect(deps.connect).not.toHaveBeenCalled();
-    expect(deps.onConnected).not.toHaveBeenCalled();
-    expect(deps.onError).toHaveBeenCalledWith(
-      expect.objectContaining({ message: NO_CATALOG_IDENTITY }),
-    );
-  });
-
-  it("treats a missing options bag as no connector", async () => {
-    const deps = makeDeps();
-    const port = createDesktopMcpAuthPort(deps);
-
-    port.beginAuth("custom:abc123");
-    await flush();
-
-    expect(deps.connect).not.toHaveBeenCalled();
-    expect(deps.onError).toHaveBeenCalled();
-  });
-
-  it("does NOT report connected when the connect fails", async () => {
-    // The card then stays at `connecting`, which is the truthful state: a
-    // browser opened and we never heard back.
+  it("reports a failure against the id the CARD is keyed by", async () => {
+    // The card moved to `connecting` on click, keyed by the gate's server id.
+    // Reporting a failure under any other id would leave that card claiming a
+    // consent screen is open forever — the exact silent-failure shape this
+    // whole change exists to remove.
     const deps = makeDeps({
-      connect: vi.fn(async () => {
-        throw new Error("connector_oauth_denied");
+      authorize: vi.fn(async () => {
+        throw new Error("connector_profile_unavailable");
       }),
     } as never);
     const port = createDesktopMcpAuthPort(deps);
@@ -116,13 +121,16 @@ describe("createDesktopMcpAuthPort", () => {
     await flush();
 
     expect(deps.onConnected).not.toHaveBeenCalled();
-    expect(deps.onError).toHaveBeenCalled();
+    expect(deps.onError).toHaveBeenCalledWith(
+      "seed:linear",
+      expect.objectContaining({ message: "connector_profile_unavailable" }),
+    );
   });
 
-  it("never throws into the render from a rejected connect", async () => {
+  it("never throws into the render from a rejected authorize", async () => {
     // Every verb is fire-and-forget from the card's perspective.
     const deps = makeDeps({
-      connect: vi.fn(async () => {
+      authorize: vi.fn(async () => {
         throw new Error("boom");
       }),
     } as never);
@@ -135,8 +143,6 @@ describe("createDesktopMcpAuthPort", () => {
   });
 
   it("records a deny against the server id", async () => {
-    // Skip is server-keyed — it resolves the gate on a row that exists —
-    // whereas connect is slug-keyed. The asymmetry is real, not an oversight.
     const deps = makeDeps();
     const port = createDesktopMcpAuthPort(deps);
 
@@ -158,19 +164,20 @@ describe("createDesktopMcpAuthPort", () => {
 
     expect(() => port.skipAuth("seed:linear")).not.toThrow();
     await flush();
-    expect(deps.onError).toHaveBeenCalled();
+    expect(deps.onError).toHaveBeenCalledWith("seed:linear", expect.anything());
   });
 
   it("installs and authenticates in one brokered call", async () => {
     // No separate install step: the backend ensures the server row idempotently
-    // before starting OAuth, so `installFromCatalog` IS `connect`.
+    // before starting OAuth, so `installFromCatalog` IS an authorize. There is
+    // no server id yet, so the slug goes over alone.
     const deps = makeDeps();
     const port = createDesktopMcpAuthPort(deps);
 
     port.installFromCatalog("linear");
     await flush();
 
-    expect(deps.connect).toHaveBeenCalledTimes(1);
-    expect(deps.connect).toHaveBeenCalledWith("linear");
+    expect(deps.authorize).toHaveBeenCalledTimes(1);
+    expect(deps.authorize).toHaveBeenCalledWith({ slug: "linear" });
   });
 });

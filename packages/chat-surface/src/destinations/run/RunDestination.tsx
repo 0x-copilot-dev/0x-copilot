@@ -1056,6 +1056,15 @@ export interface RunDestinationProps {
    */
   readonly connectedConnectorServerId?: string | null;
   /**
+   * A connector whose authorization FAILED, or `null` — the mirror of
+   * `connectedConnectorServerId`. Pressing Connect moves the card to
+   * `connecting` before the host has heard anything back, so a host that never
+   * reached the vendor needs a way to undo that; without one the card claims a
+   * consent screen is open indefinitely. Pass a FRESH object per failure so a
+   * connector that fails twice in a row still re-fires.
+   */
+  readonly failedConnector?: { readonly serverId: string } | null;
+  /**
    * WC-P6a (AD-11): the host-supplied markdown chip renderer, forwarded verbatim
    * to the in-chat `TcChat` (its `components.a` slot routes the citation-remark
    * plugin's `#cite-ord:` / `#cite:` anchors to the host's chip dispatcher). The
@@ -1126,6 +1135,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     renderEmptyComposer,
     mcpAuthPort,
     connectedConnectorServerId = null,
+    failedConnector = null,
     markdownComponents,
     onOrdinalSelect,
     onSelectSource,
@@ -3069,6 +3079,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const connectorConsent = useConnectorConsentStates(
     mcpAuthPort,
     connectedConnectorServerId,
+    failedConnector,
   );
   const consentPort = connectorConsent.port;
 

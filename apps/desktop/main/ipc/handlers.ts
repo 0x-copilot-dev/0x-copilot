@@ -22,12 +22,14 @@ import {
 } from "../capabilities/schemas";
 import type { RendererGrant } from "../capabilities/types";
 import type { WorkspaceApprovalHostPort } from "../capabilities/workspace-approval";
-import { CONNECTOR_CHANNELS } from "../connectors/channels";
 import {
-  AuthorizeServerParamsSchema,
+  CONNECTOR_CHANNELS,
+  type ConnectorAuthorizationResult,
+} from "../connectors/channels";
+import {
+  AuthorizeParamsSchema,
+  ConnectorAuthorizationResultSchema,
   ConnectorCatalogResponseSchema,
-  ConnectorConnectionResultSchema,
-  ConnectParamsSchema,
   ListCatalogParamsSchema,
 } from "../connectors/schemas";
 import {
@@ -95,13 +97,13 @@ export interface CapabilityHandlers {
 // URI. The ConnectorService satisfies this structurally.
 export interface ConnectorHandlers {
   listCatalog(): Promise<DesktopConnectorCatalogResponse>;
-  connect(
-    slug: string,
-    options: { readonly productScope?: DesktopRequestedProductScope },
-  ): Promise<DesktopConnectorConnectionResult>;
-  /** OAuth an MCP server by id — catalog seeds and custom servers, which have
-   *  no desktop profile and therefore cannot go through `connect`. */
-  authorizeServer(serverId: string): Promise<void>;
+  /** Authorize a connector by whichever identity the caller holds. The
+   *  implementation picks the OAuth topology — see `ConnectorService`. */
+  authorize(target: {
+    readonly slug?: string;
+    readonly serverId?: string;
+    readonly productScope?: DesktopRequestedProductScope;
+  }): Promise<ConnectorAuthorizationResult>;
 }
 
 export interface IpcLogger {
@@ -486,31 +488,20 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       },
     );
 
-    ipcMain.handle(CONNECTOR_CHANNELS.connect, async (_event, raw: unknown) => {
-      const params = parseOrThrow(
-        CONNECTOR_CHANNELS.connect,
-        ConnectParamsSchema,
-        raw,
-      );
-      const result = await connectors.connect(params.slug, {
-        productScope: params.productScope,
-      });
-      // Only the SAFE connection metadata may cross to the renderer.
-      return ConnectorConnectionResultSchema.parse(result);
-    });
-
+    // One handler because there is one verb. `connectors.authorize` picks the
+    // OAuth topology from the backend-owned profile overlay; the renderer
+    // supplies whichever identity it holds and never names a mechanism.
     ipcMain.handle(
-      CONNECTOR_CHANNELS.authorizeServer,
+      CONNECTOR_CHANNELS.authorize,
       async (_event, raw: unknown) => {
         const params = parseOrThrow(
-          CONNECTOR_CHANNELS.authorizeServer,
-          AuthorizeServerParamsSchema,
+          CONNECTOR_CHANNELS.authorize,
+          AuthorizeParamsSchema,
           raw,
         );
-        // Resolves once the OAuth round-trip completes. Nothing is returned:
-        // the server's own row carries the resulting auth state, so no token
-        // or provider metadata needs to cross back to the renderer.
-        await connectors.authorizeServer(params.serverId);
+        const result = await connectors.authorize(params);
+        // Only the SAFE connection metadata may cross to the renderer.
+        return ConnectorAuthorizationResultSchema.parse(result);
       },
     );
   }
@@ -552,7 +543,10 @@ export function registerIpcHandlers(deps: RegisterHandlersDeps): () => void {
       channels.push(CAPABILITY_CHANNELS.decideWorkspaceApproval);
     }
     if (connectors) {
-      channels.push(CONNECTOR_CHANNELS.listCatalog, CONNECTOR_CHANNELS.connect);
+      // Every connector channel, so teardown actually removes what setup
+      // registered — the old list omitted the second authorization channel,
+      // which left a live handler behind on dispose.
+      channels.push(...Object.values(CONNECTOR_CHANNELS));
     }
     for (const channel of channels) {
       ipcMain.removeHandler(channel);

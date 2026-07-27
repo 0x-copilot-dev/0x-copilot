@@ -26,17 +26,26 @@ import type {
   McpAuthBeginOptions,
   McpAuthPort,
 } from "@0x-copilot/chat-surface";
-import type { DesktopConnectorConnectionResult } from "@0x-copilot/api-types";
 
-import { CONNECTOR_CHANNELS } from "../main/connectors/channels";
+import {
+  CONNECTOR_CHANNELS,
+  type ConnectorAuthorizationResult,
+} from "../main/connectors/channels";
 
 /**
  * Host plumbing the desktop {@link McpAuthPort} drives. Injected rather than
  * reached for, so the port is testable without an Electron bridge.
  */
 export interface DesktopMcpAuthPortDeps {
-  /** Main-brokered connect: loopback + system browser + code exchange. */
-  readonly connect: (slug: string) => Promise<DesktopConnectorConnectionResult>;
+  /**
+   * Main-brokered authorize: loopback + system browser + code exchange. Main
+   * picks the OAuth topology, so this passes BOTH identities it holds — the
+   * gate's `serverId` and the catalog `slug` — and names no mechanism.
+   */
+  readonly authorize: (target: {
+    readonly slug?: string;
+    readonly serverId?: string;
+  }) => Promise<ConnectorAuthorizationResult>;
   /**
    * Record that the user declined this connector for the run, so the agent
    * does not re-prompt. Best-effort — a discovery suggestion has no persisted
@@ -49,51 +58,61 @@ export interface DesktopMcpAuthPortDeps {
    * — the one transition nothing else can observe.
    */
   readonly onConnected: (serverId: string) => void;
-  /** Surface a failure to the host. The card's actions are fire-and-forget. */
-  readonly onError?: (error: unknown) => void;
+  /**
+   * Authorization failed. Carries the `serverId` so the host can put THAT
+   * card back to `pending`: without it a failure left the card asserting
+   * "a browser tab opened" forever, which is what turned a 404 into a
+   * silent mystery.
+   */
+  readonly onError?: (serverId: string, error: unknown) => void;
 }
 
-/**
- * Raised when a gate names no connector. Not a bug and not a crash: a custom
- * MCP server (one the user added by URL) has no catalog identity, and the
- * desktop connect flow is driven by the profile catalog. Saying so is better
- * than opening a browser at something that cannot complete.
- */
-export const NO_CATALOG_IDENTITY =
-  "This connector isn’t in the desktop catalog, so it can’t be connected here yet.";
+// `NO_CATALOG_IDENTITY` used to live here — the refusal shown when a gate named
+// no connector, on the reasoning that the desktop connect flow "is driven by the
+// profile catalog". It is gone because that premise is gone: a server id is a
+// perfectly good identity on the MCP OAuth route, so a gate without a slug is
+// authorized rather than refused.
 
 export function createDesktopMcpAuthPort(
   deps: DesktopMcpAuthPortDeps,
 ): McpAuthPort {
-  function connectBySlug(slug: string, serverId: string | null): void {
+  function authorize(target: {
+    readonly slug?: string;
+    readonly serverId?: string;
+  }): void {
+    // The card is already showing `connecting`, so the id used to undo that on
+    // failure must be the one the card is keyed by — the gate's `serverId`.
+    const cardId = target.serverId ?? target.slug ?? "";
     void (async () => {
       try {
-        const result = await deps.connect(slug);
-        // Prefer the id the backend just confirmed. For an uninstalled
-        // suggestion the server row is minted DURING this call, so the id the
-        // card knew may not be the one that now exists.
-        deps.onConnected(result.server_id ?? serverId ?? slug);
+        const result = await deps.authorize(target);
+        // Prefer the id main just confirmed. For an uninstalled suggestion the
+        // server row is minted DURING this call, so the id the card knew may
+        // not be the one that now exists.
+        deps.onConnected(result.server_id ?? cardId);
       } catch (error: unknown) {
-        deps.onError?.(error);
+        deps.onError?.(cardId, error);
       }
     })();
   }
 
   function beginAuth(serverId: string, options?: McpAuthBeginOptions): void {
-    const slug = options?.connectorSlug ?? null;
-    if (slug === null) {
-      // The identity hop failed upstream. Report it rather than falling back to
-      // the `server_id`: the slug-keyed endpoint would 404 on a profile lookup,
-      // which reads to the user as a broken button rather than an absent one.
-      deps.onError?.(new Error(NO_CATALOG_IDENTITY));
-      return;
-    }
-    connectBySlug(slug, serverId);
+    // Both identities go to main, which resolves the topology. A gate always
+    // carries a `serverId`; the `connectorSlug` is what lets a profile-backed
+    // connector take the pre-registered-client route. Neither is a mechanism
+    // choice, so a missing slug is no longer fatal here — a seed authorizes
+    // over MCP OAuth by server id alone.
+    authorize({
+      serverId,
+      ...(options?.connectorSlug != null
+        ? { slug: options.connectorSlug }
+        : {}),
+    });
   }
 
   function skipAuth(serverId: string): void {
     void deps.recordSkip(serverId).catch((error: unknown) => {
-      deps.onError?.(error);
+      deps.onError?.(serverId, error);
     });
   }
 
@@ -101,7 +120,7 @@ export function createDesktopMcpAuthPort(
     // Same call. On desktop, install and authenticate are ONE brokered flow —
     // the backend ensures the server row idempotently before starting OAuth —
     // so there is no separate install step to run first.
-    connectBySlug(slug, null);
+    authorize({ slug });
   }
 
   return { beginAuth, skipAuth, installFromCatalog };
@@ -115,16 +134,16 @@ export function createDesktopMcpAuthPort(
 export function bridgeMcpAuthDeps(
   onConnected: (serverId: string) => void,
   recordSkip: (serverId: string) => Promise<void>,
-  onError?: (error: unknown) => void,
+  onError?: (serverId: string, error: unknown) => void,
 ): DesktopMcpAuthPortDeps | undefined {
   const win = window as unknown as { bridge?: Window["bridge"] };
   if (win.bridge === undefined) return undefined;
   const bridge = win.bridge;
   return {
-    connect: (slug: string) =>
-      bridge.ipc.invoke<DesktopConnectorConnectionResult>(
-        CONNECTOR_CHANNELS.connect,
-        { slug },
+    authorize: (target) =>
+      bridge.ipc.invoke<ConnectorAuthorizationResult>(
+        CONNECTOR_CHANNELS.authorize,
+        target,
       ),
     recordSkip,
     onConnected,

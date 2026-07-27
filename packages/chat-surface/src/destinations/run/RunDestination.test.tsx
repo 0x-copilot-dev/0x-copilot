@@ -2413,7 +2413,12 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     act(() => {
       fireEvent.click(connect);
     });
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      // Forwarded verbatim — these fixtures carry no `connector_slug`, and the
+      // point is that the bag ARRIVES: dropping it is what stripped the
+      // connector identity and made desktop Connect a no-op.
+      connectorSlug: null,
+    });
 
     // Deny is exercised on a SECOND connector, not the same card: Connect now
     // moves the card to `connecting`, which swaps both actions for a Cancel.
@@ -2460,7 +2465,12 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     act(() => {
       fireEvent.click(connect);
     });
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      // Forwarded verbatim — these fixtures carry no `connector_slug`, and the
+      // point is that the bag ARRIVES: dropping it is what stripped the
+      // connector identity and made desktop Connect a no-op.
+      connectorSlug: null,
+    });
     expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
       false,
     );
@@ -2496,7 +2506,12 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     });
 
     // The host still hears it…
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      // Forwarded verbatim — these fixtures carry no `connector_slug`, and the
+      // point is that the bag ARRIVES: dropping it is what stripped the
+      // connector identity and made desktop Connect a no-op.
+      connectorSlug: null,
+    });
     // …and the card no longer reads as an unpressed button.
     await waitFor(() => {
       expect(
@@ -2535,7 +2550,12 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     act(() => {
       fireEvent.click(screen.getByTestId("cc-reconsider"));
     });
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      // Forwarded verbatim — these fixtures carry no `connector_slug`, and the
+      // point is that the bag ARRIVES: dropping it is what stripped the
+      // connector identity and made desktop Connect a no-op.
+      connectorSlug: null,
+    });
   });
 
   it("Cancel while connecting returns the card to pending", async () => {

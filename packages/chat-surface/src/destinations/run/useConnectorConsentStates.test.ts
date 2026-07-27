@@ -47,7 +47,67 @@ describe("useConnectorConsentStates", () => {
     // Optimistic: the browser is about to leave for the vendor's consent
     // screen, and waiting for the return would leave the card dead meanwhile.
     expect(result.current.states["seed:linear"]).toBe("connecting");
-    expect(port.beginAuth).toHaveBeenCalledWith("seed:linear");
+    expect(port.beginAuth).toHaveBeenCalledWith("seed:linear", undefined);
+  });
+
+  it("forwards the options bag to the host port", () => {
+    // The wrapper used to declare `beginAuth(serverId: string)` and forward
+    // only that, silently dropping `connectorSlug` — the field naming WHICH
+    // connector this is. The host then received an identity-less call and
+    // refused it before opening any browser, while the line above had already
+    // claimed `connecting`. Connect looked like it worked and did nothing.
+    const port = makePort();
+    const { result } = renderHook(() => useConnectorConsentStates(port));
+
+    act(() =>
+      result.current.port?.beginAuth("seed:linear", {
+        connectorSlug: "linear",
+      }),
+    );
+
+    expect(port.beginAuth).toHaveBeenCalledWith("seed:linear", {
+      connectorSlug: "linear",
+    });
+  });
+
+  it("returns a failed connector to pending", () => {
+    // `beginAuth` claims `connecting` before the host has heard anything back.
+    // Without this mirror of `connectedServerId`, a host that never reached the
+    // vendor left the card asserting a consent screen was open forever, with
+    // Cancel as the only way out.
+    const port = makePort();
+    const { result, rerender } = renderHook(
+      ({ failed }: { failed: { serverId: string } | null }) =>
+        useConnectorConsentStates(port, null, failed),
+      { initialProps: { failed: null as { serverId: string } | null } },
+    );
+
+    act(() => result.current.port?.beginAuth("seed:linear"));
+    expect(result.current.states["seed:linear"]).toBe("connecting");
+
+    rerender({ failed: { serverId: "seed:linear" } });
+
+    expect(result.current.states["seed:linear"]).toBe("pending");
+  });
+
+  it("re-fires for the same connector failing twice", () => {
+    // A fresh object per failure is why this works: an unchanged id string
+    // would not re-run the effect, so a retry that failed again would sit at
+    // `connecting` — the exact bug, one attempt later.
+    const port = makePort();
+    const { result, rerender } = renderHook(
+      ({ failed }: { failed: { serverId: string } | null }) =>
+        useConnectorConsentStates(port, null, failed),
+      { initialProps: { failed: null as { serverId: string } | null } },
+    );
+
+    rerender({ failed: { serverId: "seed:linear" } });
+    act(() => result.current.port?.beginAuth("seed:linear"));
+    expect(result.current.states["seed:linear"]).toBe("connecting");
+
+    rerender({ failed: { serverId: "seed:linear" } });
+
+    expect(result.current.states["seed:linear"]).toBe("pending");
   });
 
   it("moves to denied on Deny, and still calls the host", () => {

@@ -426,7 +426,7 @@ export function FirstRunSurfaceMount({
   const handleConnectCatalog = useCallback(
     (entry: FirstRunInstallableConnector): void => {
       void window.bridge.ipc
-        .invoke(CONNECTOR_CHANNELS.connect, { slug: entry.slug })
+        .invoke(CONNECTOR_CHANNELS.authorize, { slug: entry.slug })
         .catch(() => {
           // Workspace-authorize is best-effort here; first-use tool consent
           // still lands as the run-time `mcp_auth_required` HITL card.
