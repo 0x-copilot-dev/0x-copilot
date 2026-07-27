@@ -383,7 +383,7 @@ class ToolBudgetGuardedRegistry:
     def list_available_tools(self, context: object) -> tuple[object, ...]:
         """Return all tools from the inner registry, each wrapped with budget enforcement."""
         rendered = self._inner.list_available_tools(context)  # type: ignore[attr-defined]
-        return tuple(self._wrap(tool) for tool in rendered)
+        return guard_model_tools(rendered)
 
     @staticmethod
     def _wrap(tool: object) -> object:
@@ -400,6 +400,18 @@ class ToolBudgetGuardedRegistry:
         )
 
 
+def guard_model_tools(tools: tuple[object, ...] | list[object]) -> tuple[object, ...]:
+    """Wrap a complete model-visible tool surface exactly once.
+
+    Registries are only one source of tools. The factory appends MCP, skills,
+    prior-result, question, and desktop capability tools afterwards; calling
+    this function after final assembly is therefore the only topology that can
+    truthfully guarantee one hard budget gate per model-visible tool.
+    """
+
+    return tuple(ToolBudgetGuardedRegistry._wrap(tool) for tool in tools)
+
+
 # Optional callable signature for callers that want to build a guard
 # from a budget-loading function (e.g. the run handler).
 ToolBudgetSnapshotLoader = Callable[[str], Awaitable[list[object]]]
@@ -409,4 +421,5 @@ __all__ = (
     "ToolBudgetGuard",
     "ToolBudgetGuardedRegistry",
     "ToolBudgetGuardedTool",
+    "guard_model_tools",
 )

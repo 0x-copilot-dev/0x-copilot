@@ -23,6 +23,7 @@ from agent_runtime.capabilities.tool_budget_guard import (
     ToolBudgetGuard,
     ToolBudgetGuardedRegistry,
     ToolBudgetGuardedTool,
+    guard_model_tools,
     _Limits,
 )
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
@@ -473,6 +474,17 @@ class TestToolBudgetGuardedRegistry:
         rendered = registry.list_available_tools(context=None)
         # The wrapper recognises its own kind and short-circuits.
         assert rendered[0] is already_wrapped
+
+
+def test_full_model_surface_wrapper_is_idempotent_for_injected_tools() -> None:
+    """Factory-injected tools must receive the same guard as registry tools."""
+
+    original = _RecordingTool()
+    once = guard_model_tools([original])
+    twice = guard_model_tools(list(once))
+
+    assert isinstance(once[0], ToolBudgetGuardedTool)
+    assert twice == once
 
 
 # --- persistence port snapshot ---------------------------------------------
