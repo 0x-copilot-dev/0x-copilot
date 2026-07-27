@@ -75,7 +75,18 @@ from agent_runtime.prompts.runtime import (
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
     SKILL_CARDS_INSTRUCTIONS,
 )
+from agent_runtime.prompts import (
+    PromptAssembler,
+    PromptAssemblyPlan,
+    PromptCacheEligibility,
+    PromptFragment,
+    PromptFragmentScope,
+    PromptFragmentTier,
+    ProviderPromptDecorator,
+)
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
+from agent_runtime.capabilities.tool_budget_guard import guard_model_tools
 
 # Replace deepagents' built-in `task` tool builder with ours so each
 # subagent's RunnableConfig metadata carries `supervisor_task_call_id`.
@@ -108,6 +119,7 @@ class RuntimeHarness:
     memory_backend: object
     skill_directories: tuple[str, ...]
     skill_cards: tuple[object, ...] = ()
+    prompt_assembly_plan: PromptAssemblyPlan | None = None
 
 
 async def acreate_agent_runtime(
@@ -243,6 +255,12 @@ async def _assemble_harness(
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             runtime_context=runtime_context,
         )
+        # Registry decoration alone cannot cover tools injected below the
+        # registry boundary (MCP, skills, prior results, and desktop tools).
+        # Apply the idempotent wrapper to the complete surface before policy
+        # decoration: a policy-blocked call must not consume budget, while every
+        # policy-admitted BaseTool still crosses the same hard gate.
+        model_tools = guard_model_tools(list(model_tools))
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
         # ``call_mcp_tool`` (and any future gated umbrella tool) is routed to
         # the SAME human-approval interrupt for ask/require, blocked with a safe
@@ -263,31 +281,26 @@ async def _assemble_harness(
             ),
         )
         model_tools = enforced_tools.tools
-        model_instructions = _instructions_with_capability_tools(
-            instructions=_instructions_with_workspace(
-                instructions=_instructions_with_suggested_connectors(
-                    instructions=_instructions_with_skill_cards(
-                        instructions=_instructions_with_mcp_cards(
-                            instructions=_instructions_with_application_context(
-                                instructions=instructions
-                            ),
-                            mcp_servers=mcp_servers,
-                        ),
-                        skill_cards=skill_cards,
-                    ),
-                    suggestions=runtime_context.suggested_connectors,
-                ),
-                workspace_active=bool(
-                    workspace_backend is not None
-                    and getattr(workspace_backend, "advertise_workspace", True)
-                ),
-                workspace_writable=workspace_writable,
-                workspace_effect_staging=workspace_effect_staging,
+        prompt_assembly_plan = _prompt_assembly_plan(
+            instructions=instructions,
+            runtime_context=runtime_context,
+            mcp_servers=mcp_servers,
+            skill_cards=skill_cards,
+            workspace_active=bool(
+                workspace_backend is not None
+                and getattr(workspace_backend, "advertise_workspace", True)
             ),
+            workspace_writable=workspace_writable,
+            workspace_effect_staging=workspace_effect_staging,
             code_mode_active=runtime_dependencies.code_mode_tool is not None,
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
             is not None,
         )
+        prompt_decoration = ProviderPromptDecorator().decorate(
+            provider=runtime_context.model_profile.provider,
+            plan=prompt_assembly_plan,
+        )
+        model_instructions = prompt_decoration.system_prompt
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
         # chat-model construction in the graph. Subagents inherit the
@@ -363,6 +376,7 @@ async def _assemble_harness(
         memory_backend=memory_backend,
         skill_directories=skill_directories,
         skill_cards=skill_cards,
+        prompt_assembly_plan=prompt_assembly_plan,
     )
 
 
@@ -498,6 +512,179 @@ def _model_visible_tools(
             _structured_tool(publish_artifact_tool, PublishArtifactInput)
         )
     return tuple(model_tools)
+
+
+def _prompt_assembly_plan(
+    *,
+    instructions: str,
+    runtime_context: AgentRuntimeContext,
+    mcp_servers: Sequence[object],
+    skill_cards: Sequence[object],
+    workspace_active: bool,
+    workspace_writable: bool,
+    workspace_effect_staging: bool,
+    code_mode_active: bool,
+    sandbox_execute_active: bool,
+) -> PromptAssemblyPlan:
+    """Build the F2 prompt plan without changing established rendered order.
+
+    Dynamic blocks are still generated by the existing helper functions; this
+    adapter gives each block a typed revision, scope, and cache eligibility
+    before rendering them in their historical order.  The plan itself is safe
+    to project only through :meth:`PromptAssemblyPlan.diagnostic`.
+    """
+
+    base_cacheable = instructions == DEFAULT_INSTRUCTIONS
+    application_block = _instructions_with_application_context(instructions="")
+    mcp_block = _instructions_with_mcp_cards(instructions="", mcp_servers=mcp_servers)
+    skill_block = _instructions_with_skill_cards(
+        instructions="", skill_cards=skill_cards
+    )
+    suggested_block = _instructions_with_suggested_connectors(
+        instructions="", suggestions=runtime_context.suggested_connectors
+    )
+    workspace_block = _instructions_with_workspace(
+        instructions="",
+        workspace_active=workspace_active,
+        workspace_writable=workspace_writable,
+        workspace_effect_staging=workspace_effect_staging,
+    )
+    capability_block = _instructions_with_capability_tools(
+        instructions="",
+        code_mode_active=code_mode_active,
+        sandbox_execute_active=sandbox_execute_active,
+    )
+    fragments = [
+        PromptFragment(
+            fragment_id="00_base_runtime",
+            revision="runtime-base-v1",
+            tier=PromptFragmentTier.SYSTEM_POLICY,
+            scope=PromptFragmentScope.INSTALLATION,
+            content=instructions,
+            cache_eligibility=(
+                PromptCacheEligibility.STABLE_PREFIX
+                if base_cacheable
+                else PromptCacheEligibility.NEVER
+            ),
+        ),
+        PromptFragment(
+            fragment_id="10_application_context_boundary",
+            revision="application-context-v1",
+            tier=PromptFragmentTier.STABLE,
+            scope=PromptFragmentScope.INSTALLATION,
+            content=application_block,
+            cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
+        ),
+    ]
+    fragments.extend(
+        fragment
+        for fragment in (
+            _contextual_prompt_fragment(
+                fragment_id="20_mcp_cards",
+                revision="mcp-cards-v1",
+                content=mcp_block,
+                runtime_context=runtime_context,
+            ),
+            _contextual_prompt_fragment(
+                fragment_id="30_skill_cards",
+                revision="skill-cards-v1",
+                content=skill_block,
+                runtime_context=runtime_context,
+            ),
+            _contextual_prompt_fragment(
+                fragment_id="40_suggested_connectors",
+                revision="suggested-connectors-v1",
+                content=suggested_block,
+                runtime_context=runtime_context,
+            ),
+            _run_prompt_fragment(
+                fragment_id="50_workspace_guidance",
+                revision="workspace-guidance-v1",
+                content=workspace_block,
+                runtime_context=runtime_context,
+            ),
+            _run_prompt_fragment(
+                fragment_id="60_capability_guidance",
+                revision="capability-guidance-v1",
+                content=capability_block,
+                runtime_context=runtime_context,
+            ),
+        )
+        if fragment is not None
+    )
+    return PromptAssembler().assemble(fragments)
+
+
+def _contextual_prompt_fragment(
+    *,
+    fragment_id: str,
+    revision: str,
+    content: str,
+    runtime_context: AgentRuntimeContext,
+) -> PromptFragment | None:
+    if not content.strip():
+        return None
+    return PromptFragment(
+        fragment_id=fragment_id,
+        revision=revision,
+        tier=PromptFragmentTier.CONTEXTUAL,
+        scope=PromptFragmentScope.PROFILE,
+        content=content,
+        scope_fingerprint=_prompt_scope_fingerprint(
+            runtime_context=runtime_context,
+            content=content,
+            scope=PromptFragmentScope.PROFILE,
+        ),
+    )
+
+
+def _run_prompt_fragment(
+    *,
+    fragment_id: str,
+    revision: str,
+    content: str,
+    runtime_context: AgentRuntimeContext,
+) -> PromptFragment | None:
+    if not content.strip():
+        return None
+    return PromptFragment(
+        fragment_id=fragment_id,
+        revision=revision,
+        tier=PromptFragmentTier.VOLATILE,
+        scope=PromptFragmentScope.RUN,
+        content=content,
+        scope_fingerprint=_prompt_scope_fingerprint(
+            runtime_context=runtime_context,
+            content=content,
+            scope=PromptFragmentScope.RUN,
+        ),
+    )
+
+
+def _prompt_scope_fingerprint(
+    *,
+    runtime_context: AgentRuntimeContext,
+    content: str,
+    scope: PromptFragmentScope,
+) -> str:
+    """Hash all scope-changing inputs without retaining their raw values."""
+
+    return canonical_json_sha256(
+        {
+            "scope": scope.value,
+            "content": content,
+            "subject": runtime_context.model_dump(
+                mode="json",
+                include={
+                    "org_id",
+                    "user_id",
+                    "permission_scopes",
+                    "connector_scopes",
+                    "trace_id",
+                },
+            ),
+        }
+    )
 
 
 def _workspace_write_permissions(

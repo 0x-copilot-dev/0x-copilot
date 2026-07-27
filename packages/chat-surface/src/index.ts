@@ -1016,6 +1016,7 @@ export {
   // Connector-suggestion appetite — the sibling preferences controller
   // (same /v1/me/preferences round-trip, hosts pass their transport).
   useConnectorSuggestions,
+  type MutedConnector,
   DEFAULT_CONNECTOR_SUGGESTIONS,
   CONNECTOR_SUGGESTION_MODES,
   ShortcutsPage,
@@ -1664,7 +1665,18 @@ export { type TcChatApproval } from "./thread-canvas";
 // 404s on discovery). The `approvalKind` carried on `RunApproval`/`TcChatApproval`
 // (above) is what the card branches on. The host launcher + OAuth resume land in
 // P5b (apps/frontend), NOT here.
-export type { McpAuthPort } from "./destinations/run";
+export type { McpAuthBeginOptions, McpAuthPort } from "./destinations/run";
+// The consent card's four states have an owner: `useConnectorConsentStates`
+// wraps the host port so `beginAuth`/`skipAuth` move the card, and takes the
+// host's observed OAuth return (web `completedMcpAuthAction.serverId`) for the
+// one transition a redirect-based flow destroys the evidence of. `RunDestination`
+// mounts it; exported so a host that renders the card outside the cockpit gets
+// the same machine rather than a second copy.
+export {
+  useConnectorConsentStates,
+  type ConnectorConsentStateController,
+  type ConnectorConsentStates,
+} from "./destinations/run";
 // === end WC-P5a (MCP-OAuth chat-surface half) ===
 
 // === WC-P6a — citation projection (in-chat chip resolution, AD-11) ===

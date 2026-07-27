@@ -2329,25 +2329,67 @@ function mcpAuthRequired(
   });
 }
 
+// A catalog SUGGESTION rather than a gate: the same `mcp_auth_required` event,
+// plus the `catalog_slug` the backend stamps only when the discovery lookup fell
+// through to the catalog. That slug is what makes the card muteable.
+function mcpDiscoverySuggestion(
+  approvalId: string,
+  serverId: string,
+  catalogSlug: string,
+): Record<string, unknown> {
+  return event({
+    event_type: "mcp_auth_required",
+    activity_kind: "mcp_auth",
+    payload: {
+      approval_id: approvalId,
+      approval_kind: "mcp_auth",
+      server_id: serverId,
+      server_name: serverId,
+      display_name: "Linear",
+      catalog_slug: catalogSlug,
+      message: "MCP authentication required",
+    },
+  });
+}
+
 describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
   function renderRunWithPort(port: {
     beginAuth: (id: string) => void;
     skipAuth: (id: string) => void;
     installFromCatalog: (slug: string) => void;
-  }): { transport: FakeTransport } {
+  }): {
+    transport: FakeTransport;
+    /** Drive the OAuth return the way the web host does — from outside. */
+    showConnected: (serverId: string) => void;
+  } {
     const transport = new FakeTransport();
     transport.requestHandler = async (req) =>
       req.path.includes("/messages")
         ? { messages: [] }
         : runningRun("Connect the connector");
-    render(
+    // One store instance across rerenders; a fresh one would remount the
+    // provider and take the cockpit's mode/collapse state with it.
+    const store = makeStore();
+    const tree = (connected: string | null) => (
       <TransportProvider transport={transport}>
-        <KeyValueStoreProvider store={makeStore()}>
-          <RunDestination conversationId={CONV} mcpAuthPort={port} />
+        <KeyValueStoreProvider store={store}>
+          <RunDestination
+            conversationId={CONV}
+            mcpAuthPort={port}
+            connectedConnectorServerId={connected}
+          />
         </KeyValueStoreProvider>
-      </TransportProvider>,
+      </TransportProvider>
     );
-    return { transport };
+    const { rerender } = render(tree(null));
+    return {
+      transport,
+      showConnected: (serverId: string) => {
+        act(() => {
+          rerender(tree(serverId));
+        });
+      },
+    };
   }
 
   it("renders the Connect card from a `mcp_auth_required` event and never POSTs `/decision`", async () => {
@@ -2372,12 +2414,21 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
       fireEvent.click(connect);
     });
     expect(beginAuth).toHaveBeenCalledWith("linear");
+
+    // Deny is exercised on a SECOND connector, not the same card: Connect now
+    // moves the card to `connecting`, which swaps both actions for a Cancel.
+    // (Before the consent states had an owner, the card sat at `pending`
+    // forever and the two clicks could share one card.)
     act(() => {
-      fireEvent.click(
-        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear"),
-      );
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:notion", "notion"));
     });
-    expect(skipAuth).toHaveBeenCalledWith("linear");
+    const deny = await screen.findByTestId(
+      "tc-chat-mcp-skip-mcp_auth:run-1:notion",
+    );
+    act(() => {
+      fireEvent.click(deny);
+    });
+    expect(skipAuth).toHaveBeenCalledWith("notion");
     // The cockpit NEVER POSTed a decision for the auth gate (AD-7).
     expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
       false,
@@ -2413,6 +2464,229 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(transport.requests.some((r) => r.path.includes("/decision"))).toBe(
       false,
     );
+  });
+
+  // The cockpit owns the consent card's state machine
+  // (`useConnectorConsentStates`) and must hand the canvas the WRAPPED port.
+  // Passing the host's original would still call `beginAuth` — so every test
+  // above would pass — while leaving the card frozen at `pending`, which is the
+  // exact bug the machine exists to fix. These pin the wiring itself.
+  it("moves the card to `connecting` when Connect is pressed", async () => {
+    seqCounter = 0;
+    const beginAuth = vi.fn();
+    const { transport } = renderRunWithPort({
+      beginAuth,
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+
+    const card = await screen.findByTestId(
+      "tc-chat-connector-mcp_auth:run-1:linear",
+    );
+    expect(card).toHaveAttribute("data-state", "pending");
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear"),
+      );
+    });
+
+    // The host still hears it…
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+    // …and the card no longer reads as an unpressed button.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear"),
+      ).toHaveAttribute("data-state", "connecting");
+    });
+    expect(screen.getByTestId("cc-cancel")).toBeInTheDocument();
+  });
+
+  it("moves the card to `denied` on Deny, and Reconsider re-enters OAuth", async () => {
+    seqCounter = 0;
+    const beginAuth = vi.fn();
+    const { transport } = renderRunWithPort({
+      beginAuth,
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+    await screen.findByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear");
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear"),
+      );
+    });
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear"),
+      ).toHaveAttribute("data-state", "denied");
+    });
+
+    // Reversible: a denial is a decision, not a dead end.
+    act(() => {
+      fireEvent.click(screen.getByTestId("cc-reconsider"));
+    });
+    expect(beginAuth).toHaveBeenCalledWith("linear");
+  });
+
+  it("Cancel while connecting returns the card to pending", async () => {
+    seqCounter = 0;
+    const { transport } = renderRunWithPort({
+      beginAuth: vi.fn(),
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+    await screen.findByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear");
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear"),
+      );
+    });
+    await screen.findByTestId("cc-cancel");
+    act(() => {
+      fireEvent.click(screen.getByTestId("cc-cancel"));
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear"),
+      ).toHaveAttribute("data-state", "pending");
+    });
+    expect(
+      screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear"),
+    ).toBeInTheDocument();
+  });
+
+  // Phase 4: the two behaviours behind the card.
+  it("denying a catalog suggestion mutes it, slug-scoped so it cannot clobber", async () => {
+    seqCounter = 0;
+    const { transport } = renderRunWithPort({
+      beginAuth: vi.fn(),
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(
+        mcpDiscoverySuggestion(
+          "mcp_discovery:run-1:seed:linear",
+          "seed:linear",
+          "linear",
+        ),
+      );
+    });
+    await screen.findByTestId(
+      "tc-chat-mcp-skip-mcp_discovery:run-1:seed:linear",
+    );
+
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_discovery:run-1:seed:linear"),
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        transport.requests.some((r) => r.path === "/v1/me/preferences"),
+      ).toBe(true);
+    });
+    const patch = transport.requests.find(
+      (r) => r.path === "/v1/me/preferences",
+    );
+    expect(patch?.method).toBe("PUT");
+    // ONLY the slug. The global appetite (`mode`) has its own writer in
+    // Settings; sending it here would let a deny silently reset it.
+    expect(patch?.body).toEqual({
+      discoverable_connectors: { overrides: { linear: false } },
+    });
+  });
+
+  it("denying a gate on an installed connector writes no mute", async () => {
+    seqCounter = 0;
+    const { transport } = renderRunWithPort({
+      beginAuth: vi.fn(),
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+    await screen.findByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear");
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run-1:linear"),
+      );
+    });
+
+    // Deliberately not a `waitFor` on absence — assert after the click has been
+    // flushed by the state update above.
+    await waitFor(() => {
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run-1:linear"),
+      ).toHaveAttribute("data-state", "denied");
+    });
+    expect(
+      transport.requests.some((r) => r.path === "/v1/me/preferences"),
+    ).toBe(false);
+  });
+
+  it("retry after a mid-run connect starts a NEW turn, never restarting the run", async () => {
+    seqCounter = 0;
+    const { transport, showConnected } = renderRunWithPort({
+      beginAuth: vi.fn(),
+      skipAuth: vi.fn(),
+      installFromCatalog: vi.fn(),
+    });
+    await waitFor(() => expect(transport.sessionSub).toBeDefined());
+    act(() => {
+      transport.emit(mcpAuthRequired("mcp_auth:run-1:linear", "linear"));
+    });
+    await screen.findByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear");
+
+    // Connect → connecting, then the host reports the OAuth return.
+    act(() => {
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run-1:linear"),
+      );
+    });
+    // The cockpit cannot observe the return itself; drive it the way the web
+    // host does, by re-rendering with the completed connector.
+    showConnected("linear");
+
+    const retry = await screen.findByTestId("cc-retry");
+    act(() => {
+      fireEvent.click(retry);
+    });
+
+    await waitFor(() => {
+      expect(
+        transport.requests.some(
+          (r) => r.method === "POST" && r.path === "/v1/agent/runs",
+        ),
+      ).toBe(true);
+    });
+    const started = transport.requests.find(
+      (r) => r.method === "POST" && r.path === "/v1/agent/runs",
+    );
+    // A new turn carrying the user's intent — NOT a re-execution of the run
+    // they are reading, which would re-emit its output and re-spend its tokens.
+    expect(JSON.stringify(started?.body)).toContain("Retry that step");
+    expect(JSON.stringify(started?.body)).toContain("Linear");
   });
 
   it("still POSTs `/decision` for a plain tool_action approval (no regression)", async () => {

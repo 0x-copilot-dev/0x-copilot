@@ -96,6 +96,10 @@ import { RunComposer } from "./composer/RunComposer";
 import { RunEmptyComposer } from "./composer/RunEmptyComposer";
 import { createComposerConnectorsPort } from "./composer/composerConnectorsPort";
 import { isSurfacesV2Enabled } from "./featureFlags";
+import {
+  bridgeMcpAuthDeps,
+  createDesktopMcpAuthPort,
+} from "./desktopMcpAuthPort";
 
 // ---------------------------------------------------------------------------
 // Shared load hook — drives the 4-state machine (loading / ok / empty / error)
@@ -924,6 +928,34 @@ export function RunBinder({
   readonly workspaceStageHost?: WorkspaceStageHost;
 }): ReactElement {
   const transport = useTransport();
+
+  // The connector consent card's port. `connectedConnectorServerId` is the one
+  // state the cockpit's consent machine cannot infer — on web it survives a
+  // full-page redirect via the callback route; here the brokered connect simply
+  // resolves, so we hand the id straight back.
+  const [connectedConnectorServerId, setConnectedConnectorServerId] = useState<
+    string | null
+  >(null);
+  const mcpAuthPort = useMemo(() => {
+    const deps = bridgeMcpAuthDeps(
+      setConnectedConnectorServerId,
+      (serverId: string) =>
+        transport
+          .request({
+            method: "POST",
+            path: `/v1/mcp/servers/${encodeURIComponent(serverId)}/auth/skip`,
+          })
+          .then(() => undefined),
+      // Fire-and-forget from the card's perspective; log rather than throw into
+      // a render. A failed connect leaves the card at `connecting`, which is
+      // honest — we opened a browser and never heard back.
+      (error: unknown) => {
+        console.warn("[connectors] connect failed", error);
+      },
+    );
+    return deps === undefined ? undefined : createDesktopMcpAuthPort(deps);
+  }, [transport]);
+
   // Composer chrome ports: the inline Tools popover's MCP surface (the shared
   // `/v1/mcp/*` adapter) + the model pill's inline "Add a provider key" form
   // surface. Both are stable per transport, so memoize.
@@ -1131,12 +1163,14 @@ export function RunBinder({
       // inside RunDestination (the resolveApproval / handleRegenerateView
       // pattern), so no per-binder callback duplication.
       //
-      // GAP (not this pass): the canvas gate card's Connect needs a desktop
-      // `mcpAuthPort` — the renderer cannot open the vendor consent screen and
-      // the run→conversation resume is unbuilt (the in-chat `mcp_auth` card has
-      // the same desktop gap). Absent → the gate card renders + the write-policy
-      // radio PATCHes, but Connect/Skip degrade to inert (never a crash).
       surfacesV2={isSurfacesV2Enabled()}
+      // The connector consent card's Connect / Deny. The renderer stays denied
+      // `window.open`: `connect` is main-brokered (loopback bind + system
+      // browser + code exchange), and unlike web's full-page redirect it
+      // RESOLVES here, so the connected state is reported directly rather than
+      // recovered from a callback route.
+      mcpAuthPort={mcpAuthPort}
+      connectedConnectorServerId={connectedConnectorServerId}
       // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron
       // renderer has the DOM); the package stays substrate-agnostic.
       onCopyText={copyTextToClipboard}

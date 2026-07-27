@@ -49,6 +49,8 @@ from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyResolver,
 )
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
+from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
@@ -353,6 +355,23 @@ class RuntimeApprovalHandler:
         workspace_backend = await self._workspace_backend_for_resume(running)
         operation_context_token: object | None = None
         shadow_comparison_token: object | None = None
+        # A resumed graph is a fresh tool-execution context. Bind the desktop
+        # model-admission boundary again even when the org has no tool-budget
+        # rows. Empty middleware carries admission without changing policy.
+        tool_result_admission = self._file_store_wiring.tool_result_admission()
+        tool_admission_guard = (
+            ToolBudgetGuard(
+                middleware=ToolBudgetMiddleware(()),
+                ledger=self.stream_event_mapper.message_processor.ledger_for_run(
+                    running.run_id
+                ),
+                run=running,
+                event_producer=self.event_producer,
+                tool_result_admission=tool_result_admission,
+            )
+            if tool_result_admission is not None
+            else None
+        )
         dependencies = self._dependencies_for_resume(
             running, workspace_backend=workspace_backend
         )
@@ -360,6 +379,11 @@ class RuntimeApprovalHandler:
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)
         display_token = ToolDisplayLookupContext.bind_for_run(
             RuntimeRunHandler._build_tool_display_lookup(dependencies.tool_registry)
+        )
+        tool_admission_token = (
+            ToolBudgetGuard.bind_for_run(tool_admission_guard)
+            if tool_admission_guard is not None
+            else None
         )
         try:
             if self._shadow_comparison_enabled():
@@ -462,6 +486,11 @@ class RuntimeApprovalHandler:
             ConversationOrdinalAllocator.unbind(allocator_token)
             ToolDisplayLookupContext.unbind(display_token)
             McpDisplayRegistryContext.unbind(mcp_display_token)
+            if tool_admission_token is not None:
+                ToolBudgetGuard.unbind(tool_admission_token)
+            self._file_store_wiring.discard_tool_result_projections(
+                run_id=running.run_id
+            )
             # Release this resume invocation's pinned grant snapshot
             # (``/v1/runs/end``) — the approved host write lands during resume,
             # so its pinned authority must not outlive the invocation.

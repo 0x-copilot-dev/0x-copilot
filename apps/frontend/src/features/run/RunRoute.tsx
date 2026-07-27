@@ -402,6 +402,12 @@ export function RunRoute({
         // `RunDestination` — the same pattern as `resolveApproval` /
         // `handleRegenerateView` — so no per-binder callback duplication.
         mcpAuthPort={mcpAuthPort}
+        // The consent card's `connected` state. `beginAuth` full-page-redirects,
+        // so the cockpit never sees its own OAuth return — App's
+        // `/mcp/oauth/callback` effect does, and hands the completed action back
+        // down. Without this the card would remount reading `pending` on a
+        // connector the user had just finished connecting.
+        connectedConnectorServerId={completedMcpAuthAction?.serverId ?? null}
         // WC-P6a (AD-11): in-chat citation chips. The cockpit mounts the
         // CitationsProvider (fed by projectCitations over session.events); these
         // host wrappers resolve `[[N]]` / `[c<id>]` chips against it.

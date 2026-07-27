@@ -42,6 +42,9 @@ class McpAuthSession(RuntimeContract):
     display_name: str
     auth_url: str
     expires_at: datetime
+    # The connector this server was installed from, when it came from the
+    # catalog. Carried so the gate payload can name it — see the card comment.
+    connector_slug: str | None = None
 
 
 class AuthMcpInput(RuntimeContract):
@@ -96,6 +99,14 @@ class AuthMcpTool:
             "auth_url": session.auth_url,
             "expires_at": session.expires_at.isoformat(),
             "message": f"Authenticate {session.display_name} to continue using this MCP server.",
+            # The catalog identity, for hosts whose connect flow is slug-keyed
+            # (desktop binds a loopback and opens the system browser through
+            # main; the renderer never gets an arbitrary URL to open). Distinct
+            # from the discovery card's ``catalog_slug``, which means something
+            # narrower — "this connector is not installed yet" — and is what the
+            # client keys the "never suggest this again" mute on. Conflating the
+            # two would let a gate for an installed connector be muted.
+            "connector_slug": session.connector_slug,
             # Same server-derived trust line the non-blocking suggestion carries,
             # so the two connector cards make identical promises. The auth
             # session has no connector row to read a scope off, so ``access_mode``

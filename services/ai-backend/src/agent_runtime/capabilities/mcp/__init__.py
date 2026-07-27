@@ -37,6 +37,16 @@ from agent_runtime.capabilities.mcp.discovery_cache import (
     McpDiscoveryCacheKey,
     McpDiscoveryCacheStats,
 )
+from agent_runtime.capabilities.mcp.freshness import (
+    McpDescriptorCacheResult,
+    McpDescriptorFreshnessDecision,
+    McpDescriptorFreshnessRequest,
+    McpDescriptorFreshnessState,
+    McpDescriptorInvalidationResult,
+    McpDescriptorRevision,
+    McpDescriptorSubject,
+    RevisionAwareMcpDiscoveryCache,
+)
 from agent_runtime.capabilities.mcp.files import (
     FileMcpConfigStore,
     FileMcpServerProvider,
@@ -71,6 +81,13 @@ __all__ = [
     "McpConnectionError",
     "McpConnectionMetadata",
     "McpDiscoveryCache",
+    "McpDescriptorCacheResult",
+    "McpDescriptorFreshnessDecision",
+    "McpDescriptorFreshnessRequest",
+    "McpDescriptorFreshnessState",
+    "McpDescriptorInvalidationResult",
+    "McpDescriptorRevision",
+    "McpDescriptorSubject",
     "McpFilesError",
     "McpServerConfigFile",
     "McpToolMetadataFile",
@@ -96,4 +113,5 @@ __all__ = [
     "McpTransport",
     "McpUnsupportedMethodError",
     "McpWarningCode",
+    "RevisionAwareMcpDiscoveryCache",
 ]

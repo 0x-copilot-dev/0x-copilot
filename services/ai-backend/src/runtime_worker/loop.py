@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from functools import partial
 import logging
 from typing import Protocol
 from uuid import uuid4
@@ -77,6 +79,22 @@ from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
 
 
 _ROLLOUT_LOGGER = LoggingConfigurator.get_logger("runtime_worker.rollout")
+
+
+@dataclass(slots=True)
+class _PreparedWorkerDispatch:
+    """A validated command awaiting its first handler instruction.
+
+    ``handler_entered`` is the worker's generic retry boundary. Before it flips,
+    no command handler (and therefore no model/tool execution) has run. Once it
+    flips, only command families with their own replay-safe protocol may use the
+    generic queue retry.
+    """
+
+    command_type: str
+    trace_carrier: object
+    invoke_handler: Callable[[], Awaitable[None]]
+    handler_entered: bool = False
 
 
 class EffectCommitHandlerPort(Protocol):
@@ -607,8 +625,10 @@ class RuntimeWorker:
 
     async def _handle_claim(self, claim: RuntimeWorkerClaim) -> None:
         """Dispatch the claim and mark it complete, retry, or dead-letter on error."""
+        prepared: _PreparedWorkerDispatch | None = None
         try:
-            await self._dispatch(claim)
+            prepared = self._prepare_dispatch(claim)
+            await self._invoke_prepared_dispatch(prepared)
         except AgentRuntimeError as exc:
             self.logger.exception(
                 "runtime worker command failed command_id=%s command_type=%s run_id=%s",
@@ -616,7 +636,11 @@ class RuntimeWorker:
                 claim.command_type,
                 claim.run_id,
             )
-            await self._mark_failure(claim=claim, error=exc)
+            await self._mark_failure(
+                claim=claim,
+                error=exc,
+                retry_permitted=self._retry_permitted(prepared),
+            )
             return
         except Exception:
             self.logger.exception(
@@ -630,7 +654,11 @@ class RuntimeWorker:
                 "Runtime worker command failed safely.",
                 retryable=True,
             )
-            await self._mark_failure(claim=claim, error=safe_error)
+            await self._mark_failure(
+                claim=claim,
+                error=safe_error,
+                retry_permitted=self._retry_permitted(prepared),
+            )
             return
         await self.queue.mark_complete(
             result=RuntimeWorkerResult(command_id=claim.command_id, succeeded=True)
@@ -654,78 +682,115 @@ class RuntimeWorker:
     }
 
     async def _dispatch(self, claim: RuntimeWorkerClaim) -> None:
-        """Route a claimed command to the appropriate handler under the extracted OTel trace context."""
+        """Prepare and invoke one command.
+
+        Kept as the direct-dispatch test seam. Queue processing calls the two
+        phases separately so failure handling can distinguish work that has not
+        reached a handler from potentially ambiguous post-dispatch work.
+        """
+        prepared = self._prepare_dispatch(claim)
+        await self._invoke_prepared_dispatch(prepared)
+
+    def _prepare_dispatch(self, claim: RuntimeWorkerClaim) -> _PreparedWorkerDispatch:
+        """Validate a claim and bind its handler without entering that handler."""
         command_type = claim.command_type
         carrier = claim.payload.get("trace_propagation")
-        parent_ctx = QueueTracePropagator.extract(carrier)
-        span_name = self._DISPATCH_SPAN_NAMES.get(
-            command_type, f"runtime_worker.{command_type}"
-        )
-        tracer = otel_trace.get_tracer("agent_runtime.runtime_worker")
-        with tracer.start_as_current_span(span_name, context=parent_ctx):
-            if command_type == PersistenceValues.EventType.RUN_REQUESTED:
-                command = self._runtime_run_command(claim)
-                await self.run_handler.handle(command)
-                return
-            if command_type == PersistenceValues.EventType.RUN_CANCEL_REQUESTED:
-                command = self._runtime_cancel_command(claim)
-                await self.cancel_handler.handle(command)
-                return
-            if command_type == PersistenceValues.EventType.APPROVAL_RESOLVED:
-                command = self._runtime_approval_command(claim)
-                await self.approval_handler.handle(command)
-                return
-            if command_type == PersistenceValues.EventType.STAGE_COMMIT_REQUESTED:
-                command = self._runtime_stage_commit_command(claim)
-                await self.stage_commit_handler.handle(command)
-                return
-            if command_type == PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED:
-                handler = self.effect_commit_handler
-                if handler is None:
-                    raise AgentRuntimeError(
-                        RuntimeErrorCode.CONFIGURATION_ERROR,
-                        "Effect-commit worker handler is not configured.",
-                        retryable=False,
-                    )
-                command = self._runtime_effect_commit_command(claim)
-                await handler.handle(command)
-                return
-            if command_type == PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED:
-                handler = self.effect_reconcile_handler
-                if handler is None:
-                    raise AgentRuntimeError(
-                        RuntimeErrorCode.CONFIGURATION_ERROR,
-                        "Effect-reconcile worker handler is not configured.",
-                        retryable=False,
-                    )
-                command = self._runtime_effect_reconcile_command(claim)
-                await handler.handle(command)
-                return
-            if (
-                command_type
-                == PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED
-            ):
-                command = self._runtime_artifact_event_command(claim)
-                await self.artifact_event_handler.handle(command)
-                return
+        if command_type == PersistenceValues.EventType.RUN_REQUESTED:
+            command = self._runtime_run_command(claim)
+            callback = partial(self.run_handler.handle, command)
+        elif command_type == PersistenceValues.EventType.RUN_CANCEL_REQUESTED:
+            command = self._runtime_cancel_command(claim)
+            callback = partial(self.cancel_handler.handle, command)
+        elif command_type == PersistenceValues.EventType.APPROVAL_RESOLVED:
+            command = self._runtime_approval_command(claim)
+            callback = partial(self.approval_handler.handle, command)
+        elif command_type == PersistenceValues.EventType.STAGE_COMMIT_REQUESTED:
+            command = self._runtime_stage_commit_command(claim)
+            callback = partial(self.stage_commit_handler.handle, command)
+        elif command_type == PersistenceValues.EventType.EFFECT_COMMIT_REQUESTED:
+            handler = self.effect_commit_handler
+            if handler is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "Effect-commit worker handler is not configured.",
+                    retryable=False,
+                )
+            command = self._runtime_effect_commit_command(claim)
+            callback = partial(handler.handle, command)
+        elif command_type == PersistenceValues.EventType.EFFECT_RECONCILE_REQUESTED:
+            handler = self.effect_reconcile_handler
+            if handler is None:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "Effect-reconcile worker handler is not configured.",
+                    retryable=False,
+                )
+            command = self._runtime_effect_reconcile_command(claim)
+            callback = partial(handler.handle, command)
+        elif (
+            command_type == PersistenceValues.EventType.ARTIFACT_EVENT_PUBLISH_REQUESTED
+        ):
+            command = self._runtime_artifact_event_command(claim)
+            callback = partial(self.artifact_event_handler.handle, command)
+        else:
             raise AgentRuntimeError(
                 RuntimeErrorCode.VALIDATION_ERROR,
                 f"Unsupported worker command type '{command_type}'.",
                 retryable=False,
             )
+        return _PreparedWorkerDispatch(
+            command_type=command_type,
+            trace_carrier=carrier,
+            invoke_handler=callback,
+        )
+
+    async def _invoke_prepared_dispatch(
+        self, prepared: _PreparedWorkerDispatch
+    ) -> None:
+        """Enter tracing and cross the explicit handler-dispatch boundary."""
+        parent_ctx = QueueTracePropagator.extract(prepared.trace_carrier)
+        span_name = self._DISPATCH_SPAN_NAMES.get(
+            prepared.command_type, f"runtime_worker.{prepared.command_type}"
+        )
+        tracer = otel_trace.get_tracer("agent_runtime.runtime_worker")
+        with tracer.start_as_current_span(span_name, context=parent_ctx):
+            prepared.handler_entered = True
+            await prepared.invoke_handler()
+
+    @staticmethod
+    def _retry_permitted(prepared: _PreparedWorkerDispatch | None) -> bool:
+        """Return whether generic queue replay is safe at the observed boundary.
+
+        A run command can create model output, tool calls, or externally visible
+        effects after its handler starts. Those failures need F10 attempt-level
+        classification/reconciliation and must not replay the whole run. Other
+        command families retain their existing queue semantics because they are
+        backed by dedicated idempotency/claim protocols.
+        """
+        if prepared is None or not prepared.handler_entered:
+            return True
+        return prepared.command_type != PersistenceValues.EventType.RUN_REQUESTED
 
     async def _mark_failure(
-        self, *, claim: RuntimeWorkerClaim, error: AgentRuntimeError
+        self,
+        *,
+        claim: RuntimeWorkerClaim,
+        error: AgentRuntimeError,
+        retry_permitted: bool = True,
     ) -> None:
         """Mark the claim as failed; routes to retry or dead-letter based on the error and attempt count."""
+        retryable = error.retryable and retry_permitted
+        safe_error = error.to_envelope()
+        if safe_error.retryable != retryable:
+            safe_error = safe_error.model_copy(update={"retryable": retryable})
         result = RuntimeWorkerResult(
             command_id=claim.command_id,
             succeeded=False,
-            safe_error=error.to_envelope(),
+            safe_error=safe_error,
             retry_available_at=datetime.now(timezone.utc)
             + timedelta(seconds=self.retry_delay_seconds),
         )
-        if error.retryable and claim.attempts <= self.settings.execution.max_retries:
+        if retryable and claim.attempts <= self.settings.execution.max_retries:
             await self.queue.mark_retry(result=result)
             return
         await self.queue.mark_dead_letter(result=result)

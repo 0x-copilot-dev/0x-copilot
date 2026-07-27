@@ -117,6 +117,7 @@ class BackendMcpProvider:
             display_name=card.display_name or card.name,
             auth_url=str(payload["auth_url"]),
             expires_at=datetime.fromisoformat(str(payload["expires_at"])),
+            connector_slug=card.connector_slug,
         )
 
     @staticmethod
