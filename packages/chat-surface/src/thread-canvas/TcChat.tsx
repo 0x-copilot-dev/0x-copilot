@@ -1096,6 +1096,12 @@ const chatContainerStyle = (): CSSProperties => ({
 
 const messageListStyle = (ghost: boolean): CSSProperties => ({
   flex: 1,
+  // Both axes are named on purpose: `overflow-y: auto` alone makes the CSS
+  // `visible` on the other axis compute to `auto`, so the transcript silently
+  // became a horizontal scroller too — one long token or a wide tool payload
+  // and the messages pan sideways under a stationary composer. Wide blocks
+  // (code, tables) scroll inside their own box; the column itself never does.
+  overflowX: "hidden",
   overflowY: "auto",
   display: "flex",
   flexDirection: "column",

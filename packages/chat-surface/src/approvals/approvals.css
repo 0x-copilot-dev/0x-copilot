@@ -73,10 +73,19 @@
   background: oklch(0.42 0.13 var(--cc-mark-h, 258));
 }
 
+/* Truncates like `.cc__purpose` below, and for the same reason: the title is a
+ * nowrap string that grows with the connector name and the state ("Waiting for
+ * Linear sign-in…"). Without `min-width: 0` + ellipsis it refuses to shrink, so
+ * in a narrow Run rail (the resizer bottoms out at 300px) it shoved Connect /
+ * Cancel past the chat column's right edge — content the column can neither
+ * show nor, now that it clips instead of panning, scroll to. */
 .cc__title {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
   letter-spacing: var(--tracking-tight);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 

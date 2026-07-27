@@ -145,6 +145,19 @@ describe("RunWorkspaceRail — tabs (FR-3.10)", () => {
     );
   });
 
+  // Regression: the Studio chat panel was `overflow: auto`, so a resting
+  // composer tooltip overflowing the column's right edge made the transcript
+  // AND the composer draggable sideways as one. A chat column scrolls the way a
+  // transcript does — vertically — and clips horizontally; anything genuinely
+  // wide (code, tables) owns its own scroller.
+  it("never scrolls the chat column horizontally", () => {
+    render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
+    expect(screen.getByTestId("run-rail-panel-chat")).toHaveStyle({
+      overflowX: "hidden",
+      overflowY: "auto",
+    });
+  });
+
   it("exposes a tablist with tab + tabpanel roles", () => {
     render(<RunWorkspaceRail mode="studio" chatSlot={chatSlot()} />);
     expect(screen.getByRole("tablist")).toBeInTheDocument();

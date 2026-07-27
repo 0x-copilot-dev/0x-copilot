@@ -444,6 +444,11 @@ export const AssistantComposer = forwardRef<
                 aria-haspopup="menu"
                 aria-label="Open attachment and tools menu"
                 data-tooltip="Add attachment"
+                // Left-most control in the row: a centred tooltip would hang
+                // past the composer's left edge (and, in the Run cockpit's
+                // narrow chat column, past the column itself). `start` grows it
+                // inward instead. Same reason `end` is set on the right cluster.
+                data-tooltip-align="start"
                 onClick={() => {
                   setMenuOpen((current) => !current);
                   setMenuView("root");
@@ -518,6 +523,7 @@ export const AssistantComposer = forwardRef<
               className="aui-icon-button ui-cicon atlas-composer-mic"
               aria-label="Voice input (coming soon)"
               data-tooltip="Voice input"
+              data-tooltip-align="end"
               disabled
             >
               <svg
@@ -605,6 +611,7 @@ function AssistantComposerSendButton({
         className="aui-send-button aui-send-button--stop"
         aria-label="Stop response"
         data-tooltip="Stop response"
+        data-tooltip-align="end"
         onClick={() => onCancel?.()}
       >
         <span className="aui-send-button__stop-icon" aria-hidden="true" />
@@ -619,6 +626,8 @@ function AssistantComposerSendButton({
       className="aui-send-button ui-csend aui-composer-send"
       aria-label="Send message"
       data-tooltip="Send message"
+      // Right-most control in the row — see the `+` button's `start` note.
+      data-tooltip-align="end"
       disabled={sendDisabled}
       onClick={onSend}
     >

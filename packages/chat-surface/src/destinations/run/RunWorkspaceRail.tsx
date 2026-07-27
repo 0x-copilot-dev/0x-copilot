@@ -861,6 +861,13 @@ const panelStyle = (visible: boolean): CSSProperties => ({
 
 // Chat panel wrapper. Studio: a stacked tab panel (visibility toggled). Focus:
 // the always-visible LEFT column of the two-column split.
+//
+// `overflowX: "hidden"` in Studio is a fix, not a default (real bug): with
+// `overflow: auto` this panel was the scroll container the composer's resting
+// tooltips overflowed, so the transcript AND the composer could be dragged
+// sideways as one. Nothing in a chat column is legitimately pannable — every
+// genuinely wide block (code, tables) owns its own scroller in markdown.css —
+// so the column clips horizontally and only scrolls the way a transcript does.
 const chatPanelStyle = (mode: RunMode, visible: boolean): CSSProperties =>
   mode === "focus"
     ? {
@@ -877,7 +884,8 @@ const chatPanelStyle = (mode: RunMode, visible: boolean): CSSProperties =>
         flex: 1,
         minHeight: 0,
         minWidth: 0,
-        overflow: "auto",
+        overflowX: "hidden",
+        overflowY: "auto",
       };
 
 // Inner wrapper around `chatSlot` — present in BOTH modes (so the node's parent

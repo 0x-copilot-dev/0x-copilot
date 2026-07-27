@@ -286,6 +286,20 @@ describe("TcChat", () => {
     expect(screen.queryByTestId("tc-chat-focus-tabs")).not.toBeInTheDocument();
   });
 
+  // Regression: the transcript declared `overflow-y: auto` only, and CSS then
+  // computes the untouched axis to `auto` as well — so one long token or a wide
+  // tool payload panned the messages sideways under a stationary composer.
+  it("scrolls the transcript vertically only, never sideways", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    render(
+      withTransport(transport, <TcChat conversationId="c" mode="studio" />),
+    );
+    expect(screen.getByTestId("tc-chat-messages")).toHaveStyle({
+      overflowX: "hidden",
+      overflowY: "auto",
+    });
+  });
+
   it("renders host-provided messages in focus without a fallback fetch", () => {
     const { transport, record } = makeTransport(() =>
       Promise.resolve(SAMPLE_RESPONSE),
