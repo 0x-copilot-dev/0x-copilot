@@ -28,6 +28,7 @@ import {
 import type {
   Connector,
   ConnectorAccessMode,
+  ConnectorCatalogEntry,
   ConnectorId,
   ConnectorSlug,
   ConnectorStatus,
@@ -54,6 +55,10 @@ export const TOOLS_LEAD_COPY =
 
 /** The inline policy-note link label (FR-4.25). */
 export const TOOLS_POLICY_NOTE_COPY = "Settings → Model & behavior";
+
+/** Eyebrow above the installable catalog on the surface. Matches the composer
+ *  popover's group label so the two lists read as one idea. */
+export const TOOLS_AVAILABLE_HEADER = "Add a connector";
 
 // Retained for callers/tests that imported the old subtitle constant. The
 // thesis now lives in the lead paragraph (TOOLS_LEAD_COPY).
@@ -91,6 +96,19 @@ export interface ConnectorsDestinationProps {
 
   /** Primary CTA — opens the host's connect modal. */
   readonly onConnect?: () => void;
+
+  /**
+   * The installable catalog, rendered as an "Add a connector" section beneath
+   * the connected list. PRD-11 D2 had put the catalog ONLY in the connect
+   * modal, which left the destination — the surface actually named Tools —
+   * unable to answer "what can I connect?" without opening a dialog, while the
+   * composer pill showed the same list inline. Passing this renders it here;
+   * omitting it preserves the modal-only behaviour exactly.
+   */
+  readonly catalog?: readonly ConnectorCatalogEntry[];
+
+  /** Connect a catalog entry directly from the surface. */
+  readonly onConnectEntry?: (slug: ConnectorSlug) => void;
 
   /**
    * Remove a connector entirely. Destructive and confirmed inline (this package
@@ -143,6 +161,8 @@ export function ConnectorsDestination(
   const {
     items = null,
     onConnect,
+    catalog,
+    onConnectEntry,
     onOpenConnector,
     onOpenWebhooks,
     onReconnect,
@@ -181,6 +201,19 @@ export function ConnectorsDestination(
       );
     },
     [accessPort],
+  );
+
+  // Only what is not already in the connected list — a catalog row for a tool
+  // the user already has is noise, and the connected row is the one that can
+  // act on it.
+  const connectedSlugs = new Set(
+    (items !== null && items.status === "ok"
+      ? (items.data?.connectors ?? [])
+      : []
+    ).map((c) => c.slug),
+  );
+  const installable = (catalog ?? []).filter(
+    (entry) => !connectedSlugs.has(entry.slug),
   );
 
   const connectCta =
@@ -253,6 +286,43 @@ export function ConnectorsDestination(
           onAccessModeChange: handleAccessModeChange,
           renderIcon,
         })}
+        {installable.length > 0 ? (
+          <>
+            <SectionHeader data-testid="connectors-available-header">
+              {TOOLS_AVAILABLE_HEADER}
+            </SectionHeader>
+            <RowList
+              items={installable}
+              keyFor={(entry) => entry.slug}
+              ariaLabel="Connectors available to add"
+              data-testid="connectors-available-list"
+              renderRow={(entry) => (
+                <Row
+                  icon={
+                    <AppIcon name={entry.slug} size="tile" tone="neutral" />
+                  }
+                  iconSize={30}
+                  subFont="mono"
+                  title={entry.display_name}
+                  sub={entry.description}
+                  meta={
+                    onConnectEntry !== undefined ? (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => onConnectEntry(entry.slug)}
+                        data-testid={`connector-available-connect-${entry.slug}`}
+                      >
+                        Connect
+                      </Button>
+                    ) : undefined
+                  }
+                  data-testid="connector-available-row"
+                />
+              )}
+            />
+          </>
+        ) : null}
       </div>
     </section>
   );

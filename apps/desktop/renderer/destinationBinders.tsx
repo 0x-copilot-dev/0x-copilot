@@ -541,6 +541,8 @@ export function ConnectorsBinder({
       <ConnectorsDestination
         items={result}
         onConnect={flow.openConnect}
+        catalog={catalog}
+        onConnectEntry={(slug) => flow.onSelectEntry(slug)}
         onReconnect={handleReconnect}
         onRemove={handleRemove}
         accessPort={accessPort}

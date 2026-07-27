@@ -441,6 +441,8 @@ export function ConnectorsRoute({
         <ConnectorsDestination
           items={items}
           onConnect={flow.openConnect}
+          catalog={catalog}
+          onConnectEntry={(slug) => flow.onSelectEntry(slug)}
           onOpenConnector={onOpenConnector}
           onOpenWebhooks={onOpenWebhooks}
           onReconnect={(id) => {
