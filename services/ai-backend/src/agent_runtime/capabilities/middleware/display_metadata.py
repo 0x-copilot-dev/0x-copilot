@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Mapping
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Callable, get_type_hints
 
+from langchain_core.runnables import RunnableConfig
 from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
@@ -589,22 +591,56 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
     update: dict[str, object] = {"args_schema": wrapped_schema}
 
     if callable(original_func):
+        config_param = _runnable_config_parameter(original_func)
 
-        def _wrapped_func(*, tool_call_id: str = "", **kwargs: Any) -> Any:
-            """Sync dispatch path: strip display args and invoke the inner function."""
-            del tool_call_id  # captured by LangChain injection; not forwarded to inner
-            real, _ = strip_display(kwargs)
-            return original_func(**real)
+        if config_param is None:
+
+            def _wrapped_func(*, tool_call_id: str = "", **kwargs: Any) -> Any:
+                """Sync dispatch path: strip display args and invoke the inner function."""
+                del (
+                    tool_call_id
+                )  # captured by LangChain injection; not forwarded to inner
+                real, _ = strip_display(kwargs)
+                return original_func(**real)
+
+        else:
+
+            def _wrapped_func(
+                *, tool_call_id: str = "", config: RunnableConfig, **kwargs: Any
+            ) -> Any:
+                """Preserve LangChain's injected config for config-aware inner tools."""
+                del tool_call_id
+                real, _ = strip_display(kwargs)
+                real[config_param] = config
+                return original_func(**real)
 
         update["func"] = _wrapped_func
 
     if callable(original_coroutine):
+        config_param = _runnable_config_parameter(original_coroutine)
 
-        async def _wrapped_coroutine(*, tool_call_id: str = "", **kwargs: Any) -> Any:
-            """Async dispatch path: strip display args and await the inner coroutine."""
-            del tool_call_id  # captured for LangChain, not forwarded — see docstring
-            real, _ = strip_display(kwargs)
-            return await original_coroutine(**real)
+        if config_param is None:
+
+            async def _wrapped_coroutine(
+                *, tool_call_id: str = "", **kwargs: Any
+            ) -> Any:
+                """Async dispatch path: strip display args and await the inner coroutine."""
+                del (
+                    tool_call_id
+                )  # captured for LangChain, not forwarded — see docstring
+                real, _ = strip_display(kwargs)
+                return await original_coroutine(**real)
+
+        else:
+
+            async def _wrapped_coroutine(
+                *, tool_call_id: str = "", config: RunnableConfig, **kwargs: Any
+            ) -> Any:
+                """Preserve LangChain's injected config for config-aware inner tools."""
+                del tool_call_id
+                real, _ = strip_display(kwargs)
+                real[config_param] = config
+                return await original_coroutine(**real)
 
         update["coroutine"] = _wrapped_coroutine
 
@@ -624,7 +660,9 @@ def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
     wrapped_schema = wrap_args_schema(original_schema)
     inner_name = getattr(tool, "name", "tool")
 
-    async def _delegating_coroutine(*, tool_call_id: str = "", **kwargs: Any) -> Any:
+    async def _delegating_coroutine(
+        *, tool_call_id: str = "", config: RunnableConfig, **kwargs: Any
+    ) -> Any:
         """Delegate to ``tool.ainvoke`` with a full LangChain tool-call envelope."""
         real, _ = strip_display(kwargs)
         envelope = _DispatchEnvelope.build(
@@ -632,7 +670,7 @@ def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
             name=inner_name,
             tool_call_id=tool_call_id,
         )
-        return await tool.ainvoke(envelope)
+        return await tool.ainvoke(envelope, config=config)
 
     return structured_tool_cls.from_function(
         coroutine=_delegating_coroutine,
@@ -640,3 +678,34 @@ def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
         description=getattr(tool, "description", ""),
         args_schema=wrapped_schema,
     )
+
+
+def _runnable_config_parameter(func: Callable[..., Any]) -> str | None:
+    """Return the parameter LangChain injects with ``RunnableConfig``.
+
+    ``StructuredTool`` detects config support from the callable's resolved type
+    hints.  A wrapper must retain the same typed parameter; otherwise the
+    wrapped callable is invoked without its required runtime configuration.
+    This deliberately mirrors LangChain's detector without importing its
+    private helper.
+    """
+
+    try:
+        hints = get_type_hints(func)
+    except (NameError, TypeError):
+        hints = {}
+    for name, annotation in hints.items():
+        if annotation is RunnableConfig:
+            return name
+    # Nested test adapters and dynamically-created tools can retain a string
+    # forward reference that cannot be resolved from the module globals.  The
+    # signature still carries enough information to preserve LangChain's
+    # injection contract.
+    for name, parameter in inspect.signature(func).parameters.items():
+        annotation = parameter.annotation
+        if (
+            annotation is RunnableConfig
+            or str(annotation).strip("'") == "RunnableConfig"
+        ):
+            return name
+    return None

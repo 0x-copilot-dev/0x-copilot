@@ -726,6 +726,59 @@ def test_wrap_tool_with_display_extends_structured_tool_schema() -> None:
     assert received == [{"query": "Q1 launch"}]
 
 
+def test_wrap_tool_with_display_preserves_runnable_config_through_budget_wrapper() -> (
+    None
+):
+    """A config-aware artifact tool must keep its injected run context.
+
+    This is the production topology: display metadata is applied while the
+    deep-agent graph is built and the complete model-visible surface is then
+    wrapped by the budget guard.  ``StructuredTool`` only injects ``config``
+    when the outer callable retains a typed ``RunnableConfig`` parameter.
+    """
+
+    import asyncio
+
+    from langchain_core.runnables import RunnableConfig
+    from langchain_core.tools import StructuredTool
+    from pydantic import BaseModel
+
+    from agent_runtime.capabilities.middleware.display_metadata import (
+        DISPLAY_TITLE_KEY,
+        wrap_tool_with_display,
+    )
+    from agent_runtime.capabilities.tool_budget_guard import guard_model_tools
+
+    class ArtifactArgs(BaseModel):
+        path: str
+
+    received: list[tuple[str, RunnableConfig]] = []
+
+    async def _publish(path: str, *, config: RunnableConfig) -> str:
+        received.append((path, config))
+        return "published"
+
+    tool = StructuredTool.from_function(
+        coroutine=_publish,
+        name="publish_artifact",
+        description="Publish a staged local artifact.",
+        args_schema=ArtifactArgs,
+    )
+    wrapped = guard_model_tools([wrap_tool_with_display(tool)])[0]
+    config: RunnableConfig = {"configurable": {"run_id": "run-g2"}}
+
+    result = asyncio.run(
+        wrapped.ainvoke(
+            {"path": "report.csv", DISPLAY_TITLE_KEY: "Creating report"},
+            config=config,
+        )
+    )
+
+    assert result == "published"
+    assert received[0][0] == "report.csv"
+    assert received[0][1]["configurable"] == config["configurable"]
+
+
 def test_wrap_tool_with_display_idempotent_via_schema_marker() -> None:
     """A tool whose args_schema already carries the ``__display_wrapped__``
     marker is returned unchanged. Pins the contract that
