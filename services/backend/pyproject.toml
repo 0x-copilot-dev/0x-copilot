@@ -9,7 +9,7 @@ description = "Core product backend for 0xCopilot"
 requires-python = ">=3.13"
 dependencies = [
   "cryptography==49.0.0",
-  "fastapi==0.139.2",
+  "fastapi==0.140.1",
   "httpx==0.28.1",
   "psycopg[binary]==3.3.4",
   "psycopg_pool==3.3.1",
