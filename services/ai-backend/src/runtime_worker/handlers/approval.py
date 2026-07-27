@@ -830,8 +830,13 @@ class RuntimeApprovalHandler:
         interrupt_id: str | None = None,
     ) -> object:
         """Stream a resumed LangGraph run and return the composed final result."""
+        stream = (
+            self.runtime_resumer(harness, resume, interrupt_id=interrupt_id)
+            if interrupt_id is not None
+            else self.runtime_resumer(harness, resume)
+        )
         result = await StreamingExecutor.run(
-            stream=self.runtime_resumer(harness, resume, interrupt_id=interrupt_id),
+            stream=stream,
             run=run,
             metrics=metrics,
             event_store=self.event_store,
