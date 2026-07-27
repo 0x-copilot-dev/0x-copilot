@@ -134,7 +134,7 @@ def test_gate_fails_when_graph_and_runtime_builders_are_aliased(
     )
 
 
-def test_agent_topology_requires_exact_universal_controller(
+def test_agent_topology_requires_exact_root_and_child_controller(
     tmp_path: Path,
 ) -> None:
     builder = tmp_path / "agent_runtime" / "execution" / "deep_agent_builder.py"
@@ -148,6 +148,7 @@ def test_agent_topology_requires_exact_universal_controller(
     factory = tmp_path / "agent_runtime" / "execution" / "factory.py"
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
+        "    middleware=(RuntimeControlMiddleware(),),\n"
         "    universal_middleware_factories=(OtherMiddleware,),\n"
         ")\n",
         encoding="utf-8",
@@ -157,12 +158,40 @@ def test_agent_topology_requires_exact_universal_controller(
 
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    universal_middleware_factories=(RuntimeToolControlMiddleware,),\n"
+        "    middleware=(RuntimeControlMiddleware(),),\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
         ")\n",
         encoding="utf-8",
     )
 
     assert canonical_agent_topology_present(tmp_path) is True
+
+    factory.write_text(
+        "request = DeepAgentBuildRequest(\n"
+        "    middleware=(OtherMiddleware(),),\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    assert canonical_agent_topology_present(tmp_path) is False
+
+    factory.write_text(
+        "request = DeepAgentBuildRequest(\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
+        ")\n",
+        encoding="utf-8",
+    )
+
+    assert canonical_agent_topology_present(tmp_path) is False
+
+    factory.write_text(
+        "request = DeepAgentBuildRequest(\n"
+        "    middleware=(RuntimeControlMiddleware(),),\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
+        ")\n",
+        encoding="utf-8",
+    )
 
     builder.write_text(
         builder.read_text(encoding="utf-8")
