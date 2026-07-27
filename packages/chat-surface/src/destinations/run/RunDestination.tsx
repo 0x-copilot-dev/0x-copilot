@@ -191,6 +191,8 @@ import {
 // POST. Optional — hosts that have not wired a launcher pass nothing and the card
 // degrades to an inert (but visible) gate.
 import type { McpAuthPort } from "./mcpAuthPort";
+import { useConnectorConsentStates } from "./useConnectorConsentStates";
+import { muteConnectorSuggestion } from "./muteConnectorSuggestion";
 // PR-3.11: the empty/idle goal composer (FR-3.25) mounts inside this shell (no
 // separate host remount) and binds a freshly-started run via the `runId` seam.
 import { RunEmptyState, type StartRunError } from "./RunEmptyState";
@@ -1027,6 +1029,15 @@ export interface RunDestinationProps {
    */
   readonly mcpAuthPort?: McpAuthPort;
   /**
+   * A connector the host just observed finish OAuth, or `null`. Web supplies
+   * `completedMcpAuthAction.serverId`: `beginAuth` full-page-redirects, so the
+   * cockpit is torn down mid-flow and cannot see the return itself — without
+   * this the card would come back reading `pending` on a connector that is now
+   * connected. Desktop has no launcher yet, so it passes nothing and the gate
+   * stays inert exactly as before.
+   */
+  readonly connectedConnectorServerId?: string | null;
+  /**
    * WC-P6a (AD-11): the host-supplied markdown chip renderer, forwarded verbatim
    * to the in-chat `TcChat` (its `components.a` slot routes the citation-remark
    * plugin's `#cite-ord:` / `#cite:` anchors to the host's chip dispatcher). The
@@ -1096,6 +1107,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     renderComposer,
     renderEmptyComposer,
     mcpAuthPort,
+    connectedConnectorServerId = null,
     markdownComponents,
     onOrdinalSelect,
     onSelectSource,
@@ -2767,17 +2779,55 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // mid-run OAuth launcher the in-chat `mcp_auth` card uses); absent → inert but
   // visible (desktop has no mid-run launcher wired yet). The write-policy choice
   // is held locally (controlled radio) AND best-effort PATCHed to the connector.
+  // The consent card's four states. `useConnectorConsentStates` wraps the host
+  // port so `beginAuth`/`skipAuth` move the card, and exposes `markConnected`
+  // for the one transition only the host's OAuth return can observe. Everything
+  // downstream takes the WRAPPED port — handing out the original would let the
+  // card's actions bypass the machine.
+  const connectorConsent = useConnectorConsentStates(
+    mcpAuthPort,
+    connectedConnectorServerId,
+  );
+  const consentPort = connectorConsent.port;
+
   const handleGateConnect = useCallback(
     (serverId: string): void => {
-      mcpAuthPort?.beginAuth(serverId);
+      consentPort?.beginAuth(serverId);
     },
-    [mcpAuthPort],
+    [consentPort],
   );
   const handleGateSkip = useCallback(
     (serverId: string): void => {
-      mcpAuthPort?.skipAuth(serverId);
+      consentPort?.skipAuth(serverId);
     },
-    [mcpAuthPort],
+    [consentPort],
+  );
+
+  // Denying an unsolicited CATALOG suggestion mutes it for good. Fire-and-
+  // forget: the card has already moved to `denied`, and a failed PATCH is not
+  // worth interrupting a live run over — the mute is reversible in Settings,
+  // which is also where a user who missed it can undo one.
+  const handleConnectorMute = useCallback(
+    (catalogSlug: string): void => {
+      void muteConnectorSuggestion(transport, catalogSlug).catch(
+        () => undefined,
+      );
+    },
+    [transport],
+  );
+
+  // A mid-run connect arms the NEXT turn; it never restarts the run. Restarting
+  // would re-emit work the user is reading and re-spend the tokens that made
+  // it, so the choice is theirs and it costs exactly one turn.
+  const handleConnectorRetry = useCallback(
+    (_serverId: string, displayName: string): void => {
+      // Through the ONE start path, so the retry turn gets the same readiness
+      // gate, optimistic echo, and error surfacing as anything the user types.
+      void handleStartRun({
+        goal: `Retry that step, using ${displayName}.`,
+      }).catch(() => undefined);
+    },
+    [handleStartRun],
   );
   const handleGatePolicyChange = useCallback(
     (gateId: string, serverId: string, policy: LedgerGateWritePolicy): void => {
@@ -3291,7 +3341,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // card (→ this port) for `mcp_auth` gates / `mcp_discovery:` suggestions
         // instead of Approve/Reject, keeping them off the `/decision` POST. Absent
         // → the card renders inert (host wires the launcher in P5b).
-        mcpAuthPort={mcpAuthPort}
+        mcpAuthPort={consentPort}
+        connectorConsentStates={connectorConsent.states}
+        onConnectorConsentCancel={connectorConsent.markPending}
+        onConnectorMute={handleConnectorMute}
+        onConnectorRetry={handleConnectorRetry}
         // Host composer seam: desktop mounts the full AssistantComposer here. The
         // dispatch-injecting wrapper (§D3) makes its send bind the live session.
         renderComposer={renderComposerWithDispatch}

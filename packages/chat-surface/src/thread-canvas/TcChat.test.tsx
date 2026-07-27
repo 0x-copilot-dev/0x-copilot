@@ -1068,7 +1068,9 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     fireEvent.click(
       screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
     );
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      connectorSlug: null,
+    });
     fireEvent.click(
       screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
     );
@@ -1110,7 +1112,9 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     fireEvent.click(
       screen.getByTestId("tc-chat-mcp-connect-mcp_discovery:run_1:seed:linear"),
     );
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      connectorSlug: null,
+    });
     expect(onApprove).not.toHaveBeenCalled();
   });
 
@@ -1181,5 +1185,364 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(onApprove).toHaveBeenCalledWith("appr-1");
     // …and never the Connect card.
     expect(screen.queryByTestId("tc-chat-mcp-auth-appr-1")).toBeNull();
+  });
+
+  // The card has always DRAWN four states; until now it was always handed
+  // `pending`, because nothing in the run stream can see a consent popup. The
+  // owner is `useConnectorConsentStates` in the Run cockpit, and these tests pin
+  // the seam it drives — that `connectorConsentStates` reaches the card, keyed
+  // by `server_id`.
+  it("renders the state the host reports for this server, not a hardcoded pending", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "connecting" }}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "connecting");
+    // Connecting swaps the two actions for a single Cancel.
+    expect(screen.getByTestId("cc-cancel")).toBeInTheDocument();
+    expect(
+      screen.queryByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
+    ).toBeNull();
+  });
+
+  it("reaches connected — the state only the host's OAuth return can report", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "connected" }}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "connected");
+  });
+
+  it("offers Reconsider once denied", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port, beginAuth } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "denied" }}
+        />,
+      ),
+    );
+    // Reversible by design — a denial is a decision, not a dead end.
+    fireEvent.click(screen.getByTestId("cc-reconsider"));
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      connectorSlug: null,
+    });
+  });
+
+  it("Cancel while connecting returns the card to pending", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    const onCancel = vi.fn();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "connecting" }}
+          onConnectorConsentCancel={onCancel}
+        />,
+      ),
+    );
+    fireEvent.click(screen.getByTestId("cc-cancel"));
+    expect(onCancel).toHaveBeenCalledWith("linear");
+  });
+
+  it("keys state by server_id, so one connector's state never bleeds into another's", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[
+            mcpAuthApproval(),
+            mcpAuthApproval({
+              approvalId: "mcp_auth:run_1:notion",
+              title: "Connect Notion",
+              serverId: "notion",
+            }),
+          ]}
+          mcpAuthPort={port}
+          connectorConsentStates={{ linear: "denied" }}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "denied");
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:notion"),
+    ).toHaveAttribute("data-state", "pending");
+  });
+
+  // A slug-keyed host (desktop) cannot start a connect from a `server_id`: its
+  // whole path is keyed on the catalog slug, because the backend reconstructs
+  // the loopback redirect from a validated port rather than accepting one from
+  // the client. So the card names the connector both ways and lets each host
+  // use the key its own flow is built on.
+  describe("naming the connector for a slug-keyed host", () => {
+    function connectWith(overrides: Partial<TcChatApproval>) {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port, beginAuth } = makePort();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval(overrides)]}
+            mcpAuthPort={port}
+          />,
+        ),
+      );
+      fireEvent.click(
+        screen.getByTestId(
+          `tc-chat-mcp-connect-${mcpAuthApproval(overrides).approvalId}`,
+        ),
+      );
+      return beginAuth;
+    }
+
+    it("passes an installed server's connector slug", () => {
+      const beginAuth = connectWith({ connectorSlug: "linear" });
+      expect(beginAuth).toHaveBeenCalledWith("linear", {
+        connectorSlug: "linear",
+      });
+    });
+
+    it("falls back to a suggestion's catalog slug", () => {
+      // Different fields, same answer to "which connector". A slug-keyed
+      // connect is install-then-auth and idempotent, so it does not care which
+      // of the two named it.
+      const beginAuth = connectWith({
+        approvalId: "mcp_discovery:run_1:seed:notion",
+        serverId: "seed:notion",
+        catalogSlug: "notion",
+      });
+      expect(beginAuth).toHaveBeenCalledWith("seed:notion", {
+        connectorSlug: "notion",
+      });
+    });
+
+    it("prefers the installed identity when a card somehow carries both", () => {
+      const beginAuth = connectWith({
+        connectorSlug: "linear",
+        catalogSlug: "linear-catalog",
+      });
+      expect(beginAuth).toHaveBeenCalledWith("linear", {
+        connectorSlug: "linear",
+      });
+    });
+
+    it("reports null for a custom server rather than guessing a slug", () => {
+      // A pasted-URL MCP server has no catalog identity. The honest answer lets
+      // the host say "not available here" instead of failing mid-flow.
+      const beginAuth = connectWith({});
+      expect(beginAuth).toHaveBeenCalledWith("linear", { connectorSlug: null });
+    });
+  });
+
+  // Mute lands on the card because that is where the intent forms. The
+  // distinction that matters: a GATE is a connector the user installed and the
+  // run is blocked on — denying it is a decision about this run. A slugged
+  // SUGGESTION is a connector they never asked for, and denying that is a
+  // decision about the connector.
+  describe("mute-on-deny", () => {
+    it("mutes when denying an uninstalled catalog suggestion", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port, skipAuth } = makePort();
+      const onMute = vi.fn();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[
+              mcpAuthApproval({
+                approvalId: "mcp_discovery:run_1:seed:linear",
+                serverId: "seed:linear",
+                catalogSlug: "linear",
+              }),
+            ]}
+            mcpAuthPort={port}
+            onConnectorMute={onMute}
+          />,
+        ),
+      );
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_discovery:run_1:seed:linear"),
+      );
+      // Both: the run stops asking AND the suggestion never returns.
+      expect(skipAuth).toHaveBeenCalledWith("seed:linear");
+      // Keyed by SLUG, not `server_id` — no server row exists for a connector
+      // the user has not installed.
+      expect(onMute).toHaveBeenCalledWith("linear");
+    });
+
+    it("does NOT mute when denying a gate on an installed connector", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port, skipAuth } = makePort();
+      const onMute = vi.fn();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval()]}
+            mcpAuthPort={port}
+            onConnectorMute={onMute}
+          />,
+        ),
+      );
+      fireEvent.click(
+        screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
+      );
+      expect(skipAuth).toHaveBeenCalledWith("linear");
+      // "Never suggest this again" is meaningless for something already
+      // installed, and muting it here would quietly hide it from future runs.
+      expect(onMute).not.toHaveBeenCalled();
+    });
+  });
+
+  // Connecting mid-run arms the NEXT turn rather than restarting the run —
+  // a restart re-emits work the user is reading and re-spends its tokens.
+  describe("retry-after-connect", () => {
+    it("offers a named retry once connected", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port } = makePort();
+      const onRetry = vi.fn();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            // `title` is `payload.display_name` in the real projection — the
+            // bare connector name. The shared fixture above predates that and
+            // says "Connect Linear", which would read as "Retry that step with
+            // Connect Linear"; override it so the label is asserted against
+            // what production actually produces.
+            approvals={[mcpAuthApproval({ title: "Linear" })]}
+            mcpAuthPort={port}
+            connectorConsentStates={{ linear: "connected" }}
+            onConnectorRetry={onRetry}
+          />,
+        ),
+      );
+      const retry = screen.getByTestId("cc-retry");
+      // Named after the connector: the user is choosing to spend a turn, and
+      // the label should say what that turn will use.
+      expect(retry).toHaveTextContent("Retry that step with Linear");
+      fireEvent.click(retry);
+      expect(onRetry).toHaveBeenCalledWith("linear", "Linear");
+    });
+
+    it("renders no retry when the host wired none", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port } = makePort();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval()]}
+            mcpAuthPort={port}
+            connectorConsentStates={{ linear: "connected" }}
+          />,
+        ),
+      );
+      // Still a completed connect, just with no next step to offer.
+      expect(screen.queryByTestId("cc-retry")).toBeNull();
+      expect(
+        screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+      ).toHaveAttribute("data-state", "connected");
+    });
+
+    it("offers no retry before the connector is connected", () => {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port } = makePort();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval()]}
+            mcpAuthPort={port}
+            onConnectorRetry={vi.fn()}
+          />,
+        ),
+      );
+      expect(screen.queryByTestId("cc-retry")).toBeNull();
+    });
+  });
+
+  it("falls back to pending when the host reports nothing (hook-less host)", () => {
+    const { transport } = makeTransport(() => Promise.resolve(SAMPLE_RESPONSE));
+    const { port } = makePort();
+    render(
+      withTransport(
+        transport,
+        <TcChat
+          conversationId="c"
+          mode="studio"
+          approvals={[mcpAuthApproval()]}
+          mcpAuthPort={port}
+        />,
+      ),
+    );
+    expect(
+      screen.getByTestId("tc-chat-connector-mcp_auth:run_1:linear"),
+    ).toHaveAttribute("data-state", "pending");
   });
 });

@@ -14,6 +14,12 @@
 // so a write here cannot clobber the per-slug `overrides` the suggestion card
 // writes — the two controls edit the same block from different surfaces and
 // must not race each other's state.
+//
+// It also surfaces the MUTED slugs, because the card's "Deny" now persists one.
+// A mute that could only be set and never seen again would be a one-way door: a
+// single misclick would silently remove a connector from every future run's
+// suggestions with no way to find out. The same GET already returns them, so
+// the reversal costs a list, not a round-trip.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -37,11 +43,48 @@ const PREFERENCES_PATH = "/v1/me/preferences";
 export const DEFAULT_CONNECTOR_SUGGESTIONS: ConnectorSuggestionMode =
   "unblock_only";
 
+export interface MutedConnector {
+  readonly slug: string;
+  /**
+   * Derived from the slug, not fetched. The overrides map stores slugs alone,
+   * and a catalog round-trip to prettify a label the user muted themselves is
+   * not worth the coupling — `google-drive` reads fine as "Google Drive".
+   */
+  readonly displayName: string;
+}
+
 export interface ConnectorSuggestionsController {
   readonly value: ConnectorSuggestionMode;
   readonly loading: boolean;
   readonly error: string | null;
   readonly change: (next: ConnectorSuggestionMode) => void;
+  /** Connectors the user muted, so the decision stays reversible. */
+  readonly muted: readonly MutedConnector[];
+  /** Drop a slug's override entirely — back to the catalog default. */
+  readonly unmute: (slug: string) => void;
+}
+
+/** `google-drive` → `Google Drive`. */
+function displayNameForSlug(slug: string): string {
+  return slug
+    .split(/[-_]/)
+    .filter((part) => part !== "")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function mutedFrom(prefs: UserPreferences): readonly MutedConnector[] {
+  const overrides = prefs.discoverable_connectors?.overrides ?? {};
+  return (
+    Object.entries(overrides)
+      // `false` is the mute. A `true` override is the opposite decision — the
+      // user asking for a connector the catalog does not suggest by default —
+      // and listing it here would invite them to "unmute" something they opted
+      // INTO.
+      .filter(([, enabled]) => enabled === false)
+      .map(([slug]) => ({ slug, displayName: displayNameForSlug(slug) }))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName))
+  );
 }
 
 function errorMessage(err: unknown): string {
@@ -58,6 +101,7 @@ export function useConnectorSuggestions(
   );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [muted, setMuted] = useState<readonly MutedConnector[]>([]);
 
   // Ref so `change` reads the live transport without re-creating the callback
   // when a host passes a fresh identity each render.
@@ -73,6 +117,7 @@ export function useConnectorSuggestions(
         setValue(
           prefs.discoverable_connectors?.mode ?? DEFAULT_CONNECTOR_SUGGESTIONS,
         );
+        setMuted(mutedFrom(prefs));
         setError(null);
       })
       .catch((err: unknown) => {
@@ -103,5 +148,33 @@ export function useConnectorSuggestions(
       .catch((err: unknown) => setError(errorMessage(err)));
   }, []);
 
-  return { value, loading, error, change };
+  const unmute = useCallback((slug: string) => {
+    // Optimistic, like `change` above.
+    setMuted((prev) => prev.filter((entry) => entry.slug !== slug));
+    void transportRef.current
+      .request<UserPreferences>({
+        method: "PUT",
+        path: PREFERENCES_PATH,
+        // `true`, not a delete: the merge is depth-2 and recursive, so an
+        // omitted key is left alone rather than removed. Restoring the catalog
+        // default would need a delete verb the endpoint does not have — and
+        // `true` is what the user is asking for anyway ("suggest this again").
+        body: { discoverable_connectors: { overrides: { [slug]: true } } },
+      })
+      .then(() => setError(null))
+      .catch((err: unknown) => {
+        // Put it back: unlike the appetite Select, a row that vanished and did
+        // not save would leave the user believing a mute was lifted.
+        setMuted((prev) =>
+          prev.some((entry) => entry.slug === slug)
+            ? prev
+            : [...prev, { slug, displayName: displayNameForSlug(slug) }].sort(
+                (a, b) => a.displayName.localeCompare(b.displayName),
+              ),
+        );
+        setError(errorMessage(err));
+      });
+  }, []);
+
+  return { value, loading, error, change, muted, unmute };
 }

@@ -15,22 +15,22 @@ those paths keep emitting the full inline output exactly as before.
 
 from __future__ import annotations
 
-import json
-
 from agent_runtime.api.constants import Keys
-from agent_runtime.context.memory.contracts import (
-    ContextCompressionStrategy,
-    TokenBudgetPolicy,
-)
+from agent_runtime.context.memory.contracts import TokenBudgetPolicy
 from agent_runtime.context.memory.summarization import (
-    ContextPayloadManager,
     OffloadWriter,
 )
+from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.contracts import JsonObject
 
 
 class ToolResultOffloader:
-    """Rewrite an oversized ``TOOL_RESULT`` payload into a preview + object ref."""
+    """Project a pre-model admission decision into a tool-result event.
+
+    The reusable :class:`ToolResultAdmissionAdapter` owns serialization,
+    budgeting, and storage.  This worker adapter only maps that raw-free result
+    onto the existing event payload shape.
+    """
 
     # Offload a tool result whose serialized output estimates above this many
     # tokens (~4 chars/token). Well under a model context window, but large
@@ -41,20 +41,36 @@ class ToolResultOffloader:
 
     def __init__(
         self,
-        offload_writer: OffloadWriter,
+        offload_writer: OffloadWriter | None = None,
         *,
         policy: TokenBudgetPolicy | None = None,
+        admission_adapter: ToolResultAdmissionAdapter | None = None,
     ) -> None:
-        self._offload_writer = offload_writer
-        self._policy = policy or TokenBudgetPolicy(
-            # recent_context_tokens == max_input_tokens * recent_context_ratio,
-            # and ``prepare_tool_output`` keeps content inline while it fits under
-            # that, so this pins the offload threshold to ``INLINE_TOKEN_BUDGET``.
+        if (offload_writer is None) == (admission_adapter is None):
+            raise ValueError(
+                "provide exactly one of offload_writer or admission_adapter"
+            )
+        effective_policy = policy or TokenBudgetPolicy(
             max_input_tokens=int(self.INLINE_TOKEN_BUDGET / self._RECENT_RATIO),
             recent_context_ratio=self._RECENT_RATIO,
         )
+        if admission_adapter is not None:
+            self._admission_adapter = admission_adapter
+        else:
+            assert offload_writer is not None  # narrowed by the xor guard above
+            self._admission_adapter = ToolResultAdmissionAdapter(
+                offload_writer,
+                policy=effective_policy,
+            )
 
-    def apply(self, payload: JsonObject, *, trace_id: str) -> JsonObject:
+    def apply(
+        self,
+        payload: JsonObject,
+        *,
+        trace_id: str,
+        projection_key: str | None = None,
+        projection_content: object | None = None,
+    ) -> JsonObject:
         """Return ``payload`` unchanged, or with its output offloaded when large.
 
         The returned mapping keeps ``tool_name`` / ``call_id`` / ``status`` /
@@ -64,32 +80,34 @@ class ToolResultOffloader:
 
         if Keys.Field.OUTPUT not in payload:
             return payload
-        content = self._as_text(payload[Keys.Field.OUTPUT])
-        if not content:
+        output = payload[Keys.Field.OUTPUT]
+        if output == "":
             return payload
 
-        managed = ContextPayloadManager.prepare_tool_output(
-            content=content,
-            policy=self._policy,
-            trace_id=trace_id,
-            offload_writer=self._offload_writer,
+        admitted = (
+            self._admission_adapter.consume_projection(
+                output if projection_content is None else projection_content,
+                projection_key=projection_key,
+            )
+            if projection_key is not None
+            else None
         )
-        if managed.strategy is not ContextCompressionStrategy.OFFLOAD:
+        # Legacy/direct stream paths do not cross the pre-model wrapper.  Keep
+        # their existing post-hoc offload behavior, while the production bound
+        # path projects the exact earlier admission and never decides twice.
+        if admitted is None:
+            admitted = self._admission_adapter.admit(
+                output,
+                trace_id=trace_id,
+            )
+        if admitted.output_ref is None:
             return payload
 
         rewritten = dict(payload)
-        rewritten[Keys.Field.OUTPUT] = managed.preview or ""
-        rewritten[Keys.Field.PREVIEW] = managed.preview or ""
-        rewritten[Keys.Field.OUTPUT_REF] = managed.reference
+        rewritten[Keys.Field.OUTPUT] = admitted.event_content
+        rewritten[Keys.Field.PREVIEW] = admitted.preview or ""
+        rewritten[Keys.Field.OUTPUT_REF] = admitted.output_ref
         return rewritten
-
-    @staticmethod
-    def _as_text(output: object) -> str:
-        """Serialize a tool-result output to the string the offload contract takes."""
-
-        if isinstance(output, str):
-            return output
-        return json.dumps(output, ensure_ascii=False, default=str)
 
 
 __all__ = ("ToolResultOffloader",)

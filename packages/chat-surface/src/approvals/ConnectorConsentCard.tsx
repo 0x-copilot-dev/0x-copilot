@@ -35,6 +35,14 @@ export interface ConnectorConsentCardProps {
   readonly onDeny?: () => void;
   readonly onCancel?: () => void;
   readonly onReconsider?: () => void;
+  /**
+   * Retry the step the missing connector blocked, as a NEW turn. Connecting
+   * mid-run deliberately does not restart the run — a restart re-emits work the
+   * user is already reading and re-spends the tokens that produced it. The
+   * connector arms the next turn instead, and this is where the user says so.
+   * Absent → `connected` renders with no action, as before.
+   */
+  readonly onRetry?: () => void;
   /** False when no auth port is wired — the gate stays visible but inert. */
   readonly actionable?: boolean;
   readonly testId?: string;
@@ -54,6 +62,7 @@ export function ConnectorConsentCard({
   onDeny,
   onCancel,
   onReconsider,
+  onRetry,
   actionable = true,
   testId,
   connectTestId = "cc-connect",
@@ -87,6 +96,10 @@ export function ConnectorConsentCard({
             onDeny,
             onCancel,
             onReconsider,
+            onRetry,
+            // Named after the connector, not "Retry": the user is choosing to
+            // spend a turn, and the label should say what that turn will use.
+            retryLabel: `Retry that step with ${displayName}`,
             connectTestId,
             denyTestId,
           })}
@@ -142,6 +155,8 @@ interface ActionHandlers {
   readonly onDeny?: () => void;
   readonly onCancel?: () => void;
   readonly onReconsider?: () => void;
+  readonly onRetry?: () => void;
+  readonly retryLabel: string;
   readonly connectTestId: string;
   readonly denyTestId: string;
 }
@@ -151,7 +166,21 @@ function actionsFor(
   handlers: ActionHandlers,
 ): ReactNode {
   if (state === "connected") {
-    return null;
+    // No host retry wired → no action, exactly as before. The card still
+    // reads as a completed connect; it just cannot offer the next step.
+    if (handlers.onRetry === undefined) {
+      return null;
+    }
+    return (
+      <button
+        type="button"
+        className="apc-btn apc-btn--primary"
+        data-testid="cc-retry"
+        onClick={handlers.onRetry}
+      >
+        {handlers.retryLabel}
+      </button>
+    );
   }
   if (state === "connecting") {
     return (

@@ -765,6 +765,15 @@ class InternalMcpServerCard(BackendContract):
     # from the listing entirely (visibility gate), so a card only ever carries
     # ``read`` / ``read_act``; the default keeps older callers/tests valid.
     access_mode: str = "read"
+    # The catalog identity of this server (PR #387's ``mcp_servers`` column).
+    # A server installed from the catalog knows which connector it IS, and the
+    # desktop needs that: its whole OAuth path is slug-keyed (the backend
+    # reconstructs the loopback redirect from a validated port rather than
+    # accepting one from the client), while the in-chat consent card only ever
+    # learns a ``server_id``. Without this hop the desktop cannot start a
+    # connect for a gate. ``None`` for a custom MCP server, which has no
+    # catalog identity to report.
+    connector_slug: str | None = None
 
 
 class InternalMcpServerListResponse(BackendContract):

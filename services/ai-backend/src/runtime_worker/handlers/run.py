@@ -134,7 +134,7 @@ from agent_runtime.execution.factory import (
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
 from agent_runtime.execution.runtime import ainvoke_runtime, astream_runtime
 from agent_runtime.persistence import with_optimistic_retry
-from agent_runtime.persistence.records import BudgetReservationRecord
+from agent_runtime.persistence.records import BudgetReservationRecord, ToolBudgetRecord
 from agent_runtime.observability.attribution import Purpose
 from agent_runtime.observability.usage_meter import (
     MeteredModelInvocation,
@@ -254,6 +254,10 @@ class RuntimeRunHandler:
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
+        # One explicit desktop writer/admission composition per handler. The
+        # pre-model wrapper and durable event projector must share this object;
+        # constructing the gate ad hoc would create two unrelated decisions.
+        self._file_store_worker_wiring = FileStoreWorkerWiring(self.event_store)
         # PRD-D3 — the durable command queue, threaded from the worker loop so the
         # per-run ``stage_rowset_write`` tool can enqueue an allow-always auto-apply
         # (FR-C8). ``None`` (unwired / minimal test handler) ⇒ the stager's
@@ -757,6 +761,7 @@ class RuntimeRunHandler:
                 McpDisplayRegistryContext.unbind(mcp_display_token)
             if mcp_annotations_token is not None:
                 McpToolAnnotationsRegistry.unbind(mcp_annotations_token)
+            self._file_store_wiring().discard_tool_result_projections(run_id=run.run_id)
             await WorkspaceBackendWorkerWiring.release_backend(workspace_backend)
 
         completed = await with_optimistic_retry(
@@ -1168,7 +1173,7 @@ class RuntimeRunHandler:
         place so this path and the approval-resume path cannot drift.
         """
 
-        return FileStoreWorkerWiring(self.event_store)
+        return self._file_store_worker_wiring
 
     def _file_backend_store(self) -> object | None:
         """Return the active file store, or ``None`` on non-file backends."""
@@ -2226,21 +2231,25 @@ class RuntimeRunHandler:
         without a second budget store to keep in sync.
         """
 
+        admission = self._file_store_wiring().tool_result_admission()
         loader = getattr(self.persistence, "list_tool_budgets_for_org", None)
-        if loader is None:
-            return None
-        try:
-            budgets = await loader(org_id=run.org_id)
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "tool_budget_load_failed", exc_info=True
-            )
-            return None
-        budgets = WorkspaceToolBudgetOverride.apply(
-            budgets,
-            max_calls_per_run=await self._workspace_tool_call_cap(run),
-        )
-        if not budgets:
+        budgets: Sequence[ToolBudgetRecord] = ()
+        if loader is not None:
+            try:
+                budgets = await loader(org_id=run.org_id)
+            except Exception:
+                logging.getLogger(__name__).warning(
+                    "tool_budget_load_failed", exc_info=True
+                )
+                # Desktop admission is a hard model-context boundary and must
+                # not disappear because optional budget policy I/O failed.
+                budgets = ()
+            else:
+                budgets = WorkspaceToolBudgetOverride.apply(
+                    budgets,
+                    max_calls_per_run=await self._workspace_tool_call_cap(run),
+                )
+        if not budgets and admission is None:
             return None
         ledger = self.stream_event_mapper.message_processor.ledger_for_run(run.run_id)
         return ToolBudgetGuard(
@@ -2248,6 +2257,7 @@ class RuntimeRunHandler:
             ledger=ledger,
             run=run,
             event_producer=self.event_producer,
+            tool_result_admission=admission,
         )
 
     async def _workspace_tool_call_cap(self, run: RunRecord) -> int | None:

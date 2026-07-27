@@ -2558,7 +2558,7 @@ async def test_runtime_worker_projects_native_mcp_interrupt_to_card_event() -> N
     assert approval.metadata["allowed_decisions"] == ["approve", "reject"]
 
 
-async def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> None:
+async def test_runtime_worker_does_not_replay_post_dispatch_run_failures() -> None:
     store = InMemoryRuntimeApiStore()
     settings = _TestSettings.create(max_retries=1)
     command = RuntimeRunCommand(
@@ -2593,9 +2593,8 @@ async def test_runtime_worker_retries_then_dead_letters_retryable_failures() -> 
     )
 
     assert await worker.run_once()
-    assert await worker.run_once()
     assert not await worker.run_once()
-    assert handler.attempts == 2
+    assert handler.attempts == 1
 
 
 async def test_runtime_worker_respects_max_parallel_runs() -> None:

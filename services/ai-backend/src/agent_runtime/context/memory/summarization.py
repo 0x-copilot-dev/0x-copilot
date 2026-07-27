@@ -132,6 +132,7 @@ class ContextPayloadManager:
     """Route connector and tool output to inline, offload, or summarize based on token budget."""
 
     PREVIEW_LINE_LIMIT = 10
+    PREVIEW_CHAR_LIMIT = 2_000
 
     @classmethod
     def prepare_tool_output(
@@ -214,6 +215,11 @@ class ContextPayloadManager:
 
     @classmethod
     def _preview(cls, content: str) -> str:
-        """Return the first ``PREVIEW_LINE_LIMIT`` lines for the offloaded content hint."""
+        """Return a preview bounded by both lines and characters.
 
-        return "\n".join(content.splitlines()[: cls.PREVIEW_LINE_LIMIT])
+        A line-only limit is insufficient for minified JSON or arbitrary tool
+        output: one line may contain the entire oversized payload.
+        """
+
+        line_bounded = "\n".join(content.splitlines()[: cls.PREVIEW_LINE_LIMIT])
+        return line_bounded[: cls.PREVIEW_CHAR_LIMIT]

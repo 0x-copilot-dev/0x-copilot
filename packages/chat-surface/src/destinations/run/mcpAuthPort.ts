@@ -43,6 +43,16 @@
  * degrades gracefully: it still renders the auth gate, but the Connect / Skip
  * affordances are inert (never a crash, never a `/decision` fallback).
  */
+export interface McpAuthBeginOptions {
+  /**
+   * The catalog connector this server IS — `connector_slug` on a gate, or
+   * `catalog_slug` on a suggestion for one not installed yet. `null` for a
+   * custom MCP server, which has no catalog identity; a slug-keyed host
+   * cannot start that flow and should say so rather than fail silently.
+   */
+  readonly connectorSlug?: string | null;
+}
+
 export interface McpAuthPort {
   /**
    * Begin OAuth for an already-installed connector server (the blocking
@@ -50,8 +60,16 @@ export interface McpAuthPort {
    * full-page-redirects (web) / opens the system browser (desktop) to the
    * vendor's consent screen. On return it resolves the run→conversation and
    * rebinds the stream (AD-8) — no chat-surface resume code needed.
+   *
+   * `options.connectorSlug` is the SAME connector named the other way. Hosts
+   * are not interchangeable here: the web starts auth against a `server_id`,
+   * while the desktop's flow is slug-keyed all the way down — main binds a
+   * loopback and the backend RECONSTRUCTS the redirect from a validated port
+   * rather than accepting one from the client, so there is no server-keyed
+   * entry point to call. Passing both lets each host use the key its own path
+   * is built on instead of forcing one to translate.
    */
-  beginAuth(serverId: string): void;
+  beginAuth(serverId: string, options?: McpAuthBeginOptions): void;
 
   /**
    * Dismiss / skip the auth gate for this server without connecting. The host

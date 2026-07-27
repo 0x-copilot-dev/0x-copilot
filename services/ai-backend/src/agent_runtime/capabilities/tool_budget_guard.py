@@ -20,7 +20,16 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetReject,
     ToolBudgetWarn,
 )
+from agent_runtime.capabilities.task_policy import (
+    RequestFingerprint,
+    ToolOperationOutcome,
+    ToolPolicyRejected,
+    ToolUseController,
+    ToolUseDisposition,
+    ToolUseIntent,
+)
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
+from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
 from runtime_api.schemas import RuntimeApiEventType, RunRecord
@@ -67,6 +76,9 @@ class ToolBudgetGuard:
         run: RunRecord | None = None,
         event_producer: object | None = None,
         max_surfaced_rejections: int | None = None,
+        task_policy_controller: ToolUseController | None = None,
+        task_request_fingerprint: RequestFingerprint | None = None,
+        tool_result_admission: ToolResultAdmissionAdapter | None = None,
     ) -> None:
         """Initialise the guard with a middleware, ledger, and optional event emitter."""
         self._middleware = middleware
@@ -82,6 +94,13 @@ class ToolBudgetGuard:
             else max_surfaced_rejections
         )
         self._surfaced_rejections = 0
+        if (task_policy_controller is None) != (task_request_fingerprint is None):
+            raise ValueError(
+                "task_policy_controller and task_request_fingerprint must be provided together"
+            )
+        self._task_policy_controller = task_policy_controller
+        self._task_request_fingerprint = task_request_fingerprint
+        self._tool_result_admission = tool_result_admission
 
     @classmethod
     def bind_for_run(cls, guard: "ToolBudgetGuard") -> object:
@@ -193,6 +212,98 @@ class ToolBudgetGuard:
             return None
         return usage.render_note()
 
+    def admit_tool_result(self, result: object, *, call_id: str) -> object:
+        """Bound one successful result before LangChain creates a ToolMessage.
+
+        The adapter is optional so existing runtime configurations preserve
+        their exact return types and bytes.  Once configured, its failure is
+        intentionally allowed to propagate: returning the raw result after an
+        offload failure would violate the model-admission boundary.
+        """
+
+        adapter = self._tool_result_admission
+        if adapter is None:
+            return result
+        return adapter.admit(
+            result,
+            trace_id=call_id,
+            projection_key=self._run.run_id if self._run is not None else None,
+        ).model_content
+
+    def admit_task_policy(
+        self,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> ToolUseIntent | None:
+        """Admit an operation through the optional F4 duplicate controller.
+
+        The hard tool-budget check still runs independently after this method.
+        Any controller or canonicalization failure fails open to those existing
+        hard gates; an optional quality signal must never become a new runtime
+        availability dependency.
+        """
+
+        controller = self._task_policy_controller
+        fingerprinter = self._task_request_fingerprint
+        if controller is None or fingerprinter is None:
+            return None
+        try:
+            fingerprint = fingerprinter.for_request(
+                capability_id=tool_name,
+                arguments={"args": list(args), "kwargs": kwargs},
+            )
+            intent = ToolUseIntent(
+                operation_id=f"tool-policy-{uuid4().hex}",
+                capability_id=tool_name,
+                canonical_request_fingerprint=fingerprint,
+            )
+            feedback = controller.before_operation(intent)
+        except Exception:  # noqa: BLE001 - optional controller fails open.
+            _LOGGER.warning("task_policy_before_operation_failed", exc_info=True)
+            return None
+        if feedback.disposition is not ToolUseDisposition.CONTINUE:
+            raise ToolPolicyRejected(self._task_policy_message(feedback.disposition))
+        return intent
+
+    def record_task_policy_outcome(
+        self,
+        *,
+        intent: ToolUseIntent | None,
+        succeeded: bool,
+        error_class: str | None = None,
+    ) -> None:
+        """Best-effort fold of observable completion facts into F4 state."""
+
+        controller = self._task_policy_controller
+        if controller is None or intent is None:
+            return
+        try:
+            controller.after_operation(
+                ToolOperationOutcome(
+                    operation_id=intent.operation_id,
+                    capability_id=intent.capability_id,
+                    succeeded=succeeded,
+                    error_class=error_class,
+                )
+            )
+        except Exception:  # noqa: BLE001 - must not alter a tool outcome.
+            _LOGGER.warning("task_policy_after_operation_failed", exc_info=True)
+
+    @staticmethod
+    def _task_policy_message(disposition: ToolUseDisposition) -> str:
+        if disposition is ToolUseDisposition.STOP:
+            return (
+                "This tool call is blocked by the active task policy. Do not repeat "
+                "the same request; answer with the evidence already gathered and "
+                "state what remains uncertain."
+            )
+        return (
+            "This tool call duplicates prior work. Revise the plan or change the "
+            "request before calling a tool again."
+        )
+
     async def emit_warning(self, *, decision: ToolBudgetWarn) -> None:
         """Best-effort BUDGET_WARNING emission."""
 
@@ -286,6 +397,9 @@ class ToolBudgetGuardedTool(BaseTool):
         guard = ToolBudgetGuard.active()
         if guard is None:
             return self.inner._run(*args, **kwargs)
+        policy_intent = guard.admit_task_policy(
+            tool_name=self.name, args=args, kwargs=kwargs
+        )
         estimated = _Estimator.estimate(args, kwargs)
         decision = guard.check_admit(
             tool_name=self.name, estimated_input_tokens=estimated
@@ -303,15 +417,27 @@ class ToolBudgetGuardedTool(BaseTool):
         )
         try:
             result = self.inner._run(*args, **kwargs)
+        except BaseException as exc:
+            guard.record_task_policy_outcome(
+                intent=policy_intent,
+                succeeded=False,
+                error_class=type(exc).__name__,
+            )
+            raise
+        else:
+            guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
-        return self._with_usage_note(result, guard=guard)
+        return self._model_visible_result(result, guard=guard, call_id=call_id)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Async gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
         if guard is None:
             return await self.inner._arun(*args, **kwargs)
+        policy_intent = guard.admit_task_policy(
+            tool_name=self.name, args=args, kwargs=kwargs
+        )
         estimated = _Estimator.estimate(args, kwargs)
         decision = guard.check_admit(
             tool_name=self.name, estimated_input_tokens=estimated
@@ -329,10 +455,31 @@ class ToolBudgetGuardedTool(BaseTool):
         )
         try:
             result = await self.inner._arun(*args, **kwargs)
+        except BaseException as exc:
+            guard.record_task_policy_outcome(
+                intent=policy_intent,
+                succeeded=False,
+                error_class=type(exc).__name__,
+            )
+            raise
+        else:
+            guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         # Settled first, so the count the model reads includes this call.
-        return self._with_usage_note(result, guard=guard)
+        return self._model_visible_result(result, guard=guard, call_id=call_id)
+
+    def _model_visible_result(
+        self,
+        result: object,
+        *,
+        guard: ToolBudgetGuard,
+        call_id: str,
+    ) -> object:
+        """Annotate, then bound, the exact value returned to LangChain."""
+
+        annotated = self._with_usage_note(result, guard=guard)
+        return guard.admit_tool_result(annotated, call_id=call_id)
 
     def _with_usage_note(self, result: object, *, guard: ToolBudgetGuard) -> object:
         """Append the remaining-calls note to ``result`` when one is due.
@@ -383,7 +530,7 @@ class ToolBudgetGuardedRegistry:
     def list_available_tools(self, context: object) -> tuple[object, ...]:
         """Return all tools from the inner registry, each wrapped with budget enforcement."""
         rendered = self._inner.list_available_tools(context)  # type: ignore[attr-defined]
-        return tuple(self._wrap(tool) for tool in rendered)
+        return guard_model_tools(rendered)
 
     @staticmethod
     def _wrap(tool: object) -> object:
@@ -400,6 +547,18 @@ class ToolBudgetGuardedRegistry:
         )
 
 
+def guard_model_tools(tools: tuple[object, ...] | list[object]) -> tuple[object, ...]:
+    """Wrap a complete model-visible tool surface exactly once.
+
+    Registries are only one source of tools. The factory appends MCP, skills,
+    prior-result, question, and desktop capability tools afterwards; calling
+    this function after final assembly is therefore the only topology that can
+    truthfully guarantee one hard budget gate per model-visible tool.
+    """
+
+    return tuple(ToolBudgetGuardedRegistry._wrap(tool) for tool in tools)
+
+
 # Optional callable signature for callers that want to build a guard
 # from a budget-loading function (e.g. the run handler).
 ToolBudgetSnapshotLoader = Callable[[str], Awaitable[list[object]]]
@@ -409,4 +568,5 @@ __all__ = (
     "ToolBudgetGuard",
     "ToolBudgetGuardedRegistry",
     "ToolBudgetGuardedTool",
+    "guard_model_tools",
 )
