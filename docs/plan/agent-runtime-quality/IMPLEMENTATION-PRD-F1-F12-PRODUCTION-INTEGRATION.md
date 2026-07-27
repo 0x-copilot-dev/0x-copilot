@@ -57,7 +57,9 @@ create a second planning queue.
   - [x] F12 protected answer material, provenance/trust/confidence/validity,
         and unique-claim accounting (`695c1de6`).
   - [x] Golden baseline traces (`c2ea9f9c`).
-  - [ ] Machine-readable cross-authority contract map.
+  - [x] Machine-readable cross-authority contract map with 64 records, 49
+        events, source anchors, tamper detection, and CI validation
+        (`464098f8`; 9 focused validator tests).
   - [x] Pinned Deep Agents/LangChain/LangGraph middleware signatures, harness
         profile surface, and isolated private Atlas seam (`070d75f3`; 28
         focused graph/middleware tests).
