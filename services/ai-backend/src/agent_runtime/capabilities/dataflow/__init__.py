@@ -2,8 +2,10 @@
 
 from agent_runtime.capabilities.dataflow.contracts import (
     DataflowErrorPolicy,
+    DataflowEvaluatorSemantics,
     DataflowExpression,
     DataflowExpressionKind,
+    DataflowFieldDescriptor,
     DataflowInputBinding,
     DataflowLimits,
     DataflowNode,
@@ -12,6 +14,7 @@ from agent_runtime.capabilities.dataflow.contracts import (
     DataflowValidationPolicy,
     DataflowValueType,
     ResolvedDataflowCapability,
+    ResolvedDataflowInput,
     ValidatedDataflowPlan,
 )
 from agent_runtime.capabilities.dataflow.validator import (
@@ -22,8 +25,10 @@ from agent_runtime.capabilities.dataflow.validator import (
 
 __all__ = (
     "DataflowErrorPolicy",
+    "DataflowEvaluatorSemantics",
     "DataflowExpression",
     "DataflowExpressionKind",
+    "DataflowFieldDescriptor",
     "DataflowInputBinding",
     "DataflowLimits",
     "DataflowNode",
@@ -35,5 +40,6 @@ __all__ = (
     "DataflowValidationPolicy",
     "DataflowValueType",
     "ResolvedDataflowCapability",
+    "ResolvedDataflowInput",
     "ValidatedDataflowPlan",
 )
