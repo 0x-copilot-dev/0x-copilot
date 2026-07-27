@@ -38,6 +38,31 @@ create a second planning queue.
 
 - [ ] **Step 0:** Correct foundation contracts and pin baseline/framework
       conformance.
+  - [x] F1 promotion gates and event sequence-gap detection
+        (`08c36358`).
+  - [x] F2 single prompt-cache ownership and model-qualified provider support
+        (`b15da8c7`).
+  - [ ] F4/F5 graph-wide admission and result control for Deep Agents-injected
+        tools.
+  - [ ] F6 live multi-tool serial-default enforcement.
+  - [x] F7 trusted input/schema/evaluator bindings (`e3fc7c2c`).
+  - [x] F8 generation-fenced invalidation and paginated discovery
+        (`434496f7`).
+  - [x] F9 parent-authority composition and non-model concurrency ordering
+        (`6e6b5d34`).
+  - [x] F10 complete credential/deployment/region/price/limit route bindings
+        (`b475905d`).
+  - [x] F11 bounded, edit-plan/target/result/digest-bound patch contracts
+        (`905d1252`).
+  - [x] F12 protected answer material, provenance/trust/confidence/validity,
+        and unique-claim accounting (`695c1de6`).
+  - [ ] Golden baseline traces.
+  - [ ] Machine-readable cross-authority contract map.
+  - [ ] Pinned Deep Agents/LangChain middleware signature tests.
+  - [ ] Model-construction and final model-visible-tool topology enforcement.
+  - [ ] `off`/`shadow`/`enforce` modes, kill switches, and conservative
+        unknown-mode defaults.
+  - [ ] Full Step 0 regression suite and exit-criteria check.
 - [ ] **Step 1:** Persist and rehydrate the immutable run control snapshot.
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
