@@ -320,7 +320,7 @@ export class ConnectorOAuthCoordinator {
         throw new ConnectorOAuthError("redirect", "oauth state mismatch");
       }
 
-      await this.completeMcpAuth(delivered.state, delivered.code);
+      await this.completeMcpAuth(delivered.state, delivered.code, bearer);
     } finally {
       if (registeredState !== null) this.pending.delete(registeredState);
       handle.close();
@@ -358,15 +358,29 @@ export class ConnectorOAuthCoordinator {
     return { auth_url: start.auth_url };
   }
 
-  /** Hand the provider's code back. The callback route is public — `state` is
-   *  its trust anchor — so this deliberately sends no bearer. */
-  private async completeMcpAuth(state: string, code: string): Promise<void> {
+  /** Hand the provider's code back.
+   *
+   *  The BACKEND's callback is a public route — `state` is its trust anchor,
+   *  because a provider can redirect a browser straight to it with no session.
+   *  The FACADE's is not: it runs `FacadeAuthenticator.authenticate_request`
+   *  and answers 401 "Missing bearer token" without one. Desktop always reaches
+   *  the facade, and the redirect lands on our own loopback rather than in a
+   *  browser tab, so this call is ours to make and is authenticated as the user
+   *  — strictly better than relying on `state` alone. */
+  private async completeMcpAuth(
+    state: string,
+    code: string,
+    bearer: string,
+  ): Promise<void> {
     const url = new URL(`${this.facadeBaseUrl}/v1/mcp/oauth/callback`);
     url.searchParams.set("state", state);
     url.searchParams.set("code", code);
     const response = await this.doFetch(url.toString(), {
       method: "GET",
-      headers: { accept: "application/json" },
+      headers: {
+        accept: "application/json",
+        authorization: `Bearer ${bearer}`,
+      },
     });
     if (!response.ok) {
       throw new ConnectorOAuthError(
