@@ -109,12 +109,25 @@ export class ConnectorService {
         auth_state: result.auth_state,
       };
     }
-    if (serverId !== undefined) {
-      await this.coordinator.connectMcpServer(serverId);
+    // A catalog seed must EXIST before it can be authorized. `seed:<slug>` is
+    // the catalog identity, not proof of a row: the backend mints the row on
+    // install and only then does `/v1/mcp/servers/{id}/auth/start` resolve —
+    // otherwise it answers "MCP server was not found for this scope", which is
+    // what a run's discovery suggestion hits every time, since suggesting a
+    // connector never installed it.
+    //
+    // Install is idempotent on slug (it returns the existing row unchanged), so
+    // this is safe to run on every authorize rather than gated behind a
+    // lookup, and it finally makes true the thing the desktop port has claimed
+    // all along: install and authenticate are ONE brokered flow.
+    const resolvedId =
+      slug !== undefined ? await this.ensureCatalogServer(slug) : serverId;
+    if (resolvedId !== undefined) {
+      await this.coordinator.connectMcpServer(resolvedId);
       // No `auth_state` to report: the MCP route resolves once the round-trip
       // completes and the server's OWN row is the record of what it granted.
       return {
-        server_id: serverId,
+        server_id: resolvedId,
         connector_slug: slug ?? null,
         auth_state: null,
       };
@@ -123,6 +136,43 @@ export class ConnectorService {
       "start",
       `no desktop profile for "${slug ?? ""}" and no MCP server to authorize`,
     );
+  }
+
+  /**
+   * Ensure the catalog seed for `slug` has a server row, and return its id.
+   *
+   * Idempotent server-side, so this is an "ensure" rather than an "install".
+   * Falls back to the conventional `seed:<slug>` id if the response omits one —
+   * that is the id the backend mints for a catalog entry, so a malformed
+   * response degrades to the previous behaviour instead of throwing.
+   */
+  private async ensureCatalogServer(slug: string): Promise<string> {
+    const bearer = await this.getBearer();
+    if (bearer === null) {
+      throw new ConnectorOAuthError("start", "not signed in");
+    }
+    const response = await this.doFetch(
+      `${this.facadeBaseUrl}/v1/mcp/servers/install`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json",
+          authorization: `Bearer ${bearer}`,
+        },
+        body: JSON.stringify({ slug }),
+      },
+    );
+    if (!response.ok) {
+      // 422 here is the honest "this entry needs a pre-registered OAuth client"
+      // case; surfacing the status beats a browser that cannot complete.
+      throw new ConnectorOAuthError(
+        "start",
+        `install failed for "${slug}": ${response.status}`,
+      );
+    }
+    const installed = (await response.json()) as { server_id?: string };
+    return installed.server_id ?? `seed:${slug}`;
   }
 
   /**
