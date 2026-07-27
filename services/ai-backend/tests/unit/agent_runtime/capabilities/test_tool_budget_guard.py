@@ -27,6 +27,13 @@ from agent_runtime.capabilities.tool_budget_guard import (
     _Limits,
 )
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
+from agent_runtime.capabilities.task_policy import (
+    RequestFingerprint,
+    TaskFamily,
+    TaskPolicyProfile,
+    ToolPolicyRejected,
+    ToolUseController,
+)
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.tool_errors import (
     BudgetExceeded,
@@ -154,6 +161,43 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         # The tool's own output leads; a low-headroom cap (3) also annotates it.
         assert result.startswith("echo-ok")
         # One admitted call landed on the ledger.
+        assert ledger.charged_calls("echo") == 1
+
+    async def test_task_policy_duplicate_refuses_before_inner_tool_dispatch(
+        self,
+    ) -> None:
+        inner = _RecordingTool()
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        ledger = ToolCallLedger(run_id="run-task-policy")
+        controller = ToolUseController(
+            profile=TaskPolicyProfile(
+                profile_id="research",
+                revision="v1",
+                task_family=TaskFamily.PUBLIC_RESEARCH,
+                enforce_exact_duplicates=True,
+            )
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=3)]
+            ),
+            ledger=ledger,
+            task_policy_controller=controller,
+            task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            assert (await wrapped._arun("same request")).startswith("echo-ok")
+            with pytest.raises(ToolPolicyRejected):
+                await wrapped._arun("same request")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert len(inner.calls) == 1
         assert ledger.charged_calls("echo") == 1
 
     @staticmethod

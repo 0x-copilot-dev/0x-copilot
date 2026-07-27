@@ -20,6 +20,14 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetReject,
     ToolBudgetWarn,
 )
+from agent_runtime.capabilities.task_policy import (
+    RequestFingerprint,
+    ToolOperationOutcome,
+    ToolPolicyRejected,
+    ToolUseController,
+    ToolUseDisposition,
+    ToolUseIntent,
+)
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
@@ -67,6 +75,8 @@ class ToolBudgetGuard:
         run: RunRecord | None = None,
         event_producer: object | None = None,
         max_surfaced_rejections: int | None = None,
+        task_policy_controller: ToolUseController | None = None,
+        task_request_fingerprint: RequestFingerprint | None = None,
     ) -> None:
         """Initialise the guard with a middleware, ledger, and optional event emitter."""
         self._middleware = middleware
@@ -82,6 +92,12 @@ class ToolBudgetGuard:
             else max_surfaced_rejections
         )
         self._surfaced_rejections = 0
+        if (task_policy_controller is None) != (task_request_fingerprint is None):
+            raise ValueError(
+                "task_policy_controller and task_request_fingerprint must be provided together"
+            )
+        self._task_policy_controller = task_policy_controller
+        self._task_request_fingerprint = task_request_fingerprint
 
     @classmethod
     def bind_for_run(cls, guard: "ToolBudgetGuard") -> object:
@@ -193,6 +209,80 @@ class ToolBudgetGuard:
             return None
         return usage.render_note()
 
+    def admit_task_policy(
+        self,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> ToolUseIntent | None:
+        """Admit an operation through the optional F4 duplicate controller.
+
+        The hard tool-budget check still runs independently after this method.
+        Any controller or canonicalization failure fails open to those existing
+        hard gates; an optional quality signal must never become a new runtime
+        availability dependency.
+        """
+
+        controller = self._task_policy_controller
+        fingerprinter = self._task_request_fingerprint
+        if controller is None or fingerprinter is None:
+            return None
+        try:
+            fingerprint = fingerprinter.for_request(
+                capability_id=tool_name,
+                arguments={"args": list(args), "kwargs": kwargs},
+            )
+            intent = ToolUseIntent(
+                operation_id=f"tool-policy-{uuid4().hex}",
+                capability_id=tool_name,
+                canonical_request_fingerprint=fingerprint,
+            )
+            feedback = controller.before_operation(intent)
+        except Exception:  # noqa: BLE001 - optional controller fails open.
+            _LOGGER.warning("task_policy_before_operation_failed", exc_info=True)
+            return None
+        if feedback.disposition is not ToolUseDisposition.CONTINUE:
+            raise ToolPolicyRejected(self._task_policy_message(feedback.disposition))
+        return intent
+
+    def record_task_policy_outcome(
+        self,
+        *,
+        intent: ToolUseIntent | None,
+        succeeded: bool,
+        error_class: str | None = None,
+    ) -> None:
+        """Best-effort fold of observable completion facts into F4 state."""
+
+        controller = self._task_policy_controller
+        if controller is None or intent is None:
+            return
+        try:
+            controller.after_operation(
+                ToolOperationOutcome(
+                    operation_id=intent.operation_id,
+                    capability_id=intent.capability_id,
+                    succeeded=succeeded,
+                    error_class=error_class,
+                )
+            )
+        except Exception:  # noqa: BLE001 - must not alter a tool outcome.
+            _LOGGER.warning("task_policy_after_operation_failed", exc_info=True)
+
+    @staticmethod
+    def _task_policy_message(disposition: ToolUseDisposition) -> str:
+        if disposition is ToolUseDisposition.STOP:
+            return (
+                "This tool call is blocked by the active task policy. Do not repeat "
+                "the same request; answer with the evidence already gathered and "
+                "state what remains uncertain."
+            )
+        return (
+            "This tool call duplicates prior work. Revise the plan or change the "
+            "request before calling a tool again."
+        )
+
     async def emit_warning(self, *, decision: ToolBudgetWarn) -> None:
         """Best-effort BUDGET_WARNING emission."""
 
@@ -286,6 +376,9 @@ class ToolBudgetGuardedTool(BaseTool):
         guard = ToolBudgetGuard.active()
         if guard is None:
             return self.inner._run(*args, **kwargs)
+        policy_intent = guard.admit_task_policy(
+            tool_name=self.name, args=args, kwargs=kwargs
+        )
         estimated = _Estimator.estimate(args, kwargs)
         decision = guard.check_admit(
             tool_name=self.name, estimated_input_tokens=estimated
@@ -303,6 +396,15 @@ class ToolBudgetGuardedTool(BaseTool):
         )
         try:
             result = self.inner._run(*args, **kwargs)
+        except BaseException as exc:
+            guard.record_task_policy_outcome(
+                intent=policy_intent,
+                succeeded=False,
+                error_class=type(exc).__name__,
+            )
+            raise
+        else:
+            guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         return self._with_usage_note(result, guard=guard)
@@ -312,6 +414,9 @@ class ToolBudgetGuardedTool(BaseTool):
         guard = ToolBudgetGuard.active()
         if guard is None:
             return await self.inner._arun(*args, **kwargs)
+        policy_intent = guard.admit_task_policy(
+            tool_name=self.name, args=args, kwargs=kwargs
+        )
         estimated = _Estimator.estimate(args, kwargs)
         decision = guard.check_admit(
             tool_name=self.name, estimated_input_tokens=estimated
@@ -329,6 +434,15 @@ class ToolBudgetGuardedTool(BaseTool):
         )
         try:
             result = await self.inner._arun(*args, **kwargs)
+        except BaseException as exc:
+            guard.record_task_policy_outcome(
+                intent=policy_intent,
+                succeeded=False,
+                error_class=type(exc).__name__,
+            )
+            raise
+        else:
+            guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         # Settled first, so the count the model reads includes this call.
