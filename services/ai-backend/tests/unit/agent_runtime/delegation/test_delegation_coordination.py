@@ -15,8 +15,83 @@ from agent_runtime.delegation.subagents.coordination import (
     DelegationParentState,
     DelegationRequest,
 )
+from agent_runtime.delegation.subagents.authority import (
+    SubagentCapabilityGrant,
+    SubagentPolicyGrant,
+)
+from agent_runtime.delegation.subagents.contracts import SubagentDefinition
+from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 
 NOW = datetime(2026, 7, 27, 12, tzinfo=timezone.utc)
+
+
+def _context(
+    *,
+    scopes: frozenset[str] = frozenset({"docs:read", "web:read"}),
+) -> AgentRuntimeContext:
+    return AgentRuntimeContext(
+        user_id="user-1",
+        org_id="org-1",
+        roles=frozenset({"user"}),
+        permission_scopes=scopes,
+        model_profile=ModelConfig(
+            provider="openai",
+            model_name="test-model",
+            max_input_tokens=128_000,
+            timeout_seconds=30,
+            temperature=0,
+        ),
+        trace_id="trace-1",
+    )
+
+
+def _definition(
+    *,
+    name: str = "researcher",
+    tools: frozenset[str] = frozenset({"web_search", "file_read"}),
+    skills: frozenset[str] = frozenset({"research"}),
+    required_scopes: frozenset[str] = frozenset({"docs:read"}),
+) -> SubagentDefinition:
+    return SubagentDefinition(
+        name=name,
+        description="Researches a bounded question using supplied evidence.",
+        graph_id=f"graph:{name}",
+        tools=tools,
+        skills=skills,
+        required_scopes=required_scopes,
+        allowed_scopes=frozenset({"docs:read"}),
+        policy=SubagentPolicyGrant(),
+    )
+
+
+def _parent_grant(
+    *,
+    capabilities: frozenset[str] = frozenset({"subagent"}),
+    tools: frozenset[str] = frozenset({"web_search"}),
+    skills: frozenset[str] = frozenset({"research"}),
+    scopes: frozenset[str] = frozenset({"docs:read", "web:read"}),
+) -> SubagentCapabilityGrant:
+    return SubagentCapabilityGrant(
+        capabilities=capabilities,
+        tools=tools,
+        skills=skills,
+        permission_scopes=scopes,
+    )
+
+
+def _coordinator(
+    policy: DelegationAdmissionPolicy | None = None,
+    *,
+    context: AgentRuntimeContext | None = None,
+    definitions: tuple[SubagentDefinition, ...] | None = None,
+    parent_grant: SubagentCapabilityGrant | None = None,
+) -> DelegationCoordinator:
+    return DelegationCoordinator(
+        policy,
+        context=_context() if context is None else context,
+        definitions=(_definition(),) if definitions is None else definitions,
+        parent_grant=_parent_grant() if parent_grant is None else parent_grant,
+    )
 
 
 def _budget(
@@ -68,14 +143,19 @@ def _request(
     constraints: tuple[str, ...] = (),
     budget: DelegationBudget | None = None,
     deadline_at: datetime | None = None,
+    requested_tools: tuple[str, ...] = (),
+    requested_skills: tuple[str, ...] = (),
 ) -> DelegationRequest:
     return DelegationRequest(
         delegation_id=delegation_id,
         subagent_name="researcher",
         objective=f"Produce the bounded output for {delegation_id}.",
+        relevant_summary="Use only the supplied evidence references.",
         evidence_refs=evidence_refs,
         constraints=constraints,
         dependency_refs=dependencies,
+        requested_tools=requested_tools,
+        requested_skills=requested_skills,
         budget=budget or _budget(),
         deadline_at=deadline_at or NOW + timedelta(minutes=1),
     )
@@ -90,8 +170,8 @@ def _assert_admission_code(
     assert error.value.code is expected
 
 
-def test_build_plan_has_stable_topological_order_and_parallel_waves() -> None:
-    coordinator = DelegationCoordinator()
+def test_build_plan_has_stable_topological_order_and_serial_dispatch() -> None:
+    coordinator = _coordinator()
     requests = (
         _request("collect-z"),
         _request("synthesize", dependencies=("collect-z", "collect-a")),
@@ -104,10 +184,12 @@ def test_build_plan_has_stable_topological_order_and_parallel_waves() -> None:
         now=NOW,
     )
 
-    assert plan.execution_waves == (
+    assert plan.dependency_stages == (
         ("collect-a", "collect-z"),
         ("synthesize",),
     )
+    assert plan.dispatch_order == ("collect-a", "collect-z", "synthesize")
+    assert plan.dispatch_mode.value == "serial_default"
     assert tuple(entry.request.delegation_id for entry in plan.entries) == (
         "collect-a",
         "collect-z",
@@ -115,10 +197,16 @@ def test_build_plan_has_stable_topological_order_and_parallel_waves() -> None:
     )
     assert tuple(entry.order for entry in plan.entries) == (0, 1, 2)
     assert all(entry.child_depth == 1 for entry in plan.entries)
+    assert plan.reserved_budget.max_wall_ms == 60_000
+    assert all(entry.handoff.allowed_tools == {"web_search"} for entry in plan.entries)
+    assert all(
+        entry.handoff.runtime_context_ref.permission_scopes == {"docs:read"}
+        for entry in plan.entries
+    )
 
 
 def test_packet_is_compact_deterministic_and_contains_references_not_history() -> None:
-    coordinator = DelegationCoordinator()
+    coordinator = _coordinator()
     first = _request(
         "research",
         evidence_refs=("artifact:z", "citation:a"),
@@ -164,7 +252,7 @@ def test_packet_is_compact_deterministic_and_contains_references_not_history() -
 
 
 def test_depth_limit_is_admitted_from_server_derived_parent_depth() -> None:
-    coordinator = DelegationCoordinator(DelegationAdmissionPolicy(max_depth=1))
+    coordinator = _coordinator(DelegationAdmissionPolicy(max_depth=1))
 
     _assert_admission_code(
         DelegationAdmissionCode.DEPTH_LIMIT_EXCEEDED,
@@ -177,7 +265,7 @@ def test_depth_limit_is_admitted_from_server_derived_parent_depth() -> None:
 
 
 def test_active_and_new_children_share_the_same_parent_limit() -> None:
-    coordinator = DelegationCoordinator(DelegationAdmissionPolicy(max_children=3))
+    coordinator = _coordinator(DelegationAdmissionPolicy(max_children=3))
 
     _assert_admission_code(
         DelegationAdmissionCode.CHILD_LIMIT_EXCEEDED,
@@ -190,7 +278,7 @@ def test_active_and_new_children_share_the_same_parent_limit() -> None:
 
 
 def test_aggregate_budget_prevents_batch_oversubscription() -> None:
-    coordinator = DelegationCoordinator()
+    coordinator = _coordinator()
     remaining = _budget(
         turns=3,
         tools=10,
@@ -222,7 +310,7 @@ def test_deadline_admission_rejects_expired_parent_escape_and_short_window(
     deadline: datetime,
     wall_ms: int,
 ) -> None:
-    coordinator = DelegationCoordinator()
+    coordinator = _coordinator()
 
     _assert_admission_code(
         DelegationAdmissionCode.DEADLINE_EXCEEDED,
@@ -232,6 +320,28 @@ def test_deadline_admission_rejects_expired_parent_escape_and_short_window(
                     "child",
                     deadline_at=deadline,
                     budget=_budget(wall_ms=wall_ms),
+                ),
+            ),
+            parent_state=_parent(),
+            now=NOW,
+        ),
+    )
+
+
+def test_serial_schedule_reserves_prior_children_against_later_deadlines() -> None:
+    coordinator = _coordinator()
+
+    _assert_admission_code(
+        DelegationAdmissionCode.DEADLINE_EXCEEDED,
+        lambda: coordinator.build_plan(
+            requests=(
+                _request(
+                    "child-a",
+                    budget=_budget(wall_ms=40_000),
+                ),
+                _request(
+                    "child-b",
+                    budget=_budget(wall_ms=40_000),
                 ),
             ),
             parent_state=_parent(),
@@ -264,7 +374,7 @@ def test_invalid_dependency_graphs_fail_before_dispatch(
     requests: tuple[DelegationRequest, ...],
     expected: DelegationAdmissionCode,
 ) -> None:
-    coordinator = DelegationCoordinator()
+    coordinator = _coordinator()
 
     _assert_admission_code(
         expected,
@@ -277,7 +387,7 @@ def test_invalid_dependency_graphs_fail_before_dispatch(
 
 
 def test_duplicate_delegation_ids_are_rejected() -> None:
-    coordinator = DelegationCoordinator()
+    coordinator = _coordinator()
 
     _assert_admission_code(
         DelegationAdmissionCode.DUPLICATE_DELEGATION_ID,
@@ -290,9 +400,7 @@ def test_duplicate_delegation_ids_are_rejected() -> None:
 
 
 def test_packet_byte_limit_is_enforced_after_canonical_serialization() -> None:
-    coordinator = DelegationCoordinator(
-        DelegationAdmissionPolicy(max_packet_bytes=1_024)
-    )
+    coordinator = _coordinator(DelegationAdmissionPolicy(max_packet_bytes=1_024))
     request = DelegationRequest(
         **{
             **_request("child").model_dump(),
@@ -308,3 +416,89 @@ def test_packet_byte_limit_is_enforced_after_canonical_serialization() -> None:
             now=NOW,
         ),
     )
+
+
+def test_handoff_composes_parent_definition_request_and_context_authority() -> None:
+    coordinator = _coordinator(
+        context=_context(scopes=frozenset({"docs:read"})),
+        definitions=(
+            _definition(
+                tools=frozenset({"web_search", "file_read"}),
+                skills=frozenset({"research", "summarize"}),
+            ),
+        ),
+        parent_grant=_parent_grant(
+            tools=frozenset({"web_search", "shell"}),
+            skills=frozenset({"research", "admin"}),
+            scopes=frozenset({"docs:read", "admin:write"}),
+        ),
+    )
+
+    plan = coordinator.build_plan(
+        requests=(
+            _request(
+                "child",
+                requested_tools=("web_search", "file_read"),
+                requested_skills=("research", "summarize"),
+            ),
+        ),
+        parent_state=_parent(),
+        now=NOW,
+    )
+
+    handoff = plan.entries[0].handoff
+    assert handoff.allowed_tools == {"web_search"}
+    assert handoff.allowed_skills == {"research"}
+    assert handoff.authority.permission_scopes == {"docs:read"}
+    assert handoff.runtime_context_ref.permission_scopes == {"docs:read"}
+
+
+def test_parent_without_dispatch_authority_is_rejected() -> None:
+    coordinator = _coordinator(parent_grant=_parent_grant(capabilities=frozenset()))
+
+    _assert_admission_code(
+        DelegationAdmissionCode.AUTHORITY_DENIED,
+        lambda: coordinator.build_plan(
+            requests=(_request("child"),),
+            parent_state=_parent(),
+            now=NOW,
+        ),
+    )
+
+
+def test_unknown_or_context_invisible_subagent_is_rejected() -> None:
+    unknown = _coordinator(definitions=())
+    invisible = _coordinator(
+        context=_context(scopes=frozenset({"docs:read"})),
+        definitions=(_definition(required_scopes=frozenset({"admin:write"})),),
+    )
+
+    for coordinator in (unknown, invisible):
+        _assert_admission_code(
+            DelegationAdmissionCode.SUBAGENT_UNAVAILABLE,
+            lambda coordinator=coordinator: coordinator.build_plan(
+                requests=(_request("child"),),
+                parent_state=_parent(),
+                now=NOW,
+            ),
+        )
+
+
+def test_duplicate_trusted_subagent_definitions_fail_before_planning() -> None:
+    _assert_admission_code(
+        DelegationAdmissionCode.DUPLICATE_SUBAGENT_DEFINITION,
+        lambda: _coordinator(definitions=(_definition(), _definition())),
+    )
+
+
+def test_legacy_parallel_wave_field_is_not_part_of_the_plan_contract() -> None:
+    plan = _coordinator().build_plan(
+        requests=(_request("child"),),
+        parent_state=_parent(),
+        now=NOW,
+    )
+    payload = plan.model_dump(mode="json")
+    payload["execution_waves"] = [["child"]]
+
+    with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+        type(plan).model_validate(payload)
