@@ -97,7 +97,7 @@ def canonical_model_funnel_present(source_root: Path) -> bool:
 
 
 def canonical_agent_topology_present(source_root: Path) -> bool:
-    """Return whether the graph funnel installs one reviewed universal seam."""
+    """Return whether the graph funnel installs the reviewed root/child seam."""
 
     builder_path = source_root / CANONICAL_MODEL_FUNNEL
     factory_path = source_root / CANONICAL_RUNTIME_FACTORY
@@ -149,7 +149,15 @@ def canonical_agent_topology_present(source_root: Path) -> bool:
     ]
     if len(reviewed_requests) != 1:
         return False
-    middleware_keyword = next(
+    root_middleware_keyword = next(
+        (
+            keyword.value
+            for keyword in reviewed_requests[0].keywords
+            if keyword.arg == "middleware"
+        ),
+        None,
+    )
+    child_middleware_keyword = next(
         (
             keyword.value
             for keyword in reviewed_requests[0].keywords
@@ -157,10 +165,23 @@ def canonical_agent_topology_present(source_root: Path) -> bool:
         ),
         None,
     )
-    if not isinstance(middleware_keyword, (ast.Tuple, ast.List)):
+    if not isinstance(root_middleware_keyword, (ast.Tuple, ast.List)):
         return False
-    factories = tuple(_callable_name(item) for item in middleware_keyword.elts)
-    return factories == ("RuntimeToolControlMiddleware",)
+    if not isinstance(child_middleware_keyword, (ast.Tuple, ast.List)):
+        return False
+    root_middleware = tuple(
+        _callable_name(item.func)
+        for item in root_middleware_keyword.elts
+        if isinstance(item, ast.Call)
+    )
+    child_factories = tuple(
+        _callable_name(item) for item in child_middleware_keyword.elts
+    )
+    return (
+        len(root_middleware) == len(root_middleware_keyword.elts)
+        and root_middleware == ("RuntimeControlMiddleware",)
+        and child_factories == ("RuntimeControlMiddleware",)
+    )
 
 
 def _init_reference_violations(tree: ast.AST, rel_path: str) -> list[str]:
