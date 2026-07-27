@@ -60,8 +60,9 @@ create a second planning queue.
   - [ ] Machine-readable cross-authority contract map.
   - [ ] Pinned Deep Agents/LangChain middleware signature tests.
   - [ ] Model-construction and final model-visible-tool topology enforcement.
-  - [ ] `off`/`shadow`/`enforce` modes, kill switches, and conservative
-        unknown-mode defaults.
+  - [x] `off`/`shadow`/`enforce` modes, authority-narrowing kill switches, and
+        conservative unknown-mode defaults (`d93ac11a`; 30 focused and E2
+        compatibility tests).
   - [ ] Full Step 0 regression suite and exit-criteria check.
 - [ ] **Step 1:** Persist and rehydrate the immutable run control snapshot.
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
