@@ -119,6 +119,97 @@ class _OperationFields:
     RETRYABLE = "retryable"
 
 
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_QUALITY_REF_MAX = 512
+_QualityFeature = Literal[
+    "f1",
+    "f2",
+    "f3",
+    "f4",
+    "f5",
+    "f6",
+    "f7",
+    "f8",
+    "f9",
+    "f10",
+    "f11",
+    "f12",
+]
+_QualityMode = Literal["off", "shadow", "enforce"]
+
+
+class QualityControlBoundPayload(RuntimeContract):
+    """Closed, content-free canonical snapshot row carried by one run event."""
+
+    schema_version: Literal[1] = 1
+    snapshot_id: str = Field(min_length=1, max_length=160)
+    snapshot_digest: str = Field(pattern=_SHA256_PATTERN)
+    subject_fingerprint: str = Field(pattern=_SHA256_PATTERN)
+    deployment_profile: str = Field(min_length=1, max_length=80)
+    harness_variant_ref: str = Field(min_length=1, max_length=256)
+    task_policy_selection_ref: str = Field(min_length=1, max_length=256)
+    prompt_policy_revision: str = Field(min_length=1, max_length=256)
+    capability_policy_revision: str = Field(min_length=1, max_length=256)
+    context_policy_revision: str = Field(min_length=1, max_length=256)
+    tool_controller_policy_revision: str = Field(min_length=1, max_length=256)
+    concurrency_policy_revision: str = Field(min_length=1, max_length=256)
+    dataflow_policy_revision: str = Field(min_length=1, max_length=256)
+    mcp_freshness_policy_revision: str = Field(min_length=1, max_length=256)
+    delegation_policy_revision: str = Field(min_length=1, max_length=256)
+    model_route_policy_revision: str = Field(min_length=1, max_length=256)
+    workspace_edit_policy_revision: str = Field(min_length=1, max_length=256)
+    answer_verification_policy_revision: str = Field(
+        min_length=1,
+        max_length=256,
+    )
+    feature_mode_f1: _QualityMode
+    feature_mode_f2: _QualityMode
+    feature_mode_f3: _QualityMode
+    feature_mode_f4: _QualityMode
+    feature_mode_f5: _QualityMode
+    feature_mode_f6: _QualityMode
+    feature_mode_f7: _QualityMode
+    feature_mode_f8: _QualityMode
+    feature_mode_f9: _QualityMode
+    feature_mode_f10: _QualityMode
+    feature_mode_f11: _QualityMode
+    feature_mode_f12: _QualityMode
+    budget_envelope_ref: str = Field(min_length=1, max_length=_QUALITY_REF_MAX)
+    assignment_revision: str = Field(min_length=1, max_length=256)
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def _aware_created_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value
+
+
+class QualityDecisionPayload(RuntimeContract):
+    """Closed, content-free canonical decision row carried by one run event."""
+
+    schema_version: Literal[1] = 1
+    decision_id: str = Field(min_length=1, max_length=160)
+    decision_digest: str = Field(pattern=_SHA256_PATTERN)
+    snapshot_id: str = Field(min_length=1, max_length=160)
+    phase: str = Field(min_length=1, max_length=80)
+    feature: _QualityFeature
+    policy_revision: str = Field(min_length=1, max_length=256)
+    input_digest: str = Field(pattern=_SHA256_PATTERN)
+    outcome_code: str = Field(min_length=1, max_length=120)
+    record_ref: str | None = Field(default=None, max_length=_QUALITY_REF_MAX)
+    parent_decision_refs: tuple[str, ...] = Field(default=(), max_length=64)
+    created_at: datetime
+
+    @field_validator("created_at")
+    @classmethod
+    def _aware_created_at(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("created_at must be timezone-aware")
+        return value
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -252,6 +343,10 @@ class RuntimeEventPresentationProjector:
                 event_type=event_type,
                 payload=payload,
             )
+        if event_type is RuntimeApiEventType.QUALITY_CONTROL_BOUND:
+            return cls._quality_control_payload(payload)
+        if event_type is RuntimeApiEventType.QUALITY_DECISION:
+            return cls._quality_decision_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -1631,6 +1726,32 @@ class RuntimeEventPresentationProjector:
             )
             return {}
         return validated.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+    @classmethod
+    def _quality_control_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate the complete, flat, reference-only snapshot journal row."""
+
+        try:
+            validated = QualityControlBoundPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed quality.control_bound.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _quality_decision_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate the complete, flat, reference-only decision journal row."""
+
+        try:
+            validated = QualityDecisionPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed quality.decision.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
 
     @classmethod
     def _copy_payload_version(

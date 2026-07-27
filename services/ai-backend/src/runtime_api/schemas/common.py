@@ -311,6 +311,11 @@ class RuntimeApiEventType(StrEnum):
     EFFECT_INDETERMINATE = LedgerEventType.EFFECT_INDETERMINATE.value
     EFFECT_RECONCILED = LedgerEventType.EFFECT_RECONCILED.value
     EFFECT_ROW_DECISIONS_RECORDED = LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED.value
+    # Agent-runtime quality control plane. These are content-free INTERNAL
+    # journal rows: the immutable snapshot and append-only decision lineage
+    # contain only refs, revisions, modes, digests, limits, and timestamps.
+    QUALITY_CONTROL_BOUND = "quality.control_bound.v1"
+    QUALITY_DECISION = "quality.decision.v1"
 
     @classmethod
     def from_stream_event_type(

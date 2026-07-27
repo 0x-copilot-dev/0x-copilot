@@ -15,6 +15,7 @@ from agent_runtime.api.artifact_repository import (
     ArtifactSourceLookupPort,
     RuntimeArtifactSourceLookup,
 )
+from agent_runtime.api.run_control_store import EventJournalRunControlStore
 from agent_runtime.api.ports import (
     EventStorePort,
     PersistencePort,
@@ -28,6 +29,10 @@ from agent_runtime.artifacts.ports import (
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.control_plane.ports import (
+    RunControlDecisionStorePort,
+    RunControlSnapshotStorePort,
+)
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -142,6 +147,7 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         compaction_enabled=compaction_enabled,
     )
     layout = file_store.layout
+    run_control_store = EventJournalRunControlStore(file_store)
     citation_store = FileCitationStore(layout)
     bundle = None
     queue: RuntimeQueuePort = file_store
@@ -185,6 +191,8 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         draft_store=FileDraftStore(layout),
         share_store=FileShareStore(layout),
         conversation_tool_ordinal_store=FileConversationToolOrdinalStore(layout),
+        run_control_snapshot_store=run_control_store,
+        run_control_decision_store=run_control_store,
         # Pure projectors over the file store's file-backed materialized view.
         subagent_store=InMemorySubagentStore(file_store),
         source_store=InMemorySourceStore(citation_store),
@@ -234,6 +242,8 @@ class RuntimePorts:
     draft_store: DraftStorePort
     share_store: ShareStorePort
     conversation_tool_ordinal_store: ConversationToolOrdinalStorePort
+    run_control_snapshot_store: RunControlSnapshotStorePort
+    run_control_decision_store: RunControlDecisionStorePort
     subagent_store: SubagentStorePort
     source_store: SourceStorePort
     # Postgres-only escape hatch. Populated only when ``backend == "postgres"``
@@ -358,6 +368,7 @@ class RuntimeAdapterFactory:
         constructed so they share no state with other test instances.
         """
         in_memory_citation = InMemoryCitationStore()
+        run_control_store = EventJournalRunControlStore(store)
         bundle = cls._in_memory_artifact_bundle() if artifact_effects_v2 else None
         queue: RuntimeQueuePort = store
         if bundle is not None:
@@ -372,6 +383,8 @@ class RuntimeAdapterFactory:
             draft_store=InMemoryDraftStore(),
             share_store=InMemoryShareStore(),
             conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
+            run_control_snapshot_store=run_control_store,
+            run_control_decision_store=run_control_store,
             subagent_store=InMemorySubagentStore(store),
             # One citation store shared by the read-side projector and the
             # write-side port, so a run's citations are visible to Sources.
@@ -411,6 +424,7 @@ class RuntimeAdapterFactory:
         # route to the async-native InMemoryRuntimeApiStore.
         if backend in {"in_memory_async", "in_memory"}:
             in_memory_store = InMemoryRuntimeApiStore()
+            run_control_store = EventJournalRunControlStore(in_memory_store)
             in_memory_citation = InMemoryCitationStore()
             bundle = (
                 cls._in_memory_artifact_bundle()
@@ -432,6 +446,8 @@ class RuntimeAdapterFactory:
                 draft_store=InMemoryDraftStore(),
                 share_store=InMemoryShareStore(),
                 conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
+                run_control_snapshot_store=run_control_store,
+                run_control_decision_store=run_control_store,
                 subagent_store=InMemorySubagentStore(in_memory_store),
                 # Shared instance: read-side projector and write-side port agree.
                 source_store=InMemorySourceStore(in_memory_citation),
@@ -480,6 +496,7 @@ class RuntimeAdapterFactory:
                 role=role,
                 notify_after_append=notify_after_append,
             )
+            run_control_store = EventJournalRunControlStore(postgres_store)
             bundle = (
                 cls._postgres_artifact_bundle(postgres_store, artifact_blob_root or "")
                 if settings.execution.artifact_effects_v2
@@ -498,6 +515,8 @@ class RuntimeAdapterFactory:
                 conversation_tool_ordinal_store=PostgresConversationToolOrdinalStore(
                     postgres_store
                 ),
+                run_control_snapshot_store=run_control_store,
+                run_control_decision_store=run_control_store,
                 subagent_store=PostgresSubagentStore(postgres_store),
                 source_store=PostgresSourceStore(postgres_store),
                 postgres_store=postgres_store,

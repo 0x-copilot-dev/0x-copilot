@@ -5,6 +5,7 @@ import re
 
 from copilot_service_contracts.work_ledger import LEDGER_EVENT_TYPES
 
+from agent_runtime.control_plane import AgentQualityFeature, FeatureMode
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.pending_work_v2_service import (
     PendingWorkV2Response,
@@ -13,6 +14,8 @@ from agent_runtime.api.pending_work_v2_service import (
 from agent_runtime.surfaces_v2.pending_work_v2 import PendingWorkItemV2
 from runtime_api.schemas import (
     AgentRunStatus,
+    QualityControlBoundPayload,
+    QualityDecisionPayload,
     RunHistoryEntry,
     RuntimeActivityKind,
     RuntimeApiEventType,
@@ -84,14 +87,45 @@ def _typescript_interface_fields(source: str, name: str) -> set[str]:
     assert match is not None, f"missing TypeScript interface {name}"
     return set(
         re.findall(
-            r"^\s*(?:readonly\s+)?([a-z_]+)\??\s*:",
+            r"^\s*(?:readonly\s+)?([a-z_][a-z0-9_]*)\??\s*:",
             match.group("body"),
             re.MULTILINE,
         )
     )
 
 
+def _typescript_string_union(source: str, name: str) -> set[str]:
+    match = re.search(
+        rf"export type {name}\s*=\s*(?P<body>.*?);",
+        source,
+        re.DOTALL,
+    )
+    assert match is not None, f"missing TypeScript union {name}"
+    return set(re.findall(r'"([^"]+)"', match.group("body")))
+
+
 class TestApiTypeContracts:
+    def test_quality_event_payload_fields_match_closed_typescript_contracts(
+        self,
+    ) -> None:
+        repo_root = Path(__file__).resolve().parents[5]
+        api_types = (repo_root / "packages/api-types/src/index.ts").read_text()
+
+        assert _typescript_interface_fields(
+            api_types,
+            "QualityControlBoundPayload",
+        ) == set(QualityControlBoundPayload.model_fields)
+        assert _typescript_interface_fields(
+            api_types,
+            "QualityDecisionPayload",
+        ) == set(QualityDecisionPayload.model_fields)
+        assert _typescript_string_union(api_types, "AgentQualityFeature") == {
+            feature.value for feature in AgentQualityFeature
+        }
+        assert _typescript_string_union(api_types, "QualityFeatureMode") == {
+            mode.value for mode in FeatureMode
+        }
+
     def test_typescript_runtime_event_constants_match_backend_enums(self) -> None:
         repo_root = Path(__file__).resolve().parents[5]
         api_types = (repo_root / "packages/api-types/src/index.ts").read_text()
