@@ -14,7 +14,6 @@ from agent_runtime.harness_quality import (
     FixtureResponse,
     FixtureToolExecutor,
     HarnessVariant,
-    InMemoryEvaluationRepository,
     PromotionAssessment,
     PromotionGate,
     PromotionStatus,
@@ -23,6 +22,13 @@ from agent_runtime.harness_quality import (
     RuntimeTrajectoryProjector,
     ScorerResult,
     TrajectoryProjector,
+)
+from agent_runtime.harness_quality.evaluation_contracts import (
+    EvaluationRevisionSet,
+    EvaluationScope,
+)
+from runtime_adapters.in_memory.evaluation_repository import (
+    InMemoryEvaluationRepository,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from runtime_api.schemas import (
@@ -41,6 +47,18 @@ def _case() -> EvaluationCase:
         input_ref="artifact_input_1",
         fixture_catalog_ref="fixture_catalog_r1",
         scorer_set_id="scorers_r1",
+    )
+
+
+def _revisions() -> EvaluationRevisionSet:
+    return EvaluationRevisionSet(
+        code_revision="code-r1",
+        model_revision="model-r1",
+        prompt_revision="prompt-r1",
+        tool_revision="tool-r1",
+        policy_revision="policy-r1",
+        fixture_revision="fixture-r1",
+        scorer_revision="scorer-r1",
     )
 
 
@@ -166,8 +184,10 @@ async def test_hard_gate_failure_blocks_promotion() -> None:
     repository = InMemoryEvaluationRepository()
     result = await DeterministicEvaluationRunner(
         repository=repository,
+        scope=EvaluationScope(profile_id="hermetic-test"),
         executor=executor,
         scorers=(_PassingScorer(), _FailingScorer()),
+        revisions=_revisions(),
         clock=lambda: datetime(2026, 1, 1, tzinfo=timezone.utc),
     ).run(
         case=_case(),
@@ -222,8 +242,10 @@ async def test_fixture_miss_is_inconclusive_not_a_candidate_pass() -> None:
 
     result = await DeterministicEvaluationRunner(
         repository=InMemoryEvaluationRepository(),
+        scope=EvaluationScope(profile_id="hermetic-test"),
         executor=executor,
         scorers=(),
+        revisions=_revisions(),
     ).run(case=_case(), variant=_variant(), fixtures=FixtureToolExecutor(()))
 
     assert result.status is EvaluationStatus.INCONCLUSIVE
@@ -282,8 +304,13 @@ def _result(
 ) -> EvaluationResult:
     values: dict[str, object] = {
         "evaluation_run_id": f"eval_{variant_id}_{case_id}",
+        "suite_run_id": "suite-run-r1",
         "case_id": case_id,
+        "case_revision": "case-r1",
         "variant_id": variant_id,
+        "variant_revision": "variant-r1",
+        "scorer_set_id": "scorer-set-r1",
+        "revisions": _revisions(),
         "status": status,
         "scorer_results": (),
         "hard_gate_failures": hard_gate_failures,
@@ -319,6 +346,28 @@ def test_promotion_assessment_requires_exact_paired_cases() -> None:
     assert assessment.paired_case_count == 0
     assert "unpaired_case_set" in assessment.reason_codes
     assert "minimum_paired_cases_not_met" in assessment.reason_codes
+
+
+def test_promotion_assessment_rejects_mismatched_case_revisions() -> None:
+    candidate = _result(case_id="case_1", variant_id="candidate").model_copy(
+        update={"case_revision": "case-r2"}
+    )
+    control = _result(case_id="case_1", variant_id="control")
+
+    assessment = PromotionGate().evaluate(
+        candidate_variant_id="candidate",
+        control_variant_id="control",
+        candidate_results=(candidate,),
+        control_results=(control,),
+        case_task_families={"case_1": "connector_selection"},
+        thresholds=PromotionThresholds(
+            revision="thresholds_r1",
+            minimum_paired_cases=1,
+        ),
+    )
+
+    assert not assessment.passed
+    assert "case_revision_mismatch" in assessment.reason_codes
 
 
 def test_promotion_assessment_passes_non_regressing_candidate() -> None:

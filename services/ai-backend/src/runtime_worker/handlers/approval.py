@@ -12,6 +12,7 @@ from agent_runtime.api.constants import Values as ApiValues
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_termination import (
     RunTerminationCoordinator,
+    TerminalRunObserverPort,
     TerminationReason,
 )
 from agent_runtime.api.presentation import ToolDisplayLookupContext
@@ -168,6 +169,7 @@ class RuntimeApprovalHandler:
         user_policies_resolver: UserPoliciesResolver | None = None,
         artifact_service: object | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
+        terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -205,6 +207,7 @@ class RuntimeApprovalHandler:
         )
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
+            terminal_observer=terminal_run_observer,
         )
         # Single source of truth for the desktop file-store gate shared with the
         # run handler. On non-file backends every method returns ``None`` so the

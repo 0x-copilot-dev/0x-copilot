@@ -6,6 +6,7 @@ from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_termination import (
     RunTerminationCoordinator,
+    TerminalRunObserverPort,
     TerminationReason,
 )
 from agent_runtime.persistence import with_optimistic_retry
@@ -25,6 +26,7 @@ class RuntimeCancelHandler:
         *,
         persistence: PersistencePort,
         event_store: EventStorePort,
+        terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -34,6 +36,7 @@ class RuntimeCancelHandler:
         )
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
+            terminal_observer=terminal_run_observer,
         )
 
     async def handle(self, command: RuntimeCancelCommand) -> None:

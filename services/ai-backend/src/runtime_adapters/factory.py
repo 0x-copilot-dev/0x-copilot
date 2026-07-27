@@ -29,6 +29,10 @@ from agent_runtime.artifacts.ports import (
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.harness_quality.ports import (
+    EvaluationObjectDeletionPolicy,
+    EvaluationRepositoryPort,
+)
 from agent_runtime.control_plane.ports import (
     RunControlDecisionStorePort,
     RunControlSnapshotStorePort,
@@ -67,6 +71,9 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
+from runtime_adapters.in_memory.evaluation_repository import (
+    InMemoryEvaluationRepository,
+)
 from runtime_adapters.in_memory.share_store import InMemoryShareStore
 from runtime_adapters.in_memory.source_store import InMemorySourceStore
 from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
@@ -147,6 +154,15 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         compaction_enabled=compaction_enabled,
     )
     layout = file_store.layout
+    from runtime_adapters.file.evaluation_repository import FileEvaluationRepository
+
+    evaluation_repository = FileEvaluationRepository(
+        layout,
+        object_store=file_store.object_store,
+        object_deletion_policy=EvaluationObjectDeletionPolicy.SHARED_STORE_METADATA_ONLY,
+    )
+    file_store.configure_external_object_references(evaluation_repository)
+    file_store.configure_source_run_deletion_observer(evaluation_repository)
     run_control_store = EventJournalRunControlStore(file_store)
     citation_store = FileCitationStore(layout)
     bundle = None
@@ -196,6 +212,7 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         # Pure projectors over the file store's file-backed materialized view.
         subagent_store=InMemorySubagentStore(file_store),
         source_store=InMemorySourceStore(citation_store),
+        evaluation_repository=evaluation_repository,
         # The DURABLE FileCitationStore — the SAME instance source_store reads —
         # is now the write-side port too, so run citations persist to disk
         # instead of an ephemeral in-memory sibling.
@@ -246,6 +263,10 @@ class RuntimePorts:
     run_control_decision_store: RunControlDecisionStorePort
     subagent_store: SubagentStorePort
     source_store: SourceStorePort
+    # F1 local evaluation/release spine. In-memory is test/dev only; desktop
+    # and explicitly configured shared deployments use the bounded file/CAS
+    # adapter.
+    evaluation_repository: EvaluationRepositoryPort | None = None
     # Postgres-only escape hatch. Populated only when ``backend == "postgres"``
     # so the opt-in ``DbStatementMetricsCollector`` can reach the pool via
     # ``_role_connection``. Every other consumer should use the typed ports
@@ -389,6 +410,7 @@ class RuntimeAdapterFactory:
             # One citation store shared by the read-side projector and the
             # write-side port, so a run's citations are visible to Sources.
             source_store=InMemorySourceStore(in_memory_citation),
+            evaluation_repository=InMemoryEvaluationRepository(),
             citation_store=in_memory_citation,
             artifact_source_lookup=RuntimeArtifactSourceLookup(store),
             artifact_effects_v2=artifact_effects_v2,
@@ -451,6 +473,7 @@ class RuntimeAdapterFactory:
                 subagent_store=InMemorySubagentStore(in_memory_store),
                 # Shared instance: read-side projector and write-side port agree.
                 source_store=InMemorySourceStore(in_memory_citation),
+                evaluation_repository=InMemoryEvaluationRepository(),
                 citation_store=in_memory_citation,
                 artifact_source_lookup=RuntimeArtifactSourceLookup(in_memory_store),
                 artifact_effects_v2=settings.execution.artifact_effects_v2,
@@ -519,6 +542,7 @@ class RuntimeAdapterFactory:
                 run_control_decision_store=run_control_store,
                 subagent_store=PostgresSubagentStore(postgres_store),
                 source_store=PostgresSourceStore(postgres_store),
+                evaluation_repository=cls._shared_evaluation_repository(settings),
                 postgres_store=postgres_store,
                 # The Postgres store IS a CitationStorePort — same instance the
                 # worker resolved historically, so write behavior is unchanged.
@@ -549,6 +573,46 @@ class RuntimeAdapterFactory:
             "Use 'in_memory_async', 'postgres', or 'file'.",
             retryable=False,
         )
+
+    @staticmethod
+    def _shared_evaluation_repository(
+        settings: RuntimeSettings,
+    ) -> EvaluationRepositoryPort | None:
+        """Compose a multi-process-safe file/CAS repository only on an explicit root."""
+
+        root = settings.store.evaluation_store_root
+        if root is None:
+            if settings.evaluation.projection_enabled:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "RUNTIME_EVALUATION_STORE_ROOT is required when evaluation "
+                    "projection is enabled with the Postgres runtime store.",
+                    retryable=False,
+                )
+            return None
+        path = Path(root)
+        if not path.is_absolute() or path == Path("/"):
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "RUNTIME_EVALUATION_STORE_ROOT must be an explicit absolute root.",
+                retryable=False,
+            )
+        from runtime_adapters.file._paths import FileStoreLayout
+        from runtime_adapters.file._capacity import QuotaGuard
+        from runtime_adapters.file.evaluation_repository import (
+            FileEvaluationRepository,
+        )
+        from runtime_adapters.file.object_store import FileObjectStore
+
+        layout = FileStoreLayout(path)
+        object_store = FileObjectStore(
+            layout,
+            quota=QuotaGuard(
+                layout,
+                max_bytes=settings.store.evaluation_store_max_bytes,
+            ),
+        )
+        return FileEvaluationRepository(layout, object_store=object_store)
 
     @staticmethod
     def _postgres_artifact_bundle(parent, root: str) -> ArtifactRepositoryBundle:

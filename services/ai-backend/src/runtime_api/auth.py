@@ -113,6 +113,23 @@ class RuntimeServiceAuthenticator:
             )
 
     @classmethod
+    def require_configured_service_token(cls, request: Request) -> None:
+        """Require an explicitly configured token in every environment."""
+
+        expected = cls._service_token()
+        if not expected:
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ENTERPRISE_SERVICE_TOKEN is not configured",
+            )
+        supplied = request.headers.get(SERVICE_TOKEN_HEADER, "")
+        if not hmac.compare_digest(supplied, expected):
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                "Invalid service token",
+            )
+
+    @classmethod
     def require_identity(cls, request: Request) -> TrustedRequestIdentity:
         """Strict identity resolver — never returns ``None``.
 
