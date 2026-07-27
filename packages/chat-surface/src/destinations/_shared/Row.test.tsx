@@ -223,6 +223,14 @@ describe("<Row>", () => {
     expect(getComputedStyle(slot).width).toBe("28px");
   });
 
+  it("compact density uses the v3 right-rail source-row padding", () => {
+    render(<Row title="Source" density="compact" />);
+
+    expect(screen.getByTestId("row")).toHaveStyle({
+      padding: "9px 11px",
+    });
+  });
+
   // ── PRD-08 D9 — title weight + row padding ───────────────────────────────
   it("uses the medium (500) title weight and 11px/14px row padding (DoD 23)", () => {
     render(<Row title="T" />);

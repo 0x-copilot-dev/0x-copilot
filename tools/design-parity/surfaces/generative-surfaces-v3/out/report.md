@@ -1,8 +1,8 @@
 # Design-parity — Generative Surfaces v3 review states
 
-Strict Playwright `getComputedStyle` comparison of the user-supplied v3 Design Compiler source against the real `TcStagedDraftSurface` and `TcStagedTableSurface`. No screenshot acceptance and no expected-divergence waivers.
+Strict Playwright `getComputedStyle` comparison of the user-supplied v3 Design Compiler source against the real `TcStagedDraftSurface`, `TcStagedTableSurface`, and canonical `SourcesV2Tab`. No screenshot acceptance and no expected-divergence waivers.
 
-**Aggregate findings:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 11 · ⚪ INFO 19.
+**Aggregate findings:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 14 · ⚪ INFO 27.
 
 | State | Design anchors | Live anchors | HIGH | MEDIUM | Report |
 |---|---:|---:|---:|---:|---|
@@ -10,6 +10,7 @@ Strict Playwright `getComputedStyle` comparison of the user-supplied v3 Design C
 | `draft-edit` | 9/9 | 9/9 | 0 | 0 | [report-draft-edit.md](./report-draft-edit.md) |
 | `bulk-review` | 9/9 | 9/9 | 0 | 0 | [report-bulk-review.md](./report-bulk-review.md) |
 | `bulk-partial` | 7/7 | 7/7 | 0 | 0 | [report-bulk-partial.md](./report-bulk-partial.md) |
+| `sources` | 9/9 | 9/9 | 0 | 0 | [report-sources.md](./report-sources.md) |
 
 ## Provenance
 

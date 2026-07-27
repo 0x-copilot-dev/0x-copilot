@@ -26,6 +26,8 @@ export interface RowListProps<T> {
 }
 
 const cardStyle: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
   margin: 0,
   padding: 0,
   listStyle: "none",
