@@ -65,7 +65,7 @@ class _FakeHarness:
     pass
 
 
-async def _empty_resumer(_: object, __: object):
+async def _empty_resumer(_: object, __: object, *, interrupt_id: str | None = None):
     if False:
         yield {}
 

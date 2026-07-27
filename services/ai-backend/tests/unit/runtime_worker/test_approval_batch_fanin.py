@@ -134,7 +134,9 @@ async def _seed_batch_and_items(store: InMemoryRuntimeApiStore, *, size: int) ->
 
 
 def _resume_capturing_resumer(captured: list[object]):
-    async def _resumer(_harness: object, resume: object):
+    async def _resumer(
+        _harness: object, resume: object, *, interrupt_id: str | None = None
+    ):
         captured.append(resume)
         if False:
             yield {}

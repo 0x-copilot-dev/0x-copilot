@@ -5,7 +5,10 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool, InjectedToolCallId
+
+from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from pydantic import BaseModel, ConfigDict, create_model
 
 from agent_runtime.capabilities.citation_projection import CitationProjector
@@ -55,7 +58,7 @@ class _CitationHint:
         )
 
 
-class CitationCapturingTool(BaseTool):
+class CitationCapturingTool(DelegatingTool):
     """BaseTool wrapper that projects results to the citation ledger and appends ordinal hints.
 
     Propagates the inner tool's name, description, and args_schema unchanged.
@@ -68,11 +71,15 @@ class CitationCapturingTool(BaseTool):
 
     inner: BaseTool
 
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
+    def _run(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Sync path: delegate unchanged — citation projection requires the async path."""
-        return self.inner._run(*args, **kwargs)
+        return self.delegate(*args, config=config, **kwargs)
 
-    async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+    async def _arun(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Async path: project result to the citation ledger and append an ordinal hint."""
         # LangGraph injects tool_call_id via InjectedToolCallId on schemas that
         # declare it; the inner tool typically does not accept it, so strip
@@ -80,7 +87,7 @@ class CitationCapturingTool(BaseTool):
         # wrapper's schema declares the annotation for inner schemas that don't.
         tool_call_id = self._extract_tool_call_id(kwargs)
         kwargs.pop("tool_call_id", None)
-        result = await self.inner._arun(*args, **kwargs)
+        result = await self.adelegate(*args, config=config, **kwargs)
         # Source-registration path: pattern-match the result and register any
         # detected sources with the active CitationLedger. Best-effort.
         await CitationProjector.project(

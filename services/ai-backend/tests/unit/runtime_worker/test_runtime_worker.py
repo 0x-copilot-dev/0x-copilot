@@ -1830,7 +1830,9 @@ async def test_runtime_worker_resolves_mcp_auth_action_and_completes_run() -> No
             skill_directories=(),
         )
 
-    async def fake_resumer(_harness: RuntimeHarness, resume: object):
+    async def fake_resumer(
+        _harness: RuntimeHarness, resume: object, *, interrupt_id: str | None = None
+    ):
         assert resume == {"approval_id": approval_id, "decision": "approved"}
         yield {
             "type": "values",

@@ -22,7 +22,10 @@ import random
 import time
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
+
+from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from pydantic import ConfigDict
 
 
@@ -40,7 +43,7 @@ _NEVER_RETRY: tuple[type[BaseException], ...] = (
 )
 
 
-class RetryingTool(BaseTool):
+class RetryingTool(DelegatingTool):
     """LangChain ``BaseTool`` wrapper that retries transient inner failures.
 
     The inner tool's ``name`` / ``description`` / ``args_schema`` are
@@ -60,12 +63,14 @@ class RetryingTool(BaseTool):
     # to avoid masking permanent failures. ``_NEVER_RETRY`` always wins.
     retry_exceptions: tuple[type[BaseException], ...] = (Exception,)
 
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
+    def _run(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Sync retry loop; re-raises the last exception after ``max_attempts``."""
         last_exc: BaseException | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return self.inner._run(*args, **kwargs)
+                return self.delegate(*args, config=config, **kwargs)
             except _NEVER_RETRY:
                 raise
             except BaseException as exc:  # noqa: BLE001 — width is intentional
@@ -79,12 +84,14 @@ class RetryingTool(BaseTool):
         assert last_exc is not None  # narrow for type checker
         raise last_exc
 
-    async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+    async def _arun(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Async retry loop; re-raises the last exception after ``max_attempts``."""
         last_exc: BaseException | None = None
         for attempt in range(1, self.max_attempts + 1):
             try:
-                return await self.inner._arun(*args, **kwargs)
+                return await self.adelegate(*args, config=config, **kwargs)
             except _NEVER_RETRY:
                 raise
             except BaseException as exc:  # noqa: BLE001 — width is intentional
