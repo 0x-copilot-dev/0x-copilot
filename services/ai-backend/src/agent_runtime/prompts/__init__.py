@@ -9,6 +9,10 @@ from agent_runtime.prompts.assembly import (
     PromptFragmentScope,
     PromptFragmentTier,
 )
+from agent_runtime.prompts.provider_cache import (
+    ProviderPromptDecoration,
+    ProviderPromptDecorator,
+)
 
 __all__ = [
     "PromptAssembler",
@@ -18,4 +22,6 @@ __all__ = [
     "PromptFragmentDiagnostic",
     "PromptFragmentScope",
     "PromptFragmentTier",
+    "ProviderPromptDecoration",
+    "ProviderPromptDecorator",
 ]

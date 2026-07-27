@@ -11,6 +11,7 @@ from langchain.chat_models import init_chat_model
 from langchain.embeddings import init_embeddings
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models import BaseChatModel
+from langchain_core.messages import SystemMessage
 
 from agent_runtime.execution.contracts import (
     ModelConfig,
@@ -226,7 +227,7 @@ class DeepAgentBuildRequest:
 
     tools: tuple[object, ...]
     model_config: ModelConfig
-    system_prompt: str
+    system_prompt: str | SystemMessage
     subagents: tuple[object, ...] = ()
     memory_backend: DeepAgentsBackend | None = None
     memory_paths: tuple[str, ...] = ()

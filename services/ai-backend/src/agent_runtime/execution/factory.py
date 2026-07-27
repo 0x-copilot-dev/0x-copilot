@@ -82,6 +82,7 @@ from agent_runtime.prompts import (
     PromptFragment,
     PromptFragmentScope,
     PromptFragmentTier,
+    ProviderPromptDecorator,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
@@ -295,7 +296,11 @@ async def _assemble_harness(
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
             is not None,
         )
-        model_instructions = prompt_assembly_plan.rendered_prompt
+        prompt_decoration = ProviderPromptDecorator().decorate(
+            provider=runtime_context.model_profile.provider,
+            plan=prompt_assembly_plan,
+        )
+        model_instructions = prompt_decoration.system_prompt
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
         # chat-model construction in the graph. Subagents inherit the
