@@ -19,18 +19,33 @@ import { ConnectorService } from "./connector-service";
  * flows are stubbed — the routes themselves are covered by
  * `oauth-coordinator.test.ts`; what matters here is WHICH one runs.
  */
-function makeService(profileSlugs: string[]): {
+function makeService(
+  profileSlugs: string[],
+  options: { readonly installStatus?: number } = {},
+): {
   service: ConnectorService;
   connect: ReturnType<typeof vi.fn>;
   connectMcpServer: ReturnType<typeof vi.fn>;
   catalogFetches: () => number;
+  installed: () => string[];
 } {
   let catalogFetches = 0;
+  const installed: string[] = [];
   const service = new ConnectorService({
     facadeBaseUrl: "http://127.0.0.1:8200",
     openExternal: vi.fn(async () => undefined),
     getBearer: vi.fn(async () => "bearer-token"),
-    fetch: (async () => {
+    fetch: (async (url: string, init?: { body?: string }) => {
+      if (url.includes("/v1/mcp/servers/install")) {
+        const slug = JSON.parse(init?.body ?? "{}").slug as string;
+        installed.push(slug);
+        if (options.installStatus !== undefined) {
+          return { ok: false, status: options.installStatus };
+        }
+        // Mirrors the backend: a catalog install mints `seed:<slug>` and is
+        // idempotent, returning the existing row on repeat.
+        return { ok: true, json: async () => ({ server_id: `seed:${slug}` }) };
+      }
       catalogFetches += 1;
       return {
         ok: true,
@@ -57,6 +72,7 @@ function makeService(profileSlugs: string[]): {
     connect,
     connectMcpServer,
     catalogFetches: () => catalogFetches,
+    installed: () => installed,
   };
 }
 
@@ -91,6 +107,50 @@ describe("ConnectorService.authorize", () => {
     });
   });
 
+  it("installs the catalog seed before authorizing it", async () => {
+    // The row does not exist until install mints it. Authorizing `seed:linear`
+    // straight off a discovery suggestion answers "MCP server was not found for
+    // this scope" — suggesting a connector never installed it. Install is
+    // idempotent on slug, so this runs unconditionally rather than behind a
+    // lookup.
+    const { service, connectMcpServer, installed } = makeService(["gmail"]);
+
+    await service.authorize({ slug: "linear", serverId: "seed:linear" });
+
+    expect(installed()).toEqual(["linear"]);
+    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+  });
+
+  it("authorizes the id the INSTALL returned, not the one passed in", async () => {
+    // The caller's id can be stale for an uninstalled suggestion; the backend
+    // is the authority on what row now exists.
+    const { service, connectMcpServer } = makeService(["gmail"]);
+
+    await service.authorize({ slug: "notion", serverId: "stale:notion" });
+
+    expect(connectMcpServer).toHaveBeenCalledWith("seed:notion");
+  });
+
+  it("does NOT install for a custom server that has no slug", async () => {
+    // A custom server added by URL already has its row and no catalog entry to
+    // install; trying would 404 on an unknown slug.
+    const { service, connectMcpServer, installed } = makeService(["gmail"]);
+
+    await service.authorize({ serverId: "custom:abc123" });
+
+    expect(installed()).toEqual([]);
+    expect(connectMcpServer).toHaveBeenCalledWith("custom:abc123");
+  });
+
+  it("never installs on the profile route", async () => {
+    // Profile connectors are provisioned by the overlay, not the MCP catalog.
+    const { service, installed } = makeService(["gmail"]);
+
+    await service.authorize({ slug: "gmail" });
+
+    expect(installed()).toEqual([]);
+  });
+
   it("prefers the profile route when BOTH identities are known", async () => {
     // A profile connector needs its pre-registered client; the MCP route cannot
     // complete it. So a known profile slug wins over a server id rather than
@@ -112,14 +172,37 @@ describe("ConnectorService.authorize", () => {
     expect(result.connector_slug).toBeNull();
   });
 
-  it("refuses an unresolvable slug instead of opening a doomed browser", async () => {
-    // No profile and no server row: nothing to authorize. Saying so beats
-    // handing the user a vendor page that cannot complete.
-    const { service } = makeService(["gmail"]);
+  it("resolves a slug with no server id at all, by installing it", async () => {
+    // This used to throw, because a seed had to arrive with an id already
+    // attached. Install mints the row, so the slug alone is now enough — which
+    // is what makes the composer's install-then-connect path one call.
+    const { service, connectMcpServer, installed } = makeService(["gmail"]);
+
+    const result = await service.authorize({ slug: "linear" });
+
+    expect(installed()).toEqual(["linear"]);
+    expect(connectMcpServer).toHaveBeenCalledWith("seed:linear");
+    expect(result.server_id).toBe("seed:linear");
+  });
+
+  it("refuses when the install itself fails, instead of opening a doomed browser", async () => {
+    // An unknown slug, or an entry needing a pre-registered client (422). No
+    // row can exist, so there is nothing to authorize — saying so beats handing
+    // the user a vendor page that cannot complete.
+    const { service, connectMcpServer } = makeService(["gmail"], {
+      installStatus: 422,
+    });
 
     await expect(service.authorize({ slug: "linear" })).rejects.toThrow(
-      /no desktop profile/,
+      /install failed/,
     );
+    expect(connectMcpServer).not.toHaveBeenCalled();
+  });
+
+  it("refuses when there is neither a slug nor a server id", async () => {
+    const { service } = makeService(["gmail"]);
+
+    await expect(service.authorize({})).rejects.toThrow(/no desktop profile/);
   });
 
   it("resolves the profile set once, not per authorization", async () => {

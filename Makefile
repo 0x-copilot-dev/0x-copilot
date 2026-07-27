@@ -154,12 +154,25 @@ desktop-supervised:
 # builds @0x-copilot/desktop + @0x-copilot/frontend and assembles the payload,
 # so root node_modules must exist. First launch downloads pinned CPython and
 # PostgreSQL builds (~a few hundred MB).
+# PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: the CLI depends on `playwright` because the
+# desktop app's browser runtime resolves it at runtime (esbuild marks it
+# external). It does NOT need the browsers npm fetches here — browser-runtime.mjs
+# points PLAYWRIGHT_BROWSERS_PATH at its own cache under the desktop-runtime dir
+# and runs `playwright install chromium` on demand. So the ~1 GB npm downloads
+# into ~/Library/Caches/ms-playwright is never read by anything.
+#
+# `copilot install`, not `copilot`: staging is gated on the CLI VERSION string,
+# which never changes when installing from a checkout, so a plain start reports
+# "runtime already staged" and launches the PREVIOUS build. That fails silently
+# in the most expensive way — you test code you did not just build. `install`
+# is the entry point that always re-stages.
 desktop-install:
 	@test -d node_modules || (echo "Missing node_modules. Run: make setup" && exit 1)
 	cd tools/cli && \
 		rm -f 0x-copilot-cli-*.tgz && \
 		npm pack && \
-		npm install -g ./0x-copilot-cli-*.tgz
+		PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm install -g ./0x-copilot-cli-*.tgz
+	copilot install
 	copilot
 
 # Removes all three layers: staged runtime + app data (copilot uninstall,
