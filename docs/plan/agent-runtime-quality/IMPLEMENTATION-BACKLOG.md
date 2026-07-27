@@ -72,36 +72,34 @@ lands so the design history remains auditable.
   the model sees bounded content, the event gets the same reference, and the
   original content is stored once in the content-addressed object store.
 
-## Open
-
-### ARQ-005 — Generic worker retry can replay a completed portion of a run
+### ARQ-005 — Generic worker retry could replay a completed portion of a run
 
 - **Found in:** F7–F12 implementation audit; verified in
   `runtime_worker/loop.py` and `execution/runtime.py`.
-- **Impact:** a generic retryable runtime exception can requeue the complete
-  run command after model/tool work has begun. That is not a model-attempt
-  retry and risks replaying graph work across already-observed operations.
-- **Required architectural fix:** F10 must introduce attempt-scoped model
-  retries and a durable effect-observed barrier. The worker may retry only
-  pre-dispatch infrastructure failures; any post-dispatch uncertainty must be
-  reconciled, never replayed blindly.
-- **Status:** resolved for generic queue replay. The worker now has an explicit
-  prepare/handler-entry boundary: retryable failures before a run handler
-  begins may retry, while retryable `RUN_REQUESTED` failures after entry are
-  dead-lettered with `retryable=false`. Attempt-scoped provider retries,
-  durable ambiguous-state reconciliation, and routing remain F10 work below.
+- **Impact:** a generic retryable runtime exception could requeue the complete
+  run command after model/tool work had begun, risking replay across
+  already-observed operations.
+- **Architectural fix:** establish an explicit prepare/handler-entry boundary.
+  The worker may retry only pre-dispatch infrastructure failures; a retryable
+  failure after handler entry is dead-lettered and reconciled instead of
+  replaying the run. Attempt-scoped provider retries remain F10-owned.
+- **Status:** resolved for generic queue replay. The remaining F10 live
+  provider-attempt routing, persistence, and ambiguity work is tracked by
+  ARQ-009.
+
+## Open
 
 ### ARQ-006 — Production subagent dispatch bypasses the bounded handoff seam
 
-- **Found in:** F7–F12 implementation audit; verified in
-  `agent_runtime/delegation/subagents/atlas_task_tool.py` and the uncomposed
+- **Found in:** F7–F12 implementation audit; verified in the current
+  Deep Agents task-tool integration and the uncomposed
   `SubagentHandoffBuilder` / `AsyncSubagentLifecycle` abstractions.
 - **Impact:** the production Deep Agents task path does not consistently bind
   a compact packet, total budget, deadline, and durable lifecycle to every
   child. This prevents F9 from proving authority, context, and retry bounds.
 - **Required architectural fix:** add one F9 coordinator around the existing
-  Atlas task tool and route production dispatch through it. Do not introduce a
-  parallel delegation implementation.
+  0xCopilot task-tool integration and route production dispatch through it. Do
+  not introduce a parallel delegation implementation.
 - **Status:** open; blocking F9 parallel delegation enablement.
 
 ## Open implementation tasks
@@ -109,6 +107,40 @@ lands so the design history remains auditable.
 These are planned PRD slices, not independently confirmed production defects.
 They remain here to make the next integration work visible without treating an
 unshipped feature as a regression.
+
+### ARQ-018 — F1 evaluation and promotion contracts are not an operating control plane
+
+- **Current state:** F1 has deterministic, content-safe trajectory projection,
+  closed fixture execution, immutable in-memory evaluation records, scorers,
+  and promotion-decision contracts. The projector reads the established event
+  timeline rather than duplicating production events.
+- **Remaining work:** add RuntimePorts-backed desktop persistence and deletion
+  cascades for cases, fixtures, manifests, reports, and promotion decisions;
+  schedule consent/profile-gated low-priority projection after runs; implement
+  bounded offline evaluation execution and report export; bind a versioned
+  experiment assignment before the first model call; atomically update and
+  roll back promotion pointers; ship local diagnostics, cost caps, runbooks,
+  and the full synthetic evaluation corpus. This must remain local-first and
+  must not introduce telemetry upload or a hosted database by default.
+- **Status:** open; F1 provides testable foundations but no operating
+  evaluation/promotion workflow.
+
+### ARQ-019 — F2 lacks cache-outcome telemetry and full provider conformance
+
+- **Current state:** the runtime factory builds typed, deterministic prompt
+  fragments for the active harness and applies a scoped Anthropic stable-prefix
+  decorator. Unsupported providers retain the same rendered prompt without
+  cache metadata, and prompt bodies are excluded from diagnostics.
+- **Remaining work:** adapt every remaining system-prompt source into a
+  revisioned fragment provider; emit body-free `prompt.assembled` and actual
+  provider cache-outcome facts through the existing usage/event path; normalize
+  provider response metadata; add bounded pre-output cache-metadata fallback;
+  support only explicitly validated provider/model adapters; add feature flags,
+  local diagnostics, and F1 quality/cache-reuse gates; remove legacy prompt
+  construction only after conformance. No provider cache identifier or
+  user/profile-scoped prompt content may become durable shared state.
+- **Status:** open; typed assembly is active, but F2's observability,
+  rollout, and multi-provider Definition of Done are not met.
 
 ### ARQ-007 — F3 catalog is shadow-only and has no model bridge
 
@@ -186,13 +218,13 @@ unshipped feature as a regression.
 - **Status:** open; the wrapper is not yet wired into descriptor loading and
   provides no cross-process freshness convergence.
 
-### ARQ-012 — F9 coordinator is not on the production Atlas dispatch path
+### ARQ-012 — F9 coordinator is not on the production task dispatch path
 
 - **Current state:** `DelegationCoordinator` now creates compact,
   transcript-free packets, validates dependency DAGs, reserves aggregate
   budgets, enforces server-derived depth/child/deadline constraints, and emits
   deterministic topological waves without dispatching a child.
-- **Remaining work:** route the existing Atlas task tool through this one
+- **Remaining work:** route the existing 0xCopilot task tool through this one
   coordinator; derive remaining budget/deadline from server state and reserve
   them atomically with reconciliation; persist admission, packet, plan, and
   lifecycle facts; reauthorize evidence refs; verify typed child results and
