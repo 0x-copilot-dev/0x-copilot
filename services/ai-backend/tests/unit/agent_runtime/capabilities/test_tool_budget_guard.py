@@ -26,6 +26,7 @@ from agent_runtime.capabilities.tool_budget_guard import (
     guard_model_tools,
     _Limits,
 )
+from agent_runtime.capabilities.tool_error_policy_tool import ToolErrorPolicyTool
 from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
 from agent_runtime.capabilities.task_policy import (
     RequestFingerprint,
@@ -698,6 +699,27 @@ def test_full_model_surface_wrapper_is_idempotent_for_injected_tools() -> None:
 
     assert isinstance(once[0], ToolBudgetGuardedTool)
     assert twice == once
+
+
+def test_full_model_surface_preserves_error_policy_outside_nested_guard() -> None:
+    """Registry composition stays ErrorPolicy(Budget(tool)), without a second gate."""
+
+    original = _RecordingTool()
+    guarded = ToolBudgetGuardedTool(
+        name=original.name,
+        description=original.description,
+        inner=original,
+    )
+    policy_wrapped = ToolErrorPolicyTool(
+        name=original.name,
+        description=original.description,
+        inner=guarded,
+    )
+
+    rendered = guard_model_tools([policy_wrapped])
+
+    assert rendered == (policy_wrapped,)
+    assert rendered[0].inner is guarded
 
 
 # --- persistence port snapshot ---------------------------------------------
