@@ -73,6 +73,7 @@ function fakeConnectorsPort(
     installFromCatalog: vi.fn().mockResolvedValue(connectedServer()),
     addCustomServer: vi.fn().mockResolvedValue(connectedServer()),
     beginAuth: vi.fn().mockResolvedValue(undefined),
+    deleteServer: vi.fn().mockResolvedValue(undefined),
     ...over,
   };
 }

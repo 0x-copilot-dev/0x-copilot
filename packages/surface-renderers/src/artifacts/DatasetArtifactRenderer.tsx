@@ -761,7 +761,11 @@ function useDatasetView(
       }
     }
     if (sortColumn === null) return matching;
-    return matching.toSorted((left, right) => {
+    // Copy-then-sort rather than `toSorted`: the repo compiles at ES2022
+    // (tsconfig.base.json), where `Array.prototype.toSorted` is not in `lib`.
+    // `matching` is local to this memo, so the copy is only about keeping the
+    // non-mutating shape the sort already had.
+    return [...matching].sort((left, right) => {
       const comparison = valueAt(left, sortColumn).localeCompare(
         valueAt(right, sortColumn),
       );
