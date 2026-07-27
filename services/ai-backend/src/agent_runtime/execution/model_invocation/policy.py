@@ -23,6 +23,7 @@ from agent_runtime.execution.model_invocation.contracts import (
     ModelRecoveryScope,
     ModelRouteExclusion,
     ModelRouteExclusionReason,
+    ModelRouteEntry,
     ModelRoutePlan,
     ModelStreamState,
     ProviderFailureObservation,
@@ -45,7 +46,10 @@ class ModelRoutePolicy:
         availability = {
             item.provider: item.modes for item in requirements.credential_availability
         }
-        eligible: dict[tuple[int, int, int], list[ModelDeploymentDescriptor]] = {}
+        eligible: dict[
+            tuple[int, int, int],
+            list[tuple[ModelDeploymentDescriptor, ModelCredentialMode]],
+        ] = {}
         exclusions: list[ModelRouteExclusion] = []
         for descriptor in descriptor_list:
             available_modes = availability.get(descriptor.provider, frozenset())
@@ -62,22 +66,29 @@ class ModelRoutePolicy:
                     )
                 )
                 continue
+            selected_credential_mode = self._select_credential_mode(
+                requirements,
+                descriptor.credential_modes & available_modes,
+            )
             route_key = self._route_key(
                 requirements,
                 descriptor,
-                available_modes=available_modes,
+                selected_credential_mode=selected_credential_mode,
             )
-            eligible.setdefault(route_key, []).append(descriptor)
+            eligible.setdefault(route_key, []).append(
+                (descriptor, selected_credential_mode)
+            )
 
         # Deployment catalogs can be assembled from independent sources.  Never
         # let source enumeration order decide a fallback or alter the persisted
         # route plan: rank first, then use the opaque deployment ID only as a
         # stable tie-breaker.
         ordered_eligible = [
-            descriptor
+            candidate
             for route_key in sorted(eligible)
-            for descriptor in sorted(
-                eligible[route_key], key=lambda item: item.deployment_id
+            for candidate in sorted(
+                eligible[route_key],
+                key=lambda item: item[0].deployment_id,
             )
         ]
         if (
@@ -85,7 +96,7 @@ class ModelRoutePolicy:
             and ordered_eligible
         ):
             kept = ordered_eligible[:1]
-            for descriptor in ordered_eligible[1:]:
+            for descriptor, _credential_mode in ordered_eligible[1:]:
                 exclusions.append(
                     ModelRouteExclusion(
                         deployment_id=descriptor.deployment_id,
@@ -94,9 +105,13 @@ class ModelRoutePolicy:
                 )
             ordered_eligible = kept
 
-        return ModelRoutePlan(
-            deployment_ids=tuple(
-                descriptor.deployment_id for descriptor in ordered_eligible
+        return ModelRoutePlan.create(
+            routes=tuple(
+                ModelRouteEntry.from_descriptor(
+                    descriptor,
+                    credential_mode=credential_mode,
+                )
+                for descriptor, credential_mode in ordered_eligible
             ),
             exclusions=tuple(sorted(exclusions, key=lambda item: item.deployment_id)),
             fallback_policy=requirements.fallback_policy,
@@ -146,10 +161,7 @@ class ModelRoutePolicy:
             reasons.append(ModelRouteExclusionReason.CAPABILITY_MISMATCH)
         if descriptor.max_input_tokens < requirements.minimum_context_tokens:
             reasons.append(ModelRouteExclusionReason.CONTEXT_TOO_SMALL)
-        if (
-            requirements.region is not None
-            and requirements.region not in descriptor.regions
-        ):
+        if requirements.region is not None and requirements.region != descriptor.region:
             reasons.append(ModelRouteExclusionReason.REGION_MISMATCH)
 
         available_modes = descriptor.credential_modes & available_modes
@@ -176,7 +188,7 @@ class ModelRoutePolicy:
         requirements: ModelInvocationRequirements,
         descriptor: ModelDeploymentDescriptor,
         *,
-        available_modes: frozenset[ModelCredentialMode],
+        selected_credential_mode: ModelCredentialMode,
     ) -> tuple[int, int, int]:
         if descriptor.deployment_id == requirements.primary_deployment_id:
             tier = 0
@@ -190,11 +202,35 @@ class ModelRoutePolicy:
         credential_rank = (
             0
             if requirements.byok_policy is ByokPolicy.PREFERRED
-            and ModelCredentialMode.BYOK in available_modes
+            and selected_credential_mode is ModelCredentialMode.BYOK
             else 1
         )
         health_rank = 0 if descriptor.health is ModelDeploymentHealth.AVAILABLE else 1
         return (tier, credential_rank, health_rank)
+
+    @staticmethod
+    def _select_credential_mode(
+        requirements: ModelInvocationRequirements,
+        available_modes: frozenset[ModelCredentialMode],
+    ) -> ModelCredentialMode:
+        if (
+            requirements.byok_policy
+            in {
+                ByokPolicy.REQUIRED,
+                ByokPolicy.PREFERRED,
+                ByokPolicy.ALLOWED,
+            }
+            and ModelCredentialMode.BYOK in available_modes
+        ):
+            return ModelCredentialMode.BYOK
+        for mode in (
+            ModelCredentialMode.DEPLOYMENT,
+            ModelCredentialMode.KEYLESS,
+        ):
+            if mode in available_modes:
+                return mode
+        # Eligibility rejects an empty set and BYOK-only under DISALLOWED.
+        raise ValueError("no credential mode survived route eligibility")
 
 
 class ProviderFailureClassifier:
