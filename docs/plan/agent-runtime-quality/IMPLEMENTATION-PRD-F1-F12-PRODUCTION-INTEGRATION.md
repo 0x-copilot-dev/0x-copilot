@@ -112,6 +112,25 @@ create a second planning queue.
         deselected; 14 pre-existing deprecation warnings).
 - [ ] **Step 3:** Complete the local F1 evaluation, assignment, report, and
       signed-promotion spine.
+  - [ ] Domain-owned immutable case, fixture-catalog, suite-run, trajectory,
+        result, paired-report, decision, and signed `HarnessManifest`
+        contracts behind an `EvaluationRepositoryPort`.
+  - [ ] Desktop file/CAS and hermetic in-memory repository adapters with
+        idempotency conflicts, bounded quota, crash recovery, export, deletion,
+        and protected-reference ownership.
+  - [ ] Consent-gated, bounded, resumable terminal projection jobs that reuse
+        the canonical event journal, never delay run termination, and remain
+        disabled for ordinary production profiles.
+  - [ ] Fixture-only resumable suite execution with hard per-case and per-suite
+        cost, model-turn, tool-call, token, and wall-time ceilings plus the
+        operational corpus and deterministic hard-gate scorers.
+  - [ ] Paired candidate/control reports with explicit missing-data treatment,
+        sample/confidence/protected-family/quality/cost/latency gates, and
+        optional bounded model graders that cannot override hard gates.
+  - [ ] Signed release-manifest verification, immutable run assignment,
+        development/dogfood override, atomic rollback, local export, and
+        development-only loopback CLI/API without runtime self-promotion.
+  - [ ] Full Step 3 regression suite and exit-criteria check.
 - [ ] **Step 4:** Bind F4 task policy, tool plan, budgets, fingerprints, and
       restart-safe controller state.
 - [ ] **Step 5:** Complete F2 effective-prompt assembly, single cache ownership,
