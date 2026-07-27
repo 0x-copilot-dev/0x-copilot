@@ -107,13 +107,17 @@ class _FakeHarness:
     pass
 
 
-async def _empty_resumer(harness: object, resume: object):
+async def _empty_resumer(
+    harness: object, resume: object, *, interrupt_id: str | None = None
+):
     if False:
         yield {}
 
 
 def _resume_capturing_resumer(captured: list[object]):
-    async def _resumer(harness: object, resume: object):
+    async def _resumer(
+        harness: object, resume: object, *, interrupt_id: str | None = None
+    ):
         captured.append(resume)
         if False:
             yield {}

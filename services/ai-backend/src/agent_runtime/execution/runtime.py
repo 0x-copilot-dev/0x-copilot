@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import AsyncIterator, Generator, Sequence
 from contextlib import contextmanager
 from time import perf_counter
@@ -42,6 +43,52 @@ class RuntimeStreamOptions:
             "subgraphs": True,
             "version": "v2",
         }
+
+
+# A LangGraph interrupt id is ``xxh3_128_hexdigest("|".join(task_namespace))`` —
+# 32 lowercase hex chars. LangGraph only treats ``Command(resume=<dict>)`` as a
+# per-interrupt *resume map* when EVERY key matches this shape
+# (``langgraph.pregel._utils.is_xxh3_128_hexdigest``, asserted in
+# ``pregel/_loop.py``); otherwise the dict is passed through as the literal
+# resume value. Mirrored here rather than imported so a private-module move in
+# LangGraph cannot silently turn a targeted resume into a corrupted payload.
+# The regression test pins this against the real library.
+_INTERRUPT_ID_PATTERN = re.compile(r"[0-9a-f]{32}")
+
+
+def is_native_interrupt_id(interrupt_id: str | None) -> bool:
+    """Return ``True`` if *interrupt_id* is a real LangGraph interrupt id.
+
+    Synthetic ids (the ``interrupt:{run_id}:{index}`` fallback the stream mapper
+    assigns when an interrupt carries no id, and ids minted by non-LangGraph
+    approval kinds) are rejected: wrapping one into a resume map would make
+    LangGraph deliver ``{synthetic_id: value}`` to the graph as the resume value
+    instead of ``value``.
+    """
+    return interrupt_id is not None and bool(
+        _INTERRUPT_ID_PATTERN.fullmatch(interrupt_id)
+    )
+
+
+def resume_command(resume: object, interrupt_id: str | None = None) -> Command:
+    """Build the LangGraph resume ``Command``, targeting *interrupt_id* when known.
+
+    With a real interrupt id this returns ``Command(resume={interrupt_id: resume})``
+    — a resume *map*, which LangGraph routes to the single task whose namespace
+    hashes to that id. This is required whenever more than one interrupt is
+    pending: a bare ``Command(resume=value)`` is ambiguous and LangGraph raises
+    ``RuntimeError("When there are multiple pending interrupts, ...")``, killing
+    the run after the user already approved.
+
+    Interrupts left pending by this resume stay pending — the graph re-raises
+    them and the caller re-parks the run.
+
+    Without a usable id we fall back to the bare form, which is still correct for
+    the single-pending-interrupt case.
+    """
+    if is_native_interrupt_id(interrupt_id):
+        return Command(resume={interrupt_id: resume})
+    return Command(resume=resume)
 
 
 def runtime_config(harness: RuntimeHarness) -> dict[str, object]:
@@ -235,9 +282,15 @@ async def ainvoke_runtime_resume(
     harness: RuntimeHarness,
     resume: object,
     *,
+    interrupt_id: str | None = None,
     logger: RuntimeLogger | None = None,
 ) -> Any:
-    """Resume a checkpointed runtime graph with a LangGraph HITL decision."""
+    """Resume a checkpointed runtime graph with a LangGraph HITL decision.
+
+    ``interrupt_id`` is the native LangGraph interrupt this decision answers.
+    Pass it whenever it is known — without it a run holding several pending
+    interrupts cannot be resumed at all (see ``resume_command``).
+    """
 
     call = _TracedRuntimeCall(
         harness,
@@ -249,7 +302,7 @@ async def ainvoke_runtime_resume(
     call.require_method("ainvoke")
     with call.guard():
         return await harness.agent.ainvoke(
-            Command(resume=resume),
+            resume_command(resume, interrupt_id),
             config=runtime_config(harness),
         )
 
@@ -288,9 +341,15 @@ async def astream_runtime_resume(
     harness: RuntimeHarness,
     resume: object,
     *,
+    interrupt_id: str | None = None,
     logger: RuntimeLogger | None = None,
 ) -> AsyncIterator[object]:
-    """Stream a checkpointed runtime graph after a LangGraph HITL decision."""
+    """Stream a checkpointed runtime graph after a LangGraph HITL decision.
+
+    ``interrupt_id`` is the native LangGraph interrupt this decision answers.
+    Pass it whenever it is known — without it a run holding several pending
+    interrupts cannot be resumed at all (see ``resume_command``).
+    """
 
     call = _TracedRuntimeCall(
         harness,
@@ -300,12 +359,14 @@ async def astream_runtime_resume(
         log_runtime_errors=False,
     )
     if not call.has_method("astream"):
-        yield await ainvoke_runtime_resume(harness, resume, logger=call.logger)
+        yield await ainvoke_runtime_resume(
+            harness, resume, interrupt_id=interrupt_id, logger=call.logger
+        )
         return
 
     with call.guard():
         async for chunk in harness.agent.astream(
-            Command(resume=resume),
+            resume_command(resume, interrupt_id),
             config=runtime_config(harness),
             **RuntimeStreamOptions.rich(),
         ):

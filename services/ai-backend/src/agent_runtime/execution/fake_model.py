@@ -70,6 +70,21 @@ class DeterministicFakeChatModel(BaseChatModel):
     tool_call_name: str = "ls"
     tool_call_args: dict[str, Any] = Field(default_factory=lambda: {"path": "/"})
 
+    parallel_tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    """Tool calls to emit together in ONE turn, e.g. ``[{"name": ..., "args": {...}}]``.
+
+    Set this to drive genuinely parallel graph branches — the only way to
+    reproduce a run holding several *concurrent* LangGraph interrupts (each
+    branch parks in its own task namespace), which is a different shape from
+    one interrupt carrying several ``action_requests``.
+    """
+
+    parallel_trigger: str = ""
+    """Only fan out when the latest human message contains this substring.
+
+    Keeps the fan-out scoped to the turn that should branch; empty means always.
+    """
+
     @property
     def _llm_type(self) -> str:
         return "deterministic-fake"
@@ -96,18 +111,49 @@ class DeterministicFakeChatModel(BaseChatModel):
         words = self.reasoning_text.split(" ")
         return [w + (" " if i < len(words) - 1 else "") for i, w in enumerate(words)]
 
+    @staticmethod
+    def _latest_human_text(messages: Sequence[BaseMessage]) -> str:
+        """Return the text of the most recent human message, or ``""``."""
+        for message in reversed(messages):
+            if message.type == "human":
+                content = message.content
+                return content if isinstance(content, str) else str(content)
+        return ""
+
+    def _scripted_calls(self, messages: Sequence[BaseMessage]) -> list[dict[str, Any]]:
+        """Return this turn's tool calls — the fan-out script, else the single call.
+
+        ``parallel_trigger`` scopes the fan-out to the prompt that carries it, so
+        a run whose fan-out targets are subagents does not recurse: the parent's
+        user message contains the trigger and emits N calls, while each
+        subagent's prompt (its task description) does not.
+        """
+        fans_out = bool(self.parallel_tool_calls) and (
+            not self.parallel_trigger
+            or self.parallel_trigger in self._latest_human_text(messages)
+        )
+        if not fans_out:
+            return [
+                {
+                    "name": self.tool_call_name,
+                    "args": dict(self.tool_call_args),
+                    "id": self._tool_call_id(messages),
+                }
+            ]
+        return [
+            {
+                "name": call.get("name", self.tool_call_name),
+                "args": dict(call.get("args", {})),
+                "id": f"fake_parallel_{index}",
+            }
+            for index, call in enumerate(self.parallel_tool_calls)
+        ]
+
     def _final_message(self, messages: Sequence[BaseMessage]) -> AIMessage:
         if self._wants_tool_call(messages):
-            return AIMessage(
-                content="",
-                tool_calls=[
-                    {
-                        "name": self.tool_call_name,
-                        "args": dict(self.tool_call_args),
-                        "id": self._tool_call_id(messages),
-                    }
-                ],
-            )
+            # One AIMessage carrying N tool calls — LangGraph runs them in a
+            # single superstep, so each target lands in its own task namespace.
+            return AIMessage(content="", tool_calls=self._scripted_calls(messages))
         return AIMessage(content=self.response_text)
 
     def _generate(
@@ -161,18 +207,19 @@ class DeterministicFakeChatModel(BaseChatModel):
     ) -> Iterator[ChatGenerationChunk]:
         if self._wants_tool_call(messages):
             # A tool-call turn carries no assistant text — the graph
-            # dispatches the call and loops back with the result.
+            # dispatches the call(s) and loops back with the result(s).
             yield ChatGenerationChunk(
                 message=AIMessageChunk(
                     content="",
                     tool_call_chunks=[
                         {
-                            "name": self.tool_call_name,
-                            "args": json.dumps(self.tool_call_args),
-                            "id": self._tool_call_id(messages),
-                            "index": 0,
+                            "name": call["name"],
+                            "args": json.dumps(call["args"]),
+                            "id": call["id"],
+                            "index": index,
                             "type": "tool_call_chunk",
                         }
+                        for index, call in enumerate(self._scripted_calls(messages))
                     ],
                 )
             )
@@ -206,6 +253,10 @@ class FakeModelProvider:
     ENV_TOOL_CALLS = "RUNTIME_FAKE_MODEL_TOOL_CALLS"
     ENV_TOOL_NAME = "RUNTIME_FAKE_MODEL_TOOL_NAME"
     ENV_TOOL_ARGS = "RUNTIME_FAKE_MODEL_TOOL_ARGS"
+    # JSON list of ``{"name", "args"}`` emitted in ONE turn, for driving
+    # parallel branches (concurrent interrupts). Scoped by ENV_PARALLEL_TRIGGER.
+    ENV_PARALLEL_TOOL_CALLS = "RUNTIME_FAKE_MODEL_PARALLEL_TOOL_CALLS"
+    ENV_PARALLEL_TRIGGER = "RUNTIME_FAKE_MODEL_PARALLEL_TRIGGER"
 
     @classmethod
     def is_enabled(cls) -> bool:
@@ -249,7 +300,27 @@ class FakeModelProvider:
         tool_args = cls._tool_call_args()
         if tool_args is not None:
             overrides["tool_call_args"] = tool_args
+        parallel = cls._parallel_tool_calls()
+        if parallel:
+            overrides["parallel_tool_calls"] = parallel
+            overrides["parallel_trigger"] = os.environ.get(
+                cls.ENV_PARALLEL_TRIGGER, ""
+            ).strip()
         return DeterministicFakeChatModel(**overrides)
+
+    @classmethod
+    def _parallel_tool_calls(cls) -> list[dict[str, Any]]:
+        """Parse the scripted fan-out tool calls as JSON; ``[]`` when unset or invalid."""
+        raw = os.environ.get(cls.ENV_PARALLEL_TOOL_CALLS, "").strip()
+        if not raw:
+            return []
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return []
+        if not isinstance(parsed, list):
+            return []
+        return [call for call in parsed if isinstance(call, dict)]
 
     @classmethod
     def _tool_call_args(cls) -> dict[str, Any] | None:

@@ -217,6 +217,25 @@ class StreamingExecutor:
         }
     )
 
+    # Keys under which LangGraph surfaces a raised interrupt on a stream chunk:
+    # ``updates`` chunks carry ``data["__interrupt__"]``; ``values`` chunks carry
+    # a sibling ``interrupts`` tuple. Only a non-empty value counts — a drained
+    # graph reports ``interrupts=()`` on its final chunk.
+    _INTERRUPT_CHUNK_KEYS = ("__interrupt__", "interrupts")
+
+    @classmethod
+    def _chunk_raises_interrupt(cls, chunk: object) -> bool:
+        """Return ``True`` if *chunk* carries a non-empty LangGraph interrupt."""
+        if not isinstance(chunk, Mapping):
+            return False
+        for key in cls._INTERRUPT_CHUNK_KEYS:
+            if chunk.get(key):
+                return True
+        data = chunk.get("data")
+        return isinstance(data, Mapping) and any(
+            data.get(key) for key in cls._INTERRUPT_CHUNK_KEYS
+        )
+
     @classmethod
     async def run(
         cls,
@@ -271,6 +290,16 @@ class StreamingExecutor:
         async with delta_coalescer:
             async for chunk in stream:
                 result.last_chunk = chunk
+                # A LangGraph interrupt raised anywhere in this stream means the
+                # graph is still parked, whatever else the stream produced. Read
+                # it from the chunk itself rather than inferring it from a
+                # projected ``approval_requested`` event: on a targeted resume
+                # the sibling interrupt re-raises but its approval row already
+                # exists, and interrupt kinds that project no approval card emit
+                # no event at all. Trusting the event alone let a run that was
+                # still awaiting a second approval be marked COMPLETED.
+                if cls._chunk_raises_interrupt(chunk):
+                    result.action_interrupted = True
                 chunk_message_id = _MessageIdExtractor.extract(chunk)
                 # Build the attribution context *only* when the chunk
                 # closes an AIMessage (otherwise nothing to attribute);
