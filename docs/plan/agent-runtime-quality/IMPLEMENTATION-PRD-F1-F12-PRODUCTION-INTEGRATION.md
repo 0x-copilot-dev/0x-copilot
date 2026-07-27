@@ -89,6 +89,15 @@ create a second planning queue.
         deprecation warnings).
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
+  - [ ] Domain-owned immutable run/call context, restart-stable model/tool/
+        operation identity, and exactly-once lifecycle reducer.
+  - [ ] Deterministic `DeepAgentBuildRequest` middleware sequence and supported
+        async LangChain hook composition for supervisor and local subagents.
+  - [ ] One run-scoped serial permit shared by every graph-visible tool call,
+        including framework-injected and delegated tools.
+  - [ ] Policy-before-budget ordering, compatibility-wrapper shadow parity,
+        model-visible result admission, and final-tool-surface conformance.
+  - [ ] Full Step 2 regression suite and exit-criteria check.
 - [ ] **Step 3:** Complete the local F1 evaluation, assignment, report, and
       signed-promotion spine.
 - [ ] **Step 4:** Bind F4 task policy, tool plan, budgets, fingerprints, and
