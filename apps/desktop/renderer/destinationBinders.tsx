@@ -495,6 +495,42 @@ export function ConnectorsBinder({
     [authorize, notify, port, retry],
   );
 
+  // Remove a connector for good. The row is a read-model projection of an MCP
+  // server, so the delete targets the server: DELETE /v1/mcp/servers/{id}, whose
+  // `mcp_auth_connections` FK is ON DELETE CASCADE, so the stored auth
+  // connection is removed with it rather than being left behind. The row is
+  // confirmed in the surface before this runs.
+  const handleRemove = useCallback(
+    (id: ConnectorId): void => {
+      const connector = connectorsRef.current.find((c) => c.id === id);
+      if (connector === undefined) return;
+      void (async () => {
+        try {
+          const servers = await port.listServers();
+          const underscored = connector.slug.replace(/-/g, "_");
+          const server = servers.find(
+            (s) =>
+              s.server_id === `seed:${connector.slug}` ||
+              s.name === connector.slug ||
+              s.name === underscored,
+          );
+          if (server === undefined) {
+            throw new Error("No MCP server backs this connector.");
+          }
+          await port.deleteServer(server.server_id);
+          retry();
+        } catch (error: unknown) {
+          notify({
+            tone: "error",
+            title: `Couldn’t remove ${connector.display_name}`,
+            body: messageFromError(error),
+          });
+        }
+      })();
+    },
+    [notify, port, retry],
+  );
+
   const catalog = useMemo<ReadonlyArray<ConnectorCatalogEntry>>(
     () => (result?.status === "ok" ? (result.data?.available ?? []) : []),
     [result],
@@ -506,6 +542,7 @@ export function ConnectorsBinder({
         items={result}
         onConnect={flow.openConnect}
         onReconnect={handleReconnect}
+        onRemove={handleRemove}
         accessPort={accessPort}
         onOpenApprovalSettings={onOpenApprovalSettings}
         onRetry={retry}

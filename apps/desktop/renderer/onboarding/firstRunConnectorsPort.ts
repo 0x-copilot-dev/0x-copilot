@@ -86,6 +86,13 @@ export function createFirstRunConnectorsPort(
       });
     },
 
+    async deleteServer(serverId: string): Promise<void> {
+      await transport.request<null>({
+        method: "DELETE",
+        path: `/v1/mcp/servers/${encodeURIComponent(serverId)}`,
+      });
+    },
+
     async beginAuth(serverId: string): Promise<void> {
       // Prepare the OAuth flow server-side (returns `auth_url`). The renderer
       // cannot open the external browser directly on desktop; the featured

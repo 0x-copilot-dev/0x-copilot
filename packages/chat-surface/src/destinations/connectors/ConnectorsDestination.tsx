@@ -92,6 +92,15 @@ export interface ConnectorsDestinationProps {
   /** Primary CTA — opens the host's connect modal. */
   readonly onConnect?: () => void;
 
+  /**
+   * Remove a connector entirely. Destructive and confirmed inline (this package
+   * has no `window.confirm`), so the row asks once before calling this. The
+   * host performs the delete — on desktop that is DELETE /v1/mcp/servers/{id},
+   * whose `mcp_auth_connections` FK is ON DELETE CASCADE, so the stored auth
+   * connection goes with it rather than lingering.
+   */
+  readonly onRemove?: (id: ConnectorId) => void;
+
   /** Row-title click — host wires to open the connector detail route. */
   readonly onOpenConnector?: (id: ConnectorId) => void;
 
@@ -137,6 +146,7 @@ export function ConnectorsDestination(
     onOpenConnector,
     onOpenWebhooks,
     onReconnect,
+    onRemove,
     accessPort,
     onOpenApprovalSettings,
     onRetry,
@@ -237,6 +247,7 @@ export function ConnectorsDestination(
           onConnect,
           onOpenConnector,
           onReconnect,
+          onRemove,
           accessPort,
           overrides,
           onAccessModeChange: handleAccessModeChange,
@@ -253,6 +264,7 @@ interface BodyArgs {
   readonly onConnect: ConnectorsDestinationProps["onConnect"];
   readonly onOpenConnector: ConnectorsDestinationProps["onOpenConnector"];
   readonly onReconnect: ConnectorsDestinationProps["onReconnect"];
+  readonly onRemove: ConnectorsDestinationProps["onRemove"];
   readonly accessPort: ConnectorsDestinationProps["accessPort"];
   readonly overrides: Readonly<Record<string, ConnectorAccessMode>>;
   readonly onAccessModeChange: (
@@ -269,6 +281,7 @@ function renderBody(args: BodyArgs): ReactElement {
     onConnect,
     onOpenConnector,
     onReconnect,
+    onRemove,
     accessPort,
     overrides,
     onAccessModeChange,
@@ -321,6 +334,7 @@ function renderBody(args: BodyArgs): ReactElement {
           accessMode={overrides[c.id] ?? c.access_mode}
           onOpenConnector={onOpenConnector}
           onReconnect={onReconnect}
+          onRemove={onRemove}
           onAccessModeChange={
             accessPort !== undefined
               ? (mode) => onAccessModeChange(c.id, mode)
@@ -340,6 +354,7 @@ interface ConnectorRowProps {
   readonly accessMode?: ConnectorAccessMode;
   readonly onOpenConnector?: (id: ConnectorId) => void;
   readonly onReconnect?: (id: ConnectorId) => void;
+  readonly onRemove?: (id: ConnectorId) => void;
   readonly onAccessModeChange?: (mode: ConnectorAccessMode) => void;
   readonly renderIcon?: (slug: ConnectorSlug) => ReactNode;
 }
@@ -349,9 +364,13 @@ function ConnectorRow({
   accessMode,
   onOpenConnector,
   onReconnect,
+  onRemove,
   onAccessModeChange,
   renderIcon,
 }: ConnectorRowProps): ReactElement {
+  // Two-step confirm, held per row. A destructive action needs a deliberate
+  // second click, and this package cannot reach `window.confirm`.
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   // `disconnected` belongs in BOTH sets. It used to be counted as broken (so the
   // row showed a "Disconnected" pill) but excluded from `needsReconnect`, which
   // gates the only affordance that can fix it — leaving a row flagged as broken
@@ -427,6 +446,41 @@ function ConnectorRow({
             >
               {c.status === "disconnected" ? "Connect" : "Reconnect"}
             </Button>
+          ) : null}
+          {onRemove !== undefined ? (
+            confirmingRemove ? (
+              <>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirmingRemove(false)}
+                  data-testid="connector-remove-cancel"
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setConfirmingRemove(false);
+                    onRemove(c.id);
+                  }}
+                  data-testid="connector-remove-confirm"
+                >
+                  Remove
+                </Button>
+              </>
+            ) : (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setConfirmingRemove(true)}
+                aria-label={`Remove ${c.display_name}`}
+                data-testid="connector-remove"
+              >
+                Remove
+              </Button>
+            )
           ) : null}
           {accessMode !== undefined ? (
             <AccessModeSegment

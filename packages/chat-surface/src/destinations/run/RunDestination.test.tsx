@@ -2542,6 +2542,7 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     seqCounter = 0;
     const { transport } = renderRunWithPort({
       beginAuth: vi.fn(),
+      deleteServer: vi.fn(),
       skipAuth: vi.fn(),
       installFromCatalog: vi.fn(),
     });
@@ -2576,6 +2577,7 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     seqCounter = 0;
     const { transport } = renderRunWithPort({
       beginAuth: vi.fn(),
+      deleteServer: vi.fn(),
       skipAuth: vi.fn(),
       installFromCatalog: vi.fn(),
     });
@@ -2619,6 +2621,7 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     seqCounter = 0;
     const { transport } = renderRunWithPort({
       beginAuth: vi.fn(),
+      deleteServer: vi.fn(),
       skipAuth: vi.fn(),
       installFromCatalog: vi.fn(),
     });
@@ -2649,6 +2652,7 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     seqCounter = 0;
     const { transport, showConnected } = renderRunWithPort({
       beginAuth: vi.fn(),
+      deleteServer: vi.fn(),
       skipAuth: vi.fn(),
       installFromCatalog: vi.fn(),
     });
@@ -2693,6 +2697,7 @@ describe("RunDestination — MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     seqCounter = 0;
     const { transport } = renderRunWithPort({
       beginAuth: vi.fn(),
+      deleteServer: vi.fn(),
       skipAuth: vi.fn(),
       installFromCatalog: vi.fn(),
     });

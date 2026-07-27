@@ -53,7 +53,9 @@ import {
 } from "../../api/connectorsApi";
 import {
   createMcpServer,
+  deleteMcpServer,
   installMcpServer,
+  listMcpServers,
   startMcpAuth,
 } from "../../api/mcpApi";
 import { errorMessage } from "../../utils/errors";
@@ -318,6 +320,35 @@ export function ConnectorsRoute({
   }, [identity, state.kind, markConnected]);
 
   // ---- Reconnect (FR-4.25) — restart OAuth for an error/expired row --
+  // Remove a connector for good. The row projects an MCP server, so the delete
+  // targets the server; `mcp_auth_connections` is ON DELETE CASCADE, so the
+  // stored auth connection goes with it. The surface confirms before calling.
+  const handleRemove = useCallback(
+    async (id: ConnectorId): Promise<void> => {
+      const connector = connectorsRef.current.find((c) => c.id === id);
+      if (connector === undefined) return;
+      setPendingError(null);
+      try {
+        const servers = await listMcpServers(identity);
+        const underscored = connector.slug.replace(/-/g, "_");
+        const server = servers.find(
+          (s) =>
+            s.server_id === `seed:${connector.slug}` ||
+            s.name === connector.slug ||
+            s.name === underscored,
+        );
+        if (server === undefined) {
+          throw new Error("No MCP server backs this connector.");
+        }
+        await deleteMcpServer(server.server_id, identity);
+        setReloadToken((t) => t + 1);
+      } catch (error: unknown) {
+        setPendingError(errorMessage(error, "Could not remove this tool."));
+      }
+    },
+    [identity],
+  );
+
   const handleReconnect = useCallback(
     async (id: ConnectorId): Promise<void> => {
       const connector = connectorsRef.current.find((c) => c.id === id);
@@ -414,6 +445,9 @@ export function ConnectorsRoute({
           onOpenWebhooks={onOpenWebhooks}
           onReconnect={(id) => {
             void handleReconnect(id);
+          }}
+          onRemove={(id) => {
+            void handleRemove(id);
           }}
           accessPort={accessPort}
           onOpenApprovalSettings={onOpenApprovalSettings}

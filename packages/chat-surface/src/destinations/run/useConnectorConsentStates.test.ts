@@ -21,6 +21,7 @@ function makePort(): McpAuthPort & {
 } {
   return {
     beginAuth: vi.fn(),
+    deleteServer: vi.fn(),
     skipAuth: vi.fn(),
     installFromCatalog: vi.fn(),
   } as unknown as McpAuthPort & {

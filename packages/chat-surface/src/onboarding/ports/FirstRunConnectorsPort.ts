@@ -52,4 +52,10 @@ export interface FirstRunConnectorsPort {
    * await completion (the OAuth callback lands back in the host, not here).
    */
   beginAuth(serverId: string): Promise<void>;
+  /**
+   * Remove a server for good — `DELETE /v1/mcp/servers/{id}`. The
+   * `mcp_auth_connections` FK is ON DELETE CASCADE, so the stored auth
+   * connection goes with the server instead of outliving it.
+   */
+  deleteServer(serverId: string): Promise<void>;
 }
