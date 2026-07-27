@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import partial
 import logging
+import os
 from typing import Protocol
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from agent_runtime.api.ports import (
     PersistencePort,
     RuntimeQueuePort,
 )
+from agent_runtime.api.run_control_store import EventJournalRunControlStore
 from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
@@ -34,6 +36,7 @@ from agent_runtime.observability.queue_propagation import QueueTracePropagator
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.deployment.profile import DeploymentProfileLoader
 from agent_runtime.rollout import (
     RolloutStartupReadiness,
     RolloutStartupValidator,
@@ -75,6 +78,10 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
+from runtime_worker.run_control import (
+    RunControlPlaneBuilder,
+    StableUserProfileHmac,
+)
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
 
 
@@ -153,6 +160,7 @@ class RuntimeWorker:
         | None = None,
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
+        run_control_builder: RunControlPlaneBuilder | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -206,6 +214,14 @@ class RuntimeWorker:
         self.artifact_service = artifact_service
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
+        worker_environment = dict(os.environ)
+        if capability_env is not None:
+            worker_environment.update(capability_env)
+        self.run_control_builder = run_control_builder or RunControlPlaneBuilder(
+            store=EventJournalRunControlStore(self.event_store),
+            deployment_profile=DeploymentProfileLoader.load(worker_environment).name,
+            subject_hmac=StableUserProfileHmac.from_environment(worker_environment),
+        )
         if workspace_host_sessions is None and (
             callable(getattr(artifact_blob_store, "put_stream", None))
             and callable(getattr(artifact_reference_store, "acquire", None))
@@ -260,6 +276,7 @@ class RuntimeWorker:
             workspace_overlay_store=self.workspace_overlay_store,
             sandbox_provider_overrides=sandbox_provider_overrides,
             capability_env=capability_env,
+            run_control_builder=self.run_control_builder,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
@@ -275,6 +292,7 @@ class RuntimeWorker:
             mcp_discovery_cache=mcp_discovery_cache,
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             artifact_service=artifact_service,
+            run_control_builder=self.run_control_builder,
         )
         self.artifact_event_handler = (
             artifact_event_handler

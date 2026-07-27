@@ -159,6 +159,10 @@ from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
+from runtime_worker.run_control import (
+    RunControlContext,
+    RunControlPlaneBuilder,
+)
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
@@ -251,6 +255,7 @@ class RuntimeRunHandler:
         sandbox_patch_collector: object | None = None,
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
+        run_control_builder: RunControlPlaneBuilder | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -276,6 +281,7 @@ class RuntimeRunHandler:
         self._sandbox_patch_collector = sandbox_patch_collector
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
+        self._run_control_builder = run_control_builder
         self.settings = settings or RuntimeSettings.load()
         # The sole runtime gate for explicitly enabled E2 lanes. It is
         # deliberately run-scoped: every capability receives persisted
@@ -393,6 +399,14 @@ class RuntimeRunHandler:
             await self._reject_run_for_budget(run, budget_decision)
             return
 
+        run_control_snapshot = (
+            await self._run_control_builder.ensure_snapshot(
+                run=run,
+                trace_id=command.trace_id,
+            )
+            if self._run_control_builder is not None
+            else None
+        )
         run = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.RUNNING
@@ -494,7 +508,15 @@ class RuntimeRunHandler:
         # release its pinned broker grant snapshot (``/v1/runs/end``) on every
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
+        run_control_token: object | None = None
         try:
+            if (
+                self._run_control_builder is not None
+                and run_control_snapshot is not None
+            ):
+                run_control_token = RunControlContext.bind_for_run(
+                    self._run_control_builder.binding_for(run_control_snapshot)
+                )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
                     resolution=self.settings.execution.rollout
@@ -735,6 +757,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if run_control_token is not None:
+                RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
                 ShadowComparisonContext.unbind(shadow_comparison_token)  # type: ignore[arg-type]
             if mcp_operation_gateway_token is not None:
