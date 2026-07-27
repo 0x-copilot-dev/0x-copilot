@@ -94,6 +94,12 @@ export interface TcChatApproval {
    * card muteable — see `RunApproval.catalogSlug`.
    */
   readonly catalogSlug?: string | null;
+  /**
+   * WC-P5a: which catalog connector an installed server is. Handed to
+   * `McpAuthPort.beginAuth` so a slug-keyed host (desktop) can start the flow
+   * its own path is built on. See `RunApproval.connectorSlug`.
+   */
+  readonly connectorSlug?: string | null;
   /** Vendor·access pill; null when unknown. */
   readonly category: {
     readonly vendor: string;
@@ -629,6 +635,11 @@ function renderMcpAuthConnectCard(
   onRetry?: (serverId: string, displayName: string) => void,
 ): ReactNode {
   const serverId = approval.serverId;
+  // A gate names its connector with `connector_slug`; an uninstalled suggestion
+  // names the same thing with `catalog_slug`. Both answer "which connector",
+  // which is all a slug-keyed connect needs — the two fields differ in what
+  // they imply about installation, not in what they identify.
+  const connectorSlug = approval.connectorSlug ?? approval.catalogSlug ?? null;
   const actionable = mcpAuthPort !== undefined && serverId !== null;
   return (
     <div
@@ -655,7 +666,9 @@ function renderMcpAuthConnectCard(
         brandKey={serverId}
         actionable={actionable}
         onConnect={() =>
-          serverId !== null ? mcpAuthPort?.beginAuth(serverId) : undefined
+          serverId !== null
+            ? mcpAuthPort?.beginAuth(serverId, { connectorSlug })
+            : undefined
         }
         onDeny={() => {
           if (serverId === null) return;
@@ -671,7 +684,9 @@ function renderMcpAuthConnectCard(
         // deliberately lets the user reverse, so it is the same verb as
         // Connect, not a separate one.
         onReconsider={() =>
-          serverId !== null ? mcpAuthPort?.beginAuth(serverId) : undefined
+          serverId !== null
+            ? mcpAuthPort?.beginAuth(serverId, { connectorSlug })
+            : undefined
         }
         // Cancel is state-only — see `markPending`. Both handlers went
         // unpassed until now without anyone noticing, because `connecting` and

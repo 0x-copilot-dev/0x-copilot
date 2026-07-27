@@ -680,6 +680,7 @@ class McpRegistryService:
                     health=record.health,
                     enabled=record.enabled,
                     access_mode=(access_mode or ConnectorAccessMode.READ).value,
+                    connector_slug=record.connector_slug,
                 )
             )
         return InternalMcpServerListResponse(servers=tuple(cards))

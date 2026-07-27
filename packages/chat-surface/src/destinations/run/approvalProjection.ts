@@ -78,6 +78,14 @@ export interface RunApproval {
    * no server row exists yet.
    */
   readonly catalogSlug: string | null;
+  /**
+   * Which catalog connector an INSTALLED server is (`payload.connector_slug`).
+   * Distinct from `catalogSlug` above, which is stamped only when the connector
+   * is NOT installed — conflating them would let a gate be muted. Both answer
+   * "which connector", which is what a slug-keyed host needs to start a
+   * connect; `null` on a custom MCP server, which has no catalog identity.
+   */
+  readonly connectorSlug: string | null;
   /** Vendor·access pill ({ vendor: "SLACK", access: "ACTION" }); null when unknown. */
   readonly category: {
     readonly vendor: string;
@@ -158,6 +166,7 @@ interface MutableApproval {
   approvalKind: RunApprovalKind;
   serverId: string | null;
   catalogSlug: string | null;
+  connectorSlug: string | null;
   category: { vendor: string; access: string } | null;
   params: ActivityParam[];
   target: string | null;
@@ -294,6 +303,8 @@ function reduceRequested(
     // gate the user can only decline for this one run.
     catalogSlug:
       stringField(payload.catalog_slug) ?? existing?.catalogSlug ?? null,
+    connectorSlug:
+      stringField(payload.connector_slug) ?? existing?.connectorSlug ?? null,
     category: buildCategory(event),
     params: buildParams(payload.arguments),
     target: buildTarget(payload.arguments),
@@ -354,6 +365,7 @@ function freeze(m: MutableApproval): RunApproval {
     approvalKind: m.approvalKind,
     serverId: m.serverId,
     catalogSlug: m.catalogSlug,
+    connectorSlug: m.connectorSlug,
     category: m.category,
     params: m.params,
     target: m.target,
