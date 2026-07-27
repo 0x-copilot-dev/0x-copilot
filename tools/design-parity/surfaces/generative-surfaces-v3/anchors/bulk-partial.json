@@ -27,19 +27,19 @@
       "label": "bulk.row",
       "group": "Row result",
       "design": "[data-parity-anchor=\"bulk-row\"]",
-      "live": "[data-testid=\"tc-table-row\"]"
+      "live": "[data-testid=\"tc-table-row\"][data-row-key=\"opp-1\"]"
     },
     {
       "label": "bulk.row-failed",
       "group": "Row result",
       "design": "[data-parity-anchor=\"bulk-row-failed\"]",
-      "live": "[data-testid=\"tc-table-row\"][data-row-key=\"opp-2\"] [data-testid=\"tc-table-row-outcome\"]"
+      "live": "[data-testid=\"tc-table-row\"][data-row-key=\"opp-1\"] [data-testid=\"tc-table-row-outcome\"]"
     },
     {
       "label": "bulk.partial-copy",
       "group": "Recovery",
       "design": "[data-parity-anchor=\"bulk-partial-copy\"]",
-      "live": "[data-testid=\"tc-staged-table-counts\"]"
+      "live": "[data-testid=\"tc-bulk-pledge\"]"
     },
     {
       "label": "bulk.retry",

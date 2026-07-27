@@ -71,6 +71,38 @@
     return t.length > 60 ? t.slice(0, 60) + "…" : t;
   }
 
+  function normalizedMargin(node, cs) {
+    const collapsed = collapse4(
+      cs,
+      "marginTop",
+      "marginRight",
+      "marginBottom",
+      "marginLeft",
+    );
+    const parent = node.parentElement;
+    if (!parent) return collapsed;
+    const parentStyle = getComputedStyle(parent);
+    const marginLeft = Number.parseFloat(cs.marginLeft);
+    if (
+      parentStyle.display !== "flex" &&
+      parentStyle.display !== "inline-flex"
+    ) {
+      return collapsed;
+    }
+    if (!Number.isFinite(marginLeft) || marginLeft <= 0.5) return collapsed;
+
+    // Browsers serialize `margin-left:auto` as the amount of free space it
+    // consumed. That number changes with sibling copy even when both elements
+    // are aligned to the exact same right edge. Normalize only the observable
+    // flex-end case; fixed margins that do not right-align remain measurable.
+    const rect = node.getBoundingClientRect();
+    const parentRect = parent.getBoundingClientRect();
+    const parentRight =
+      parentRect.right - Number.parseFloat(parentStyle.paddingRight || "0");
+    if (Math.abs(rect.right - parentRight) > 0.5) return collapsed;
+    return `${cs.marginTop} ${cs.marginRight} ${cs.marginBottom} auto-end`;
+  }
+
   globalThis.__extractParity = function (spec) {
     const props = (spec && spec.props) || DEFAULT_PROPS;
     const out = {};
@@ -91,13 +123,7 @@
         "paddingBottom",
         "paddingLeft",
       );
-      styles.margin = collapse4(
-        cs,
-        "marginTop",
-        "marginRight",
-        "marginBottom",
-        "marginLeft",
-      );
+      styles.margin = normalizedMargin(node, cs);
       styles.borderWidth = collapse4(
         cs,
         "borderTopWidth",

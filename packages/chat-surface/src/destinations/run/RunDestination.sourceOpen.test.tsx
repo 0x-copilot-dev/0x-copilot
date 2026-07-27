@@ -83,6 +83,10 @@ class SourceOpenTransport implements Transport {
     act(() => this.onEvent?.(JSON.stringify(event)));
   }
 
+  hasEventSubscriber(): boolean {
+    return this.onEvent !== undefined;
+  }
+
   getSession(): Session {
     return { bearer: null };
   }
@@ -134,7 +138,8 @@ function makeStore(): KeyValueStore {
 }
 
 function surfaceTabs(): readonly HTMLElement[] {
-  const strip = screen.getByTestId("tc-tabs");
+  const strip = screen.queryByTestId("tc-tabs");
+  if (strip === null) return [];
   return within(strip).queryAllByRole("tab");
 }
 
@@ -149,6 +154,7 @@ describe("RunDestination source-open", () => {
       </TransportProvider>,
     );
     await screen.findByTestId("thread-canvas");
+    await waitFor(() => expect(transport.hasEventSubscriber()).toBe(true));
 
     // Artifact creation contributes a canonical provenance fact, but without
     // artifact.presentation_decided it must not produce a lifecycle tab.

@@ -127,6 +127,27 @@ class Harness:
             row_keys=keys,
         )
 
+    async def record_apply_result(
+        self,
+        *,
+        stage_id: str,
+        result: str,
+        row_results: list[dict[str, str]],
+    ) -> None:
+        await self.stager.ledger.emit(
+            run=self.run,
+            event_type_value="write.applied",
+            payload={
+                "v": 1,
+                "stage_id": stage_id,
+                "rev": 1,
+                "result": result,
+                "row_keys": [item["row_key"] for item in row_results],
+                "row_results": row_results,
+            },
+            summary="row-set apply completed",
+        )
+
     def decision_events(self) -> list[dict]:
         return [
             e.payload
@@ -209,6 +230,51 @@ class TestApply:
         assert state.status is StagedWriteStatus.APPLY_PENDING
         assert len(h.store.events_by_run[_RUN]) == events_after_first
         assert len(h.queue.calls) == enqueues_after_first
+
+    async def test_partial_retry_enqueues_every_and_only_failed_row(self) -> None:
+        h = Harness()
+        state = await h.stage(_rows(3))
+        await h.apply(state.stage_id, 1, ["row0", "row1", "row2"])
+        await h.record_apply_result(
+            stage_id=state.stage_id,
+            result="partial",
+            row_results=[
+                {"row_key": "row0", "outcome": "applied"},
+                {"row_key": "row1", "outcome": "failed"},
+                {"row_key": "row2", "outcome": "applied"},
+            ],
+        )
+
+        retry = await h.apply(state.stage_id, 1, ["row1"])
+
+        assert retry.status is StagedWriteStatus.APPLY_PENDING
+        assert len(h.queue.calls) == 2
+        assert h.queue.calls[-1]["row_keys"] == ("row1",)
+        applies = [d for d in h.decision_events() if d.get("apply") is True]
+        assert applies[-1]["scope"]["row_keys"] == ["row1"]
+
+    async def test_partial_retry_rejects_applied_or_incomplete_failed_set(self) -> None:
+        h = Harness()
+        state = await h.stage(_rows(3))
+        await h.apply(state.stage_id, 1, ["row0", "row1", "row2"])
+        await h.record_apply_result(
+            stage_id=state.stage_id,
+            result="partial",
+            row_results=[
+                {"row_key": "row0", "outcome": "applied"},
+                {"row_key": "row1", "outcome": "failed"},
+                {"row_key": "row2", "outcome": "failed"},
+            ],
+        )
+        before_events = len(h.store.events_by_run[_RUN])
+        before_enqueues = len(h.queue.calls)
+
+        for invalid in (["row0"], ["row1"], ["row1", "row2", "row0"]):
+            with pytest.raises(ApplySetMismatch):
+                await h.apply(state.stage_id, 1, invalid)
+
+        assert len(h.store.events_by_run[_RUN]) == before_events
+        assert len(h.queue.calls) == before_enqueues
 
 
 class TestAllowAlways:

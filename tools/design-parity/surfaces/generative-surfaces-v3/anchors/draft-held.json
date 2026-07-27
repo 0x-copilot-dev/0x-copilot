@@ -57,7 +57,7 @@
       "label": "draft.provenance",
       "group": "Provenance",
       "design": "[data-parity-anchor=\"draft-provenance\"]",
-      "live": "[data-testid=\"tc-staged-draft-ledger-id\"]"
+      "live": "[data-testid=\"tc-staged-draft-access\"]"
     }
   ]
 }

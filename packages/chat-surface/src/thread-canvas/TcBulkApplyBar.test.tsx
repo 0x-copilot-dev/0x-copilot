@@ -5,6 +5,8 @@ import {
   TcBulkApplyBar,
   bulkApplyLabel,
   bulkApplyPledge,
+  bulkRetryLabel,
+  bulkRetryMessage,
 } from "./TcBulkApplyBar";
 import type { LedgerStagedRow, LedgerStagedWrite } from "./ledgerProjection";
 
@@ -119,5 +121,30 @@ describe("TcBulkApplyBar", () => {
     const btn = screen.getByTestId("tc-bulk-apply") as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
     expect(btn.textContent).toBe("Applying…");
+  });
+
+  it("recovery retries every and only failed row", () => {
+    const onApply = vi.fn();
+    render(
+      <TcBulkApplyBar
+        stage={stage(
+          [
+            { ...row("a", "will_apply"), applyOutcome: "applied" },
+            { ...row("b", "will_apply"), applyOutcome: "failed" },
+            { ...row("c", "held"), applyOutcome: null },
+          ],
+          { status: "partially_applied", applyResult: "partial" },
+        )}
+        onApply={onApply}
+      />,
+    );
+    expect(screen.getByTestId("tc-bulk-pledge")).toHaveTextContent(
+      bulkRetryMessage(1, "linear"),
+    );
+    expect(screen.getByTestId("tc-bulk-retry")).toHaveTextContent(
+      bulkRetryLabel(1),
+    );
+    fireEvent.click(screen.getByTestId("tc-bulk-retry"));
+    expect(onApply).toHaveBeenCalledWith("stage_1", 1, ["b"]);
   });
 });

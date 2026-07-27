@@ -33,7 +33,7 @@
       "label": "bulk.row-change",
       "group": "Row diff",
       "design": "[data-parity-anchor=\"bulk-row-change\"]",
-      "live": "[data-testid=\"tc-table-row-change\"]"
+      "live": "[data-testid=\"tc-table-row-change-value\"]"
     },
     {
       "label": "bulk.row-hold",
@@ -51,7 +51,7 @@
       "label": "bulk.review-copy",
       "group": "Apply",
       "design": "[data-parity-anchor=\"bulk-review-copy\"]",
-      "live": "[data-testid=\"tc-bulk-pledge\"]"
+      "live": "[data-testid=\"tc-staged-table-counts\"]"
     },
     {
       "label": "bulk.action",

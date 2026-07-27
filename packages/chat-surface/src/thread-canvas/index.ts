@@ -115,6 +115,7 @@ export {
 export {
   TcStagedDraftSurface,
   renderAuthorshipSpans,
+  type StagedMessagePresentation,
   type TcStagedDraftSurfaceProps,
 } from "./TcStagedDraftSurface";
 // === end PRD-D1 ===
@@ -136,6 +137,9 @@ export {
   TcBulkApplyBar,
   bulkApplyLabel,
   bulkApplyPledge,
+  bulkRetryLabel,
+  bulkRetryMessage,
+  bulkRetryPledge,
   type TcBulkApplyBarProps,
 } from "./TcBulkApplyBar";
 // === end PRD-D3 ===

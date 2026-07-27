@@ -19,12 +19,12 @@ _REQUIRED_ARCHETYPES = {"record", "table", "message", "doc", "board"}
 class TestSpecAuthoringSkill:
     def test_manifest_fields(self) -> None:
         skill = SpecAuthoringSkill.load()
-        assert skill.skill_version == 1
+        assert skill.skill_version == 2
         assert skill.model_hint == "nano"
         assert skill.max_retries == 1
 
-    def test_has_at_least_six_examples(self) -> None:
-        assert len(SpecAuthoringSkill.load().examples) >= 6
+    def test_has_at_least_eight_examples(self) -> None:
+        assert len(SpecAuthoringSkill.load().examples) >= 8
 
     def test_examples_cover_the_core_archetypes(self) -> None:
         archetypes = {
@@ -41,8 +41,12 @@ class TestSpecAuthoringSkill:
 
     def test_system_prompt_includes_doctrine_and_examples(self) -> None:
         prompt = SpecAuthoringSkill.load().system_prompt()
+        normalized = " ".join(prompt.lower().split())
         assert "archetype" in prompt.lower()
         assert "untrusted" in prompt.lower()
+        assert "connector identity does not choose the archetype" in normalized
+        assert "renderer owns visual fidelity" in normalized
+        assert "local filesystem path is text" in normalized
         # Few-shot examples are serialized into the prompt.
         assert "title_path" in prompt
 
@@ -58,3 +62,9 @@ class TestSpecAuthoringSkill:
             and (spec.fields is None or len(spec.fields) <= 1)
             for spec in minimal
         )
+
+    def test_examples_cover_local_filesystem_shapes(self) -> None:
+        tools = {
+            ex["tool_descriptor"]["name"] for ex in SpecAuthoringSkill.load().examples
+        }
+        assert {"read_markdown", "list_directory"}.issubset(tools)

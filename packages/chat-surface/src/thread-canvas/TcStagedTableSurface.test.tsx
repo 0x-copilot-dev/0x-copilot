@@ -66,8 +66,9 @@ describe("TcStagedTableSurface", () => {
       "Acme renewal",
     );
     const change = screen.getByTestId("tc-table-row-change").textContent ?? "";
+    const previous = screen.getByTestId("tc-table-row-old").textContent ?? "";
     expect(change).toContain("priority");
-    expect(change).toContain("1");
+    expect(previous).toContain("1");
     expect(change).toContain("2");
   });
 
@@ -178,6 +179,7 @@ describe("TcStagedTableSurface", () => {
   });
 
   it("shows a partial state with per-row outcomes", () => {
+    const onApply = vi.fn();
     render(
       <TcStagedTableSurface
         stage={stage({
@@ -188,10 +190,15 @@ describe("TcStagedTableSurface", () => {
           ],
         })}
         onRowDecision={noop}
-        onApply={noop}
+        onApply={onApply}
       />,
     );
     const outcomes = screen.getAllByTestId("tc-table-row-outcome");
     expect(outcomes.map((o) => o.textContent)).toEqual(["updated", "failed"]);
+    expect(screen.getByTestId("tc-bulk-retry")).toHaveTextContent(
+      "Retry 1 failed",
+    );
+    fireEvent.click(screen.getByTestId("tc-bulk-retry"));
+    expect(onApply).toHaveBeenCalledWith("stage_1", 1, ["b"]);
   });
 });

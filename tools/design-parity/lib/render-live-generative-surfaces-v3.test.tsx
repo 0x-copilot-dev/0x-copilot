@@ -1,7 +1,7 @@
 /* Real staged-draft and staged-table components for v3 computed-style parity. */
 import { fireEvent, render, screen, cleanup } from "@testing-library/react";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
-import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
 import {
@@ -20,7 +20,15 @@ const LIVE = (path: string): string =>
 const noop = (): void => {};
 
 const BODY =
-  "Hi Priya — good news: the checkout fix (ENG-142) is in review and on track to ship Thursday, Feb 12, ahead of your Friday webinar.\n\nI also confirmed the retry path is stable after the token-refresh patch.\n\nI'll send release notes once it's live. — Alex";
+  "Hi Priya — good news: the checkout fix (ENG-142) is in review and on track to ship Thursday, Feb 12, ahead of your Friday webinar.\n\nDana's PR covers the session-refresh path, and we'll confirm here the moment it's deployed.\n\nI'll send release notes once it's live. — Alex";
+const MESSAGE_PRESENTATION = {
+  from: "alex@northbeam.co · via 0xCopilot",
+  to: "Priya Shah <priya@harborline.io>",
+  subject: "Re: Checkout fix — timeline?",
+  quotedLabel: "Yesterday 4:12 PM — Priya wrote",
+  quotedBody:
+    "Hi Alex — any update on the checkout regression? We're running a customer webinar Friday and I'd love to say the fix is live. — P",
+} as const;
 
 function revision(): LedgerStageRevision {
   return {
@@ -40,7 +48,10 @@ function draftStage(): LedgerStagedWrite {
     stageId: "stage_v3_draft",
     surfaceId: "surface_v3_draft",
     draftId: "draft_v3_reply",
-    target: { connector: "Gmail", op: "messages.send" },
+    target: {
+      connector: "gmail.drafts",
+      op: "create → messages.send",
+    },
     latestRev: 1,
     approvedRev: null,
     status: "staged",
@@ -48,7 +59,7 @@ function draftStage(): LedgerStagedWrite {
     decisions: [],
     createdSeq: 3,
     lastSeq: 4,
-    ledgerId: "rv3·003",
+    ledgerId: "gv-02",
     latestRevision: latest,
     applyResult: null,
     applyFailureCode: null,
@@ -76,17 +87,47 @@ function row(
 }
 
 function tableStage(partial: boolean): LedgerStagedWrite {
+  const titles = [
+    "Meridian Health — renewal",
+    "Anchor Logistics — seat expansion",
+    "Bluepine — platform pilot",
+    "Corsair Labs — annual",
+    "Halcyon Media — upsell",
+    "Northwind Retail — POS rollout",
+    "Osprey Financial — API tier",
+    "Tessellate — starter plan",
+  ];
   const rows = partial
-    ? [
-        row("opp-1", "Northstar renewal", "will_apply", "applied"),
-        row("opp-2", "Harborline expansion", "will_apply", "failed"),
-        row("opp-3", "Aperture migration", "held", null, "recent activity"),
-      ]
-    : [
-        row("opp-1", "Northstar renewal", "will_apply"),
-        row("opp-2", "Harborline expansion", "held", null, "recent activity"),
-        row("opp-3", "Aperture migration", "will_apply"),
-      ];
+    ? titles.map((title, index) =>
+        index === 0 || index === 5
+          ? row(`opp-${index + 1}`, title, "will_apply", "failed")
+          : index === 4 || index === 6
+            ? row(
+                `opp-${index + 1}`,
+                title,
+                "held",
+                null,
+                index === 4
+                  ? "Contact replied 12d ago"
+                  : "Renewal call yesterday",
+              )
+            : row(`opp-${index + 1}`, title, "will_apply", "applied"),
+      )
+    : titles.map((title, index) =>
+        index === 2
+          ? row(`opp-${index + 1}`, title, "held")
+          : index === 4 || index === 6
+            ? row(
+                `opp-${index + 1}`,
+                title,
+                "held",
+                null,
+                index === 4
+                  ? "Contact replied 12d ago"
+                  : "Renewal call yesterday",
+              )
+            : row(`opp-${index + 1}`, title, "will_apply"),
+      );
   return {
     stageId: "stage_v3_bulk",
     surfaceId: "surface_v3_bulk",
@@ -127,8 +168,8 @@ function html(state: string, body: string): string {
     <link rel="stylesheet" href="./styles.css" />
     <style>
       html, body { margin: 0; min-height: 100%; background: var(--color-bg); }
-      *, *::before, *::after { animation: none !important; transition: none !important; }
-      #parity-frame { box-sizing: border-box; width: 780px; min-height: 620px; padding: 22px; }
+      *, *::before, *::after { animation: none !important; }
+      #parity-frame { box-sizing: border-box; display: flex; width: 795px; height: 508.562px; padding: 22px; }
     </style>
   </head>
   <body><div id="parity-frame" data-state="${state}">${body}</div></body>
@@ -143,9 +184,15 @@ describe("live Generative Surfaces v3 review fixtures", () => {
   beforeAll(() => {
     mkdirSync(LIVE(""), { recursive: true });
     mkdirSync(LIVE("fonts"), { recursive: true });
-    copyFileSync(
-      REPO("packages/design-system/src/styles.css"),
+    writeFileSync(
       LIVE("styles.css"),
+      [
+        readFileSync(REPO("packages/design-system/src/styles.css"), "utf8"),
+        readFileSync(
+          REPO("packages/chat-surface/src/thread-canvas/review-surfaces.css"),
+          "utf8",
+        ),
+      ].join("\n"),
     );
     for (const font of [
       "instrument-sans-latin.woff2",
@@ -170,6 +217,7 @@ describe("live Generative Surfaces v3 review fixtures", () => {
       <TcStagedDraftSurface
         stage={draftStage()}
         bodyText={BODY}
+        presentation={MESSAGE_PRESENTATION}
         onSubmitEdit={noop}
         onApprove={noop}
         onReject={noop}
@@ -185,6 +233,7 @@ describe("live Generative Surfaces v3 review fixtures", () => {
       <TcStagedDraftSurface
         stage={draftStage()}
         bodyText={BODY}
+        presentation={MESSAGE_PRESENTATION}
         onSubmitEdit={noop}
         onApprove={noop}
         onReject={noop}
@@ -192,7 +241,15 @@ describe("live Generative Surfaces v3 review fixtures", () => {
       />,
     );
     fireEvent.click(screen.getByTestId("tc-staged-draft-edit"));
-    expect(screen.getByTestId("tc-staged-draft-editor")).not.toBeNull();
+    const editor = screen.getByTestId(
+      "tc-staged-draft-editor",
+    ) as HTMLTextAreaElement;
+    fireEvent.change(editor, {
+      target: {
+        value:
+          "Dana's PR covers the session-refresh path, and we'll confirm the Thursday release window.",
+      },
+    });
     persist("draft-edit", container);
   });
 
@@ -200,6 +257,9 @@ describe("live Generative Surfaces v3 review fixtures", () => {
     const { container } = render(
       <TcStagedTableSurface
         stage={tableStage(false)}
+        title="8 opportunities → Closed-Lost"
+        summary="5 approved · 1 stale · 2 held"
+        reviewNotice="1 row is stale — re-stage it before it can apply. Held rows stay untouched."
         onRowDecision={noop}
         onApply={noop}
       />,
@@ -212,11 +272,12 @@ describe("live Generative Surfaces v3 review fixtures", () => {
     const { container } = render(
       <TcStagedTableSurface
         stage={tableStage(true)}
+        title="8 opportunities → Closed-Lost"
         onRowDecision={noop}
         onApply={noop}
       />,
     );
-    expect(screen.getAllByTestId("tc-table-row-outcome")).toHaveLength(2);
+    expect(screen.getAllByTestId("tc-table-row-outcome")).toHaveLength(6);
     persist("bulk-partial", container);
   });
 });

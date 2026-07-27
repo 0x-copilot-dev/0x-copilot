@@ -211,7 +211,6 @@ const lines = [
   "```bash",
   "node tools/design-parity/lib/run-generative-surfaces-v3-parity.mjs",
   "```",
-  "",
 ];
 writeFileSync(resolve(OUT, "report.md"), `${lines.join("\n")}\n`);
 console.log(`${SURFACE}/out/report.md`);

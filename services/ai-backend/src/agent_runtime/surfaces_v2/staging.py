@@ -241,7 +241,8 @@ class StagedWriteStatus(StrEnum):
     APPLIED = "applied"
     # PRD-D3: apply decided (frozen), ``write.applied`` not yet folded.
     APPLY_PENDING = "apply_pending"
-    # PRD-D3: some approved rows failed mid-apply (terminal in D3).
+    # PRD-D3: some approved rows failed mid-apply. Applied rows are immutable;
+    # the exact failed subset may be retried through a fresh apply decision.
     PARTIALLY_APPLIED = "partially_applied"
     # PRD-D2 defensive: a ``write.applied`` folded onto a stage that was not in a
     # matching APPROVED state (unreachable absent a bug — D1 freezes approved
@@ -323,6 +324,18 @@ class StagedWriteState(RuntimeContract):
             return ()
         return tuple(
             row.row_key for row in self.rows if row.stance is RowStance.WILL_APPLY
+        )
+
+    def failed_row_keys(self) -> tuple[str, ...]:
+        """Failed, still-approved row keys eligible for an exact retry."""
+
+        if self.rows is None:
+            return ()
+        return tuple(
+            row.row_key
+            for row in self.rows
+            if row.stance is RowStance.WILL_APPLY
+            and row.apply_outcome == Values.ROW_OUTCOME_FAILED
         )
 
     def staged_row(self, row_key: str) -> StagedRow | None:
@@ -785,9 +798,9 @@ class StagedWriteFold:
         result = cls._str_or(payload.get(Keys.Field.RESULT), "")
 
         # PRD-D3 — a row-set apply terminal. Matched by the frozen APPLY_PENDING
-        # state (not rev): applied ⇒ APPLIED, partial ⇒ PARTIALLY_APPLIED (both
-        # terminal, per-row outcomes ride ``row_results``); failed ⇒ back to
-        # STAGED with the apply consumed (stances intact, a fresh apply retries).
+        # state (not rev): applied ⇒ APPLIED, partial ⇒ PARTIALLY_APPLIED.
+        # Failed first attempts return to STAGED; a failed retry remains
+        # PARTIALLY_APPLIED because earlier successful rows are immutable.
         if accumulator.is_rowset:
             cls._apply_rowset_terminal(accumulator, result=result, payload=payload)
             return
@@ -839,19 +852,33 @@ class StagedWriteFold:
             accumulator.status = StagedWriteStatus.CORRUPT
             accumulator.apply_result = result or None
             return
+        # Fold outcomes before selecting the aggregate state. This is
+        # particularly important for an all-failed retry: the new failed
+        # outcome coexists with rows applied by the prior attempt.
+        cls._apply_row_results(accumulator, payload.get(Keys.Field.ROW_RESULTS))
         if result == Values.RESULT_APPLIED:
             accumulator.status = StagedWriteStatus.APPLIED
             accumulator.apply_result = Values.RESULT_APPLIED
-            cls._apply_row_results(accumulator, payload.get(Keys.Field.ROW_RESULTS))
         elif result == Values.RESULT_PARTIAL:
             accumulator.status = StagedWriteStatus.PARTIALLY_APPLIED
             accumulator.apply_result = Values.RESULT_PARTIAL
-            cls._apply_row_results(accumulator, payload.get(Keys.Field.ROW_RESULTS))
         elif result == Values.RESULT_FAILED:
-            # Apply consumed: back to STAGED (stances intact), a fresh apply retries.
-            accumulator.status = StagedWriteStatus.STAGED
+            # If an earlier attempt already applied any row, retain the recovery
+            # state and expose the failed subset for another exact retry. A
+            # completely failed first attempt returns to STAGED as before.
+            has_applied = any(
+                outcome == Values.ROW_OUTCOME_APPLIED
+                for outcome in accumulator.row_apply_outcomes.values()
+            )
+            accumulator.status = (
+                StagedWriteStatus.PARTIALLY_APPLIED
+                if has_applied
+                else StagedWriteStatus.STAGED
+            )
             accumulator.approved_rev = None
-            accumulator.apply_result = Values.RESULT_FAILED
+            accumulator.apply_result = (
+                Values.RESULT_PARTIAL if has_applied else Values.RESULT_FAILED
+            )
         else:
             accumulator.status = StagedWriteStatus.CORRUPT
             accumulator.apply_result = result or None
@@ -1267,12 +1294,12 @@ class WriteStager:
     ) -> StagedWriteState:
         """The ONLY row-set path to execution — emit the apply decision + enqueue.
 
-        Precondition: row-set stage, status == STAGED, ``rev == latest_rev``, and
-        ``row_keys`` equals the current will-apply set EXACTLY (WYSIWYG — you
-        apply exactly the set you saw). A mismatched set is a 409
-        (:class:`ApplySetMismatch`); a duplicate apply of the same rev+set while
-        pending/applied is idempotent (200, no event, no enqueue). Held rows are
-        never named — they cannot enter the apply set.
+        Precondition: row-set stage, ``rev == latest_rev``, and ``row_keys``
+        equals the visible action set EXACTLY: all current will-apply rows for a
+        fresh stage, or all currently failed rows for a partial-recovery stage.
+        A mismatched set is a 409 (:class:`ApplySetMismatch`); a duplicate apply
+        of the same rev+set while pending/applied is idempotent (200, no event,
+        no enqueue). Held or already-applied rows can never enter a retry set.
         """
 
         requested = frozenset(row_keys)
@@ -1287,7 +1314,6 @@ class WriteStager:
         if state.status in (
             StagedWriteStatus.APPLY_PENDING,
             StagedWriteStatus.APPLIED,
-            StagedWriteStatus.PARTIALLY_APPLIED,
         ):
             applied = self._apply_decision_of(state)
             if (
@@ -1298,18 +1324,26 @@ class WriteStager:
                 return state
             raise StageFrozen()
 
-        if state.status is not StagedWriteStatus.STAGED:
+        if state.status not in (
+            StagedWriteStatus.STAGED,
+            StagedWriteStatus.PARTIALLY_APPLIED,
+        ):
             raise StageFrozen()
         if rev != state.latest_rev:
             raise StaleRevision()
         unknown = requested - {row.row_key for row in state.rows or ()}
         if unknown:
             raise UnknownRowKey()
-        if requested != frozenset(state.will_apply_keys()):
-            # WYSIWYG: you apply exactly the current will-apply set, nothing else.
+        ordered = (
+            state.failed_row_keys()
+            if state.status is StagedWriteStatus.PARTIALLY_APPLIED
+            else state.will_apply_keys()
+        )
+        if not ordered or requested != frozenset(ordered):
+            # WYSIWYG: fresh apply uses every current will-apply row; recovery
+            # uses every and only failed row. Applied and held rows stay inert.
             raise ApplySetMismatch()
 
-        ordered = state.will_apply_keys()  # canonical order for the payload
         emitted = await self.ledger.emit(
             run=run,
             event_type_value=LedgerEventType.DECISION_RECORDED.value,

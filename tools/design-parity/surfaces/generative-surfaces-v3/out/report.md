@@ -2,14 +2,14 @@
 
 Strict Playwright `getComputedStyle` comparison of the user-supplied v3 Design Compiler source against the real `TcStagedDraftSurface` and `TcStagedTableSurface`. No screenshot acceptance and no expected-divergence waivers.
 
-**Aggregate findings:** 🔴 HIGH 57 · 🟠 MEDIUM 125 · 🟡 LOW 140 · ⚪ INFO 25.
+**Aggregate findings:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 11 · ⚪ INFO 20.
 
 | State | Design anchors | Live anchors | HIGH | MEDIUM | Report |
 |---|---:|---:|---:|---:|---|
-| `draft-held` | 9/9 | 9/9 | 18 | 37 | [report-draft-held.md](./report-draft-held.md) |
-| `draft-edit` | 9/9 | 5/9 | 16 | 26 | [report-draft-edit.md](./report-draft-edit.md) |
-| `bulk-review` | 9/9 | 9/9 | 15 | 39 | [report-bulk-review.md](./report-bulk-review.md) |
-| `bulk-partial` | 7/7 | 6/7 | 8 | 23 | [report-bulk-partial.md](./report-bulk-partial.md) |
+| `draft-held` | 9/9 | 9/9 | 0 | 0 | [report-draft-held.md](./report-draft-held.md) |
+| `draft-edit` | 9/9 | 9/9 | 0 | 0 | [report-draft-edit.md](./report-draft-edit.md) |
+| `bulk-review` | 9/9 | 9/9 | 0 | 0 | [report-bulk-review.md](./report-bulk-review.md) |
+| `bulk-partial` | 7/7 | 7/7 | 0 | 0 | [report-bulk-partial.md](./report-bulk-partial.md) |
 
 ## Provenance
 

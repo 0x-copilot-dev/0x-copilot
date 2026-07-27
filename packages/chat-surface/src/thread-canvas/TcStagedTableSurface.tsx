@@ -11,7 +11,7 @@
 // Pure presentational: no port/clock/browser reads. Kit-only styling (design-system
 // recipes + tokens); no raw font-size / letter-spacing.
 
-import type { CSSProperties, ReactElement } from "react";
+import type { ReactElement } from "react";
 
 import { Badge } from "@0x-copilot/design-system";
 
@@ -20,6 +20,12 @@ import type { LedgerStagedRow, LedgerStagedWrite } from "./ledgerProjection";
 
 export interface TcStagedTableSurfaceProps {
   readonly stage: LedgerStagedWrite;
+  /** Surface-authored display title; falls back without connector guessing. */
+  readonly title?: string;
+  /** Optional surface-authored count/status summary for the table header. */
+  readonly summary?: string;
+  /** Optional precondition/recovery note shown beside the apply action. */
+  readonly reviewNotice?: string;
   /** Toggle a row's stance (host POSTs `/decisions {approve|hold, row_keys}`). */
   readonly onRowDecision: (
     stageId: string,
@@ -34,61 +40,6 @@ export interface TcStagedTableSurfaceProps {
   ) => void;
   readonly busy?: boolean;
 }
-
-const rootStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: "var(--space-sm)",
-};
-
-const headerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-sm)",
-  flexWrap: "wrap",
-  padding: "var(--space-md) var(--space-md) 0",
-};
-
-const spacerStyle: CSSProperties = { flex: "1 1 auto" };
-
-const rowStyle: CSSProperties = {
-  display: "flex",
-  flexDirection: "column",
-  gap: 4,
-  padding: "var(--space-sm) var(--space-md)",
-  borderTop: "1px solid var(--color-border-subtle)",
-};
-
-const rowHeadStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-sm)",
-  flexWrap: "wrap",
-};
-
-const heldReasonStyle: CSSProperties = {
-  color: "var(--color-text-warning, var(--color-text-secondary))",
-};
-
-const diffStyle: CSSProperties = { margin: 0 };
-const oldStyle: CSSProperties = {
-  textDecoration: "line-through",
-  opacity: 0.6,
-};
-
-const footerStyle: CSSProperties = {
-  display: "flex",
-  alignItems: "center",
-  gap: "var(--space-sm)",
-  padding: "6px var(--space-md)",
-  borderTop: "1px solid var(--color-border-subtle)",
-};
-
-const rowActionsStyle: CSSProperties = {
-  display: "flex",
-  gap: "var(--space-sm)",
-  alignItems: "center",
-};
 
 /** Live counts header, e.g. "6 will apply · 2 held". */
 export function countsHeader(willApply: number, held: number): string {
@@ -121,87 +72,190 @@ function StagedRowView({
   const held = row.stance === "held";
   const editable =
     stage.status === "staged" && !busy && row.applyOutcome === null;
+  const outcomeLabel =
+    row.applyOutcome === "applied"
+      ? "updated"
+      : row.applyOutcome === "failed"
+        ? "failed"
+        : held
+          ? "held"
+          : "approved";
 
   return (
-    <div style={rowStyle} data-testid="tc-table-row" data-row-key={row.rowKey}>
-      <div style={rowHeadStyle}>
-        <span className="ui-section-label" data-testid="tc-table-row-title">
-          {row.title}
-        </span>
-        {held ? (
-          <Badge tone="warning" data-testid="tc-table-row-held">
-            held
-          </Badge>
-        ) : (
-          <Badge tone="neutral" data-testid="tc-table-row-will-apply">
-            will apply
-          </Badge>
-        )}
-        {row.applyOutcome !== null ? (
-          <Badge
-            tone={row.applyOutcome === "applied" ? "success" : "warning"}
-            data-testid="tc-table-row-outcome"
+    <div
+      className={`tc-review-table__row${
+        held ? " tc-review-table__row--held" : ""
+      }${row.applyOutcome === "failed" ? " tc-review-table__row--failed" : ""}`}
+      data-testid="tc-table-row"
+      data-row-key={row.rowKey}
+      role="row"
+    >
+      <div className="tc-review-table__decisions" role="cell">
+        <button
+          type="button"
+          className="tc-review-table__decision tc-review-table__decision--approve"
+          title="Approve this change"
+          aria-label={`Approve ${row.title}`}
+          aria-pressed={!held}
+          disabled={!editable}
+          onClick={() => onRowDecision(stage.stageId, "approve", row.rowKey)}
+          data-testid="tc-table-row-approve"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="12"
+            height="12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
           >
-            {row.applyOutcome === "applied" ? "updated" : "failed"}
-          </Badge>
-        ) : null}
-        <span style={spacerStyle} aria-hidden="true" />
-        {editable ? (
-          <div style={rowActionsStyle}>
-            {held ? (
-              <button
-                type="button"
-                className="ui-button"
-                onClick={() =>
-                  onRowDecision(stage.stageId, "approve", row.rowKey)
-                }
-                data-testid="tc-table-row-approve"
-              >
-                Approve
-              </button>
-            ) : (
-              <button
-                type="button"
-                className="ui-button"
-                onClick={() => onRowDecision(stage.stageId, "hold", row.rowKey)}
-                data-testid="tc-table-row-hold"
-              >
-                Hold
-              </button>
-            )}
-          </div>
-        ) : null}
+            <path d="M5 12l5 5L20 7" />
+          </svg>
+        </button>
+        <button
+          type="button"
+          className="tc-review-table__decision tc-review-table__decision--hold"
+          title="Hold — keep as is"
+          aria-label={`Hold ${row.title}`}
+          aria-pressed={held}
+          disabled={!editable}
+          onClick={() => onRowDecision(stage.stageId, "hold", row.rowKey)}
+          data-testid="tc-table-row-hold"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            width="12"
+            height="12"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            aria-hidden="true"
+          >
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
       </div>
 
-      {/* Agent pre-hold reason — STILL visible after a user override (FR-C7). */}
-      {row.agentHoldReason !== null && row.agentHoldReason !== "" ? (
-        <span
-          className="ui-caption"
-          style={heldReasonStyle}
-          data-testid="tc-table-row-reason"
-        >
-          {`${row.agentHoldReason} — agent pre-held`}
-        </span>
-      ) : null}
+      <div className="tc-review-table__title" role="cell">
+        <strong data-testid="tc-table-row-title">{row.title}</strong>
+      </div>
 
-      {row.changes.map((change, i) => (
-        <p
-          key={`${row.rowKey}-${change.field}-${i}`}
-          className="ui-caption"
-          style={diffStyle}
-          data-testid="tc-table-row-change"
-        >
-          <span>{`${change.field}: `}</span>
-          <span style={oldStyle}>{renderValue(change.old)}</span>
-          <span>{` → ${renderValue(change.new)}`}</span>
-        </p>
-      ))}
+      <div
+        className="tc-review-table__old"
+        data-testid="tc-table-row-old"
+        role="cell"
+      >
+        {row.changes.map((change, index) => (
+          <span key={`${row.rowKey}-old-${change.field}-${index}`}>
+            {renderValue(change.old)}
+          </span>
+        ))}
+      </div>
+
+      <div
+        className="tc-review-table__change"
+        data-testid="tc-table-row-change"
+        role="cell"
+      >
+        {row.changes.map((change, index) => (
+          <span key={`${row.rowKey}-new-${change.field}-${index}`}>
+            <small>{change.field}</small>
+            <span
+              className="tc-review-table__change-value"
+              data-testid="tc-table-row-change-value"
+            >
+              {renderValue(change.new)}
+            </span>
+          </span>
+        ))}
+      </div>
+
+      <div className="tc-review-table__note" role="cell">
+        {/* Agent pre-hold reason remains visible after a user override (FR-C7). */}
+        {row.agentHoldReason !== null && row.agentHoldReason !== "" ? (
+          <div data-testid="tc-table-row-reason">
+            <svg
+              viewBox="0 0 24 24"
+              width="10"
+              height="10"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3l10 17H2z" />
+              <path d="M12 9v5M12 17.5v.5" />
+            </svg>
+            {`${row.agentHoldReason} — agent pre-held`}
+          </div>
+        ) : row.applyOutcome === "failed" ? (
+          <span>Write failed — retry available</span>
+        ) : (
+          <span>{held ? "Held — untouched" : "Ready to apply"}</span>
+        )}
+      </div>
+
+      <div className="tc-review-table__status" role="cell">
+        {row.applyOutcome !== null ? (
+          <span
+            className={`tc-review-table__outcome tc-review-table__outcome--${row.applyOutcome}`}
+            data-testid="tc-table-row-outcome"
+          >
+            {row.applyOutcome === "applied" ? (
+              <svg
+                viewBox="0 0 24 24"
+                width="11"
+                height="11"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M5 12l5 5L20 7" />
+              </svg>
+            ) : (
+              <svg
+                viewBox="0 0 24 24"
+                width="11"
+                height="11"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M18 6 6 18M6 6l12 12" />
+              </svg>
+            )}
+            {outcomeLabel}
+          </span>
+        ) : (
+          <Badge
+            tone={held ? "warning" : "neutral"}
+            data-testid={held ? "tc-table-row-held" : "tc-table-row-will-apply"}
+          >
+            {outcomeLabel}
+          </Badge>
+        )}
+      </div>
     </div>
   );
 }
 
 export function TcStagedTableSurface({
   stage,
+  title,
+  summary,
+  reviewNotice,
   onRowDecision,
   onApply,
   busy = false,
@@ -213,52 +267,85 @@ export function TcStagedTableSurface({
   const rows = stage.rows ?? [];
   const isApplied = stage.status === "applied";
   const isPartial = stage.status === "partially_applied";
-  const terminal = isApplied || isPartial;
 
   return (
-    <div className="ui-card" style={rootStyle} data-testid="tc-staged-table">
-      <div style={headerStyle}>
+    <div
+      className="tc-review-surface tc-review-surface--table"
+      data-testid="tc-staged-table"
+      data-state={stage.status}
+    >
+      <header className="tc-review-table__header">
         <span
-          className="ui-section-label"
+          className="tc-review-table__title-heading"
           data-testid="tc-staged-table-connector"
         >
-          {stage.target.connector !== ""
-            ? stage.target.connector
-            : "Bulk change"}
+          {title ??
+            `${rows.length} ${
+              stage.target.connector !== "" ? stage.target.connector : "bulk"
+            } changes`}
         </span>
-        <span style={spacerStyle} aria-hidden="true" />
-        <span className="ui-caption" data-testid="tc-staged-table-counts">
-          {terminal ? resultLine(applied, held) : countsHeader(willApply, held)}
-        </span>
-      </div>
-
-      {rows.map((row) => (
-        <StagedRowView
-          key={row.rowKey}
-          stage={stage}
-          row={row}
-          onRowDecision={onRowDecision}
-          busy={busy}
-        />
-      ))}
-
-      <div style={footerStyle}>
         <Badge
           tone={isApplied ? "success" : "warning"}
           data-testid="tc-staged-table-access"
         >
-          {isApplied ? "write · applied" : "write · held"}
+          {isApplied
+            ? "applied"
+            : isPartial
+              ? "partial · retry available"
+              : "staged, not applied"}
         </Badge>
-        <span className="ui-mono-caps" data-testid="tc-staged-table-ledger-id">
-          {stage.ledgerId}
+        <span
+          className="tc-review-table__counts"
+          data-testid="tc-staged-table-counts"
+        >
+          {summary ??
+            (isApplied || isPartial
+              ? resultLine(applied, held)
+              : countsHeader(willApply, held))}
         </span>
+      </header>
+
+      <div className="tc-review-table" role="table">
+        <div className="tc-review-table__columns" role="row">
+          <span role="columnheader">Decide</span>
+          <span role="columnheader">Item</span>
+          <span role="columnheader">Previous</span>
+          <span role="columnheader">Change</span>
+          <span role="columnheader">Review note</span>
+          <span role="columnheader">Status</span>
+        </div>
+
+        {rows.map((row) => (
+          <StagedRowView
+            key={row.rowKey}
+            stage={stage}
+            row={row}
+            onRowDecision={onRowDecision}
+            busy={busy}
+          />
+        ))}
       </div>
 
-      {/* The apply bar drops once the row-set reaches a terminal state (nothing
-          left to apply); a failed apply folds back to `staged`, returning it. */}
-      {!terminal ? (
-        <TcBulkApplyBar stage={stage} onApply={onApply} busy={busy} />
+      {/* A partial result exposes a real recovery command for exactly the
+          failed subset. Applied rows remain immutable and are never resent. */}
+      {!isApplied ? (
+        <TcBulkApplyBar
+          stage={stage}
+          onApply={onApply}
+          message={reviewNotice}
+          busy={busy}
+        />
       ) : null}
+
+      <footer className="tc-review-provenance">
+        <span className="tc-review-provenance__kind">Table</span>
+        <span
+          className="tc-review-provenance__detail"
+          data-testid="tc-staged-table-ledger-id"
+        >
+          {`${stage.target.connector}.${stage.target.op} · per-row approval · ${stage.ledgerId}`}
+        </span>
+      </footer>
     </div>
   );
 }
