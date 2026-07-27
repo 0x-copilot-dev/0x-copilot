@@ -117,6 +117,7 @@ function fakeConnectorsPort(): ComposerConnectorsPort {
     installFromCatalog: () => Promise.reject(new Error("unused")),
     addCustomServer: () => Promise.reject(new Error("unused")),
     beginAuth: () => Promise.resolve(),
+    deleteServer: () => Promise.reject(new Error("unused")),
   };
 }
 

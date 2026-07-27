@@ -1068,7 +1068,7 @@ function toolCallKey(event: RuntimeEventEnvelope): string {
   // upstream: every tool result must carry the id (see the tool_call_id
   // invariant in the runtime's display middleware).
   const callId = pickString(event.payload, "call_id");
-  if (callId !== undefined && callId.length > 0) {
+  if (callId !== null && callId.length > 0) {
     return callId;
   }
   return `${UNKEYED_TOOL_CALL_PREFIX}${event.event_id}`;
