@@ -82,6 +82,7 @@ from agent_runtime.prompts import (
     PromptFragment,
     PromptFragmentScope,
     PromptFragmentTier,
+    ProviderCacheOwner,
     ProviderPromptDecorator,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
@@ -299,6 +300,11 @@ async def _assemble_harness(
         prompt_decoration = ProviderPromptDecorator().decorate(
             provider=runtime_context.model_profile.provider,
             plan=prompt_assembly_plan,
+            # Deep Agents 0.6.12 appends and model-qualifies its own provider
+            # prompt-caching middleware after the caller prompt. Delegating
+            # ownership avoids stacking a caller breakpoint with the
+            # framework's final-system/tool breakpoints.
+            cache_owner=ProviderCacheOwner.FRAMEWORK,
         )
         model_instructions = prompt_decoration.system_prompt
         # Compute workspace-policy kwargs (e.g. training opt-out provider

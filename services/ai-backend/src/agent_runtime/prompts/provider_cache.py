@@ -8,6 +8,7 @@ unsupported providers receive the exact legacy string.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from langchain_core.messages import SystemMessage
 
@@ -17,11 +18,20 @@ from agent_runtime.prompts.assembly import (
 )
 
 
+class ProviderCacheOwner(StrEnum):
+    """The one layer permitted to add provider cache controls."""
+
+    NONE = "none"
+    FRAMEWORK = "framework"
+    PRODUCT = "product"
+
+
 @dataclass(frozen=True)
 class ProviderPromptDecoration:
     """Provider payload plus content-free cache diagnostics."""
 
     system_prompt: str | SystemMessage
+    cache_owner: ProviderCacheOwner
     provider_cache_enabled: bool
     cached_prefix_digest: str | None
     reason_code: str
@@ -35,13 +45,40 @@ class ProviderPromptDecorator:
         *,
         provider: str,
         plan: PromptAssemblyPlan,
+        cache_owner: ProviderCacheOwner,
+        supports_explicit_cache_controls: bool = False,
     ) -> ProviderPromptDecoration:
+        if cache_owner is ProviderCacheOwner.FRAMEWORK:
+            return ProviderPromptDecoration(
+                system_prompt=plan.rendered_prompt,
+                cache_owner=cache_owner,
+                provider_cache_enabled=False,
+                cached_prefix_digest=None,
+                reason_code="delegated_to_framework_middleware",
+            )
+        if cache_owner is ProviderCacheOwner.NONE:
+            return ProviderPromptDecoration(
+                system_prompt=plan.rendered_prompt,
+                cache_owner=cache_owner,
+                provider_cache_enabled=False,
+                cached_prefix_digest=None,
+                reason_code="cache_controls_disabled",
+            )
         if provider.strip().lower() != "anthropic":
             return ProviderPromptDecoration(
                 system_prompt=plan.rendered_prompt,
+                cache_owner=cache_owner,
                 provider_cache_enabled=False,
                 cached_prefix_digest=None,
                 reason_code="provider_implicit_or_unsupported",
+            )
+        if not supports_explicit_cache_controls:
+            return ProviderPromptDecoration(
+                system_prompt=plan.rendered_prompt,
+                cache_owner=cache_owner,
+                provider_cache_enabled=False,
+                cached_prefix_digest=None,
+                reason_code="model_not_qualified_for_explicit_cache_controls",
             )
         cacheable_count = 0
         for fragment in plan.fragments:
@@ -52,6 +89,7 @@ class ProviderPromptDecorator:
         if cacheable_count == 0:
             return ProviderPromptDecoration(
                 system_prompt=plan.rendered_prompt,
+                cache_owner=cache_owner,
                 provider_cache_enabled=False,
                 cached_prefix_digest=None,
                 reason_code=(
@@ -73,6 +111,7 @@ class ProviderPromptDecorator:
         ):
             return ProviderPromptDecoration(
                 system_prompt=plan.rendered_prompt,
+                cache_owner=cache_owner,
                 provider_cache_enabled=False,
                 cached_prefix_digest=None,
                 reason_code="non_contiguous_cacheable_prefix",
@@ -85,10 +124,15 @@ class ProviderPromptDecorator:
             blocks.append(block)
         return ProviderPromptDecoration(
             system_prompt=SystemMessage(content=blocks),
+            cache_owner=cache_owner,
             provider_cache_enabled=True,
             cached_prefix_digest=plan.stable_prefix_digest,
             reason_code="anthropic_stable_prefix",
         )
 
 
-__all__ = ("ProviderPromptDecoration", "ProviderPromptDecorator")
+__all__ = (
+    "ProviderCacheOwner",
+    "ProviderPromptDecoration",
+    "ProviderPromptDecorator",
+)
