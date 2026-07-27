@@ -1665,7 +1665,7 @@ export { type TcChatApproval } from "./thread-canvas";
 // 404s on discovery). The `approvalKind` carried on `RunApproval`/`TcChatApproval`
 // (above) is what the card branches on. The host launcher + OAuth resume land in
 // P5b (apps/frontend), NOT here.
-export type { McpAuthPort } from "./destinations/run";
+export type { McpAuthBeginOptions, McpAuthPort } from "./destinations/run";
 // The consent card's four states have an owner: `useConnectorConsentStates`
 // wraps the host port so `beginAuth`/`skipAuth` move the card, and takes the
 // host's observed OAuth return (web `completedMcpAuthAction.serverId`) for the

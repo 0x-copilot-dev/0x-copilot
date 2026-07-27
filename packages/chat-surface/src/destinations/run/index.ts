@@ -62,7 +62,7 @@ export {
 } from "./approvalProjection";
 
 // === WC-P5a — MCP-OAuth launcher port TYPE (AD-6) ===
-export type { McpAuthPort } from "./mcpAuthPort";
+export type { McpAuthBeginOptions, McpAuthPort } from "./mcpAuthPort";
 export {
   useConnectorConsentStates,
   type ConnectorConsentStateController,

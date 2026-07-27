@@ -145,6 +145,13 @@ class McpServerCard(RuntimeContract):
     # so this is ``read`` / ``read_act`` in practice; the default keeps
     # deployment-level cards (no connector row) valid.
     access_mode: ConnectorAccessMode = ConnectorAccessMode.READ
+    # Which catalog connector this server IS, projected by the backend from the
+    # ``mcp_servers`` column. Server id and catalog slug are different names for
+    # different things — the desktop's OAuth path is keyed on the slug (it
+    # reconstructs the loopback redirect rather than accepting one from the
+    # client) while the consent card only ever learns a server id, so a gate
+    # cannot be connected on desktop without this. ``None`` for a custom server.
+    connector_slug: str | None = None
 
     @field_validator(Keys.Field.NAME)
     @classmethod

@@ -1068,7 +1068,9 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     fireEvent.click(
       screen.getByTestId("tc-chat-mcp-connect-mcp_auth:run_1:linear"),
     );
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      connectorSlug: null,
+    });
     fireEvent.click(
       screen.getByTestId("tc-chat-mcp-skip-mcp_auth:run_1:linear"),
     );
@@ -1110,7 +1112,9 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     fireEvent.click(
       screen.getByTestId("tc-chat-mcp-connect-mcp_discovery:run_1:seed:linear"),
     );
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      connectorSlug: null,
+    });
     expect(onApprove).not.toHaveBeenCalled();
   });
 
@@ -1250,7 +1254,9 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     );
     // Reversible by design — a denial is a decision, not a dead end.
     fireEvent.click(screen.getByTestId("cc-reconsider"));
-    expect(beginAuth).toHaveBeenCalledWith("linear");
+    expect(beginAuth).toHaveBeenCalledWith("linear", {
+      connectorSlug: null,
+    });
   });
 
   it("Cancel while connecting returns the card to pending", () => {
@@ -1302,6 +1308,75 @@ describe("TcChat MCP-OAuth Connect card (WC-P5a / AD-7)", () => {
     expect(
       screen.getByTestId("tc-chat-connector-mcp_auth:run_1:notion"),
     ).toHaveAttribute("data-state", "pending");
+  });
+
+  // A slug-keyed host (desktop) cannot start a connect from a `server_id`: its
+  // whole path is keyed on the catalog slug, because the backend reconstructs
+  // the loopback redirect from a validated port rather than accepting one from
+  // the client. So the card names the connector both ways and lets each host
+  // use the key its own flow is built on.
+  describe("naming the connector for a slug-keyed host", () => {
+    function connectWith(overrides: Partial<TcChatApproval>) {
+      const { transport } = makeTransport(() =>
+        Promise.resolve(SAMPLE_RESPONSE),
+      );
+      const { port, beginAuth } = makePort();
+      render(
+        withTransport(
+          transport,
+          <TcChat
+            conversationId="c"
+            mode="studio"
+            approvals={[mcpAuthApproval(overrides)]}
+            mcpAuthPort={port}
+          />,
+        ),
+      );
+      fireEvent.click(
+        screen.getByTestId(
+          `tc-chat-mcp-connect-${mcpAuthApproval(overrides).approvalId}`,
+        ),
+      );
+      return beginAuth;
+    }
+
+    it("passes an installed server's connector slug", () => {
+      const beginAuth = connectWith({ connectorSlug: "linear" });
+      expect(beginAuth).toHaveBeenCalledWith("linear", {
+        connectorSlug: "linear",
+      });
+    });
+
+    it("falls back to a suggestion's catalog slug", () => {
+      // Different fields, same answer to "which connector". A slug-keyed
+      // connect is install-then-auth and idempotent, so it does not care which
+      // of the two named it.
+      const beginAuth = connectWith({
+        approvalId: "mcp_discovery:run_1:seed:notion",
+        serverId: "seed:notion",
+        catalogSlug: "notion",
+      });
+      expect(beginAuth).toHaveBeenCalledWith("seed:notion", {
+        connectorSlug: "notion",
+      });
+    });
+
+    it("prefers the installed identity when a card somehow carries both", () => {
+      const beginAuth = connectWith({
+        connectorSlug: "linear",
+        catalogSlug: "linear-catalog",
+      });
+      expect(beginAuth).toHaveBeenCalledWith("linear", {
+        connectorSlug: "linear",
+      });
+    });
+
+    it("reports null for a custom server rather than guessing a slug", () => {
+      // A pasted-URL MCP server has no catalog identity. The honest answer lets
+      // the host say "not available here" instead of failing mid-flow.
+      const beginAuth = connectWith({});
+      expect(beginAuth).toHaveBeenCalledWith("linear", { connectorSlug: null });
+    });
   });
 
   // Mute lands on the card because that is where the intent forms. The
