@@ -635,6 +635,8 @@ export type RuntimeApiEventType =
   | "receipt.emitted"
   | ArtifactRuntimeEventType
   | RuntimeLedgerV21EventType
+  | "quality.control_bound.v1"
+  | "quality.decision.v1"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -712,6 +714,8 @@ export const RUNTIME_API_EVENT_TYPES = [
   // slice above. Keeping a single spread makes the backend contract parser
   // resolve the transport tuple without following imports across files.
   ...RUNTIME_LEDGER_V21_EVENT_TYPES,
+  "quality.control_bound.v1",
+  "quality.decision.v1",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2338,6 +2342,74 @@ export interface RuntimeTextPayload {
   [key: string]: unknown;
 }
 
+export type AgentQualityFeature =
+  | "f1"
+  | "f2"
+  | "f3"
+  | "f4"
+  | "f5"
+  | "f6"
+  | "f7"
+  | "f8"
+  | "f9"
+  | "f10"
+  | "f11"
+  | "f12";
+
+export type QualityFeatureMode = "off" | "shadow" | "enforce";
+
+/** Internal, closed, flat, content-free run-control journal payloads. */
+export interface QualityControlBoundPayload {
+  schema_version: 1;
+  snapshot_id: string;
+  snapshot_digest: string;
+  subject_fingerprint: string;
+  deployment_profile: string;
+  harness_variant_ref: string;
+  task_policy_selection_ref: string;
+  prompt_policy_revision: string;
+  capability_policy_revision: string;
+  context_policy_revision: string;
+  tool_controller_policy_revision: string;
+  concurrency_policy_revision: string;
+  dataflow_policy_revision: string;
+  mcp_freshness_policy_revision: string;
+  delegation_policy_revision: string;
+  model_route_policy_revision: string;
+  workspace_edit_policy_revision: string;
+  answer_verification_policy_revision: string;
+  feature_mode_f1: QualityFeatureMode;
+  feature_mode_f2: QualityFeatureMode;
+  feature_mode_f3: QualityFeatureMode;
+  feature_mode_f4: QualityFeatureMode;
+  feature_mode_f5: QualityFeatureMode;
+  feature_mode_f6: QualityFeatureMode;
+  feature_mode_f7: QualityFeatureMode;
+  feature_mode_f8: QualityFeatureMode;
+  feature_mode_f9: QualityFeatureMode;
+  feature_mode_f10: QualityFeatureMode;
+  feature_mode_f11: QualityFeatureMode;
+  feature_mode_f12: QualityFeatureMode;
+  budget_envelope_ref: string;
+  assignment_revision: string;
+  created_at: string;
+}
+
+export interface QualityDecisionPayload {
+  schema_version: 1;
+  decision_id: string;
+  decision_digest: string;
+  snapshot_id: string;
+  phase: string;
+  feature: AgentQualityFeature;
+  policy_revision: string;
+  input_digest: string;
+  outcome_code: string;
+  record_ref: string | null;
+  parent_decision_refs: readonly string[];
+  created_at: string;
+}
+
 // Citations (PR 1.1). `citation_id` is short ("c<base36>" of the per-run
 // ordinal) and is the token the assistant text embeds inline as
 // `[c<id>]`. The frontend's markdown plugin resolves these tokens by
@@ -2718,6 +2790,8 @@ export interface RuntimeEventPayloadByType
    * {kind: receipt}`) at run termination. Carries only `surface_id` + `fold_ref`
    * (the receipt is re-derivable by folding the ledger, never a stored blob). */
   "receipt.emitted": ReceiptEmittedPayload;
+  "quality.control_bound.v1": QualityControlBoundPayload;
+  "quality.decision.v1": QualityDecisionPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event
