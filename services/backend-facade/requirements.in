@@ -1,6 +1,6 @@
 # Top-level runtime + test deps for services/backend-facade. Regenerate lock:
 #   cd services/backend-facade && .venv/bin/pip-compile --generate-hashes --resolver=backtracking requirements.in -o requirements.txt
-fastapi==0.139.2
+fastapi==0.140.1
 httpx==0.28.1
 pydantic==2.13.4
 python-dotenv==1.2.2
