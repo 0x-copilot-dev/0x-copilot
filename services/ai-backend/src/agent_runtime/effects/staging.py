@@ -220,7 +220,7 @@ class EffectStager:
             raise EffectStageInvalidTransition(
                 "A different projection is already bound to this revision."
             )
-        event = await self.ledger.append_stage_event(
+        await self.ledger.append_stage_event(
             scope=scope,
             event_type=_EVENT_PROJECTION_BOUND,
             payload={
@@ -245,12 +245,25 @@ class EffectStager:
                 },
             ),
         )
-        bound = EffectStageFold.fold((*events, event))
-        # A concurrent revision can make this newly appended binding stale before
-        # replay reaches us. Fail closed: the caller must rebuild/reproject the
-        # current revision rather than returning an approvable stale projection.
-        if not bound.approval_ready:
+        # Re-read canonical history after append. A revision or competing
+        # binding can interleave between the first read and this write; folding
+        # only the stale prefix plus our event would incorrectly report that
+        # our projection won the race.
+        bound = await self.get_state(scope=scope, stage_id=stage_id)
+        if bound.current_revision.revision != revision:
             raise EffectStageStaleRevision()
+        binding = bound.projection_binding
+        if (
+            not bound.approval_ready
+            or binding is None
+            or binding.revision != revision
+            or binding.projection_ref != projection_ref
+            or binding.proposal_digest != proposal_digest
+            or binding.target_digest != target_digest
+        ):
+            raise EffectStageInvalidTransition(
+                "The requested projection did not become the canonical binding."
+            )
         return bound
 
     async def revise(

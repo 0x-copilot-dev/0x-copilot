@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from agent_runtime.effects.contracts import EffectProposalKind, EffectStageStatus
+from agent_runtime.effects.contracts import (
+    EffectProposalKind,
+    EffectStageStatus,
+    ProposedEffect,
+)
 from agent_runtime.effects.errors import (
     EffectStageDigestMismatch,
     EffectStageForbidden,
@@ -59,6 +63,25 @@ async def _stage(stager: EffectStager, *, key: str = "stage-1"):
         idempotency_key=key,
     )
     return state, proposed
+
+
+async def test_stage_returns_append_result_without_a_second_ledger_read() -> None:
+    class ReadUnavailableLedger(FakeLedger):
+        async def list_stage_events(self, **_kwargs: object):
+            raise RuntimeError("read path unavailable after append")
+
+    ledger = ReadUnavailableLedger()
+    stager = EffectStager(
+        ledger=ledger,
+        outbox=FakeOutbox(),
+        clock=FakeClock(),
+        stage_ids=FakeStageIds(),
+    )
+
+    state, _ = await _stage(stager)
+
+    assert state.current_revision.revision == 1
+    assert ledger.append_calls == 1
 
 
 async def test_approve_pins_exact_digests_and_enqueues_one_body_free_command() -> None:
@@ -218,6 +241,71 @@ async def test_revision_invalidates_a_previous_projection_binding() -> None:
         )
     assert outbox.enqueue_calls == 0
     assert ledger.append_calls == 3
+
+
+async def test_concurrent_revision_prevents_stale_projection_from_returning_ready() -> (
+    None
+):
+    class RevisionBeforeBindingLedger(FakeLedger):
+        stager: EffectStager | None = None
+        staged_proposal: ProposedEffect | None = None
+        stage_id: str | None = None
+        revision_inserted = False
+
+        async def append_stage_event(self, **kwargs: object):
+            if (
+                kwargs.get("event_type") == "effect.projection_bound"
+                and not self.revision_inserted
+            ):
+                self.revision_inserted = True
+                assert self.stager is not None
+                assert self.staged_proposal is not None
+                assert self.stage_id is not None
+                await self.stager.revise(
+                    scope=scope(),
+                    stage_id=self.stage_id,
+                    expected_revision=1,
+                    proposal=revision_from(self.staged_proposal),
+                    actor=user(),
+                    idempotency_key="concurrent-revision",
+                )
+            return await super().append_stage_event(**kwargs)  # type: ignore[arg-type]
+
+    ledger = RevisionBeforeBindingLedger()
+    stager = EffectStager(
+        ledger=ledger,
+        outbox=FakeOutbox(),
+        clock=FakeClock(),
+        stage_ids=FakeStageIds(),
+    )
+    proposed = proposal(projection_required=True)
+    staged = await stager.stage(
+        scope=scope(),
+        proposed_effect=proposed,
+        policy_snapshot=policy_snapshot(),
+        actor=user(),
+        idempotency_key="stage-before-concurrent-revision",
+    )
+    ledger.stager = stager
+    ledger.staged_proposal = proposed
+    ledger.stage_id = staged.stage_id
+
+    with pytest.raises(EffectStageStaleRevision):
+        await stager.bind_projection(
+            scope=scope(),
+            stage_id=staged.stage_id,
+            revision=1,
+            projection_ref="workspace-overlay://runs/run_a4_test/versions/1",
+            proposal_digest=proposed.proposal_digest,
+            target_digest=proposed.target_digest,
+            actor=user(),
+            idempotency_key="stale-projection-binding",
+        )
+
+    canonical = await stager.get_state(scope=scope(), stage_id=staged.stage_id)
+    assert canonical.current_revision.revision == 2
+    assert canonical.projection_binding is None
+    assert not canonical.approval_ready
 
 
 async def test_invalid_or_stale_mutations_emit_nothing() -> None:

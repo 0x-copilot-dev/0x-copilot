@@ -268,6 +268,25 @@ class FailOnceProjectionBindingLedger(FakeLedger):
         return await super().append_stage_event(**kwargs)  # type: ignore[arg-type]
 
 
+class ExplodingProjectionCancellationLedger(FakeLedger):
+    """Prove the missing binding stays fail-closed when cleanup also fails."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancel_attempts = 0
+
+    async def append_stage_event(self, **kwargs: object) -> object:
+        payload = kwargs.get("payload")
+        if (
+            kwargs.get("event_type") == LedgerEventType.EFFECT_DECISION_RECORDED.value
+            and isinstance(payload, dict)
+            and payload.get("decision") == EffectDecisionKind.CANCEL.value
+        ):
+            self.cancel_attempts += 1
+            raise RuntimeError("stage cancellation unavailable")
+        return await super().append_stage_event(**kwargs)  # type: ignore[arg-type]
+
+
 class ExplodingOutbox(FakeOutbox):
     """A pre-approval workspace stage must never reach the command outbox."""
 
@@ -638,6 +657,47 @@ async def test_failed_overlay_projection_never_exposes_content_or_an_approvable_
     )
     assert harness.base.files[path] == original
     assert harness.base.mutation_calls == []
+
+
+async def test_projection_and_cleanup_failure_leaves_an_unapprovable_stage() -> None:
+    path = f"/workspace/{MOUNT}/double-failure.csv"
+    overlays = InMemoryWorkspaceOverlayStore()
+    projection = ExplodingProjectionOverlayStore(overlays)
+    ledger = ExplodingProjectionCancellationLedger()
+    harness = _harness(ledger=ledger, overlay_store=projection)
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(path, "account,total\nAcme,20\n")
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    assert result.error is not None
+    assert (await overlays.get_manifest(run_id=RUN_ID)).entries == ()
+    assert ledger.cancel_attempts == 1
+    assert harness.outbox.enqueue_calls == 0
+    assert len(ledger.events_by_stage) == 1
+    stage_id = next(iter(ledger.events_by_stage))
+    state = await harness.stager.get_state(
+        scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER),
+        stage_id=stage_id,
+    )
+    assert state.status is EffectStageStatus.HELD
+    assert state.projection_required
+    assert not state.approval_ready
+    with pytest.raises(EffectStageProjectionUnbound):
+        await harness.stager.decide(
+            scope=EffectStageScope(run_id=RUN_ID, owner_ref=OWNER),
+            stage_id=stage_id,
+            revision=state.current_revision.revision,
+            decision=EffectDecisionKind.APPROVE,
+            proposal_digest=state.current_revision.proposal_digest,
+            target_digest=state.target_digest,
+            actor=EffectActorIdentity(
+                actor=EffectActor.USER,
+                principal_ref=OWNER,
+            ),
+            idempotency_key="double-failure-must-stay-unbound",
+        )
 
 
 async def test_retry_recovers_an_overlay_after_its_projection_binding_append_failed() -> (

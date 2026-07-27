@@ -406,6 +406,28 @@ async def test_stale_approval_and_changed_ref_refuse_before_prepare() -> None:
 
 
 @pytest.mark.asyncio
+async def test_forged_command_for_unbound_required_stage_never_dispatches() -> None:
+    command, ledger, references = await _approved_command()
+    staged = ledger.events_by_stage[command.stage_id][0]
+    ledger.events_by_stage[command.stage_id][0] = staged.model_copy(
+        update={"payload": {**staged.payload, "projection_required": True}}
+    )
+    claims = InMemoryEffectClaimStore()
+    executor = _matching_executor()
+
+    result = await _coordinator(
+        ledger=ledger,
+        references=references,
+        claims=claims,
+        executor=executor,
+    ).handle(command)
+
+    assert result.status is EffectCoordinatorStatus.REFUSED
+    assert executor.calls == []
+    assert await claims.list_incomplete() == ()
+
+
+@pytest.mark.asyncio
 async def test_cancellation_after_claim_aborts_without_apply() -> None:
     command, ledger, references = await _approved_command()
     claims = InMemoryEffectClaimStore()
