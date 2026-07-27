@@ -1171,6 +1171,9 @@ def main() -> int:
                 assert status.get("target") == INSTALLED_PAYLOAD_TARGET, (
                     "G1 did not launch the installed desktop payload"
                 )
+                assert session.wait_for("[data-testid=sign-in-button]"), (
+                    "sign-in gate never appeared after the supervised runtime became ready"
+                )
                 _assert_main_production_posture(session)
 
                 session.sign_in_local()

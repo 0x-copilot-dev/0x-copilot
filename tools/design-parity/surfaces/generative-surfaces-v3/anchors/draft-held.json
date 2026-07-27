@@ -1,0 +1,63 @@
+{
+  "surface": "generative-surfaces-v3",
+  "state": "draft-held",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "Supplied v3 held Gmail draft compared with the real staged-draft surface. No divergences are waived.",
+  "elements": [
+    {
+      "label": "draft.root",
+      "group": "Draft",
+      "design": "[data-parity-anchor=\"surface-root\"]",
+      "live": "[data-testid=\"tc-staged-draft\"]"
+    },
+    {
+      "label": "draft.revision",
+      "group": "Draft",
+      "design": "[data-parity-anchor=\"draft-revision\"]",
+      "live": "[data-testid=\"tc-staged-draft-rev\"]"
+    },
+    {
+      "label": "draft.body",
+      "group": "Draft",
+      "design": "[data-parity-anchor=\"draft-body\"]",
+      "live": "[data-testid=\"tc-staged-draft-body\"]"
+    },
+    {
+      "label": "draft.edit",
+      "group": "Draft actions",
+      "design": "[data-parity-anchor=\"draft-edit\"]",
+      "live": "[data-testid=\"tc-staged-draft-edit\"]"
+    },
+    {
+      "label": "draft.approval",
+      "group": "Approval",
+      "design": "[data-parity-anchor=\"draft-approval\"]",
+      "live": "[data-testid=\"tc-approve-bar\"]"
+    },
+    {
+      "label": "draft.approval-copy",
+      "group": "Approval",
+      "design": "[data-parity-anchor=\"draft-approval-copy\"]",
+      "live": "[data-testid=\"tc-approve-bar-copy\"]"
+    },
+    {
+      "label": "draft.approve",
+      "group": "Approval",
+      "design": "[data-parity-anchor=\"draft-approve\"]",
+      "live": "[data-testid=\"tc-approve-bar-approve\"]"
+    },
+    {
+      "label": "draft.reject",
+      "group": "Approval",
+      "design": "[data-parity-anchor=\"draft-reject\"]",
+      "live": "[data-testid=\"tc-approve-bar-reject\"]"
+    },
+    {
+      "label": "draft.provenance",
+      "group": "Provenance",
+      "design": "[data-parity-anchor=\"draft-provenance\"]",
+      "live": "[data-testid=\"tc-staged-draft-ledger-id\"]"
+    }
+  ]
+}

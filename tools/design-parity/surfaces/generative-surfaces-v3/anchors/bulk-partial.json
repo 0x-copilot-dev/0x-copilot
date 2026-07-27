@@ -1,0 +1,51 @@
+{
+  "surface": "generative-surfaces-v3",
+  "state": "bulk-partial",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "Supplied v3 partial-apply recovery compared with the real staged-table partial state. A missing retry action is intentionally not waived.",
+  "elements": [
+    {
+      "label": "bulk.root",
+      "group": "Bulk partial",
+      "design": "[data-parity-anchor=\"surface-root\"]",
+      "live": "[data-testid=\"tc-staged-table\"]"
+    },
+    {
+      "label": "bulk.title",
+      "group": "Bulk partial",
+      "design": "[data-parity-anchor=\"bulk-title\"]",
+      "live": "[data-testid=\"tc-staged-table-connector\"]"
+    },
+    {
+      "label": "bulk.status",
+      "group": "Bulk partial",
+      "design": "[data-parity-anchor=\"bulk-status\"]",
+      "live": "[data-testid=\"tc-staged-table-access\"]"
+    },
+    {
+      "label": "bulk.row",
+      "group": "Row result",
+      "design": "[data-parity-anchor=\"bulk-row\"]",
+      "live": "[data-testid=\"tc-table-row\"]"
+    },
+    {
+      "label": "bulk.row-failed",
+      "group": "Row result",
+      "design": "[data-parity-anchor=\"bulk-row-failed\"]",
+      "live": "[data-testid=\"tc-table-row\"][data-row-key=\"opp-2\"] [data-testid=\"tc-table-row-outcome\"]"
+    },
+    {
+      "label": "bulk.partial-copy",
+      "group": "Recovery",
+      "design": "[data-parity-anchor=\"bulk-partial-copy\"]",
+      "live": "[data-testid=\"tc-staged-table-counts\"]"
+    },
+    {
+      "label": "bulk.retry",
+      "group": "Recovery",
+      "design": "[data-parity-anchor=\"bulk-retry\"]",
+      "live": "[data-testid=\"tc-bulk-retry\"]"
+    }
+  ]
+}
