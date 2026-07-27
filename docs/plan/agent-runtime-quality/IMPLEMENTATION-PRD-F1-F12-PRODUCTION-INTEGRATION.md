@@ -42,9 +42,9 @@ create a second planning queue.
         (`08c36358`).
   - [x] F2 single prompt-cache ownership and model-qualified provider support
         (`b15da8c7`).
-  - [ ] F4/F5 graph-wide admission and result control for Deep Agents-injected
-        tools.
-  - [ ] F6 live multi-tool serial-default enforcement.
+  - [x] F4/F5 graph-wide admission and result control for Deep Agents-injected
+        tools (`ba5a3bfc`).
+  - [x] F6 live multi-tool serial-default enforcement (`ba5a3bfc`).
   - [x] F7 trusted input/schema/evaluator bindings (`e3fc7c2c`).
   - [x] F8 generation-fenced invalidation and paginated discovery
         (`434496f7`).
