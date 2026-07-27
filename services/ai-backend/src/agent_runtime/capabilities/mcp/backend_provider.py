@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 import os
-from typing import Any
+from typing import Any, ClassVar
 
 from copilot_service_contracts.headers import (
     ORG_HEADER,
@@ -31,7 +31,9 @@ from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
     McpClient,
     McpConnectionError,
+    McpResourceDiscoveryPage,
     McpTimeoutError,
+    McpToolDiscoveryPage,
     McpUnsupportedMethodError,
     RawMcpConnectionMetadata,
 )
@@ -157,6 +159,7 @@ class BackendMcpClient:
     server_url: str | None = None
     initialized: bool = False
     request_id: int = 0
+    _MAX_DISCOVERY_PAGES: ClassVar[int] = 100
     http_client: httpx.AsyncClient = field(
         default_factory=BackendHttpPool.get,
         repr=False,
@@ -193,31 +196,82 @@ class BackendMcpClient:
         )
 
     async def list_tools(self) -> tuple[McpToolDescriptor | dict[str, Any], ...]:
-        """Fetch tool descriptors via ``tools/list`` and build typed ``McpToolDescriptor`` objects."""
-        result = await self._rpc_result(Values.JsonRpcMethod.LIST_TOOLS)
+        """Fetch every tools/list page for non-paginated protocol callers."""
+        items: list[McpToolDescriptor | dict[str, Any]] = []
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _ in range(self._MAX_DISCOVERY_PAGES):
+            page = await self.list_tools_page(cursor=cursor)
+            items.extend(page.items)
+            if page.next_cursor is None:
+                return tuple(items)
+            if page.next_cursor in seen:
+                raise McpConnectionError("MCP tools/list cursor repeated.")
+            seen.add(page.next_cursor)
+            cursor = page.next_cursor
+        raise McpConnectionError("MCP tools/list exceeded the page limit.")
+
+    async def list_tools_page(
+        self,
+        *,
+        cursor: str | None,
+    ) -> McpToolDiscoveryPage:
+        """Fetch one tools/list page and preserve its continuation cursor."""
+        params = None if cursor is None else {Keys.Field.CURSOR: cursor}
+        result = await self._rpc_result(Values.JsonRpcMethod.LIST_TOOLS, params)
         tools = result.get(Keys.Field.TOOLS, ())
         if not isinstance(tools, list):
-            return ()
-        return tuple(
-            self._tool_descriptor(tool) for tool in tools if isinstance(tool, dict)
+            tools = []
+        return McpToolDiscoveryPage(
+            items=tuple(
+                self._tool_descriptor(tool) for tool in tools if isinstance(tool, dict)
+            ),
+            next_cursor=result.get(Keys.Field.NEXT_CURSOR),
         )
 
     async def list_resources(
         self,
     ) -> tuple[McpResourceDescriptor | dict[str, Any], ...]:
-        """Fetch resource descriptors via ``resources/list``; return empty tuple if unsupported."""
+        """Fetch every resources/list page for non-paginated protocol callers."""
+        items: list[McpResourceDescriptor | dict[str, Any]] = []
+        cursor: str | None = None
+        seen: set[str] = set()
+        for _ in range(self._MAX_DISCOVERY_PAGES):
+            page = await self.list_resources_page(cursor=cursor)
+            items.extend(page.items)
+            if page.next_cursor is None:
+                return tuple(items)
+            if page.next_cursor in seen:
+                raise McpConnectionError("MCP resources/list cursor repeated.")
+            seen.add(page.next_cursor)
+            cursor = page.next_cursor
+        raise McpConnectionError("MCP resources/list exceeded the page limit.")
+
+    async def list_resources_page(
+        self,
+        *,
+        cursor: str | None,
+    ) -> McpResourceDiscoveryPage:
+        """Fetch one resources/list page and preserve its continuation cursor."""
         try:
-            result = await self._rpc_result(Values.JsonRpcMethod.LIST_RESOURCES)
+            params = None if cursor is None else {Keys.Field.CURSOR: cursor}
+            result = await self._rpc_result(
+                Values.JsonRpcMethod.LIST_RESOURCES,
+                params,
+            )
         except McpUnsupportedMethodError:
             # resources/list is optional in the MCP spec; graceful degradation.
-            return ()
+            return McpResourceDiscoveryPage()
         resources = result.get(Keys.Field.RESOURCES, ())
         if not isinstance(resources, list):
-            return ()
-        return tuple(
-            self._resource_descriptor(resource)
-            for resource in resources
-            if isinstance(resource, dict)
+            resources = []
+        return McpResourceDiscoveryPage(
+            items=tuple(
+                self._resource_descriptor(resource)
+                for resource in resources
+                if isinstance(resource, dict)
+            ),
+            next_cursor=result.get(Keys.Field.NEXT_CURSOR),
         )
 
     async def call_tool(

@@ -12,13 +12,17 @@ These tests exist to confirm two invariants:
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass, field
 
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 from agent_runtime.capabilities.mcp import (
     DynamicMcpRegistry,
     McpDiscoveryCache,
+    McpLoadErrorCode,
     McpLoadRequest,
     McpLoader,
+    McpResourceDiscoveryPage,
+    McpToolDiscoveryPage,
 )
 
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
@@ -58,6 +62,43 @@ class LoaderCacheMixin(DynamicMcpLoadingMixin):
             McpLoader(DynamicMcpRegistry(providers=(provider,)), cache=cache),
             provider,
         )
+
+
+@dataclass
+class _PaginatedMcpClient(DynamicMcpLoadingMixin.FakeMcpClient):
+    tool_pages: dict[str | None, McpToolDiscoveryPage] = field(default_factory=dict)
+    resource_pages: dict[str | None, McpResourceDiscoveryPage] = field(
+        default_factory=dict
+    )
+    requested_tool_cursors: list[str | None] = field(default_factory=list)
+    requested_resource_cursors: list[str | None] = field(default_factory=list)
+
+    async def list_tools_page(
+        self,
+        *,
+        cursor: str | None,
+    ) -> McpToolDiscoveryPage:
+        self.requested_tool_cursors.append(cursor)
+        return self.tool_pages[cursor]
+
+    async def list_resources_page(
+        self,
+        *,
+        cursor: str | None,
+    ) -> McpResourceDiscoveryPage:
+        self.requested_resource_cursors.append(cursor)
+        return self.resource_pages[cursor]
+
+
+@dataclass
+class _DelayedMcpClient(DynamicMcpLoadingMixin.FakeMcpClient):
+    load_started: asyncio.Event = field(default_factory=asyncio.Event)
+    release_load: asyncio.Event = field(default_factory=asyncio.Event)
+
+    async def list_tools(self):
+        self.load_started.set()
+        await self.release_load.wait()
+        return await super().list_tools()
 
 
 class TestLoaderCacheIntegration(LoaderCacheMixin):
@@ -183,5 +224,146 @@ class TestLoaderCacheIntegration(LoaderCacheMixin):
                 )
             )
             assert len(provider.created_clients) == 2
+
+        asyncio.run(run())
+
+    def test_paginated_client_loads_every_page_before_publication(self) -> None:
+        async def run() -> None:
+            client = _PaginatedMcpClient(
+                tools=(),
+                resources=(),
+                tool_pages={
+                    None: McpToolDiscoveryPage(
+                        items=(self.make_tool(name="first_page_tool"),),
+                        next_cursor="tools-page-2",
+                    ),
+                    "tools-page-2": McpToolDiscoveryPage(
+                        items=(self.make_tool(name="second_page_tool"),),
+                    ),
+                },
+                resource_pages={
+                    None: McpResourceDiscoveryPage(
+                        items=(self.make_resource(),),
+                    )
+                },
+            )
+            provider = self.FakeMcpProvider(
+                cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+                clients={self.TestValues.Names.DRIVE_MCP: client},
+            )
+            loader = McpLoader(DynamicMcpRegistry(providers=(provider,)))
+            request = McpLoadRequest(
+                server_name=self.TestValues.Names.DRIVE_MCP,
+                runtime_context=self.build_context(
+                    ModelConfig(
+                        provider="fake",
+                        model_name="fake",
+                        max_input_tokens=128_000,
+                        timeout_seconds=30,
+                        temperature=0,
+                    )
+                ),
+            )
+
+            result = await loader.load_server(request)
+
+            assert result.succeeded
+            assert result.loaded_server is not None
+            assert tuple(tool.name for tool in result.loaded_server.tools) == (
+                "first_page_tool",
+                "second_page_tool",
+            )
+            assert client.requested_tool_cursors == [None, "tools-page-2"]
+            assert client.requested_resource_cursors == [None]
+
+        asyncio.run(run())
+
+    def test_paginated_client_rejects_repeated_cursor(self) -> None:
+        async def run() -> None:
+            repeated = McpToolDiscoveryPage(
+                items=(self.make_tool(),),
+                next_cursor="repeat",
+            )
+            client = _PaginatedMcpClient(
+                tools=(),
+                resources=(),
+                tool_pages={None: repeated, "repeat": repeated},
+                resource_pages={None: McpResourceDiscoveryPage()},
+            )
+            provider = self.FakeMcpProvider(
+                cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+                clients={self.TestValues.Names.DRIVE_MCP: client},
+            )
+            loader = McpLoader(DynamicMcpRegistry(providers=(provider,)))
+            request = McpLoadRequest(
+                server_name=self.TestValues.Names.DRIVE_MCP,
+                runtime_context=self.build_context(
+                    ModelConfig(
+                        provider="fake",
+                        model_name="fake",
+                        max_input_tokens=128_000,
+                        timeout_seconds=30,
+                        temperature=0,
+                    )
+                ),
+            )
+
+            result = await loader.load_server(request)
+
+            assert result.error is not None
+            assert result.error.code is McpLoadErrorCode.MALFORMED_DESCRIPTOR
+            assert client.requested_tool_cursors == [None, "repeat"]
+            assert client.requested_resource_cursors == []
+
+        asyncio.run(run())
+
+    def test_invalidation_race_does_not_surface_or_cache_loaded_descriptors(
+        self,
+    ) -> None:
+        async def run() -> None:
+            cache = McpDiscoveryCache()
+            client = _DelayedMcpClient(
+                tools=(self.make_tool(),),
+                resources=(self.make_resource(),),
+            )
+            provider = self.FakeMcpProvider(
+                cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+                clients={self.TestValues.Names.DRIVE_MCP: client},
+            )
+            loader = McpLoader(
+                DynamicMcpRegistry(providers=(provider,)),
+                cache=cache,
+            )
+            context = self.build_context(
+                ModelConfig(
+                    provider="fake",
+                    model_name="fake",
+                    max_input_tokens=128_000,
+                    timeout_seconds=30,
+                    temperature=0,
+                )
+            )
+            pending = asyncio.create_task(
+                loader.load_server(
+                    McpLoadRequest(
+                        server_name=self.TestValues.Names.DRIVE_MCP,
+                        runtime_context=context,
+                    )
+                )
+            )
+            await client.load_started.wait()
+
+            await cache.invalidate(
+                server_name=self.TestValues.Names.DRIVE_MCP,
+                org_id=context.org_id,
+                user_id=context.user_id,
+            )
+            client.release_load.set()
+            result = await pending
+
+            assert result.error is not None
+            assert result.error.code is McpLoadErrorCode.CONNECTION_FAILED
+            assert result.error.retryable is True
+            assert cache.stats().current_size == 0
 
         asyncio.run(run())
