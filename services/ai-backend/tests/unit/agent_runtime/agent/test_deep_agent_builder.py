@@ -3,9 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from deepagents import HarnessProfile
+from langchain_core.messages import HumanMessage
+from langchain_core.tools import StructuredTool
 import pytest
 
 from agent_runtime.execution import deep_agent_builder as builder_module
+from agent_runtime.execution.fake_model import DeterministicFakeChatModel
 from agent_runtime.execution.contracts import (
     ModelConfig,
     ModelReasoningConfig,
@@ -136,6 +139,120 @@ def test_universal_middleware_is_materialized_for_supervisor_and_local_subagents
     subagent_controls = {id(instances[0]) for instances in controls[:-1]}
     assert len(subagent_controls) == 1
     assert id(main_control) not in subagent_controls
+
+
+def test_final_model_visible_tools_have_one_universal_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Capture live final tool bindings, not only the caller-supplied tools."""
+
+    import deepagents.graph as deepagents_graph
+    import deepagents.middleware.subagents as deepagents_subagents
+
+    captured_graphs: list[object] = []
+    captured_stacks: list[list[object]] = []
+    bound_tool_sets: list[frozenset[str]] = []
+    graph_create_agent = deepagents_graph.create_agent
+    subagent_create_agent = deepagents_subagents.create_agent
+    original_bind_tools = DeterministicFakeChatModel.bind_tools
+
+    def capture_graph(
+        original: object,
+    ) -> object:
+        def create_agent(
+            model: object,
+            *args: object,
+            middleware: list[object],
+            **kwargs: object,
+        ) -> object:
+            graph = original(  # type: ignore[operator]
+                model,
+                *args,
+                middleware=middleware,
+                **kwargs,
+            )
+            captured_stacks.append(middleware)
+            captured_graphs.append(graph)
+            return graph
+
+        return create_agent
+
+    def capture_bind_tools(
+        model: DeterministicFakeChatModel,
+        tools: list[object],
+        **kwargs: object,
+    ) -> object:
+        bound_tool_sets.append(
+            frozenset(str(getattr(tool, "name", "")) for tool in tools)
+        )
+        return original_bind_tools(model, tools, **kwargs)
+
+    def catalog_read(query: str) -> str:
+        return query
+
+    factory_tool = StructuredTool.from_function(
+        func=catalog_read,
+        name="catalog_read",
+        description="Read one reviewed catalog entry.",
+    )
+    monkeypatch.setenv("RUNTIME_FAKE_MODEL", "1")
+    monkeypatch.setattr(
+        deepagents_graph,
+        "create_agent",
+        capture_graph(graph_create_agent),
+    )
+    monkeypatch.setattr(
+        deepagents_subagents,
+        "create_agent",
+        capture_graph(subagent_create_agent),
+    )
+    monkeypatch.setattr(
+        DeterministicFakeChatModel,
+        "bind_tools",
+        capture_bind_tools,
+    )
+    monkeypatch.setattr(builder_module, "_web_harness_profiles_registered", False)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=(factory_tool,),
+            model_config=ModelConfig(
+                provider="openai",
+                model_name="gpt-5.4-mini",
+                max_input_tokens=128_000,
+                timeout_seconds=45,
+                temperature=0,
+                supports_streaming=True,
+            ),
+            system_prompt="Follow policy.",
+            universal_middleware_factories=(RuntimeToolControlMiddleware,),
+        )
+    )
+
+    for graph in captured_graphs:
+        graph.invoke({"messages": [HumanMessage(content="Inspect tools.")]})  # type: ignore[attr-defined]
+
+    expected_local_tools = frozenset(
+        {
+            "catalog_read",
+            "glob",
+            "grep",
+            "ls",
+            "read_file",
+            "write_todos",
+        }
+    )
+    expected_supervisor_tools = expected_local_tools | {"task"}
+    assert len(captured_graphs) == len(captured_stacks) == len(bound_tool_sets)
+    assert bound_tool_sets.count(expected_local_tools) == 2
+    assert bound_tool_sets.count(expected_supervisor_tools) == 1
+    assert all(
+        sum(
+            isinstance(middleware, RuntimeToolControlMiddleware) for middleware in stack
+        )
+        == 1
+        for stack in captured_stacks
+    )
 
 
 def test_deep_agent_builder_configures_openai_responses_reasoning(
