@@ -303,6 +303,7 @@ class RuntimeApiEventType(StrEnum):
     # sole execution path; these rows describe only staged intent, claims, and
     # observed outcomes. Values come from the A1 ledger vocabulary.
     EFFECT_STAGED = LedgerEventType.EFFECT_STAGED.value
+    EFFECT_PROJECTION_BOUND = LedgerEventType.EFFECT_PROJECTION_BOUND.value
     EFFECT_REVISED = LedgerEventType.EFFECT_REVISED.value
     EFFECT_DECISION_RECORDED = LedgerEventType.EFFECT_DECISION_RECORDED.value
     EFFECT_CLAIMED = LedgerEventType.EFFECT_CLAIMED.value

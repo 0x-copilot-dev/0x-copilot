@@ -21,17 +21,16 @@ from deepagents.backends.protocol import (
 )
 
 from agent_runtime.capabilities.operations.context import OperationRequestFactory
-from agent_runtime.capabilities.operations.gateway import OperationGateway
 from agent_runtime.capabilities.workspace.contracts import (
     WorkspaceEntryKind,
     normalize_virtual_path,
 )
 from agent_runtime.capabilities.workspace.effects import (
     WorkspaceGrantBinding,
-    WorkspaceOperationAdapter,
     staged_disposition_message,
 )
 from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
+from agent_runtime.capabilities.workspace.operation_port import WorkspaceOperationPort
 
 _UNAVAILABLE = (
     "Local workspace access is unavailable. Create an artifact or download "
@@ -50,13 +49,11 @@ class WorkspaceGatewayBackend(BackendProtocol):
         self,
         *,
         merged: MergedWorkspaceBackend,
-        gateway: OperationGateway,
-        adapter: WorkspaceOperationAdapter,
+        operations: WorkspaceOperationPort,
         grants: tuple[WorkspaceGrantBinding, ...],
     ) -> None:
         self._merged = merged
-        self._gateway = gateway
-        self._adapter = adapter
+        self._operations = operations
         self._grants = grants
         self._mutation_lock = asyncio.Lock()
 
@@ -242,7 +239,7 @@ class WorkspaceGatewayBackend(BackendProtocol):
             op=op,
             arguments=arguments,
         )
-        return await self._gateway.invoke(request, self._adapter)
+        return await self._operations.invoke(request)
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[object]:
         del files

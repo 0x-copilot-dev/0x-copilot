@@ -274,8 +274,8 @@ describe("LEDGER_EVENT_TYPES", () => {
     expect([...LEDGER_EVENT_TYPES]).toEqual(Object.keys(contract.events));
   });
 
-  it("covers all 32 event types", () => {
-    expect(LEDGER_EVENT_TYPES).toHaveLength(32);
+  it("covers all 33 event types", () => {
+    expect(LEDGER_EVENT_TYPES).toHaveLength(33);
   });
 
   it("isLedgerEventType accepts every listed type and rejects others", () => {

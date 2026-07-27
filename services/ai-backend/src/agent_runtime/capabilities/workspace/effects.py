@@ -28,12 +28,23 @@ from agent_runtime.capabilities.operations.contracts import (
 )
 from agent_runtime.capabilities.workspace.contracts import (
     OverlayEntry,
-    WorkspaceMutationResult,
+    WorkspaceOverlayVersionRef,
     mount_id_for_path,
     normalize_virtual_path,
 )
-from agent_runtime.capabilities.workspace.merged_backend import MergedWorkspaceBackend
-from agent_runtime.capabilities.workspace.overlay import WorkspaceOverlayService
+from agent_runtime.capabilities.operations.stage_authority import (
+    GatewayStageCapability,
+)
+from agent_runtime.capabilities.operations.errors import OperationStageCapabilityError
+from agent_runtime.artifacts.ports import ArtifactBlobStorePort
+from agent_runtime.capabilities.workspace.overlay import (
+    _WorkspaceOverlayMutationEngine,
+    _WorkspaceOverlayPlan,
+)
+from agent_runtime.capabilities.workspace.ports import (
+    WorkspaceBaseReadPort,
+    WorkspaceOverlayStorePort,
+)
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
     EffectPolicySnapshot,
@@ -110,8 +121,6 @@ class WorkspaceProposalStorePort(Protocol):
 class WorkspaceGatewayServices:
     """Per-run dependencies for the enforced workspace adapter."""
 
-    merged: MergedWorkspaceBackend
-    overlay: WorkspaceOverlayService
     stager: EffectStager
     scope: EffectStageScope
     actor: EffectActorIdentity
@@ -213,27 +222,68 @@ class WorkspaceGrantGate:
 
 
 class WorkspaceOperationAdapter(OperationAdapter):
-    """Build one exact overlay mutation and bind it to an A4 stage."""
+    """The sole model-mutation gateway for one workspace run.
 
-    def __init__(self, *, services: WorkspaceGatewayServices) -> None:
+    This is the only public constructor that owns the private raw overlay
+    engine.  It is retained exclusively by worker-owned operation composition
+    and invoked by :class:`OperationGateway`; model backends receive only the
+    narrow ``WorkspaceOperationPort`` and never this adapter or raw engine.
+    """
+
+    def __init__(
+        self,
+        *,
+        services: WorkspaceGatewayServices,
+        run_id: str,
+        base_read: WorkspaceBaseReadPort,
+        overlay_store: WorkspaceOverlayStorePort,
+        blob_store: ArtifactBlobStorePort,
+    ) -> None:
         self._services = services
+        self._mutations = _WorkspaceOverlayMutationEngine(
+            run_id=run_id,
+            base_read=base_read,
+            overlay_store=overlay_store,
+            blob_store=blob_store,
+        )
 
     async def execute_read(self, request: OperationRequest) -> OperationRawResult:
         del request
         raise RuntimeError("workspace reads use the merged read backend")
 
     async def build_proposal(self, request: OperationRequest) -> GatewayProposedEffect:
-        arguments = _request_arguments(request)
-        before = await self._services.overlay.manifest()
-        mutation = await self._mutate(request.op, arguments)
-        paths = _bound_paths(request.op, arguments, mutation)
+        """Refuse the legacy adapter seam; use gateway-issued authority instead."""
 
-        if mutation.entry is None:
+        del request
+        raise OperationStageCapabilityError()
+
+    async def build_proposal_with_capability(
+        self,
+        request: OperationRequest,
+        capability: GatewayStageCapability,
+    ) -> GatewayProposedEffect:
+        if not isinstance(capability, GatewayStageCapability):
+            raise OperationStageCapabilityError()
+        capability._consume_for(request)
+        arguments = _request_arguments(request)
+        paths = _operation_paths(request.op, arguments)
+        # Runtime replay keeps the operation id stable. Repair the binding
+        # before compiling a second plan, so a replay neither duplicates nor
+        # cancels the already-visible overlay.
+        recovered = await self._recover_unbound_projection(
+            request=request,
+            paths=paths,
+        )
+        if recovered is not None:
+            return recovered
+        plan = await self._mutations._plan(op=request.op, arguments=arguments)
+
+        if not _plan_entries(plan, paths):
             prior = next(
                 (
-                    before.entry_at(path)
+                    plan.baseline.entry_at(path)
                     for path in paths
-                    if before.entry_at(path) is not None
+                    if plan.baseline.entry_at(path) is not None
                 ),
                 None,
             )
@@ -253,6 +303,13 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 actor=self._services.actor,
                 idempotency_key=f"workspace-cancel:{request.operation_id}",
             )
+            try:
+                await self._mutations._project(plan)
+            except Exception:
+                # The pre-existing stage is already cancelled, so a failed
+                # projection leaves the prior model-visible overlay intact and
+                # cannot be approved or executed.
+                raise
             return GatewayProposedEffect(
                 stage_id=state.stage_id,
                 proposal_ref=state.current_revision.proposal_ref,
@@ -263,11 +320,7 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 activity_ref=state.current_revision.proposal_ref,
             )
 
-        entries = tuple(
-            entry
-            for path in paths
-            if (entry := mutation.manifest.entry_at(path)) is not None
-        )
+        entries = _plan_entries(plan, paths)
         if not entries:
             raise RuntimeError("workspace proposal has no overlay entries")
         grant = self._services.grant_for_path(entries[0].virtual_path)
@@ -301,23 +354,37 @@ class WorkspaceOperationAdapter(OperationAdapter):
         )
         revision = state.current_revision
         try:
-            await self._services.overlay.bind_stage(
-                virtual_paths=paths,
+            projected = await self._mutations._project(
+                plan,
                 stage_id=state.stage_id,
                 stage_revision=revision.revision,
-                expected_manifest_version=mutation.manifest.version,
             )
         except Exception:
-            # A stage whose overlay binding lost its optimistic-CAS race must
-            # never remain approvable. Best-effort cancellation makes the
-            # durable stage visibly inert; the original conflict still fails
-            # the operation and a fresh request must re-read current content.
+            # Projection is intentionally after durable material+stage writes.
+            # A failed optimistic projection therefore never changes the
+            # model-visible overlay; cancel the just-created/revised stage so
+            # it cannot be approved while not represented in the workspace.
             await self._cancel_safely(
                 request=request,
                 state=state,
-                reason="workspace-bind-race",
+                reason="workspace-project-failed",
             )
             raise
+        state = await self._services.stager.bind_projection(
+            scope=self._services.scope,
+            stage_id=state.stage_id,
+            revision=revision.revision,
+            projection_ref=WorkspaceOverlayVersionRef.format(
+                run_id=request.run_id,
+                version=projected.manifest.version,
+            ),
+            proposal_digest=revision.proposal_digest,
+            target_digest=state.target_digest,
+            actor=self._services.actor,
+            idempotency_key=(
+                f"workspace-projection-bind:{request.operation_id}:{revision.revision}"
+            ),
+        )
         return GatewayProposedEffect(
             stage_id=state.stage_id,
             proposal_ref=revision.proposal_ref,
@@ -329,44 +396,6 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 else None
             ),
         )
-
-    async def _mutate(
-        self, op: str, arguments: dict[str, object]
-    ) -> WorkspaceMutationResult:
-        author = "agent"
-        if op in {"create", "replace", "write"}:
-            path = _required_text(arguments, "virtual_path")
-            content = _required_text(arguments, "content")
-            if op == "create":
-                return await self._services.overlay.propose_create(
-                    path, content, author=author
-                )
-            return await self._services.overlay.propose_replace(
-                path, content, author=author
-            )
-        if op == "edit":
-            return await self._services.overlay.propose_edit(
-                _required_text(arguments, "virtual_path"),
-                _required_text(arguments, "old_string"),
-                _required_text(arguments, "new_string", allow_empty=True),
-                replace_all=bool(arguments.get("replace_all", False)),
-                author=author,
-            )
-        if op == "delete":
-            return await self._services.overlay.propose_delete(
-                _required_text(arguments, "virtual_path"), author=author
-            )
-        if op == "move":
-            return await self._services.overlay.propose_move(
-                _required_text(arguments, "source_virtual_path"),
-                _required_text(arguments, "destination_virtual_path"),
-                author=author,
-            )
-        if op == "mkdir":
-            return await self._services.overlay.propose_mkdir(
-                _required_text(arguments, "virtual_path"), author=author
-            )
-        raise RuntimeError("workspace operation is not stageable")
 
     async def _stage_or_revise(
         self,
@@ -444,10 +473,78 @@ class WorkspaceOperationAdapter(OperationAdapter):
                 precondition_digest=stored.precondition_digest,
                 effect_class=effect_class,
                 policy_snapshot_ref=snapshot.snapshot_ref,
+                projection_required=True,
             ),
             policy_snapshot=snapshot,
             actor=self._services.actor,
             idempotency_key=f"workspace-stage:{request.operation_id}",
+        )
+
+    async def _recover_unbound_projection(
+        self,
+        *,
+        request: OperationRequest,
+        paths: tuple[str, ...],
+    ) -> GatewayProposedEffect | None:
+        """Finish a previously projected workspace stage on an idempotent retry."""
+
+        manifest = await self._mutations._manifest()
+        entries = tuple(manifest.entry_at(path) for path in paths)
+        if not entries or any(entry is None for entry in entries):
+            return None
+        present = tuple(entry for entry in entries if entry is not None)
+        stage_ids = {entry.stage_id for entry in present}
+        revisions = {entry.stage_revision for entry in present}
+        if len(stage_ids) != 1 or len(revisions) != 1:
+            return None
+        stage_id = next(iter(stage_ids))
+        revision = next(iter(revisions))
+        if stage_id is None or revision is None:
+            return None
+        state = await self._services.stager.get_state(
+            scope=self._services.scope,
+            stage_id=stage_id,
+        )
+        if (
+            state.operation_id != request.operation_id
+            or state.target.op != request.op
+            or not state.projection_required
+            or state.approval_ready
+            or state.current_revision.revision != revision
+            or state.status
+            in {
+                EffectStageStatus.APPROVED,
+                EffectStageStatus.REJECTED,
+                EffectStageStatus.CANCELLED,
+            }
+        ):
+            return None
+        current = state.current_revision
+        bound = await self._services.stager.bind_projection(
+            scope=self._services.scope,
+            stage_id=state.stage_id,
+            revision=revision,
+            projection_ref=WorkspaceOverlayVersionRef.format(
+                run_id=request.run_id,
+                version=manifest.version,
+            ),
+            proposal_digest=current.proposal_digest,
+            target_digest=state.target_digest,
+            actor=self._services.actor,
+            idempotency_key=(
+                f"workspace-projection-bind:{request.operation_id}:{revision}"
+            ),
+        )
+        return GatewayProposedEffect(
+            stage_id=bound.stage_id,
+            proposal_ref=bound.current_revision.proposal_ref,
+            safe_summary=_STAGED_SUMMARY,
+            activity_ref=bound.current_revision.proposal_ref,
+            artifact_source_ref=(
+                present[0].content_ref
+                if len(present) == 1 and present[0].content_ref is not None
+                else None
+            ),
         )
 
     async def _cancel_safely(
@@ -534,15 +631,15 @@ def _operation_paths(op: str, arguments: dict[str, object]) -> tuple[str, ...]:
     return (normalize_virtual_path(_required_text(arguments, "virtual_path")),)
 
 
-def _bound_paths(
-    op: str,
-    arguments: dict[str, object],
-    mutation: WorkspaceMutationResult,
-) -> tuple[str, ...]:
-    paths = _operation_paths(op, arguments)
-    if mutation.entry is None:
-        return paths
-    return paths
+def _plan_entries(
+    plan: _WorkspaceOverlayPlan,
+    paths: tuple[str, ...],
+) -> tuple[OverlayEntry, ...]:
+    """Read only the request-local candidate, never a visible overlay write."""
+
+    return tuple(
+        entry for path in paths if (entry := plan.candidate.entry_at(path)) is not None
+    )
 
 
 def _required_text(

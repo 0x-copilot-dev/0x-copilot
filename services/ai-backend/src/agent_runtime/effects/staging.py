@@ -32,6 +32,7 @@ from agent_runtime.effects.errors import (
     EffectStageInvalidTransition,
     EffectStageNotStageable,
     EffectStagePolicyBlocked,
+    EffectStageProjectionUnbound,
     EffectStageStaleRevision,
 )
 from agent_runtime.effects.fold import EffectStageFold
@@ -55,6 +56,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
 _EVENT_STAGED = LedgerEventType.EFFECT_STAGED.value
 _EVENT_REVISED = LedgerEventType.EFFECT_REVISED.value
 _EVENT_DECISION = LedgerEventType.EFFECT_DECISION_RECORDED.value
+_EVENT_PROJECTION_BOUND = LedgerEventType.EFFECT_PROJECTION_BOUND.value
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,7 @@ class EffectStager:
             "policy": resolution.policy.value,
             "agent_hold": proposed_effect.agent_hold,
             "safe_summary_ref": proposed_effect.safe_summary_ref,
+            "projection_required": proposed_effect.projection_required,
             "owner_ref": scope.owner_ref,
             "author_actor": actor.actor.value,
             "author_ref": actor.principal_ref,
@@ -162,8 +165,93 @@ class EffectStager:
                 },
             ),
         )
-        returned_stage_id = _event_stage_id(event.payload)
-        return await self.get_state(scope=scope, stage_id=returned_stage_id)
+        state = EffectStageFold.fold((event,))
+        if state.scope != scope:
+            raise EffectStageForbidden()
+        return state
+
+    async def bind_projection(
+        self,
+        *,
+        scope: EffectStageScope,
+        stage_id: str,
+        revision: int,
+        projection_ref: str,
+        proposal_digest: str,
+        target_digest: str,
+        actor: EffectActorIdentity,
+        idempotency_key: str,
+    ) -> EffectStageState:
+        """Bind one retained visible projection to an exact stage revision."""
+
+        validate_idempotency_key(idempotency_key)
+        events = await self.ledger.list_stage_events(scope=scope, stage_id=stage_id)
+        state = EffectStageFold.fold(events)
+        if state.scope != scope:
+            raise EffectStageForbidden()
+        self._assert_owner(scope, actor, allow_policy_or_system=True)
+        if not state.projection_required:
+            raise EffectStageInvalidTransition(
+                "This staged effect does not require a projection binding."
+            )
+        if state.status in {
+            EffectStageStatus.APPROVED,
+            EffectStageStatus.REJECTED,
+            EffectStageStatus.CANCELLED,
+        }:
+            raise EffectStageInvalidTransition()
+        current = state.current_revision
+        if revision != current.revision:
+            raise EffectStageStaleRevision()
+        if (
+            proposal_digest != current.proposal_digest
+            or target_digest != state.target_digest
+        ):
+            raise EffectStageDigestMismatch()
+        if state.projection_binding is not None:
+            binding = state.projection_binding
+            if (
+                binding.revision == revision
+                and binding.projection_ref == projection_ref
+                and binding.proposal_digest == proposal_digest
+                and binding.target_digest == target_digest
+            ):
+                return state
+            raise EffectStageInvalidTransition(
+                "A different projection is already bound to this revision."
+            )
+        event = await self.ledger.append_stage_event(
+            scope=scope,
+            event_type=_EVENT_PROJECTION_BOUND,
+            payload={
+                "v": 1,
+                "stage_id": stage_id,
+                "revision": revision,
+                "projection_ref": projection_ref,
+                "proposal_digest": proposal_digest,
+                "target_digest": target_digest,
+                "bound_at": self.clock.now(),
+            },
+            idempotency_key=idempotency_key,
+            request_fingerprint=_fingerprint(
+                "bind_projection",
+                {
+                    "stage_id": stage_id,
+                    "revision": revision,
+                    "projection_ref": projection_ref,
+                    "proposal_digest": proposal_digest,
+                    "target_digest": target_digest,
+                    "actor": actor.model_dump(mode="json"),
+                },
+            ),
+        )
+        bound = EffectStageFold.fold((*events, event))
+        # A concurrent revision can make this newly appended binding stale before
+        # replay reaches us. Fail closed: the caller must rebuild/reproject the
+        # current revision rather than returning an approvable stale projection.
+        if not bound.approval_ready:
+            raise EffectStageStaleRevision()
+        return bound
 
     async def revise(
         self,
@@ -275,6 +363,8 @@ class EffectStager:
             raise EffectStageInvalidTransition()
         if state.policy is EffectPolicy.BLOCK:
             raise EffectStagePolicyBlocked()
+        if decision is EffectDecisionKind.APPROVE and not state.approval_ready:
+            raise EffectStageProjectionUnbound()
         if actor.actor is EffectActor.POLICY and state.policy is not EffectPolicy.AUTO:
             raise EffectStageForbidden("Policy cannot approve this held effect.")
         if (

@@ -63,3 +63,8 @@ class EffectStageIdempotencyConflict(EffectStageError):
 class EffectStageMalformedEvent(EffectStageError):
     code = "effect_stage_malformed_event"
     safe_message = "The staged-effect history is malformed."
+
+
+class EffectStageProjectionUnbound(EffectStageError):
+    code = "effect_stage_projection_unbound"
+    safe_message = "The staged workspace change is not ready for approval yet."

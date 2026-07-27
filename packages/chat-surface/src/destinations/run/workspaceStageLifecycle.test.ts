@@ -139,6 +139,51 @@ describe("projectWorkspaceStageLifecycle", () => {
     expect(stale?.snapshot).toBeNull();
   });
 
+  it("holds a projection-required workspace stage until its exact overlay version binds", () => {
+    const beforeBinding = projectWorkspaceStageLifecycle([
+      staged({ projection_required: true }),
+    ]).get(STAGE_ID);
+    expect(beforeBinding?.stage.status).toBe("staged");
+    expect(beforeBinding?.stage.decisionAvailable).toBe(false);
+    expect(beforeBinding?.snapshot).toBeNull();
+
+    const bound = projectWorkspaceStageLifecycle([
+      staged({ projection_required: true }),
+      event(4, "effect.projection_bound", {
+        v: 1,
+        stage_id: STAGE_ID,
+        revision: 1,
+        projection_ref: "workspace-overlay://runs/run_workspace_1/versions/1",
+        proposal_digest: PROPOSAL_DIGEST,
+        target_digest: TARGET_DIGEST,
+        bound_at: "2026-07-24T00:00:04+00:00",
+      }),
+    ]).get(STAGE_ID);
+    expect(bound?.stage.decisionAvailable).toBe(true);
+    expect(bound?.snapshot).toEqual({
+      runId: RUN_ID,
+      stageId: STAGE_ID,
+      revision: 1,
+      proposalDigest: PROPOSAL_DIGEST,
+      targetDigest: TARGET_DIGEST,
+    });
+
+    const staleBinding = projectWorkspaceStageLifecycle([
+      staged({ projection_required: true }),
+      event(4, "effect.projection_bound", {
+        v: 1,
+        stage_id: STAGE_ID,
+        revision: 2,
+        projection_ref: "workspace-overlay://runs/run_workspace_1/versions/2",
+        proposal_digest: PROPOSAL_DIGEST,
+        target_digest: TARGET_DIGEST,
+        bound_at: "2026-07-24T00:00:04+00:00",
+      }),
+    ]).get(STAGE_ID);
+    expect(staleBinding?.stage.status).toBe("held");
+    expect(staleBinding?.snapshot).toBeNull();
+  });
+
   it("ignores non-workspace effect stages rather than rendering a workspace authority card", () => {
     const reviews = projectWorkspaceStageLifecycle([
       staged({ executor: "mcp" }),

@@ -221,7 +221,7 @@ async def test_enforce_stale_legacy_approval_resumes_into_tombstone() -> None:
     assert "no local file was changed" in result.error
 
 
-async def test_enforce_backend_reuses_real_a4_stager_and_has_no_host_writer() -> None:
+async def test_enforce_backend_exposes_no_stager_adapter_or_host_writer() -> None:
     sessions = InMemoryWorkspaceHostSessionRegistry()
     sessions.bind(
         scope=_scope(),
@@ -251,10 +251,15 @@ async def test_enforce_backend_reuses_real_a4_stager_and_has_no_host_writer() ->
     )
 
     assert isinstance(backend, WorkspaceGatewayBackend)
-    assert backend._adapter._services.stager is services.stager
+    # The worker composition supplies the real A4 stager when binding the
+    # opaque operation route.  The model-visible backend intentionally cannot
+    # inspect that composition or walk to its raw overlay engine.
+    assert not hasattr(backend, "_adapter")
+    assert not hasattr(backend, "_gateway")
+    assert not hasattr(backend._operations, "_adapter")
+    assert not hasattr(backend._operations, "_mutations")
     assert not hasattr(backend, "client")
     assert not hasattr(backend, "apply")
-    assert not hasattr(backend._adapter, "apply")
 
 
 async def test_tombstone_route_cannot_fall_through_to_state_backend() -> None:

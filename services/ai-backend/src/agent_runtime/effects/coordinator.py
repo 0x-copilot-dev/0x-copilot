@@ -502,6 +502,7 @@ class EffectCoordinator:
         if (
             state.scope != scope
             or state.status is not EffectStageStatus.APPROVED
+            or not state.approval_ready
             or decision is None
             or decision.decision is not EffectDecisionKind.APPROVE
             or decision.revision != command.revision

@@ -99,6 +99,7 @@ export type {
   ArtifactPromotedPayload,
   ArtifactPresentationDecidedPayload,
   EffectStagedPayload,
+  EffectProjectionBoundPayload,
   EffectRevisedPayload,
   EffectDecisionRecordedPayload,
   EffectClaimedPayload,
@@ -540,7 +541,7 @@ export type RuntimeEventSource =
 
 // A1 owns these append-only tuple positions. Runtime transport references the
 // canonical ledger mirror instead of redeclaring v2.1 wire literals here.
-// A5 appends the seven universal-effect lifecycle rows after A2/A3's artifact
+// A5 appends the universal-effect lifecycle rows after A2/A3's artifact
 // slice; they remain reference-only and use the same SSE/replay envelope.
 const RUNTIME_LEDGER_V21_EVENT_TYPES = [
   WORK_LEDGER_EVENT_TYPES[15],
@@ -557,6 +558,7 @@ const RUNTIME_LEDGER_V21_EVENT_TYPES = [
   WORK_LEDGER_EVENT_TYPES[27],
   WORK_LEDGER_EVENT_TYPES[28],
   WORK_LEDGER_EVENT_TYPES[29],
+  WORK_LEDGER_EVENT_TYPES[30],
 ] as const;
 type RuntimeLedgerV21EventType =
   (typeof RUNTIME_LEDGER_V21_EVENT_TYPES)[number];

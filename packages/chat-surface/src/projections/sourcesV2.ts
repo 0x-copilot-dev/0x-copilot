@@ -60,8 +60,8 @@ const CANONICAL_EVENT = {
   artifactRevised: ARTIFACT_EVENT_TYPES[1],
   artifactPromoted: ARTIFACT_EVENT_TYPES[2],
   effectStaged: EFFECT_EVENT_TYPES[0],
-  effectApplied: EFFECT_EVENT_TYPES[4],
-  effectReconciled: EFFECT_EVENT_TYPES[6],
+  effectApplied: EFFECT_EVENT_TYPES[5],
+  effectReconciled: EFFECT_EVENT_TYPES[7],
 } as const;
 
 /**

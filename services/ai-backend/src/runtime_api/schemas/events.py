@@ -239,6 +239,7 @@ class RuntimeEventPresentationProjector:
             )
         if event_type in {
             RuntimeApiEventType.EFFECT_STAGED,
+            RuntimeApiEventType.EFFECT_PROJECTION_BOUND,
             RuntimeApiEventType.EFFECT_REVISED,
             RuntimeApiEventType.EFFECT_DECISION_RECORDED,
             RuntimeApiEventType.EFFECT_CLAIMED,
@@ -388,6 +389,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.OPERATION_COMPLETED,
             RuntimeApiEventType.OPERATION_FAILED,
             RuntimeApiEventType.EFFECT_STAGED,
+            RuntimeApiEventType.EFFECT_PROJECTION_BOUND,
             RuntimeApiEventType.EFFECT_REVISED,
             RuntimeApiEventType.EFFECT_DECISION_RECORDED,
             RuntimeApiEventType.EFFECT_CLAIMED,

@@ -57,7 +57,7 @@ and trivial loaders.
         "auth_state",
       ],
     },
-    // ... 32 events total, in append-only contract order ...
+    // ... 33 events total, in append-only contract order ...
   },
 }
 ```

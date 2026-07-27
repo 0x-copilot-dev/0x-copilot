@@ -78,6 +78,7 @@ class LedgerEventType(StrEnum):
     ARTIFACT_PROMOTED = "artifact.promoted"
     ARTIFACT_PRESENTATION_DECIDED = "artifact.presentation_decided"
     EFFECT_STAGED = "effect.staged"
+    EFFECT_PROJECTION_BOUND = "effect.projection_bound"
     EFFECT_REVISED = "effect.revised"
     EFFECT_DECISION_RECORDED = "effect.decision_recorded"
     EFFECT_CLAIMED = "effect.claimed"
@@ -757,6 +758,7 @@ class EffectStagedPayload(LedgerPayload):
     policy_snapshot_ref: str | None = None
     agent_hold: bool | None = None
     safe_summary_ref: str | None = None
+    projection_required: bool | None = None
     owner_ref: str | None = None
     author_actor: EffectActor | None = None
     author_ref: str | None = None
@@ -841,6 +843,21 @@ class EffectRevisedPayload(LedgerPayload):
         if parsed.stage_id != self.stage_id or parsed.revision != self.revision:
             raise ValueError(_Messages.REVISED_PROPOSAL_REF_MATCHES)
         return self
+
+
+class EffectProjectionBoundPayload(LedgerPayload):
+    stage_id: EffectStageIdText
+    revision: SafePositiveInt
+    projection_ref: str
+    proposal_digest: Sha256Hex
+    target_digest: Sha256Hex
+    bound_at: Annotated[str, Field(min_length=1, max_length=128)]
+
+    @field_validator("projection_ref")
+    @classmethod
+    def _projection_ref_is_safe(cls, value: str) -> str:
+        _validate_opaque_safe_uri(value, "projection_ref")
+        return value
 
 
 class EffectDecisionRecordedPayload(LedgerPayload):
@@ -1095,6 +1112,7 @@ class WorkLedgerVocabulary:
             ArtifactPresentationDecidedPayload
         ),
         LedgerEventType.EFFECT_STAGED: EffectStagedPayload,
+        LedgerEventType.EFFECT_PROJECTION_BOUND: EffectProjectionBoundPayload,
         LedgerEventType.EFFECT_REVISED: EffectRevisedPayload,
         LedgerEventType.EFFECT_DECISION_RECORDED: EffectDecisionRecordedPayload,
         LedgerEventType.EFFECT_CLAIMED: EffectClaimedPayload,
