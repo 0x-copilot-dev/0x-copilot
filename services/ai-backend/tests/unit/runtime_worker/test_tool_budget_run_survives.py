@@ -54,8 +54,9 @@ class _OfflineWebSearchTool(BaseTool):
 
     Only the network call is replaced. The tool is still composed through
     the real ``WebSearchToolRegistry`` → ``CitationCapturingRegistry`` →
-    ``ToolBudgetGuardedRegistry`` → ``ToolErrorPolicyRegistry`` stack, so
-    the budget guard and error policy under test are the shipped ones.
+    ``ToolErrorPolicyRegistry`` stack, then crosses the graph-wide runtime
+    middleware after Deep Agents completes the tool surface. The budget guard
+    and error policy under test are therefore the shipped production path.
     """
 
     name: str = "web_search"
@@ -80,10 +81,8 @@ class ToolBudgetRunMixin(FakeModelRunMixin):
     """Small enough that the overrun happens within a few graph steps."""
 
     TOOL_NAME = "web_search"
-    """The budget guard wraps runtime-registered tools; Deep Agents
-    built-ins (``ls``, ``read_file``, ``task`` …) are injected by the
-    graph builder and never pass through the guarded registry, so they
-    cannot exercise this path."""
+    """Default externally registered tool; a dedicated case below selects
+    ``ls`` to prove Deep Agents-injected tools cross the same boundary."""
 
     TOOL_ARGS = {"query": "what shipped this week"}
 
@@ -218,3 +217,31 @@ class TestRunSurvivesToolBudgetExhaustion(ToolBudgetRunMixin):
         # Either outcome is acceptable — what matters is that the run reached
         # a terminal state instead of spinning on free refusals.
         assert "run_completed" in names or "run_failed" in names, names
+
+
+class TestInjectedToolBudgetCoverage(ToolBudgetRunMixin):
+    """Deep Agents-injected built-ins cannot bypass graph-wide F4/F5 control."""
+
+    TOOL_NAME = "ls"
+    TOOL_ARGS = {"path": "/"}
+
+    async def test_injected_filesystem_tool_is_admitted_and_bounded(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        store, run_id = await self._run_overrunning_budget(
+            monkeypatch,
+            tool_calls=5,
+        )
+
+        results = [
+            str(event.payload)
+            for event in store.events_by_run[run_id]
+            if event.event_type == "tool_result"
+        ]
+        refusals = [body for body in results if "ToolBudgetRejected" in body]
+        successful = [body for body in results if "ToolBudgetRejected" not in body]
+
+        assert len(successful) == self.CAP, results
+        assert len(refusals) == 3, results
+        assert "run_completed" in self._event_names(store, run_id)

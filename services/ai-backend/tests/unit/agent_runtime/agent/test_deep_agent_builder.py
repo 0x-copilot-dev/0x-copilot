@@ -18,6 +18,7 @@ from agent_runtime.execution.deep_agent_builder import (
     DeepAgentBuildRequest,
     build_deep_agent,
 )
+from agent_runtime.capabilities.middleware import RuntimeToolControlMiddleware
 from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule
 
 
@@ -64,10 +65,77 @@ def test_web_harness_profile_excludes_write_and_execute_tools(
 
     assert calls == [
         ("anthropic", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
+        (
+            "deterministicfakechatmodel",
+            builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS,
+        ),
         ("gemini", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
         ("google_genai", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
         ("openai", builder_module.WEB_EXCLUDED_DEEP_AGENT_TOOLS),
     ]
+
+
+def test_universal_middleware_is_materialized_for_supervisor_and_local_subagents(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deep Agents must add one fresh runtime boundary to every compiled graph."""
+
+    import deepagents.graph as deepagents_graph
+    import deepagents.middleware.subagents as deepagents_subagents
+
+    captured_stacks: list[list[object]] = []
+
+    class _Compiled:
+        def with_config(self, _config: object) -> "_Compiled":
+            return self
+
+    def capture_create_agent(
+        _model: object,
+        *,
+        middleware: list[object],
+        **_kwargs: object,
+    ) -> _Compiled:
+        captured_stacks.append(middleware)
+        return _Compiled()
+
+    monkeypatch.setenv("RUNTIME_FAKE_MODEL", "1")
+    monkeypatch.setattr(deepagents_graph, "create_agent", capture_create_agent)
+    monkeypatch.setattr(deepagents_subagents, "create_agent", capture_create_agent)
+    monkeypatch.setattr(builder_module, "_web_harness_profiles_registered", False)
+
+    build_deep_agent(
+        DeepAgentBuildRequest(
+            tools=(),
+            model_config=ModelConfig(
+                provider="openai",
+                model_name="gpt-5.4-mini",
+                max_input_tokens=128_000,
+                timeout_seconds=45,
+                temperature=0,
+                supports_streaming=True,
+            ),
+            system_prompt="Follow policy.",
+            universal_middleware_factories=(RuntimeToolControlMiddleware,),
+        )
+    )
+
+    # The auto general-purpose subagent compiles before the supervisor. The
+    # task-tool setter recompiles that same reviewed spec after private state is
+    # known; both compilations intentionally retain its one middleware instance.
+    assert len(captured_stacks) >= 2
+    controls = [
+        [
+            middleware
+            for middleware in stack
+            if isinstance(middleware, RuntimeToolControlMiddleware)
+        ]
+        for stack in captured_stacks
+    ]
+    assert all(len(instances) == 1 for instances in controls)
+    main_control = controls[-1][0]
+    subagent_controls = {id(instances[0]) for instances in controls[:-1]}
+    assert len(subagent_controls) == 1
+    assert id(main_control) not in subagent_controls
 
 
 def test_deep_agent_builder_configures_openai_responses_reasoning(

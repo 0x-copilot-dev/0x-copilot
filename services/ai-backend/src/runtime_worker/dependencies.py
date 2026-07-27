@@ -16,7 +16,6 @@ from agent_runtime.capabilities.skills.virtual import (
     BackendSkillProvider,
     VirtualSkillRegistry,
 )
-from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedRegistry
 from agent_runtime.capabilities.tool_error_policy_tool import (
     ToolErrorPolicyRegistry,
 )
@@ -182,9 +181,9 @@ class DefaultRuntimeDependenciesFactory:
     ) -> RuntimeDependencies:
         """Build and return the full ``RuntimeDependencies`` graph for a worker run.
 
-        Tool registries are composed outermost-to-innermost:
-        ``ToolErrorPolicyRegistry`` → ``ToolBudgetGuardedRegistry`` →
-        ``CitationCapturingRegistry`` → ``WebSearchToolRegistry``.
+        Tool registries retain tool-specific citation and error adapters. The
+        graph-wide runtime middleware owns budget/task/result controls because
+        Deep Agents injects additional tools after registry assembly.
         """
         self._validate_capability_mode(context)
         mcp_registry = self._mcp_registry(
@@ -193,9 +192,7 @@ class DefaultRuntimeDependenciesFactory:
             rollout_facts=rollout_facts,
         )
         tool_registry = ToolErrorPolicyRegistry(
-            inner=ToolBudgetGuardedRegistry(
-                inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
-            )
+            inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
         )
         # Single gate read per run: on the desktop file store this returns the
         # wiring that persists memory / skills / subagent defs as files; on the
