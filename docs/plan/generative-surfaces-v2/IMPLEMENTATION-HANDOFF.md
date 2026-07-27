@@ -1,8 +1,10 @@
 # Generative Surfaces v2.1 — End-to-End Handoff
 
-**Snapshot:** 2026-07-26  
-**Baseline:** `origin/main` at `63e6c10b`  
-**Purpose:** Continue delivery without rediscovering architectural decisions, unmerged defects, merge order, or release evidence.
+**Snapshot:** 2026-07-27
+
+**Baseline:** `origin/main` at `b47e4ee9`
+
+**Purpose:** Continue delivery without rediscovering architectural decisions, completed corrective work, merge order, or remaining release evidence.
 
 ## 1. Product boundary
 
@@ -84,6 +86,9 @@ the desktop filesystem owner.
 | G2 CSV lifecycle harness                                                                                 | PR #383 / `42fe4ec4`      | Merged                              |
 | E2 rollout admission                                                                                     | PR #380 / `3fd70913`      | Merged                              |
 | D3 hosted OpenAI container provider                                                                      | PR #381 / `63e6c10b`      | Merged but deliberately dark        |
+| F012 workspace mutation boundary and durable projection binding                                          | PR #371 / `67ba983b`      | Merged                              |
+| F012 projection-binding race hardening                                                                   | `459c238a`                | Merged                              |
+| F013 neutral operation boundary                                                                          | PR #374                   | Merged                              |
 
 ### 3.1 E2 rollout admission
 
@@ -111,40 +116,27 @@ report a structured skip. A valid run proves Electron-main production posture,
 exact immutable artifact ID/reference/digest, exact approved bytes, and native
 journal/receipt evidence.
 
-## 4. Unmerged defects and required designs
+## 4. Completed corrective designs
 
-### 4.1 PR #371 — F012 workspace mutation boundary (REDESIGN SPECIFIED)
+### 4.1 PR #371 — F012 workspace mutation boundary (MERGED)
 
-The current branch must not merge as written. Independent review demonstrated
-two product-reachable assembly failures:
+PR #371 merged the durable projection-binding design specified in
+`prds/PRD-371-workspace-projection-binding.md`. Workspace stages now require an
+exact current-revision `effect.projection_bound` event before approval or
+execution. Proposal material is persisted before staging, staging precedes
+overlay projection, and the canonical append result removes the second
+post-append read failure window.
 
-- a cancellation append failure after projection failure leaves a durable held
-  stage approvable; and
-- an effect-stage read failure after append can also leave an unbound,
-  approvable stage.
+The fold, approval service, and worker independently fail closed for missing,
+stale, or forged bindings. Retrying a projection/binding failure reuses the same
+operation and stage idempotently. Follow-up `459c238a` hardened the two remaining
+races: approval now revalidates the binding inside the transaction that enqueues
+the command, and cancellation now retries the canonical stage after a
+projection failure.
 
-The earlier handoff overstated a Python-reflection proof. The model does not
-receive the backend, operation port, queue, adapter, overlay store, or outbox as
-a Python object. Model tools and Monty cross typed JSON boundaries. An
-in-process queue is containment rather than a security boundary, but a new
-authority process is not required for the reachable defect. Actual host writes
-already cross the Electron main-process capability broker.
-
-**Required correction:** implement
-`prds/PRD-371-workspace-projection-binding.md`. Persist an additive
-`effect.projection_bound` readiness event after the exact stage revision is
-projected to an immutable workspace-overlay version. The stage fold, decision
-service, and commit worker must all deny approval/execution until that binding
-matches the current proposal and target digests. Revision clears the binding.
-`EffectStager.stage()` must fold the canonical event returned by append instead
-of requiring a second fallible read. Projection/binding retry must recover the
-same operation and stage idempotently.
-
-Acceptance tests must cover: failed stage binding; failed compensation;
-post-append state-read failure; replay; stale approval; zero host effect; and
-zero approvable/executable stage without a durable current-revision binding. Add
-canaries at the real model-tool and Monty JSON seams; do not treat direct trusted
-Python access to a private object as model reachability.
+Model-reachability canaries remain at the real typed tool and Monty JSON seams.
+Actual host writes still cross the Electron main-process capability broker; no
+new authority service or database migration was introduced.
 
 ### 4.2 PR #374 — F013 neutral operation boundary (MERGED)
 
@@ -180,7 +172,7 @@ restoring presenter/projector/raw-connector authority to adapters.
 
 | ID  | Gate                | Completion evidence                                                               |
 | --- | ------------------- | --------------------------------------------------------------------------------- |
-| R1  | Repair/merge F012   | Durable projection binding + fail-closed approval/execution + retry proof         |
+| R1  | Repair/merge F012   | **Done:** PR #371 plus race hardening `459c238a` merged on `main`                 |
 | R2  | Repair/merge F013   | **Done:** PR #374 merged on `main`                                                |
 | R3  | D3 C1/A2 handoff    | Snapshot export, durable deliverables, explicit patch import                      |
 | R4  | Real G0/G1/G2 runs  | Supervised desktop, actual BYOK, main-process local-file write, exact receipts    |

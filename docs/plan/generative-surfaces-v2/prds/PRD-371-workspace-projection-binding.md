@@ -1,14 +1,18 @@
 # PRD-371 — Durable workspace projection binding
 
-Status: implementation-ready corrective PRD for GitHub PR #371  
-Scope: workspace proposal assembly and approval readiness  
-Product wave: no new wave; this corrects the existing workspace/effect architecture  
+Status: implemented architecture record; delivered by GitHub PR #371 and follow-up `459c238a`
+
+Scope: workspace proposal assembly and approval readiness
+
+Product wave: no new wave; this corrects the existing workspace/effect architecture
+
 Default posture: filesystem-first, desktop-first, fail closed
 
 ## 1. Executive summary
 
-PR #371 is directionally correct but currently solves the wrong boundary too
-aggressively.
+This PRD captured the corrective design used to complete PR #371. The design is
+now implemented on `main`; this document remains the architecture and failure-
+mode record for the durable workspace projection-binding protocol.
 
 The model does not receive a Python `WorkspaceGatewayBackend`,
 `WorkspaceOperationPort`, `asyncio.Queue`, gateway, adapter, overlay store, or
@@ -22,19 +26,19 @@ We must not claim that an in-process queue, closure, private attribute, or
 `__slots__` is a security boundary. We also do not need a new authority service
 to address the product-reachable failure.
 
-The real defect is a distributed assembly gap:
+The defect addressed by the implementation was a distributed assembly gap:
 
 1. immutable proposal material is persisted;
 2. `effect.staged` or `effect.revised` is appended;
 3. the workspace overlay is projected;
 4. the caller reports a reviewable staged change.
 
-Steps 2 and 3 use different durable stores. A stage can therefore exist after a
-projection failure. If compensation also fails, the stage can currently remain
-approvable even though its exact current revision is not represented in the
-workspace overlay. `EffectStager.stage()` also appends the stage and then performs
-a second fallible read; a read failure can hide a successfully appended stage
-from the caller.
+Steps 2 and 3 use different durable stores. Before the correction, a stage could
+therefore exist after a projection failure. If compensation also failed, the
+stage could remain approvable even though its exact current revision was not
+represented in the workspace overlay. `EffectStager.stage()` also appended the
+stage and then performed a second fallible read; a read failure could hide a
+successfully appended stage from the caller.
 
 The correction is a durable readiness marker:
 
@@ -748,24 +752,29 @@ No new service or migration.
 
 ## 16. Definition of done
 
-- [ ] `effect.projection_bound` is in the shared contract, Python, TypeScript,
+Verified on `origin/main` at `b47e4ee9` on 2026-07-27. Core delivery landed in
+PR #371 (`67ba983b`, merge `fa76bfda`); transactional approval revalidation and
+canonical cancellation retry landed in follow-up `459c238a`.
+
+- [x] `effect.projection_bound` is in the shared contract, Python, TypeScript,
       golden fixture, and runtime projector.
-- [ ] Workspace `effect.staged` events require projection binding.
-- [ ] `EffectStager.stage()` has no post-append state-read dependency.
-- [ ] The fold cannot reach `APPROVED` for an unbound required revision.
-- [ ] The API cannot enqueue an unbound approval.
-- [ ] The worker cannot execute a forged/stale unbound command.
-- [ ] Every successful workspace proposal returns only after overlay + binding.
-- [ ] Projection and cancellation can both fail without producing approvable work.
-- [ ] Projection-success/binding-failure is recoverable with the same
+- [x] Workspace `effect.staged` events require projection binding.
+- [x] `EffectStager.stage()` has no post-append state-read dependency.
+- [x] The fold cannot reach `APPROVED` for an unbound required revision.
+- [x] The API cannot enqueue an unbound approval.
+- [x] The worker cannot execute a forged/stale unbound command.
+- [x] Every successful workspace proposal returns only after overlay + binding.
+- [x] Projection and cancellation can both fail without producing approvable work.
+- [x] Projection-success/binding-failure is recoverable with the same
       `operation_id` and stage.
-- [ ] Revision invalidates the previous binding.
-- [ ] Legacy non-workspace effect behavior is unchanged.
-- [ ] Actual host writes still occur only through the Electron broker.
-- [ ] Model-reachability canaries pass at the real tool/interpreter seams.
-- [ ] No new deployable service or database migration is introduced.
-- [ ] #371 is rebased on the latest `origin/main`, focused suites and affected
-      full suites pass, and CI is green on the rebased head.
+- [x] Revision invalidates the previous binding.
+- [x] Legacy non-workspace effect behavior is unchanged.
+- [x] Actual host writes still occur only through the Electron broker.
+- [x] Model-reachability canaries pass at the real tool/interpreter seams.
+- [x] No new deployable service or database migration is introduced.
+- [x] #371 was rebased on `origin/main`; focused suites, the affected full suite,
+      and CI passed on the merged implementation. The normal current-main
+      `ai-backend` suite also passes: 5,367 passed, 127 skipped, 1 deselected.
 
 ## 17. Explicitly rejected alternatives
 
