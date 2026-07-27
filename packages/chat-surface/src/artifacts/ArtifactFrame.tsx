@@ -39,24 +39,27 @@ export function ArtifactFrame(props: {
     );
   const artifact = props.artifact;
   return (
-    <section className="ui-card" data-testid="artifact-frame">
-      <header>
-        <p className="ui-eyebrow">{artifact.kind} artifact</p>
-        <h2 className="ui-title">{artifact.title}</h2>
-        <p className="ui-caption">
-          {artifact.filename} · revision {artifact.revision} ·{" "}
-          {artifact.byteSize.toLocaleString()} bytes ·{" "}
+    <section className="ui-artifact-surface" data-testid="artifact-frame">
+      <header className="ui-artifact-header">
+        <div className="ui-artifact-header__identity">
+          <h2 className="ui-artifact-title">{artifact.title}</h2>
+          <span className="ui-badge">{artifact.kind} artifact</span>
+        </div>
+        <p className="ui-artifact-meta">
+          r{artifact.revision} · {artifact.byteSize.toLocaleString()} bytes ·{" "}
           {artifact.digest.slice(0, 12)}
         </p>
-        <ArtifactDownloadAction
-          transport={props.transport}
-          artifactId={artifact.artifactId}
-          revision={artifact.revision}
-          filename={artifact.filename}
-          port={props.downloadPort}
-        />
+        <div className="ui-artifact-header__actions">
+          <ArtifactDownloadAction
+            transport={props.transport}
+            artifactId={artifact.artifactId}
+            revision={artifact.revision}
+            filename={artifact.filename}
+            port={props.downloadPort}
+          />
+        </div>
       </header>
-      {props.children}
+      <div className="ui-artifact-content">{props.children}</div>
     </section>
   );
 }

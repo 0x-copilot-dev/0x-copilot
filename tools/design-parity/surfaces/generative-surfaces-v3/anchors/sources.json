@@ -1,0 +1,63 @@
+{
+  "surface": "generative-surfaces-v3",
+  "state": "sources",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "Supplied v3 Sources rail compared with the canonical Sources v2 presentation. Non-artifact facts intentionally remain non-openable, but no visual divergence is waived.",
+  "elements": [
+    {
+      "label": "sources.panel",
+      "group": "Sources",
+      "design": "[data-parity-anchor=\"sources-panel\"]",
+      "live": "[data-testid=\"sources-v2-tab\"]"
+    },
+    {
+      "label": "sources.note",
+      "group": "Sources",
+      "design": "[data-parity-anchor=\"sources-note\"]",
+      "live": ".atlas-sources-panel__note"
+    },
+    {
+      "label": "sources.group-header",
+      "group": "Group",
+      "design": "[data-parity-anchor=\"sources-group-header\"]",
+      "live": "[data-testid=\"sources-v2-group\"]:first-of-type .atlas-sources-panel__group-header"
+    },
+    {
+      "label": "sources.list",
+      "group": "Group",
+      "design": "[data-parity-anchor=\"sources-list\"]",
+      "live": "[data-testid=\"sources-v2-list\"]"
+    },
+    {
+      "label": "sources.row",
+      "group": "Row",
+      "design": "[data-parity-anchor=\"sources-row\"]",
+      "live": "[data-testid=\"sources-v2-list\"] [data-testid=\"sources-v2-row\"]"
+    },
+    {
+      "label": "sources.icon",
+      "group": "Row",
+      "design": "[data-parity-anchor=\"sources-icon\"]",
+      "live": "[data-testid=\"sources-v2-list\"] [data-testid=\"row-icon\"]"
+    },
+    {
+      "label": "sources.title",
+      "group": "Row",
+      "design": "[data-parity-anchor=\"sources-title\"]",
+      "live": "[data-testid=\"sources-v2-list\"] .atlas-sources-panel__row-title"
+    },
+    {
+      "label": "sources.sub",
+      "group": "Row",
+      "design": "[data-parity-anchor=\"sources-sub\"]",
+      "live": "[data-testid=\"sources-v2-list\"] [data-testid=\"row-sub\"]"
+    },
+    {
+      "label": "sources.trailing",
+      "group": "Row",
+      "design": "[data-parity-anchor=\"sources-trailing\"]",
+      "live": "[data-testid=\"sources-v2-list\"] [data-testid=\"sources-v2-open-artifact\"]"
+    }
+  ]
+}

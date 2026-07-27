@@ -84,6 +84,15 @@ const controlled = source
       }
       return s;
     }
+    if (selected === "sources") {
+      const s = this.snap(5);
+      s.tools.li = this.tool("ok", "ask");
+      s.tools.gm = this.tool("ok", "ask");
+      s.tools.sf = this.tool("ok", "ask");
+      s.tools.fa = this.tool("ok", "ask");
+      s.sdTab = "sources";
+      return s;
+    }
     throw new Error("Unknown Generative Surfaces v3 parity state: " + selected);
   })();`,
   )

@@ -1,0 +1,59 @@
+{
+  "surface": "artifact-dataset",
+  "state": "editor-v3-shared-grammar",
+  "viewport": "1200x816",
+  "strict": true,
+  "note": "The supplied v3 mock has no standalone CSV artifact editor. These anchors therefore compare only the visual roles that are genuinely shared with its bulk-review sheet: header, title, action bar, explanatory copy, and primary action. Dataset-only filter, editable-cell, and revision-history controls remain covered by renderer tests and visual inspection rather than a fabricated design baseline.",
+  "elements": [
+    {
+      "label": "artifact.header",
+      "group": "Shared sheet chrome",
+      "design": "[data-parity-anchor=\"bulk-header\"]",
+      "live": "#artifact-dataset .ui-artifact-header",
+      "expectDivergence": {
+        "text": "The design names a staged Salesforce operation; the artifact header names the generated CSV and its immutable revision.",
+        "width": "The live fixture intentionally renders in a wider standalone artifact frame."
+      }
+    },
+    {
+      "label": "artifact.title",
+      "group": "Shared sheet chrome",
+      "design": "[data-parity-anchor=\"bulk-title\"]",
+      "live": "#artifact-dataset .ui-artifact-title",
+      "expectDivergence": {
+        "text": "Dynamic artifact filename replaces the staged-operation title.",
+        "width": "Intrinsic title width follows dynamic copy."
+      }
+    },
+    {
+      "label": "dataset.action-bar",
+      "group": "Revision action",
+      "design": "[data-parity-anchor=\"bulk-action-bar\"]",
+      "live": "#artifact-dataset .ui-dataset-action-bar",
+      "expectDivergence": {
+        "text": "The artifact bar describes immutable revision creation; the design bar describes applying approved connector writes.",
+        "width": "The live fixture intentionally renders in a wider standalone artifact frame."
+      }
+    },
+    {
+      "label": "dataset.action-copy",
+      "group": "Revision action",
+      "design": "[data-parity-anchor=\"bulk-action-copy\"]",
+      "live": "#artifact-dataset .ui-dataset-action-bar__copy",
+      "expectDivergence": {
+        "text": "Artifact revision safety copy is domain-specific.",
+        "width": "Intrinsic copy width follows dynamic text."
+      }
+    },
+    {
+      "label": "dataset.primary-action",
+      "group": "Revision action",
+      "design": "[data-parity-anchor=\"bulk-action\"]",
+      "live": "#artifact-dataset [aria-label=\"Dataset revision actions\"] .ui-button--primary",
+      "expectDivergence": {
+        "text": "Saving an immutable CSV revision is distinct from applying approved connector writes.",
+        "width": "Intrinsic button width follows its action label."
+      }
+    }
+  ]
+}

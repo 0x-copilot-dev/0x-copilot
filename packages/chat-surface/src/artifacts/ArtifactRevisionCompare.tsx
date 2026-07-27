@@ -59,14 +59,18 @@ export function ArtifactRevisionCompare(props: {
   if (props.status === "idle") return null;
   if (props.status === "loading") {
     return (
-      <section className="ui-card" role="status" aria-live="polite">
+      <section
+        className="ui-artifact-subpanel"
+        role="status"
+        aria-live="polite"
+      >
         Loading revision comparison…
       </section>
     );
   }
   if (props.status === "error" || props.comparison === null) {
     return (
-      <section className="ui-card" role="alert">
+      <section className="ui-artifact-subpanel" role="alert">
         These revisions cannot be compared as bounded UTF-8 text. Download the
         exact bytes instead.
       </section>
@@ -74,7 +78,10 @@ export function ArtifactRevisionCompare(props: {
   }
   const { comparison } = props;
   return (
-    <section className="ui-card" aria-label="Artifact revision comparison">
+    <section
+      className="ui-artifact-subpanel"
+      aria-label="Artifact revision comparison"
+    >
       <p className="ui-section-label">
         Compare r{comparison.baseRevision} to current r
         {comparison.currentRevision}
@@ -98,7 +105,7 @@ export function ArtifactRevisionCompare(props: {
         </code>
       </pre>
       <button
-        className="ui-button ui-button--ghost"
+        className="ui-button ui-button--ghost ui-button--sm"
         type="button"
         onClick={props.onClose}
       >

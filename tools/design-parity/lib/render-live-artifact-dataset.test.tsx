@@ -7,10 +7,12 @@
  */
 import { copyFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { createElement as h } from "react";
-import { renderToStaticMarkup } from "react-dom/server";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { expect, it } from "vitest";
 
+import { ArtifactFrame } from "../../../packages/chat-surface/src/artifacts/ArtifactFrame";
+import { ArtifactRevisionHistory } from "../../../packages/chat-surface/src/artifacts/ArtifactRevisionHistory";
+import type { Transport } from "../../../packages/chat-transport/src";
 import { DatasetArtifactRenderer } from "../../../packages/surface-renderers/src/artifacts/DatasetArtifactRenderer";
 import type { ArtifactRenderState } from "../../../packages/surface-renderers/src/artifacts/model";
 
@@ -45,6 +47,19 @@ const artifact = {
   },
 } as unknown as ArtifactRenderState;
 
+const transport = {
+  getArtifactContent: async () => {
+    throw new Error("not invoked by the static parity fixture");
+  },
+  createArtifactRevision: async () => {
+    throw new Error("not invoked by the static parity fixture");
+  },
+} as unknown as Transport;
+
+const downloadPort = {
+  saveArtifact: async () => undefined,
+};
+
 function shell(inner: string): string {
   return `<!doctype html>
 <html lang="en" data-theme="dark">
@@ -54,8 +69,7 @@ function shell(inner: string): string {
     <link rel="stylesheet" href="./styles.css" />
     <style>
       html, body { margin: 0; min-height: 100%; background: var(--color-bg); }
-      #artifact-dataset { box-sizing: border-box; max-width: 960px; padding: 24px; }
-      #artifact-dataset .ui-card { max-width: 912px; }
+      #artifact-dataset { box-sizing: border-box; display: flex; height: 620px; max-width: 960px; padding: 22px; }
     </style>
   </head>
   <body><main id="artifact-dataset">${inner}</main></body>
@@ -68,10 +82,44 @@ it("renders a deterministic fixed dataset editor target", () => {
     REPO("packages/design-system/src/styles.css"),
     LIVE("styles.css"),
   );
-  const markup = renderToStaticMarkup(h(DatasetArtifactRenderer, { artifact }));
+  const { container } = render(
+    <ArtifactFrame
+      artifact={artifact}
+      status="ready"
+      transport={transport}
+      downloadPort={downloadPort}
+    >
+      <DatasetArtifactRenderer artifact={artifact} />
+      <ArtifactRevisionHistory
+        revisions={[
+          {
+            revision: 7,
+            author: "Ada",
+            created_at: "2026-07-26T00:00:00Z",
+            byte_size: text.length,
+            content_digest: "a".repeat(64),
+            source_ref: "artifact://fixture",
+          },
+        ]}
+        activeRevision={7}
+        latestRevision={7}
+        onSelect={() => undefined}
+        onCompareToCurrent={() => undefined}
+        onRestore={() => undefined}
+        restoreDisabled={false}
+        hasOlderHistory={false}
+        onLoadOlder={() => undefined}
+      />
+    </ArtifactFrame>,
+  );
+  fireEvent.change(screen.getByLabelText("owner, row 2"), {
+    target: { value: "Avery" },
+  });
+  const markup = container.innerHTML;
 
+  expect(markup).toContain('data-testid="artifact-frame"');
   expect(markup).toContain('data-testid="artifact-dataset-renderer"');
   expect(markup).toContain('data-testid="dataset-virtual-window"');
-  expect(markup).not.toContain("<img");
+  expect(container.querySelectorAll("img")).toHaveLength(0);
   writeFileSync(LIVE("editor.html"), shell(markup));
 });

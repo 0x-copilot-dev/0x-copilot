@@ -86,6 +86,13 @@ export interface RowProps extends Omit<
    * background is never visible on a connector row.
    */
   readonly iconSize?: 28 | 30;
+  /** Identity-tile typography used by connector/source rows (`.lrow__logo`). */
+  readonly iconVariant?: "default" | "identity";
+  /**
+   * Vertical/list density. `"compact"` is the v3 right-rail source-row tier
+   * (`9px 11px`); the default destination-row tier remains `11px 14px`.
+   */
+  readonly density?: "default" | "compact";
   /**
    * When provided, the row is an activatable control (click + Enter/Space).
    * When omitted, the row is inert chrome.
@@ -202,6 +209,8 @@ export function Row({
   iconTone = "default",
   subFont = "body",
   iconSize = 28,
+  iconVariant = "default",
+  density = "default",
   onActivate,
   ariaLabel,
   style,
@@ -241,6 +250,7 @@ export function Row({
       onKeyDown={interactive ? onKeyDown : undefined}
       style={{
         ...rowStyle,
+        ...(density === "compact" ? { padding: "9px 11px" } : null),
         ...style,
       }}
       {...rest}
@@ -251,10 +261,21 @@ export function Row({
             ...iconSlotStyle,
             width: iconSize,
             height: iconSize,
+            ...(iconVariant === "identity"
+              ? {
+                  color: "var(--color-text-strong)",
+                  fontFamily: "var(--font-sans)",
+                  fontSize: "var(--font-size-12)",
+                  fontWeight: "var(--font-weight-semibold)",
+                  lineHeight: "var(--line-height-base)",
+                }
+              : null),
             color:
-              iconTone === "success"
-                ? "var(--color-success)"
-                : iconSlotStyle.color,
+              iconVariant === "identity"
+                ? "var(--color-text-strong)"
+                : iconTone === "success"
+                  ? "var(--color-success)"
+                  : iconSlotStyle.color,
           }}
           aria-hidden="true"
           data-testid="row-icon"
@@ -262,7 +283,12 @@ export function Row({
           {icon}
         </span>
       ) : null}
-      <span style={mainColStyle}>
+      <span
+        style={{
+          ...mainColStyle,
+          ...(density === "compact" ? { display: "block" } : null),
+        }}
+      >
         <span style={titleRowStyle}>
           <span style={titleStyle} data-testid="row-title">
             {title}
@@ -280,6 +306,13 @@ export function Row({
           <span
             style={{
               ...subStyle,
+              ...(density === "compact"
+                ? {
+                    fontSize: "var(--font-size-11)",
+                    lineHeight: "var(--line-height-base)",
+                    marginTop: 1,
+                  }
+                : null),
               ...(subFont === "mono"
                 ? { fontFamily: "var(--font-mono)" }
                 : null),

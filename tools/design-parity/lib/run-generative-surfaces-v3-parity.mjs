@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* Strict four-state computed-style parity runner for Generative Surfaces v3. */
+/* Strict computed-style parity runner for Generative Surfaces v3. */
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -11,7 +11,13 @@ const TOOLS = resolve(HERE, "..");
 const REPO = resolve(TOOLS, "../..");
 const SURFACE = "surfaces/generative-surfaces-v3";
 const OUT = resolve(TOOLS, SURFACE, "out");
-const STATES = ["draft-held", "draft-edit", "bulk-review", "bulk-partial"];
+const STATES = [
+  "draft-held",
+  "draft-edit",
+  "bulk-review",
+  "bulk-partial",
+  "sources",
+];
 const MIME = {
   ".css": "text/css; charset=utf-8",
   ".html": "text/html; charset=utf-8",
@@ -74,7 +80,7 @@ console.log("[v3 parity] prepare supplied design");
 await run(process.execPath, [
   "lib/prepare-generative-surfaces-v3-reference.mjs",
 ]);
-console.log("[v3 parity] render real review components");
+console.log("[v3 parity] render real Generative Surfaces components");
 await run(resolve(REPO, "node_modules/.bin/vitest"), [
   "run",
   "--config",
@@ -185,7 +191,7 @@ const provenance = JSON.parse(
 const lines = [
   "# Design-parity — Generative Surfaces v3 review states",
   "",
-  "Strict Playwright `getComputedStyle` comparison of the user-supplied v3 Design Compiler source against the real `TcStagedDraftSurface` and `TcStagedTableSurface`. No screenshot acceptance and no expected-divergence waivers.",
+  "Strict Playwright `getComputedStyle` comparison of the user-supplied v3 Design Compiler source against the real `TcStagedDraftSurface`, `TcStagedTableSurface`, and canonical `SourcesV2Tab`. No screenshot acceptance and no expected-divergence waivers.",
   "",
   `**Aggregate findings:** 🔴 HIGH ${totals.high} · 🟠 MEDIUM ${totals.medium} · 🟡 LOW ${totals.low} · ⚪ INFO ${totals.info}.`,
   "",

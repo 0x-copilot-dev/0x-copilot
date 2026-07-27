@@ -1,11 +1,15 @@
-import type { Transport } from "../transport";
+import type { ArtifactCapableTransport, Transport } from "../transport";
 import {
+  type ArtifactContentRequest,
+  type ArtifactContentResponse,
+  type ArtifactRevisionRequest,
   type Session,
   type SseSubscribeOptions,
   type SseSubscription,
   type TransportCapabilities,
   type TypedRequest,
   UnauthorizedError,
+  isArtifactTransport,
 } from "../types";
 
 export interface BearerRefreshResult {
@@ -25,9 +29,20 @@ export interface WithBearerRefreshOptions {
 }
 
 export function withBearerRefresh(
+  inner: ArtifactCapableTransport,
+  opts: WithBearerRefreshOptions,
+): ArtifactCapableTransport;
+export function withBearerRefresh(
+  inner: Transport,
+  opts: WithBearerRefreshOptions,
+): Transport;
+export function withBearerRefresh(
   inner: Transport,
   opts: WithBearerRefreshOptions,
 ): Transport {
+  if (isArtifactTransport(inner)) {
+    return new ArtifactBearerRefreshTransport(inner, opts);
+  }
   return new BearerRefreshTransport(inner, opts);
 }
 
@@ -47,8 +62,18 @@ class BearerRefreshTransport implements Transport {
   }
 
   async request<TRes>(req: TypedRequest): Promise<TRes> {
+    return this.executeWithRefresh(
+      () => this.#inner.request<TRes>(req),
+      () => this.#safeNotifyRetry(req),
+    );
+  }
+
+  protected async executeWithRefresh<T>(
+    operation: () => Promise<T>,
+    onRetry: () => void = () => {},
+  ): Promise<T> {
     try {
-      return await this.#inner.request<TRes>(req);
+      return await operation();
     } catch (err) {
       if (!(err instanceof UnauthorizedError)) {
         throw err;
@@ -58,10 +83,10 @@ class BearerRefreshTransport implements Transport {
         this.#safeNotifyRefreshFailure(result.reason ?? "refresh failed");
         throw err;
       }
-      this.#safeNotifyRetry(req);
+      onRetry();
       // Single retry only — a second UnauthorizedError propagates so the
       // renderer's sign-in surface re-prompts instead of looping.
-      return await this.#inner.request<TRes>(req);
+      return await operation();
     }
   }
 
@@ -91,5 +116,33 @@ class BearerRefreshTransport implements Transport {
     } catch {
       // observer errors must not mask the auth flow
     }
+  }
+}
+
+class ArtifactBearerRefreshTransport
+  extends BearerRefreshTransport
+  implements ArtifactCapableTransport
+{
+  readonly #artifactInner: ArtifactCapableTransport;
+
+  constructor(inner: ArtifactCapableTransport, opts: WithBearerRefreshOptions) {
+    super(inner, opts);
+    this.#artifactInner = inner;
+  }
+
+  async getArtifactContent(
+    request: ArtifactContentRequest,
+  ): Promise<ArtifactContentResponse> {
+    return this.executeWithRefresh(() =>
+      this.#artifactInner.getArtifactContent(request),
+    );
+  }
+
+  async createArtifactRevision(
+    request: ArtifactRevisionRequest,
+  ): Promise<unknown> {
+    return this.executeWithRefresh(() =>
+      this.#artifactInner.createArtifactRevision(request),
+    );
   }
 }

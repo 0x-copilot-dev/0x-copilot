@@ -50,13 +50,20 @@ const sources: SourcesProjectionV2 = {
 };
 
 describe("SourcesV2Tab", () => {
-  it("renders controlled source labels and sends only an opaque source id", () => {
+  it("renders the designed grouped source rows and sends only an opaque source id", () => {
     const onOpenSource = vi.fn();
     render(<SourcesV2Tab sources={sources} onOpenSource={onOpenSource} />);
 
-    expect(screen.getByText("Artifact")).toBeInTheDocument();
-    expect(screen.getByText("Connector activity")).toBeInTheDocument();
-    fireEvent.click(screen.getByTestId("sources-v2-open-artifact"));
+    expect(
+      screen.getByText(
+        "Everything the agent read or fetched this run — the receipts behind each surface.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Artifacts · 1")).toBeInTheDocument();
+    expect(screen.getByText("Linear · 1")).toBeInTheDocument();
+    expect(screen.getByText("Generated Artifact")).toBeInTheDocument();
+    expect(screen.getByText("Get issue")).toBeInTheDocument();
+    fireEvent.click(screen.getByLabelText("Open Generated Artifact"));
     expect(onOpenSource).toHaveBeenCalledWith("source:v2:004:artifact");
   });
 
@@ -81,5 +88,18 @@ describe("SourcesV2Tab", () => {
 
     expect(screen.getAllByTestId("sources-v2-row")).toHaveLength(2);
     expect(screen.getAllByTestId("sources-v2-open-artifact")).toHaveLength(1);
+  });
+
+  it("renders the supplied v3 empty-state contract", () => {
+    render(
+      <SourcesV2Tab
+        sources={{ ...sources, facts: [] }}
+        onOpenSource={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("No sources yet — the run hasn't read anything."),
+    ).toBeInTheDocument();
   });
 });

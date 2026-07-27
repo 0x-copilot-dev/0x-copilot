@@ -7,11 +7,13 @@ import { fileURLToPath } from "node:url";
 import {
   TcStagedDraftSurface,
   TcStagedTableSurface,
+  SourcesV2Tab,
   projectRowsetReviewModel,
   type LedgerStageRevision,
   type LedgerStagedRow,
   type LedgerStagedWrite,
 } from "@0x-copilot/chat-surface";
+import type { SourcesProjectionV2 } from "@0x-copilot/api-types";
 
 const HERE = (path: string): string =>
   fileURLToPath(new URL(path, import.meta.url));
@@ -160,6 +162,10 @@ function tableStage(partial: boolean): LedgerStagedWrite {
 }
 
 function html(state: string, body: string): string {
+  const frameStyle =
+    state === "sources"
+      ? "box-sizing:border-box;display:flex;width:378px;height:464.562px;padding:0"
+      : "box-sizing:border-box;display:flex;width:795px;height:508.562px;padding:22px";
   return `<!doctype html>
 <html lang="en" data-theme="dark" data-density="comfortable">
   <head>
@@ -170,7 +176,7 @@ function html(state: string, body: string): string {
     <style>
       html, body { margin: 0; min-height: 100%; background: var(--color-bg); }
       *, *::before, *::after { animation: none !important; }
-      #parity-frame { box-sizing: border-box; display: flex; width: 795px; height: 508.562px; padding: 22px; }
+      #parity-frame { ${frameStyle}; }
     </style>
   </head>
   <body><div id="parity-frame" data-state="${state}">${body}</div></body>
@@ -179,6 +185,62 @@ function html(state: string, body: string): string {
 
 function persist(state: string, container: HTMLElement): void {
   writeFileSync(LIVE(`${state}.html`), html(state, container.innerHTML));
+}
+
+const SOURCES: SourcesProjectionV2 = {
+  v: 2,
+  run_id: "run_sources_v3",
+  latest_sequence_no: 6,
+  facts: [
+    {
+      source_id: "source:v2:001:artifact",
+      kind: "artifact",
+      sequence_no: 1,
+      ledger_id: "rv3·001",
+      connector: null,
+      tool: null,
+      origin: null,
+      artifact_id: "artifact_v3",
+      artifact_revision: 1,
+      artifact_source_ref: "artifact://artifact_v3/revisions/1",
+      workspace_grant_label: null,
+      workspace_virtual_path_key: null,
+      browser_origin: null,
+      sandbox_operation: null,
+      subagent_task: null,
+      external_receipt_ref: null,
+    },
+    sourceFact(2, "linear", "get_issue"),
+    sourceFact(3, "gmail", "get_thread"),
+    sourceFact(4, "salesforce", "list_opportunities"),
+    sourceFact(5, "salesforce", "analytics_export"),
+    sourceFact(6, "fathom", "get_call"),
+  ],
+};
+
+function sourceFact(
+  sequence: number,
+  connector: string,
+  tool: string,
+): SourcesProjectionV2["facts"][number] {
+  return {
+    source_id: `source:v2:${String(sequence).padStart(3, "0")}:connector`,
+    kind: "connector",
+    sequence_no: sequence,
+    ledger_id: `rv3·${String(sequence).padStart(3, "0")}`,
+    connector,
+    tool,
+    origin: null,
+    artifact_id: null,
+    artifact_revision: null,
+    artifact_source_ref: null,
+    workspace_grant_label: null,
+    workspace_virtual_path_key: null,
+    browser_origin: null,
+    sandbox_operation: null,
+    subagent_task: null,
+    external_receipt_ref: null,
+  };
 }
 
 describe("live Generative Surfaces v3 review fixtures", () => {
@@ -191,6 +253,10 @@ describe("live Generative Surfaces v3 review fixtures", () => {
         readFileSync(REPO("packages/design-system/src/styles.css"), "utf8"),
         readFileSync(
           REPO("packages/chat-surface/src/thread-canvas/review-surfaces.css"),
+          "utf8",
+        ),
+        readFileSync(
+          REPO("packages/chat-surface/src/workspace/workspace.css"),
           "utf8",
         ),
       ].join("\n"),
@@ -283,5 +349,13 @@ describe("live Generative Surfaces v3 review fixtures", () => {
     );
     expect(screen.getAllByTestId("tc-table-row-outcome")).toHaveLength(6);
     persist("bulk-partial", container);
+  });
+
+  it("renders sources", () => {
+    const { container } = render(
+      <SourcesV2Tab sources={SOURCES} onOpenSource={noop} />,
+    );
+    expect(screen.getAllByTestId("sources-v2-row")).toHaveLength(6);
+    persist("sources", container);
   });
 });

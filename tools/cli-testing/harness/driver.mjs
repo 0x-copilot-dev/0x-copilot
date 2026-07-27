@@ -199,6 +199,7 @@ async function rpc(cmd, args) {
         : "";
       return {
         target: TARGET.kind,
+        pid: app?.process()?.pid ?? null,
         appDir: APP_DIR,
         cliPackageRoot: TARGET.cliPackageRoot,
         posture: POSTURE,

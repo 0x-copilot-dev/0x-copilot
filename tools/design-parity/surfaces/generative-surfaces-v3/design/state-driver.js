@@ -13,6 +13,7 @@
     "draft-edit",
     "bulk-review",
     "bulk-partial",
+    "sources",
   ]);
   if (!valid.has(state)) throw new Error(`Unknown v3 parity state: ${state}`);
 
@@ -39,16 +40,39 @@
     const bulk = document.querySelector(
       '[data-screen-label="Surface — Salesforce bulk review"]',
     );
-    const root = state.startsWith("draft") ? draft : bulk;
+    const sources = document.querySelector(".sd");
+    const root = state.startsWith("draft")
+      ? draft
+      : state === "sources"
+        ? sources
+        : bulk;
     if (!(root instanceof Element)) {
       if (attempts < 300) return schedule();
       throw new Error(`v3 design state ${state} did not mount its surface.`);
     }
 
     mark(root, "surface-root");
-    mark(root.querySelector(".sheet-scroll"), "surface-scroll");
+    if (state !== "sources") {
+      mark(root.querySelector(".sheet-scroll"), "surface-scroll");
+    }
 
-    if (state.startsWith("draft")) {
+    if (state === "sources") {
+      const panel = root.querySelector(".side-body");
+      const groups = all(":scope > div", panel).filter((node) =>
+        node.querySelector(".rowlist"),
+      );
+      const firstGroup = groups[0];
+      const firstRow = firstGroup?.querySelector(".lrow");
+      mark(panel, "sources-panel");
+      mark(panel?.querySelector(".sd-note"), "sources-note");
+      mark(firstGroup?.querySelector(".sect-h"), "sources-group-header");
+      mark(firstGroup?.querySelector(".rowlist"), "sources-list");
+      mark(firstRow, "sources-row");
+      mark(firstRow?.querySelector(".lrow__logo"), "sources-icon");
+      mark(firstRow?.querySelector(".src-nm"), "sources-title");
+      mark(firstRow?.querySelector(".lrow__sub"), "sources-sub");
+      mark(firstRow?.querySelector(":scope > svg"), "sources-trailing");
+    } else if (state.startsWith("draft")) {
       mark(byText("span", "SUBJECT", root), "draft-subject-label");
       mark(byText("span", "Re: Checkout fix", root), "draft-subject");
       mark(byText("span", "DRAFT ·", root), "draft-revision");
@@ -68,6 +92,7 @@
         mark(byText("button", "Cancel", root), "draft-cancel");
       }
     } else {
+      mark(root.firstElementChild, "bulk-header");
       mark(byText("span", "8 opportunities", root), "bulk-title");
       mark(byText("span", "staged, not applied", root), "bulk-status");
       mark(root.querySelector(".sheet-scroll"), "bulk-table");
@@ -81,7 +106,9 @@
       mark(byText("div", "agent pre-held", root), "bulk-held-reason");
       if (state === "bulk-review") {
         mark(byText("span", "approved", root), "bulk-review-copy");
-        mark(byText("button", "Apply", root), "bulk-action");
+        const action = mark(byText("button", "Apply", root), "bulk-action");
+        mark(action?.parentElement, "bulk-action-bar");
+        mark(action?.parentElement?.querySelector("span"), "bulk-action-copy");
       } else {
         mark(byText("span", "nothing lost", root), "bulk-partial-copy");
         mark(byText("button", "Retry", root), "bulk-retry");

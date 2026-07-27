@@ -36,9 +36,9 @@ export function ArtifactDownloadAction(props: {
       .catch(() => setStatus("error"));
   };
   return (
-    <span>
+    <span className="ui-artifact-download">
       <button
-        className="ui-button ui-button--ghost"
+        className="ui-button ui-button--ghost ui-button--sm"
         type="button"
         disabled={!available || status === "downloading"}
         onClick={download}
