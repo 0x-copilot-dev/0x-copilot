@@ -361,6 +361,11 @@ class RuntimeApiAppFactory:
             if effect_stage_decisions_enabled or workspace_approval_enabled
             else None
         )
+        app.state.rowset_effect_review_service = (
+            cls.default_rowset_effect_review_service(app)
+            if effect_stage_decisions_enabled
+            else None
+        )
         app.state.workspace_approval_decision_service = (
             cls.default_workspace_approval_decision_service(app)
             if workspace_approval_enabled
@@ -981,6 +986,29 @@ class RuntimeApiAppFactory:
             ),
             queue=ports.queue,
             rollout_admission=app.state.e2_rollout_admission,
+        )
+
+    @classmethod
+    def default_rowset_effect_review_service(cls, app):  # type: ignore[no-untyped-def]
+        """Compose the row-set read/action facade over canonical effect state."""
+
+        from agent_runtime.api.rowset_effect_review import RowSetEffectReviewService
+        from runtime_adapters.rowset_effect_review import (
+            RuntimeRowSetProposalResolver,
+        )
+
+        ports = getattr(app.state, "runtime_ports", None)
+        decisions = getattr(app.state, "effect_stage_decision_service", None)
+        blobs = getattr(ports, "artifact_blob_store", None)
+        references = getattr(ports, "artifact_reference_provider", None)
+        if ports is None or decisions is None or blobs is None or references is None:
+            return None
+        return RowSetEffectReviewService(
+            decisions=decisions,
+            material=RuntimeRowSetProposalResolver(
+                blobs=blobs,
+                references=references,
+            ),
         )
 
     @classmethod

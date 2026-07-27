@@ -107,7 +107,7 @@ function makeStore(): KeyValueStore {
 
 let seq = 0;
 function v2Event(
-  eventType: "surface.created" | "view.derived",
+  eventType: string,
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
   seq += 1;
@@ -121,6 +121,161 @@ function v2Event(
     payload,
     created_at: new Date(1_700_000_000_000 + seq * 1000).toISOString(),
   };
+}
+
+function canonicalRowsetEvent(): Record<string, unknown> {
+  return v2Event("effect.staged", {
+    v: 1,
+    stage_id: "stg-rowset",
+    operation_id: "op-rowset",
+    executor: "builtin",
+    target_ref: "builtin-target://linear/update_issue",
+    target_digest: "b".repeat(64),
+    proposal_ref: "proposal://stg-rowset/revisions/1",
+    proposal_content_ref: "operation://op-rowset/args",
+    proposal_digest: "a".repeat(64),
+    proposal_kind: "row_set",
+    proposal_media_type: "application/json",
+    policy: "ask",
+    display_target: "Renewal changes",
+  });
+}
+
+function partialRowsetReview(): Record<string, unknown> {
+  const rows = [
+    {
+      row_key: "success",
+      title: "Success",
+      changes: [{ field: "status", old: "old", new: "new" }],
+      decision: "approve",
+      decision_source: "user",
+      hold_reason: null,
+      apply_outcome: "applied",
+      can_decide: false,
+    },
+    {
+      row_key: "failed-a",
+      title: "Failed A",
+      changes: [{ field: "status", old: "old", new: "new" }],
+      decision: "approve",
+      decision_source: "user",
+      hold_reason: null,
+      apply_outcome: "failed",
+      can_decide: false,
+    },
+    {
+      row_key: "held",
+      title: "Held",
+      changes: [{ field: "status", old: "old", new: "new" }],
+      decision: "hold",
+      decision_source: "agent",
+      hold_reason: "manual review",
+      apply_outcome: null,
+      can_decide: false,
+    },
+    {
+      row_key: "failed-b",
+      title: "Failed B",
+      changes: [{ field: "status", old: "old", new: "new" }],
+      decision: "approve",
+      decision_source: "user",
+      hold_reason: null,
+      apply_outcome: "failed",
+      can_decide: false,
+    },
+  ];
+  return {
+    stage_id: "stg-rowset",
+    revision: 1,
+    proposal_digest: "a".repeat(64),
+    target_digest: "b".repeat(64),
+    title: "Renewal changes",
+    source_connector: "linear",
+    source_op: "update_issue",
+    status: "partial",
+    rows,
+    counts: {
+      total: 4,
+      approved: 3,
+      held: 1,
+      applied: 1,
+      failed: 2,
+    },
+    action: {
+      kind: "retry_failed",
+      row_keys: ["failed-a", "failed-b"],
+      basis_sequence_no: 14,
+      basis_ledger_id: "rrun·014",
+    },
+    ledger_id: "rrun·014",
+    last_sequence_no: 14,
+  };
+}
+
+function legacyPartialRowsetEvents(): readonly Record<string, unknown>[] {
+  return [
+    created("surface-rowset", "table", "Renewal changes"),
+    v2Event("write.staged", {
+      v: 1,
+      stage_id: "stage-rowset",
+      surface_id: "surface-rowset",
+      target: { connector: "local-csv", op: "update_rows" },
+      proposal_ref: "stage://stage-rowset/v1",
+      rows: 4,
+      agent_holds: [{ row_key: "held", reason: "manual review" }],
+    }),
+    v2Event("revision.added", {
+      v: 1,
+      stage_id: "stage-rowset",
+      rev: 1,
+      author: "agent",
+      proposal_ref: "stage://stage-rowset/v1",
+      diff_ref: "stage://stage-rowset/v1",
+      rowset: {
+        rows: [
+          {
+            row_key: "success",
+            title: "Success",
+            changes: [{ field: "status", old: "old", new: "new" }],
+          },
+          {
+            row_key: "failed-a",
+            title: "Failed A",
+            changes: [{ field: "status", old: "old", new: "new" }],
+          },
+          {
+            row_key: "held",
+            title: "Held",
+            changes: [{ field: "status", old: "old", new: "new" }],
+          },
+          {
+            row_key: "failed-b",
+            title: "Failed B",
+            changes: [{ field: "status", old: "old", new: "new" }],
+          },
+        ],
+      },
+    }),
+    v2Event("decision.recorded", {
+      v: 1,
+      stage_id: "stage-rowset",
+      decision: "approve",
+      scope: { row_keys: ["success", "failed-a", "failed-b"] },
+      actor: "user",
+      apply: true,
+    }),
+    v2Event("write.applied", {
+      v: 1,
+      stage_id: "stage-rowset",
+      rev: 1,
+      result: "partial",
+      row_results: [
+        { row_key: "success", outcome: "applied" },
+        { row_key: "failed-a", outcome: "failed" },
+        { row_key: "failed-b", outcome: "failed" },
+      ],
+    }),
+  ];
 }
 
 function created(
@@ -485,6 +640,104 @@ describe("RunDestination — Generative Surfaces v2 flag (PRD-B1)", () => {
     );
     fireEvent.click(screen.getByTestId("receipt-v2-open"));
     await screen.findByTestId("receipt-v2-surface");
+  });
+
+  it("submits every and only failed row from the projected recovery context", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (request) => {
+      if (request.path.includes("/rowset/review")) return partialRowsetReview();
+      if (request.path.includes("/rowset/retry")) return partialRowsetReview();
+      return request.path.includes("/messages")
+        ? { messages: [] }
+        : {
+            latest_run_id: "run-1",
+            latest_run_id_any_status: "run-1",
+            runs: [],
+          };
+    };
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [canonicalRowsetEvent()]);
+
+    const retry = await screen.findByTestId("tc-bulk-retry");
+    expect(retry).toHaveTextContent("Retry 2 failed");
+    fireEvent.click(retry);
+
+    await waitFor(() => {
+      const request = transport.requests.find(
+        (item) =>
+          item.method === "POST" &&
+          item.path.includes("/effect-stages/stg-rowset/rowset/retry"),
+      );
+      expect(request?.body).toEqual({
+        revision: 1,
+        proposal_digest: "a".repeat(64),
+        target_digest: "b".repeat(64),
+        row_keys: ["failed-a", "failed-b"],
+        basis_sequence_no: 14,
+        basis_ledger_id: "rrun·014",
+      });
+    });
+    expect(
+      (screen.getByTestId("tc-bulk-retry") as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(screen.getByTestId("tc-bulk-retry")).toHaveTextContent("Retrying…");
+  });
+
+  it("fails a rejected retry locally without widening or hiding recovery", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    transport.requestHandler = async (request) => {
+      if (
+        request.method === "POST" &&
+        request.path.includes("/effect-stages/stg-rowset/rowset/retry")
+      ) {
+        throw new Error("rejected");
+      }
+      if (request.path.includes("/rowset/review")) return partialRowsetReview();
+      return request.path.includes("/messages")
+        ? { messages: [] }
+        : {
+            latest_run_id: "run-1",
+            latest_run_id_any_status: "run-1",
+            runs: [],
+          };
+    };
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, [canonicalRowsetEvent()]);
+
+    fireEvent.click(await screen.findByTestId("tc-bulk-retry"));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("tc-bulk-pledge")).toHaveTextContent(
+        "Successful and held rows were not touched.",
+      ),
+    );
+    expect(
+      (screen.getByTestId("tc-bulk-retry") as HTMLButtonElement).disabled,
+    ).toBe(false);
+    expect(screen.getByTestId("tc-bulk-retry")).toHaveTextContent(
+      "Retry 2 failed",
+    );
+  });
+
+  it("keeps historical write.staged rowsets read-only after cutover", async () => {
+    seq = 0;
+    const transport = new FakeTransport();
+    renderRun(transport, makeStore(), true);
+    await screen.findByTestId("thread-canvas");
+    stream(transport, legacyPartialRowsetEvents());
+
+    await waitFor(() =>
+      expect(screen.queryByTestId("tc-bulk-retry")).toBeNull(),
+    );
+    expect(
+      transport.requests.some((request) =>
+        request.path.includes("/effect-stages/"),
+      ),
+    ).toBe(false);
   });
 
   it("flag ON: a hostile title renders as text, not markup (no injection)", async () => {

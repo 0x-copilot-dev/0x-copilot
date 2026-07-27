@@ -115,6 +115,16 @@ class RuntimeEffectCommitCommand(RuntimeContract):
     proposal_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     target_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
     idempotency_key: str = Field(min_length=1, max_length=256)
+    row_keys: tuple[str, ...] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    retry_basis_ledger_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        exclude_if=lambda value: value is None,
+    )
     # A durable explicit-E2 mark. It prevents a queued command from becoming a
     # legacy permit if a process restarts with the corresponding lane disabled.
     governed_capabilities: tuple[RolloutCapability, ...] | None = Field(
@@ -125,6 +135,14 @@ class RuntimeEffectCommitCommand(RuntimeContract):
     )
     trace_propagation: dict[str, str] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+    @model_validator(mode="after")
+    def _row_keys_are_unique(self) -> RuntimeEffectCommitCommand:
+        if self.row_keys is not None and (
+            not self.row_keys or len(self.row_keys) != len(set(self.row_keys))
+        ):
+            raise ValueError("row_keys must contain unique row keys")
+        return self
 
 
 class RuntimeEffectReconcileCommand(RuntimeContract):

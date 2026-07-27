@@ -17,7 +17,7 @@ reason to replay a possibly-sent mutation.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import UTC, datetime
 from enum import StrEnum
 import hashlib
@@ -49,7 +49,7 @@ from agent_runtime.effects.executor import (
 )
 from agent_runtime.effects.executor_registry import EffectExecutorRegistry
 from agent_runtime.effects.fold import EffectStageFold
-from agent_runtime.effects.ports import EffectStageLedgerPort
+from agent_runtime.effects.ports import EffectStageLedgerPort, StructuralEvent
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.entities import EffectExecutionResult
 from agent_runtime.surfaces_v2.ledger_models import (
@@ -509,6 +509,11 @@ class EffectCoordinator:
             or decision.ledger_id != command.decision_ledger_id
             or decision.proposal_digest != command.proposal_digest
             or decision.target_digest != command.target_digest
+            or not _command_row_scope_matches(
+                events=events,
+                decision_row_keys=decision.row_keys,
+                command=command,
+            )
             or state.current_revision.revision != command.revision
             or state.current_revision.proposal_digest != command.proposal_digest
             or state.target_digest != command.target_digest
@@ -583,6 +588,51 @@ class EffectCoordinator:
         )
 
 
+def _command_row_scope_matches(
+    *,
+    events: Sequence[StructuralEvent],
+    decision_row_keys: tuple[str, ...] | None,
+    command: EffectCommitCommand,
+) -> bool:
+    """Re-prove initial or recovery scope from durable ledger facts."""
+
+    if command.retry_basis_ledger_id is None:
+        return decision_row_keys == command.row_keys
+    if decision_row_keys is None or command.row_keys is None:
+        return False
+    if not set(command.row_keys).issubset(decision_row_keys):
+        return False
+    applied = [
+        event
+        for event in events
+        if event.event_type == _EVENT_APPLIED
+        and isinstance(event.payload.get("row_results"), list | tuple)
+    ]
+    if not applied:
+        return False
+    latest = max(applied, key=lambda event: (event.sequence_no, event.ledger_id))
+    if latest.ledger_id != command.retry_basis_ledger_id:
+        return False
+    failed: list[str] = []
+    seen: set[str] = set()
+    for item in latest.payload.get("row_results", ()):
+        if not isinstance(item, dict):
+            return False
+        row_key = item.get("row_key")
+        outcome = item.get("outcome")
+        if (
+            not isinstance(row_key, str)
+            or not row_key
+            or row_key in seen
+            or outcome not in {"applied", "failed"}
+        ):
+            return False
+        seen.add(row_key)
+        if outcome == "failed":
+            failed.append(row_key)
+    return bool(failed) and set(command.row_keys) == set(failed)
+
+
 async def _digest_reference(
     *,
     resolver: EffectImmutableReferenceResolver,
@@ -623,6 +673,7 @@ def _dispatch_request(
         proposal_digest=state.current_revision.proposal_digest,
         actor=decision.actor.actor,
         decision_ledger_id=decision.ledger_id,
+        row_keys=command.row_keys,
     )
 
 
@@ -673,6 +724,11 @@ def _completed_claim(
             "receipt_ref": result.receipt_ref,
             "result_digest": result.result_digest,
             "safe_message": _safe_message(result.safe_message, None),
+            "row_results": (
+                [item.model_dump(mode="json") for item in result.row_results]
+                if result.row_results is not None
+                else None
+            ),
             "updated_at": _now(),
         }
     )
@@ -692,6 +748,8 @@ def _indeterminate_claim(
             "receipt_ref": result.receipt_ref if result else None,
             "result_digest": result.result_digest if result else None,
             "safe_message": _safe_message(safe_message, _PUBLIC_UNKNOWN_OUTCOME),
+            # An indeterminate mutation cannot safely assert per-row outcomes.
+            "row_results": None,
             "updated_at": _now(),
         }
     )
@@ -725,6 +783,10 @@ def _applied_payload(claim: EffectClaim) -> dict[str, object]:
         payload["receipt_ref"] = claim.receipt_ref
     if claim.result_digest is not None:
         payload["result_digest"] = claim.result_digest
+    if claim.row_results is not None:
+        payload["row_results"] = [
+            item.model_dump(mode="json") for item in claim.row_results
+        ]
     return payload
 
 
@@ -766,6 +828,7 @@ def _audit_facts(
         "executor": state.executor.value,
         "operation_id": state.operation_id,
         "claim_id": claim_id,
+        "row_count": len(command.row_keys) if command.row_keys is not None else None,
     }
 
 

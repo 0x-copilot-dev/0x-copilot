@@ -50,7 +50,8 @@ export type LedgerEventType =
   | "effect.indeterminate"
   | "effect.reconciled"
   | "gate.opened.v2"
-  | "gate.resolved.v2";
+  | "gate.resolved.v2"
+  | "effect.row_decisions_recorded";
 
 /** Runtime SSOT tuple for the event-type union, in contract order. Pinned to
  * the service-contracts JSON `events` key order by `ledger.test.ts`. Later
@@ -89,6 +90,7 @@ export const LEDGER_EVENT_TYPES = [
   "effect.reconciled",
   "gate.opened.v2",
   "gate.resolved.v2",
+  "effect.row_decisions_recorded",
 ] as const satisfies readonly LedgerEventType[];
 
 /** Canonical artifact ledger events. Consumers import this tuple instead of
@@ -119,6 +121,7 @@ export const EFFECT_EVENT_TYPES = [
   "effect.applied",
   "effect.indeterminate",
   "effect.reconciled",
+  "effect.row_decisions_recorded",
 ] as const satisfies readonly LedgerEventType[];
 
 /** Canonical v2 gate lifecycle events. */
@@ -645,6 +648,24 @@ export interface EffectDecisionRecordedPayload {
   target_digest: string;
   actor_ref?: string;
   decided_at?: string;
+  row_keys?: readonly string[];
+}
+
+export interface EffectRowDecision {
+  row_key: string;
+  decision: "approve" | "hold";
+}
+
+export interface EffectRowDecisionsRecordedPayload {
+  v: 1;
+  stage_id: string;
+  revision: number;
+  decisions: readonly EffectRowDecision[];
+  actor: EffectActor;
+  proposal_digest: string;
+  target_digest: string;
+  actor_ref?: string;
+  decided_at?: string;
 }
 
 export interface EffectClaimedPayload {
@@ -663,6 +684,7 @@ export interface EffectAppliedPayload {
   outcome: EffectOutcome;
   receipt_ref?: string;
   result_digest?: string;
+  row_results?: readonly WriteAppliedRowResult[];
 }
 
 export interface EffectIndeterminatePayload {
@@ -739,6 +761,7 @@ export interface LedgerEventPayloadMap extends ArtifactRuntimeEventPayloadMap {
   "effect.reconciled": EffectReconciledPayload;
   "gate.opened.v2": GateOpenedV2Payload;
   "gate.resolved.v2": GateResolvedV2Payload;
+  "effect.row_decisions_recorded": EffectRowDecisionsRecordedPayload;
 }
 
 /** One v2 ledger event on the wire (envelope-lite: the fields every projector
@@ -1167,6 +1190,192 @@ export interface EffectStageDecisionResponse {
   readonly status: "approved" | "rejected";
 }
 
+/** One connector-neutral row in the canonical row-set review response. */
+export interface RowSetEffectReviewRow {
+  readonly row_key: string;
+  readonly title: string;
+  readonly changes: readonly RowFieldChange[];
+  readonly decision: "approve" | "hold";
+  readonly decision_source: "default" | "agent" | "user";
+  readonly hold_reason: string | null;
+  readonly apply_outcome: "applied" | "failed" | null;
+  readonly can_decide: boolean;
+}
+
+export interface RowSetEffectReviewCounts {
+  readonly total: number;
+  readonly approved: number;
+  readonly held: number;
+  readonly applied: number;
+  readonly failed: number;
+}
+
+export interface RowSetEffectReviewAction {
+  readonly kind: "apply" | "retry_failed";
+  readonly row_keys: readonly string[];
+  readonly basis_sequence_no: number;
+  readonly basis_ledger_id: string | null;
+}
+
+/**
+ * Owner-scoped semantic review returned by the canonical v2.1 effect lane.
+ * It contains presentation facts and exact command snapshots, never target
+ * arguments, physical paths, connector credentials, or mutable material.
+ */
+export interface RowSetEffectReview {
+  readonly stage_id: string;
+  readonly revision: number;
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+  readonly title: string;
+  readonly source_connector: string;
+  readonly source_op: string;
+  readonly status: "staged" | "held" | "apply_pending" | "partial" | "applied";
+  readonly rows: readonly RowSetEffectReviewRow[];
+  readonly counts: RowSetEffectReviewCounts;
+  readonly action: RowSetEffectReviewAction | null;
+  readonly ledger_id: string;
+  readonly last_sequence_no: number;
+}
+
+export interface RowSetEffectDecisionRequest {
+  readonly revision: number;
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+  readonly decisions: Readonly<Record<string, "approve" | "hold">>;
+}
+
+export interface RowSetEffectActionRequest {
+  readonly revision: number;
+  readonly proposal_digest: string;
+  readonly target_digest: string;
+  readonly row_keys: readonly string[];
+  readonly basis_sequence_no: number;
+  readonly basis_ledger_id: string | null;
+}
+
+/** Fail-closed guard for the owner-scoped row-set review HTTP response. */
+export function isRowSetEffectReview(
+  value: unknown,
+): value is RowSetEffectReview {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return false;
+  const review = value as Record<string, unknown>;
+  const digest = (candidate: unknown): candidate is string =>
+    typeof candidate === "string" && /^[a-f0-9]{64}$/u.test(candidate);
+  const positive = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate > 0;
+  const nonnegative = (candidate: unknown): candidate is number =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0;
+  const text = (candidate: unknown): candidate is string =>
+    typeof candidate === "string" && candidate.length > 0;
+  const statuses = new Set([
+    "staged",
+    "held",
+    "apply_pending",
+    "partial",
+    "applied",
+  ]);
+  if (
+    !text(review.stage_id) ||
+    !positive(review.revision) ||
+    !digest(review.proposal_digest) ||
+    !digest(review.target_digest) ||
+    !text(review.title) ||
+    !text(review.source_connector) ||
+    !text(review.source_op) ||
+    !statuses.has(String(review.status)) ||
+    !text(review.ledger_id) ||
+    !positive(review.last_sequence_no) ||
+    !Array.isArray(review.rows) ||
+    typeof review.counts !== "object" ||
+    review.counts === null ||
+    Array.isArray(review.counts)
+  ) {
+    return false;
+  }
+  const counts = review.counts as Record<string, unknown>;
+  const rowKeys = new Set<string>();
+  let approved = 0;
+  let held = 0;
+  let applied = 0;
+  let failed = 0;
+  for (const candidate of review.rows) {
+    if (
+      typeof candidate !== "object" ||
+      candidate === null ||
+      Array.isArray(candidate)
+    )
+      return false;
+    const row = candidate as Record<string, unknown>;
+    if (
+      !text(row.row_key) ||
+      rowKeys.has(row.row_key) ||
+      !text(row.title) ||
+      !Array.isArray(row.changes) ||
+      row.changes.some(
+        (change) =>
+          typeof change !== "object" ||
+          change === null ||
+          Array.isArray(change) ||
+          !text((change as Record<string, unknown>).field),
+      ) ||
+      !["approve", "hold"].includes(String(row.decision)) ||
+      !["default", "agent", "user"].includes(String(row.decision_source)) ||
+      !(row.hold_reason === null || typeof row.hold_reason === "string") ||
+      !(
+        row.apply_outcome === null ||
+        row.apply_outcome === "applied" ||
+        row.apply_outcome === "failed"
+      ) ||
+      typeof row.can_decide !== "boolean"
+    )
+      return false;
+    rowKeys.add(row.row_key);
+    if (row.decision === "approve") approved += 1;
+    else held += 1;
+    if (row.apply_outcome === "applied") applied += 1;
+    if (row.apply_outcome === "failed") failed += 1;
+  }
+  if (
+    !nonnegative(counts.total) ||
+    !nonnegative(counts.approved) ||
+    !nonnegative(counts.held) ||
+    !nonnegative(counts.applied) ||
+    !nonnegative(counts.failed) ||
+    counts.total !== review.rows.length ||
+    counts.approved !== approved ||
+    counts.held !== held ||
+    counts.applied !== applied ||
+    counts.failed !== failed
+  ) {
+    return false;
+  }
+  if (review.action !== null) {
+    if (typeof review.action !== "object" || Array.isArray(review.action))
+      return false;
+    const action = review.action as Record<string, unknown>;
+    if (
+      !["apply", "retry_failed"].includes(String(action.kind)) ||
+      !Array.isArray(action.row_keys) ||
+      action.row_keys.length === 0 ||
+      action.row_keys.some((key) => !text(key) || !rowKeys.has(key)) ||
+      new Set(action.row_keys).size !== action.row_keys.length ||
+      !positive(action.basis_sequence_no) ||
+      !(
+        (action.kind === "apply" && action.basis_ledger_id === null) ||
+        (action.kind === "retry_failed" && text(action.basis_ledger_id))
+      )
+    )
+      return false;
+  }
+  return true;
+}
+
 export interface EffectExecutionRequest {
   readonly stage_id: string;
   readonly revision: number;
@@ -1179,6 +1388,7 @@ export interface EffectExecutionRequest {
   readonly proposal_digest: string;
   readonly actor: EffectActor;
   readonly decision_ledger_id: string;
+  readonly row_keys?: readonly string[];
 }
 
 export interface EffectExecutionResult {
@@ -1187,6 +1397,7 @@ export interface EffectExecutionResult {
   readonly result_digest?: string;
   readonly retryable: boolean;
   readonly safe_message?: string;
+  readonly row_results?: readonly WriteAppliedRowResult[];
 }
 
 // ---------------------------------------------------------------------------

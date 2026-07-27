@@ -34,6 +34,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectExecutorKind,
     EffectOutcome,
     Sha256Hex,
+    WriteAppliedRowResult,
 )
 
 _IDENTIFIER_MAX_LENGTH = 255
@@ -88,6 +89,8 @@ class EffectClaim(RuntimeContract):
     proposal_content_ref: str | None = Field(default=None, max_length=_REF_MAX_LENGTH)
     actor: EffectActor
     decision_ledger_id: str = Field(min_length=1, max_length=_IDENTIFIER_MAX_LENGTH)
+    row_keys: tuple[str, ...] | None = None
+    row_results: tuple[WriteAppliedRowResult, ...] | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -175,6 +178,19 @@ class EffectClaim(RuntimeContract):
             raise ValueError("safe_message must be a short single-line message")
         return value
 
+    @field_validator("row_keys")
+    @classmethod
+    def _row_keys_are_unique(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is not None and (
+            not value
+            or len(value) != len(set(value))
+            or any(not key or len(key) > 256 for key in value)
+        ):
+            raise ValueError("row_keys must contain unique row keys")
+        return value
+
     @model_validator(mode="after")
     def _state_is_consistent(self) -> "EffectClaim":
         # A4 stage ids are canonical ``stg_`` identifiers and must preserve
@@ -206,6 +222,24 @@ class EffectClaim(RuntimeContract):
             parsed = EffectReceiptRefCodec.parse(self.receipt_ref)
             if parsed.stage_id != self.stage_id or parsed.claim_id != self.claim_id:
                 raise ValueError("receipt_ref must reference this stage and claim")
+        if self.row_results is not None:
+            result_keys = tuple(item.row_key for item in self.row_results)
+            if (
+                self.row_keys is None
+                or not result_keys
+                or len(result_keys) != len(set(result_keys))
+                or set(result_keys) != set(self.row_keys)
+                or self.state is not EffectClaimState.COMPLETED
+            ):
+                raise ValueError(
+                    "row_results must exactly cover one completed row-key scope"
+                )
+        if (
+            self.state is EffectClaimState.COMPLETED
+            and self.row_keys is not None
+            and self.row_results is None
+        ):
+            raise ValueError("a completed row-set claim requires exact row outcomes")
         return self
 
     def same_request_as(self, other: "EffectClaim") -> bool:
@@ -230,6 +264,7 @@ class EffectClaim(RuntimeContract):
             and self.proposal_content_ref == other.proposal_content_ref
             and self.actor is other.actor
             and self.decision_ledger_id == other.decision_ledger_id
+            and self.row_keys == other.row_keys
         )
 
 

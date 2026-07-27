@@ -8,6 +8,7 @@ import pytest
 
 from agent_runtime.effects.claims import EffectClaimState
 from agent_runtime.effects.contracts import EffectCommitCommand
+from agent_runtime.effects.contracts import EffectProposalKind
 from agent_runtime.effects.coordinator import (
     EffectCoordinator,
     EffectCoordinatorStatus,
@@ -26,6 +27,8 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectDecisionKind,
     EffectExecutorKind,
     EffectOutcome,
+    RowOutcome,
+    WriteAppliedRowResult,
 )
 from runtime_adapters.in_memory.effect_claim_store import InMemoryEffectClaimStore
 from tests.unit.agent_runtime.effects.fakes import (
@@ -106,11 +109,17 @@ def _matching_executor(
 async def _approved_command(
     *,
     executor: EffectExecutorKind = EffectExecutorKind.BUILTIN,
+    row_keys: tuple[str, ...] | None = None,
 ) -> tuple[EffectCommitCommand, FakeLedger, _References]:
     proposal_bytes = b'{"exact":"approved proposal"}'
     target_bytes = b'{"target":"immutable target"}'
     proposed = proposal(
         executor=executor,
+        kind=(
+            EffectProposalKind.ROW_SET
+            if row_keys is not None
+            else EffectProposalKind.CANONICAL_ARGUMENTS
+        ),
         proposal_digest=hashlib.sha256(proposal_bytes).hexdigest(),
         target_digest=hashlib.sha256(target_bytes).hexdigest(),
     )
@@ -138,6 +147,7 @@ async def _approved_command(
         target_digest=staged.target_digest,
         actor=user(),
         idempotency_key="decide-effect-1",
+        row_keys=row_keys,
     )
     command = next(iter(outbox.commands.values()))
     return (
@@ -237,6 +247,128 @@ async def test_duplicate_delivery_never_calls_apply_twice() -> None:
     assert [
         event.event_type for event in ledger.events_by_stage[command.stage_id]
     ].count("effect.applied") == 1
+
+
+@pytest.mark.asyncio
+async def test_partial_rowset_retry_dispatches_exact_latest_failed_scope() -> None:
+    command, ledger, references = await _approved_command(
+        row_keys=("row-a", "row-b"),
+    )
+    claims = InMemoryEffectClaimStore()
+    apply_count = 0
+
+    async def _on_apply(prepared: PreparedEffect) -> EffectExecutionResult:
+        nonlocal apply_count
+        apply_count += 1
+        if apply_count == 1:
+            assert prepared.request.row_keys == ("row-a", "row-b")
+            return EffectExecutionResult(
+                outcome=EffectOutcome.PARTIAL,
+                retryable=True,
+                row_results=(
+                    WriteAppliedRowResult(
+                        row_key="row-a",
+                        outcome=RowOutcome.APPLIED,
+                    ),
+                    WriteAppliedRowResult(
+                        row_key="row-b",
+                        outcome=RowOutcome.FAILED,
+                    ),
+                ),
+            )
+        assert prepared.request.row_keys == ("row-b",)
+        return EffectExecutionResult(
+            outcome=EffectOutcome.APPLIED,
+            retryable=False,
+            row_results=(
+                WriteAppliedRowResult(
+                    row_key="row-b",
+                    outcome=RowOutcome.APPLIED,
+                ),
+            ),
+        )
+
+    executor = _matching_executor(on_apply=_on_apply)
+    coordinator = _coordinator(
+        ledger=ledger,
+        references=references,
+        claims=claims,
+        executor=executor,
+    )
+    first = await coordinator.handle(command)
+    assert first.outcome is EffectOutcome.PARTIAL
+    basis = ledger.events_by_stage[command.stage_id][-1]
+    retry = command.model_copy(
+        update={
+            "idempotency_key": "decide-effect-retry-row-b",
+            "row_keys": ("row-b",),
+            "retry_basis_ledger_id": basis.ledger_id,
+        }
+    )
+
+    recovered = await coordinator.handle(retry)
+
+    assert recovered.outcome is EffectOutcome.APPLIED
+    assert apply_count == 2
+    assert [
+        event.payload.get("row_results")
+        for event in ledger.events_by_stage[command.stage_id]
+        if event.event_type == "effect.applied"
+    ] == [
+        [
+            {"row_key": "row-a", "outcome": "applied", "detail": None},
+            {"row_key": "row-b", "outcome": "failed", "detail": None},
+        ],
+        [{"row_key": "row-b", "outcome": "applied", "detail": None}],
+    ]
+
+
+@pytest.mark.asyncio
+async def test_rowset_retry_with_widened_scope_is_refused_before_prepare() -> None:
+    command, ledger, references = await _approved_command(
+        row_keys=("row-a", "row-b"),
+    )
+    claims = InMemoryEffectClaimStore()
+
+    async def _partially_apply(
+        _prepared: PreparedEffect,
+    ) -> EffectExecutionResult:
+        return EffectExecutionResult(
+            outcome=EffectOutcome.PARTIAL,
+            retryable=True,
+            row_results=(
+                WriteAppliedRowResult(
+                    row_key="row-a",
+                    outcome=RowOutcome.APPLIED,
+                ),
+                WriteAppliedRowResult(
+                    row_key="row-b",
+                    outcome=RowOutcome.FAILED,
+                ),
+            ),
+        )
+
+    executor = _matching_executor(on_apply=_partially_apply)
+    coordinator = _coordinator(
+        ledger=ledger,
+        references=references,
+        claims=claims,
+        executor=executor,
+    )
+    await coordinator.handle(command)
+    basis = ledger.events_by_stage[command.stage_id][-1]
+    forged = command.model_copy(
+        update={
+            "idempotency_key": "decide-effect-forged-retry",
+            "row_keys": ("row-a", "row-b"),
+            "retry_basis_ledger_id": basis.ledger_id,
+        }
+    )
+
+    result = await coordinator.handle(forged)
+
+    assert result.status is EffectCoordinatorStatus.REFUSED
+    assert executor.calls.count("apply") == 1
 
 
 @pytest.mark.asyncio

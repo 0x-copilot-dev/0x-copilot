@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from typing import Literal
 from urllib.parse import unquote
 
 from pydantic import Field, field_validator, model_validator
@@ -321,6 +322,26 @@ class EffectStageDecision(RuntimeContract):
     target_digest: Sha256Hex
     decided_at: str
     ledger_id: str
+    row_keys: tuple[str, ...] | None = None
+
+    @field_validator("row_keys")
+    @classmethod
+    def _row_keys_are_unique(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is not None and (not value or len(value) != len(set(value))):
+            raise ValueError("row_keys must contain unique row keys")
+        return value
+
+
+class EffectRowDecisionState(RuntimeContract):
+    """Latest durable user posture for one row in a row-set revision."""
+
+    row_key: str = Field(min_length=1, max_length=256)
+    decision: Literal["approve", "hold"]
+    actor: EffectActorIdentity
+    decided_at: str
+    ledger_id: str
 
 
 class EffectProjectionBinding(RuntimeContract):
@@ -363,6 +384,7 @@ class EffectStageState(RuntimeContract):
     projection_required: bool = False
     projection_binding: EffectProjectionBinding | None = None
     decision: EffectStageDecision | None = None
+    row_decisions: tuple[EffectRowDecisionState, ...] = ()
     superseded_revision: int | None = None
     created_at: str
     updated_at: str
@@ -447,6 +469,14 @@ class EffectCommitCommand(RuntimeContract):
     proposal_digest: Sha256Hex
     target_digest: Sha256Hex
     idempotency_key: str
+    row_keys: tuple[str, ...] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
+    retry_basis_ledger_id: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
     # E2 decision boundary copies this closed set onto newly governed work.
     # ``None`` remains the explicit compatibility shape for old A4 commands.
     governed_capabilities: tuple[RolloutCapability, ...] | None = Field(
@@ -476,6 +506,28 @@ class EffectCommitCommand(RuntimeContract):
             raise ValueError("idempotency_key must be a stable opaque key")
         return value
 
+    @field_validator("row_keys")
+    @classmethod
+    def _row_keys_are_unique(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is not None and (not value or len(value) != len(set(value))):
+            raise ValueError("row_keys must contain unique row keys")
+        return value
+
+    @field_validator("retry_basis_ledger_id")
+    @classmethod
+    def _retry_basis_is_opaque(cls, value: str | None) -> str | None:
+        if value is not None and (
+            not value
+            or len(value) > 255
+            or value != value.strip()
+            or "/" in value
+            or "\\" in value
+        ):
+            raise ValueError("retry_basis_ledger_id must be an opaque identifier")
+        return value
+
 
 class EffectDispatchRequest(RuntimeContract):
     """Exact server-derived facts consumed by the shared effect dispatcher.
@@ -497,6 +549,7 @@ class EffectDispatchRequest(RuntimeContract):
     proposal_digest: Sha256Hex
     actor: EffectActor
     decision_ledger_id: str = Field(min_length=1, max_length=255)
+    row_keys: tuple[str, ...] | None = None
 
     @field_validator("stage_id", "idempotency_key", "decision_ledger_id")
     @classmethod
@@ -509,6 +562,15 @@ class EffectDispatchRequest(RuntimeContract):
     @classmethod
     def _reference_is_safe(cls, value: str) -> str:
         return _safe_reference(value, "effect dispatch reference")
+
+    @field_validator("row_keys")
+    @classmethod
+    def _row_keys_are_unique(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is not None and (not value or len(value) != len(set(value))):
+            raise ValueError("row_keys must contain unique row keys")
+        return value
 
 
 def validate_idempotency_key(value: str) -> str:
@@ -599,6 +661,7 @@ __all__ = [
     "EffectPolicySnapshot",
     "EffectProposalKind",
     "EffectRevisionProposal",
+    "EffectRowDecisionState",
     "EffectStageDecision",
     "EffectStageRevision",
     "EffectStageScope",

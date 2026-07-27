@@ -6,145 +6,107 @@ import {
   bulkApplyLabel,
   bulkApplyPledge,
   bulkRetryLabel,
-  bulkRetryMessage,
 } from "./TcBulkApplyBar";
-import type { LedgerStagedRow, LedgerStagedWrite } from "./ledgerProjection";
+import type { ApplyContext, RecoveryContext } from "./rowsetReviewModel";
 
-function row(rowKey: string, stance: "will_apply" | "held"): LedgerStagedRow {
+function applyAction(overrides: Partial<ApplyContext> = {}): ApplyContext {
   return {
-    rowKey,
-    title: rowKey,
-    changes: [],
-    stance,
-    agentHoldReason: null,
-    decidedBy: null,
-    applyOutcome: null,
+    kind: "apply",
+    stageId: "stage_1",
+    revision: 2,
+    proposalDigest: "a".repeat(64),
+    targetDigest: "b".repeat(64),
+    rowKeys: ["a", "c"],
+    basisSequence: 9,
+    basisLedgerId: null,
+    label: bulkApplyLabel(2),
+    message: bulkApplyPledge,
+    accessibleLabel: "Apply exactly 2 approved rows",
+    pending: false,
+    disabled: false,
+    ...overrides,
   };
 }
 
-function stage(
-  rows: LedgerStagedRow[],
-  overrides: Partial<LedgerStagedWrite> = {},
-): LedgerStagedWrite {
+function recoveryAction(
+  overrides: Partial<RecoveryContext> = {},
+): RecoveryContext {
   return {
+    kind: "retry_failed",
     stageId: "stage_1",
-    surfaceId: "surf_1",
-    draftId: "",
-    target: { connector: "linear", op: "update_issue" },
-    latestRev: 1,
-    approvedRev: null,
-    status: "staged",
-    revisions: [],
-    decisions: [],
-    createdSeq: 2,
-    lastSeq: 3,
-    ledgerId: "rrun1·002",
-    latestRevision: null,
-    applyResult: null,
-    applyFailureCode: null,
-    rows,
-    rowCounts: {
-      total: rows.length,
-      willApply: rows.filter((r) => r.stance === "will_apply").length,
-      held: rows.filter((r) => r.stance === "held").length,
-      applied: 0,
-      failed: 0,
-    },
+    revision: 2,
+    proposalDigest: "a".repeat(64),
+    targetDigest: "b".repeat(64),
+    rowKeys: ["failed-a", "failed-c"],
+    failedRowKeys: ["failed-a", "failed-c"],
+    basisSequence: 12,
+    basisLedgerId: "rrun1·012",
+    label: bulkRetryLabel(2),
+    message: "Some writes failed. Applied rows are safe — nothing lost.",
+    accessibleLabel: "Retry exactly 2 failed rows",
+    pending: false,
+    disabled: false,
     ...overrides,
   };
 }
 
 describe("TcBulkApplyBar", () => {
-  it('labels "Apply {N} changes →" tracking the will-apply count', () => {
-    render(
-      <TcBulkApplyBar
-        stage={stage([
-          row("a", "will_apply"),
-          row("b", "will_apply"),
-          row("c", "held"),
-        ])}
-        onApply={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId("tc-bulk-apply").textContent).toBe(
+  it("renders the projected apply action without inspecting rows", () => {
+    render(<TcBulkApplyBar action={applyAction()} onApply={vi.fn()} />);
+    expect(screen.getByTestId("tc-bulk-apply")).toHaveTextContent(
       bulkApplyLabel(2),
     );
-  });
-
-  it("renders the exact contract-grade pledge microcopy", () => {
-    render(
-      <TcBulkApplyBar
-        stage={stage([row("a", "will_apply")])}
-        onApply={vi.fn()}
-      />,
-    );
-    expect(screen.getByTestId("tc-bulk-pledge").textContent).toBe(
+    expect(screen.getByTestId("tc-bulk-pledge")).toHaveTextContent(
       bulkApplyPledge,
     );
-    expect(bulkApplyPledge).toBe(
-      "Writes apply only to rows you approve. Held rows stay untouched.",
-    );
   });
 
-  it("disables the button when no rows will apply", () => {
-    render(
-      <TcBulkApplyBar stage={stage([row("a", "held")])} onApply={vi.fn()} />,
-    );
-    expect(
-      (screen.getByTestId("tc-bulk-apply") as HTMLButtonElement).disabled,
-    ).toBe(true);
-  });
-
-  it("apply callback sends {rev, row_keys} = the displayed will-apply set", () => {
+  it("returns the same immutable action object unchanged", () => {
+    const action = recoveryAction();
     const onApply = vi.fn();
-    render(
-      <TcBulkApplyBar
-        stage={stage([
-          row("a", "will_apply"),
-          row("b", "held"),
-          row("c", "will_apply"),
-        ])}
-        onApply={onApply}
-      />,
-    );
-    fireEvent.click(screen.getByTestId("tc-bulk-apply"));
-    expect(onApply).toHaveBeenCalledWith("stage_1", 1, ["a", "c"]);
+    render(<TcBulkApplyBar action={action} onApply={onApply} />);
+
+    fireEvent.click(screen.getByTestId("tc-bulk-retry"));
+
+    expect(onApply).toHaveBeenCalledTimes(1);
+    expect(onApply).toHaveBeenCalledWith(action);
+    expect(onApply.mock.calls[0][0]).toBe(action);
   });
 
-  it("shows a busy state while apply is pending", () => {
+  it("keeps pending action scope visible but disabled", () => {
     render(
       <TcBulkApplyBar
-        stage={stage([row("a", "will_apply")], { status: "apply_pending" })}
+        action={recoveryAction({
+          pending: true,
+          disabled: true,
+          label: "Retrying…",
+        })}
         onApply={vi.fn()}
       />,
     );
-    const btn = screen.getByTestId("tc-bulk-apply") as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
-    expect(btn.textContent).toBe("Applying…");
+    const button = screen.getByTestId("tc-bulk-retry") as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button).toHaveTextContent("Retrying…");
+    expect(screen.getByTestId("tc-bulk-apply-bar")).toHaveAttribute(
+      "aria-busy",
+      "true",
+    );
   });
 
-  it("recovery retries every and only failed row", () => {
+  it("never invokes a disabled zero-scope recovery action", () => {
     const onApply = vi.fn();
     render(
       <TcBulkApplyBar
-        stage={stage(
-          [
-            { ...row("a", "will_apply"), applyOutcome: "applied" },
-            { ...row("b", "will_apply"), applyOutcome: "failed" },
-            { ...row("c", "held"), applyOutcome: null },
-          ],
-          { status: "partially_applied", applyResult: "partial" },
-        )}
+        action={recoveryAction({
+          rowKeys: [],
+          failedRowKeys: [],
+          disabled: true,
+          label: bulkRetryLabel(0),
+        })}
         onApply={onApply}
       />,
     );
-    expect(screen.getByTestId("tc-bulk-pledge")).toHaveTextContent(
-      bulkRetryMessage(1, "linear"),
-    );
-    expect(screen.getByTestId("tc-bulk-retry")).toHaveTextContent(
-      bulkRetryLabel(1),
-    );
     fireEvent.click(screen.getByTestId("tc-bulk-retry"));
-    expect(onApply).toHaveBeenCalledWith("stage_1", 1, ["b"]);
+    expect(onApply).not.toHaveBeenCalled();
   });
 });

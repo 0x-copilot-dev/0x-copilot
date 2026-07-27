@@ -310,6 +310,7 @@ class RuntimeApiEventType(StrEnum):
     EFFECT_APPLIED = LedgerEventType.EFFECT_APPLIED.value
     EFFECT_INDETERMINATE = LedgerEventType.EFFECT_INDETERMINATE.value
     EFFECT_RECONCILED = LedgerEventType.EFFECT_RECONCILED.value
+    EFFECT_ROW_DECISIONS_RECORDED = LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED.value
 
     @classmethod
     def from_stream_event_type(

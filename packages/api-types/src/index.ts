@@ -102,6 +102,8 @@ export type {
   EffectProjectionBoundPayload,
   EffectRevisedPayload,
   EffectDecisionRecordedPayload,
+  EffectRowDecision,
+  EffectRowDecisionsRecordedPayload,
   EffectClaimedPayload,
   EffectAppliedPayload,
   EffectIndeterminatePayload,
@@ -134,6 +136,12 @@ export type {
   EffectDecision,
   EffectStageDecisionRequest,
   EffectStageDecisionResponse,
+  RowSetEffectReviewRow,
+  RowSetEffectReviewCounts,
+  RowSetEffectReviewAction,
+  RowSetEffectReview,
+  RowSetEffectDecisionRequest,
+  RowSetEffectActionRequest,
   WorkspaceApprovalDecisionRequest,
   WorkspaceApprovalDecisionReceipt,
   EffectExecutionRequest,
@@ -238,6 +246,7 @@ export {
   sha256Hex,
   // PRD-E2 — pending-work envelope guard.
   isPendingWorkResponse,
+  isRowSetEffectReview,
   // E1 D6 — strict canonical pending-work boundary guard.
   isPendingWorkV2Response,
   // E1 D4/D5 — strict safe source-open boundary guard.
@@ -559,6 +568,7 @@ const RUNTIME_LEDGER_V21_EVENT_TYPES = [
   WORK_LEDGER_EVENT_TYPES[28],
   WORK_LEDGER_EVENT_TYPES[29],
   WORK_LEDGER_EVENT_TYPES[30],
+  WORK_LEDGER_EVENT_TYPES[33],
 ] as const;
 type RuntimeLedgerV21EventType =
   (typeof RUNTIME_LEDGER_V21_EVENT_TYPES)[number];

@@ -1158,8 +1158,12 @@ class RuntimeApiRouter:
             from runtime_api.http.effect_stage_decisions import (
                 register_effect_stage_decision_routes,
             )
+            from runtime_api.http.rowset_effect_reviews import (
+                register_rowset_effect_review_routes,
+            )
 
             register_effect_stage_decision_routes(router)
+            register_rowset_effect_review_routes(router)
         # C3 — this route is deliberately distinct from legacy staged-write
         # routes and exists only for an enforced workspace-effect cohort.
         if workspace_approval_enabled:

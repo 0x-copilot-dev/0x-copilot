@@ -7,6 +7,7 @@ apply, or reconcile an effect, and it imports none of the capability/executor la
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import hashlib
@@ -50,6 +51,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectClass,
     EffectDecisionKind,
     EffectPolicy,
+    EffectProposalKind,
     LedgerEventType,
 )
 
@@ -57,6 +59,7 @@ _EVENT_STAGED = LedgerEventType.EFFECT_STAGED.value
 _EVENT_REVISED = LedgerEventType.EFFECT_REVISED.value
 _EVENT_DECISION = LedgerEventType.EFFECT_DECISION_RECORDED.value
 _EVENT_PROJECTION_BOUND = LedgerEventType.EFFECT_PROJECTION_BOUND.value
+_EVENT_ROW_DECISIONS = LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED.value
 
 
 @dataclass(frozen=True)
@@ -325,6 +328,79 @@ class EffectStager:
         )
         return await self.get_state(scope=scope, stage_id=stage_id)
 
+    async def record_row_decisions(
+        self,
+        *,
+        scope: EffectStageScope,
+        stage_id: str,
+        revision: int,
+        decisions: Mapping[str, str],
+        proposal_digest: str,
+        target_digest: str,
+        actor: EffectActorIdentity,
+        idempotency_key: str,
+    ) -> EffectStageState:
+        """Persist row-review posture without approving or enqueueing an effect."""
+
+        validate_idempotency_key(idempotency_key)
+        state = await self.get_state(scope=scope, stage_id=stage_id)
+        self._assert_owner(scope, actor)
+        if (
+            state.current_revision.proposal_kind is not EffectProposalKind.ROW_SET
+            or state.status
+            not in {
+                EffectStageStatus.PROPOSED,
+                EffectStageStatus.HELD,
+                EffectStageStatus.REVISED,
+            }
+        ):
+            raise EffectStageInvalidTransition()
+        if revision != state.current_revision.revision:
+            raise EffectStageStaleRevision()
+        if (
+            proposal_digest != state.current_revision.proposal_digest
+            or target_digest != state.target_digest
+        ):
+            raise EffectStageDigestMismatch()
+        normalized = tuple(sorted(decisions.items()))
+        if not normalized or any(
+            not key or decision not in {"approve", "hold"}
+            for key, decision in normalized
+        ):
+            raise EffectStageInvalidTransition()
+        decided_at = self.clock.now()
+        await self.ledger.append_stage_event(
+            scope=scope,
+            event_type=_EVENT_ROW_DECISIONS,
+            payload={
+                "v": 1,
+                "stage_id": stage_id,
+                "revision": revision,
+                "decisions": [
+                    {"row_key": key, "decision": decision}
+                    for key, decision in normalized
+                ],
+                "actor": actor.actor.value,
+                "actor_ref": actor.principal_ref,
+                "proposal_digest": proposal_digest,
+                "target_digest": target_digest,
+                "decided_at": decided_at,
+            },
+            idempotency_key=idempotency_key,
+            request_fingerprint=_fingerprint(
+                "row-decisions",
+                {
+                    "stage_id": stage_id,
+                    "revision": revision,
+                    "decisions": normalized,
+                    "proposal_digest": proposal_digest,
+                    "target_digest": target_digest,
+                    "actor": actor.model_dump(mode="json"),
+                },
+            ),
+        )
+        return await self.get_state(scope=scope, stage_id=stage_id)
+
     async def decide(
         self,
         *,
@@ -336,6 +412,7 @@ class EffectStager:
         target_digest: str,
         actor: EffectActorIdentity,
         idempotency_key: str,
+        row_keys: tuple[str, ...] | None = None,
         governed_capabilities: tuple[RolloutCapability, ...] | None = None,
     ) -> EffectStageState:
         """Record a digest-pinned decision and enqueue only an approved command."""
@@ -364,7 +441,7 @@ class EffectStager:
             EffectStageStatus.CANCELLED,
         }:
             if _is_identical_decision(
-                state, decision, actor, proposal_digest, target_digest
+                state, decision, actor, proposal_digest, target_digest, row_keys
             ):
                 return state
             raise EffectStageInvalidTransition()
@@ -378,6 +455,16 @@ class EffectStager:
             raise EffectStagePolicyBlocked()
         if decision is EffectDecisionKind.APPROVE and not state.approval_ready:
             raise EffectStageProjectionUnbound()
+        is_rowset = state.current_revision.proposal_kind is EffectProposalKind.ROW_SET
+        if decision is EffectDecisionKind.APPROVE:
+            if is_rowset and (
+                row_keys is None or not row_keys or len(row_keys) != len(set(row_keys))
+            ):
+                raise EffectStageInvalidTransition()
+            if not is_rowset and row_keys is not None:
+                raise EffectStageInvalidTransition()
+        elif row_keys is not None:
+            raise EffectStageInvalidTransition()
         if actor.actor is EffectActor.POLICY and state.policy is not EffectPolicy.AUTO:
             raise EffectStageForbidden("Policy cannot approve this held effect.")
         if (
@@ -400,6 +487,7 @@ class EffectStager:
                 "proposal_digest": proposal_digest,
                 "target_digest": target_digest,
                 "decided_at": decided_at,
+                **({"row_keys": list(row_keys)} if row_keys is not None else {}),
             },
             idempotency_key=idempotency_key,
             request_fingerprint=_fingerprint(
@@ -410,6 +498,7 @@ class EffectStager:
                     "decision": decision.value,
                     "proposal_digest": proposal_digest,
                     "target_digest": target_digest,
+                    "row_keys": row_keys,
                     "actor": actor.model_dump(mode="json"),
                 },
             ),
@@ -424,6 +513,7 @@ class EffectStager:
                     proposal_digest=proposal_digest,
                     target_digest=target_digest,
                     idempotency_key=idempotency_key,
+                    row_keys=row_keys,
                     governed_capabilities=governed_capabilities,
                 )
             )
@@ -497,6 +587,7 @@ def _is_identical_decision(
     actor: EffectActorIdentity,
     proposal_digest: str,
     target_digest: str,
+    row_keys: tuple[str, ...] | None,
 ) -> bool:
     current = state.decision
     return bool(
@@ -505,6 +596,7 @@ def _is_identical_decision(
         and current.actor == actor
         and current.proposal_digest == proposal_digest
         and current.target_digest == target_digest
+        and current.row_keys == row_keys
     )
 
 

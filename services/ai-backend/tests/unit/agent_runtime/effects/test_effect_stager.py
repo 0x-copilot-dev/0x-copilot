@@ -21,6 +21,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectClass,
     EffectDecisionKind,
+    EffectExecutorKind,
 )
 
 from .fakes import (
@@ -140,6 +141,57 @@ async def test_approve_pins_exact_digests_and_enqueues_one_body_free_command() -
     )
     assert replay == approved
     assert outbox.enqueue_calls == 1
+
+
+async def test_rowset_posture_is_durable_and_approval_enqueues_exact_scope() -> None:
+    stager, ledger, outbox = _stager()
+    proposed = proposal(
+        kind=EffectProposalKind.ROW_SET,
+        executor=EffectExecutorKind.BUILTIN,
+    )
+    state = await stager.stage(
+        scope=scope(),
+        proposed_effect=proposed,
+        policy_snapshot=policy_snapshot(),
+        actor=user(),
+        idempotency_key="rowset-stage",
+    )
+
+    reviewed = await stager.record_row_decisions(
+        scope=scope(),
+        stage_id=state.stage_id,
+        revision=1,
+        decisions={"row-b": "hold", "row-a": "approve"},
+        proposal_digest=proposed.proposal_digest,
+        target_digest=proposed.target_digest,
+        actor=user(),
+        idempotency_key="rowset-posture",
+    )
+
+    assert [(row.row_key, row.decision) for row in reviewed.row_decisions] == [
+        ("row-a", "approve"),
+        ("row-b", "hold"),
+    ]
+    assert outbox.enqueue_calls == 0
+    assert ledger.events_by_stage[state.stage_id][-1].event_type == (
+        "effect.row_decisions_recorded"
+    )
+
+    approved = await stager.decide(
+        scope=scope(),
+        stage_id=state.stage_id,
+        revision=1,
+        decision=EffectDecisionKind.APPROVE,
+        proposal_digest=proposed.proposal_digest,
+        target_digest=proposed.target_digest,
+        row_keys=("row-a",),
+        actor=user(),
+        idempotency_key="rowset-approve",
+    )
+
+    assert approved.decision is not None
+    assert approved.decision.row_keys == ("row-a",)
+    assert outbox.commands["rowset-approve"].row_keys == ("row-a",)
 
 
 async def test_projection_required_stage_cannot_approve_until_exact_binding_exists() -> (

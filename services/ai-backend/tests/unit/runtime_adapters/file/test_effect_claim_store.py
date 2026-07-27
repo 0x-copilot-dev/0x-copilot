@@ -15,11 +15,15 @@ from agent_runtime.effects.claims import (
     EffectClaimAcquisition,
     EffectClaimConflict,
     EffectClaimScanCursor,
+    EffectClaimState,
     EffectClaimStorageError,
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     EffectActor,
     EffectExecutorKind,
+    EffectOutcome,
+    RowOutcome,
+    WriteAppliedRowResult,
 )
 from runtime_adapters.file.effect_claim_store import FileEffectClaimStore
 
@@ -127,6 +131,37 @@ async def test_claim_survives_restart_with_same_identity(tmp_path) -> None:
     assert replay.created is False
     assert replay.claim == original
     assert loaded == original
+
+
+async def test_exact_row_scope_and_outcomes_survive_restart(tmp_path) -> None:
+    store = FileEffectClaimStore(root=tmp_path)
+    claimed = _claim().model_copy(update={"row_keys": ("row-a", "row-b")})
+    await store.claim(claim=claimed)
+    completed = claimed.model_copy(
+        update={
+            "state": EffectClaimState.COMPLETED,
+            "outcome": EffectOutcome.PARTIAL,
+            "row_results": (
+                WriteAppliedRowResult(
+                    row_key="row-a",
+                    outcome=RowOutcome.APPLIED,
+                ),
+                WriteAppliedRowResult(
+                    row_key="row-b",
+                    outcome=RowOutcome.FAILED,
+                ),
+            ),
+        }
+    )
+    await store.update(claim=completed)
+
+    loaded = await FileEffectClaimStore(root=tmp_path).get(
+        org_id=completed.org_id,
+        executor=completed.executor,
+        idempotency_key=completed.idempotency_key,
+    )
+
+    assert loaded == completed
 
 
 async def test_new_file_claim_persists_canonical_and_content_references(

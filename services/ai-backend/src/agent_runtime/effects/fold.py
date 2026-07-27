@@ -16,6 +16,7 @@ from pydantic import ValidationError
 from agent_runtime.effects.contracts import (
     EffectActorIdentity,
     EffectProjectionBinding,
+    EffectRowDecisionState,
     EffectStageDecision,
     EffectStageRevision,
     EffectStageScope,
@@ -33,6 +34,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     EffectDecisionKind,
     EffectExecutorKind,
     EffectPolicy,
+    EffectProposalKind,
     LedgerEventType,
 )
 
@@ -40,6 +42,7 @@ _EVENT_STAGED = LedgerEventType.EFFECT_STAGED.value
 _EVENT_REVISED = LedgerEventType.EFFECT_REVISED.value
 _EVENT_DECISION = LedgerEventType.EFFECT_DECISION_RECORDED.value
 _EVENT_PROJECTION_BOUND = LedgerEventType.EFFECT_PROJECTION_BOUND.value
+_EVENT_ROW_DECISIONS = LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED.value
 
 
 class EffectStageFold:
@@ -72,6 +75,8 @@ class EffectStageFold:
                 state = cls._apply_projection_binding(state, event)
             elif event.event_type == _EVENT_DECISION:
                 state = cls._apply_decision(state, event)
+            elif event.event_type == _EVENT_ROW_DECISIONS:
+                state = cls._apply_row_decisions(state, event)
         if state is None:
             raise EffectStageNotFound()
         return state
@@ -202,6 +207,7 @@ class EffectStageFold:
                     else EffectStageStatus.REVISED
                 ),
                 "decision": None,
+                "row_decisions": (),
                 "projection_binding": None,
                 "superseded_revision": approved_revision,
                 "updated_at": event.created_at,
@@ -275,6 +281,7 @@ class EffectStageFold:
                 target_digest=_string(payload, "target_digest"),
                 decided_at=_string(payload, "decided_at"),
                 ledger_id=event.ledger_id,
+                row_keys=_optional_row_keys(payload),
             )
         except (KeyError, TypeError, ValueError, ValidationError):
             return state
@@ -305,6 +312,66 @@ class EffectStageFold:
             update={
                 "status": status_by_decision[decision.decision],
                 "decision": decision,
+                "updated_at": event.created_at,
+            }
+        )
+
+    @classmethod
+    def _apply_row_decisions(
+        cls,
+        state: EffectStageState,
+        event: StructuralEvent,
+    ) -> EffectStageState:
+        if (
+            state.current_revision.proposal_kind is not EffectProposalKind.ROW_SET
+            or state.status
+            not in {
+                EffectStageStatus.PROPOSED,
+                EffectStageStatus.HELD,
+                EffectStageStatus.REVISED,
+            }
+        ):
+            return state
+        payload = event.payload
+        try:
+            _validate_payload_version(payload)
+            if (
+                _integer(payload, "revision") != state.current_revision.revision
+                or _string(payload, "proposal_digest")
+                != state.current_revision.proposal_digest
+                or _string(payload, "target_digest") != state.target_digest
+            ):
+                return state
+            actor = EffectActorIdentity(
+                actor=EffectActor(_string(payload, "actor")),
+                principal_ref=_string(payload, "actor_ref"),
+            )
+            decided_at = _string(payload, "decided_at")
+            raw_decisions = payload["decisions"]
+            if not isinstance(raw_decisions, list | tuple) or not raw_decisions:
+                return state
+            updates: dict[str, EffectRowDecisionState] = {}
+            for item in raw_decisions:
+                if not isinstance(item, dict):
+                    return state
+                row_key = _string(item, "row_key")
+                decision = _string(item, "decision")
+                if decision not in {"approve", "hold"} or row_key in updates:
+                    return state
+                updates[row_key] = EffectRowDecisionState(
+                    row_key=row_key,
+                    decision=decision,
+                    actor=actor,
+                    decided_at=decided_at,
+                    ledger_id=event.ledger_id,
+                )
+        except (KeyError, TypeError, ValueError, ValidationError):
+            return state
+        merged = {item.row_key: item for item in state.row_decisions}
+        merged.update(updates)
+        return state.model_copy(
+            update={
+                "row_decisions": tuple(merged[key] for key in sorted(merged)),
                 "updated_at": event.created_at,
             }
         )
@@ -373,6 +440,20 @@ def _optional_string(payload: dict[str, object], key: str) -> str | None:
     if not isinstance(value, str):
         raise ValueError(f"{key} must be a string or null")
     return value
+
+
+def _optional_row_keys(payload: dict[str, object]) -> tuple[str, ...] | None:
+    value = payload.get("row_keys")
+    if value is None:
+        return None
+    if not isinstance(value, list | tuple) or not value:
+        raise ValueError("row_keys must be a non-empty array")
+    result = tuple(value)
+    if any(not isinstance(item, str) or not item for item in result):
+        raise ValueError("row_keys must contain strings")
+    if len(result) != len(set(result)):
+        raise ValueError("row_keys must be unique")
+    return result
 
 
 def _integer(payload: dict[str, object], key: str) -> int:

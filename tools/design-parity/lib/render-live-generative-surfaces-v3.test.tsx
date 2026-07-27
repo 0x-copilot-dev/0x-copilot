@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import {
   TcStagedDraftSurface,
   TcStagedTableSurface,
+  projectRowsetReviewModel,
   type LedgerStageRevision,
   type LedgerStagedRow,
   type LedgerStagedWrite,
@@ -256,10 +257,12 @@ describe("live Generative Surfaces v3 review fixtures", () => {
   it("renders bulk-review", () => {
     const { container } = render(
       <TcStagedTableSurface
-        stage={tableStage(false)}
-        title="8 opportunities → Closed-Lost"
-        summary="5 approved · 1 stale · 2 held"
-        reviewNotice="1 row is stale — re-stage it before it can apply. Held rows stay untouched."
+        model={projectRowsetReviewModel(tableStage(false), {
+          title: "8 opportunities → Closed-Lost",
+          summary: "5 approved · 1 stale · 2 held",
+          actionNotice:
+            "1 row is stale — re-stage it before it can apply. Held rows stay untouched.",
+        })}
         onRowDecision={noop}
         onApply={noop}
       />,
@@ -271,8 +274,9 @@ describe("live Generative Surfaces v3 review fixtures", () => {
   it("renders bulk-partial", () => {
     const { container } = render(
       <TcStagedTableSurface
-        stage={tableStage(true)}
-        title="8 opportunities → Closed-Lost"
+        model={projectRowsetReviewModel(tableStage(true), {
+          title: "8 opportunities → Closed-Lost",
+        })}
         onRowDecision={noop}
         onApply={noop}
       />,

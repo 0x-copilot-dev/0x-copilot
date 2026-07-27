@@ -56,6 +56,8 @@ class RuntimeEffectCommitOutbox:
                 proposal_digest=command.proposal_digest,
                 target_digest=command.target_digest,
                 idempotency_key=command.idempotency_key,
+                row_keys=command.row_keys,
+                retry_basis_ledger_id=command.retry_basis_ledger_id,
                 governed_capabilities=command.governed_capabilities,
                 trace_propagation=QueueTracePropagator.inject(),
             )
@@ -73,6 +75,8 @@ class RuntimeEffectCommitOutbox:
             "proposal_digest": command.proposal_digest,
             "target_digest": command.target_digest,
             "idempotency_key": command.idempotency_key,
+            "row_keys": command.row_keys,
+            "retry_basis_ledger_id": command.retry_basis_ledger_id,
         }
         encoded = json.dumps(
             body,

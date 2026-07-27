@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, field_validator, model_validator
 from copilot_service_contracts.work_ledger import load_work_ledger_contract
 
 from agent_runtime.execution.contracts import RuntimeContract
@@ -64,6 +64,7 @@ from agent_runtime.surfaces_v2.ledger_models import (
     ViewBasis,
     ViewKeep,
     ViewTier,
+    WriteAppliedRowResult,
     validate_immutable_content_ref,
 )
 
@@ -354,6 +355,10 @@ class EffectExecutionRequest(RuntimeContract):
     proposal_digest: Sha256Hex
     actor: EffectActor
     decision_ledger_id: str
+    row_keys: tuple[str, ...] | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+    )
 
     @field_validator("proposal_ref")
     @classmethod
@@ -379,6 +384,15 @@ class EffectExecutionRequest(RuntimeContract):
             raise ValueError("proposal_ref must reference stage_id and revision")
         return self
 
+    @field_validator("row_keys")
+    @classmethod
+    def _row_keys_are_unique(
+        cls, value: tuple[str, ...] | None
+    ) -> tuple[str, ...] | None:
+        if value is not None and (not value or len(value) != len(set(value))):
+            raise ValueError("row_keys must contain unique row keys")
+        return value
+
 
 class EffectExecutionResult(RuntimeContract):
     outcome: EffectOutcome
@@ -386,6 +400,7 @@ class EffectExecutionResult(RuntimeContract):
     result_digest: Sha256Hex | None = None
     retryable: bool
     safe_message: str | None = None
+    row_results: tuple[WriteAppliedRowResult, ...] | None = None
 
     @field_validator("receipt_ref")
     @classmethod
