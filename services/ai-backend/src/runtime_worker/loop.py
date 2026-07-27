@@ -20,6 +20,8 @@ from agent_runtime.api.ports import (
     RuntimeQueuePort,
 )
 from agent_runtime.api.run_control_store import EventJournalRunControlStore
+from agent_runtime.api.run_termination import TerminalRunObserverPort
+from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
 from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
@@ -122,6 +124,13 @@ class EffectReconcileHandlerPort(Protocol):
         """Consume one validated effect-reconciliation command."""
 
 
+class BackgroundJobRunnerPort(Protocol):
+    """One bounded background unit sharing the worker process lifecycle."""
+
+    async def run_once(self) -> bool:
+        """Run at most one durable job and report whether work was claimed."""
+
+
 class RuntimeWorker:
     """Claim and process queued runtime commands with bounded concurrency."""
 
@@ -161,6 +170,9 @@ class RuntimeWorker:
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
+        terminal_run_observer: TerminalRunObserverPort | None = None,
+        evaluation_projection_runner: BackgroundJobRunnerPort | None = None,
+        evaluation_repository: EvaluationRepositoryPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -222,6 +234,24 @@ class RuntimeWorker:
             deployment_profile=DeploymentProfileLoader.load(worker_environment).name,
             subject_hmac=StableUserProfileHmac.from_environment(worker_environment),
         )
+        if (
+            terminal_run_observer is None
+            and evaluation_projection_runner is None
+            and evaluation_repository is not None
+        ):
+            from runtime_worker.evaluation_projection_composition import (
+                build_evaluation_projection,
+            )
+
+            projection = build_evaluation_projection(
+                settings=self.settings,
+                repository=evaluation_repository,
+                event_store=self.event_store,
+                worker_id=self.worker_id,
+            )
+            if projection is not None:
+                terminal_run_observer = projection.observer
+                evaluation_projection_runner = projection.runner
         if workspace_host_sessions is None and (
             callable(getattr(artifact_blob_store, "put_stream", None))
             and callable(getattr(artifact_reference_store, "acquire", None))
@@ -277,10 +307,12 @@ class RuntimeWorker:
             sandbox_provider_overrides=sandbox_provider_overrides,
             capability_env=capability_env,
             run_control_builder=self.run_control_builder,
+            terminal_run_observer=terminal_run_observer,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
             event_store=self.event_store,
+            terminal_run_observer=terminal_run_observer,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
             persistence=self.persistence,
@@ -293,6 +325,7 @@ class RuntimeWorker:
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             artifact_service=artifact_service,
             run_control_builder=self.run_control_builder,
+            terminal_run_observer=terminal_run_observer,
         )
         self.artifact_event_handler = (
             artifact_event_handler
@@ -399,6 +432,7 @@ class RuntimeWorker:
         self._semaphore = asyncio.Semaphore(self.settings.execution.max_parallel_runs)
         self.logger = logging.getLogger("runtime_worker")
         self._sandbox_recovery_reaper = self._build_sandbox_recovery_reaper()
+        self._evaluation_projection_runner = evaluation_projection_runner
 
     def _validate_e2_rollout_startup(
         self,
@@ -567,9 +601,10 @@ class RuntimeWorker:
         """Claim and process one command, returning whether work was found."""
 
         await self._reap_sandbox_cleanup()
+        projected = await self._run_evaluation_projection_once()
         claim = await self._claim_next()
         if claim is None:
-            return False
+            return projected
         async with self._semaphore:
             await self._handle_claim(claim)
         return True
@@ -580,13 +615,29 @@ class RuntimeWorker:
         processed = 0
         while True:
             await self._reap_sandbox_cleanup()
+            projected = await self._run_evaluation_projection_once()
             claims = await self._claim_batch()
             if not claims:
-                return processed
+                if not projected:
+                    return processed
+                continue
             await asyncio.gather(
                 *(self._handle_claim_with_limit(claim) for claim in claims)
             )
             processed += len(claims)
+
+    async def _run_evaluation_projection_once(self) -> bool:
+        runner = self._evaluation_projection_runner
+        if runner is None:
+            return False
+        try:
+            return await runner.run_once()
+        except Exception:  # noqa: BLE001 - command execution must remain available
+            self.logger.warning(
+                "evaluation projection pass failed",
+                exc_info=True,
+            )
+            return False
 
     def _build_sandbox_recovery_reaper(self) -> object | None:
         """Construct only the strict file-native D3 reaper, otherwise omit it."""

@@ -53,6 +53,7 @@ from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_termination import (
     RunTerminationCoordinator,
+    TerminalRunObserverPort,
     TerminationReason,
 )
 from agent_runtime.api.presentation import (
@@ -256,6 +257,7 @@ class RuntimeRunHandler:
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
+        terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -328,6 +330,7 @@ class RuntimeRunHandler:
         )
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
+            terminal_observer=terminal_run_observer,
         )
         self.stream_event_mapper = StreamOrchestrator(
             self.event_producer,

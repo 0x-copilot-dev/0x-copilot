@@ -15,6 +15,8 @@ import hmac
 import json
 import os
 
+from pydantic import Field
+
 from agent_runtime.control_plane.contracts import (
     BudgetEnvelope,
     RunControlSnapshot,
@@ -34,6 +36,7 @@ from agent_runtime.control_plane.ports import (
     RunControlSnapshotWrite,
 )
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from runtime_api.schemas import AgentRunStatus, RunRecord
 
 
@@ -59,6 +62,12 @@ class RunControlAssignment(RuntimeContract):
     feature_modes: FeatureModeSet = FeatureModeSet()
     budget_envelope_ref: str
     assignment_revision: str
+
+    @property
+    def digest(self) -> str:
+        """Digest the complete deployment-owned variant definition."""
+
+        return canonical_json_sha256(self.model_dump(mode="json"))
 
     @classmethod
     def safe_active_v1(cls) -> "RunControlAssignment":
@@ -89,6 +98,14 @@ class RunControlAssignment(RuntimeContract):
             budget_envelope_ref=budget_envelope.revision_ref,
             assignment_revision=revision,
         )
+
+
+class RunControlAssignmentAllocation(RuntimeContract):
+    """One verified release allocation resolved to a full control assignment."""
+
+    assignment: RunControlAssignment
+    allocation_basis_points: int = Field(ge=0, le=10_000)
+    release_assignment_revision: str = Field(min_length=1, max_length=160)
 
 
 class StableUserProfileHmac:
@@ -165,13 +182,32 @@ class RunControlPlaneBuilder:
         deployment_profile: str,
         subject_hmac: StableUserProfileHmac,
         assignments: Sequence[RunControlAssignment] = (),
+        allocations: Sequence[RunControlAssignmentAllocation] = (),
         cutover_at: datetime | None = None,
         live_constraints: LiveConstraintsProvider | None = None,
     ) -> None:
         if not deployment_profile.strip():
             raise ValueError("deployment_profile must be non-empty")
-        resolved_assignments = tuple(assignments) or (
-            RunControlAssignment.safe_active_v1(),
+        if assignments and allocations:
+            raise ValueError("assignments and allocations are mutually exclusive")
+        resolved_allocations = tuple(allocations)
+        if resolved_allocations:
+            if (
+                sum(item.allocation_basis_points for item in resolved_allocations)
+                != 10_000
+            ):
+                raise ValueError(
+                    "run-control allocations must total 10000 basis points"
+                )
+            allocation_refs = [
+                item.assignment.harness_variant_ref for item in resolved_allocations
+            ]
+            if len(allocation_refs) != len(set(allocation_refs)):
+                raise ValueError("run-control allocation variant refs must be unique")
+        resolved_assignments = (
+            tuple(item.assignment for item in resolved_allocations)
+            or tuple(assignments)
+            or (RunControlAssignment.safe_active_v1(),)
         )
         revisions = [item.assignment_revision for item in resolved_assignments]
         if len(revisions) != len(set(revisions)):
@@ -182,6 +218,12 @@ class RunControlPlaneBuilder:
         # Configuration input order cannot change an assignment or digest.
         self._assignments = tuple(
             sorted(resolved_assignments, key=lambda item: item.assignment_revision)
+        )
+        self._allocations = tuple(
+            sorted(
+                resolved_allocations,
+                key=lambda item: item.assignment.harness_variant_ref,
+            )
         )
         self._cutover_at = cutover_at or datetime.now(timezone.utc)
         if self._cutover_at.tzinfo is None or self._cutover_at.utcoffset() is None:
@@ -263,6 +305,20 @@ class RunControlPlaneBuilder:
         )
 
     def _assignment_for(self, subject_fingerprint: str) -> RunControlAssignment:
+        if self._allocations:
+            bucket = int(subject_fingerprint, 16) % 10_000
+            upper_bound = 0
+            for allocation in self._allocations:
+                upper_bound += allocation.allocation_basis_points
+                if bucket < upper_bound:
+                    return allocation.assignment.model_copy(
+                        update={
+                            "assignment_revision": (
+                                allocation.release_assignment_revision
+                            )
+                        }
+                    )
+            raise RuntimeError("run-control allocations do not cover assignment bucket")
         index = int(subject_fingerprint, 16) % len(self._assignments)
         return self._assignments[index]
 
@@ -283,6 +339,7 @@ class RunControlPlaneBuilder:
 __all__ = [
     "LiveRunControlConstraints",
     "RunControlAssignment",
+    "RunControlAssignmentAllocation",
     "RunControlBinding",
     "RunControlContext",
     "RunControlPlaneBuilder",

@@ -18,7 +18,9 @@ from uuid import uuid4
 from agent_runtime.harness_quality.evaluation_contracts import (
     EvaluationCase,
     EvaluationMode,
+    EvaluationRevisionSet,
     EvaluationResult,
+    EvaluationScope,
     EvaluationStatus,
     FixtureResponse,
     HarnessVariant,
@@ -31,6 +33,7 @@ from agent_runtime.harness_quality.evaluation_contracts import (
     TrajectoryManifest,
     TrajectoryStep,
 )
+from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
 from agent_runtime.api.ports import EventStorePort
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from runtime_api.schemas import RuntimeEventEnvelope
@@ -221,54 +224,24 @@ class RuntimeTrajectoryProjector:
         )
 
 
-class InMemoryEvaluationRepository:
-    """Strict immutable repository used by hermetic runners and unit tests."""
-
-    def __init__(self) -> None:
-        self._cases: dict[tuple[str, str], EvaluationCase] = {}
-        self._results: dict[str, EvaluationResult] = {}
-        self._decisions: dict[str, PromotionDecision] = {}
-
-    def put_case(self, case: EvaluationCase) -> bool:
-        key = (case.case_id, case.revision)
-        existing = self._cases.get(key)
-        if existing is not None and existing != case:
-            raise ValueError("case revision is immutable")
-        self._cases[key] = case
-        return existing is None
-
-    def get_case(self, *, case_id: str, revision: str) -> EvaluationCase | None:
-        return self._cases.get((case_id, revision))
-
-    def put_result(self, result: EvaluationResult) -> bool:
-        existing = self._results.get(result.evaluation_run_id)
-        if existing is not None and existing != result:
-            raise ValueError("evaluation result idempotency conflict")
-        self._results[result.evaluation_run_id] = result
-        return existing is None
-
-    def put_decision(self, decision: PromotionDecision) -> bool:
-        existing = self._decisions.get(decision.decision_id)
-        if existing is not None and existing != decision:
-            raise ValueError("promotion decision idempotency conflict")
-        self._decisions[decision.decision_id] = decision
-        return existing is None
-
-
 class DeterministicEvaluationRunner:
     """Runs fixture-only evaluations and persists immutable result records."""
 
     def __init__(
         self,
         *,
-        repository: InMemoryEvaluationRepository,
+        repository: EvaluationRepositoryPort,
+        scope: EvaluationScope,
         executor: TrajectoryExecutor,
         scorers: Sequence[EvaluationScorer],
+        revisions: EvaluationRevisionSet,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._repository = repository
+        self._scope = scope
         self._executor = executor
         self._scorers = tuple(scorers)
+        self._revisions = revisions
         self._clock = clock
 
     async def run(
@@ -310,8 +283,13 @@ class DeterministicEvaluationRunner:
         duration_ms = max(0, int((ended - started).total_seconds() * 1_000))
         values: dict[str, object] = {
             "evaluation_run_id": run_id,
+            "suite_run_id": None,
             "case_id": case.case_id,
+            "case_revision": case.revision,
             "variant_id": variant.variant_id,
+            "variant_revision": variant.revision,
+            "scorer_set_id": case.scorer_set_id,
+            "revisions": self._revisions,
             "status": status,
             "scorer_results": scorer_results,
             "hard_gate_failures": hard_failures,
@@ -327,7 +305,7 @@ class DeterministicEvaluationRunner:
             **values,
             result_digest=EvaluationResult.digest_for(**values),
         )
-        self._repository.put_result(result)
+        await self._repository.put_evaluation_result(self._scope, result)
         return result
 
 
@@ -384,6 +362,8 @@ class PromotionGate:
         for case_id in paired_case_ids:
             candidate = candidate_by_case[case_id]
             control = control_by_case[case_id]
+            if candidate.case_revision != control.case_revision:
+                reasons.add("case_revision_mismatch")
             if candidate.status in self._INCOMPLETE_STATUSES:
                 reasons.add("candidate_incomplete_status")
             if control.status in self._INCOMPLETE_STATUSES:

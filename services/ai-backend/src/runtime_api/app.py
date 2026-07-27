@@ -62,6 +62,8 @@ from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
 from copilot_service_contracts.deployment_profile import PROFILE_SINGLE_USER_DESKTOP
 from agent_runtime.execution.models import ModelConfigResolver
+from agent_runtime.harness_quality.diagnostics import EvaluationDiagnosticsService
+from agent_runtime.harness_quality.evaluation_contracts import EvaluationScope
 from agent_runtime.observability.http_logging import (
     LoggingConfigurator,
     RequestContextMiddleware,
@@ -84,6 +86,7 @@ from runtime_api.http.account_merge_routes import AccountMergeApiRouter
 from runtime_api.http.desktop_workspace_attestation import (
     DesktopWorkspaceAttestationRouter,
 )
+from runtime_api.http.evaluation_diagnostics import LocalEvaluationDiagnosticsRouter
 from runtime_api.http.legacy_migration_routes import LegacyMigrationApiRouter
 from runtime_api.http.errors import RuntimeApiError, RuntimeApiErrorMapper
 from runtime_api.http.retention_routes import (
@@ -94,6 +97,7 @@ from runtime_api.http.legal_hold_routes import LegalHoldRouter
 from runtime_api.http.agent_usage import AgentUsageApiRouter
 from runtime_api.http.llm_embed_routes import LlmEmbedApiRouter
 from runtime_api.http.local_models_routes import LocalModelsApiRouter
+from runtime_api.http.local_release_control import LocalReleaseControlRouter
 from runtime_api.http.routes import (
     BudgetApiRouter,
     InternalRuntimeApiRouter,
@@ -109,6 +113,10 @@ from runtime_api.sse.event_bus import (
 )
 from runtime_api.sse.postgres_event_bus import PostgresEventBus
 from runtime_worker import RuntimeWorker
+from runtime_worker.run_control_release_composition import (
+    build_local_release_control_service,
+    build_run_control_plane_builder,
+)
 
 
 # Structured logger for run-executor topology decisions. A "no run executor"
@@ -238,6 +246,24 @@ class RuntimeApiAppFactory:
         # (env) and injected-ports (test) paths — route handlers read
         # feature flags (e.g. enable_local_models) from here.
         app.state.runtime_settings = _settings
+        app.state.local_release_control_service = build_local_release_control_service(
+            settings=_settings,
+            repository=_ports.evaluation_repository,
+        )
+        app.state.local_evaluation_diagnostics_service = (
+            EvaluationDiagnosticsService(
+                repository=_ports.evaluation_repository,
+                scope=EvaluationScope(
+                    profile_id=_settings.evaluation.profile_id,
+                    project_id=_settings.evaluation.project_id,
+                ),
+            )
+            if (
+                app.state.local_release_control_service is not None
+                and _ports.evaluation_repository is not None
+            )
+            else None
+        )
         # C2's signed bootstrap is verified before the in-process worker
         # evaluates E2 readiness. A later Electron-main renewal arrives via
         # the facade route below; absence/malformed input remains fail-closed.
@@ -448,6 +474,9 @@ class RuntimeApiAppFactory:
         # RUNTIME_ENABLE_LOCAL_MODELS; every route but /status 404s when off.
         app.include_router(LocalModelsApiRouter.create_router())
         app.include_router(DesktopWorkspaceAttestationRouter.create_router())
+        if app.state.local_release_control_service is not None:
+            app.include_router(LocalReleaseControlRouter.create_router())
+            app.include_router(LocalEvaluationDiagnosticsRouter.create_router())
         app.add_exception_handler(
             RuntimeApiError, RuntimeApiErrorMapper.handle_runtime_api_error
         )
@@ -1499,6 +1528,11 @@ class RuntimeApiAppFactory:
             _log_decision(started=False, reason="no_ports")
             return
         event_bus = getattr(app.state, "runtime_event_bus", None)
+        run_control_builder = await build_run_control_plane_builder(
+            settings=settings,
+            repository=getattr(ports, "evaluation_repository", None),
+            store=ports.run_control_snapshot_store,
+        )
         worker = RuntimeWorker(
             persistence=ports.persistence,
             event_store=ports.event_store,
@@ -1520,6 +1554,8 @@ class RuntimeApiAppFactory:
             artifact_reference_store=getattr(
                 ports, "artifact_reference_provider", None
             ),
+            evaluation_repository=getattr(ports, "evaluation_repository", None),
+            run_control_builder=run_control_builder,
             workspace_attestation_registry=getattr(
                 app.state, "desktop_workspace_attestation_registry", None
             ),

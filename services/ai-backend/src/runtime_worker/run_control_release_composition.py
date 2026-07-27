@@ -1,0 +1,175 @@
+"""Production composition for signed release assignment and local controls."""
+
+from __future__ import annotations
+
+from collections.abc import Mapping
+import os
+
+from agent_runtime.control_plane.ports import RunControlSnapshotStorePort
+from agent_runtime.deployment.profile import DeploymentProfileLoader
+from agent_runtime.harness_quality.evaluation_contracts import EvaluationScope
+from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
+from agent_runtime.release.control import LocalReleaseControlService
+from agent_runtime.release.local_control import (
+    LocalReleaseControlPolicy,
+    ReleaseControlProfile,
+)
+from agent_runtime.release.manifest import ReleaseManifestVerifier
+from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
+from runtime_worker.run_control import (
+    RunControlPlaneBuilder,
+    StableUserProfileHmac,
+)
+from runtime_worker.run_control_release_bootstrap import (
+    NoActiveRunControlRelease,
+    bootstrap_run_control_release,
+)
+from runtime_worker.run_control_release_configuration import (
+    RunControlReleaseDeploymentConfiguration,
+    load_run_control_release_configuration,
+)
+
+
+class RunControlReleaseCompositionError(RuntimeError):
+    """Startup cannot safely bind the configured active release."""
+
+
+async def build_run_control_plane_builder(
+    *,
+    settings: RuntimeSettings,
+    repository: EvaluationRepositoryPort | None,
+    store: RunControlSnapshotStorePort,
+    environment: Mapping[str, str] | None = None,
+) -> RunControlPlaneBuilder:
+    """Return the one Step 1 builder, using a verified active release if present."""
+
+    env = dict(os.environ if environment is None else environment)
+    deployment_profile = DeploymentProfileLoader.load(env).name
+    subject_hmac = StableUserProfileHmac.from_environment(env)
+    path = settings.evaluation.release_config_path
+    if repository is None:
+        if path is not None:
+            raise RunControlReleaseCompositionError(
+                "release configuration requires an evaluation repository"
+            )
+        return _safe_builder(
+            store=store,
+            deployment_profile=deployment_profile,
+            subject_hmac=subject_hmac,
+        )
+
+    pointer = await repository.get_active_harness_manifest(_scope(settings))
+    if path is None:
+        if pointer is not None:
+            raise RunControlReleaseCompositionError(
+                "active harness release has no verification configuration"
+            )
+        return _safe_builder(
+            store=store,
+            deployment_profile=deployment_profile,
+            subject_hmac=subject_hmac,
+        )
+
+    configuration = load_run_control_release_configuration(path)
+    _validate_runtime_profile(settings=settings, configuration=configuration)
+    result = await bootstrap_run_control_release(
+        repository=repository,
+        scope=_scope(settings),
+        verification_keys=configuration.verification_key_map(),
+        catalog=configuration.assignment_catalog(),
+        store=store,
+        deployment_profile=deployment_profile,
+        release_profile=configuration.release_profile,
+        subject_hmac=subject_hmac,
+        development_override=configuration.development_override,
+    )
+    return result.builder if isinstance(result, NoActiveRunControlRelease) else result
+
+
+def build_local_release_control_service(
+    *,
+    settings: RuntimeSettings,
+    repository: EvaluationRepositoryPort | None,
+    environment: Mapping[str, str] | None = None,
+) -> LocalReleaseControlService | None:
+    """Compose a verifier/mutator only for explicit non-production loopback use."""
+
+    if not settings.evaluation.local_release_control_enabled:
+        return None
+    if repository is None:
+        raise RunControlReleaseCompositionError(
+            "local release control requires an evaluation repository"
+        )
+    path = settings.evaluation.release_config_path
+    if path is None:  # guarded by RuntimeSettings; retained as defense-in-depth
+        raise RunControlReleaseCompositionError(
+            "local release control requires release configuration"
+        )
+    configuration = load_run_control_release_configuration(path)
+    _validate_runtime_profile(settings=settings, configuration=configuration)
+    if configuration.release_profile is ReleaseControlProfile.PRODUCTION:
+        raise RunControlReleaseCompositionError(
+            "local release control requires development or dogfood profile"
+        )
+    env = os.environ if environment is None else environment
+    if not env.get("ENTERPRISE_SERVICE_TOKEN", "").strip():
+        raise RunControlReleaseCompositionError(
+            "local release control requires ENTERPRISE_SERVICE_TOKEN"
+        )
+    return LocalReleaseControlService(
+        repository=repository,
+        verifier=ReleaseManifestVerifier(
+            verification_keys=configuration.verification_key_map()
+        ),
+        policy=LocalReleaseControlPolicy(
+            profile=configuration.release_profile,
+            explicitly_enabled=True,
+            bind_host="127.0.0.1",
+        ),
+        scope=_scope(settings),
+        allowed_variant_digests={
+            variant_ref: assignment.digest
+            for variant_ref, assignment in configuration.assignment_catalog().items()
+        },
+    )
+
+
+def _validate_runtime_profile(
+    *,
+    settings: RuntimeSettings,
+    configuration: RunControlReleaseDeploymentConfiguration,
+) -> None:
+    if (
+        settings.environment is RuntimeEnvironment.PRODUCTION
+        and configuration.release_profile is not ReleaseControlProfile.PRODUCTION
+    ):
+        raise RunControlReleaseCompositionError(
+            "production runtime requires a production release profile"
+        )
+
+
+def _scope(settings: RuntimeSettings) -> EvaluationScope:
+    return EvaluationScope(
+        profile_id=settings.evaluation.profile_id,
+        project_id=settings.evaluation.project_id,
+    )
+
+
+def _safe_builder(
+    *,
+    store: RunControlSnapshotStorePort,
+    deployment_profile: str,
+    subject_hmac: StableUserProfileHmac,
+) -> RunControlPlaneBuilder:
+    return RunControlPlaneBuilder(
+        store=store,
+        deployment_profile=deployment_profile,
+        subject_hmac=subject_hmac,
+    )
+
+
+__all__ = (
+    "RunControlReleaseCompositionError",
+    "build_local_release_control_service",
+    "build_run_control_plane_builder",
+)
