@@ -73,6 +73,16 @@ create a second planning queue.
         tree: 5,425 passed, 127 skipped, 1 live-eval deselected; 58 focused
         hermetic collection/dependency tests).
 - [ ] **Step 1:** Persist and rehydrate the immutable run control snapshot.
+  - [x] Immutable snapshot/budget/revision/decision contracts, strict internal
+        event payloads, canonical event-journal ports, and in-memory/file/
+        Postgres runtime composition (`4f86cb4b`; 42 focused contract, replay,
+        collision, adapter, and type-parity tests plus TypeScript typecheck).
+  - [ ] Deletion visibility, physical-retention parity, desktop file recovery,
+        and explicit non-CAS budget-reference ownership.
+  - [ ] Verified-boundary builder, stable HMAC assignment, typed run context,
+        pre-model bind, approval/restart rehydration, legacy-safe migration,
+        and live narrowing.
+  - [ ] Full Step 1 regression suite and exit-criteria check.
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
 - [ ] **Step 3:** Complete the local F1 evaluation, assignment, report, and
