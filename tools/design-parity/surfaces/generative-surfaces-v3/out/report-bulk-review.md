@@ -5,17 +5,15 @@ Design baseline (source of truth) vs live app, by computed style.
 - Design: `surfaces/generative-surfaces-v3/out/design-bulk-review.json`
 - Live: `surfaces/generative-surfaces-v3/out/live-bulk-review.json`
 
-**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 5 · ⚪ INFO 4
+**Summary:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 3 · ⚪ INFO 4
 
-## 🟡 LOW (5)
+## 🟡 LOW (3)
 
 | Element | Group | Property | Design → Live |
 |---|---|---|---|
 | `bulk.root` | Bulk review | height | 464.562px → 464.547px |
 | `bulk.title` | Bulk review | width | 186.828px → 186.578px |
 | `bulk.title` | Bulk review | height | 18.75px → 18.7188px |
-| `bulk.status` | Bulk review | width | 137.734px → 137.703px |
-| `bulk.review-copy` | Apply | width | 174.031px → 174px |
 
 ## ⚪ INFO (4)
 

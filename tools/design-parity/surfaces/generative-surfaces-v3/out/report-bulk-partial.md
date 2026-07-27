@@ -21,7 +21,7 @@ Design baseline (source of truth) vs live app, by computed style.
 |---|---|---|---|
 | `bulk.root` | Bulk partial | text | “” → “8 opportunities → Closed-Lostpartial · retry available4 upda…” |
 | `bulk.status` | Bulk partial | text | “staged, not applied” → “partial · retry available” |
-| `bulk.status` | Bulk partial | width | expected: intrinsic width follows dynamic runtime copy — 137.734px → 175.5px |
+| `bulk.status` | Bulk partial | width | expected: intrinsic width follows dynamic runtime copy — 137.703px → 175.5px |
 | `bulk.row` | Row result | text | “” → “Meridian Health — renewalNegotiationstageClosed-LostWrite fa…” |
 | `bulk.partial-copy` | Recovery | text | “— , the successes stuck.” → “2 writes failed at Salesforce · successes kept — , the succe…” |
 | `bulk.partial-copy` | Recovery | width | expected: intrinsic width follows dynamic runtime copy — 467.203px → 467.188px |

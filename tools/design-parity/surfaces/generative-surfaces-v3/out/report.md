@@ -2,7 +2,7 @@
 
 Strict Playwright `getComputedStyle` comparison of the user-supplied v3 Design Compiler source against the real `TcStagedDraftSurface` and `TcStagedTableSurface`. No screenshot acceptance and no expected-divergence waivers.
 
-**Aggregate findings:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 11 · ⚪ INFO 20.
+**Aggregate findings:** 🔴 HIGH 0 · 🟠 MEDIUM 0 · 🟡 LOW 9 · ⚪ INFO 17.
 
 | State | Design anchors | Live anchors | HIGH | MEDIUM | Report |
 |---|---:|---:|---:|---:|---|
