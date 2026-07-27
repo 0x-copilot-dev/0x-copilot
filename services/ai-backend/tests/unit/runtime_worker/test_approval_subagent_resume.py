@@ -47,7 +47,7 @@ class _FakeHarness:
     pass
 
 
-async def _empty_resumer(_: object, __: object):
+async def _empty_resumer(_: object, __: object, *, interrupt_id: str | None = None):
     """Resumer that yields nothing — graph completes immediately so the
     handler runs the post-resume cleanup path."""
     if False:

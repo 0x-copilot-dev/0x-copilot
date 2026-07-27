@@ -67,7 +67,10 @@ from agent_runtime.execution.factory import (
     acreate_agent_runtime,
 )
 from agent_runtime.execution.providers.citation_pipeline import CitationStreamPipeline
-from agent_runtime.execution.runtime import astream_runtime_resume
+from agent_runtime.execution.runtime import (
+    astream_runtime_resume,
+    is_native_interrupt_id,
+)
 from agent_runtime.persistence import with_optimistic_retry
 from agent_runtime.persistence.ports import (
     ConversationToolOrdinalStorePort,
@@ -103,7 +106,10 @@ RuntimeDependenciesFactory = Callable[[AgentRuntimeContext], RuntimeDependencies
 # inside the factory; tests injecting sync fakes (``lambda **_: _FakeHarness()``)
 # continue to work because the call site awaits via ``inspect.isawaitable``.
 AgentFactory = Callable[..., RuntimeHarness | Awaitable[RuntimeHarness]]
-RuntimeResumer = Callable[[RuntimeHarness, object], AsyncIterator[object]]
+# ``interrupt_id`` is keyword-only and optional: it names the native LangGraph
+# interrupt the decision answers, and is REQUIRED in practice whenever a run can
+# hold more than one pending interrupt (LangGraph refuses an ambiguous resume).
+RuntimeResumer = Callable[..., AsyncIterator[object]]
 
 # Discriminator written into ``approval.metadata['kind']`` by the draft-send path so
 # this handler routes draft-send approvals through their own resolution path instead of
@@ -122,6 +128,9 @@ class RuntimeApprovalHandler:
     class _Fields:
         APPROVAL_KIND = "approval_kind"
         NATIVE_INTERRUPT_ID = "native_interrupt_id"
+        # Stamped from the same interrupt id as ``native_interrupt_id`` (the
+        # batch is the interrupt's 1:1 persistence projection).
+        BATCH_ID = "batch_id"
         APPROVAL_ID = "approval_id"
         ANSWER = "answer"
         DECISION = "decision"
@@ -323,6 +332,11 @@ class RuntimeApprovalHandler:
         # from the aligned per-item decisions so LangGraph sees N decisions
         # for N action_requests.
         resume = self._resume_payload(command, metadata, outcome=outcome)
+        # The interrupt this decision answers. Without it LangGraph cannot tell
+        # which of several pending interrupts the resume value belongs to and
+        # refuses the resume outright — the run would die holding a decision the
+        # user already made.
+        interrupt_id = self._native_interrupt_id_for(metadata, outcome=outcome)
         running = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=run.run_id,
@@ -446,6 +460,7 @@ class RuntimeApprovalHandler:
                 harness=harness,
                 resume=resume,
                 metrics=metrics,
+                interrupt_id=interrupt_id,
             )
             await self._process_model_artifact_content(result, run=running)
             if RuntimeRunHandler._is_action_interrupt(result):
@@ -785,10 +800,11 @@ class RuntimeApprovalHandler:
         harness: RuntimeHarness,
         resume: object,
         metrics: AssistantRunMetrics,
+        interrupt_id: str | None = None,
     ) -> object:
         """Stream a resumed LangGraph run and return the composed final result."""
         result = await StreamingExecutor.run(
-            stream=self.runtime_resumer(harness, resume),
+            stream=self.runtime_resumer(harness, resume, interrupt_id=interrupt_id),
             run=run,
             metrics=metrics,
             event_store=self.event_store,
@@ -855,6 +871,40 @@ class RuntimeApprovalHandler:
             extra_payload=AssistantRunMetrics.with_payload({}, metrics_payload),
             extra_metadata=AssistantRunMetrics.metadata(metrics_payload),
         )
+
+    @classmethod
+    def _native_interrupt_id_for(
+        cls,
+        metadata: Mapping[str, object],
+        *,
+        outcome: BatchTransitionOutcome | None = None,
+    ) -> str | None:
+        """Return the native LangGraph interrupt id this approval belongs to.
+
+        Three sources carry the same value by construction — the stream mapper
+        stamps ``native_interrupt_id`` and ``batch_id`` from one interrupt id,
+        and ``ApprovalBatchRecord.batch_id`` is that id (the batch is the
+        interrupt's persistence projection). ``batch_id`` is preferred because
+        the batch row is the resume gate; ``native_interrupt_id`` covers
+        single-action kinds (``mcp_auth``, ``ask_a_question``) whose payloads
+        predate batches.
+
+        Returns ``None`` when neither is a real LangGraph id, which makes the
+        resume fall back to the bare (untargeted) form — correct as long as only
+        one interrupt is pending.
+        """
+
+        candidates = (
+            outcome.batch.batch_id
+            if outcome is not None and outcome.batch is not None
+            else None,
+            StreamTextHelper.extract(metadata.get(cls._Fields.BATCH_ID)),
+            StreamTextHelper.extract(metadata.get(cls._Fields.NATIVE_INTERRUPT_ID)),
+        )
+        for candidate in candidates:
+            if is_native_interrupt_id(candidate):
+                return candidate
+        return None
 
     @classmethod
     def _resume_payload(

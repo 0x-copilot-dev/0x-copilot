@@ -451,7 +451,9 @@ class TestWorkerForwardedSkip:
         await _seed_run_and_pending_approval(store)
         captured_resumes: list[object] = []
 
-        async def _capturing_resumer(harness: object, resume: object):
+        async def _capturing_resumer(
+            harness: object, resume: object, *, interrupt_id: str | None = None
+        ):
             # Should NEVER fire on a forwarded command — assertions below
             # rely on capture being empty.
             captured_resumes.append(resume)

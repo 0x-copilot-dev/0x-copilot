@@ -10,9 +10,11 @@ from contextvars import ContextVar
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
 from pydantic import ConfigDict
 
+from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetAdmit,
     ToolBudgetDecision,
@@ -380,7 +382,7 @@ class _Estimator:
         return str(value)
 
 
-class ToolBudgetGuardedTool(BaseTool):
+class ToolBudgetGuardedTool(DelegatingTool):
     """LangChain ``BaseTool`` wrapper that gates calls through the active guard.
 
     Inner tool's ``name`` / ``description`` / ``args_schema`` are
@@ -392,11 +394,13 @@ class ToolBudgetGuardedTool(BaseTool):
 
     inner: BaseTool
 
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
+    def _run(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Sync gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
         if guard is None:
-            return self.inner._run(*args, **kwargs)
+            return self.delegate(*args, config=config, **kwargs)
         policy_intent = guard.admit_task_policy(
             tool_name=self.name, args=args, kwargs=kwargs
         )
@@ -416,7 +420,7 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         try:
-            result = self.inner._run(*args, **kwargs)
+            result = self.delegate(*args, config=config, **kwargs)
         except BaseException as exc:
             guard.record_task_policy_outcome(
                 intent=policy_intent,
@@ -430,11 +434,13 @@ class ToolBudgetGuardedTool(BaseTool):
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         return self._model_visible_result(result, guard=guard, call_id=call_id)
 
-    async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+    async def _arun(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Async gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
         if guard is None:
-            return await self.inner._arun(*args, **kwargs)
+            return await self.adelegate(*args, config=config, **kwargs)
         policy_intent = guard.admit_task_policy(
             tool_name=self.name, args=args, kwargs=kwargs
         )
@@ -454,7 +460,7 @@ class ToolBudgetGuardedTool(BaseTool):
             tool_name=self.name, estimated_input_tokens=estimated
         )
         try:
-            result = await self.inner._arun(*args, **kwargs)
+            result = await self.adelegate(*args, config=config, **kwargs)
         except BaseException as exc:
             guard.record_task_policy_outcome(
                 intent=policy_intent,
