@@ -409,15 +409,18 @@ function DatasetPreview(props: {
   }
   const actions = editorActionsFor(props.artifact);
   return (
-    <section className="ui-card" data-testid="artifact-dataset-renderer">
+    <section
+      className="ui-dataset-surface"
+      data-testid="artifact-dataset-renderer"
+    >
       {model.formulaCells > 0 ? (
-        <p className="ui-caption" role="note">
+        <p className="ui-dataset-notice" role="note">
           Formula-like cells are shown as text and are never evaluated. Exact
           download preserves them; safe export is explicit.
         </p>
       ) : null}
       {model.fidelityWarning !== null ? (
-        <p className="ui-caption" role="note">
+        <p className="ui-dataset-notice ui-dataset-notice--warning" role="note">
           {model.fidelityWarning}
         </p>
       ) : null}
@@ -445,17 +448,26 @@ function DatasetGrid(props: { readonly model: DatasetModel }): ReactElement {
         onChange={view.setWindowStart}
       />
       <div
-        className="ui-table-wrap"
+        className="ui-dataset-table-wrap"
         data-testid="dataset-virtual-window"
         data-dom-row-budget={DATASET_DOM_ROW_BUDGET}
         data-window-row-count={view.windowedRowIndexes.length}
         data-window-start={view.windowStart}
       >
-        <table role="grid" aria-label="Dataset preview">
+        <table
+          className="ui-dataset-table"
+          role="grid"
+          aria-label="Dataset preview"
+        >
           <thead>
             <tr role="row">
               {props.model.headers.map((value, index) => (
-                <th key={index} role="columnheader" scope="col">
+                <th
+                  className="ui-dataset-table__header"
+                  key={index}
+                  role="columnheader"
+                  scope="col"
+                >
                   {value}
                 </th>
               ))}
@@ -465,7 +477,11 @@ function DatasetGrid(props: { readonly model: DatasetModel }): ReactElement {
             {view.windowedRowIndexes.map((rowIndex) => (
               <tr key={rowIndex} role="row">
                 {props.model.headers.map((_, columnIndex) => (
-                  <td key={columnIndex} role="gridcell">
+                  <td
+                    className="ui-dataset-table__cell"
+                    key={columnIndex}
+                    role="gridcell"
+                  >
                     {view.valueAt(rowIndex, columnIndex)}
                   </td>
                 ))}
@@ -542,11 +558,19 @@ function DatasetPatchEditor(props: {
   };
   const canEdit =
     props.model.editable && !props.actions.disabled && status !== "saving";
+  const changedCellCount = Object.keys(patch).length;
   return (
-    <section aria-label="Dataset cell editor">
-      <p className="ui-caption" id="dataset-cell-editor-help">
-        Edits are held in memory until you save a complete immutable revision.
-        Keyboard focus moves through cells normally.
+    <section className="ui-dataset-editor" aria-label="Dataset cell editor">
+      <p className="ui-dataset-helper" id="dataset-cell-editor-help">
+        <span>
+          Edit cells directly. Changes stay local until you save an immutable
+          revision.
+        </span>
+        <span className="ui-dataset-helper__status">
+          {changedCellCount === 0
+            ? "No unsaved edits"
+            : `${changedCellCount} unsaved ${changedCellCount === 1 ? "edit" : "edits"}`}
+        </span>
       </p>
       <DatasetWindowControls
         start={view.windowStart}
@@ -555,13 +579,14 @@ function DatasetPatchEditor(props: {
       />
       <DatasetViewControls model={props.model} view={view} />
       <div
-        className="ui-table-wrap"
+        className="ui-dataset-table-wrap"
         data-testid="dataset-virtual-window"
         data-dom-row-budget={DATASET_DOM_ROW_BUDGET}
         data-window-row-count={view.windowedRowIndexes.length}
         data-window-start={view.windowStart}
       >
         <table
+          className="ui-dataset-table ui-dataset-table--editable"
           role="grid"
           aria-label="Dataset cell editor"
           aria-describedby="dataset-cell-editor-help"
@@ -569,10 +594,18 @@ function DatasetPatchEditor(props: {
           <thead>
             <tr role="row">
               {props.model.headers.map((header, column) => (
-                <th key={column} role="columnheader" scope="col">
+                <th
+                  className="ui-dataset-table__header"
+                  key={column}
+                  role="columnheader"
+                  scope="col"
+                >
                   <input
                     aria-label={`Header ${column + 1}`}
-                    className="ui-input"
+                    className="ui-dataset-cell-input ui-dataset-cell-input--header"
+                    data-modified={
+                      patch[cellKey(0, column)] === undefined ? "false" : "true"
+                    }
                     disabled={!canEdit}
                     value={patch[cellKey(0, column)] ?? header}
                     onChange={(event) => update(0, column, event.target.value)}
@@ -589,10 +622,19 @@ function DatasetPatchEditor(props: {
                   {props.model.headers.map((header, column) => {
                     const rowNumber = rowIndex + 2;
                     return (
-                      <td key={column} role="gridcell">
+                      <td
+                        className="ui-dataset-table__cell"
+                        key={column}
+                        role="gridcell"
+                      >
                         <input
                           aria-label={`${header || `Column ${column + 1}`}, row ${rowNumber}`}
-                          className="ui-input"
+                          className="ui-dataset-cell-input"
+                          data-modified={
+                            patch[cellKey(rowIndex + 1, column)] === undefined
+                              ? "false"
+                              : "true"
+                          }
                           disabled={!canEdit}
                           value={view.valueAt(rowIndex, column)}
                           onChange={(event) =>
@@ -609,56 +651,69 @@ function DatasetPatchEditor(props: {
         </table>
       </div>
       {pending !== null ? (
-        <div className="ui-card" role="alert">
-          <p className="ui-caption">
+        <div className="ui-dataset-confirmation" role="alert">
+          <p>
             {props.model.fidelityWarning ??
               "Formula-like cells will be prefixed with an apostrophe only in this new safe-export revision. The canonical revision remains unchanged."}
           </p>
-          <button
-            className="ui-button"
-            type="button"
-            onClick={() => commit(pending.source)}
-          >
-            {pending.label}
-          </button>
-          <button
-            className="ui-button ui-button--ghost"
-            type="button"
-            onClick={() => setPending(null)}
-          >
-            Cancel
-          </button>
+          <div className="ui-dataset-confirmation__actions">
+            <button
+              className="ui-button ui-button--primary ui-button--sm"
+              type="button"
+              onClick={() => commit(pending.source)}
+            >
+              {pending.label}
+            </button>
+            <button
+              className="ui-button ui-button--ghost ui-button--sm"
+              type="button"
+              onClick={() => setPending(null)}
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       ) : null}
       {status === "conflict" ? (
-        <p className="ui-caption" role="alert">
+        <p
+          className="ui-dataset-status ui-dataset-status--warning"
+          role="alert"
+        >
           A newer revision exists. Your in-memory cell edits are preserved;
           compare and rebase manually before saving.
         </p>
       ) : null}
       {status === "error" ? (
-        <p className="ui-caption" role="alert">
+        <p className="ui-dataset-status ui-dataset-status--danger" role="alert">
           This dataset could not be saved. Your in-memory cell edits are still
           here.
         </p>
       ) : null}
-      <div className="ui-toolbar" aria-label="Dataset revision actions">
+      <div
+        className="ui-dataset-action-bar"
+        aria-label="Dataset revision actions"
+      >
+        <span className="ui-dataset-action-bar__copy">
+          New immutable revision; original stays unchanged.
+        </span>
         <button
-          className="ui-button"
+          className="ui-button ui-button--primary ui-button--sm"
           type="button"
-          disabled={!canEdit}
+          disabled={!canEdit || changedCellCount === 0}
           onClick={() => prepareSave(false)}
         >
           {status === "saving" ? "Saving…" : "Save patched revision"}
         </button>
-        <button
-          className="ui-button ui-button--ghost"
-          type="button"
-          disabled={!canEdit || props.model.formulaCells === 0}
-          onClick={() => prepareSave(true)}
-        >
-          Create formula-safe revision
-        </button>
+        {props.model.formulaCells > 0 ? (
+          <button
+            className="ui-button ui-button--ghost ui-button--sm"
+            type="button"
+            disabled={!canEdit}
+            onClick={() => prepareSave(true)}
+          >
+            Create formula-safe revision
+          </button>
+        ) : null}
       </div>
     </section>
   );
@@ -754,21 +809,22 @@ function DatasetViewControls(props: {
   readonly view: DatasetView;
 }): ReactElement {
   return (
-    <div className="ui-toolbar" aria-label="Dataset view controls">
-      <label className="ui-caption">
-        Filter rows
+    <div className="ui-dataset-toolbar" aria-label="Dataset view controls">
+      <label className="ui-dataset-field ui-dataset-field--filter">
+        <span>Filter</span>
         <input
           aria-label="Filter dataset rows"
           className="ui-input"
+          placeholder="Filter rows…"
           value={props.view.filter}
           onChange={(event) => props.view.setFilter(event.target.value)}
         />
       </label>
-      <label className="ui-caption">
-        Sort rows
+      <label className="ui-dataset-field">
+        <span>Sort</span>
         <select
           aria-label="Sort dataset rows"
-          className="ui-input"
+          className="ui-select"
           value={props.view.sortColumn ?? ""}
           onChange={(event) =>
             props.view.setSortColumn(
@@ -785,7 +841,7 @@ function DatasetViewControls(props: {
         </select>
       </label>
       <button
-        className="ui-button ui-button--ghost"
+        className="ui-button ui-button--ghost ui-button--sm"
         type="button"
         disabled={props.view.sortColumn === null}
         onClick={props.view.toggleSortDirection}
@@ -804,12 +860,15 @@ function DatasetWindowControls(props: {
   if (props.total <= DATASET_DOM_ROW_BUDGET) return null;
   const end = Math.min(props.start + DATASET_DOM_ROW_BUDGET, props.total);
   return (
-    <div className="ui-toolbar" aria-label="Dataset row navigation">
-      <span className="ui-caption" aria-live="polite">
+    <div
+      className="ui-dataset-window-controls"
+      aria-label="Dataset row navigation"
+    >
+      <span aria-live="polite">
         Showing rows {props.start + 1}–{end} of {props.total.toLocaleString()}
       </span>
       <button
-        className="ui-button ui-button--ghost"
+        className="ui-button ui-button--ghost ui-button--sm"
         type="button"
         disabled={props.start === 0}
         onClick={() =>
@@ -819,7 +878,7 @@ function DatasetWindowControls(props: {
         Previous rows
       </button>
       <button
-        className="ui-button ui-button--ghost"
+        className="ui-button ui-button--ghost ui-button--sm"
         type="button"
         disabled={end === props.total}
         onClick={() => props.onChange(Math.min(end, props.total - 1))}

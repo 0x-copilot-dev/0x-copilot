@@ -87,14 +87,29 @@ describe("fixed artifact renderers", () => {
       mediaType: "text/csv",
       datasetEditor: { disabled: false, saveRevision },
     } as unknown as ArtifactRenderState;
-    render(<DatasetArtifactRenderer artifact={editable} />);
+    const { container } = render(
+      <DatasetArtifactRenderer artifact={editable} />,
+    );
 
     expect(
       screen.getByRole("grid", { name: "Dataset cell editor" }),
     ).toHaveAttribute("aria-describedby", "dataset-cell-editor-help");
+    expect(screen.getByTestId("artifact-dataset-renderer")).toHaveClass(
+      "ui-dataset-surface",
+    );
+    expect(container.querySelector(".ui-card")).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Save patched revision" }),
+    ).toHaveClass("ui-button--primary", "ui-button--sm");
+    expect(
+      screen.getByRole("button", { name: "Save patched revision" }),
+    ).toBeDisabled();
     fireEvent.change(screen.getByLabelText("amount, row 2"), {
       target: { value: "3" },
     });
+    expect(
+      screen.getByRole("button", { name: "Save patched revision" }),
+    ).toBeEnabled();
     fireEvent.click(
       screen.getByRole("button", { name: "Save patched revision" }),
     );

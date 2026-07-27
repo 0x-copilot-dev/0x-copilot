@@ -13,21 +13,32 @@ export function ArtifactRevisionHistory(props: {
   readonly onLoadOlder: () => void;
 }): ReactElement {
   return (
-    <section className="ui-card" data-testid="artifact-revision-history">
-      <p className="ui-section-label">Revision history</p>
-      <ol>
+    <section
+      className="ui-artifact-history"
+      data-testid="artifact-revision-history"
+    >
+      <div className="ui-artifact-history__heading">
+        <p className="ui-mono-caps ui-mono-caps--9">Revision history</p>
+        <span className="ui-artifact-history__count">
+          {props.revisions.length} loaded
+        </span>
+      </div>
+      <ol className="ui-artifact-history__list">
         {props.revisions.map((revision) => (
-          <li key={revision.revision}>
+          <li className="ui-artifact-history__row" key={revision.revision}>
             <button
-              className="ui-button ui-button--ghost"
+              className={`ui-button ui-button--sm ${
+                revision.revision === props.activeRevision
+                  ? "ui-button--secondary"
+                  : "ui-button--ghost"
+              }`}
               type="button"
               aria-pressed={revision.revision === props.activeRevision}
               onClick={() => props.onSelect(revision.revision)}
             >
               r{revision.revision}
             </button>
-            <span className="ui-caption">
-              {" "}
+            <span className="ui-artifact-history__meta">
               {revision.author} · {revision.created_at} ·{" "}
               {revision.byte_size.toLocaleString()} bytes ·{" "}
               {revision.content_digest.slice(0, 12)}
@@ -35,16 +46,16 @@ export function ArtifactRevisionHistory(props: {
             </span>
             {props.latestRevision !== null &&
             revision.revision !== props.latestRevision ? (
-              <span>
+              <span className="ui-artifact-history__actions">
                 <button
-                  className="ui-button ui-button--ghost"
+                  className="ui-button ui-button--ghost ui-button--sm"
                   type="button"
                   onClick={() => props.onCompareToCurrent(revision.revision)}
                 >
                   Compare to current
                 </button>
                 <button
-                  className="ui-button ui-button--ghost"
+                  className="ui-button ui-button--ghost ui-button--sm"
                   type="button"
                   disabled={props.restoreDisabled}
                   onClick={() => props.onRestore(revision.revision)}
@@ -58,7 +69,7 @@ export function ArtifactRevisionHistory(props: {
       </ol>
       {props.hasOlderHistory ? (
         <button
-          className="ui-button ui-button--ghost"
+          className="ui-button ui-button--ghost ui-button--sm"
           type="button"
           onClick={props.onLoadOlder}
         >
