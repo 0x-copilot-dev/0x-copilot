@@ -115,23 +115,28 @@ unshipped feature as a regression.
 
 - **Current state:** the runtime now builds a run/policy-scoped compact catalog
   from authorized `ToolCard` and `McpServerCard` records and ranks it with a
-  bounded deterministic lexical ranker. It neither connects to MCP servers
-  nor exposes an invocation path.
-- **Remaining work:** add `search_capabilities` / `describe_capability` bridge
-  tools, bounded top-K authorized descriptor expansion through the existing
-  loader/cache, typed discovery events, and invocation revalidation through
-  the existing operation gateway. Add revision invalidation with F8.
+  bounded deterministic lexical ranker. Safe `search_capabilities` and
+  `describe_capability` adapters now recheck the exact run subject and expiry
+  on every call, but are not yet factory-wired model tools.
+- **Remaining work:** bind the bridge through the runtime/factory under the
+  normal budget/error-policy wrappers; add bounded top-K authorized descriptor
+  expansion through the existing loader/cache, typed discovery events, and
+  invocation revalidation through the existing operation gateway. Add revision
+  invalidation with F8.
 - **Status:** open; F3 deferred mode cannot be enabled.
 
 ### ARQ-008 — F5 admission adapter is not at the LangChain tool boundary
 
 - **Current state:** `ToolResultAdmissionAdapter` has the correct bounded,
-  fail-closed representation and the worker event projector reuses it.
-- **Remaining work:** install the adapter immediately after governed tool
-  execution and before the tool returns to Deep Agents; route the opaque ref
-  through the existing authorized evidence/read-back path rather than exposing
-  raw content. Add a current-turn oversized-result integration test.
-- **Status:** open; this is the implementation task that closes ARQ-004.
+  fail-closed representation and the worker event projector reuses it. The
+  governed `BaseTool` wrapper now admits successful returns before they go
+  back to LangChain, when a desktop writer/adapter is bound to the run.
+- **Remaining work:** construct and bind the adapter with the desktop
+  `OffloadWriter` in the worker; project its one decision into the durable
+  event/metrics path without a second offload decision; route opaque refs
+  through the authorized evidence/read-back path; add an end-to-end
+  current-turn `ToolMessage` test.
+- **Status:** open; production binding is required to close ARQ-004.
 
 ### ARQ-009 — F10 has no attempt-level reliability control plane
 
@@ -141,3 +146,17 @@ unshipped feature as a regression.
   reconcile ambiguous post-crash attempts; aggregate cost/deadline across
   attempts; add circuit breakers and route-policy evaluation.
 - **Status:** open; provider fallback remains disabled by design.
+
+### ARQ-010 — F6 planner is not yet an execution control plane
+
+- **Current state:** a deterministic, serial-first `BatchPlanner` now creates
+  stable segments. It permits concurrency only for explicitly trusted,
+  independent read/no-effect operations with disjoint opaque resource keys.
+  Effects, unknown metadata, dependencies, resource conflicts, and auth-epoch
+  changes are barriers.
+- **Remaining work:** resolve policy precedence from real descriptors; persist
+  shadow plans/events; add a bounded executor, permits, rate-limit coordinator,
+  per-child gateway reauthorization, cancellation/recovery semantics, and
+  curated connector opt-ins. Do not enable graph-level parallel execution
+  until those controls and F1 evaluation are present.
+- **Status:** open; F6 remains serial in production.

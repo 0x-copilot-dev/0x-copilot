@@ -35,6 +35,8 @@ from agent_runtime.capabilities.task_policy import (
     ToolUseController,
 )
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.context.memory import TokenBudgetPolicy
+from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.tool_errors import (
     BudgetExceeded,
     RunFatalToolError,
@@ -78,6 +80,23 @@ class _RecordingTool(BaseTool):
     async def _arun(self, *args: object, **kwargs: object) -> str:
         self.calls.append((args, kwargs))
         return "echo-ok"
+
+
+class _ResultTool(BaseTool):
+    """Return configurable content while recording whether dispatch occurred."""
+
+    name: str = "echo"
+    description: str = "Returns configured content for boundary tests."
+    result: str
+    call_count: int = 0
+
+    def _run(self, *args: object, **kwargs: object) -> str:
+        self.call_count += 1
+        return self.result
+
+    async def _arun(self, *args: object, **kwargs: object) -> str:
+        self.call_count += 1
+        return self.result
 
 
 def _budget(
@@ -324,6 +343,156 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
         finally:
             ToolBudgetGuard.unbind(token)
         assert result == "echo-ok"
+
+    async def test_bound_admission_offloads_before_async_result_reaches_model(
+        self,
+    ) -> None:
+        unique_tail = "UNIQUE_RAW_TAIL"
+        raw = ("oversized-result-" * 1_000) + unique_tail
+        writes: list[str] = []
+        reference = "/large_tool_results/async-result"
+        inner = _ResultTool(result=raw)
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
+            ),
+            ledger=ToolCallLedger(run_id="run-admission-async"),
+            tool_result_admission=ToolResultAdmissionAdapter(
+                lambda content: writes.append(content) or reference,
+                policy=TokenBudgetPolicy(
+                    max_input_tokens=4_000,
+                    recent_context_ratio=0.25,
+                    summary_threshold_ratio=0.85,
+                ),
+            ),
+        )
+
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            result = await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert inner.call_count == 1
+        assert writes == [raw]
+        assert isinstance(result, str)
+        assert reference in result
+        assert unique_tail not in result
+        assert len(result) <= 4_096
+
+    def test_bound_admission_offloads_before_sync_result_reaches_model(self) -> None:
+        unique_tail = "UNIQUE_SYNC_RAW_TAIL"
+        raw = ("oversized-sync-result-" * 1_000) + unique_tail
+        writes: list[str] = []
+        reference = "/large_tool_results/sync-result"
+        inner = _ResultTool(result=raw)
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
+            ),
+            ledger=ToolCallLedger(run_id="run-admission-sync"),
+            tool_result_admission=ToolResultAdmissionAdapter(
+                lambda content: writes.append(content) or reference,
+                policy=TokenBudgetPolicy(
+                    max_input_tokens=4_000,
+                    recent_context_ratio=0.25,
+                    summary_threshold_ratio=0.85,
+                ),
+            ),
+        )
+
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            result = wrapped._run("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert inner.call_count == 1
+        assert writes == [raw]
+        assert isinstance(result, str)
+        assert reference in result
+        assert unique_tail not in result
+        assert len(result) <= 4_096
+
+    async def test_bound_admission_preserves_small_string_exactly(self) -> None:
+        writes: list[str] = []
+        inner = _ResultTool(result="small exact result")
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
+            ),
+            ledger=ToolCallLedger(run_id="run-admission-inline"),
+            tool_result_admission=ToolResultAdmissionAdapter(
+                lambda content: writes.append(content) or "/large_tool_results/unused",
+                policy=TokenBudgetPolicy(
+                    max_input_tokens=4_000,
+                    recent_context_ratio=0.25,
+                    summary_threshold_ratio=0.85,
+                ),
+            ),
+        )
+
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            result = await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert result == "small exact result"
+        assert writes == []
+
+    async def test_bound_admission_failure_never_falls_back_to_raw_result(
+        self,
+    ) -> None:
+        raw = "oversized-sensitive-result-" * 1_000
+        inner = _ResultTool(result=raw)
+        wrapped = ToolBudgetGuardedTool(
+            name=inner.name,
+            description=inner.description,
+            inner=inner,
+        )
+
+        def fail_offload(_content: str) -> str:
+            raise OSError("offload unavailable")
+
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(
+                [_budget(org_id=None, tool_name="echo", max_calls_per_run=10)]
+            ),
+            ledger=ToolCallLedger(run_id="run-admission-failure"),
+            tool_result_admission=ToolResultAdmissionAdapter(
+                fail_offload,
+                policy=TokenBudgetPolicy(
+                    max_input_tokens=4_000,
+                    recent_context_ratio=0.25,
+                    summary_threshold_ratio=0.85,
+                ),
+            ),
+        )
+
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            with pytest.raises(OSError, match="offload unavailable"):
+                await wrapped._arun("hi")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert inner.call_count == 1
 
     async def test_counts_down_the_remaining_calls_as_the_cap_nears(self) -> None:
         """The model gets the remaining count as a planning signal.

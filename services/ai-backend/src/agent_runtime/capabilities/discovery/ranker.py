@@ -14,6 +14,7 @@ from agent_runtime.capabilities.discovery.contracts import (
 )
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
+_MATCHED_TERM_MAX_CHARS = 96
 
 
 class DeterministicLexicalRanker:
@@ -113,7 +114,11 @@ class DeterministicLexicalRanker:
             if term in connector_tokens:
                 term_score += 15
             if term_score:
-                matched.add(term)
+                # ``query`` is bounded, but an individual unicode token can
+                # still be much larger than useful model-facing diagnostics.
+                # Ranking uses the complete term; only the explanatory hint is
+                # bounded.
+                matched.add(term[:_MATCHED_TERM_MAX_CHARS])
                 score += term_score
         return score, tuple(sorted(matched))
 

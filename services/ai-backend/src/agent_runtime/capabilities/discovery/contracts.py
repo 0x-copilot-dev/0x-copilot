@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Self
+from typing import Annotated, Self
 
 from pydantic import (
     Field,
@@ -296,7 +296,10 @@ class CapabilityCandidate(RuntimeContract):
     capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
     stable_name: str = Field(min_length=1, max_length=256)
     score: PositiveInt
-    matched_terms: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
+    matched_terms: tuple[
+        Annotated[str, Field(min_length=1, max_length=96)],
+        ...,
+    ] = Field(default_factory=tuple, max_length=64)
     source: CapabilitySource
     effect_class: CatalogEffectClass
     approval_cue: ApprovalCue
@@ -313,3 +316,132 @@ class CapabilitySearchResult(RuntimeContract):
         default_factory=tuple,
         max_length=10,
     )
+
+
+class CapabilityDiscoveryErrorCode(StrEnum):
+    """Stable model-safe failure classes for discovery bridge calls."""
+
+    INVALID_REQUEST = "invalid_request"
+    CATALOG_INACTIVE = "catalog_inactive"
+    CAPABILITY_NOT_FOUND = "capability_not_found"
+
+
+class CapabilityDiscoveryError(RuntimeContract):
+    """Content-free error returned instead of catalog or validation internals."""
+
+    code: CapabilityDiscoveryErrorCode
+    safe_message: str = Field(min_length=1, max_length=240)
+
+
+class CapabilitySearchToolResult(RuntimeContract):
+    """Exactly-one-outcome envelope returned by the model-facing search adapter."""
+
+    search: CapabilitySearchResult | None = None
+    error: CapabilityDiscoveryError | None = None
+
+    @model_validator(mode="after")
+    def _require_exactly_one_outcome(self) -> Self:
+        if (self.search is None) == (self.error is None):
+            msg = "search result must contain exactly one outcome"
+            raise ValueError(msg)
+        return self
+
+    @classmethod
+    def ok(cls, search: CapabilitySearchResult) -> Self:
+        """Return a successful bounded search result."""
+
+        return cls(search=search)
+
+    @classmethod
+    def fail(
+        cls,
+        code: CapabilityDiscoveryErrorCode,
+        safe_message: str,
+    ) -> Self:
+        """Return a safe failure without catalog metadata."""
+
+        return cls(
+            error=CapabilityDiscoveryError(
+                code=code,
+                safe_message=safe_message,
+            )
+        )
+
+
+class CapabilityDescribeRequest(RuntimeContract):
+    """Request compact metadata by the opaque ref returned from search."""
+
+    capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
+
+
+class CapabilityParameterHint(RuntimeContract):
+    """Schema-free name/type hint; never a JSON schema or invocation contract."""
+
+    name: str = Field(min_length=1, max_length=96)
+    type_hint: str | None = Field(default=None, min_length=1, max_length=96)
+
+
+class CapabilityDescription(RuntimeContract):
+    """Bounded compact metadata for one member of the active catalog."""
+
+    capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
+    stable_name: str = Field(min_length=1, max_length=256)
+    display_name: str = Field(min_length=1, max_length=256)
+    concise_description: str = Field(min_length=1, max_length=512)
+    source: CapabilitySource
+    intent_tags: tuple[
+        Annotated[str, Field(min_length=1, max_length=64)],
+        ...,
+    ] = Field(default_factory=tuple, max_length=16)
+    parameters: tuple[CapabilityParameterHint, ...] = Field(
+        default_factory=tuple,
+        max_length=32,
+    )
+    effect_class: CatalogEffectClass
+    approval_cue: ApprovalCue
+    connector_label: str = Field(min_length=1, max_length=256)
+    descriptor_revision: str | None = Field(default=None, max_length=256)
+    metadata_truncated: bool = False
+
+
+class CapabilityDescribeResult(RuntimeContract):
+    """Description plus the revision that made the opaque ref meaningful."""
+
+    catalog_id: str = Field(pattern=r"^cat_[0-9a-f]{32}$")
+    catalog_revision: str = Field(pattern=r"^rev_[0-9a-f]{32}$")
+    capability: CapabilityDescription
+
+
+class CapabilityDescribeToolResult(RuntimeContract):
+    """Exactly-one-outcome envelope returned by the describe adapter."""
+
+    description: CapabilityDescribeResult | None = None
+    error: CapabilityDiscoveryError | None = None
+
+    @model_validator(mode="after")
+    def _require_exactly_one_outcome(self) -> Self:
+        if (self.description is None) == (self.error is None):
+            msg = "describe result must contain exactly one outcome"
+            raise ValueError(msg)
+        return self
+
+    @classmethod
+    def ok(cls, description: CapabilityDescribeResult) -> Self:
+        """Return a successful bounded description."""
+
+        return cls(description=description)
+
+    @classmethod
+    def fail(
+        cls,
+        code: CapabilityDiscoveryErrorCode,
+        safe_message: str,
+    ) -> Self:
+        """Return a safe failure without catalog metadata."""
+
+        return cls(
+            error=CapabilityDiscoveryError(
+                code=code,
+                safe_message=safe_message,
+            )
+        )

@@ -29,6 +29,7 @@ from agent_runtime.capabilities.task_policy import (
     ToolUseIntent,
 )
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
+from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
 from runtime_api.schemas import RuntimeApiEventType, RunRecord
@@ -77,6 +78,7 @@ class ToolBudgetGuard:
         max_surfaced_rejections: int | None = None,
         task_policy_controller: ToolUseController | None = None,
         task_request_fingerprint: RequestFingerprint | None = None,
+        tool_result_admission: ToolResultAdmissionAdapter | None = None,
     ) -> None:
         """Initialise the guard with a middleware, ledger, and optional event emitter."""
         self._middleware = middleware
@@ -98,6 +100,7 @@ class ToolBudgetGuard:
             )
         self._task_policy_controller = task_policy_controller
         self._task_request_fingerprint = task_request_fingerprint
+        self._tool_result_admission = tool_result_admission
 
     @classmethod
     def bind_for_run(cls, guard: "ToolBudgetGuard") -> object:
@@ -208,6 +211,20 @@ class ToolBudgetGuard:
         if usage is None or not usage.should_notify:
             return None
         return usage.render_note()
+
+    def admit_tool_result(self, result: object, *, call_id: str) -> object:
+        """Bound one successful result before LangChain creates a ToolMessage.
+
+        The adapter is optional so existing runtime configurations preserve
+        their exact return types and bytes.  Once configured, its failure is
+        intentionally allowed to propagate: returning the raw result after an
+        offload failure would violate the model-admission boundary.
+        """
+
+        adapter = self._tool_result_admission
+        if adapter is None:
+            return result
+        return adapter.admit(result, trace_id=call_id).model_content
 
     def admit_task_policy(
         self,
@@ -407,7 +424,7 @@ class ToolBudgetGuardedTool(BaseTool):
             guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
-        return self._with_usage_note(result, guard=guard)
+        return self._model_visible_result(result, guard=guard, call_id=call_id)
 
     async def _arun(self, *args: Any, **kwargs: Any) -> Any:
         """Async gate: check budget, record the call, delegate to the inner tool."""
@@ -446,7 +463,19 @@ class ToolBudgetGuardedTool(BaseTool):
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         # Settled first, so the count the model reads includes this call.
-        return self._with_usage_note(result, guard=guard)
+        return self._model_visible_result(result, guard=guard, call_id=call_id)
+
+    def _model_visible_result(
+        self,
+        result: object,
+        *,
+        guard: ToolBudgetGuard,
+        call_id: str,
+    ) -> object:
+        """Annotate, then bound, the exact value returned to LangChain."""
+
+        annotated = self._with_usage_note(result, guard=guard)
+        return guard.admit_tool_result(annotated, call_id=call_id)
 
     def _with_usage_note(self, result: object, *, guard: ToolBudgetGuard) -> object:
         """Append the remaining-calls note to ``result`` when one is due.
