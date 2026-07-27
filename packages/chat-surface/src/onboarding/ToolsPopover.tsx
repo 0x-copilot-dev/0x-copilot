@@ -221,13 +221,15 @@ export function ToolsPopoverContent(
     onClose,
   } = props;
   const [state, setState] = useState<LoadState>({ status: "idle" });
-  const loadedRef = useRef(false);
 
+  // No "already loaded" ref guard here. Both hosts mount under <StrictMode>, so
+  // this effect is deliberately double-invoked: a ref guard set on the first run
+  // makes the second run bail out, while the first run's cleanup has already set
+  // `cancelled = true` and suppressed its own result — leaving the popover stuck
+  // on "Loading connectors…" forever. The `cancelled` flag below is the whole
+  // StrictMode contract: the discarded pass resolves into nothing and the live
+  // pass sets the state.
   useEffect(() => {
-    if (loadedRef.current) {
-      return;
-    }
-    loadedRef.current = true;
     let cancelled = false;
     setState({ status: "loading" });
     Promise.all([port.listServers(), port.listCatalog()])
