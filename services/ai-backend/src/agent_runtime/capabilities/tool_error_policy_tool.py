@@ -26,7 +26,10 @@ import asyncio
 import logging
 from typing import Any
 
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import BaseTool
+
+from agent_runtime.capabilities.delegating_tool import NO_CONFIG, DelegatingTool
 from pydantic import ConfigDict
 
 from agent_runtime.execution.tool_error_policy import (
@@ -51,7 +54,7 @@ _NEVER_CLASSIFY: tuple[type[BaseException], ...] = (
 )
 
 
-class ToolErrorPolicyTool(BaseTool):
+class ToolErrorPolicyTool(DelegatingTool):
     """LangChain ``BaseTool`` wrapper that catches & routes inner errors."""
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -59,10 +62,12 @@ class ToolErrorPolicyTool(BaseTool):
     inner: BaseTool
     policy: ToolErrorPolicy = DefaultToolErrorPolicy()  # type: ignore[assignment]
 
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
+    def _run(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Sync invocation path: classify exceptions and surface or re-raise per policy."""
         try:
-            return self.inner._run(*args, **kwargs)
+            return self.delegate(*args, config=config, **kwargs)
         except _NEVER_CLASSIFY:
             raise
         except RunFatalToolError:
@@ -80,10 +85,12 @@ class ToolErrorPolicyTool(BaseTool):
             self._log_surfaced(classification, sync=True)
             return classification.to_llm_message_content()
 
-    async def _arun(self, *args: Any, **kwargs: Any) -> Any:
+    async def _arun(
+        self, *args: Any, config: RunnableConfig = NO_CONFIG, **kwargs: Any
+    ) -> Any:
         """Async invocation path: classify exceptions and surface or re-raise per policy."""
         try:
-            return await self.inner._arun(*args, **kwargs)
+            return await self.adelegate(*args, config=config, **kwargs)
         except _NEVER_CLASSIFY:
             raise
         except RunFatalToolError:
