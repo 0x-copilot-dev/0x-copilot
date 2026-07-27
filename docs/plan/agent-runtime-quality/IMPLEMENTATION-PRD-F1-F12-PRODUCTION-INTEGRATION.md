@@ -89,14 +89,23 @@ create a second planning queue.
         deprecation warnings).
 - [ ] **Step 2:** Install the graph-wide LangChain middleware composition and
       serial-default tool admission.
-  - [ ] Domain-owned immutable run/call context, restart-stable model/tool/
-        operation identity, and exactly-once lifecycle reducer.
-  - [ ] Deterministic `DeepAgentBuildRequest` middleware sequence and supported
-        async LangChain hook composition for supervisor and local subagents.
-  - [ ] One run-scoped serial permit shared by every graph-visible tool call,
-        including framework-injected and delegated tools.
-  - [ ] Policy-before-budget ordering, compatibility-wrapper shadow parity,
-        model-visible result admission, and final-tool-surface conformance.
+  - [x] Domain-owned immutable run/call context, restart-stable model/tool/
+        operation identity, and exactly-once lifecycle reducer (`b0e3e97e`;
+        success, error, interrupt, `Command`, cancellation, replay, resume,
+        scope-collision, bounded-ledger, and content-free control tests).
+  - [x] Deterministic `DeepAgentBuildRequest` middleware sequence and supported
+        async LangChain hook composition for supervisor and local subagents
+        (`b0e3e97e`; pinned Deep Agents root, declarative-child, and
+        general-purpose-child stack conformance).
+  - [x] One run-scoped serial permit shared by every graph-visible tool call,
+        including framework-injected and delegated tools (`b0e3e97e`; live
+        multi-tool fan-out and cross-supervisor/child maximum concurrency of
+        one).
+  - [x] Policy-before-budget ordering, compatibility-wrapper shadow parity,
+        model-visible result admission, and final-tool-surface conformance
+        (`b0e3e97e`; provider-bound tool sets equal the controller canary,
+        reviewed exclusions are applied, legacy graph wrappers are removed at
+        canonical assembly, and feature-off output/event parity is preserved).
   - [ ] Full Step 2 regression suite and exit-criteria check.
 - [ ] **Step 3:** Complete the local F1 evaluation, assignment, report, and
       signed-promotion spine.
