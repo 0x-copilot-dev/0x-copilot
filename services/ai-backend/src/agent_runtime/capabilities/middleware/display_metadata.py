@@ -24,6 +24,52 @@ DISPLAY_SUMMARY_KEY = "_display_summary"
 # declare it. Never visible to the model (LangChain hides InjectedToolCallId
 # fields from the tool schema block).
 TOOL_CALL_ID_KEY = "tool_call_id"
+
+# A tool_call_id is the provider's correlation handle between a tool call and
+# its result. It is injected by LangChain from the model's own tool call, so a
+# wrapper never invents one — it either receives the real id or it has a bug.
+#
+# The field cannot simply be required: it is injected, so it must carry a
+# default for schema construction. The default used to be "", which is why this
+# failed the way it did — an empty string is a legitimate-looking value, so it
+# passed every internal boundary and only surfaced turns later inside the
+# provider SDK as `Invalid 'input[3].call_id': empty string`, with a traceback
+# pointing at langchain_openai rather than at the tool that produced it.
+#
+# So the default is a sentinel that can never be mistaken for data, and the
+# boundary below refuses to build an envelope around one.
+UNINJECTED_TOOL_CALL_ID = "__uninjected_tool_call_id__"
+
+
+class MissingToolCallIdError(RuntimeError):
+    """A wrapped tool tried to emit a result carrying no usable tool_call_id.
+
+    Raised at the envelope boundary rather than left to the provider. Providers
+    disagree about this: OpenAI rejects an empty ``call_id`` outright with a 400,
+    while Anthropic accepts it — so the same defect is fatal on one model and
+    invisible on another. Failing here makes it deterministic, and names the
+    tool that caused it instead of surfacing as an opaque request error.
+    """
+
+
+def require_tool_call_id(tool_call_id: str, *, tool_name: str) -> str:
+    """Return ``tool_call_id`` when it is usable, else raise.
+
+    The single choke point for this invariant. Wrappers are added over time —
+    the display wrapper, the budget guard, and whatever comes next — and each
+    one is a chance to drop the injection. Checking here covers all of them
+    instead of asking every future wrapper to remember.
+    """
+    if tool_call_id and tool_call_id != UNINJECTED_TOOL_CALL_ID:
+        return tool_call_id
+    raise MissingToolCallIdError(
+        f"tool {tool_name!r} produced a result with no tool_call_id "
+        f"(got {tool_call_id!r}). The id is injected from the model's tool "
+        f"call; a missing one means a wrapper in the chain did not declare or "
+        f"forward the InjectedToolCallId field."
+    )
+
+
 # Alias-form wire keys — what the model emits and what the projector reads.
 _DISPLAY_WIRE_KEYS: tuple[str, ...] = (DISPLAY_TITLE_KEY, DISPLAY_SUMMARY_KEY)
 # Field-name-form keys — what LangChain converts alias keys to before invoking
@@ -407,7 +453,7 @@ class _DisplayFields(BaseModel):
     # the nested ToolCall envelope. Leaving this as an ordinary defaulted
     # coroutine parameter silently produced ``ToolMessage(tool_call_id="")``
     # for tools whose original schema did not already declare the injection.
-    tool_call_id: Annotated[str, InjectedToolCallId] = ""
+    tool_call_id: Annotated[str, InjectedToolCallId] = UNINJECTED_TOOL_CALL_ID
 
 
 def wrap_args_schema(args_schema: type[BaseModel] | None) -> type[BaseModel]:
@@ -569,11 +615,16 @@ class _DispatchEnvelope:
         name: str,
         tool_call_id: str,
     ) -> dict[str, Any]:
-        """Build a LangChain ToolCall envelope dict."""
+        """Build a LangChain ToolCall envelope dict.
+
+        Refuses an unusable id: this envelope becomes the inner ToolMessage that
+        enters conversation history, so a bad id here is not a local error — it
+        poisons every subsequent model call in the run.
+        """
         return {
             cls.KEY_ARGS: args,
             cls.KEY_NAME: name,
-            cls.KEY_ID: tool_call_id,
+            cls.KEY_ID: require_tool_call_id(tool_call_id, tool_name=name),
             cls.KEY_TYPE: cls.TYPE_TOOL_CALL,
         }
 
@@ -598,7 +649,9 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
 
         if config_param is None:
 
-            def _wrapped_func(*, tool_call_id: str = "", **kwargs: Any) -> Any:
+            def _wrapped_func(
+                *, tool_call_id: str = UNINJECTED_TOOL_CALL_ID, **kwargs: Any
+            ) -> Any:
                 """Sync dispatch path: strip display args and invoke the inner function."""
                 del (
                     tool_call_id
@@ -609,7 +662,10 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
         else:
 
             def _wrapped_func(
-                *, tool_call_id: str = "", config: RunnableConfig, **kwargs: Any
+                *,
+                tool_call_id: str = UNINJECTED_TOOL_CALL_ID,
+                config: RunnableConfig,
+                **kwargs: Any,
             ) -> Any:
                 """Preserve LangChain's injected config for config-aware inner tools."""
                 del tool_call_id
@@ -625,7 +681,7 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
         if config_param is None:
 
             async def _wrapped_coroutine(
-                *, tool_call_id: str = "", **kwargs: Any
+                *, tool_call_id: str = UNINJECTED_TOOL_CALL_ID, **kwargs: Any
             ) -> Any:
                 """Async dispatch path: strip display args and await the inner coroutine."""
                 del (
@@ -637,7 +693,10 @@ def _wrap_structured_tool(tool: Any, structured_tool_cls: type) -> Any:
         else:
 
             async def _wrapped_coroutine(
-                *, tool_call_id: str = "", config: RunnableConfig, **kwargs: Any
+                *,
+                tool_call_id: str = UNINJECTED_TOOL_CALL_ID,
+                config: RunnableConfig,
+                **kwargs: Any,
             ) -> Any:
                 """Preserve LangChain's injected config for config-aware inner tools."""
                 del tool_call_id
@@ -664,7 +723,10 @@ def _wrap_base_tool_via_delegation(tool: Any, structured_tool_cls: type) -> Any:
     inner_name = getattr(tool, "name", "tool")
 
     async def _delegating_coroutine(
-        *, tool_call_id: str = "", config: RunnableConfig, **kwargs: Any
+        *,
+        tool_call_id: str = UNINJECTED_TOOL_CALL_ID,
+        config: RunnableConfig,
+        **kwargs: Any,
     ) -> Any:
         """Delegate to ``tool.ainvoke`` with a full LangChain tool-call envelope."""
         real, _ = strip_display(kwargs)

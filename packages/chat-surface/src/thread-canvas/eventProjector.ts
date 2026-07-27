@@ -1056,8 +1056,27 @@ function mapResultStatus(
 }
 
 function toolCallKey(event: RuntimeEventEnvelope): string {
-  return pickString(event.payload, "call_id") ?? event.event_id;
+  // `call_id` is the only key that collapses a started→result pair into ONE
+  // card. Falling back to `event_id` looks harmless but is not: `event_id` is
+  // unique per EVENT, so an op whose events carry no usable `call_id` renders
+  // its start and its result as two separate cards — which is exactly the
+  // duplicate `load_mcp_server` / `suggest_mcp_connector` cards users saw.
+  //
+  // The fallback is kept, because dropping the event entirely would be worse
+  // than showing it twice, but it is now marked so the defect is visible as a
+  // data problem rather than silently absorbed into the UI. The real fix is
+  // upstream: every tool result must carry the id (see the tool_call_id
+  // invariant in the runtime's display middleware).
+  const callId = pickString(event.payload, "call_id");
+  if (callId !== undefined && callId.length > 0) {
+    return callId;
+  }
+  return `${UNKEYED_TOOL_CALL_PREFIX}${event.event_id}`;
 }
+
+/** Marks a card whose event carried no usable `call_id`. Greppable on purpose:
+ *  a key with this prefix means an upstream op emitted an unusable id. */
+export const UNKEYED_TOOL_CALL_PREFIX = "unkeyed:";
 
 /**
  * Runtime tool-call deltas currently carry the latest accumulated `args`
