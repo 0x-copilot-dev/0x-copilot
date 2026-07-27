@@ -1,13 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 
-import type { Transport } from "../transport";
+import type { ArtifactCapableTransport, Transport } from "../transport";
 import {
+  type ArtifactContentRequest,
+  type ArtifactContentResponse,
+  type ArtifactRevisionRequest,
   type Session,
   type SseSubscribeOptions,
   type SseSubscription,
   type TransportCapabilities,
   type TypedRequest,
   UnauthorizedError,
+  isArtifactTransport,
 } from "../types";
 import { withBearerRefresh } from "./withBearerRefresh";
 
@@ -60,6 +64,39 @@ class ScriptedTransport implements Transport {
       clipboardWrite: false,
       openExternal: false,
     };
+  }
+}
+
+class ArtifactScriptedTransport
+  extends ScriptedTransport
+  implements ArtifactCapableTransport
+{
+  readonly contentCalls: ArtifactContentRequest[] = [];
+  readonly revisionCalls: ArtifactRevisionRequest[] = [];
+  contentFailures = 0;
+
+  async getArtifactContent(
+    request: ArtifactContentRequest,
+  ): Promise<ArtifactContentResponse> {
+    this.contentCalls.push(request);
+    if (this.contentFailures > 0) {
+      this.contentFailures -= 1;
+      throw new UnauthorizedError("expired artifact stream");
+    }
+    return {
+      body: new ReadableStream<Uint8Array>(),
+      contentType: "text/csv",
+      contentLength: 3,
+      etag: '"digest"',
+      filename: "forecast.csv",
+    };
+  }
+
+  async createArtifactRevision(
+    request: ArtifactRevisionRequest,
+  ): Promise<unknown> {
+    this.revisionCalls.push(request);
+    return { revision: request.parentRevision + 1 };
   }
 }
 
@@ -246,6 +283,45 @@ describe("withBearerRefresh — pass-through methods", () => {
 
     expect(caps.substrate).toBe("web");
     expect(inner.capabilitiesCalls).toHaveLength(1);
+  });
+
+  it("preserves artifact capabilities and delegates both artifact operations", async () => {
+    const inner = new ArtifactScriptedTransport();
+    const decorated = withBearerRefresh(inner, {
+      workspaceId: "wsp_acme",
+      refresh: async () => ({ ok: true }),
+    });
+    const contentRequest = { artifactId: "art_1", revision: 1 };
+    const revisionRequest = {
+      artifactId: "art_1",
+      parentRevision: 1,
+      content: new Uint8Array([1, 2, 3]),
+      contentType: "text/csv",
+      filename: "forecast.csv",
+      idempotencyKey: "idem-1",
+    };
+
+    expect(isArtifactTransport(decorated)).toBe(true);
+    await decorated.getArtifactContent(contentRequest);
+    await decorated.createArtifactRevision(revisionRequest);
+
+    expect(inner.contentCalls).toEqual([contentRequest]);
+    expect(inner.revisionCalls).toEqual([revisionRequest]);
+  });
+
+  it("refreshes and retries an artifact stream once on 401", async () => {
+    const inner = new ArtifactScriptedTransport();
+    inner.contentFailures = 1;
+    const refresh = vi.fn(async () => ({ ok: true }));
+    const decorated = withBearerRefresh(inner, {
+      workspaceId: "wsp_acme",
+      refresh,
+    });
+
+    await decorated.getArtifactContent({ artifactId: "art_1", revision: 1 });
+
+    expect(refresh).toHaveBeenCalledOnce();
+    expect(inner.contentCalls).toHaveLength(2);
   });
 });
 

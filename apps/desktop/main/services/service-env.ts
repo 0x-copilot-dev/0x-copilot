@@ -138,9 +138,10 @@ export function aiFileStoreV1Root(userDataDir: string): string {
 /**
  * Resolve the release posture for Studio's artifact and local-workspace
  * lifecycle. These are *supervisor-owned* settings: the desktop process may
- * take an explicit operator kill-switch from its launch environment, but only
- * the ai-backend child receives the resolved values. They must never join the
- * global passthrough allowlist, which is shared by all three services.
+ * take an explicit operator kill-switch from its launch environment. The
+ * ai-backend receives the complete policy; the facade receives only the
+ * matching artifact-route admission bit. They must never join the global
+ * passthrough allowlist, which is shared by all three services.
  *
  * Desktop ships the review-first artifact lane on by default. An explicit
  * falsey artifact setting is the rollback path. Workspace effects additionally
@@ -475,6 +476,16 @@ export function buildServiceEnv(
       env.FACADE_ENVIRONMENT = "production";
       env.BACKEND_URL = backendUrl;
       env.AI_BACKEND_URL = aiBackendUrl;
+      // Facade route admission and ai-backend capability admission are one
+      // release contract. If this bit is omitted here, publish_artifact can
+      // succeed in the worker while the renderer receives a facade-local 404
+      // when it tries to hydrate the resulting surface.
+      env.ARTIFACT_EFFECTS_V2 = resolveDesktopStudioRuntimeEnv(
+        inputs.processEnv,
+        {
+          workspaceBrokerEnabled: inputs.workspaceBroker?.enabled === true,
+        },
+      ).ARTIFACT_EFFECTS_V2;
       // Serve the built SIWE wallet page (wallet.html + assets/) from the staged
       // web dir, same-origin with /v1/auth/siwe/*. Empty when unstaged → no route.
       if (inputs.webDir !== undefined && inputs.webDir !== "") {

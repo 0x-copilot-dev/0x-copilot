@@ -37,7 +37,6 @@ from _lib import DriverSession, load_env_key  # noqa: E402
 
 JOURNEY_ID: Final = "G2"
 ARTIFACT_NAME: Final = "forecast.csv"
-APP_PROCESS_NAME: Final = "0xCopilot"
 INSTALLED_PAYLOAD_TARGET: Final = "installed-payload"
 TERMINAL_STATUSES: Final = frozenset(
     {"completed", "failed", "cancelled", "rejected", "timed_out"}
@@ -199,6 +198,11 @@ def _preflight_packaged_supervisor() -> None:
             "G2 must not use COPILOT_FACADE_URL; it requires the embedded "
             "supervised facade"
         )
+    _preflight_staged_runtime()
+
+
+def _preflight_staged_runtime() -> None:
+    """Require the real supervised services without constraining the shell build."""
 
     runtime = _copilot_home() / "runtime" / _host_runtime_key()
     manifest_path = runtime / "staging-manifest.json"
@@ -273,9 +277,10 @@ def _journey_environment() -> Iterator[None]:
 
 
 _FOLDER_PICKER_APPLESCRIPT: Final = r"""
-on waitForSheet(processName, attempts)
+on waitForSheet(processId, attempts)
   tell application "System Events"
-    tell process processName
+    set targetProcess to first application process whose unix id is processId
+    tell targetProcess
       repeat with attempt from 1 to attempts
         if exists sheet 1 of window 1 then return true
         delay 0.1
@@ -287,10 +292,11 @@ end waitForSheet
 
 on run argv
   set fixtureRoot to item 1 of argv
-  set processName to item 2 of argv
-  if my waitForSheet(processName, 200) is false then error "folder picker did not appear"
+  set processId to (item 2 of argv) as integer
+  if my waitForSheet(processId, 200) is false then error "folder picker did not appear"
   tell application "System Events"
-    tell process processName
+    set targetProcess to first application process whose unix id is processId
+    tell targetProcess
       set frontmost to true
       keystroke "g" using {command down, shift down}
       delay 0.2
@@ -304,9 +310,10 @@ end run
 """
 
 _APPROVAL_APPLESCRIPT: Final = r"""
-on waitForSheet(processName, attempts)
+on waitForSheet(processId, attempts)
   tell application "System Events"
-    tell process processName
+    set targetProcess to first application process whose unix id is processId
+    tell targetProcess
       repeat with attempt from 1 to attempts
         if exists sheet 1 of window 1 then return true
         delay 0.1
@@ -317,10 +324,11 @@ on waitForSheet(processName, attempts)
 end waitForSheet
 
 on run argv
-  set processName to item 1 of argv
-  if my waitForSheet(processName, 200) is false then error "workspace confirmation did not appear"
+  set processId to (item 1 of argv) as integer
+  if my waitForSheet(processId, 200) is false then error "workspace confirmation did not appear"
   tell application "System Events"
-    tell process processName
+    set targetProcess to first application process whose unix id is processId
+    tell targetProcess
       click button "Approve" of sheet 1 of window 1
     end tell
   end tell
@@ -328,26 +336,24 @@ end run
 """
 
 
-def _folder_picker_command(
-    root: Path, process_name: str = APP_PROCESS_NAME
-) -> list[str]:
+def _folder_picker_command(root: Path, process_id: int) -> list[str]:
     return [
         "/usr/bin/osascript",
         "-e",
         _FOLDER_PICKER_APPLESCRIPT,
         "--",
         str(root),
-        process_name,
+        str(process_id),
     ]
 
 
-def _approval_command(process_name: str = APP_PROCESS_NAME) -> list[str]:
+def _approval_command(process_id: int) -> list[str]:
     return [
         "/usr/bin/osascript",
         "-e",
         _APPROVAL_APPLESCRIPT,
         "--",
-        process_name,
+        str(process_id),
     ]
 
 
@@ -400,9 +406,20 @@ def _capability_invoke(
     )
 
 
+def _desktop_process_id(session: DriverSession) -> int:
+    status = session.rpc("status")
+    process_id = status.get("pid")
+    assert isinstance(process_id, int) and process_id > 0, (
+        "desktop driver did not expose its launched Electron process id"
+    )
+    return process_id
+
+
 def _grant_fixture_workspace(session: DriverSession, fixture: FixtureWorkspace) -> str:
     assert fixture.root is not None
-    picker = _start_native_automation(_folder_picker_command(fixture.root))
+    picker = _start_native_automation(
+        _folder_picker_command(fixture.root, _desktop_process_id(session))
+    )
     try:
         grant = _capability_invoke(
             session,
@@ -428,11 +445,25 @@ def _grant_fixture_workspace(session: DriverSession, fixture: FixtureWorkspace) 
     return grant_id
 
 
-def _conversation_id(session: DriverSession) -> str:
-    route = str(session.evaluate("window.location.hash") or "")
-    match = re.fullmatch(r"#/convo/([^/?#]+)(?:[?#].*)?", route)
-    assert match is not None, f"expected a bound #/convo/<id> route, got {route!r}"
-    return match.group(1)
+def _wait_for_conversation_id(session: DriverSession) -> str:
+    """Wait until the first composer submission binds the new conversation.
+
+    A fresh installed payload intentionally has no conversation route before
+    the user sends their first message. The UI creates and selects that
+    conversation as one atomic submission flow.
+    """
+
+    deadline = time.time() + 60
+    last_route = ""
+    while time.time() < deadline:
+        last_route = str(session.evaluate("window.location.hash") or "")
+        match = re.fullmatch(r"#/convo/([^/?#]+)(?:[?#].*)?", last_route)
+        if match is not None:
+            return match.group(1)
+        time.sleep(0.25)
+    raise AssertionError(
+        f"first CSV prompt did not bind a conversation route; got {last_route!r}"
+    )
 
 
 def _runs_for_conversation(
@@ -976,7 +1007,9 @@ def _assert_no_plaintext_secret(secret: str, roots: tuple[Path, ...]) -> None:
 
 
 def _approve_stage(session: DriverSession) -> None:
-    confirmation = _start_native_automation(_approval_command())
+    confirmation = _start_native_automation(
+        _approval_command(_desktop_process_id(session))
+    )
     try:
         session.click("[data-testid=tc-workspace-stage-approve]")
     finally:
@@ -1031,8 +1064,13 @@ def main() -> int:
                 )
                 session.shot("g2-local-grant")
 
-                conversation_id = _conversation_id(session)
-                _, create_events = _run_prompt(session, conversation_id, CREATE_PROMPT)
+                # The fresh first-run composer is deliberately unbound. Its
+                # first submission creates both the conversation and its run.
+                session.send_first_run_message(CREATE_PROMPT)
+                conversation_id = _wait_for_conversation_id(session)
+                create_run_id = _wait_for_new_run(session, conversation_id, 0)
+                _wait_for_terminal_run(session, create_run_id)
+                create_events = _events(session, create_run_id)
                 _assert_only_workspace_or_artifact_tools(create_events)
                 _assert_no_workspace_apply(create_events)
                 artifact = _dataset_artifact_from_run(create_events)

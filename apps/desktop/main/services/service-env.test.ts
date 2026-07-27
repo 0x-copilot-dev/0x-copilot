@@ -303,7 +303,7 @@ describe("buildServiceEnv(ai-backend)", () => {
     }
   });
 
-  it("does not leak desktop Studio rollout controls to sibling services", () => {
+  it("shares only artifact route admission with the facade", () => {
     const hostile = inputs({
       SURFACES_V2: "false",
       ARTIFACT_EFFECTS_V2: "true",
@@ -311,14 +311,28 @@ describe("buildServiceEnv(ai-backend)", () => {
       OPERATION_GATEWAY_MODE: "enforce",
       WORKSPACE_EFFECT_MODE: "enforce",
     });
-    for (const name of ["backend", "backend-facade"] as const) {
-      const env = buildServiceEnv(name, hostile);
-      expect(env.SURFACES_V2).toBeUndefined();
-      expect(env.ARTIFACT_EFFECTS_V2).toBeUndefined();
-      expect(env.ARTIFACT_DRAFTS_V2).toBeUndefined();
-      expect(env.OPERATION_GATEWAY_MODE).toBeUndefined();
-      expect(env.WORKSPACE_EFFECT_MODE).toBeUndefined();
-    }
+    const backend = buildServiceEnv("backend", hostile);
+    expect(backend.SURFACES_V2).toBeUndefined();
+    expect(backend.ARTIFACT_EFFECTS_V2).toBeUndefined();
+    expect(backend.ARTIFACT_DRAFTS_V2).toBeUndefined();
+    expect(backend.OPERATION_GATEWAY_MODE).toBeUndefined();
+    expect(backend.WORKSPACE_EFFECT_MODE).toBeUndefined();
+
+    const facade = buildServiceEnv("backend-facade", hostile);
+    expect(facade.ARTIFACT_EFFECTS_V2).toBe("true");
+    expect(facade.SURFACES_V2).toBeUndefined();
+    expect(facade.ARTIFACT_DRAFTS_V2).toBeUndefined();
+    expect(facade.OPERATION_GATEWAY_MODE).toBeUndefined();
+    expect(facade.WORKSPACE_EFFECT_MODE).toBeUndefined();
+  });
+
+  it("keeps facade artifact routes on the same explicit rollback switch", () => {
+    const env = buildServiceEnv(
+      "backend-facade",
+      inputs({ ARTIFACT_EFFECTS_V2: "false" }),
+    );
+
+    expect(env.ARTIFACT_EFFECTS_V2).toBe("false");
   });
 
   it("injects browser broker authority into ai-backend only", () => {

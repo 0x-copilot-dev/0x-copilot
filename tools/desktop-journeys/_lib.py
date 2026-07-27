@@ -384,7 +384,12 @@ class DriverSession:
         session bearer). e.g. transport("GET", "/v1/agent/models")."""
         js = (
             '(async()=>{try{const r=await window.bridge.ipc.invoke("transport.request",'
-            f'{{method:"{method}",path:"{path}"}});return JSON.stringify(r.value||r);}}'
+            f'{{method:"{method}",path:"{path}"}});'
+            'if(r&&r.kind==="transport-result"){'
+            'if(!r.ok)return "ERR:HTTP "+String(r.error?.status??"unknown")+'
+            '" "+String(r.error?.message??"request failed");'
+            "return JSON.stringify(r.value);}"
+            "return JSON.stringify(r);}"
             'catch(e){return "ERR:"+e.message}})()'
         )
         raw = self.evaluate(js)
