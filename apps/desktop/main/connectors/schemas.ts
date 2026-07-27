@@ -12,22 +12,28 @@ import { z } from "zod";
 
 export const ListCatalogParamsSchema = z.object({}).strict();
 
-export const ConnectParamsSchema = z
+/**
+ * The one authorization request. A caller supplies whichever identity it holds
+ * — a marketing `slug` (catalog rows, FTUE), an MCP `serverId` (an installed
+ * server, a run's consent gate), or both — and main decides the mechanism.
+ *
+ * `.refine` rather than a union: "at least one identity" is the real invariant,
+ * and encoding it here means the IPC boundary rejects an empty request instead
+ * of `authorize` having to. Still no redirect URI, port, or token — main
+ * derives the loopback callback itself.
+ */
+export const AuthorizeParamsSchema = z
   .object({
-    slug: z.string().min(1),
+    slug: z.string().min(1).optional(),
+    serverId: z.string().min(1).optional(),
     productScope: z.enum(["read", "draft"]).optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => value.slug !== undefined || value.serverId !== undefined, {
+    message: "authorize requires a slug or a serverId",
+  });
 
-export type ConnectParams = z.infer<typeof ConnectParamsSchema>;
-
-/** Only an MCP server id crosses into main — never a redirect URI or token;
- *  main derives the loopback callback itself, exactly as for `connect`. */
-export const AuthorizeServerParamsSchema = z
-  .object({ serverId: z.string().min(1) })
-  .strict();
-
-export type AuthorizeServerParams = z.infer<typeof AuthorizeServerParamsSchema>;
+export type AuthorizeParams = z.infer<typeof AuthorizeParamsSchema>;
 
 // -- Outbound (main → renderer) — SAFE views only ---------------------------
 
@@ -37,6 +43,22 @@ export const ConnectorConnectionResultSchema = z
     connector_slug: z.string(),
     display_group: z.string(),
     auth_state: z.string(),
+  })
+  .strict();
+
+/**
+ * What `connector.authorize` returns — deliberately NARROWER than the profile
+ * route's own result, because it must describe both topologies honestly. The
+ * MCP route knows the server it authorized and nothing more, so `auth_state`
+ * and `connector_slug` are nullable rather than padded with a plausible value.
+ * `display_group` is dropped entirely: it is profile presentation metadata, and
+ * no caller of this verb reads it.
+ */
+export const ConnectorAuthorizationResultSchema = z
+  .object({
+    server_id: z.string(),
+    connector_slug: z.string().nullable(),
+    auth_state: z.string().nullable(),
   })
   .strict();
 

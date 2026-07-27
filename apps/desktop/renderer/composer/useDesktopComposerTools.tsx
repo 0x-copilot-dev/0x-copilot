@@ -60,13 +60,13 @@ export function useDesktopComposerTools(
   // Electron MAIN brokers OAuth in the system browser. No token crosses IPC.
   //
   // The popover lists `mcp_catalog` seeds, so a catalog row is installed as an
-  // MCP SERVER and then authorized by server id. It must NOT go through
-  // `CONNECTOR_CHANNELS.connect`, which resolves a slug against the four
-  // entries in `desktop_profiles.yaml` and answers 404
-  // connector_profile_unavailable for everything else — which is exactly what
-  // made this button do nothing for Linear and Notion.
+  // MCP SERVER first — that mint is what gives the connector a `server_id` to
+  // authorize by. Both identities then go to `connector.authorize`, which picks
+  // the route: a seed has no `desktop_profiles.yaml` entry and authorizes over
+  // MCP OAuth, which is what this button needed to do all along for Linear and
+  // Notion.
   //
-  // Failures are reported. The previous `.catch(() => {})` swallowed them, so a
+  // Failures are reported. The original `.catch(() => {})` swallowed them, so a
   // 404 presented as a button that did not respond, with no error anywhere and
   // no request in the HTTP logs.
   const handleConnectCatalog = useCallback(
@@ -81,7 +81,8 @@ export function useDesktopComposerTools(
       void (async () => {
         try {
           const server = await connectorsPort.installFromCatalog(entry.slug);
-          await bridge.ipc.invoke(CONNECTOR_CHANNELS.authorizeServer, {
+          await bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
+            slug: entry.slug,
             serverId: server.server_id,
           });
         } catch (error: unknown) {

@@ -981,10 +981,7 @@ function wireTransportAndIpc(
         ? undefined
         : {
             listCatalog: () => connectorService!.listCatalog(),
-            connect: (slug, options) =>
-              connectorService!.connect(slug, options),
-            authorizeServer: (serverId) =>
-              connectorService!.authorizeServer(serverId),
+            authorize: (target) => connectorService!.authorize(target),
           },
   });
 

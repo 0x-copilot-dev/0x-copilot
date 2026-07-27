@@ -9,21 +9,37 @@
 
 import type {
   DesktopConnectorCatalogResponse,
-  DesktopConnectorConnectionResult,
   DesktopRequestedProductScope,
 } from "@0x-copilot/api-types";
 
 import {
   ConnectorOAuthCoordinator,
+  ConnectorOAuthError,
   type ConnectorOAuthDeps,
 } from "./oauth-coordinator";
 
 export interface ConnectorServiceDeps extends ConnectorOAuthDeps {}
 
+/**
+ * What a completed authorization reports back — the same shape for both OAuth
+ * topologies, so a caller never learns which route ran.
+ *
+ * `auth_state` is nullable rather than defaulted: the MCP route records the
+ * outcome on the server's own row and has nothing truthful to say here, and a
+ * fabricated "connected" would be worse than an honest absence.
+ */
+export interface ConnectorAuthorizationResult {
+  readonly server_id: string;
+  readonly connector_slug: string | null;
+  readonly auth_state: string | null;
+}
+
 export class ConnectorService {
   private readonly facadeBaseUrl: string;
   private readonly getBearer: () => Promise<string | null>;
   private readonly doFetch: typeof fetch;
+  /** Profile-backed slugs, resolved once per boot. `null` = not yet known. */
+  private profileSlugs: Set<string> | null = null;
   readonly coordinator: ConnectorOAuthCoordinator;
 
   constructor(deps: ConnectorServiceDeps) {
@@ -59,21 +75,80 @@ export class ConnectorService {
     return (await response.json()) as DesktopConnectorCatalogResponse;
   }
 
-  /** Begin the system-browser connect flow for a stable slug. Returns only
-   *  safe connection metadata — never a token. */
-  connect(
-    slug: string,
-    options: { readonly productScope?: DesktopRequestedProductScope } = {},
-  ): Promise<DesktopConnectorConnectionResult> {
-    return this.coordinator.connect(slug, options);
+  /**
+   * Authorize a connector. THE authorization entry point — the renderer names
+   * a connector, never a mechanism.
+   *
+   * Two OAuth topologies exist and they are not interchangeable:
+   *
+   *   profile  `desktop_profiles.yaml` connectors (gmail, gdrive, outlook,
+   *            atlassian) carry a PRE-REGISTERED client, so they authorize
+   *            through `/v1/connectors/{slug}/desktop/start-oauth`.
+   *   mcp      every other catalog seed and every custom server has no profile
+   *            and authorizes through the MCP OAuth routes, which discover the
+   *            provider and dynamically register a client.
+   *
+   * Which one applies is decided by a backend-owned file, so asking the
+   * renderer to choose was never sound. It chose wrong at three of five call
+   * sites, and the failure mode was silent: the profile route answers 404
+   * `connector_profile_unavailable` BEFORE opening a browser, so Connect did
+   * nothing at all for Linear, Notion, and every other seed.
+   *
+   * Resolution order, and why:
+   *   1. a profile-backed slug wins even when a `serverId` is also known — the
+   *      MCP route cannot complete a connector that needs a pre-registered
+   *      client, so the profile is the only route that works.
+   *   2. otherwise a `serverId` authorizes over MCP OAuth.
+   *   3. a slug with no profile and no server row cannot be resolved here; the
+   *      caller has to install it first (that mints the row). Saying so beats
+   *      opening a browser at something that cannot finish.
+   */
+  async authorize(target: {
+    readonly slug?: string;
+    readonly serverId?: string;
+    readonly productScope?: DesktopRequestedProductScope;
+  }): Promise<ConnectorAuthorizationResult> {
+    const { slug, serverId, productScope } = target;
+    if (slug !== undefined && (await this.hasDesktopProfile(slug))) {
+      const result = await this.coordinator.connect(slug, { productScope });
+      return {
+        server_id: result.server_id,
+        connector_slug: result.connector_slug,
+        auth_state: result.auth_state,
+      };
+    }
+    if (serverId !== undefined) {
+      await this.coordinator.connectMcpServer(serverId);
+      // No `auth_state` to report: the MCP route resolves once the round-trip
+      // completes and the server's OWN row is the record of what it granted.
+      return {
+        server_id: serverId,
+        connector_slug: slug ?? null,
+        auth_state: null,
+      };
+    }
+    throw new ConnectorOAuthError(
+      "start",
+      `no desktop profile for "${slug ?? ""}" and no MCP server to authorize`,
+    );
   }
 
-  /** Begin the system-browser OAuth flow for an MCP server by id — the path for
-   *  catalog seeds and custom servers, which have no desktop profile and so
-   *  cannot go through `connect()`. Returns nothing: the server's own row
-   *  reports the resulting auth state. */
-  authorizeServer(serverId: string): Promise<void> {
-    return this.coordinator.connectMcpServer(serverId);
+  /**
+   * Is this slug one of the profile-backed connectors?
+   *
+   * The reconciled desktop catalog IS the profile overlay, so membership is the
+   * authoritative answer rather than a guess. Cached because the overlay is
+   * static for a boot — but ONLY when non-empty: `listCatalog` degrades to
+   * `{entries: []}` on a signed-out or failed fetch, and caching that would
+   * misroute a real profile connector down the MCP path for the whole session.
+   */
+  private async hasDesktopProfile(slug: string): Promise<boolean> {
+    if (this.profileSlugs === null) {
+      const catalog = await this.listCatalog();
+      if (catalog.entries.length === 0) return false;
+      this.profileSlugs = new Set(catalog.entries.map((e) => e.slug));
+    }
+    return this.profileSlugs.has(slug);
   }
 }
 

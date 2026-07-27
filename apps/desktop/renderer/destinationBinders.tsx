@@ -381,8 +381,12 @@ export function ConnectorsBinder({
   // OAuth) is rejected — desktop cannot open it from the renderer.
   const markConnectedRef = useRef<(slug?: ConnectorSlug) => void>(() => {});
   const authorize = useCallback(
-    async (request: { slug?: ConnectorSlug; url?: string }): Promise<void> => {
-      if (request.slug === undefined) {
+    async (request: {
+      slug?: ConnectorSlug;
+      serverId?: string;
+      url?: string;
+    }): Promise<void> => {
+      if (request.slug === undefined && request.serverId === undefined) {
         throw new Error(
           "This server needs a browser sign-in that isn’t available on desktop yet.",
         );
@@ -391,9 +395,13 @@ export function ConnectorsBinder({
       if (win.bridge === undefined) {
         throw new Error("Connect is unavailable in this environment.");
       }
-      const slug = request.slug;
       try {
-        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.connect, { slug });
+        await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorize, {
+          ...(request.slug !== undefined ? { slug: request.slug } : {}),
+          ...(request.serverId !== undefined
+            ? { serverId: request.serverId }
+            : {}),
+        });
       } catch (error: unknown) {
         const raw = error instanceof Error ? error.message : String(error);
         throw new Error(
@@ -405,7 +413,7 @@ export function ConnectorsBinder({
       // The main-brokered connect resolves on completion → refetch so the row
       // lands, and signal the flow so the modal advances to the permission step.
       retry();
-      markConnectedRef.current(slug);
+      markConnectedRef.current(request.slug);
     },
     [retry],
   );
@@ -444,28 +452,21 @@ export function ConnectorsBinder({
 
   // Connect (or reconnect) a broken connector.
   //
-  // Two authorities can own a row and they need different OAuth routes. A row
-  // backed by a desktop profile (gmail / gdrive / outlook / atlassian) goes
-  // through the main-brokered slug path. Everything else — a catalog seed, or a
-  // custom server added by URL — has no profile, and asking that path for one
-  // answers 404 connector_profile_unavailable. Those authorize by MCP server id
-  // instead, so resolve the row to its server first and only fall back to the
-  // slug path when no server matches.
+  // This used to pick the OAuth route itself — resolve the row to an MCP server
+  // and authorize by id, else fall back to the slug path — because the two
+  // routes were separate IPC verbs and only a desktop-profile connector could
+  // use the slug one. `connector.authorize` resolves the topology in main now,
+  // so both identities go over and the branch is gone.
   //
-  // Slug↔server correspondence mirrors the backend's `mcp_connector_slug`:
-  // `seed:<slug>` for a catalog install, else the server `name` (which both
-  // mint paths write as `slug.replace("-", "_")`).
+  // The server lookup stays, but only to SUPPLY the id: slug↔server
+  // correspondence mirrors the backend's `mcp_connector_slug` — `seed:<slug>`
+  // for a catalog install, else the server `name` (which both mint paths write
+  // as `slug.replace("-", "_")`). A miss is no longer a fallback, just an
+  // authorize with the slug alone.
   const handleReconnect = useCallback(
     (id: ConnectorId): void => {
       const connector = connectorsRef.current.find((c) => c.id === id);
       if (connector === undefined) return;
-      const fail = (error: unknown): void => {
-        notify({
-          tone: "error",
-          title: `Couldn’t connect ${connector.display_name}`,
-          body: messageFromError(error),
-        });
-      };
       void (async () => {
         try {
           const servers = await port.listServers();
@@ -476,19 +477,17 @@ export function ConnectorsBinder({
               s.name === connector.slug ||
               s.name === underscored,
           );
-          if (server !== undefined) {
-            const win = window as unknown as { bridge?: Window["bridge"] };
-            if (win.bridge !== undefined) {
-              await win.bridge.ipc.invoke(CONNECTOR_CHANNELS.authorizeServer, {
-                serverId: server.server_id,
-              });
-              retry();
-              return;
-            }
-          }
-          await authorize({ slug: connector.slug });
+          await authorize({
+            slug: connector.slug,
+            ...(server !== undefined ? { serverId: server.server_id } : {}),
+          });
+          retry();
         } catch (error: unknown) {
-          fail(error);
+          notify({
+            tone: "error",
+            title: `Couldn’t connect ${connector.display_name}`,
+            body: messageFromError(error),
+          });
         }
       })();
     },
@@ -1003,6 +1002,7 @@ export function RunBinder({
   readonly workspaceStageHost?: WorkspaceStageHost;
 }): ReactElement {
   const transport = useTransport();
+  const notify = useNotify();
 
   // The connector consent card's port. `connectedConnectorServerId` is the one
   // state the cockpit's consent machine cannot infer — on web it survives a
@@ -1011,6 +1011,11 @@ export function RunBinder({
   const [connectedConnectorServerId, setConnectedConnectorServerId] = useState<
     string | null
   >(null);
+  // The failure mirror. A fresh object per failure so the same connector
+  // failing twice still resets its card the second time.
+  const [failedConnector, setFailedConnector] = useState<{
+    readonly serverId: string;
+  } | null>(null);
   const mcpAuthPort = useMemo(() => {
     const deps = bridgeMcpAuthDeps(
       setConnectedConnectorServerId,
@@ -1021,15 +1026,22 @@ export function RunBinder({
             path: `/v1/mcp/servers/${encodeURIComponent(serverId)}/auth/skip`,
           })
           .then(() => undefined),
-      // Fire-and-forget from the card's perspective; log rather than throw into
-      // a render. A failed connect leaves the card at `connecting`, which is
-      // honest — we opened a browser and never heard back.
-      (error: unknown) => {
-        console.warn("[connectors] connect failed", error);
+      // A failure must reach the user. This used to be a bare `console.warn`
+      // whose comment reasoned that leaving the card at `connecting` was
+      // honest "because we opened a browser and never heard back" — but the
+      // failures that actually happen here occur BEFORE any browser opens, so
+      // the card was asserting something untrue and Cancel was the only exit.
+      (serverId: string, error: unknown) => {
+        setFailedConnector({ serverId });
+        notify({
+          tone: "error",
+          title: "Couldn’t connect",
+          body: messageFromError(error),
+        });
       },
     );
     return deps === undefined ? undefined : createDesktopMcpAuthPort(deps);
-  }, [transport]);
+  }, [notify, transport]);
 
   // Composer chrome ports: the inline Tools popover's MCP surface (the shared
   // `/v1/mcp/*` adapter) + the model pill's inline "Add a provider key" form
@@ -1246,6 +1258,7 @@ export function RunBinder({
       // recovered from a callback route.
       mcpAuthPort={mcpAuthPort}
       connectedConnectorServerId={connectedConnectorServerId}
+      failedConnector={failedConnector}
       // PRD-B2: raw-fallback Copy / Download. Renderer-side (the Electron
       // renderer has the DOM); the package stays substrate-agnostic.
       onCopyText={copyTextToClipboard}

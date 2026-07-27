@@ -13,14 +13,21 @@
 export const CONNECTOR_CHANNELS = {
   /** Renderer → main: fetch the reconciled desktop connector catalog. */
   listCatalog: "connector.list-catalog",
-  /** Renderer → main: begin the system-browser OAuth connect flow for a slug. */
-  connect: "connector.connect",
   /**
-   * Renderer → main: begin the system-browser OAuth flow for an MCP server by
-   * id. `connect` resolves a slug against the four desktop profiles; this is
-   * the path for the catalog seeds and custom servers that have no profile.
+   * Renderer → main: authorize a connector. THE one authorization verb.
+   *
+   * There used to be two — `connector.connect` (by slug, via the four
+   * `desktop_profiles.yaml` entries) and `connector.authorize-server` (by MCP
+   * server id, via MCP OAuth discovery + DCR). Which one a connector needs is
+   * decided by a BACKEND-owned file, so every renderer caller was guessing:
+   * of five call sites, three guessed "profile", which is why Connect was a
+   * dead button for every catalog seed — Linear, Notion, and anything else
+   * outside the four profiles. See `ConnectorService.authorize`.
+   *
+   * Main now resolves the topology, so a renderer never names a mechanism and
+   * a new connector needs no renderer change at all.
    */
-  authorizeServer: "connector.authorize-server",
+  authorize: "connector.authorize",
 } as const;
 
 export type ConnectorChannelName =

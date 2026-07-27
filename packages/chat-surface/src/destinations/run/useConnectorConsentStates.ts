@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import type { ConnectorConsentState } from "../../approvals/ConnectorConsentCard";
-import type { McpAuthPort } from "./mcpAuthPort";
+import type { McpAuthBeginOptions, McpAuthPort } from "./mcpAuthPort";
 
 export type ConnectorConsentStates = Readonly<
   Record<string, ConnectorConsentState>
@@ -67,6 +67,18 @@ export function useConnectorConsentStates(
    * that survives the round-trip, and it hands the result back here.
    */
   connectedServerId?: string | null,
+  /**
+   * A connector whose authorization FAILED, or `null`. The mirror of
+   * `connectedServerId`, and not optional polish: `beginAuth` moves the card to
+   * `connecting` optimistically, so without a failure signal a host that never
+   * reached the vendor left the card asserting a consent screen was open
+   * forever. Resetting to `pending` is the honest end state — the user never
+   * decided anything, so offer the choice again.
+   *
+   * A fresh OBJECT per failure rather than a bare id: the same connector can
+   * fail twice in a row, and an unchanged string would not re-fire the effect.
+   */
+  failedConnector?: { readonly serverId: string } | null,
 ): ConnectorConsentStateController {
   const [states, setStates] = useState<ConnectorConsentStates>({});
 
@@ -108,12 +120,18 @@ export function useConnectorConsentStates(
         // `markConnected` once it has minted an id.
         portRef.current?.installFromCatalog(slug);
       },
-      beginAuth(serverId: string) {
+      beginAuth(serverId: string, options?: McpAuthBeginOptions) {
         // Optimistic on purpose. The browser is about to leave for the vendor's
         // consent screen, and a card that only reacts on return would read as
         // a dead button for the whole round-trip.
         set(serverId, "connecting");
-        portRef.current?.beginAuth(serverId);
+        // `options` MUST be forwarded. Dropping it silently stripped
+        // `connectorSlug` — the field that tells the host which connector this
+        // is — so the desktop port received an identity-less call and refused
+        // it before any browser opened, while this line had already claimed
+        // `connecting`. That combination is what made Connect look like it
+        // worked and do nothing.
+        portRef.current?.beginAuth(serverId, options);
       },
       skipAuth(serverId: string) {
         // Terminal, and deliberately reversible on the card: `denied` is the
@@ -131,6 +149,11 @@ export function useConnectorConsentStates(
     // Idempotent by construction — `set` no-ops when the value is unchanged, so
     // a host that holds the same completion across renders does not loop.
   }, [connectedServerId, markConnected]);
+
+  useEffect(() => {
+    if (failedConnector === undefined || failedConnector === null) return;
+    markPending(failedConnector.serverId);
+  }, [failedConnector, markPending]);
 
   return { states, port: wrapped, markConnected, markPending };
 }
