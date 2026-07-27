@@ -1,5 +1,14 @@
-"""Runtime context sub-packages: memory scoping, token budgets, and compression."""
+"""Runtime context planning, model admission, memory, and compression."""
 
 from __future__ import annotations
 
-__all__ = ["memory"]
+from agent_runtime.context.tool_result_admission import (
+    ToolResultAdmission,
+    ToolResultAdmissionAdapter,
+)
+
+__all__ = [
+    "ToolResultAdmission",
+    "ToolResultAdmissionAdapter",
+    "memory",
+]

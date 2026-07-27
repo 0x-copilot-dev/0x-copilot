@@ -19,8 +19,6 @@ lands so the design history remains auditable.
   canonical-hash contract and avoids per-model conversion workarounds.
 - **Status:** resolved in the F1 foundation slice; regression-tested.
 
-## Open
-
 ### ARQ-002 — The base prompt can terminate a tool run at a progress checkpoint
 
 - **Found in:** F2–F6 implementation audit; verified in
@@ -57,6 +55,8 @@ lands so the design history remains auditable.
   every policy-admitted `BaseTool` is budget-governed. Regression coverage
   proves the wrapper is idempotent and policy decoration remains visible.
 
+## Open
+
 ### ARQ-004 — Desktop tool-result offload happens after model context admission
 
 - **Found in:** F2–F6 implementation audit; verified in
@@ -68,7 +68,12 @@ lands so the design history remains auditable.
   common tool-result boundary before the result becomes a model `ToolMessage`.
   F5's `ContextBudgeter` and evidence hydration contract will own this, with
   the current file-backed content-addressed store retained as the backing ref.
-- **Status:** open; blocking F5 context enforcement.
+- **Status:** partially addressed. `ToolResultAdmissionAdapter` now owns
+  deterministic serialization, bounded model content, content-addressed
+  offload, and the worker's persisted-event projection. It is not yet called
+  by the Deep Agents/LangChain tool wrapper before its result becomes a
+  `ToolMessage`, so the production current-turn context remains unbounded.
+  This stays open and blocks F5 context enforcement.
 
 ### ARQ-005 — Generic worker retry can replay a completed portion of a run
 
@@ -81,7 +86,11 @@ lands so the design history remains auditable.
   retries and a durable effect-observed barrier. The worker may retry only
   pre-dispatch infrastructure failures; any post-dispatch uncertainty must be
   reconciled, never replayed blindly.
-- **Status:** open; blocking F10 fallback enablement.
+- **Status:** resolved for generic queue replay. The worker now has an explicit
+  prepare/handler-entry boundary: retryable failures before a run handler
+  begins may retry, while retryable `RUN_REQUESTED` failures after entry are
+  dead-lettered with `retryable=false`. Attempt-scoped provider retries,
+  durable ambiguous-state reconciliation, and routing remain F10 work below.
 
 ### ARQ-006 — Production subagent dispatch bypasses the bounded handoff seam
 
@@ -95,3 +104,40 @@ lands so the design history remains auditable.
   Atlas task tool and route production dispatch through it. Do not introduce a
   parallel delegation implementation.
 - **Status:** open; blocking F9 parallel delegation enablement.
+
+## Open implementation tasks
+
+These are planned PRD slices, not independently confirmed production defects.
+They remain here to make the next integration work visible without treating an
+unshipped feature as a regression.
+
+### ARQ-007 — F3 catalog is shadow-only and has no model bridge
+
+- **Current state:** the runtime now builds a run/policy-scoped compact catalog
+  from authorized `ToolCard` and `McpServerCard` records and ranks it with a
+  bounded deterministic lexical ranker. It neither connects to MCP servers
+  nor exposes an invocation path.
+- **Remaining work:** add `search_capabilities` / `describe_capability` bridge
+  tools, bounded top-K authorized descriptor expansion through the existing
+  loader/cache, typed discovery events, and invocation revalidation through
+  the existing operation gateway. Add revision invalidation with F8.
+- **Status:** open; F3 deferred mode cannot be enabled.
+
+### ARQ-008 — F5 admission adapter is not at the LangChain tool boundary
+
+- **Current state:** `ToolResultAdmissionAdapter` has the correct bounded,
+  fail-closed representation and the worker event projector reuses it.
+- **Remaining work:** install the adapter immediately after governed tool
+  execution and before the tool returns to Deep Agents; route the opaque ref
+  through the existing authorized evidence/read-back path rather than exposing
+  raw content. Add a current-turn oversized-result integration test.
+- **Status:** open; this is the implementation task that closes ARQ-004.
+
+### ARQ-009 — F10 has no attempt-level reliability control plane
+
+- **Current state:** generic worker replay after run-handler entry is blocked.
+- **Remaining work:** persist model invocation/route/attempt lineage; classify
+  provider failures; permit only stream-safe provider-attempt retry/fallback;
+  reconcile ambiguous post-crash attempts; aggregate cost/deadline across
+  attempts; add circuit breakers and route-policy evaluation.
+- **Status:** open; provider fallback remains disabled by design.
