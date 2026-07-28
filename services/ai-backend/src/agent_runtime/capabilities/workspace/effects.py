@@ -8,6 +8,7 @@ apply one. Host authority remains exclusively behind the C2
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Literal, Protocol, runtime_checkable
 
@@ -79,6 +80,8 @@ _READ_ONLY = "This workspace grant is read-only; no host change was made."
 _DELETE_FORBIDDEN = (
     "This workspace grant does not allow delete or move; no host change was made."
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class WorkspaceGrantBinding(RuntimeContract):
@@ -202,18 +205,45 @@ class WorkspaceGrantGate:
         reason: str,
         summary: str,
     ) -> GateResolution:
-        await _GatewayPresentationContext.require().ledger_emitter.emit(
-            LedgerEventType.GATE_OPENED_V2,
-            {
-                "v": 1,
-                "gate_id": f"workspace:{request.operation_id}",
-                "operation_id": request.operation_id,
-                "gate_kind": kind.value,
-                "capability": "workspace",
-                "reason": reason,
-            },
-            summary,
-        )
+        """Deny the operation and record why, in that order of authority.
+
+        The returned :class:`GateResolution` is the decision; the ledger event is
+        evidence describing it. Emission is therefore best-effort — the same
+        shape ``WorkLedgerEmitter.on_tool_result`` already uses — because a
+        failure to *describe* a denial must never be able to change it.
+
+        This is not hypothetical caution. Until PRD-01 the emit raised
+        ``ValueError`` on every call (``gate.opened.v2`` was absent from
+        ``RuntimeApiEventType``), so an unguarded ``await`` here propagated out of
+        the gate and failed the very operation it was denying. Losing evidence
+        degrades observability; losing the denial would be a security defect.
+        """
+
+        try:
+            await _GatewayPresentationContext.require().ledger_emitter.emit(
+                LedgerEventType.GATE_OPENED_V2,
+                {
+                    "v": 1,
+                    "gate_id": f"workspace:{request.operation_id}",
+                    "operation_id": request.operation_id,
+                    "gate_kind": kind.value,
+                    "capability": "workspace",
+                    "reason": reason,
+                },
+                summary,
+            )
+        except Exception:  # noqa: BLE001 — evidence must never alter the decision
+            _LOGGER.warning(
+                "workspace.gate_emit_failed",
+                extra={
+                    "metadata": {
+                        "gate_id": f"workspace:{request.operation_id}",
+                        "operation_id": request.operation_id,
+                        "gate_kind": kind.value,
+                    }
+                },
+                exc_info=True,
+            )
         return GateResolution(
             allowed=False,
             gate_kind=kind,
