@@ -12,6 +12,7 @@ from agent_runtime.execution.model_invocation.contracts import (
     ModelAttemptDecisionReason,
     ModelAttemptOutcome,
     ModelCredentialMode,
+    ModelDeploymentCatalog,
     ModelDeploymentDescriptor,
     ModelDeploymentHealth,
     ModelDispatchState,
@@ -37,12 +38,49 @@ class ModelRoutePolicy:
         self,
         requirements: ModelInvocationRequirements,
         descriptors: Iterable[ModelDeploymentDescriptor],
+        *,
+        policy_revision: str = "model-route-policy.v2",
     ) -> ModelRoutePlan:
-        descriptor_list = tuple(descriptors)
+        descriptor_list = tuple(
+            sorted(descriptors, key=lambda item: item.deployment_id)
+        )
         descriptor_ids = tuple(item.deployment_id for item in descriptor_list)
         if len(descriptor_ids) != len(set(descriptor_ids)):
             raise ValueError("deployment_id values must be unique")
+        return self._plan_ordered(
+            requirements,
+            descriptor_list,
+            policy_revision=policy_revision,
+        )
 
+    def plan_catalog(
+        self,
+        requirements: ModelInvocationRequirements,
+        catalog: ModelDeploymentCatalog,
+        *,
+        policy_revision: str = "model-route-policy.v2",
+    ) -> ModelRoutePlan:
+        """Plan in one ``O(D)`` pass over an already canonical catalog.
+
+        ``ModelDeploymentCatalog`` validates deployment-ID ordering and
+        uniqueness once at the authority boundary. Route planning therefore
+        avoids another descriptor sort while retaining the legacy ``plan``
+        entry point for unordered callers.
+        """
+
+        return self._plan_ordered(
+            requirements,
+            catalog.descriptors,
+            policy_revision=policy_revision,
+        )
+
+    def _plan_ordered(
+        self,
+        requirements: ModelInvocationRequirements,
+        descriptor_list: tuple[ModelDeploymentDescriptor, ...],
+        *,
+        policy_revision: str,
+    ) -> ModelRoutePlan:
         availability = {
             item.provider: item.modes for item in requirements.credential_availability
         }
@@ -79,17 +117,13 @@ class ModelRoutePolicy:
                 (descriptor, selected_credential_mode)
             )
 
-        # Deployment catalogs can be assembled from independent sources.  Never
-        # let source enumeration order decide a fallback or alter the persisted
-        # route plan: rank first, then use the opaque deployment ID only as a
-        # stable tie-breaker.
+        # ``descriptor_list`` is canonical deployment-ID order. The finite
+        # route-key set is constant-sized, so bucket concatenation remains O(D)
+        # and deployment IDs are already a stable tie-breaker inside each key.
         ordered_eligible = [
             candidate
             for route_key in sorted(eligible)
-            for candidate in sorted(
-                eligible[route_key],
-                key=lambda item: item[0].deployment_id,
-            )
+            for candidate in eligible[route_key]
         ]
         if (
             requirements.fallback_policy is ModelFallbackPolicy.NONE
@@ -113,9 +147,10 @@ class ModelRoutePolicy:
                 )
                 for descriptor, credential_mode in ordered_eligible
             ),
-            exclusions=tuple(sorted(exclusions, key=lambda item: item.deployment_id)),
+            exclusions=tuple(exclusions),
             fallback_policy=requirements.fallback_policy,
             budget=requirements.budget,
+            policy_revision=policy_revision,
         )
 
     @classmethod
