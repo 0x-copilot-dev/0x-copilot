@@ -42,6 +42,32 @@ All env vars read by `services/backend`. No defaults means the var is required i
 
 ---
 
+## MCP revision publication and session pool (F8)
+
+The backend publishes MCP descriptor revision changes as part of its registry
+workflow; it has no separate revision-feed environment knob. These strict values
+bound the shared session pool and its lifecycle. See the
+[MCP control-plane operations runbook](../../../ai-backend/docs/runbooks/mcp-control-plane-operations.md)
+for rollout, metrics, and independent backout.
+
+| Variable                                       | Default | Accepted bound / requirement                        | Notes                                                                                       |
+| ---------------------------------------------- | ------: | --------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `MCP_SESSION_POOL_REUSE_ENABLED`               |  `true` | Strict boolean: `1/true/yes/on` or `0/false/no/off` | Independent reuse backout. `false` takes the one-shot close path; restart backend to apply. |
+| `MCP_SESSION_POOL_MAX_TOTAL`                   |    `64` | integer `1..512`                                    | Maximum sessions across all pool keys.                                                      |
+| `MCP_SESSION_POOL_MAX_PER_KEY`                 |     `4` | integer `1..32`                                     | Maximum sessions for one pool key.                                                          |
+| `MCP_SESSION_POOL_IDLE_TTL_SECONDS`            |    `60` | numeric `> 0` and `<= 3600`                         | Idle lease expiry.                                                                          |
+| `MCP_SESSION_POOL_ABSOLUTE_TTL_SECONDS`        |   `900` | numeric `> 0` and `<= 86400`                        | Maximum session lifetime regardless of activity.                                            |
+| `MCP_SESSION_POOL_INVALIDATION_TTL_SECONDS`    |   `900` | numeric `> 0` and `<= 86400`                        | Retention for invalidation information.                                                     |
+| `MCP_SESSION_POOL_MAX_PRE_DISPATCH_RECONNECTS` |     `1` | integer `0..3`                                      | Bounded reconnect attempts before dispatch.                                                 |
+| `MCP_SESSION_POOL_MAINTENANCE_SECONDS`         |    `30` | numeric `1..300`                                    | Background pool-maintenance interval.                                                       |
+| `MCP_SESSION_POOL_SHUTDOWN_SECONDS`            |     `5` | numeric `0..30`                                     | Maximum backend pool-drain wait during shutdown.                                            |
+
+All invalid numeric/bound values fail backend startup. Pool capacity and
+maintenance limits are process-local; do not substitute identity labels or
+unbounded capacity for operational diagnosis.
+
+---
+
 ## RBAC
 
 | Variable    | Default   | Notes                                                           |

@@ -74,6 +74,10 @@ Each diagram covers one system layer; the index below maps cluster to diagram.
 | Context / memory                                  | [10-context-memory.puml](architecture/diagrams/clusters/10-context-memory.puml)       |
 | Cross-cutting (observability, budgets, retention) | [11-cross-cutting.puml](architecture/diagrams/clusters/11-cross-cutting.puml)         |
 
+## Operations
+
+- [MCP control-plane operations (F8)](runbooks/mcp-control-plane-operations.md) — revision-feed lifecycle, desktop cursor durability, pool backout, and dashboards
+
 ## Definition of done
 
 A change is complete when: code, tests, and the relevant doc in this KB all agree.
