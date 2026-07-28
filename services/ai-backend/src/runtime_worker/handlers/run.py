@@ -802,11 +802,14 @@ class RuntimeRunHandler:
         The single chokepoint every terminal path in this handler
         (completed / failed / timed-out) routes through: it folds the run's
         ledger into ``surface.created {kind: receipt}`` + ``receipt.emitted`` and
-        appends both BEFORE the terminal lifecycle event (the SSE stream stops on
-        terminal run status, so late-appended events would never reach live
-        clients). Gated on the same ``SURFACES_V2`` value the WorkLedgerEmitter
-        binds on, so flag-off is byte-identical. Best-effort: emission never
-        blocks termination.
+        appends both BEFORE the terminal lifecycle event, because both are
+        causal facts and belong inside the run's sealed prefix. ``terminate``
+        then drains any remaining registered projections and seals — see
+        :mod:`agent_runtime.api.ledger_seal` for why that ordering is now an
+        enforced invariant rather than a convention each caller re-derives.
+        Gated on the same ``SURFACES_V2`` value the WorkLedgerEmitter binds on,
+        so flag-off is byte-identical. Best-effort: emission never blocks
+        termination.
         """
 
         await emit_receipt_if_enabled(

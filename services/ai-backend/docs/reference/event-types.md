@@ -219,3 +219,35 @@ To add a new event type: [guides/add-event-type.md](../guides/add-event-type.md)
 - `USER` — included in `GET /v1/agent/runs/{id}/stream` and `GET /v1/agent/runs/{id}/events`.
 - `INTERNAL` — persisted but excluded from SSE output to the browser.
 - `AUDIT` — persisted with a longer retention period; not sent to browser; accessible via audit log endpoints.
+
+## The causal-prefix seal
+
+A run's terminal event (`run_completed` / `run_failed` / `run_cancelled` /
+`run_rejected`) **seals the run's causal prefix**. Every event the run caused
+precedes it, so a consumer that has replayed through the terminal event has
+provably seen the whole run.
+
+The ledger itself remains append-only forever. Facts that could only be known
+afterwards append after the seal as **amendments**, carrying
+`ledger_amendment_reason` (and `ledger_amends` when they point at a specific
+sealed fact) in event metadata:
+
+| Reason                 | When                                                                                                                                                                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reconciliation`       | An A5 effect claim settled after its run ended — its disposition was unknowable while the run was open.                                                                            |
+| `late_causal_recovery` | A causal event whose in-run emission was lost to a crash, recovered by the outbox bridge. Not "pretending to be causal": the label keeps the prefix's completeness claim truthful. |
+
+**Producing events.** Emit causal events before termination. Enforcement is
+fail-closed at `RuntimeEventProducer.append_api_event`: a causal append to a
+sealed run raises `LedgerSealViolation`. A producer with genuinely post-hoc
+facts declares a `LedgerAmendment`; a producer that is merely late is a bug and
+should be fixed, not relabelled. Sources with pending run-scoped work register a
+`RunProjectionDrainPort` so termination flushes them before sealing.
+
+**Consuming events.** The live SSE stream closes once it has delivered the seal
+event, so it guarantees delivery of the causal prefix and nothing more.
+Amendments reach clients through replay
+(`GET /v1/agent/runs/{run_id}/events`), not the live tail — nobody is watching a
+run that ended hours ago.
+
+See `agent_runtime/api/ledger_seal.py`.

@@ -13,6 +13,10 @@ from uuid import uuid4
 
 from opentelemetry import trace as otel_trace
 
+from agent_runtime.api.artifact_ledger_publisher import (
+    ArtifactOutboxProjectionDrain,
+    RuntimeArtifactLedgerPublisher,
+)
 from agent_runtime.api.ports import (
     EventStorePort,
     PersistencePort,
@@ -261,6 +265,29 @@ class RuntimeWorker:
             sandbox_provider_overrides=sandbox_provider_overrides,
             capability_env=capability_env,
         )
+        # Give artifact publication its live path. Without this the artifact's
+        # ledger events only reach the run through the outbox, which is drained
+        # from ``claim_next`` — and an in-process worker cannot claim while it
+        # is executing, so the events arrived after the run had sealed and no
+        # live client ever saw them. See ``agent_runtime.api.ledger_seal``.
+        bind_ledger_publisher = getattr(artifact_service, "bind_ledger_publisher", None)
+        if callable(bind_ledger_publisher):
+            bind_ledger_publisher(
+                RuntimeArtifactLedgerPublisher(
+                    persistence=self.persistence,
+                    event_producer=self.run_handler.event_producer,
+                )
+            )
+        # …and its safety net: anything the inline publish missed is flushed
+        # while the run is still open, so it lands inside the sealed prefix.
+        canonical_outbox = getattr(self.queue, "canonical_outbox", None)
+        if canonical_outbox is not None:
+            self.run_handler.run_termination.register_projection_drain(
+                ArtifactOutboxProjectionDrain(
+                    canonical_outbox=canonical_outbox,
+                    event_producer=self.run_handler.event_producer,
+                )
+            )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
             event_store=self.event_store,

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import logging
 from collections.abc import AsyncIterator, Callable
 from datetime import datetime, timezone
 from uuid import uuid4
@@ -35,6 +37,7 @@ from agent_runtime.artifacts.errors import (
 )
 from agent_runtime.artifacts.ports import (
     ArtifactBlobStorePort,
+    ArtifactLedgerPublisherPort,
     ArtifactMetadataStorePort,
     ArtifactRunScopeResolverPort,
     ArtifactSourceResolverPort,
@@ -58,6 +61,8 @@ from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactRevisedPayload,
     LedgerEventType,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class ArtifactService:
@@ -88,6 +93,7 @@ class ArtifactService:
         sources: ArtifactSourceResolverPort | None = None,
         limits: ArtifactLimits | None = None,
         now: Callable[[], datetime] | None = None,
+        ledger_publisher: ArtifactLedgerPublisherPort | None = None,
     ) -> None:
         self._metadata = metadata
         self._blobs = blobs
@@ -95,6 +101,21 @@ class ArtifactService:
         self._sources = sources
         self._limits = limits or ArtifactLimits()
         self._now = now or (lambda: datetime.now(timezone.utc))
+        # Optional so the service stays usable in contexts with no run ledger
+        # (tests, the artifact REST surface). Unset means the outbox drain is
+        # the only delivery path — correct, just not live.
+        self._ledger_publisher = ledger_publisher
+
+    def bind_ledger_publisher(self, publisher: ArtifactLedgerPublisherPort) -> None:
+        """Attach the run-ledger publisher once the event producer exists.
+
+        Worker topology builds this service before the run handler that owns
+        the event producer, so the live publication path cannot be supplied at
+        construction. Binding afterwards keeps the ordering explicit instead of
+        threading a half-built producer through the composition root.
+        """
+
+        self._ledger_publisher = publisher
 
     async def create_from_stream(
         self,
@@ -749,7 +770,48 @@ class ArtifactService:
             ),
             ledger_events=tuple(events),
         )
-        return await self._metadata.create_artifact(command)
+        mutation = await self._metadata.create_artifact(command)
+        await self._publish_ledger_events(command.ledger_events)
+        return mutation
+
+    async def _publish_ledger_events(
+        self, events: tuple[ArtifactLedgerEvent, ...]
+    ) -> None:
+        """Project committed artifact facts onto the run ledger immediately.
+
+        The durable commit above is the source of truth; this is the *timely*
+        path, not the reliable one. It matters because the events are causal:
+        they describe something the run just did, so they belong inside the
+        run's sealed prefix — and because the model tells the user the artifact
+        is on the canvas *now*, which is only true if the canvas hears about it
+        mid-run.
+
+        Publication is best-effort by design. Two backstops already guarantee
+        eventual delivery, both keyed on the same ``event_id`` so all three
+        paths are idempotent and cannot disagree:
+
+        * ``RunTerminationCoordinator`` drains the outbox before sealing, so a
+          failure here is still repaired inside the prefix;
+        * the queue bridge recovers rows orphaned by a crash, declaring them
+          ``LATE_CAUSAL_RECOVERY`` amendments because by then the seal has
+          passed and pretending otherwise would falsify the prefix.
+
+        Swallowing the error is therefore correct rather than lax: raising
+        would fail a publication that is already durably committed.
+        """
+
+        if self._ledger_publisher is None:
+            return
+        for event in events:
+            try:
+                await self._ledger_publisher.publish(event)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                _LOGGER.debug(
+                    "artifact_publication.inline_ledger_publish_failed",
+                    extra={"metadata": {"event_id": event.event_id}},
+                )
 
     async def _require_run_scope(
         self, *, org_id: str, user_id: str, run_id: str

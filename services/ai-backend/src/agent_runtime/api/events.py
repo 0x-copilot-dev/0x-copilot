@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
+from agent_runtime.api.ledger_seal import LedgerAmendment, LedgerSeal
 from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.presentation import PresentationGenerator
 from agent_runtime.execution.contracts import JsonObject, StreamEvent, StreamEventSource
@@ -57,6 +58,11 @@ class RuntimeEventProducer:
         self.lifecycle_ledger: LifecycleLedger = (
             lifecycle_ledger if lifecycle_ledger is not None else LifecycleLedger()
         )
+        # Sibling invariant to the lifecycle ledger, centralized for the same
+        # reason: "what is currently in flight" and "is this run's causal prefix
+        # closed" are both properties of the ledger, and both are unenforceable
+        # if each emission site has to remember them. See ``ledger_seal``.
+        self.ledger_seal: LedgerSeal = LedgerSeal()
 
     async def append_api_event(
         self,
@@ -72,19 +78,33 @@ class RuntimeEventProducer:
         status: str | None = None,
         event_id: str | None = None,
         created_at: datetime | None = None,
+        amendment: LedgerAmendment | None = None,
     ) -> RuntimeEventEnvelope:
         """Append an API-authored event and update the run sequence cursor.
 
         ``event_id`` and ``created_at`` are reserved for durable domain-outbox
         publication. Existing stream producers leave them unset and preserve
         the historical adapter-assigned identity and append timestamp.
+
+        ``amendment`` declares that this fact is landing *after* the run's
+        terminal event on purpose — see :mod:`agent_runtime.api.ledger_seal`.
+        Leaving it unset asserts the event is causal, and a causal append to a
+        sealed run raises :class:`LedgerSealViolation` rather than becoming an
+        event no live client can ever receive.
         """
 
+        self.ledger_seal.guard(
+            run_id=run.run_id, event_type=event_type, amendment=amendment
+        )
         safe_payload = RuntimeEventPresentationProjector.payload_for_event(
             event_type=event_type,
             payload=payload or {},
         )
-        safe_metadata = metadata or {}
+        safe_metadata = (
+            {**(metadata or {}), **amendment.as_metadata()}
+            if amendment is not None
+            else metadata or {}
+        )
         timeline_fields = RuntimeEventPresentationProjector.presentation_fields(
             event_type=event_type,
             source=source,
@@ -173,13 +193,24 @@ class RuntimeEventProducer:
         run: RunRecord,
         stream_event: StreamEvent,
     ) -> RuntimeEventEnvelope:
-        """Append a normalized runtime event after projecting UI timeline fields."""
+        """Append a normalized runtime event after projecting UI timeline fields.
+
+        Stream events are model/tool output and are causal without exception —
+        there is no amendment parameter because a delta arriving after its run
+        sealed is never legitimate.
+        """
 
         draft = RuntimeEventDraft.from_stream_event(
             run_id=run.run_id,
             conversation_id=run.conversation_id,
             org_id=run.org_id,
             stream_event=stream_event,
+        )
+        # Guarded on the draft, not the stream event: ``StreamEvent.event_type``
+        # is a ``StreamEventType``, and the seal is defined over the persisted
+        # ``RuntimeApiEventType`` vocabulary the draft resolves it to.
+        self.ledger_seal.guard(
+            run_id=run.run_id, event_type=draft.event_type, amendment=None
         )
         timeline_fields = draft.model_dump(
             mode="python",
@@ -311,6 +342,10 @@ class RuntimeEventProducer:
 
         if not entries:
             return ()
+        # One guard for the batch: every entry shares ``event_type`` and
+        # ``run``, and the batch is a single transaction, so admitting it
+        # entry-by-entry would report the same verdict N times.
+        self.ledger_seal.guard(run_id=run.run_id, event_type=event_type, amendment=None)
         drafts: list[RuntimeEventDraft] = []
         for entry in entries:
             payload = entry.get("payload") or {}

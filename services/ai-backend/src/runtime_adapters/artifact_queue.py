@@ -43,6 +43,18 @@ class ArtifactAwareRuntimeQueue:
         self._mirror = queue
         self._canonical_outbox = canonical_outbox
 
+    @property
+    def canonical_outbox(self) -> ArtifactCanonicalOutboxPort:
+        """The canonical artifact intent ledger behind this queue.
+
+        Public so run termination can drain pending artifact rows into the
+        ledger *before* sealing. Previously the only way those rows became
+        events was :meth:`claim_next` below — which an in-process worker cannot
+        reach while it is busy executing the run that produced them.
+        """
+
+        return self._canonical_outbox
+
     async def enqueue_run(self, command: RuntimeRunCommand) -> None:
         await self._queue.enqueue_run(command)
 
