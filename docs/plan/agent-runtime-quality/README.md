@@ -551,7 +551,7 @@ backend-to-ai callback, or desktop daemon.
       are opaque and bounded; revisions are compared for equality, never
       inferred from caller-shaped order. Add cross-service golden fixtures
       instead of a deployable cross-service import.
-- [ ] **F8.2 — Durable backend revision authority.** Add one backend migration
+- [x] **F8.2 — Durable backend revision authority.** Add one backend migration
       and matching in-memory/Postgres store ports for current descriptor view
       state plus an append-only revision feed. Commit a view update and its
       feed notice in the same existing registry transaction, with stable
@@ -559,7 +559,7 @@ backend-to-ai callback, or desktop daemon.
       bounded retention, deletion/account-merge behavior, and no raw schemas,
       endpoints, tokens, or tool-result bodies. Preserve the registry as the
       source of truth; the connectors table remains a projection.
-- [ ] **F8.3 — Transactional mutation and discovery publication.** Advance the
+- [x] **F8.3 — Transactional mutation and discovery publication.** Advance the
       appropriate config/auth/transport generation on install, update,
       enable/disable, delete, OAuth start/complete/failure, test-token upsert,
       token refresh/rotation, and explicit refresh. Observe complete paginated
@@ -568,7 +568,7 @@ backend-to-ai callback, or desktop daemon.
       debounce unchanged or bursty observations, and publish a new view only
       after the complete cycle succeeds. Partial/failed discovery cannot
       become a successful empty revision.
-- [ ] **F8.4 — Authenticated pull and exact-check API.** Expose internal
+- [x] **F8.4 — Authenticated pull and exact-check API.** Expose internal
       service-authenticated feed and exact-revision endpoints using the
       existing trusted service-token plus profile/user header boundary.
       Enforce a capped page size, opaque durable cursor, deterministic
@@ -576,7 +576,7 @@ backend-to-ai callback, or desktop daemon.
       server-scoped exact checks, and constant-shape not-found/unauthorized
       behavior. Apps and Electron continue to call only the facade; these
       internal routes remain ai-backend-only.
-- [ ] **F8.5 — Backend-owned bounded remote session pool.** Replace the
+- [x] **F8.5 — Backend-owned bounded remote session pool.** Replace the
       stateless per-RPC remote transport path with a process-local pool keyed
       by verified profile/user/server, one-way credential subject, auth epoch,
       transport revision, and required session scope. Keep opaque leases,
