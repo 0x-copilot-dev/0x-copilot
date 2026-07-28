@@ -10,6 +10,11 @@ from agent_runtime.capabilities.citation_capturing_tool import (
 )
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
 from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+from agent_runtime.capabilities.mcp.freshness import RevisionAwareMcpDiscoveryCache
+from agent_runtime.capabilities.mcp.revision_resolver import (
+    McpDescriptorRevisionResolver,
+)
+from agent_runtime.capabilities.mcp.revision_wire import BackendMcpRevisionClient
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSource, SkillSourceConfig
 from agent_runtime.capabilities.skills.virtual import (
@@ -135,7 +140,7 @@ class DefaultRuntimeDependenciesFactory:
         self,
         settings: RuntimeSettings | None = None,
         *,
-        mcp_discovery_cache: McpDiscoveryCache | None = None,
+        mcp_discovery_cache: object | None = None,
     ) -> None:
         """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``."""
         self.settings = settings or RuntimeSettings.load()
@@ -232,12 +237,16 @@ class DefaultRuntimeDependenciesFactory:
         return wiring if wiring.active else None
 
     @classmethod
-    def build_default_discovery_cache(cls) -> McpDiscoveryCache:
-        """Build a :class:`McpDiscoveryCache` configured from env vars.
+    def build_default_discovery_cache(
+        cls,
+        settings: RuntimeSettings | None = None,
+    ) -> RevisionAwareMcpDiscoveryCache:
+        """Build the single revision-aware discovery composition for a worker.
 
         Reads ``RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS`` (default 900) and
         ``RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES`` (default 1000). Used by
-        the worker process entrypoint so each worker gets its own cache.
+        the external-worker and in-process-worker roots. The F8 revision path
+        is explicitly default-off; disabled mode delegates to the base cache.
         """
 
         import os
@@ -262,11 +271,50 @@ class DefaultRuntimeDependenciesFactory:
                 return default
             return parsed if parsed > 0 else default
 
-        return McpDiscoveryCache(
+        def _enabled(env_name: str) -> bool:
+            return os.environ.get(env_name, "").strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+
+        base = McpDiscoveryCache(
             ttl_seconds=_positive_float(
                 "RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS", 900.0
             ),
             max_entries=_positive_int("RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES", 1000),
+        )
+        revision_checks_enabled = _enabled("RUNTIME_ENABLE_F8_MCP_CONTROL_PLANE")
+        backend_url = (
+            settings.mcp.backend_registry_url
+            if settings is not None
+            else os.environ.get("MCP_BACKEND_REGISTRY_URL", "").strip() or None
+        )
+        if revision_checks_enabled and backend_url is None:
+            raise ValueError(
+                "RUNTIME_ENABLE_F8_MCP_CONTROL_PLANE requires MCP_BACKEND_REGISTRY_URL"
+            )
+        resolver = (
+            McpDescriptorRevisionResolver(
+                BackendMcpRevisionClient(backend_url=backend_url),
+                ttl_seconds=_positive_float(
+                    "RUNTIME_MCP_REVISION_CACHE_TTL_SECONDS", 30.0
+                ),
+                max_entries=_positive_int(
+                    "RUNTIME_MCP_REVISION_CACHE_MAX_ENTRIES", 1000
+                ),
+            )
+            if revision_checks_enabled
+            else None
+        )
+        return RevisionAwareMcpDiscoveryCache(
+            base,
+            max_staleness_seconds=_positive_float(
+                "RUNTIME_MCP_DESCRIPTOR_MAX_STALENESS_SECONDS", 300.0
+            ),
+            revision_resolver=resolver,
+            revision_checks_enabled=revision_checks_enabled,
         )
 
     def _skill_source_config(

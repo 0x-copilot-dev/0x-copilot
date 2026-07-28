@@ -23,6 +23,7 @@ from agent_runtime.capabilities.mcp import (
     McpLoader,
     McpResourceDiscoveryPage,
     McpToolDiscoveryPage,
+    RevisionAwareMcpDiscoveryCache,
 )
 
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
@@ -47,8 +48,11 @@ class LoaderCacheMixin(DynamicMcpLoadingMixin):
             tools=(self.make_tool(),),
             resources=(self.make_resource(),),
         )
+        card = self.make_card(name=self.TestValues.Names.DRIVE_MCP).model_copy(
+            update={"server_id": "server-drive"}
+        )
         return self.FakeMcpProvider(
-            cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+            cards=(card,),
             clients={self.TestValues.Names.DRIVE_MCP: client},
         )
 
@@ -227,6 +231,82 @@ class TestLoaderCacheIntegration(LoaderCacheMixin):
 
         asyncio.run(run())
 
+    def test_cached_hit_rechecks_current_permissions(self) -> None:
+        async def run() -> None:
+            cache = McpDiscoveryCache()
+            loader, provider = self.build_loader(cache=cache)
+            model_config = ModelConfig(
+                provider="fake",
+                model_name="fake",
+                max_input_tokens=128_000,
+                timeout_seconds=30,
+                temperature=0,
+            )
+            authorized = self.build_context(model_config)
+            denied = AgentRuntimeContext(
+                user_id=authorized.user_id,
+                org_id=authorized.org_id,
+                roles=authorized.roles,
+                permission_scopes=set(),
+                model_profile=model_config,
+                feature_flags=authorized.feature_flags,
+            )
+            request = McpLoadRequest(
+                server_name=self.TestValues.Names.DRIVE_MCP,
+                runtime_context=authorized,
+            )
+
+            assert (await loader.load_server(request)).succeeded
+            denied_result = await loader.load_server(
+                request.model_copy(update={"runtime_context": denied})
+            )
+
+            assert denied_result.error is not None
+            assert denied_result.error.code is McpLoadErrorCode.PERMISSION_DENIED
+            assert len(provider.created_clients) == 1
+
+        asyncio.run(run())
+
+    def test_feature_off_cache_preserves_cards_without_backend_source_id(self) -> None:
+        async def run() -> None:
+            client = self.FakeMcpClient(
+                tools=(self.make_tool(),),
+                resources=(self.make_resource(),),
+            )
+            provider = self.FakeMcpProvider(
+                cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+                clients={self.TestValues.Names.DRIVE_MCP: client},
+            )
+            loader = McpLoader(
+                DynamicMcpRegistry(providers=(provider,)),
+                cache=RevisionAwareMcpDiscoveryCache(
+                    McpDiscoveryCache(),
+                    max_staleness_seconds=60,
+                    revision_checks_enabled=False,
+                ),
+            )
+            request = McpLoadRequest(
+                server_name=self.TestValues.Names.DRIVE_MCP,
+                runtime_context=self.build_context(
+                    ModelConfig(
+                        provider="fake",
+                        model_name="fake",
+                        max_input_tokens=128_000,
+                        timeout_seconds=30,
+                        temperature=0,
+                    )
+                ),
+            )
+
+            first = await loader.load_server(request)
+            second = await loader.load_server(request)
+
+            assert first.succeeded
+            assert second.succeeded
+            assert provider.created_clients == [self.TestValues.Names.DRIVE_MCP]
+
+        asyncio.run(run())
+
     def test_paginated_client_loads_every_page_before_publication(self) -> None:
         async def run() -> None:
             client = _PaginatedMcpClient(
@@ -327,7 +407,11 @@ class TestLoaderCacheIntegration(LoaderCacheMixin):
                 resources=(self.make_resource(),),
             )
             provider = self.FakeMcpProvider(
-                cards=(self.make_card(name=self.TestValues.Names.DRIVE_MCP),),
+                cards=(
+                    self.make_card(name=self.TestValues.Names.DRIVE_MCP).model_copy(
+                        update={"server_id": "server-drive"}
+                    ),
+                ),
                 clients={self.TestValues.Names.DRIVE_MCP: client},
             )
             loader = McpLoader(

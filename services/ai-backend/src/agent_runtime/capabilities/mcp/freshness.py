@@ -31,6 +31,10 @@ from agent_runtime.capabilities.mcp.discovery_cache import (
     McpDiscoveryCache,
     McpDiscoveryCacheKey,
 )
+from agent_runtime.capabilities.mcp.revision_resolver import (
+    McpDescriptorRevisionResolverPort,
+    RevisionResolveState,
+)
 from agent_runtime.execution.contracts import RuntimeContract
 
 
@@ -149,12 +153,20 @@ class RevisionAwareMcpDiscoveryCache:
         cache: McpDiscoveryCache,
         *,
         max_staleness_seconds: float,
+        revision_resolver: McpDescriptorRevisionResolverPort | None = None,
+        revision_checks_enabled: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if max_staleness_seconds <= 0:
             msg = "max_staleness_seconds must be positive"
             raise ValueError(msg)
+        if revision_checks_enabled and revision_resolver is None:
+            raise ValueError(
+                "revision_resolver is required when revision checks are enabled"
+            )
         self._cache = cache
+        self._revision_resolver = revision_resolver
+        self._revision_checks_enabled = revision_checks_enabled
         self._max_staleness_seconds = float(max_staleness_seconds)
         self._clock = clock
         self._revisions: dict[McpDiscoveryCacheKey, _RevisionRecord] = {}
@@ -200,43 +212,116 @@ class RevisionAwareMcpDiscoveryCache:
         """
         key = request.cache_key()
         async with self._lock_for(key):
-            cached = await self._get_locked(key=key, request=request)
-            if cached.record is not None:
-                return cached
-
-            generation = await self._generation_for(key)
-            loaded = await load()
-            if loaded is None:
-                return cached
-
-            admitted_for_generation = await self._put_locked(
+            return await self._get_or_load_locked(
                 key=key,
                 request=request,
-                record=loaded,
-                expected_generation=generation,
+                load=load,
             )
-            if not admitted_for_generation:
-                return McpDescriptorCacheResult(
-                    decision=self._decision(
-                        request=request,
-                        state=McpDescriptorFreshnessState.INVALIDATION_RACED,
-                    ),
-                )
-            admitted = await self._cache.get(key)
-            if admitted is None:  # Defensive: an adapter may reject admission.
-                async with self._state_lock:
-                    self._revisions.pop(key, None)
-                return McpDescriptorCacheResult(
-                    decision=self._decision(
-                        request=request,
-                        state=McpDescriptorFreshnessState.VALUE_EVICTED,
-                    ),
-                )
-            return McpDescriptorCacheResult(
-                decision=cached.decision,
-                record=admitted,
-                loaded=True,
+
+    async def get_or_load_cache_entry(
+        self,
+        key: McpDiscoveryCacheKey,
+        *,
+        source_id: str | None,
+        load: Callable[[], Awaitable[LoadedMcpServer | None]],
+    ) -> LoadedMcpServer | None:
+        """Resolve one trusted revision and compose it over the base cache.
+
+        The feature-off path delegates byte-for-byte to the existing cache.
+        When enabled, source registration, exact revision resolution, and
+        descriptor lookup share this wrapper's per-key cohort. Missing revision
+        authority falls back to a generation-fenced live load that is never
+        admitted under a fabricated revision.
+        """
+
+        if not self._revision_checks_enabled:
+            return await self._cache.get_or_load_cache_entry(
+                key,
+                source_id=source_id,
+                load=load,
             )
+
+        async with self._lock_for(key):
+            resolver = self._revision_resolver
+            if resolver is not None and source_id is not None:
+                await resolver.register(
+                    org_id=key.org_id,
+                    user_id=key.user_id,
+                    server_name=key.server_name,
+                    server_id=source_id,
+                )
+                resolved = await resolver.resolve(
+                    org_id=key.org_id,
+                    user_id=key.user_id,
+                    server_name=key.server_name,
+                )
+                if (
+                    resolved.state is RevisionResolveState.FRESH
+                    and resolved.revision is not None
+                    and resolved.revision.server_id == source_id
+                ):
+                    request = McpDescriptorFreshnessRequest(
+                        server_name=key.server_name,
+                        subject=McpDescriptorSubject(
+                            org_id=key.org_id,
+                            user_id=key.user_id,
+                        ),
+                        revision=McpDescriptorRevision(
+                            value=resolved.revision.revision
+                        ),
+                    )
+                    result = await self._get_or_load_locked(
+                        key=key,
+                        request=request,
+                        load=load,
+                    )
+                    return result.record
+
+            await self._invalidate_exact(key, advance_generation=True)
+            return await self._load_untracked_locked(key=key, load=load)
+
+    async def invalidate(
+        self,
+        *,
+        server_name: str | None = None,
+        org_id: str | None = None,
+        user_id: str | None = None,
+    ) -> int:
+        """Preserve base invalidation semantics and advance wrapper barriers."""
+
+        if not self._revision_checks_enabled:
+            return await self._cache.invalidate(
+                server_name=server_name,
+                org_id=org_id,
+                user_id=user_id,
+            )
+        matching_keys, _revision_records_removed = await self._invalidate_metadata(
+            server_name=server_name,
+            org_id=org_id,
+            user_id=user_id,
+        )
+        resolver = self._revision_resolver
+        if resolver is not None:
+            resolver_keys = list(matching_keys)
+            if server_name is not None and org_id is not None and user_id is not None:
+                explicit_key = McpDiscoveryCacheKey(
+                    server_name=server_name,
+                    org_id=org_id,
+                    user_id=user_id,
+                )
+                if explicit_key not in resolver_keys:
+                    resolver_keys.append(explicit_key)
+            for key in resolver_keys:
+                await resolver.invalidate(
+                    org_id=key.org_id,
+                    user_id=key.user_id,
+                    server_name=key.server_name,
+                )
+        return await self._cache.invalidate(
+            server_name=server_name,
+            org_id=org_id,
+            user_id=user_id,
+        )
 
     async def invalidate_subject(
         self,
@@ -249,22 +334,19 @@ class RevisionAwareMcpDiscoveryCache:
         Both subject fields are mandatory by construction.  This intentionally
         does not expose the wildcard org/user surface of the base cache.
         """
-        async with self._state_lock:
-            matching_keys = tuple(
-                key
-                for key in set(self._revisions).union(self._key_locks)
-                if key.org_id == subject.org_id
-                and key.user_id == subject.user_id
-                and (server_name is None or key.server_name == server_name)
-            )
-            revision_records_removed = 0
+        matching_keys, revision_records_removed = await self._invalidate_metadata(
+            server_name=server_name,
+            org_id=subject.org_id,
+            user_id=subject.user_id,
+        )
+        resolver = self._revision_resolver
+        if resolver is not None:
             for key in matching_keys:
-                self._generations[key] = self._generations.get(key, 0) + 1
-                if key in self._revisions:
-                    revision_records_removed += 1
-                self._revisions.pop(key, None)
-                if key not in self._key_locks:
-                    self._generations.pop(key, None)
+                await resolver.invalidate(
+                    org_id=key.org_id,
+                    user_id=key.user_id,
+                    server_name=key.server_name,
+                )
         cached_removed = await self._cache.invalidate(
             server_name=server_name,
             org_id=subject.org_id,
@@ -275,6 +357,91 @@ class RevisionAwareMcpDiscoveryCache:
             revision_records_removed=revision_records_removed,
             generation_barriers_advanced=len(matching_keys),
         )
+
+    async def _get_or_load_locked(
+        self,
+        *,
+        key: McpDiscoveryCacheKey,
+        request: McpDescriptorFreshnessRequest,
+        load: Callable[[], Awaitable[LoadedMcpServer | None]],
+    ) -> McpDescriptorCacheResult:
+        cached = await self._get_locked(key=key, request=request)
+        if cached.record is not None:
+            return cached
+
+        generation = await self._generation_for(key)
+        loaded = await load()
+        if loaded is None:
+            return cached
+
+        admitted_for_generation = await self._put_locked(
+            key=key,
+            request=request,
+            record=loaded,
+            expected_generation=generation,
+        )
+        if not admitted_for_generation:
+            return McpDescriptorCacheResult(
+                decision=self._decision(
+                    request=request,
+                    state=McpDescriptorFreshnessState.INVALIDATION_RACED,
+                ),
+            )
+        admitted = await self._cache.get(key)
+        if admitted is None:  # Defensive: an adapter may reject admission.
+            async with self._state_lock:
+                self._revisions.pop(key, None)
+            return McpDescriptorCacheResult(
+                decision=self._decision(
+                    request=request,
+                    state=McpDescriptorFreshnessState.VALUE_EVICTED,
+                ),
+            )
+        return McpDescriptorCacheResult(
+            decision=cached.decision,
+            record=admitted,
+            loaded=True,
+        )
+
+    async def _load_untracked_locked(
+        self,
+        *,
+        key: McpDiscoveryCacheKey,
+        load: Callable[[], Awaitable[LoadedMcpServer | None]],
+    ) -> LoadedMcpServer | None:
+        generation = await self._generation_for(key)
+        loaded = await load()
+        if loaded is None:
+            return None
+        async with self._state_lock:
+            if self._generations.get(key, 0) != generation:
+                return None
+        return loaded.model_copy(deep=True)
+
+    async def _invalidate_metadata(
+        self,
+        *,
+        server_name: str | None,
+        org_id: str | None,
+        user_id: str | None,
+    ) -> tuple[tuple[McpDiscoveryCacheKey, ...], int]:
+        async with self._state_lock:
+            matching_keys = tuple(
+                key
+                for key in set(self._revisions).union(self._key_locks)
+                if (server_name is None or key.server_name == server_name)
+                and (org_id is None or key.org_id == org_id)
+                and (user_id is None or key.user_id == user_id)
+            )
+            revision_records_removed = 0
+            for key in matching_keys:
+                self._generations[key] = self._generations.get(key, 0) + 1
+                if key in self._revisions:
+                    revision_records_removed += 1
+                self._revisions.pop(key, None)
+                if key not in self._key_locks:
+                    self._generations.pop(key, None)
+        return matching_keys, revision_records_removed
 
     async def _get_locked(
         self,
@@ -302,7 +469,7 @@ class RevisionAwareMcpDiscoveryCache:
                 cached_revision=revision_record.revision,
                 age_seconds=age_seconds,
             )
-            await self._evict_exact(key)
+            await self._invalidate_exact(key)
             return McpDescriptorCacheResult(decision=decision)
 
         if age_seconds >= self._max_staleness_seconds:
@@ -312,7 +479,7 @@ class RevisionAwareMcpDiscoveryCache:
                 cached_revision=revision_record.revision,
                 age_seconds=age_seconds,
             )
-            await self._evict_exact(key)
+            await self._invalidate_exact(key)
             return McpDescriptorCacheResult(decision=decision)
 
         record = await self._cache.get(key)
@@ -385,14 +552,24 @@ class RevisionAwareMcpDiscoveryCache:
         async with self._state_lock:
             return self._generations.get(key, 0)
 
-    async def _evict_exact(self, key: McpDiscoveryCacheKey) -> None:
+    async def _invalidate_exact(
+        self,
+        key: McpDiscoveryCacheKey,
+        *,
+        advance_generation: bool = False,
+    ) -> None:
+        if advance_generation:
+            async with self._state_lock:
+                self._generations[key] = self._generations.get(key, 0) + 1
+                self._revisions.pop(key, None)
         await self._cache.invalidate(
             server_name=key.server_name,
             org_id=key.org_id,
             user_id=key.user_id,
         )
-        async with self._state_lock:
-            self._revisions.pop(key, None)
+        if not advance_generation:
+            async with self._state_lock:
+                self._revisions.pop(key, None)
 
     def _decision(
         self,

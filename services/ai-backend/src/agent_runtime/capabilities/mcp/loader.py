@@ -41,7 +41,7 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.constants import Defaults, Keys, Messages
 from agent_runtime.capabilities.mcp.discovery_cache import (
-    McpDiscoveryCache,
+    McpDiscoveryCachePort,
     McpDiscoveryCacheKey,
 )
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
@@ -81,7 +81,7 @@ class McpLoader:
     max_tool_descriptors: int = Defaults.MAX_TOOL_DESCRIPTORS
     max_resource_descriptors: int = Defaults.MAX_RESOURCE_DESCRIPTORS
     max_discovery_pages: int = 100
-    cache: McpDiscoveryCache | None = None
+    cache: McpDiscoveryCachePort | None = None
 
     async def load_server(self, request: McpLoadRequest) -> McpLoadResult:
         """Load a selected MCP server while rechecking permissions and validation.
@@ -142,7 +142,11 @@ class McpLoader:
             captured_result["value"] = result
             return result.loaded_server if result.succeeded else None
 
-        cached_record = await self.cache.get_or_load(cache_key, _load)
+        cached_record = await self.cache.get_or_load_cache_entry(
+            cache_key,
+            source_id=card.server_id,
+            load=_load,
+        )
         if "value" in captured_result:
             live_result = captured_result["value"]
             if live_result.succeeded and cached_record is None:

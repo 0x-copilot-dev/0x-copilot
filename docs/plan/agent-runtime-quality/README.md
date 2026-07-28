@@ -593,7 +593,7 @@ backend-to-ai callback, or desktop daemon.
       service stop. Reconnect only when remote acceptance/effect is proven
       absent; ambiguous/effecting requests fail honestly and remain under the
       existing F4 retry/Operation Gateway authority.
-- [ ] **F8.7 — Revision-aware ai-backend discovery composition.** Compose the
+- [x] **F8.7 — Revision-aware ai-backend discovery composition.** Compose the
       existing `RevisionAwareMcpDiscoveryCache` over the current TTL/LRU
       single-flight cache in the real worker/root/subagent loader path. Fetch
       trusted current revisions before stale-sensitive discovery, attach the
