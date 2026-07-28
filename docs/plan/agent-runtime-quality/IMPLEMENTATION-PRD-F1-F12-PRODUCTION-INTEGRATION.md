@@ -190,8 +190,30 @@ create a second planning queue.
         tests; final service gate: 5,846 passed, 127 skipped, one live
         evaluation deselected; API types, full-service ruff/format, compile
         validation, commit hooks, and `git diff --check` passed).
-- [ ] **Step 6:** Attach F10 route selection, credential mode, attempt journal,
+- [x] **Step 6:** Attach F10 route selection, credential mode, attempt journal,
       streaming fences, usage, and reconciliation to every model call.
+  - [x] Trusted enabled deployment catalog, ephemeral credential/endpoint
+        authority, deterministic `O(D)` route plans, replay-stable call
+        identity, and body-free canonical journal.
+  - [x] Graph-wide supervisor/local-subagent model middleware, central model
+        construction, provider lifecycle attestation, typed failure
+        normalization, bounded attempts, and no mixed streams or hedging.
+  - [x] Signed independent retry/alternate/equivalent/circuit controls,
+        primary-only shadow behavior, BYOK-isolated process health, and
+        optional bounded desktop snapshot restore/flush.
+  - [x] Initial and approval-resume worker composition, live external-effect
+        fence, ambiguous open-attempt recovery, worker-retry boundary, and
+        feature-off parity.
+  - [x] Exactly-once per-attempt usage, streamed-call deduplication,
+        restart-safe run aggregate reconstruction, existing budget charging,
+        and journal-derived low-cardinality metrics.
+  - [x] Single framework cache owner retained for the pinned Deep Agents
+        version; unsupported product undecoration fails closed without private
+        framework patches or generic provider-error heuristics.
+  - [x] Operations/backout documentation and full Step 6 gate (`de9aad1a`,
+        `ce938056`; 275 combined integration tests; final service gate: 5,901
+        passed, 97 skipped; API-types/desktop typechecks, 42 desktop env tests,
+        full ruff/format/compile, hooks, and diff checks passed).
 - [ ] **Step 7:** Add backend-owned F8 MCP revisions, annotation cache, remote
       session pooling, and generation-safe ai-backend invalidation.
 - [ ] **Step 8:** Enable F3 catalog activation, top-K expansion,

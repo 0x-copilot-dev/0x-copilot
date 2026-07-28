@@ -435,7 +435,7 @@ commits for root to integrate. The existing pure
 the source of truth; this step composes them into the real root/subagent model
 path and does not introduce a second router or retry policy.
 
-- [ ] **F10.1 — Trusted deployment-catalog and requirements adapters.** Adapt
+- [x] **F10.1 — Trusted deployment-catalog and requirements adapters.** Adapt
       the existing resolved `ModelConfig`, curated model catalog, workspace
       enablement, ephemeral BYOK availability, user privacy/region policy,
       current-call capability/context/deadline budgets, and bounded health
@@ -445,14 +445,14 @@ path and does not introduce a second router or retry policy.
       endpoint URLs and plaintext keys only in the existing ephemeral runtime
       context. Preserve an explicit-model default of
       `ModelFallbackPolicy.NONE`.
-- [ ] **F10.2 — Replay-stable invocation identity and route authority.** Bind
+- [x] **F10.2 — Replay-stable invocation identity and route authority.** Bind
       each invocation to the Step 5 `RuntimeModelCallIdentity`, purpose,
       request digest, verified run/control revisions, requirements revision,
       descriptor-set revision, and route-plan digest. Reject stale or
       mismatched plans before dispatch. Keep deterministic route planning
       `O(D)` with one catalog pass and a measured p95 planning target below
       5 ms for the bounded local catalog.
-- [ ] **F10.3 — Canonical model-invocation event journal.** Define body-free,
+- [x] **F10.3 — Canonical model-invocation event journal.** Define body-free,
       versioned invocation, route, exclusion, attempt-admission, attempt-state,
       usage, completion, failure, and recovery records behind a
       `ModelInvocationStorePort`. Implement the port over the existing
@@ -460,7 +460,7 @@ path and does not introduce a second router or retry policy.
       inherit stable event IDs, idempotency-conflict detection, replay,
       retention, and deletion without a new table, JSONL ledger, queue, or
       daemon.
-- [ ] **F10.4 — Graph-wide per-call middleware and central model construction.**
+- [x] **F10.4 — Graph-wide per-call middleware and central model construction.**
       Install one `ModelInvocationMiddleware.awrap_model_call` for the
       supervisor and every locally compiled subagent, ordered after final
       Step 5 prompt/tool assembly and before provider dispatch. Persist the
@@ -469,7 +469,7 @@ path and does not introduce a second router or retry policy.
       using the existing `build_chat_model` funnel and an ephemeral
       credential/endpoint resolver; never rebuild the graph or import provider
       SDKs into the domain.
-- [ ] **F10.5 — Provider lifecycle attestation and failure normalization.**
+- [x] **F10.5 — Provider lifecycle attestation and failure normalization.**
       Observe dispatch acknowledgement, stream start, first visible text,
       first tool-call content, usage, completion, cancellation, and sanitized
       failure through LangChain callbacks/stream observers at the concrete
@@ -477,7 +477,7 @@ path and does not introduce a second router or retry policy.
       classes/status fields, but must output only reviewed
       `ProviderFailureObservation` facts; exception-string heuristics are
       forbidden and unknown progress becomes ambiguous.
-- [ ] **F10.6 — Bounded attempt controller with no mixed streams.** Execute the
+- [x] **F10.6 — Bounded attempt controller with no mixed streams.** Execute the
       existing `ModelAttemptAdmissionPolicy` with default two attempts, hard
       maximum three, and no hedging. Permit only proven pre-content,
       pre-effect recovery, including the Step 5 one-time undecorated cache
@@ -486,14 +486,14 @@ path and does not introduce a second router or retry policy.
       invalid/auth/policy failures, or ambiguous provider state. Keep
       alternate/equivalent routes release-disabled until a named F1
       qualification record authorizes the exact task-family/revision pair.
-- [ ] **F10.7 — Per-attempt metering and aggregate reconciliation.** Record
+- [x] **F10.7 — Per-attempt metering and aggregate reconciliation.** Record
       successful and failed attempt usage/cost independently using only
       provider-reported metadata, charge every attempt against the shared
       invocation budget, and reconcile exactly once into the existing
       run/model-call usage path. Attribute the user-visible response to one
       terminal attempt and prove that discarded attempts cannot leak duplicate
       deltas, tool calls, or final content.
-- [ ] **F10.8 — Bounded circuit health and release controls.** Add a
+- [x] **F10.8 — Bounded circuit health and release controls.** Add a
       process-local bounded health reducer keyed by provider, deployment,
       region, and credential scope, with an optional capped file snapshot only
       for desktop restart continuity. User-specific BYOK authentication
@@ -501,13 +501,13 @@ path and does not introduce a second router or retry policy.
       deployment-global circuit. Supply independent modes/kill switches for
       retry, alternate route, equivalent route, and circuit influence, plus
       immediate feature-off parity.
-- [ ] **F10.9 — Crash, resume, and worker retry fences.** On worker claim or
+- [x] **F10.9 — Crash, resume, and worker retry fences.** On worker claim or
       approval resume, replay the journal before a new attempt. Treat an open
       provider attempt after process loss as ambiguous and require honest
       reconciliation/failure; never blindly replay it. Limit queue/worker
       retry to failures proven before model-handler entry, and preserve the
       original invocation/attempt lineage across continuation.
-- [ ] **F10.10 — Qualification, operations, and step gate.** Extend the
+- [x] **F10.10 — Qualification, operations, and step gate.** Extend the
       existing F1 corpus with primary/subagent lineage, deterministic route
       ordering, BYOK/region/privacy exclusion, safe pre-content retry, cache
       rejection, visible-output interruption, ambiguous crash recovery,
@@ -516,6 +516,21 @@ path and does not introduce a second router or retry policy.
       graph-surface tests, the full `ai-backend` suite, API-types typecheck,
       ruff, formatting, compile validation, `git diff --check`, and every Step
       6 exit criterion before marking the normative checklist complete.
+
+Step 6 completion evidence: deployment/catalog authority, the body-free
+invocation journal, provider lifecycle and bounded circuit substrate, signed
+per-run reliability controls, graph-wide model middleware, F2 cache-rejection
+handoff, worker initial/resume composition, terminal usage/metrics projection,
+and restart-safe aggregate rebuilding landed through `de9aad1a`; `ce938056`
+records the reviewed central model-construction seam. The pinned Deep Agents
+release has no supported per-run cache-middleware exclusion, so production
+retains framework cache ownership and the typed product undecorated-retry
+contract stays safely dormant—there is no private monkey-patch or generic
+provider-error retry. The merged tree passed 275 combined F10/control/prompt/
+worker/adapter tests and the final service gate of 5,901 tests with 97
+environment-dependent skips. Full-service ruff and format checks, compile
+validation, API-types and desktop TypeScript checking, 42 desktop
+service-environment tests, commit hooks, and `git diff --check` also passed.
 
 ## Complete PRD index
 
