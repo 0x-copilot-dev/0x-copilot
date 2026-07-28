@@ -91,7 +91,11 @@ Variables marked **required in production** will cause startup to fail if unset 
 All evaluation settings resolve once at process startup. See
 [Harness evaluation and release operations](../runbooks/harness-evaluation-release-operations.md)
 for consent, release schema, diagnostics, restart, rollback, and deletion
-procedures.
+procedures. F10 uses the same signed release path; see
+[Model invocation reliability operations](../runbooks/model-invocation-reliability-operations.md)
+for mode, recovery-control, incident, and backout guidance. There are no
+standalone `F10_*` environment variables: independent retry, alternate,
+equivalent, and circuit controls must come from reviewed composition.
 
 | Variable                                      | Default                           | Bounds / description                                                                                                                                                                                                                                |
 | --------------------------------------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
