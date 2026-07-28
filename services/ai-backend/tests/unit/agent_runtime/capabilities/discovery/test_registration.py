@@ -23,6 +23,7 @@ from agent_runtime.capabilities.discovery import (
     CapabilityBridgeToolName,
     CapabilityCatalog,
     CapabilityCatalogAccess,
+    CapabilityCatalogMembershipError,
     CapabilityCatalogRevision,
     CapabilityCatalogRevisionAuthority,
     CapabilityCatalogScope,
@@ -38,7 +39,12 @@ from agent_runtime.capabilities.discovery import (
     CapabilitySource,
 )
 from agent_runtime.capabilities.discovery.tool_bridge import CapabilityExecutionRefused
-from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
+from agent_runtime.capabilities.mcp.cards import (
+    McpAuthMode,
+    McpServerCard,
+    McpServerHealth,
+    McpTransport,
+)
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.control_plane.revision_binding import RevisionBindingRevalidator
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
@@ -84,16 +90,17 @@ def _catalog(
             connector_scope_revision="scope_9",
         ),
         task_policy_selection_ref=selection_ref,
-        tool_cards=(
-            ToolCard(
-                name="drive_search",
-                display_name="Drive Search",
+        mcp_server_cards=(
+            McpServerCard(
+                name="drive_server",
+                display_name="Drive Server",
                 short_description="Find relevant drive records.",
-                connector="drive",
-                tags={"search"},
+                transport=McpTransport.HTTP,
+                auth_mode=McpAuthMode.OAUTH2,
                 required_scopes=frozenset({"docs:read"}),
-                risk_level=ToolRiskLevel.LOW,
-                load_cost=1,
+                health=McpServerHealth.HEALTHY,
+                load_cost=2,
+                connector_slug="drive",
             ),
         ),
         expires_at=expires_at,
@@ -347,7 +354,7 @@ class TestBridgeRecursionGuard:
         with pytest.raises(ValidationError) as exc_info:
             CapabilityIndexEntry(
                 capability_ref=f"cap_{'1' * 32}",
-                source=CapabilitySource.TOOL_CARD,
+                source=CapabilitySource.MCP_SERVER,
                 stable_name=bridge_name.value,
                 display_name="Bridge",
                 concise_description="A bridge tool masquerading as a capability.",
@@ -370,7 +377,7 @@ class TestBridgeRecursionGuard:
         with pytest.raises(ValidationError):
             CapabilityIndexEntry(
                 capability_ref=f"cap_{'2' * 32}",
-                source=CapabilitySource.TOOL_CARD,
+                source=CapabilitySource.MCP_SERVER,
                 stable_name=spelling,
                 display_name="Bridge",
                 concise_description="A bridge tool masquerading as a capability.",
@@ -416,6 +423,114 @@ class TestBridgeRecursionGuard:
         assert CapabilityBridgeToolName.reserved_names() == {
             member.value for member in CapabilityBridgeToolName
         }
+
+    def test_a_dispatch_target_may_still_name_an_undispatchable_source(self) -> None:
+        """The executor's source guard has to stay reachable to stay tested.
+
+        A catalog member can no longer carry an undispatchable source, so the
+        only way one reaches dispatch is a record forged past validation.  If
+        the *target* contract also refused the source, the executor's
+        fail-closed branch would become unreachable and the forgery would lose
+        its last check.  Targets therefore stay permissive on purpose.
+        """
+
+        target = CapabilityInvocationTarget(
+            capability_ref=f"cap_{'7' * 32}",
+            stable_name="drive_search",
+            source=CapabilitySource.TOOL_CARD,
+            connector_label="drive",
+            effect_class="unknown",
+            approval_cue="unknown",
+        )
+
+        assert target.source is CapabilitySource.TOOL_CARD
+        assert not target.source.has_non_model_dispatch
+
+
+class TestOnlyDispatchableSourcesAreCatalogMembers:
+    """M-09: catalog membership and non-model dispatchability are one set.
+
+    A product tool card has no non-model dispatcher, so a catalog entry for one
+    could be searched and described and would then be refused at invoke.  The
+    refusal lives at the membership contract, which every construction path --
+    builder, adapter, or test -- has to pass through.
+    """
+
+    @staticmethod
+    def _entry(source: CapabilitySource) -> CapabilityIndexEntry:
+        return CapabilityIndexEntry(
+            capability_ref=f"cap_{'8' * 32}",
+            source=source,
+            stable_name="drive_search",
+            display_name="Drive Search",
+            concise_description="Find relevant drive records.",
+            connector_label="drive",
+        )
+
+    def test_admissible_sources_are_exactly_the_dispatchable_ones(self) -> None:
+        assert CapabilitySource.catalog_admissible() == {
+            member for member in CapabilitySource if member.has_non_model_dispatch
+        }
+        assert CapabilitySource.catalog_admissible() == {CapabilitySource.MCP_SERVER}
+
+    @pytest.mark.parametrize(
+        "source",
+        sorted(set(CapabilitySource) - CapabilitySource.catalog_admissible()),
+    )
+    def test_an_undispatchable_source_can_never_be_a_member(
+        self,
+        source: CapabilitySource,
+    ) -> None:
+        with pytest.raises(ValidationError) as exc_info:
+            self._entry(source)
+
+        error = exc_info.value.errors()[0].get("ctx", {}).get("error")
+        assert isinstance(error, CapabilityCatalogMembershipError)
+        assert str(error) == (
+            CapabilityCatalogMembershipError.Messages.UNDISPATCHABLE_SOURCE
+        )
+
+    @pytest.mark.parametrize("source", sorted(CapabilitySource.catalog_admissible()))
+    def test_a_dispatchable_source_is_still_admitted(
+        self,
+        source: CapabilitySource,
+    ) -> None:
+        assert self._entry(source).source is source
+
+    def test_a_hand_built_catalog_cannot_smuggle_one_in(self) -> None:
+        """The chokepoint is the entry, so assembling a catalog cannot bypass it."""
+
+        context = _context()
+        catalog = _catalog(context)
+
+        with pytest.raises(ValidationError) as exc_info:
+            CapabilityCatalog(
+                scope=catalog.scope,
+                revision=catalog.revision,
+                entries=(
+                    catalog.entries[0].model_dump()
+                    | {"source": CapabilitySource.TOOL_CARD},
+                ),
+            )
+
+        assert isinstance(
+            exc_info.value.errors()[0].get("ctx", {}).get("error"),
+            CapabilityCatalogMembershipError,
+        )
+
+    def test_the_registered_bridge_only_ever_sees_dispatchable_members(self) -> None:
+        context = _context()
+        catalog = _catalog(context)
+
+        registrations = CapabilityBridgeRegistrar.registrations_for(
+            activation=_decision(CapabilityActivationMode.DEFERRED),
+            catalog=catalog,
+            runtime_context=context,
+        )
+
+        assert registrations != ()
+        assert catalog.entries != ()
+        assert all(entry.source.has_non_model_dispatch for entry in catalog.entries)
 
     async def test_invoking_a_bridge_name_is_indistinguishable_from_unknown(
         self,

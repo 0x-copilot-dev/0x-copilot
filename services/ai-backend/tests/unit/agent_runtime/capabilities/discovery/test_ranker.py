@@ -9,6 +9,7 @@ from agent_runtime.capabilities.discovery import (
     AuthorizedCatalogBuilder,
     CapabilityCandidate,
     CapabilityCatalogScope,
+    CapabilityIndexEntry,
     CapabilitySearchFilters,
     CapabilitySearchRequest,
     CapabilitySource,
@@ -19,7 +20,12 @@ from agent_runtime.capabilities.discovery.ranker import (
     BoundedTopKSelector,
     RankedCapabilitySelection,
 )
-from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
+from agent_runtime.capabilities.mcp.cards import (
+    McpAuthMode,
+    McpServerCard,
+    McpServerHealth,
+    McpTransport,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 
 _NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
@@ -47,21 +53,47 @@ def _card(
     name: str,
     *,
     description: str,
-    tags: frozenset[str] = frozenset(),
-) -> ToolCard:
-    return ToolCard(
+    scopes: frozenset[str] = frozenset({"docs:read"}),
+) -> McpServerCard:
+    return McpServerCard(
         name=name,
         display_name=name.replace("_", " ").title(),
         short_description=description,
-        connector="drive",
-        tags=tags,
-        required_scopes={"docs:read"},
-        risk_level=ToolRiskLevel.LOW,
-        load_cost=1,
+        transport=McpTransport.HTTP,
+        auth_mode=McpAuthMode.OAUTH2,
+        required_scopes=scopes,
+        health=McpServerHealth.HEALTHY,
+        load_cost=2,
+        connector_slug="drive",
     )
 
 
-def _catalog(cards: tuple[ToolCard, ...]):
+def _entry(
+    name: str,
+    *,
+    description: str,
+    tags: frozenset[str] = frozenset(),
+    index: int = 0,
+) -> CapabilityIndexEntry:
+    """Build one already-authorized entry the ranker may score.
+
+    Ranking is authorization-neutral, so entries are supplied directly where a
+    test needs metadata (such as intent tags) that no compact *card* projection
+    carries.
+    """
+
+    return CapabilityIndexEntry(
+        capability_ref=f"cap_{index:032x}",
+        source=CapabilitySource.MCP_SERVER,
+        stable_name=name,
+        display_name=name.replace("_", " ").title(),
+        concise_description=description,
+        intent_tags=tags,
+        connector_label="drive",
+    )
+
+
+def _catalog(cards: tuple[McpServerCard, ...]):
     context = _context()
     return AuthorizedCatalogBuilder(reference_key=b"x" * 32).build(
         context=context,
@@ -73,42 +105,53 @@ def _catalog(cards: tuple[ToolCard, ...]):
         ),
         task_policy_selection_ref="task-policy-selection://run_rank/default/sha256/"
         + "a" * 64,
-        tool_cards=cards,
+        mcp_server_cards=cards,
         expires_at=_NOW + timedelta(minutes=15),
     )
 
 
 class TestDeterministicLexicalRanker:
     def test_exact_name_beats_intent_and_description_matches(self) -> None:
-        catalog = _catalog(
-            (
-                _card(
-                    "document_search",
-                    description="Search all company documents.",
-                ),
-                _card(
-                    "lookup_records",
-                    description="Look up records by key.",
-                    tags=frozenset({"document_search"}),
-                ),
-                _card(
-                    "browse_files",
-                    description="Document search across files.",
-                ),
-            )
+        entries = (
+            _entry(
+                "document_search",
+                description="Search all company documents.",
+                index=1,
+            ),
+            _entry(
+                "lookup_records",
+                description="Look up records by key.",
+                tags=frozenset({"document_search"}),
+                index=2,
+            ),
+            _entry(
+                "browse_files",
+                description="Document search across files.",
+                index=3,
+            ),
         )
+
+        selection = DeterministicLexicalRanker().rank_entries(
+            entries,
+            CapabilitySearchRequest(query="document_search"),
+        )
+
+        assert [candidate.stable_name for candidate in selection.candidates] == [
+            "document_search",
+            "lookup_records",
+            "browse_files",
+        ]
+        assert selection.candidates[0].score > selection.candidates[1].score
+
+    def test_the_query_is_recorded_only_as_a_digest(self) -> None:
+        catalog = _catalog((_card("document_search", description="Search docs."),))
 
         result = DeterministicLexicalRanker().search(
             catalog,
             CapabilitySearchRequest(query="document_search"),
         )
 
-        assert [candidate.stable_name for candidate in result.candidates] == [
-            "document_search",
-            "lookup_records",
-            "browse_files",
-        ]
-        assert result.candidates[0].score > result.candidates[1].score
+        assert result.candidates[0].stable_name == "document_search"
         assert result.query_digest.startswith("sha256:")
         assert "document_search" not in result.query_digest
 
@@ -146,13 +189,36 @@ class TestDeterministicLexicalRanker:
             CapabilitySearchRequest(
                 query="search",
                 filters=CapabilitySearchFilters(
-                    sources={CapabilitySource.MCP_SERVER},
+                    sources={CapabilitySource.TOOL_CARD},
                 ),
             ),
         )
 
         assert result.scanned_count == 0
         assert result.candidates == ()
+
+    def test_search_over_a_catalog_never_returns_a_tool_card(self) -> None:
+        """M-09: an undispatchable source cannot reach a model-visible answer."""
+
+        catalog = _catalog(
+            (
+                _card("drive_search", description="Search drive."),
+                _card("calendar_search", description="Search the calendar."),
+            )
+        )
+
+        result = DeterministicLexicalRanker().search(
+            catalog,
+            CapabilitySearchRequest(query="search"),
+        )
+
+        assert len(result.candidates) == 2
+        assert {candidate.source for candidate in result.candidates} == {
+            CapabilitySource.MCP_SERVER
+        }
+        assert all(
+            candidate.source.has_non_model_dispatch for candidate in result.candidates
+        )
 
     def test_zero_score_entries_are_not_returned(self) -> None:
         catalog = _catalog(
@@ -211,7 +277,7 @@ class BoundedSelectionMixin:
             capability_ref=f"cap_{index:032x}",
             stable_name=f"tool_{index:04d}",
             score=score,
-            source=CapabilitySource.TOOL_CARD,
+            source=CapabilitySource.MCP_SERVER,
             effect_class=CatalogEffectClass.UNKNOWN,
             approval_cue=ApprovalCue.UNKNOWN,
         )

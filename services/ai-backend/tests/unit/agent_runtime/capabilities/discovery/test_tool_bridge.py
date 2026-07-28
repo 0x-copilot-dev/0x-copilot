@@ -15,7 +15,12 @@ from agent_runtime.capabilities.discovery import (
     CapabilityIndexEntry,
     CapabilitySearchTool,
 )
-from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
+from agent_runtime.capabilities.mcp.cards import (
+    McpAuthMode,
+    McpServerCard,
+    McpServerHealth,
+    McpTransport,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 
 _NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
@@ -40,16 +45,17 @@ def _context(*, run_id: str = "run_discovery") -> AgentRuntimeContext:
     )
 
 
-def _card(index: int) -> ToolCard:
-    return ToolCard(
+def _card(index: int) -> McpServerCard:
+    return McpServerCard(
         name=f"document_search_{index:02d}",
         display_name=f"Document Search {index:02d}",
         short_description="Search authorized documents and return matching records.",
-        connector="drive",
-        tags={"documents", "search"},
+        transport=McpTransport.HTTP,
+        auth_mode=McpAuthMode.OAUTH2,
         required_scopes={"docs:read"},
-        risk_level=ToolRiskLevel.LOW,
-        load_cost=1,
+        health=McpServerHealth.HEALTHY,
+        load_cost=2,
+        connector_slug="drive",
     )
 
 
@@ -68,7 +74,7 @@ def _catalog(
             connector_scope_revision="scope_1",
         ),
         task_policy_selection_ref=_SELECTION_REF,
-        tool_cards=tuple(_card(index) for index in range(count)),
+        mcp_server_cards=tuple(_card(index) for index in range(count)),
         expires_at=expires_at,
     )
 
