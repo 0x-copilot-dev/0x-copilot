@@ -808,6 +808,154 @@ class TestDescriptorProjection(ExpansionMixin):
         assert expanded.connector_label == "search_server_00"
 
 
+class TestOneReferenceMinter(ExpansionMixin):
+    """One keyed derivation backs both ref paths, and the two never collide.
+
+    F3.1 and F3.3 were built in isolated worktrees and each grew its own copy of
+    the HMAC-SHA256 derivation.  These tests pin the collapsed shape: the
+    catalog builder and the second-tier expander mint through the *same*
+    :class:`HmacCapabilityReferenceMinter` under the same ``reference_key``, and
+    their identity namespaces stay disjoint, so no opaque ref can ever mean two
+    different capabilities at once.
+    """
+
+    CATALOG_ID = "cat_" + "0" * 32
+    OTHER_CATALOG_ID = "cat_" + "1" * 32
+    OWNER_REF = "cap_" + "a" * 32
+    OTHER_OWNER_REF = "cap_" + "b" * 32
+
+    def minter(self) -> HmacCapabilityReferenceMinter:
+        return HmacCapabilityReferenceMinter(reference_key=_REFERENCE_KEY)
+
+    def expanded_identity(self, owner_ref: str, tool_name: str) -> str:
+        return f"{CapabilitySource.MCP_SERVER.value}:tool:{owner_ref}:{tool_name}"
+
+    def test_the_catalog_builder_mints_through_the_shared_minter(self) -> None:
+        """A second private derivation inside the builder would break this.
+
+        The builder's identity format is deliberately restated here rather than
+        imported, so a change to *either* the format or the derivation is
+        caught instead of silently agreeing with itself.
+        """
+
+        context = self.context()
+        catalog = self.catalog(context=context, server_names=("search_server_00",))
+        entry = next(
+            entry
+            for entry in catalog.entries
+            if entry.source is CapabilitySource.MCP_SERVER
+        )
+        # A card with no explicit ``server_id`` sources its identity from its
+        # own name: ``mcp_server:{source_id}:{name}``.
+        identity = (
+            f"{CapabilitySource.MCP_SERVER.value}:"
+            f"{entry.stable_name}:{entry.stable_name}"
+        )
+
+        assert entry.capability_ref == self.minter().mint(
+            catalog_id=catalog.revision.catalog_id,
+            identity=identity,
+        )
+
+    def test_the_two_mint_paths_are_namespaced_apart(self) -> None:
+        minter = self.minter()
+        name = "search_docs"
+
+        refs = {
+            minter.mint(
+                catalog_id=self.CATALOG_ID,
+                identity=self.expanded_identity(self.OWNER_REF, name),
+            ),
+            minter.mint(
+                catalog_id=self.CATALOG_ID,
+                identity=f"{CapabilitySource.MCP_SERVER.value}:{name}:{name}",
+            ),
+            minter.mint(
+                catalog_id=self.CATALOG_ID,
+                identity=f"{CapabilitySource.TOOL_CARD.value}:drive:{name}",
+            ),
+        }
+
+        assert len(refs) == 3
+
+    def test_a_registrable_card_cannot_claim_the_expanded_namespace(self) -> None:
+        """The ``tool`` discriminator is unreachable from any registrable card.
+
+        An expanded identity is ``mcp_server:tool:{owner_ref}:{tool_name}``.  A
+        compact card could only reproduce it by carrying that ``:``-joined tail
+        in its own name — and an MCP server name and an MCP tool name are both
+        colon-free slugs, so the shape is not constructible in the first place.
+        Reaching it through ``server_id`` would additionally require predicting
+        ``owner_ref``, which is itself an HMAC output over the secret key.
+        """
+
+        colliding_name = f"tool:{self.OWNER_REF}:search_docs"
+
+        with pytest.raises(ValidationError):
+            self.make_card(
+                name=colliding_name,
+                short_description=_SERVER_DESCRIPTION,
+            )
+        with pytest.raises(ValidationError):
+            self.make_tool(name=colliding_name)
+
+    def test_an_expanded_ref_is_scoped_to_its_owner_and_its_catalog(self) -> None:
+        minter = self.minter()
+        identity = self.expanded_identity(self.OWNER_REF, "search_docs")
+        other_owner = self.expanded_identity(self.OTHER_OWNER_REF, "search_docs")
+
+        same_tool_other_server = minter.mint(
+            catalog_id=self.CATALOG_ID,
+            identity=other_owner,
+        )
+        same_identity_other_catalog = minter.mint(
+            catalog_id=self.OTHER_CATALOG_ID,
+            identity=identity,
+        )
+        reference = minter.mint(catalog_id=self.CATALOG_ID, identity=identity)
+
+        assert reference != same_tool_other_server
+        assert reference != same_identity_other_catalog
+
+    async def test_a_name_shared_across_both_paths_stays_two_refs(self) -> None:
+        """The end-to-end case a single unnamespaced derivation would collapse.
+
+        ``search_server_00`` exposes a tool named ``search_server_01`` while a
+        *server card* of that exact name is a member of the same catalog, so
+        both paths mint under one catalog id for one shared name.
+        """
+
+        clients = {
+            "search_server_00": _CountingMcpClient(
+                tools=(
+                    self.make_tool(
+                        name="search_server_01",
+                        input_schema=self.descriptor_schema(),
+                    ),
+                ),
+                resources=(),
+            )
+        }
+        context = self.context()
+        catalog = self.catalog(
+            context=context,
+            server_names=("search_server_00", "search_server_01"),
+        )
+
+        result = await self.expander(
+            self.loader(self.provider(clients)),
+            limits=CapabilityExpansionLimits(max_servers=1),
+        ).expand(catalog=catalog, context=context, request=self.request())
+
+        expanded = result.capabilities[0].entry
+        card_ref = self.ref_for(catalog, "search_server_01")
+        assert expanded.stable_name == "search_server_01"
+        assert expanded.capability_ref != card_ref
+        assert {
+            capability.entry.capability_ref for capability in result.capabilities
+        }.isdisjoint({entry.capability_ref for entry in catalog.entries})
+
+
 class TestTwoTierSearch(ExpansionMixin):
     def search(
         self,

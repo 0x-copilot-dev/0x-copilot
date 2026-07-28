@@ -20,36 +20,17 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
-from pydantic import Field, NonNegativeInt
-
 from agent_runtime.capabilities.discovery.contracts import (
     CapabilityCandidate,
     CapabilityCatalog,
     CapabilityIndexEntry,
     CapabilitySearchRequest,
     CapabilitySearchResult,
+    RankedCapabilitySelection,
 )
-from agent_runtime.execution.contracts import RuntimeContract
 
 _TOKEN_PATTERN = re.compile(r"[^\W_]+", flags=re.UNICODE)
 _MATCHED_TERM_MAX_CHARS = 96
-_MAX_CANDIDATES = 10
-
-
-class RankedCapabilitySelection(RuntimeContract):
-    """Bounded ranked candidates plus how many entries were actually scored.
-
-    This is the catalog-free half of a search result.  It exists so the second
-    discovery tier can rank newly expanded records with the same deterministic
-    scorer and merge them into one bounded answer without pretending the
-    expanded records are catalog members.
-    """
-
-    scanned_count: NonNegativeInt = 0
-    candidates: tuple[CapabilityCandidate, ...] = Field(
-        default_factory=tuple,
-        max_length=_MAX_CANDIDATES,
-    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -306,5 +287,8 @@ class DeterministicLexicalRanker:
 __all__ = (
     "BoundedTopKSelector",
     "DeterministicLexicalRanker",
+    # Re-exported from ``contracts``, where the selection contract now lives,
+    # so existing ``from ...ranker import RankedCapabilitySelection`` call
+    # sites keep resolving to the one definition.
     "RankedCapabilitySelection",
 )

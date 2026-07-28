@@ -5,7 +5,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 import hashlib
-import hmac
 import json
 
 from agent_runtime.capabilities.discovery.contracts import (
@@ -16,8 +15,11 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityCatalogRevision,
     CapabilityCatalogScope,
     CapabilityIndexEntry,
+    CapabilityReferenceFormat,
     CapabilitySource,
+    CapabilitySubjectFingerprint,
     CatalogDescriptorRevision,
+    HmacCapabilityReferenceMinter,
 )
 from agent_runtime.capabilities.mcp.cards import McpServerCard
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
@@ -25,56 +27,19 @@ from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
 from agent_runtime.capabilities.tools.permissions import ToolPermissionChecker
 from agent_runtime.execution.contracts import AgentRuntimeContext
 
-_REF_KEY_MIN_BYTES = 32
-
-
-class CapabilitySubjectFingerprint:
-    """Derive the protected subject identity a catalog generation is keyed to.
-
-    The shared revision-binding primitive constrains a bound scope's subject to
-    lowercase SHA-256 hexadecimal, so raw organization and user identifiers are
-    never carried into a generation, a ref, or an event.  Derivation is keyed
-    and domain-separated: the same subject reproduces the same fingerprint, and
-    a fingerprint minted for another purpose cannot be replayed here.
-
-    The fingerprint is derived from the *verified* runtime context rather than
-    accepted from a caller, so no call site can key a catalog to a subject it
-    did not authenticate.
-    """
-
-    PURPOSE = "capability-catalog-subject-v1"
-
-    def __init__(self, *, reference_key: bytes) -> None:
-        if len(reference_key) < _REF_KEY_MIN_BYTES:
-            msg = f"reference_key must contain at least {_REF_KEY_MIN_BYTES} bytes"
-            raise ValueError(msg)
-        self._reference_key = bytes(reference_key)
-
-    def derive(self, context: AgentRuntimeContext) -> str:
-        """Return the domain-separated fingerprint of one verified subject."""
-
-        payload = json.dumps(
-            {
-                "purpose": self.PURPOSE,
-                "org_id": context.org_id,
-                "user_id": context.user_id,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return hmac.new(self._reference_key, payload, hashlib.sha256).hexdigest()
-
 
 class AuthorizedCatalogBuilder:
     """Build a schema-free catalog and defensively recheck every compact card."""
 
     def __init__(self, *, reference_key: bytes) -> None:
-        # The fingerprint derivation owns the key-strength check, so opaque refs
-        # and subject fingerprints can never be produced from different bars.
+        # Both derivations go through the one reference minter, so opaque refs
+        # and subject fingerprints can never be produced from different
+        # key-strength bars, and the ref the builder mints is byte-identical to
+        # the one the second-tier expander mints from the same key.
+        self._minter = HmacCapabilityReferenceMinter(reference_key=reference_key)
         self._subject_fingerprint = CapabilitySubjectFingerprint(
             reference_key=reference_key
         )
-        self._reference_key = bytes(reference_key)
 
     def subject_fingerprint(self, context: AgentRuntimeContext) -> str:
         """Return the same subject fingerprint this builder keys generations to.
@@ -117,7 +82,9 @@ class AuthorizedCatalogBuilder:
             msg = "deferred_schema_tokens must be non-negative"
             raise ValueError(msg)
 
-        catalog_id = self._opaque_id("cat", self._scope_identity(scope))
+        catalog_id = self._minter.mint_catalog_id(
+            scope_identity=self._scope_identity(scope)
+        )
         entries = [
             self._tool_entry(
                 catalog_id=catalog_id,
@@ -195,7 +162,10 @@ class AuthorizedCatalogBuilder:
             else ApprovalCue.UNKNOWN
         )
         return CapabilityIndexEntry(
-            capability_ref=self._opaque_id("cap", f"{catalog_id}:{identity}"),
+            capability_ref=self._minter.mint(
+                catalog_id=catalog_id,
+                identity=identity,
+            ),
             source=CapabilitySource.TOOL_CARD,
             stable_name=card.name,
             display_name=card.display_name,
@@ -214,7 +184,10 @@ class AuthorizedCatalogBuilder:
         source_id = card.server_id or card.name
         identity = f"{CapabilitySource.MCP_SERVER.value}:{source_id}:{card.name}"
         return CapabilityIndexEntry(
-            capability_ref=self._opaque_id("cap", f"{catalog_id}:{identity}"),
+            capability_ref=self._minter.mint(
+                catalog_id=catalog_id,
+                identity=identity,
+            ),
             source=CapabilitySource.MCP_SERVER,
             stable_name=card.name,
             display_name=card.display_name or card.name,
@@ -230,22 +203,23 @@ class AuthorizedCatalogBuilder:
             separators=(",", ":"),
         )
 
-    def _opaque_id(self, prefix: str, identity: str) -> str:
-        digest = hmac.new(
-            self._reference_key,
-            identity.encode("utf-8"),
-            hashlib.sha256,
-        ).hexdigest()[:32]
-        return f"{prefix}_{digest}"
-
     @staticmethod
     def _revision(entries: Sequence[CapabilityIndexEntry]) -> str:
+        """Digest the projected catalog *content*, unkeyed and reproducible.
+
+        This is deliberately not the keyed minter: a revision must be
+        recomputable from the catalog body alone by anyone holding the body, so
+        two builds of identical content compare equal without the secret.
+        """
+
         encoded = json.dumps(
             [entry.model_dump(mode="json") for entry in entries],
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        return f"rev_{hashlib.sha256(encoded).hexdigest()[:32]}"
+        digest = hashlib.sha256(encoded).hexdigest()
+        prefix = CapabilityReferenceFormat.REVISION_PREFIX
+        return f"{prefix}_{digest[: CapabilityReferenceFormat.HEX_CHARS]}"
 
     @staticmethod
     def _reject_duplicate_identities(

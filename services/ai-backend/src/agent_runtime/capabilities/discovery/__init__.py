@@ -6,11 +6,9 @@ from agent_runtime.capabilities.discovery.activation import (
     CapabilityActivationMode,
     CapabilityActivationReason,
     CapabilityActivationResolver,
+    CapabilityExpansionLimits,
 )
-from agent_runtime.capabilities.discovery.builder import (
-    AuthorizedCatalogBuilder,
-    CapabilitySubjectFingerprint,
-)
+from agent_runtime.capabilities.discovery.builder import AuthorizedCatalogBuilder
 from agent_runtime.capabilities.discovery.contracts import (
     ApprovalCue,
     CapabilityArgumentBounds,
@@ -29,6 +27,11 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityDiscoveryError,
     CapabilityDiscoveryErrorCode,
     CapabilityExecutorPort,
+    CapabilityExpansionBounds,
+    CapabilityExpansionError,
+    CapabilityExpansionOutcome,
+    CapabilityExpansionResult,
+    CapabilityExpansionState,
     CapabilityIndexEntry,
     CapabilityInvocationReceipt,
     CapabilityInvocationStatus,
@@ -38,15 +41,31 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityInvokeToolResult,
     CapabilityParameterHint,
     CapabilityRefBinding,
+    CapabilityReferenceFormat,
+    CapabilityReferenceMinter,
+    CapabilitySearchBounds,
     CapabilitySearchFilters,
     CapabilitySearchRequest,
     CapabilitySearchResult,
     CapabilitySearchToolResult,
     CapabilitySource,
+    CapabilitySubjectFingerprint,
     CatalogDescriptorRevision,
     CatalogEffectClass,
+    ExpandedCapability,
+    HmacCapabilityReferenceMinter,
+    RankedCapabilitySelection,
+    TwoTierCapabilitySearchResult,
 )
-from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRanker
+from agent_runtime.capabilities.discovery.expansion import (
+    BoundedCapabilityExpander,
+    ExpandedCapabilityProjector,
+    TwoTierCapabilitySearch,
+)
+from agent_runtime.capabilities.discovery.ranker import (
+    BoundedTopKSelector,
+    DeterministicLexicalRanker,
+)
 from agent_runtime.capabilities.discovery.registration import (
     CapabilityBridgeRegistrar,
     CapabilityBridgeToolAdapter,
@@ -70,6 +89,8 @@ from agent_runtime.capabilities.discovery.tool_bridge import (
 __all__ = [
     "ApprovalCue",
     "AuthorizedCatalogBuilder",
+    "BoundedCapabilityExpander",
+    "BoundedTopKSelector",
     "CapabilityActivationDecision",
     "CapabilityActivationError",
     "CapabilityActivationMode",
@@ -98,6 +119,12 @@ __all__ = [
     "CapabilityDiscoveryError",
     "CapabilityDiscoveryErrorCode",
     "CapabilityExecutorPort",
+    "CapabilityExpansionBounds",
+    "CapabilityExpansionError",
+    "CapabilityExpansionLimits",
+    "CapabilityExpansionOutcome",
+    "CapabilityExpansionResult",
+    "CapabilityExpansionState",
     "CapabilityIndexEntry",
     "CapabilityInvocationReceipt",
     "CapabilityInvocationStatus",
@@ -111,6 +138,9 @@ __all__ = [
     "CapabilityRefBindingError",
     "CapabilityRefRevalidation",
     "CapabilityRefRevisionBinding",
+    "CapabilityReferenceFormat",
+    "CapabilityReferenceMinter",
+    "CapabilitySearchBounds",
     "CapabilitySearchFilters",
     "CapabilitySearchRequest",
     "CapabilitySearchResult",
@@ -121,5 +151,11 @@ __all__ = [
     "CatalogDescriptorRevision",
     "CatalogEffectClass",
     "DeterministicLexicalRanker",
+    "ExpandedCapability",
+    "ExpandedCapabilityProjector",
+    "HmacCapabilityReferenceMinter",
     "LiveCapabilityCatalogGeneration",
+    "RankedCapabilitySelection",
+    "TwoTierCapabilitySearch",
+    "TwoTierCapabilitySearchResult",
 ]
