@@ -20,6 +20,7 @@ from dataclasses import dataclass
 import hashlib
 
 from agent_runtime.api.events import RuntimeEventProducer
+from agent_runtime.api.ledger_seal import LedgerAmendment, LedgerAmendmentReason
 from agent_runtime.effects.contracts import EffectStageScope
 from agent_runtime.effects.errors import EffectStageIdempotencyConflict
 from agent_runtime.effects.ports import StructuralEvent
@@ -125,6 +126,21 @@ class RuntimeEffectLedger:
                     **(dict(self.append_metadata) if self.append_metadata else {}),
                     _FINGERPRINT_METADATA_KEY: request_fingerprint,
                 },
+                # ``effect.reconciled`` is the one intrinsically post-hoc fact
+                # in this vocabulary: an indeterminate write's true disposition
+                # cannot be known while its run is still open, so D12 repair
+                # settles it long after the seal. Every other effect event is
+                # causal and stays inside the prefix. See ``ledger_seal``.
+                amendment=(
+                    LedgerAmendment(
+                        reason=LedgerAmendmentReason.RECONCILIATION,
+                        amends=LedgerIdCodec.format(
+                            self.run.run_id, self.run.latest_sequence_no
+                        ),
+                    )
+                    if event_type == LedgerEventType.EFFECT_RECONCILED.value
+                    else None
+                ),
                 event_id=self._event_id(idempotency_key),
             )
         except RuntimeEventIdempotencyConflict as error:
