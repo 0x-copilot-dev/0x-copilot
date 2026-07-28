@@ -1,291 +1,173 @@
-# Generative Surfaces v2.1 planning package
+# Generative Surfaces v2.1
 
-This folder contains the Generative Surfaces v2.1 implementation program.
-
-## Generative surfaces and governed effects
-
-The existing 17-PR A–E program defines immutable artifacts, selective
-presentation, the universal Operation Gateway, no-executor staging, exact
-approval, durable commit/reconcile, workspace overlays, MCP convergence,
-subagents, sandbox/browser adapters, accountability, and cutover.
+This folder is the architecture and delivery record for the 17-PRD Generative
+Surfaces v2.1 program.
 
 - [Product overview](00-overview.md)
 - [System design record](01-sdr.md)
 - [A–E PRD index](02-prds.md)
+- [Agent Runtime Quality, Efficiency, and Learning](../agent-runtime-quality/README.md)
 
-## Related program: agent runtime quality, efficiency, and learning
+## Product posture
 
-The separate program builds on the A–E contracts. It covers prompt/cache
-architecture, tool discovery and execution efficiency, research/grounding,
-multi-file edit planning, final-answer verification, skills, durable memory,
-learning from completed and historical work, routines, goals, cross-run
-orchestration, and governed extensibility.
-
-- [Agent Runtime Quality, Efficiency, and Learning — normative README](../agent-runtime-quality/README.md)
-
-That program's README is the source of truth for scope, PRD ownership, dependency
-order, launch gates, and the complete implementation checklist.
-
-## Deployment posture
-
-The current product target is the `single_user_desktop` profile: Electron
-supervises the local services, ai-backend defaults to its file-native store
-under the user's application-data directory, and Electron main retains native
-workspace/browser authority. The related runtime program must optimize for
-that local-first B2C path. A future hosted consumer sync offering may implement
-the same ports, but is not a prerequisite or a source of authority for the
+The launch profile is `single_user_desktop`: Electron supervises the local
+services, ai-backend uses its file-native store beneath the application-data
+directory, and Electron main/native code retains physical workspace and browser
+authority. A future hosted profile may implement the same ports, but hosted
+Postgres support is not allowed to become an accidental requirement for the
 desktop product.
 
-## Shared rule
+All capabilities share one operation, artifact, effect, workspace, audit,
+retention, and replay model. No adapter, renderer, built-in, subagent, sandbox,
+or browser integration may create a second approval or execution path.
 
-The second program must not create a parallel execution or approval path.
-Every capability continues to use the A–E operation, artifact, effect,
-workspace, audit, retention, and replay contracts. Where current ai-backend
-behavior is already stronger—brokered desktop authority, staged effects,
-citation provenance, deterministic event replay, and subagent authority
-intersection—it is preserved rather than replaced.
+## Reconciliation contract
 
-## Implementation ledger
+The implementation inventory for A1–E2 is assumed complete for this
+reconciliation. “Implemented” means the code is present on `main`; it does not
+mean every PRD requirement or release gate is currently proven.
 
-This section is the **single status ledger** for Generative Surfaces v2.1. It
-exists because a merged PR proves that code reached `main`; it does not prove
-that every requirement, architectural invariant, real desktop journey, or
-design-parity requirement still holds after later merges.
+This ledger separates:
 
-**Baseline:** `origin/main` at `732cc672d542a13298984db64dfb272da3054ea2`
-(2026-07-26). Update this section in the same PR whenever implementation,
-verification, a finding, or a release-gate result changes.
+- **architectural gap** — required product behavior is missing or wired through
+  the wrong authority boundary;
+- **evidence gap** — the intended implementation exists, but the required
+  current-revision test, build, journey, or parity receipt is absent;
+- **closed/stale** — an older finding has been superseded and must not stay in
+  the active backlog.
 
-### Status vocabulary
+**Audited baseline:** `origin/main` at
+`e96d55d5bd54aac1674c1f0c7b11b5e535f406f4` (2026-07-27). The reconciliation
+was source- and committed-test-based. It did not claim fresh execution evidence.
 
-| Status                                 | Meaning                                                                                                                                       |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Merged — evidence audit pending`      | An implementation is on `main`, but its current-main DoD evidence has not been recorded item by item here. It is not a claim of completion.   |
-| `Architecture reconciliation required` | A later design decision changes a foundational constraint. Existing code must be audited and aligned before it can be considered implemented. |
-| `DoD audit complete`                   | Each PRD and inherited DoD item has a current-main source/test/smoke/parity evidence link, with no unresolved finding.                        |
-| `Release gate complete`                | The full regression plus the required real Studio, desktop, Playwright, and computed-style parity gates passed against the recorded commit.   |
+## What D3 “hosted sandbox” means
 
-### Current implementation inventory
+D3 is an optional remote code/file execution adapter, not a Postgres-backed
+desktop runtime:
 
-| PRD                                | Merged implementation evidence                                                                                                                                                                                                                                                                                                                                                                                                                         | Current evidence status                  | Next proof required                                                                                                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A1 — contracts                     | [#262](https://github.com/0x-copilot-dev/0x-copilot/pull/262)                                                                                                                                                                                                                                                                                                                                                                                          | Merged — evidence audit pending          | Contract, golden journey, and cross-language parity inventory.                                                                                                                      |
-| A2 — artifact repository           | [#263](https://github.com/0x-copilot-dev/0x-copilot/pull/263)                                                                                                                                                                                                                                                                                                                                                                                          | Merged — evidence audit pending          | Adapter parity, streaming limits, retention/deletion, route isolation.                                                                                                              |
-| A3 — operation gateway             | [#264](https://github.com/0x-copilot-dev/0x-copilot/pull/264)                                                                                                                                                                                                                                                                                                                                                                                          | Merged — evidence audit pending          | Descriptor coverage and off/shadow/enforce conformance.                                                                                                                             |
-| A4 — effect stager                 | [#265](https://github.com/0x-copilot-dev/0x-copilot/pull/265)                                                                                                                                                                                                                                                                                                                                                                                          | Merged — evidence audit pending          | No-executor object graph and zero-effect adversarial proof.                                                                                                                         |
-| A5 — commit coordinator            | [#268](https://github.com/0x-copilot-dev/0x-copilot/pull/268), [#269](https://github.com/0x-copilot-dev/0x-copilot/pull/269), [#272](https://github.com/0x-copilot-dev/0x-copilot/pull/272)                                                                                                                                                                                                                                                            | Merged — evidence audit pending          | Claim-before-effect, reconcile, sole producer, and exact MCP flow.                                                                                                                  |
-| B1 — authored artifacts            | [#266](https://github.com/0x-copilot-dev/0x-copilot/pull/266), [#270](https://github.com/0x-copilot-dev/0x-copilot/pull/270)                                                                                                                                                                                                                                                                                                                           | Merged — evidence audit pending          | Exact revision source/promotion and draft convergence.                                                                                                                              |
-| B2 — renderers/editors             | [#277](https://github.com/0x-copilot-dev/0x-copilot/pull/277), [#343](https://github.com/0x-copilot-dev/0x-copilot/pull/343)                                                                                                                                                                                                                                                                                                                           | Merged — evidence audit pending          | Four safe renderers, large-content fallback, editor conflicts, UI parity.                                                                                                           |
-| B3 — canvas lifecycle              | [#282](https://github.com/0x-copilot-dev/0x-copilot/pull/282), [#326](https://github.com/0x-copilot-dev/0x-copilot/pull/326), [#327](https://github.com/0x-copilot-dev/0x-copilot/pull/327)                                                                                                                                                                                                                                                            | Merged — evidence audit pending          | Event replay, Studio/Focus common projector, lifecycle presentation.                                                                                                                |
-| C1 — workspace overlay             | [#267](https://github.com/0x-copilot-dev/0x-copilot/pull/267), [#319](https://github.com/0x-copilot-dev/0x-copilot/pull/319)                                                                                                                                                                                                                                                                                                                           | Merged — evidence audit pending          | File/in-memory/Postgres adapter parity, no-host-mutation and restart tests.                                                                                                         |
-| C2 — workspace authority           | [#273](https://github.com/0x-copilot-dev/0x-copilot/pull/273), [#322](https://github.com/0x-copilot-dev/0x-copilot/pull/322), [#328](https://github.com/0x-copilot-dev/0x-copilot/pull/328), [#341](https://github.com/0x-copilot-dev/0x-copilot/pull/341)                                                                                                                                                                                             | Merged — evidence audit pending          | Native confinement/permit/journal proofs on supported desktop platforms.                                                                                                            |
-| C3 — workspace product integration | [#288](https://github.com/0x-copilot-dev/0x-copilot/pull/288), [#292](https://github.com/0x-copilot-dev/0x-copilot/pull/292), [#306](https://github.com/0x-copilot-dev/0x-copilot/pull/306), [#344](https://github.com/0x-copilot-dev/0x-copilot/pull/344)                                                                                                                                                                                             | Merged — evidence audit pending          | Real supervised CSV save, web fallback, visible drift/revocation/crash behavior.                                                                                                    |
-| D1 — MCP convergence               | [#274](https://github.com/0x-copilot-dev/0x-copilot/pull/274), [#344](https://github.com/0x-copilot-dev/0x-copilot/pull/344)                                                                                                                                                                                                                                                                                                                           | Merged — evidence audit pending          | Pre-dispatch classification and exact approved dispatch proof.                                                                                                                      |
-| D2 — built-ins/subagents           | [#278](https://github.com/0x-copilot-dev/0x-copilot/pull/278), [#279](https://github.com/0x-copilot-dev/0x-copilot/pull/279), [#280](https://github.com/0x-copilot-dev/0x-copilot/pull/280), [#285](https://github.com/0x-copilot-dev/0x-copilot/pull/285), [#345](https://github.com/0x-copilot-dev/0x-copilot/pull/345)                                                                                                                              | Merged — evidence audit pending          | Full callable descriptor inventory, authority narrowing, retry-safe attribution.                                                                                                    |
-| D3 — sandbox adapter               | Earlier sandbox work: [#281](https://github.com/0x-copilot-dev/0x-copilot/pull/281), [#286](https://github.com/0x-copilot-dev/0x-copilot/pull/286). Filesystem-first contract: [#346](https://github.com/0x-copilot-dev/0x-copilot/pull/346).                                                                                                                                                                                                          | **Architecture reconciliation required** | Implement and verify the new file-native lifecycle, immutable snapshot, provider-attestation, C1/C3 handoff, and real desktop/parity requirements. No ai-backend Postgres fallback. |
-| D4 — browser adapter               | [#276](https://github.com/0x-copilot-dev/0x-copilot/pull/276), [#290](https://github.com/0x-copilot-dev/0x-copilot/pull/290), [#330](https://github.com/0x-copilot-dev/0x-copilot/pull/330)                                                                                                                                                                                                                                                            | Merged — evidence audit pending          | Browser adversarial/live suite, exact action binding, reconciliation.                                                                                                               |
-| E1 — accountability/lifecycle      | [#289](https://github.com/0x-copilot-dev/0x-copilot/pull/289) through [#320](https://github.com/0x-copilot-dev/0x-copilot/pull/320), plus [#337](https://github.com/0x-copilot-dev/0x-copilot/pull/337)                                                                                                                                                                                                                                                | Merged — evidence audit pending          | Cross-language receipt/source/pending folds, retention, repair, and operation evidence.                                                                                             |
-| E2 — cutover/conformance           | [#309](https://github.com/0x-copilot-dev/0x-copilot/pull/309), [#313](https://github.com/0x-copilot-dev/0x-copilot/pull/313), [#315](https://github.com/0x-copilot-dev/0x-copilot/pull/315), [#324](https://github.com/0x-copilot-dev/0x-copilot/pull/324), [#338](https://github.com/0x-copilot-dev/0x-copilot/pull/338)–[#342](https://github.com/0x-copilot-dev/0x-copilot/pull/342), [#344](https://github.com/0x-copilot-dev/0x-copilot/pull/344) | Merged — evidence audit pending          | Cohort/backout evidence and the final all-PRD release gate.                                                                                                                         |
+1. the desktop selects a retained C1 workspace/artifact revision;
+2. ai-backend exports a bounded, immutable base-plus-overlay snapshot;
+3. a remote provider proves the requested isolation policy before it receives
+   the snapshot;
+4. the provider runs with no inherited credentials, deny-by-default egress,
+   quotas, cancellation, and owned-resource teardown;
+5. outputs return as A2 artifacts and a declarative patch;
+6. only an explicit user action may import that patch into C1, after which the
+   normal review/stage/C3 commit path applies.
 
-### Current-main revalidation (2026-07-26)
+The file-native lifecycle, sealing, cleanup, and recovery foundation exists.
+The production prerequisite resolver intentionally returns unavailable because
+the full snapshot exporter, policy-bound provider attestation, deliverable
+publisher, patch importer, and shared UI are incomplete. Therefore
+`run_in_sandbox` must remain absent from the model. The OpenAI hosted-container
+adapter is only a candidate provider adapter; it is not evidence that the
+hosted sandbox product is safe or available.
 
-This is a **source/evidence revalidation** at
-`732cc672d542a13298984db64dfb272da3054ea2`, not a substitute for the command
-receipts and real-product gates in the close-out record below. All historical
-Wave audit baselines remain useful implementation evidence, but none proves the
-current release candidate on its own.
+## PRD DoD reconciliation board
 
-- Every inventory row remains `Merged — evidence audit pending` or
-  `Architecture reconciliation required`; none may advance to `DoD audit
-complete` from historical focused tests alone.
-- [#372](https://github.com/0x-copilot-dev/0x-copilot/pull/372) has merged the
-  reviewed file-native D3 foundation (and supersedes #350): it rejects empty
-  selections before provider work, retains a recovery-journal teardown duty,
-  and deliberately keeps the model tool absent. This is **not** the required
-  production D3 capability: no attested provider, full C1 base-plus-overlay
-  exporter, A2 deliverable publisher, or explicit C1 patch-import path exists
-  yet. D3 therefore remains a release-blocking reconciliation.
-- F-006 remains a correction in progress in draft
-  [#356](https://github.com/0x-copilot-dev/0x-copilot/pull/356). Its generic
-  effect decision path must fail closed for event-store errors and preserve
-  superseding-stage correlation across host-run changes before it can merge. A
-  later independent review also found that a same-org peer can PATCH an
-  unowned draft, replace its mutable owner field, and then send it; PATCH,
-  discard, and artifact-resolution fallback must be corrected at their shared
-  ownership boundary before the PR can merge.
-- The G0–G10 Generative Workflows journey plan, artifact/canvas computed-style
-  source mapping, and current-SHA comparison reports do not yet exist as
-  executable release evidence. F-007 remains a release blocker.
-- F-008 now has one current-main execution receipt: `services/ai-backend` at
-  `c0315a431b412efb5e8769bd6d03855096161ee4` passed `4,977`, skipped `126`,
-  and deselected `1` (`python -m pytest -q`, 2026-07-26). Backend, facade,
-  TypeScript workspaces, desktop, real Studio, and parity receipts remain
-  **current-main unverified**. The same code baseline also has full service
-  receipts for `services/backend` (`1,939 passed`, `47 skipped`) and
-  `services/backend-facade` (`353 passed`, `1 skipped`). F-009, F-010, F-011,
-  and F-014 remain code/static gates until the remaining release commands also
-  exercise them.
+| PRD                                | Reconciled state                            | What is proven                                                                                                                                                                    | Remaining closure                                                                                                                                                                                                                    |
+| ---------------------------------- | ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| A1 — contracts                     | Implemented; evidence gap only              | Canonical vocabulary, IDs, refs, golden journeys, Python/TypeScript mirrors                                                                                                       | Record current-SHA owning suites, typecheck, migration-manifest, and consumer-build receipts                                                                                                                                         |
+| A2 — artifact repository           | Implemented; evidence gaps                  | Immutable revisions, file repository, streaming APIs, outbox/lifecycle machinery, facade boundary                                                                                 | Prove receipt/audit-export reference retention; complete endpoint-identity matrix and file-adapter release evidence. Postgres conformance belongs to a future hosted profile                                                         |
+| A3 — operation gateway             | Implemented; evidence gap only              | Universal gateway, descriptor resolution, off/shadow/enforce modes, task-bound stage authority, fail-closed unknowns                                                              | Record current-SHA mode-conformance/replay receipts and reconcile the final SDR close-out text                                                                                                                                       |
+| A4 — effect stager                 | Implemented; architectural gaps             | Transport-neutral, digest-pinned proposal/stage/decision boundary with no executor reachability                                                                                   | Make decision→commit-command durable or repairable as one protocol; serialize/CAS concurrent stage mutation; expand all-operation exploding-effect coverage                                                                          |
+| A5 — commit coordinator            | Implemented; architectural gaps             | Closed executor registry, claim-before-effect, exact approved material, sole dispatch path, reconciliation model                                                                  | Wire production cancellation; classify ambiguous transport outcomes as indeterminate; make enqueue idempotent/repairable; persist phase audit and provider receipt evidence                                                          |
+| B1 — authored artifacts            | Implemented; product gaps                   | Explicit publication, canonical artifact-backed drafts, exact revision send, provider-neutral tools                                                                               | Preserve subagent work-item/operation lineage; add server-verified code-block selection and draft-version promotion                                                                                                                  |
+| B2 — renderers/editors             | Implemented; evidence-heavy                 | Shared safe code/markdown/document/dataset rendering, artifact URIs, streaming transport, revision UI                                                                             | Close oversize/raw download, complete 409 local-buffer UX, CSV/accessibility/flag-off matrices, and retain current-SHA desktop evidence. Existing v3 review and dataset parity are 0 HIGH / 0 MEDIUM                                 |
+| B3 — canvas lifecycle              | Implemented; product gaps                   | Deterministic selection, common event projection, hydration, replay parity, receipt selection rules                                                                               | Preserve the prior run’s open surface across chat-only follow-ups; add Focus Download/Save; wire selected record/table production path; stabilize tab identity/order; integrate hydration retry/raw recovery                         |
+| C1 — workspace overlay             | Implemented; architectural gaps             | Exact projection-bound staging and zero direct host mutation                                                                                                                      | Fix file-store publish ordering and immutable Postgres history contract; make move destructive; complete coalescing, authority-loss reads, collision/continuation semantics, request-digest conflicts, and keyed redacted path audit |
+| C2 — workspace authority           | Implemented foundation; architectural gaps  | Main/native-only fail-closed create/mkdir path, one-use permit, no-replace create, durable conservative journal                                                                   | Implement replace/delete/move, preimage/trash recovery, post-crash target reconciliation, hostile-child confinement proof, live revocation for legacy reads, stable-id wire parity, and idempotent prepare                           |
+| C3 — workspace product integration | Implemented; release evidence gap           | Exact staged workspace flow, common review UI, web download fallback, redacted Sources/receipts, current review parity 0 HIGH / 0 MEDIUM                                          | Retain successful current-main supervised G1/G2 and web live smoke, including grant/revoke/drift/crash recovery                                                                                                                      |
+| D1 — MCP convergence               | Implemented; product gaps                   | Pre-dispatch classification, read-once/write-stage, exact approved dispatch, post-approval auth, no direct write fallback                                                         | Enforce selective presentation; move MCP auth to operation-linked gates; offload full large results; retain provider receipts; add safe generic MCP proposal preview/diff                                                            |
+| D2 — built-ins/subagents           | Implemented foundation; architectural gaps  | Descriptor/conformance inventory, gateway treatment of built-ins, safe row-set staging                                                                                            | Wire authority intersection into production subagents; use deterministic operation lineage; propagate cancellation; produce usage/artifact attribution edges; retire bespoke connector/legacy row-set presentation                   |
+| D3 — hosted sandbox                | Safe dark foundation only                   | File-native state, immutable sealing, lifecycle/recovery primitives, gateway-only construction, zero host-write authority                                                         | Complete attested provider, full snapshot export, A2 result publication, explicit C1 patch import, shared UI, usage attribution, real-provider journeys, and D3 parity; remain default-off/model-dark                                |
+| D4 — browser adapter               | Implemented click/submit core; product gaps | Staged exact click/submit, one-use binding, observational reconciliation, no direct effect dispatch                                                                               | Build production download→artifact and artifact-backed upload; browser review UI; user/device/run/expiry-bound refs; screenshot redaction; cross-origin-frame policy; restart/reconcile journey and parity                           |
+| E1 — accountability/lifecycle      | Implemented foundation; architectural gaps  | Immutable usage/attribution, usage APIs, Receipt/Sources/Pending foundations, signed audit export, legal-hold primitives, lifecycle reference enumeration, safe metrics           | Finalize reported in-flight usage on terminal paths; compose file-native lifecycle jobs; make retention/deletion/holds graph-aware; complete repair families, privileged-access audit, and Pending projection parity                 |
+| E2 — migration/cutover             | Implemented control plane; not cut over     | Ten independent rollout modes, startup validation, trusted cohort/kill-switch wiring, draft/stage migration engines, legacy replay, shadow helpers, conformance/performance gates | Gate admission on migration readiness; migrate native filesystem interrupts; retire mutable legacy drafts/`WriteStager`; add a durable promotion controller and cutover/backout runbooks; all ten modes still default off            |
 
-### D3 foundation independent re-review (2026-07-26)
+## Active architectural backlog
 
-The independent re-review approved
-[#372](https://github.com/0x-copilot-dev/0x-copilot/pull/372), which includes
-the complete #350 foundation history plus the three corrective commits. The
-focused file-native suite passed `203 passed, 2 skipped`; every required PR
-check passed before merge.
+This is the only active product backlog for the program. Items are grouped by
+root authority boundary so that one architectural fix closes all dependent
+symptoms.
 
-- A version-zero C1 overlay now yields no plan, while retained nonzero
-  pointer/history inconsistency remains a separate fail-closed result. A
-  second check rejects a constructed manifest with zero entries before the
-  coordinator can upload or execute it.
-- If primary cleanup persistence fails after provider creation, an immutable
-  provider reference is written to a separate durable file recovery journal.
-  If immediate teardown also fails, the restart reaper drains that journal; if
-  both durable writes fail, the operation remains indeterminate and never
-  reports successful cleanup.
-- Composition is now dark even with test provider, artifact, or patch-collector
-  doubles. It can become model-visible only when a future concrete authority
-  supplies all three missing prerequisites: C1 full base-plus-overlay export,
-  A2 durable deliverable publication, and explicit user-triggered C1 patch
-  import.
+| ID         | Priority / launch tier  | Root closure                                                                                                         | PRDs           | Done when                                                                                                                                                                                                                                |
+| ---------- | ----------------------- | -------------------------------------------------------------------------------------------------------------------- | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GS-ARCH-01 | P0 · desktop core       | Transactional or repairable approval→command handoff plus serialized stage mutation                                  | A4, A5         | A crash or concurrent decision cannot strand, duplicate, or apply the wrong approved revision                                                                                                                                            |
+| GS-ARCH-02 | P0 · desktop core       | Complete the coordinator’s cancellation, uncertainty, idempotent enqueue, phase-audit, and provider-receipt protocol | A5, D1         | Cancellation reaches production dispatch; ambiguous calls remain indeterminate; replay never resends; audit/receipt evidence is durable                                                                                                  |
+| GS-ARCH-03 | P0 · desktop core       | Make C1 projection versions durable and semantically identical, with a complete transition/coalescing model          | C1, D3         | File publication is crash-safe; every adapter preserves immutable versions; move/collision/authority-loss/continuation semantics are explicit and tested                                                                                 |
+| GS-ARCH-04 | P0 · desktop core       | Complete native workspace mutation and recovery under one-use main-owned authority                                   | C2, C3         | Create/replace/delete/move are CAS-bound; recovery and post-crash reconciliation are possible; hostile children cannot escape grants; revocation is immediate                                                                            |
+| GS-ARCH-05 | P0 · Studio UX          | Make canvas identity conversation-scoped while operation state stays run-scoped                                      | B3             | A chat-only follow-up preserves the open surface; tabs have stable IDs/order; hydration failure recovers in place; Focus exposes safe Open/Download/Save                                                                                 |
+| GS-ARCH-06 | P1 · authored artifacts | Make selection, promotion, provenance, and retention reference-complete                                              | A2, B1         | Every selected code/draft revision is server-verified, lineage-complete, retained while referenced, and promotable without client-trusted offsets                                                                                        |
+| GS-ARCH-07 | P1 · MCP                | Enforce the generic presentation/gate/result/receipt contracts                                                       | D1             | Scalar reads stay activity-only; selected data uses canonical surfaces; large results remain retrievable; gates and provider receipts join the operation                                                                                 |
+| GS-ARCH-08 | P1 · subagents          | Make the deterministic operation tree authoritative in production                                                    | D2             | Parent/request/definition/runtime authority is intersected; cancellation cascades; artifacts, stages, and usage share retry-stable lineage                                                                                               |
+| GS-ARCH-09 | P2 · optional sandbox   | Finish D3 without weakening the filesystem-first desktop contract                                                    | D3             | A policy-attested provider receives only a sealed snapshot and returns only artifacts/patches; C1 import is explicit; the tool remains absent otherwise                                                                                  |
+| GS-ARCH-10 | P2 · optional browser   | Complete browser artifacts, uploads, private-ref authority, redaction, and shared review UI                          | D4             | Download/upload and exact review are product-usable; secrets and foreign/expired refs fail closed; restart remains no-blind-retry                                                                                                        |
+| GS-ARCH-11 | P0 · desktop core       | Compose a file-native lifecycle supervisor and close terminal usage accounting                                       | E1             | Reported in-flight usage is finalized on timeout/cancel/failure; bounded rollup, retention, cleanup, repair, and audit-verification loops run with durable cursors under the desktop supervisor                                          |
+| GS-ARCH-12 | P0 · desktop core       | Make the lifecycle reference graph authoritative for deletion, retention, legal hold, repair, and privileged access  | A2, E1         | Held deletion hides product content while retaining required bytes; every reference family is enumerated/repaired safely; privileged reads are durably audited                                                                           |
+| GS-ARCH-13 | P0 · cutover            | Make migration readiness a hard cohort prerequisite and retire dual write truth                                      | A4, B1, C1, E2 | Signed/fenced draft and pending-stage reports gate admission; native filesystem interrupts are converted or cancelled; legacy drafts become read-only; `WriteStager` and old approval fallback leave production composition              |
+| GS-ARCH-14 | P0 · release control    | Build one authorized, audited promotion/cutover controller and operational rollback contract                         | E1, E2         | The controller binds migration facts, soak metrics, current-SHA journeys/parity/performance, producer order, stop criteria, default flips, asymmetric rollback, and durable evidence; operator/self-host/mixed-version runbooks match it |
 
-The reviewer also reconfirmed the non-negotiable boundaries: file-native only
-(no Postgres/in-memory D3 fallback), command-only model input, no direct host
-mutation, no model-visible direct executor, and no automatic patch import.
-This merged foundation does **not** close the D3 release blocker.
+## Release-evidence backlog
 
-### Legacy v2 E3 clarification
+Evidence work does not authorize product patches. If a gate fails, the failure
+is routed to the owning architectural item above.
 
-The older Generative Surfaces v2 program has a separate
-[`PRD-E3`](../generative-surfaces-v2/prds/PRD-E3-audit-usage-retirement.md): audit
-hardening, usage endpoints, and v1 retirement. Its implementation and cutover were
-merged in [#253](https://github.com/0x-copilot-dev/0x-copilot/pull/253) and
-[#254](https://github.com/0x-copilot-dev/0x-copilot/pull/254), respectively. It is
-not an unimplemented v2.1 PRD and must not be recreated in parallel with v2.1 D3.
-The v2.1 Wave E work is E1 and E2 only; any new E3 scope requires a new reviewed PRD.
+| ID         | Priority | Evidence package                                                                                                                             | Done when                                                                                                                                                        |
+| ---------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GS-EVID-01 | P0       | Current-revision full Python suites, affected npm tests/typechecks, builds, migration manifests, service-boundary and contract-parity checks | One revision-bound manifest records every command and result                                                                                                     |
+| GS-EVID-02 | P0       | Supervised desktop filesystem journeys                                                                                                       | G0–G10 scripts exist; G1/G2 and the required recovery/reopen paths pass against the installed supervised app with facade truth and retained logs/screenshots     |
+| GS-EVID-03 | P0       | Web and Focus/Studio live smoke                                                                                                              | Ordinary chat stays chat-only; artifact and workspace flows remain honest on web; Focus remains compact; Studio owns full surfaces                               |
+| GS-EVID-04 | P0       | Computed-style design parity                                                                                                                 | Existing v3 review/dataset reports stay at 0 HIGH / 0 MEDIUM and every newly introduced MCP/subagent/sandbox/browser state gets mapped before release            |
+| GS-EVID-05 | P1       | Cross-language and compatibility corpus                                                                                                      | Public Python/JSON/TypeScript contracts, old v2 replay, signed receipt export, large-content, auth-negative, and redaction fixtures pass at the release revision |
 
-### Architectural findings ledger
+## Desktop journey construction board
 
-| ID    | Finding                                                                                                                                                 | Evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Decision / required architectural resolution                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Status                                                     |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| F-001 | A merged implementation was being treated as completion without a current-main evidence ledger.                                                         | PRs #262–#346 show many merged slices; the PRDs have no live DoD evidence map.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | This README is the required program ledger. Every close-out must map each DoD item to current evidence.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Open until every PRD is audited.                           |
-| F-002 | The sandbox must be desktop and filesystem first; selected bytes must be sealed and verified before any provider receives them.                         | [D3 contract](prds/PRD-D3-sandbox-adapter.md), [desktop file-store migration](../../operations/desktop-file-store-migration.md), and merged [#372](https://github.com/0x-copilot-dev/0x-copilot/pull/372): C1 version-zero selection and constructed empty manifests reject before provider work; nonzero retained-history gaps fail closed; queued context is matched to the persisted run; a primary cleanup write failure records an immutable provider ref in a durable recovery journal and the restarted file reaper drains it.                                                                                                                                                                                                                 | Retain the file-backed lifecycle/session/usage/cleanup namespace and C1/C3-only local mutation. The merged foundation leaves the model tool dark; build the full C1/A2/provider handoff under F-005. Non-file/Postgres history remains unavailable; do not add a fallback.                                                                                                                                                                                                                                                                                                                                                                                              | **Foundation merged — F-005 remains release blocker.**     |
-| F-003 | Desktop runtime documentation contained stale language that described ai-backend Postgres as the default.                                               | Merged [#370](https://github.com/0x-copilot-dev/0x-copilot/pull/370): `tools/desktop-runtime/README.md`, service-env comments, and a resolver-backed consistency test now describe file as default and Postgres only as an explicit compatibility/rollback lane.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | `resolveAiStoreBackend` remains the one tested source of truth. Retain the real Electron-supervised smoke as release evidence that the ai-backend actually receives `RUNTIME_STORE_BACKEND=file`; `run-local.mjs` intentionally exercises the legacy Postgres lane and does not prove this.                                                                                                                                                                                                                                                                                                                                                                             | **Code/docs merged — real smoke remains release blocker.** |
-| F-004 | Adversarial tests exist in individual PR slices, but their coverage is not recorded against the final integrated architecture.                          | A5/D3/D4/E2 PRDs explicitly require adversarial/conformance checks; #330 and #339 added related readiness/conformance work.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Audit test names, scope, and current-main results per PRD; add root-cause fixes and shared architectural gates for any gap.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Open.                                                      |
-| F-005 | D3 has a typed gateway/tool seam but no verified production worker composition, so the model-visible sandbox capability must remain unavailable.        | Merged [#372](https://github.com/0x-copilot-dev/0x-copilot/pull/372) makes availability unconditionally false until a non-test `FileSandboxAuthorityPrerequisites` resolver supplies all three prerequisites; provider/artifact/patch-collector doubles cannot opt in. No repository provider attests the required controls. The current C1 authority exports retained overlay entries only; A2 has no requested-deliverable publication; no user-triggered C1 importer consumes a sandbox patch. Official OpenAI Code Interpreter documentation remains an unqualified candidate: it does not demonstrate the required per-session egress denial, verifiable isolation attestation, owned-session enumeration, or durable teardown/reaper interface. | Compose exactly one file-native `SandboxWorkerBundle` from verified C1/A2 authority, concrete trusted file-store identities, a durable restart-safe cleanup reaper, a real patch collector, and an externally verifiable provider gateway. Make availability depend on every prerequisite. Add bounded base-plus-overlay snapshot export, result/deliverable publication, and explicit user-triggered C1 patch import; then reuse C3/C2’s existing approval/commit path. The model-facing tool may call only the coordinator; no direct executor, Postgres fallback, or automatic patch import.                                                                         | **Release blocker — architectural delivery pending.**      |
-| F-006 | Draft-send has two competing sources of truth: it stages legacy mutable draft bytes rather than the selected immutable Artifact revision.               | Current `main` still stages `DraftRecord` through legacy `WriteStager`. Draft [#356](https://github.com/0x-copilot-dev/0x-copilot/pull/356) adds generic MCP decisions, immutable binding, and direct send ownership checks; independent review found a same-org peer can still PATCH a draft without a current-owner check, overwrite the mutable owner field, then send it. The same missing boundary affects discard. The Artifact resolver also collapses inaccessible/mismatched canonical artifacts into the `None` value used for unmigrated legacy fallback.                                                                                                                                                                                  | Bind the proposal and coordinator exclusively to an Artifact revision/content digest. At the shared DraftService/repository mutation boundary, verify the persisted owner before every mutation or transition and never transfer ownership through an update; return opaque denial with zero versions/events/effects for peers. Reserve the legacy fallback exclusively for a verified unmigrated row; inaccessible or mismatched canonical artifacts must fail closed. Retain generic owner-authorized decisions and fail closed on lookup error or any F-006 supersession across host-run changes. Do not add a draft-specific bypass or copy bytes at approval time. | **Release blocker — correction in progress.**              |
-| F-007 | The release gate has no executable supervised-desktop journey proof or computed-style parity comparison for artifact surfaces.                          | Current-main audit, 2026-07-26: `tools/desktop-journeys/generative-workflows/JOURNEYS.md` is a plan; `tools/design-parity/surfaces/artifact-dataset/SOURCE-GAP.md` records the missing comparison source.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Add runnable real-stack journeys and a mapped design source/anchor set, then retain their generated artifacts as release evidence.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | **Release blocker.**                                       |
-| F-008 | The integrated release gate remains incomplete; service regression receipts alone do not prove the product.                                             | Current-main code baseline `c0315a43` (2026-07-26): ai-backend `4,977 passed / 126 skipped / 1 deselected`; backend `1,939 passed / 47 skipped`; facade `353 passed / 1 skipped`. Chat-surface, surface-renderers, frontend, desktop, real Studio, and design-parity receipts have not yet been captured at a current SHA.                                                                                                                                                                                                                                                                                                                                                                                                                            | Run every remaining workspace/desktop suite at the recorded SHA, then diagnose any failure against the current architecture; do not mask it through a broad skip. The full release gate also still requires real Studio journeys and computed-style parity.                                                                                                                                                                                                                                                                                                                                                                                                             | Open.                                                      |
-| F-009 | The static no-executor test only scans immediate `agent_runtime/effects/*.py` imports, so indirect model/stager-to-executor reachability can escape it. | Resolved by [#351](https://github.com/0x-copilot-dev/0x-copilot/pull/351), merged 2026-07-26: `effect_execution_reachability.py` follows symbol-level model/stager/worker paths and has an indirect function-local-import dispatch canary (`11 passed`).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | Keep the explicit allowlist narrow and retain the architecture suite in the final regression. AST analysis does not prove reflective or runtime-injected dispatch, which remains forbidden by the surrounding boundaries and review.                                                                                                                                                                                                                                                                                                                                                                                                                                    | Merged — static boundary closed.                           |
-| F-010 | Python and TypeScript each reduced presentation lifecycle events independently without a cross-language differential replay fixture.                    | Resolved by [#354](https://github.com/0x-copilot-dev/0x-copilot/pull/354), merged 2026-07-26: the shared `canvas_lifecycle_corpus.json` is replayed at every event prefix by the real Python and TypeScript reducers; both must produce byte-equivalent state (`5` tests per reducer).                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Retain the shared-corpus differential in the release regression. Archival is deliberately not claimed: no canonical archival event/state contract currently exists to replay.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | Merged — current lifecycle parity closed.                  |
-| F-011 | Electron production composition installs `UnavailableNativeWorkspaceAuthority`, so C2's native commit helper is reached only by tests.                  | Resolved by [#352](https://github.com/0x-copilot-dev/0x-copilot/pull/352), merged 2026-07-26: Electron main constructs the authority only after encrypted storage, confinement self-test, signed helper, and root-identity checks; targeted tests and desktop typecheck are green.                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Unsupported or unverified environments remain unavailable. Retain the packaged-macOS supervised smoke as a release gate.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | **Code merged — real smoke remains a release blocker.**    |
-| F-012 | The C1 raw overlay service remains directly usable outside the enforced gateway, so "every mutation stages" is not structurally universal.              | Current-main C/D audit, 2026-07-26: `agent_runtime/capabilities/workspace/overlay.py` versus enforced `workspace/effects.py` path. Draft [#371](https://github.com/0x-copilot-dev/0x-copilot/pull/371) makes the raw engine private and adds a graph gate, but independent review reproduced a bypass: model-visible code can enter the public string-ID `OperationContext.operation_scope()` and call `WorkspaceOperationAdapter.build_proposal()` without `OperationGateway.invoke()`, appending/binding an overlay effect.                                                                                                                                                                                                                         | Make the raw overlay service an internal primitive and add a graph gate that restricts model-facing mutation to the enforced gateway. Replace public string-ID scope as authorization evidence with an unforgeable capability minted only by `OperationGateway` after classification, gate resolution, canonical validation, and audit setup; the adapter must reject a forged scope with zero revisions, effects, host mutations, and commands.                                                                                                                                                                                                                        | **Release blocker — correction in progress.**              |
-| F-013 | D1 retains MCP-specific ledger/surface coupling and lacks a full post-approval authorization proof.                                                     | Current-main C/D audit, 2026-07-26: `capabilities/mcp/operation_adapter.py` invokes `WorkLedgerEmitter` / `SurfaceProjector`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Move presentation onto the transport-neutral operation contract; add a post-approval authorization adversarial test before dispatcher entry.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Open.                                                      |
-| F-014 | D2 lacked a repository-wide inventory/canary proving all model-visible tools use approved descriptors and cannot emit bespoke surfaces.                 | Resolved by [#358](https://github.com/0x-copilot-dev/0x-copilot/pull/358), merged 2026-07-26: the enabled runtime/framework tool inventory maps every model-visible tool to exactly one catalog entry and descriptor; planted AST canaries fail for an unregistered tool or direct `SurfaceEnvelope`/`surface` emission (`34` focused tests).                                                                                                                                                                                                                                                                                                                                                                                                         | Retain the inventory and planted negatives in final regression. AST analysis does not prove reflective/runtime-injected emission or arbitrary interprocedural dataflow; those remain forbidden by reviewed runtime boundaries.                                                                                                                                                                                                                                                                                                                                                                                                                                          | Merged — static boundary closed.                           |
+“Crafted” means an executable-quality script exists and passes static
+validation. It does not mean the real app journey has been executed.
 
-### No-bandaid operating rule
+| Journey                     | Script state                            | Execution state                                                 |
+| --------------------------- | --------------------------------------- | --------------------------------------------------------------- |
+| G0 plain chat               | Existing                                | Historical execution only; include in the final current-SHA run |
+| G1 Markdown lifecycle       | Existing                                | Current-SHA supervised execution pending                        |
+| G2 CSV row-set              | Existing                                | Current-SHA supervised execution pending                        |
+| G2A web artifact-only       | Existing                                | Current-SHA web execution pending                               |
+| G3 code artifact            | Being crafted                           | Do not execute in this reconciliation                           |
+| G4 DOCX                     | Being crafted                           | Do not execute in this reconciliation                           |
+| G5 local email triage       | Being crafted against `fixture://` only | Do not execute in this reconciliation                           |
+| G6 local timeline/X         | Being crafted against `fixture://` only | Do not execute in this reconciliation                           |
+| G7 local Discord moderation | Being crafted against `fixture://` only | Do not execute in this reconciliation                           |
+| G8 mixed multi-surface      | Being crafted                           | Do not execute in this reconciliation                           |
+| G9 recovery/honesty         | Being crafted                           | Do not execute in this reconciliation                           |
+| G10 retention/reopen        | Being crafted                           | Do not execute in this reconciliation                           |
 
-When a check fails, the owner records the failure in the findings ledger before
-changing behavior. The remedy must identify the violated boundary or contract,
-change the lowest shared layer that owns that contract, and add a reusable
-conformance/adversarial test. A local conditional, exception, feature-specific
-fallback, waiver, duplicate executor, or new direct path is not an acceptable
-resolution unless the README records a reviewed temporary exemption with an owner,
-expiry, and E2 removal plan.
+## Closed and removed stale items
 
-In particular:
+The following are historical evidence, not active backlog:
 
-- do not add local workspace writes outside C3's Electron-main authority;
-- do not add direct provider/MCP/browser dispatch around the gateway/stager/commit
-  coordinator path;
-- do not add a persistence fallback that changes the desktop file-first authority;
-- do not claim an in-process helper or mocked provider is a production security
-  boundary;
-- fix repeated UI drift in the shared component/token/projector layer, not separately
-  in web and desktop hosts.
+- the old 57-HIGH review-surface report; current
+  `tools/design-parity/surfaces/generative-surfaces-v3/out/report.md` and
+  `artifact-dataset/out/report-v3-shared.md` are 0 HIGH / 0 MEDIUM for their
+  mapped states;
+- F-006 immutable draft ownership, F-009 workspace mutation reachability,
+  F-010 selected presentation, F-012 forged generic operation scope, and F-014
+  direct bespoke surface construction;
+- old GSQA-002/005/006/007 and GSB-009/010/011/012 findings superseded by the
+  shared review architecture and current parity;
+- “G0–G2 are plan-only”; executable scripts now exist;
+- the historical macOS Accessibility block as a product defect. Host
+  preflight remains useful release-harness work, but the old machine state is
+  not a standing code backlog item;
+- “D3 needs a Postgres fallback.” D3 desktop state is intentionally file-only;
+  hosted persistence is a separate future profile.
 
-### Audit run — Wave A + B (2026-07-26)
+## Updating this ledger
 
-Audit baseline: clean `main` at `757e009d` (the audit began before the current
-origin/main documentation-only merge). This is evidence, not a release pass.
+When code or evidence changes:
 
-| Area                  | Current result                                                                                                                                                    | Required next action                                                                                       |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| A1 contracts          | Proven for SSOT, Python/TS parity, golden journeys, and old-fixture replay.                                                                                       | Keep the contract corpus in the final release regression.                                                  |
-| A2 artifacts          | Memory/file adapter conformance and scoped streaming routes are proven; Postgres coverage is narrower and retention is not aggregated across every deletion path. | Add shared Postgres conformance plus aggregate retention/deletion proof.                                   |
-| A3 gateway            | Descriptor/off/shadow and operation matrix tests are proven.                                                                                                      | Retain as integration regression; historical PR-isolation negatives are not inferred from this later main. |
-| A4/A5 effects         | Core staging, coordinator ordering, claims, reconciliation, sole `effect.applied` producer, and the F-009 symbol-level reachability gate are proven.              | Retain the architecture gate and establish whole-suite zero-effect proof while staging.                    |
-| B1 publication/drafts | Explicit publication and Artifact-backed authoring are proven. Draft-send is **not** Artifact-revision-backed.                                                    | Resolve F-006 before release.                                                                              |
-| B2/B3 UI              | Safe renderer/editor coverage and the shared Python/TS lifecycle differential are proven by [#354](https://github.com/0x-copilot-dev/0x-copilot/pull/354).        | Resolve F-007 and F-008 before release; archival remains explicitly out of the lifecycle contract.         |
-
-Focused audit suites passed, but this does **not** override F-008: the historical
-audit had no green full-suite receipt. A later ai-backend full-suite receipt is
-recorded above; the remaining workspace and product gates are still unverified.
-The remaining PRD waves are being audited independently and will be appended here
-with the same evidence / finding / required-action format.
-
-### Audit run — Wave C + D except D3 (2026-07-26)
-
-Audit baseline: `origin/main` at `202364f1`. It was a source and adversarial-test
-evidence review; it did not freshly execute the listed suites. `Proven` therefore
-means that a committed focused test exists, not that a release gate passed.
-
-| Area                   | Current result                                                                                                                                                         | Required next action                                                             |
-| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| C1 overlay             | Overlay-first reads, durable mutations, grant rejection, and no host write through the enforced route have focused proof.                                              | Resolve F-012 and add common adapter/restart conformance.                        |
-| C2 authority           | Main-only protocol, permits, CAS, journal, and verified production composition are implemented.                                                                        | Run a real supervised-desktop confinement and commit smoke.                      |
-| C3 product             | Hermetic authority tests prove approve-only writes; live desktop CSV, web fallback, receipts, and parity proof are absent.                                             | Add executable desktop journeys and parity evidence after C2 is composed.        |
-| D1 MCP                 | Canonical classification, staging, and exact dispatch are proven.                                                                                                      | Resolve F-013 and retain auth/reconnect/UI live evidence.                        |
-| D2 built-ins/subagents | Catalog/adapters plus the F-014 model-visible-tool inventory and bespoke-surface canaries are proven by [#358](https://github.com/0x-copilot-dev/0x-copilot/pull/358). | Add exhaustive authority narrowing and retry-attribution coverage.               |
-| D4 browser             | Electron-main ownership is structurally present; real browser artifact/upload/effect and security smokes are absent.                                                   | Add a supervised browser-session staged-effect journey and no-bypass graph gate. |
-
-These findings supersede any earlier claim that C2/C3 is merely awaiting a smoke:
-the desktop authority must first be composed correctly. The audit did not find a
-safe shortcut around Electron-main authority, and none will be added.
-
-### Audit run — Wave E1 + E2 (2026-07-26)
-
-Audit baseline: `origin/main` at `c6734529`. This was static evidence review, so
-`Proven` means implementation plus focused in-tree coverage exists; it is not a new
-release execution receipt.
-
-| Area                   | Current result                                                                                                             | Required next action                                                                                                                            |
-| ---------------------- | -------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| E1 usage/export        | Retry-safe attribution, tamper-evident receipt export, and sensitive-route identity tests are present.                     | Add one cross-language all-prefix conformance gate for receipt, Sources, and Pending projections; finish lifecycle retention/deletion evidence. |
-| E1 repair/operations   | Repair executor and tests exist, while the lifecycle runbook still marks D10–D13 families incomplete.                      | Align the runbook with implemented controls and add scheduled/operational evidence before claiming production completeness.                     |
-| E2 migration           | Migration services and hermetic crash/resume/quarantine tests are present.                                                 | Retain a real-dataset migration report and a retained-export verification receipt.                                                              |
-| E2 rollout/backout     | Cohort and soak policy code exists, but `RolloutCohortPolicy.admit()` has no production caller; rollback is a pure helper. | Wire cohort admission and operational backout control through the production request path; prove rollback cannot restore unsafe writes.         |
-| E2 final conformance   | The D9 runner has strong static checks, but its `ready=true` unit result is not a release invocation.                      | Produce a versioned `--require-all` artifact after the complete D10 journey matrix exists.                                                      |
-| E1/E2 release evidence | Current parity, real supervised Electron Studio, credentialed Playwright, and six continuous Studio scenarios are absent.  | Implement and run the executable journey suite, then run fresh computed-style parity against E1/E2 surfaces.                                    |
-
-Wave E therefore remains **DoD audit incomplete**. A static final-conformance report
-or a fake-model service topology smoke must never be relabeled as the product release
-gate.
-
-### Required close-out record for every PR
-
-Before merging an implementation PR, add or update an entry under this README with:
-
-1. PR URL, merge commit, and `origin/main` base SHA.
-2. Every PRD and inherited DoD item, its implementation location, and its exact test,
-   real smoke, or design-parity artifact.
-3. Any item that was not run, marked `unknown` rather than passed, with a concrete
-   follow-up owner and gate.
-4. Adversarial/no-bypass result for effectful work, including the code path tested.
-5. Any architecture finding discovered and the shared-layer remediation.
-6. The post-merge rebase/full affected-suite result.
-
-### Final release gate
-
-Only mark the program `Release gate complete` after evidence on one recorded current
-`main` SHA shows all of the following:
-
-- every row above is `DoD audit complete`;
-- full affected backend and TypeScript/workspace regression suites pass;
-- six continuous Studio scenarios pass on the real supervised desktop stack;
-- Playwright desktop journeys from `tools/desktop-journeys/` pass with real configured
-  providers where the scenario requires them;
-- the computed-style `tools/design-parity/` audit against the current design mock has
-  zero HIGH findings, with the report linked here;
-- all architectural findings are resolved or have an explicit approved non-launch
-  disposition.
+1. update the relevant PRD row;
+2. close or change one root backlog item rather than adding a duplicate symptom;
+3. attach revision-bound commands/results to the evidence package;
+4. move superseded findings to the stale section;
+5. never promote a row to complete from a merged PR or historical test receipt
+   alone.
