@@ -131,6 +131,55 @@
   {
     "descriptor": {
       "capability": "builtin",
+      "op": "search_capabilities",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 16384
+    },
+    "descriptor_version": "2026-07-28.1",
+    "display_name": "capability search",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "describe_capability",
+      "executor": "builtin",
+      "effect_class": "none",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["capability"],
+      "max_inline_result_bytes": 16384
+    },
+    "descriptor_version": "2026-07-28.1",
+    "display_name": "capability description",
+    "timeout_ms": 60000
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
+      "op": "invoke_capability",
+      "executor": "builtin",
+      "effect_class": "internal_reversible",
+      "result_kind": "activity",
+      "supports_prepare": false,
+      "supports_reconcile": false,
+      "required_gate_kinds": ["authentication", "capability", "policy"],
+      "max_inline_result_bytes": 4096
+    },
+    "descriptor_version": "2026-07-28.1",
+    "display_name": "capability invocation",
+    "timeout_ms": 60000,
+    "unknown_arguments_tighten_to_unknown": true
+  },
+  {
+    "descriptor": {
+      "capability": "builtin",
       "op": "run_code_mode",
       "executor": "builtin",
       "effect_class": "internal_reversible",
