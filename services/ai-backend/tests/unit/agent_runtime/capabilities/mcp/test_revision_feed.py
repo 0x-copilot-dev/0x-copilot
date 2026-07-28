@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -149,6 +151,19 @@ async def test_filesystem_cursor_is_opaque_restrictive_and_atomic(
 
 
 @pytest.mark.asyncio
+async def test_filesystem_cursor_round_trips_the_full_1024_byte_boundary(
+    tmp_path: Path,
+) -> None:
+    store = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
+    # ``é`` proves the exact 1024-byte UTF-8 boundary; control characters have
+    # the largest JSON envelope expansion, proving the record bound is separate.
+    for suffix, cursor in (("utf8", "é" * 512), ("escaped", "\x01" * 1024)):
+        subject = _subject(suffix)
+        await store.save(subject, cursor)
+        assert await store.load(subject) == cursor
+
+
+@pytest.mark.asyncio
 async def test_filesystem_cursor_rejects_symlink_oversize_and_corruption(
     tmp_path: Path,
 ) -> None:
@@ -158,6 +173,10 @@ async def test_filesystem_cursor_rejects_symlink_oversize_and_corruption(
     path = next((tmp_path / "mcp-revision-cursors").iterdir())
     path.unlink()
     path.symlink_to(tmp_path / "target")
+    with pytest.raises(McpRevisionCursorStoreError):
+        await store.load(subject)
+    path.unlink()
+    path.write_bytes(b"not-json")
     with pytest.raises(McpRevisionCursorStoreError):
         await store.load(subject)
     path.unlink()
@@ -192,6 +211,126 @@ def test_filesystem_cursor_fails_construction_without_dirfd_support(
     )
     with pytest.raises(McpRevisionCursorStoreUnsupported):
         DesktopFilesystemMcpRevisionCursorStore(tmp_path)
+
+
+def _force_windows_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        DesktopFilesystemMcpRevisionCursorStore,
+        "_platform_strategy",
+        classmethod(lambda _cls: "windows"),
+    )
+
+
+@pytest.mark.asyncio
+async def test_windows_strategy_round_trips_and_cleans_failed_atomic_temp(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_windows_strategy(monkeypatch)
+    store = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
+    subject = _subject()
+    await store.save(subject, "cursor-a")
+
+    def fail_replace(*_args: object, **_kwargs: object) -> None:
+        raise OSError("no replace")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    with pytest.raises(McpRevisionCursorStoreError):
+        await store.save(subject, "cursor-b")
+    assert await store.load(subject) == "cursor-a"
+    assert not list((tmp_path / "mcp-revision-cursors").glob(".*.tmp"))
+
+
+@pytest.mark.asyncio
+async def test_windows_strategy_rejects_symlink_and_corrupt_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_windows_strategy(monkeypatch)
+    store = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
+    subject = _subject()
+    await store.save(subject, "cursor-a")
+    path = next((tmp_path / "mcp-revision-cursors").iterdir())
+    path.unlink()
+    path.symlink_to(tmp_path / "target")
+    with pytest.raises(McpRevisionCursorStoreError):
+        await store.load(subject)
+
+
+@pytest.mark.asyncio
+async def test_windows_strategy_rejects_symlinked_root_and_cursor_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_windows_strategy(monkeypatch)
+    real_root = tmp_path / "real"
+    real_root.mkdir()
+    linked_root = tmp_path / "linked"
+    linked_root.symlink_to(real_root, target_is_directory=True)
+    root_store = DesktopFilesystemMcpRevisionCursorStore(linked_root)
+    with pytest.raises(McpRevisionCursorStoreError):
+        await root_store.load(_subject())
+
+    root = tmp_path / "root"
+    root.mkdir()
+    target = tmp_path / "target"
+    target.mkdir()
+    (root / "mcp-revision-cursors").symlink_to(target, target_is_directory=True)
+    directory_store = DesktopFilesystemMcpRevisionCursorStore(root)
+    with pytest.raises(McpRevisionCursorStoreError):
+        await directory_store.load(_subject())
+
+
+@pytest.mark.asyncio
+async def test_windows_strategy_rejects_root_and_cursor_directory_reparse_points(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_windows_strategy(monkeypatch)
+    original_lstat = Path.lstat
+    reparse_target: list[Path | None] = [None]
+
+    def lstat_with_reparse(path: Path) -> os.stat_result | SimpleNamespace:
+        result = original_lstat(path)
+        if path == reparse_target[0]:
+            return SimpleNamespace(
+                st_mode=result.st_mode,
+                st_file_attributes=stat.FILE_ATTRIBUTE_REPARSE_POINT,
+            )
+        return result
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_reparse)
+    root = tmp_path / "root-reparse"
+    reparse_target[0] = root
+    with pytest.raises(McpRevisionCursorStoreError):
+        await DesktopFilesystemMcpRevisionCursorStore(root).load(_subject())
+
+    root = tmp_path / "cursor-directory-reparse"
+    reparse_target[0] = root / "mcp-revision-cursors"
+    with pytest.raises(McpRevisionCursorStoreError):
+        await DesktopFilesystemMcpRevisionCursorStore(root).load(_subject())
+
+
+@pytest.mark.asyncio
+async def test_windows_strategy_rejects_target_symlinks_for_load_save_and_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _force_windows_strategy(monkeypatch)
+    store = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
+    subject = _subject()
+    await store.save(subject, "cursor-a")
+    path = next((tmp_path / "mcp-revision-cursors").iterdir())
+    external = tmp_path / "external"
+    external.write_text("keep")
+    path.unlink()
+    path.symlink_to(external)
+
+    with pytest.raises(McpRevisionCursorStoreError):
+        await store.load(subject)
+    with pytest.raises(McpRevisionCursorStoreError):
+        await store.save(subject, "cursor-b")
+    with pytest.raises(McpRevisionCursorStoreError):
+        await store.clear(subject)
+    assert external.read_text() == "keep"
+    assert path.is_symlink()
 
 
 @pytest.mark.asyncio
