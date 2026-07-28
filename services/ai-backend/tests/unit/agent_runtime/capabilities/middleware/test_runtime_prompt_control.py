@@ -30,6 +30,7 @@ from agent_runtime.execution.call_identity import (
 )
 from agent_runtime.prompts import (
     FactoryPromptFragmentProvider,
+    PromptAssemblyContext,
     PromptAssembler,
     PromptCacheEligibility,
     PromptFragment,
@@ -37,6 +38,8 @@ from agent_runtime.prompts import (
     PromptFragmentTier,
     PromptRuntimeBinding,
     PromptRuntimeObservation,
+    PromptSensitivity,
+    PromptTrustLabel,
     ProviderCacheAdapterRegistry,
     ProviderCacheOwner,
 )
@@ -86,13 +89,27 @@ def _control_binding() -> RunControlBinding:
 
 
 def _prompt_binding(observer: _Observer) -> PromptRuntimeBinding:
-    plan = PromptAssembler().assemble(
+    plan = PromptAssembler(
+        context=PromptAssemblyContext(
+            provider="openai",
+            model_family="gpt-5.4-mini",
+            harness_revision="harness-v1",
+            capability_bridge_revision="bridge-v1",
+            tool_schema_revision="tools-v1",
+            policy_revision="policy-v1",
+            authorization_revision="authorization-v1",
+        )
+    ).assemble(
         (
             PromptFragment(
                 fragment_id="policy",
-                revision="v1",
+                source_owner="test.runtime",
+                source_revision="v1",
                 tier=PromptFragmentTier.SYSTEM_POLICY,
+                source_scope=PromptFragmentScope.INSTALLATION,
                 scope=PromptFragmentScope.INSTALLATION,
+                sensitivity=PromptSensitivity.INTERNAL,
+                trust=PromptTrustLabel.IMMUTABLE_POLICY,
                 content="Runtime policy.",
                 cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
             ),

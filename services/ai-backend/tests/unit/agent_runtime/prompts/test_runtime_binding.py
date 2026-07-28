@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from langchain_core.messages import SystemMessage
 import pytest
 
+from agent_runtime.control_plane.context import TaskPolicyProgressProjection
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.prompts import (
     FactoryPromptFragmentProvider,
+    PromptAssemblyContext,
     PromptAssembler,
     PromptCacheEligibility,
     PromptFragment,
@@ -17,45 +17,55 @@ from agent_runtime.prompts import (
     PromptFragmentTier,
     PromptRuntimeBinding,
     PromptRuntimeObservation,
+    PromptSensitivity,
+    PromptTrustLabel,
     ProviderCacheAdapterRegistry,
     ProviderCacheOwner,
 )
 
 
+def _context() -> PromptAssemblyContext:
+    return PromptAssemblyContext(
+        provider="anthropic",
+        model_family="claude-sonnet-4-6",
+        harness_revision="harness-v4",
+        capability_bridge_revision="bridge-v1",
+        tool_schema_revision="tools-v1",
+        policy_revision="policy-v1",
+        authorization_revision="authorization-v1",
+    )
+
+
 def _legacy_plan():
-    return PromptAssembler().assemble(
+    return PromptAssembler(context=_context()).assemble(
         (
             PromptFragment(
                 fragment_id="00_policy",
-                revision="v1",
+                source_owner="test.runtime",
+                source_revision="v1",
                 tier=PromptFragmentTier.SYSTEM_POLICY,
+                source_scope=PromptFragmentScope.INSTALLATION,
                 scope=PromptFragmentScope.INSTALLATION,
+                sensitivity=PromptSensitivity.INTERNAL,
+                trust=PromptTrustLabel.IMMUTABLE_POLICY,
                 content="Stable policy.",
                 cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
             ),
             PromptFragment(
                 fragment_id="10_context",
-                revision="v1",
+                source_owner="test.runtime",
+                source_revision="v1",
                 tier=PromptFragmentTier.CONTEXTUAL,
+                source_scope=PromptFragmentScope.RUN,
                 scope=PromptFragmentScope.RUN,
+                sensitivity=PromptSensitivity.PERSONAL,
+                trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
                 scope_fingerprint="b" * 64,
                 content="Current authorized context.",
+                cache_eligibility=PromptCacheEligibility.NEVER,
             ),
         )
     )
-
-
-@dataclass
-class _Progress:
-    profile_id: str = "research"
-    profile_revision: str = "v4"
-    task_family: str = "research"
-    model_turns_used: int = 1
-    model_turn_limit: int = 8
-    tool_calls_used: int = 2
-    tool_call_limit: int = 12
-    completed_steps: int = 1
-    total_steps: int = 4
 
 
 class _Observer:
@@ -67,6 +77,9 @@ class _Observer:
 
 
 class _BrokenProvider:
+    def assembly_context(self, _call: object) -> PromptAssemblyContext:
+        return _context()
+
     def fragments(self, _call: object) -> tuple[PromptFragment, ...]:
         raise ValueError("shadow-only private assembly failure")
 
@@ -85,7 +98,7 @@ def _binding(
         harness_revision="harness-v4",
         fragment_provider=FactoryPromptFragmentProvider(
             legacy_plan=_legacy_plan(),
-            run_scope_fingerprint="c" * 64,
+            run_scope_fingerprint="b" * 64,
         ),
         cache_registry=ProviderCacheAdapterRegistry.default(),
         cache_owner=owner,
@@ -116,8 +129,20 @@ def test_supervisor_and_local_subagent_assemble_at_each_call(scope: str) -> None
 def test_progress_and_approval_change_without_rebuilding_binding() -> None:
     binding = _binding(mode=FeatureMode.ENFORCE)
     legacy = _legacy_plan().rendered_prompt
-    first_progress = _Progress()
-    second_progress = _Progress(model_turns_used=2, tool_calls_used=4)
+    first_progress = TaskPolicyProgressProjection(
+        profile_id="research",
+        profile_revision="v4",
+        task_family="research",
+        model_turns_used=1,
+        model_turn_limit=8,
+        tool_calls_used=2,
+        tool_call_limit=12,
+        completed_steps=1,
+        total_steps=4,
+    )
+    second_progress = first_progress.model_copy(
+        update={"model_turns_used": 2, "tool_calls_used": 4}
+    )
 
     first = binding.prepare(
         system_message=SystemMessage(content=legacy),
@@ -137,8 +162,8 @@ def test_progress_and_approval_change_without_rebuilding_binding() -> None:
     assert first.plan is not None
     assert second.plan is not None
     assert first.plan.rendered_digest != second.plan.rendered_digest
-    assert "- model_turns_used: 1" in first.plan.rendered_prompt
-    assert "- model_turns_used: 2" in second.plan.rendered_prompt
+    assert "- Model turns: 1 used, 7 remaining" in first.plan.rendered_prompt
+    assert "- Model turns: 2 used, 6 remaining" in second.plan.rendered_prompt
     assert "pending" in first.plan.rendered_prompt
     assert "approved" in second.plan.rendered_prompt
 

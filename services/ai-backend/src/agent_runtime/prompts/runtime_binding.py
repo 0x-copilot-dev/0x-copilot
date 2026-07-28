@@ -18,20 +18,25 @@ from langchain_core.messages import SystemMessage
 from pydantic import Field
 
 from agent_runtime.control_plane.feature_modes import FeatureMode
+from agent_runtime.control_plane.context import TaskPolicyProgressProjection
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.prompts.assembly import (
+    PromptAssemblyContext,
     PromptAssembler,
     PromptAssemblyPlan,
     PromptCacheEligibility,
     PromptFragment,
     PromptFragmentScope,
     PromptFragmentTier,
+    PromptSensitivity,
+    PromptTrustLabel,
 )
 from agent_runtime.prompts.provider_cache import (
     ProviderCacheAdapterRegistry,
     ProviderCacheOwner,
     ProviderPromptDecoration,
 )
+from agent_runtime.prompts.sources import render_task_policy_progress
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 
@@ -52,6 +57,8 @@ class PromptRuntimeCall:
 
 class PromptFragmentProviderPort(Protocol):
     """Pure current-call fragment provider."""
+
+    def assembly_context(self, call: PromptRuntimeCall) -> PromptAssemblyContext: ...
 
     def fragments(self, call: PromptRuntimeCall) -> Sequence[PromptFragment]: ...
 
@@ -158,7 +165,9 @@ class PromptRuntimeBinding:
             )
 
         try:
-            plan = PromptAssembler().assemble(self.fragment_provider.fragments(call))
+            plan = PromptAssembler(
+                context=self.fragment_provider.assembly_context(call)
+            ).assemble(self.fragment_provider.fragments(call))
         except Exception:  # noqa: BLE001 - shadow failures cannot affect dispatch
             if self.mode is not FeatureMode.SHADOW:
                 raise
@@ -257,6 +266,29 @@ class FactoryPromptFragmentProvider:
     ) -> None:
         self._legacy_plan = legacy_plan
         self._run_scope_fingerprint = run_scope_fingerprint
+        existing_run_fingerprints = {
+            fragment.scope_fingerprint
+            for fragment in legacy_plan.fragments
+            if fragment.scope is PromptFragmentScope.RUN
+        }
+        if existing_run_fingerprints and existing_run_fingerprints != {
+            run_scope_fingerprint
+        }:
+            raise ValueError("runtime prompt scope must match the verified legacy plan")
+
+    def assembly_context(self, call: PromptRuntimeCall) -> PromptAssemblyContext:
+        """Rebind route/tool revisions while preserving verified run authority."""
+
+        return PromptAssemblyContext(
+            provider=call.provider,
+            model_family=call.model_family,
+            harness_revision=call.harness_revision,
+            capability_bridge_revision=self._legacy_plan.capability_bridge_revision,
+            tool_schema_revision=call.tool_schema_revision,
+            policy_revision=self._legacy_plan.policy_revision,
+            authorization_revision=self._legacy_plan.authorization_revision,
+            locked_task_profile=self._legacy_plan.locked_task_profile,
+        )
 
     def fragments(self, call: PromptRuntimeCall) -> Sequence[PromptFragment]:
         system_text = _system_message_text(call.system_message)
@@ -281,17 +313,16 @@ class FactoryPromptFragmentProvider:
                     fragment_id="00_graph_effective_system",
                     revision=call.harness_revision,
                     content=system_text,
-                    tier=PromptFragmentTier.SYSTEM_POLICY,
                 )
             ]
 
-        progress = _render_task_policy_progress(call.task_policy_progress)
-        if progress:
+        progress = _task_policy_progress(call.task_policy_progress)
+        if progress is not None:
             fragments.append(
                 self._run_fragment(
                     fragment_id="90_task_policy_progress",
-                    revision="f4-progress-projection-v1",
-                    content=progress,
+                    revision=f"{progress.profile_id}:{progress.profile_revision}",
+                    content=render_task_policy_progress(progress),
                 )
             )
         approval = _approval_projection(call.state)
@@ -315,9 +346,13 @@ class FactoryPromptFragmentProvider:
     ) -> PromptFragment:
         return PromptFragment(
             fragment_id=fragment_id,
-            revision=revision,
+            source_owner="agent_runtime.prompts.runtime_binding",
+            source_revision=revision,
             tier=tier,
+            source_scope=PromptFragmentScope.RUN,
             scope=PromptFragmentScope.RUN,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.TRUSTED_RUNTIME,
             scope_fingerprint=self._run_scope_fingerprint,
             content=content,
             cache_eligibility=PromptCacheEligibility.NEVER,
@@ -402,32 +437,14 @@ def _system_message_text(message: SystemMessage | None) -> str:
     return "\n\n".join(parts)
 
 
-def _render_task_policy_progress(progress: object | None) -> str:
+def _task_policy_progress(
+    progress: object | None,
+) -> TaskPolicyProgressProjection | None:
     if progress is None:
-        return ""
-    # Consume only the reviewed typed projection fields. Raw tool results,
-    # arguments, user text, and evidence never enter this adapter.
-    profile_id = str(getattr(progress, "profile_id", "")).strip()
-    profile_revision = str(getattr(progress, "profile_revision", "")).strip()
-    task_family = str(getattr(progress, "task_family", "")).strip()
-    if not profile_id or not profile_revision or not task_family:
-        raise RuntimeError("task-policy progress projection is incomplete")
-    facts = {
-        "profile_id": profile_id,
-        "profile_revision": profile_revision,
-        "task_family": task_family,
-        "model_turns_used": int(getattr(progress, "model_turns_used", 0)),
-        "model_turn_limit": getattr(progress, "model_turn_limit", None),
-        "tool_calls_used": int(getattr(progress, "tool_calls_used", 0)),
-        "tool_call_limit": getattr(progress, "tool_call_limit", None),
-        "completed_steps": int(getattr(progress, "completed_steps", 0)),
-        "total_steps": int(getattr(progress, "total_steps", 0)),
-    }
-    lines = [
-        "Trusted runtime progress (current call):",
-        *(f"- {key}: {value}" for key, value in facts.items()),
-    ]
-    return "\n".join(lines)
+        return None
+    # This validation is the authority boundary: raw tool results, arguments,
+    # user text, and evidence cannot be coerced into the F4 prompt projection.
+    return TaskPolicyProgressProjection.model_validate(progress)
 
 
 def _approval_projection(state: Mapping[str, object]) -> str:

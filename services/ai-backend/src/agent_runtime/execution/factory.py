@@ -83,15 +83,18 @@ from agent_runtime.prompts.runtime import (
     SKILL_CARDS_INSTRUCTIONS,
 )
 from agent_runtime.prompts import (
-    PromptAssembler,
+    DEFAULT_PROMPT_FRAGMENT_PROVIDERS,
+    PromptAssemblyContext,
+    PromptAssemblyInputs,
     PromptAssemblyPlan,
     PromptCacheEligibility,
-    PromptFragment,
     PromptFragmentScope,
-    PromptFragmentTier,
     FactoryPromptFragmentProvider,
     PromptRuntimeBinding,
     ProviderCacheAdapterRegistry,
+    PromptSensitivity,
+    PromptSourceMaterial,
+    PromptTrustLabel,
     ProviderCacheOwner,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
@@ -295,6 +298,7 @@ async def _assemble_harness(
             runtime_context=runtime_context,
             mcp_servers=mcp_servers,
             skill_cards=skill_cards,
+            tool_schema_revision=_model_tool_schema_revision(model_tools),
             workspace_active=bool(
                 workspace_backend is not None
                 and getattr(workspace_backend, "advertise_workspace", True)
@@ -318,11 +322,9 @@ async def _assemble_harness(
                 harness_revision=control_binding.snapshot.harness_variant_ref,
                 fragment_provider=FactoryPromptFragmentProvider(
                     legacy_plan=prompt_assembly_plan,
-                    run_scope_fingerprint=canonical_json_sha256(
-                        {
-                            "run_id": control_binding.snapshot.run_id,
-                            "snapshot_id": control_binding.snapshot.snapshot_id,
-                        }
+                    run_scope_fingerprint=_prompt_scope_fingerprint(
+                        runtime_context=runtime_context,
+                        scope=PromptFragmentScope.RUN,
                     ),
                 ),
                 cache_registry=ProviderCacheAdapterRegistry.default(),
@@ -567,6 +569,7 @@ def _prompt_assembly_plan(
     runtime_context: AgentRuntimeContext,
     mcp_servers: Sequence[object],
     skill_cards: Sequence[object],
+    tool_schema_revision: str,
     workspace_active: bool,
     workspace_writable: bool,
     workspace_effect_staging: bool,
@@ -581,155 +584,243 @@ def _prompt_assembly_plan(
     to project only through :meth:`PromptAssemblyPlan.diagnostic`.
     """
 
+    application_block = _standalone_prompt_block(
+        _instructions_with_application_context(instructions="")
+    )
+    mcp_block = _standalone_prompt_block(
+        _instructions_with_mcp_cards(instructions="", mcp_servers=mcp_servers)
+    )
+    skill_block = _standalone_prompt_block(
+        _instructions_with_skill_cards(instructions="", skill_cards=skill_cards)
+    )
+    suggested_block = _standalone_prompt_block(
+        _instructions_with_suggested_connectors(
+            instructions="", suggestions=runtime_context.suggested_connectors
+        )
+    )
+    workspace_block = _standalone_prompt_block(
+        _instructions_with_workspace(
+            instructions="",
+            workspace_active=workspace_active,
+            workspace_writable=workspace_writable,
+            workspace_effect_staging=workspace_effect_staging,
+        )
+    )
+    capability_block = _standalone_prompt_block(
+        _instructions_with_capability_tools(
+            instructions="",
+            code_mode_active=code_mode_active,
+            sandbox_execute_active=sandbox_execute_active,
+        )
+    )
+    profile_fingerprint = _prompt_scope_fingerprint(
+        runtime_context=runtime_context,
+        scope=PromptFragmentScope.PROFILE,
+    )
+    run_fingerprint = _prompt_scope_fingerprint(
+        runtime_context=runtime_context,
+        scope=PromptFragmentScope.RUN,
+    )
     base_cacheable = instructions == DEFAULT_INSTRUCTIONS
-    application_block = _instructions_with_application_context(instructions="")
-    mcp_block = _instructions_with_mcp_cards(instructions="", mcp_servers=mcp_servers)
-    skill_block = _instructions_with_skill_cards(
-        instructions="", skill_cards=skill_cards
+    base_scope = (
+        PromptFragmentScope.INSTALLATION if base_cacheable else PromptFragmentScope.RUN
     )
-    suggested_block = _instructions_with_suggested_connectors(
-        instructions="", suggestions=runtime_context.suggested_connectors
-    )
-    workspace_block = _instructions_with_workspace(
-        instructions="",
-        workspace_active=workspace_active,
-        workspace_writable=workspace_writable,
-        workspace_effect_staging=workspace_effect_staging,
-    )
-    capability_block = _instructions_with_capability_tools(
-        instructions="",
-        code_mode_active=code_mode_active,
-        sandbox_execute_active=sandbox_execute_active,
-    )
-    fragments = [
-        PromptFragment(
-            fragment_id="00_base_runtime",
-            revision="runtime-base-v1",
-            tier=PromptFragmentTier.SYSTEM_POLICY,
-            scope=PromptFragmentScope.INSTALLATION,
+    inputs = PromptAssemblyInputs(
+        context=PromptAssemblyContext(
+            provider=runtime_context.model_profile.provider,
+            model_family=runtime_context.model_profile.model_name,
+            harness_revision="deep-agents-runtime-v1",
+            capability_bridge_revision="runtime-capability-bridge-v1",
+            tool_schema_revision=tool_schema_revision,
+            policy_revision=_prompt_policy_revision(runtime_context),
+            authorization_revision=_prompt_authorization_revision(runtime_context),
+        ),
+        base_runtime_safety=PromptSourceMaterial(
+            source_owner="agent_runtime.prompts.runtime",
+            source_revision="runtime-base-v1",
+            source_scope=base_scope,
+            scope=base_scope,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.IMMUTABLE_POLICY,
             content=instructions,
             cache_eligibility=(
                 PromptCacheEligibility.STABLE_PREFIX
                 if base_cacheable
                 else PromptCacheEligibility.NEVER
             ),
+            scope_fingerprint=None if base_cacheable else run_fingerprint,
         ),
-        PromptFragment(
-            fragment_id="10_application_context_boundary",
-            revision="application-context-v1",
-            tier=PromptFragmentTier.STABLE,
+        application_boundary=PromptSourceMaterial(
+            source_owner="agent_runtime.execution.factory",
+            source_revision="application-context-v1",
+            source_scope=PromptFragmentScope.INSTALLATION,
             scope=PromptFragmentScope.INSTALLATION,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.IMMUTABLE_POLICY,
             content=application_block,
-            cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
+            cache_eligibility=(
+                PromptCacheEligibility.STABLE_PREFIX
+                if base_cacheable
+                else PromptCacheEligibility.NEVER
+            ),
         ),
-    ]
-    fragments.extend(
-        fragment
-        for fragment in (
-            _contextual_prompt_fragment(
-                fragment_id="20_mcp_cards",
-                revision="mcp-cards-v1",
-                content=mcp_block,
-                runtime_context=runtime_context,
-            ),
-            _contextual_prompt_fragment(
-                fragment_id="30_skill_cards",
-                revision="skill-cards-v1",
-                content=skill_block,
-                runtime_context=runtime_context,
-            ),
-            _contextual_prompt_fragment(
-                fragment_id="40_suggested_connectors",
-                revision="suggested-connectors-v1",
-                content=suggested_block,
-                runtime_context=runtime_context,
-            ),
-            _run_prompt_fragment(
-                fragment_id="50_workspace_guidance",
-                revision="workspace-guidance-v1",
-                content=workspace_block,
-                runtime_context=runtime_context,
-            ),
-            _run_prompt_fragment(
-                fragment_id="60_capability_guidance",
-                revision="capability-guidance-v1",
-                content=capability_block,
-                runtime_context=runtime_context,
-            ),
-        )
-        if fragment is not None
-    )
-    return PromptAssembler().assemble(fragments)
-
-
-def _contextual_prompt_fragment(
-    *,
-    fragment_id: str,
-    revision: str,
-    content: str,
-    runtime_context: AgentRuntimeContext,
-) -> PromptFragment | None:
-    if not content.strip():
-        return None
-    return PromptFragment(
-        fragment_id=fragment_id,
-        revision=revision,
-        tier=PromptFragmentTier.CONTEXTUAL,
-        scope=PromptFragmentScope.PROFILE,
-        content=content,
-        scope_fingerprint=_prompt_scope_fingerprint(
-            runtime_context=runtime_context,
-            content=content,
+        mcp_cards=_prompt_source_material(
+            owner="agent_runtime.capabilities.mcp",
+            revision="mcp-cards-v1",
+            content=mcp_block,
             scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        skill_cards=_prompt_source_material(
+            owner="agent_runtime.capabilities.skills",
+            revision="skill-cards-v1",
+            content=skill_block,
+            scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        suggested_connectors=_prompt_source_material(
+            owner="agent_runtime.capabilities.mcp.catalog",
+            revision="suggested-connectors-v1",
+            content=suggested_block,
+            scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        workspace_guidance=_prompt_source_material(
+            owner="agent_runtime.capabilities.desktop",
+            revision="workspace-guidance-v1",
+            content=workspace_block,
+            scope=PromptFragmentScope.RUN,
+            scope_fingerprint=run_fingerprint,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.TRUSTED_RUNTIME,
+        ),
+        capability_guidance=_prompt_source_material(
+            owner="agent_runtime.capabilities",
+            revision="capability-guidance-v1",
+            content=capability_block,
+            scope=PromptFragmentScope.RUN,
+            scope_fingerprint=run_fingerprint,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.TRUSTED_RUNTIME,
         ),
     )
+    return DEFAULT_PROMPT_FRAGMENT_PROVIDERS.assemble(inputs)
 
 
-def _run_prompt_fragment(
+def _standalone_prompt_block(rendered: str) -> str:
+    """Remove only the separator introduced by a legacy empty-base helper."""
+
+    return rendered.removeprefix("\n\n")
+
+
+def _prompt_source_material(
     *,
-    fragment_id: str,
+    owner: str,
     revision: str,
     content: str,
-    runtime_context: AgentRuntimeContext,
-) -> PromptFragment | None:
+    scope: PromptFragmentScope,
+    scope_fingerprint: str,
+    sensitivity: PromptSensitivity,
+    trust: PromptTrustLabel,
+) -> PromptSourceMaterial | None:
     if not content.strip():
         return None
-    return PromptFragment(
-        fragment_id=fragment_id,
-        revision=revision,
-        tier=PromptFragmentTier.VOLATILE,
-        scope=PromptFragmentScope.RUN,
+    return PromptSourceMaterial(
+        source_owner=owner,
+        source_revision=revision,
+        source_scope=scope,
+        scope=scope,
+        sensitivity=sensitivity,
+        trust=trust,
+        cache_eligibility=PromptCacheEligibility.NEVER,
+        scope_fingerprint=scope_fingerprint,
         content=content,
-        scope_fingerprint=_prompt_scope_fingerprint(
-            runtime_context=runtime_context,
-            content=content,
-            scope=PromptFragmentScope.RUN,
-        ),
     )
 
 
 def _prompt_scope_fingerprint(
     *,
     runtime_context: AgentRuntimeContext,
-    content: str,
     scope: PromptFragmentScope,
 ) -> str:
     """Hash all scope-changing inputs without retaining their raw values."""
 
+    identity_fields = {
+        "org_id",
+        "user_id",
+        "roles",
+        "permission_scopes",
+        "connector_scopes",
+        "paused_connectors",
+        "connector_access_modes",
+    }
+    if scope is PromptFragmentScope.RUN:
+        identity_fields.update({"request_id", "run_id", "trace_id"})
     return canonical_json_sha256(
         {
             "scope": scope.value,
-            "content": content,
             "subject": runtime_context.model_dump(
                 mode="json",
-                include={
-                    "org_id",
-                    "user_id",
-                    "permission_scopes",
-                    "connector_scopes",
-                    "trace_id",
-                },
+                include=identity_fields,
             ),
+        }
+    )
+
+
+def _prompt_authorization_revision(runtime_context: AgentRuntimeContext) -> str:
+    return canonical_json_sha256(
+        runtime_context.model_dump(
+            mode="json",
+            include={
+                "org_id",
+                "user_id",
+                "roles",
+                "permission_scopes",
+                "connector_scopes",
+                "paused_connectors",
+                "connector_access_modes",
+            },
+        )
+    )
+
+
+def _prompt_policy_revision(runtime_context: AgentRuntimeContext) -> str:
+    return canonical_json_sha256(
+        {
+            "prompt_policy": "legacy-runtime-prompt-policy-v1",
+            "user_policy": runtime_context.user_policies_json,
+            "workspace_behavior": runtime_context.workspace_behavior_overrides,
+        }
+    )
+
+
+def _model_tool_schema_revision(model_tools: Sequence[object]) -> str:
+    """Digest exactly the body-free tool schema fields visible to the model."""
+
+    schemas: list[dict[str, object]] = []
+    for tool in model_tools:
+        args_schema = getattr(tool, "args_schema", None)
+        schema: object = None
+        model_json_schema = getattr(args_schema, "model_json_schema", None)
+        if callable(model_json_schema):
+            schema = model_json_schema()
+        schemas.append(
+            {
+                "name": str(getattr(tool, "name", "")),
+                "description": str(getattr(tool, "description", "")),
+                "args_schema": schema,
+            }
+        )
+    return canonical_json_sha256(
+        {
+            "schema_revision": "model-visible-tools-v1",
+            "tools": sorted(schemas, key=lambda item: str(item["name"])),
         }
     )
 
