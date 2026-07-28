@@ -172,6 +172,20 @@ create a second planning queue.
         hooks, and `git diff --check` passed).
 - [ ] **Step 5:** Complete F2 effective-prompt assembly, single cache ownership,
       outcome telemetry, and fallback.
+  - [ ] Complete source/sensitivity/scope/provider/model/harness/tool-revision
+        prompt contracts and deterministic cache-scope validation.
+  - [ ] Convert every current system source into ordered typed fragment
+        providers while preserving byte-for-byte legacy semantics.
+  - [ ] Assemble on every supervisor/subagent model call through
+        `ModelRequest.override` without mutating durable messages.
+  - [ ] Install one versioned provider cache-adapter registry with mutually
+        exclusive framework/product ownership and decoration-off backout.
+  - [ ] Persist body-free assembly/cache facts in the canonical event journal
+        and reconcile only actual provider cache metadata through usage.
+  - [ ] Expose one pre-content undecorated fallback contract to Step 6/F10;
+        never create a competing retry loop.
+  - [ ] Golden/F1/desktop operations evidence plus focused and full regression
+        suites and all Step 5 exit criteria.
 - [ ] **Step 6:** Attach F10 route selection, credential mode, attempt journal,
       streaming fences, usage, and reconciliation to every model call.
 - [ ] **Step 7:** Add backend-owned F8 MCP revisions, annotation cache, remote
