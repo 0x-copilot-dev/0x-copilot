@@ -631,6 +631,121 @@ backend-to-ai callback, or desktop daemon.
       typechecks, lifecycle tests, commit hooks, `git diff --check`, and every
       Step 7 exit criterion before checking the normative step.
 
+### In progress — Step RB one revalidation primitive
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. This step adds no authority: the primitive can
+only narrow, and every existing call-time authorization boundary stays where it
+is.
+
+- [ ] **RB.1 — Primitive and conformance suite.** Define `RevisionBoundRef`
+      (opaque ref, issuing scope, minted-against revision, binding digest) and
+      the `revalidate_at_use(ref, runtime_context, policy)` protocol returning a
+      closed `current`/`superseded`/`revoked`/`out_of_scope`/`unavailable`
+      outcome with stable reason codes and no bodies. Revisions compare by
+      equality only. Publish one reusable conformance suite covering scope
+      isolation, cross-subject rejection, superseded replay, revocation between
+      mint and use, unavailable-authority fail-closed, and idempotent repeated
+      revalidation.
+- [ ] **RB.2 — F8 adoption and parity proof.** Bind the shipped Step 7
+      descriptor-revision check to the primitive, instantiate the conformance
+      suite for it, and prove behavioral parity with the merged Step 7 path
+      including the generation barrier. No F8 behavior may change.
+
+### In progress — Step 8 policy-aware capability discovery
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. F3 reduces prompt and tool-schema load; it never
+widens authorization. Every inner operation re-enters the Operation Gateway.
+
+- [ ] **F3.1 — Catalog and activation contracts.** Extend the existing compact
+      catalog contracts with a generation identity keyed to verified identity,
+      connector scope, the F4 policy selection, and the F8 descriptor revision.
+      Add the closed activation policy `direct`/`server`/`deferred`/`shadow`
+      with a conservative default for unknown values, resolved through the
+      existing `FeatureModeResolver` rather than a second mode vocabulary.
+- [ ] **F3.2 — Bounded bridge registration.** Register
+      `search_capabilities`, `describe_capability`, and `invoke_capability` at
+      the runtime factory only in deferred/enabled modes, with bounded schemas
+      and a bridge-recursion guard so a bridge tool can never resolve to another
+      bridge tool.
+- [ ] **F3.3 — Search and bounded expansion.** Rank authorized compact cards in
+      `O(NQ + R log K)` and expand at most the configured top-K server cards
+      through the existing `McpLoader` and F8 cache. Coalesce safe independent
+      descriptor loads, respect one total discovery deadline, and guarantee that
+      partial failure narrows rather than widens the result.
+- [ ] **F3.4 — Opaque refs and describe.** Mint refs scoped to
+      run/subject/catalog generation through the Step RB primitive. `describe`
+      returns a bounded schema or a protected schema-artifact ref, never an
+      unbounded inline schema.
+- [ ] **F3.5 — Invoke and gateway revalidation.** `invoke` re-resolves the
+      current descriptor and auth revision, rejects superseded or out-of-scope
+      refs with the RB outcomes, validates canonical arguments against the
+      revalidated schema, and dispatches through a non-model
+      `CapabilityExecutorPort` that enters the ordinary Operation Gateway.
+- [ ] **F3.6 — Budget accounting.** The bridge call consumes exactly one
+      model-visible F4 call; the real inner operation consumes its own
+      operation/capability budget; the same cost is never counted twice in one
+      dimension. Prove this against the existing F4 controller ledger.
+- [ ] **F3.7 — Decisions, metrics, and F1 cases.** Emit body-free
+      search/describe/invoke decisions plus token, model-turn, and latency
+      metrics through the existing closed event vocabulary. Add F1 cases for
+      selection recall, unauthorized-name probing, and end-to-end quality.
+- [ ] **F3.8 — Cohort matrix and step gate.** Declare the named promotion cohort
+      matrix Step 15 evaluates. Prove: unauthorized capability names cannot be
+      searched, described, guessed, or invoked; revocation or schema change
+      between describe and invoke fails closed; cold discovery opens at most K
+      servers and warm discovery performs no duplicate list; direct/server
+      fallback stays available; feature-off parity holds. Run focused and full
+      suites, ruff/format/compile, hooks, and `git diff --check` before root
+      marks the step.
+
+### In progress — Step 10 capability concurrency executor
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. Missing or unknown metadata always means serial.
+Scheduling convenience is never treated as safety metadata.
+
+- [ ] **F6.1 — Descriptor metadata and precedence.** Extend trusted product
+      descriptor metadata with concurrency policy, idempotency, resource-key
+      template, ordering, rate-limit scope, and provider/session constraints.
+      Implement the precedence chain product catalog → user-approved tightening
+      → trusted provider tightening → conservative serial/unknown, where each
+      later source may only narrow.
+- [ ] **F6.2 — Persisted batches.** Construct and persist an ordered
+      `OperationBatch` and `BatchPlan` in `aafter_model` before any child is
+      dispatched, through the canonical run event journal with stable
+      idempotency identity, replay validation, and desktop file-store parity.
+- [ ] **F6.3 — Batch execution coordinator.** Implement the run-scoped
+      `BatchExecutionCoordinator` so framework-started coroutines wait on
+      persisted segment gates instead of racing. Preserve input-order results
+      with actual completion timestamps.
+- [ ] **F6.4 — Scoped permits.** Implement bounded
+      global/profile/user/connector/installation/capability permits with
+      digested scope keys, fair acquisition, and deterministic saturation
+      outcomes. Permits narrow the existing run-scoped serial permit from Step
+      2; they never widen it.
+- [ ] **F6.5 — Child gateway re-entry.** Each admitted child re-enters the
+      Operation Gateway with its own deadline, cancellation, usage, citation,
+      result, and audit identity, and a sibling failure never invalidates a
+      completed child's result.
+- [ ] **F6.6 — Cancellation and restart.** On cancel, stop new admission, cancel
+      cancellable reads, bounded-drain active children, and mark uncertain work
+      `in_flight`/`indeterminate`. On restart, resume only never-started safe
+      reads and never replay a started write. Never invent rollback or success.
+- [ ] **F6.7 — Kill switches.** Add global, per-connector, and per-capability
+      serial kill switches through the existing authority-narrowing kill-switch
+      seam, effective on an active run without restart.
+- [ ] **F6.8 — Step gate.** Prove missing/unknown metadata is serial; writes,
+      effects, approvals, and resource conflicts never overlap improperly;
+      independent curated reads improve measured p95; child successes survive
+      sibling failure; restart and cancel invent nothing. Run focused and full
+      suites, ruff/format/compile, hooks, and `git diff --check` before root
+      marks the step.
+
 ## Complete PRD index
 
 ### Wave F — Harness quality and efficiency

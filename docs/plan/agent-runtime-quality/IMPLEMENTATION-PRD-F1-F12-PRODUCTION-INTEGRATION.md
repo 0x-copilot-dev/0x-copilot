@@ -216,27 +216,70 @@ create a second planning queue.
         full ruff/format/compile, hooks, and diff checks passed).
 - [x] **Step 7:** Add backend-owned F8 MCP revisions, annotation cache, remote
       session pooling, and generation-safe ai-backend invalidation.
+      The remaining steps execute in dependency waves. Steps inside one wave share no
+      domain directory and may run as concurrent code-owner lanes; the wave boundary
+      itself is the barrier. Wave membership, not document number, decides order.
+
+**Wave A — unblocked by completed Steps 4, 5, and 7**
+
+- [ ] **Step RB:** Add one shared `RevisionBoundRef` contract and
+      `revalidate_at_use` protocol with a single conformance suite, then adopt
+      it in the existing F8 descriptor-revision check. F3 refs, F5 evidence, F9
+      grants, and F11 targets bind to the same primitive in their own steps
+      rather than reimplementing staleness and reauthorization five times.
 - [ ] **Step 8:** Enable F3 catalog activation, top-K expansion,
-      search/describe/invoke, gateway revalidation, and fallback.
-- [ ] **Step 9:** Complete F5 per-call context plans, governed compression,
-      evidence registry/reader, and all-tool/store admission parity.
+      search/describe/invoke, gateway revalidation, and fallback. Also declares
+      the named promotion cohort matrix that Step 15 evaluates.
 - [ ] **Step 10:** Complete F6 persisted batches, scoped permits, serial/parallel
       scheduling, cancellation, recovery, and kill switches.
-- [ ] **Step 11:** Complete the F7 trusted-schema dataflow executor,
-      checkpoints, evidence manifests, and model tool.
+
+**Wave B**
+
+- [ ] **Step 9:** Complete F5 per-call context plans, governed compression,
+      evidence registry/reader, and all-tool/store admission parity.
+- [ ] **Step 13a:** Deliver the D3 prerequisites — snapshot exporter, durable
+      deliverable publisher, and user-triggered declarative patch importer — as
+      their own lane so the F11 edit path is not blocked by publication
+      infrastructure.
+- [ ] **Step 13:** Complete F11 bounded target planning, atomic C1 patch
+      application, validation, repair, and review. Toolchain execution stays
+      disabled until Step 13a lands.
+
+**Wave C**
+
+- [ ] **Step 14a:** Run F12 in `shadow` on every eligible run: requirement
+      compiler, batched evidence resolution, and the deterministic verifier
+      record verification outcomes and publish nothing. This exists to collect
+      verification-outcome and first-useful-answer evidence before any output is
+      ever gated.
 - [ ] **Step 12:** Route the production local task path through F9 authority,
       admission, budget, F6 scheduling, verification, and recovery.
-- [ ] **Step 13:** Complete F11 bounded target planning, atomic C1 patch
-      application, validation, repair, review, and D3 prerequisites.
-- [ ] **Step 14:** Install the F12 buffered publication state machine,
-      evidence/requirement verification, bounded repair, and published-history
-      projection.
-- [ ] **Step 15:** Run integrated F1 gates, staged promotion, packaged desktop
-      qualification, backout drills, and remove proven legacy paths.
+- [ ] **Step 11:** Complete the F7 trusted-schema dataflow executor,
+      checkpoints, evidence manifests, and model tool. **Gated:** this step does
+      not start until a recorded value re-justification shows the model-turn
+      savings that motivated F7 still hold against the currently shipped model.
+      Step 14b consumes whatever dataflow lineage exists and does not require
+      this step.
+
+**Wave D**
+
+- [ ] **Step 14b:** Install the F12 buffered publication state machine, bounded
+      repair, and published-history projection, and move enabled profiles from
+      `shadow` to `enforce`. This is the only change that can withhold streamed
+      output, so it lands last and carries an explicit first-useful-answer
+      budget.
+
+**Wave E**
+
+- [ ] **Step 15:** Run integrated F1 gates over the declared cohort matrix,
+      staged promotion, packaged desktop qualification, backout drills, and
+      remove proven legacy paths.
 
 ### Execution discipline
 
-1. One checklist step is active at a time.
+1. One dependency wave is active at a time. Steps within a wave may run as
+   concurrent code-owner lanes only while they share no domain directory; every
+   integration-owner file in §12 stays serialized through root.
 2. Domain changes land before shared composition changes within that step.
 3. Every step has a focused test command plus the affected service's broader
    suite.
@@ -246,6 +289,11 @@ create a second planning queue.
    place before the next step begins.
 6. Feature flags may keep completed code dark, but dark code still needs
    production composition tests.
+7. Any step that inserts middleware updates the pinned expected middleware
+   **sequence** in the Step 0/2 topology proof, not only its membership. An
+   ordering change that no pinned proof asserts is treated as a defect.
+8. Only the integration owner edits this checklist. Implementation lanes report
+   evidence; they never mark a box.
 
 ## 2. Problem statement
 
@@ -1106,6 +1154,43 @@ authoritative without moving credentials into ai-backend.
 - offline/degraded behavior is explicit;
 - ARQ-011 is closed.
 
+### Step RB — One revalidation primitive for revision-bound references
+
+**Purpose:** F3 capability refs, F5 evidence refs, F8 descriptor revisions, F9
+child grants, and F11 target manifests all implement the same rule — a
+reference captured at plan time must be re-resolved and reauthorized at use
+time, and a revision mismatch fails closed. §6.1 already forbids treating the
+run snapshot as an authorization cache; this step stops that rule from being
+reimplemented five times with five subtly different staleness semantics.
+
+**Work:**
+
+1. Define `RevisionBoundRef` carrying the opaque ref, its issuing scope
+   (run/subject/catalog or equivalent), the revision it was minted against, and
+   the digest that proves the binding.
+2. Define one `revalidate_at_use(ref, runtime_context, policy)` protocol
+   returning a closed outcome — `current`, `superseded`, `revoked`,
+   `out_of_scope`, or `unavailable` — with a reason code and no bodies.
+3. Compare revisions for equality only. A caller-supplied ordering, timestamp,
+   or "newer looking" value never implies freshness.
+4. Publish one conformance suite that every domain adapter must pass: scope
+   isolation, cross-subject rejection, replay of a superseded ref, revocation
+   between mint and use, unavailable-authority fail-closed, and idempotent
+   repeated revalidation.
+5. Adopt the primitive in the existing F8 descriptor-revision check first, and
+   prove byte-for-byte behavioral parity with the shipped Step 7 path.
+6. Leave the remaining adopters to their own steps. F3 binds in Step 8, F5 in
+   Step 9, F9 in Step 12, and F11 in Step 13; each adds a conformance-suite
+   instantiation rather than a new staleness implementation.
+
+**Exit criteria:**
+
+- one protocol and one conformance suite exist and F8 passes them with no
+  behavior change;
+- no new authority is introduced — the primitive can only narrow;
+- outcomes are a closed enum with stable reason codes;
+- later adopters can bind without editing the primitive.
+
 ### Step 8 — Enable F3 policy-aware capability discovery
 
 **Purpose:** reduce prompt/tool-schema load while preserving exact
@@ -1129,6 +1214,13 @@ authorization and gateway semantics.
    `CapabilityExecutorPort` that enters the normal Operation Gateway.
 9. Prevent bridge recursion.
 10. Emit search/describe/invoke decisions and token/turn/latency metrics.
+11. Bind opaque capability refs through the Step RB primitive instead of a
+    private staleness check, and add the F3 instantiation of its conformance
+    suite.
+12. Declare the named promotion cohort matrix that Step 15 evaluates: a fixed,
+    reviewed set of feature-mode configurations with the task families and
+    protected families each one must clear. Step 15 evaluates this declared set;
+    it does not discover "meaningful combinations" at promotion time.
 
 **Budget accounting:**
 
@@ -1227,6 +1319,15 @@ authorization, ordering, and recovery honest.
 **Purpose:** replace repeated model turns for mechanical read/filter/join/
 aggregate work with one bounded, attributable plan.
 
+**Entry gate.** This step builds a bounded execution engine to save model turns.
+That trade is only worth its surface if the savings still exist against the
+currently shipped model. Before the first lane opens, record a re-justification
+measuring actual model turns, tool calls, tokens, and cost on the F1 mechanical
+read/filter/join/aggregate families with F3, F5, and F6 enabled. If the measured
+saving no longer clears the reviewed threshold, this step is re-scoped or
+deferred by explicit product decision rather than built by default. Step 14b
+verifies whatever dataflow lineage exists and does not depend on this step.
+
 **Work:**
 
 1. Retain the closed `dataflow.v1` AST and deterministic validator.
@@ -1323,7 +1424,10 @@ with validation bound to the reviewed final tree.
     repair revisions; every repair creates a new change-set/stage digest.
 11. Implement the existing D3 snapshot exporter, durable deliverable
     publisher, and user-triggered declarative patch importer prerequisites
-    before enabling toolchain execution.
+    before enabling toolchain execution. These are **Step 13a**, a separate
+    lane: they are publication infrastructure, not patch application, and the
+    atomic edit path in items 1-10 must not wait on them. Toolchain execution
+    stays disabled until 13a lands.
 12. Import formatter/generator output only as a complete declarative patch
     against the exact snapshot, then revalidate the final tree.
 13. Keep C2 as the only host mutation authority; host drift creates a new
@@ -1342,6 +1446,18 @@ with validation bound to the reviewed final tree.
 
 **Purpose:** ensure requested deliverables and material claims are checked
 before publication.
+
+**Lane split.** The work below is one feature delivered as two steps, because
+only the second half can change what a user sees.
+
+- **Step 14a (Wave C, shadow):** items 1-4 and 8, plus item 5 inserted in
+  observe-only position after publication. The verifier runs on every eligible
+  run, records outcomes, and publishes nothing. Its purpose is to produce
+  verification-outcome distributions and a measured first-useful-answer
+  baseline before any output is withheld.
+- **Step 14b (Wave D, enforce):** items 6, 7, 9-12, plus moving item 5 ahead of
+  assistant-message persistence and advancing enabled profiles from `shadow`
+  to `enforce`.
 
 **Work:**
 
@@ -1384,6 +1500,9 @@ before publication.
 - no valid answer pays a second model call;
 - repair is bounded to one and cannot widen authority;
 - citations and verification survive replay/deletion;
+- Step 14b does not regress p95 first useful answer past the declared budget on
+  enabled profiles, measured against the Step 14a shadow baseline on the same
+  cohort; and
 - ARQ-017 is closed.
 
 ### Step 15 — Cross-feature evaluation, promotion, and legacy removal
@@ -1393,8 +1512,9 @@ quality, safety, latency, and recovery.
 
 **Work:**
 
-1. Run F1 paired comparisons for every enforcement feature and meaningful
-   feature combination.
+1. Run F1 paired comparisons for every enforcement feature and for each
+   configuration in the cohort matrix declared in Step 8. The matrix is an
+   input to this step, not a judgement made during it.
 2. Verify desktop packaged smoke, offline/degraded behavior, suspend/quit,
    next-boot resume, disk recovery, bounded memory, and thermal/battery limits.
 3. Advance flags per cohort and task family; effects and high-sensitivity
@@ -1436,10 +1556,13 @@ flowchart LR
   S2 --> S7["7 F8 backend MCP"]
   S4 --> S5["5 F2 per-call prompt"]
   S4 --> S10["10 F6 executor"]
+  S7 --> SRB["RB Revision-bound refs"]
   S5 --> S8["8 F3 discovery"]
   S7 --> S8
+  SRB --> S8
   S8 --> S9["9 F5 context/evidence"]
-  S10 --> S11["11 F7 dataflow"]
+  SRB --> S9
+  S10 --> S11["11 F7 dataflow (gated)"]
   S8 --> S11
   S9 --> S11
   S6 --> S12["12 F9 delegation"]
@@ -1447,21 +1570,37 @@ flowchart LR
   S10 --> S12
   S10 --> S13["13 F11 patch workflow"]
   S4 --> S13
-  S4 --> S14["14 F12 finalizer"]
-  S6 --> S14
-  S9 --> S14
-  S11 --> S14
-  S12 --> S14
-  S13 --> S14
+  S10 --> S13A["13a D3 prerequisites"]
+  S13A -.-> S13
+  S4 --> S14A["14a F12 shadow verifier"]
+  S6 --> S14A
+  S9 --> S14A
+  S14A --> S14B["14b F12 publication gate"]
+  S12 --> S14B
+  S13 --> S14B
+  S11 -.-> S14B
   S3 --> S15["15 Promotion and removal"]
-  S14 --> S15
+  S14B --> S15
 ```
+
+Dashed edges are soft dependencies: Step 13 proceeds without Step 13a but keeps
+toolchain execution disabled until it lands, and Step 14b verifies whatever
+dataflow lineage exists rather than blocking on Step 11.
 
 After Step 2, F1, F10, and the backend portion of F8 can proceed in parallel.
 F4 may proceed concurrently but must land before F2/F6 enforcement. F7, F9,
-and F11 can be separate code-owner lanes after their prerequisites. F12 is the
-last authoritative runtime behavior because it consumes facts from the other
-features.
+and F11 can be separate code-owner lanes after their prerequisites. F12's
+publication gate is the last authoritative runtime behavior because it consumes
+facts from the other features; its shadow verifier is deliberately much earlier
+so the gate is enabled against measured evidence rather than on first contact.
+
+| Wave | Steps               | Unblocked by            |
+| ---- | ------------------- | ----------------------- |
+| A    | RB, 8, 10           | 4, 5, 7 (complete)      |
+| B    | 9, 13a, 13          | 8, 10                   |
+| C    | 14a, 12, 11 (gated) | 9, 10, and 6 for 12/14a |
+| D    | 14b                 | 14a, 12, 13             |
+| E    | 15                  | 3, 14b                  |
 
 Parallel branches must not edit the same composition files. Changes to
 `execution/factory.py`, `deep_agent_builder.py`, `runtime_worker/handlers`,
@@ -1648,20 +1787,21 @@ record.
 The implementation optimizes model/network calls and prompt load while keeping
 local control overhead bounded.
 
-| Area                 | Target                                                                                           |
-| -------------------- | ------------------------------------------------------------------------------------------------ |
-| Run snapshot bind    | One indexed read or append; p95 under 10 ms on warm desktop                                      |
-| Middleware admission | O(1) incremental ledger work plus canonical argument bytes; p95 under 2 ms excluding store fsync |
-| Prompt assembly      | O(total effective prompt + schema bytes); p95 under 10 ms for 100 KiB                            |
-| F3 ranking           | O(NQ + R log K) using bounded top-K selection; no full-schema prompt duplication                 |
-| F8 warm MCP          | Zero remote discovery rounds; one actual JSON-RPC call per tool invocation                       |
-| F5 context plan      | O(C log C) worst case; hydrate only admitted refs                                                |
-| F6 planning          | O(k log k) worst case; no unbounded tasks; parallel segment approaches max child latency         |
-| F7 execution         | One model planning turn plus one synthesis turn; external work remains O(n)                      |
-| F9 delegation        | Sum of the maximum child latency per admitted dependency wave                                    |
-| F11 patch            | O(F log F + H) validation/application over changed files/bytes                                   |
-| F12 verify           | O(requirements + unique claims + unique evidence + conflicts); one batched evidence resolve      |
-| F1 projection        | O(run events), low-priority and outside user completion                                          |
+| Area                 | Target                                                                                            |
+| -------------------- | ------------------------------------------------------------------------------------------------- |
+| Run snapshot bind    | One indexed read or append; p95 under 10 ms on warm desktop                                       |
+| Middleware admission | O(1) incremental ledger work plus canonical argument bytes; p95 under 2 ms excluding store fsync  |
+| Prompt assembly      | O(total effective prompt + schema bytes); p95 under 10 ms for 100 KiB                             |
+| F3 ranking           | O(NQ + R log K) using bounded top-K selection; no full-schema prompt duplication                  |
+| F8 warm MCP          | Zero remote discovery rounds; one actual JSON-RPC call per tool invocation                        |
+| F5 context plan      | O(C log C) worst case; hydrate only admitted refs                                                 |
+| F6 planning          | O(k log k) worst case; no unbounded tasks; parallel segment approaches max child latency          |
+| F7 execution         | One model planning turn plus one synthesis turn; external work remains O(n)                       |
+| F9 delegation        | Sum of the maximum child latency per admitted dependency wave                                     |
+| F11 patch            | O(F log F + H) validation/application over changed files/bytes                                    |
+| F12 verify           | O(requirements + unique claims + unique evidence + conflicts); one batched evidence resolve       |
+| F12 publish          | p95 first useful answer on enabled profiles within the declared budget of the 14a shadow baseline |
+| F1 projection        | O(run events), low-priority and outside user completion                                           |
 
 Desktop limits:
 

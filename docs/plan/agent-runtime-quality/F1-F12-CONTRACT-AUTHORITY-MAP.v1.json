@@ -24,7 +24,7 @@
   "source_documents": {
     "integration": {
       "path": "docs/plan/agent-runtime-quality/IMPLEMENTATION-PRD-F1-F12-PRODUCTION-INTEGRATION.md",
-      "sha256": "fc56f1fa1379ddf23f95acaebf1e89918d593eada0bb7ef27a5c2b7427916bdd",
+      "sha256": "01cfe4edddce20b0d6c8a7c7ac88b0f035ca635240d5e851fa31a4d71087ad20",
       "digest_scope": "document_without_execution_checklist"
     },
     "F1": {
@@ -665,6 +665,6 @@
   "integrity": {
     "algorithm": "sha256",
     "canonicalization": "UTF-8 JSON with sorted keys and compact separators; omit integrity.digest",
-    "digest": "225e7f4d2bde9db1960c6e03dfbe3a6d2350021d4e30c667f1554f5aa57b9042"
+    "digest": "90d45ee163b48a839b5a37cf1226a8e10ac18ea288410632d3aaacdbffdafa3e"
   }
 }
