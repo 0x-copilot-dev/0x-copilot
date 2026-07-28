@@ -782,6 +782,28 @@ Scheduling convenience is never treated as safety metadata.
       Unavailable, unparseable, and unknown-target sources all resolve to
       serial. Not yet exported or mounted; root wires it as the outermost §8
       layer at the Step 10 gate.
+- [x] **F6.R — Shared vocabulary reconciliation** (integration lane;
+      `d489affa`; 21 new tests, zero assertions weakened). F6.1, F6.4, and F6.7
+      were built concurrently in isolated worktrees and were barred from editing
+      each other's files, so each defined types locally. This collapses the
+      duplication before the executor lanes build on top. `ConcurrencyAllowance`
+      moved into `contracts.py` and now expresses the batch ceiling, so a kill
+      switch narrows a batch through one type instead of two. The `1..16`
+      parallelism bound had been restated in five places and is now one
+      constant. `PermitScopeKind` and `RateLimitScope` folded into one
+      `ConcurrencyScope` with `PROFILE` inserted after `GLOBAL` — no original
+      member moved relative to another, so every `narrowest()` outcome is
+      unchanged. `ConcurrencyKillSwitchScope` stays separate on purpose.
+      **Found and fixed a latent gap:** folding the enums made
+      `ConcurrencyScope.UNKNOWN` structurally reachable in the permit path,
+      where it would have raised a bare `KeyError` instead of refusing
+      conservatively. `PermitScope` and `PermitCapacity` now reject it with
+      typed errors, and `permit_pool()` maps `UNKNOWN → GLOBAL` — the broadest
+      pool, which shares one permit across the most work and so admits the least
+      concurrency. **Contract change for F6.2/F6.3:** `OperationBatch` and
+      `BatchSegment` take `allowance=` rather than `max_parallelism=`, and
+      should be passed an allowance already narrowed by the kill-switch gate
+      rather than a bare int.
 - [ ] **F6.8 — Step gate.** Prove missing/unknown metadata is serial; writes,
       effects, approvals, and resource conflicts never overlap improperly;
       independent curated reads improve measured p95; child successes survive
