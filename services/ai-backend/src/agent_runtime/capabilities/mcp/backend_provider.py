@@ -29,6 +29,7 @@ from agent_runtime.capabilities.mcp.cards import (
 )
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
+    McpAmbiguousDispatchError,
     McpClient,
     McpClientError,
     McpConnectionError,
@@ -323,7 +324,7 @@ class BackendMcpClient:
         if isinstance(error, dict):
             if self._is_method_not_found(error):
                 raise McpUnsupportedMethodError("MCP JSON-RPC method is not supported.")
-            raise McpConnectionError("MCP JSON-RPC request failed.")
+            raise McpAmbiguousDispatchError("MCP JSON-RPC request failed.")
         result = response.get(Keys.JsonRpc.RESULT)
         if not isinstance(result, dict):
             return {}
@@ -381,30 +382,26 @@ class BackendMcpClient:
                 timeout=self.timeout_seconds,
             )
         except httpx.TimeoutException as exc:
-            raise McpTimeoutError("MCP JSON-RPC request timed out.") from exc
+            raise McpAmbiguousDispatchError("MCP JSON-RPC request timed out.") from exc
         except httpx.HTTPError as exc:
-            raise McpConnectionError("MCP JSON-RPC request failed.") from exc
+            raise McpAmbiguousDispatchError("MCP JSON-RPC request failed.") from exc
         lease_error = self._lease_error_from_response(response)
         if lease_error is not None:
-            if isinstance(lease_error, McpLeaseError):
-                raise McpLeaseError(
-                    lease_error.code,
-                    redispatch_safe=lease_error.redispatch_safe,
-                    acquisition_safe=True,
-                )
             raise lease_error
         if response.status_code in {401, 403}:
             raise McpAuthError("MCP server is not authenticated.")
         try:
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
-            raise McpConnectionError("MCP JSON-RPC request failed.") from exc
+            raise McpAmbiguousDispatchError("MCP JSON-RPC request failed.") from exc
         envelope = response.json()
         rpc_payload = (
             envelope.get(Keys.JsonRpc.PAYLOAD) if isinstance(envelope, dict) else None
         )
         if not isinstance(rpc_payload, dict):
-            raise McpConnectionError("MCP JSON-RPC proxy returned an invalid response.")
+            raise McpAmbiguousDispatchError(
+                "MCP JSON-RPC proxy returned an invalid response."
+            )
         return rpc_payload
 
     async def _acquire_lease(self) -> None:
@@ -426,6 +423,11 @@ class BackendMcpClient:
             raise McpConnectionError("MCP client-session request failed.") from exc
         lease_error = self._lease_error_from_response(response)
         if lease_error is not None:
+            if isinstance(lease_error, McpLeaseError) and lease_error.code in {
+                "pool_saturated",
+                "server_unavailable",
+            }:
+                raise McpLeaseError(lease_error.code, acquisition_safe=True)
             raise lease_error
         if response.status_code in {401, 403}:
             raise McpAuthError("MCP server is not authenticated.")
@@ -551,7 +553,7 @@ class BackendMcpClient:
         if isinstance(error, dict):
             if self._is_method_not_found(error):
                 raise McpUnsupportedMethodError("MCP JSON-RPC method is not supported.")
-            raise McpConnectionError("MCP JSON-RPC request failed.")
+            raise McpAmbiguousDispatchError("MCP JSON-RPC request failed.")
         result = response.get(Keys.JsonRpc.RESULT)
         return result if isinstance(result, dict) else {}
 

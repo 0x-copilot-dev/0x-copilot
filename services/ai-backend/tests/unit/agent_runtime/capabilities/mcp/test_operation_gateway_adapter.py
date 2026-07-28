@@ -22,7 +22,11 @@ from agent_runtime.capabilities.mcp.annotations import (
 )
 from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpLoadError
-from agent_runtime.capabilities.mcp.client import McpAuthError, McpLeaseError
+from agent_runtime.capabilities.mcp.client import (
+    McpAmbiguousDispatchError,
+    McpAuthError,
+    McpLeaseError,
+)
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
@@ -356,6 +360,7 @@ def test_gateway_presents_the_neutral_outcome_after_mcp_result_persistence() -> 
 @pytest.mark.parametrize(
     ("code", "acquisition_safe", "expected_retryable"),
     (
+        ("ambiguous", False, False),
         ("ambiguous_transport_failure", False, False),
         ("lease_invalid", False, False),
         ("lease_wrong_owner", False, False),
@@ -377,6 +382,8 @@ def test_lease_failure_retryability_never_authorizes_effect_replay(
         nonlocal dispatches
         del tool_name, arguments
         dispatches += 1
+        if code == "ambiguous":
+            raise McpAmbiguousDispatchError("proxy outcome is unknown")
         raise McpLeaseError(code, acquisition_safe=acquisition_safe)
 
     client.call_tool = call_tool  # type: ignore[method-assign]

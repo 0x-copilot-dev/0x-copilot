@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import pytest
+import httpx
 
 from copilot_service_contracts.headers import (
     ORG_HEADER,
@@ -16,8 +17,11 @@ from agent_runtime.capabilities.mcp.backend_provider import (
     BackendMcpClient,
     BackendMcpServiceAuth,
 )
-from agent_runtime.capabilities.mcp.client import McpLeaseError
-from agent_runtime.capabilities.mcp.client import McpAuthError
+from agent_runtime.capabilities.mcp.client import (
+    McpAmbiguousDispatchError,
+    McpAuthError,
+    McpLeaseError,
+)
 from agent_runtime.execution.contracts import AgentRuntimeContext
 from agent_runtime.capabilities.mcp import McpAuthState, McpServerCard
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import (
@@ -554,9 +558,110 @@ def test_backend_mcp_client_parses_bounded_lease_failures_across_statuses() -> N
     assert mismatch.redispatch_safe is False
 
 
+@pytest.mark.parametrize("code", ("pool_saturated", "server_unavailable"))
+def test_backend_mcp_client_marks_only_acquisition_capacity_failures_safe(
+    runtime_context_admin: AgentRuntimeContext,
+    code: str,
+) -> None:
+    acquisition_calls: list[dict[str, object]] = []
+    acquisition_status = 429 if code == "pool_saturated" else 503
+    acquisition_client = _backend_client(
+        runtime_context_admin,
+        [FakeHttpResponse({"detail": {"code": code}}, status_code=acquisition_status)],
+        acquisition_calls,
+    )
+
+    with pytest.raises(McpLeaseError) as acquisition_error:
+        asyncio.run(acquisition_client.connect())
+
+    assert acquisition_error.value.code == code
+    assert acquisition_error.value.acquisition_safe is True
+
+    rpc_calls: list[dict[str, object]] = []
+    rpc_client = _backend_client(
+        runtime_context_admin,
+        [
+            FakeHttpResponse({"lease": "lease_1234567890"}),
+            FakeHttpResponse({"payload": {"result": {}}}),
+            FakeHttpResponse({"payload": {}}),
+            FakeHttpResponse(
+                {"detail": {"code": code}}, status_code=acquisition_status
+            ),
+        ],
+        rpc_calls,
+    )
+
+    with pytest.raises(McpLeaseError) as rpc_error:
+        asyncio.run(rpc_client.call_tool(tool_name="list_tasks", arguments={}))
+
+    assert rpc_error.value.code == code
+    assert rpc_error.value.acquisition_safe is False
+    assert (
+        len(
+            [
+                call
+                for call in rpc_calls
+                if call["url"].endswith("/rpc")
+                and call["json"]["payload"]["method"] == "tools/call"
+            ]
+        )
+        == 1
+    )
+
+
+@pytest.mark.parametrize(
+    "failure_kind",
+    (
+        "timeout",
+        "untyped_5xx",
+        "invalid_envelope",
+        "json_rpc_error",
+    ),
+)
+def test_backend_mcp_client_marks_rpc_uncertainty_ambiguous_and_never_replays(
+    runtime_context_admin: AgentRuntimeContext,
+    failure_kind: str,
+) -> None:
+    failure: object
+    if failure_kind == "timeout":
+        failure = httpx.TimeoutException("timed out")
+    elif failure_kind == "untyped_5xx":
+        failure = FakeHttpResponse({}, status_code=500)
+    elif failure_kind == "invalid_envelope":
+        failure = FakeHttpResponse({})
+    else:
+        failure = FakeHttpResponse({"payload": {"error": {"code": -32000}}})
+    calls: list[dict[str, object]] = []
+    client = _backend_client(
+        runtime_context_admin,
+        [
+            FakeHttpResponse({"lease": "lease_1234567890"}),
+            FakeHttpResponse({"payload": {"result": {}}}),
+            FakeHttpResponse({"payload": {}}),
+            failure,
+        ],
+        calls,
+    )
+
+    with pytest.raises(McpAmbiguousDispatchError):
+        asyncio.run(client.call_tool(tool_name="write_once", arguments={}))
+
+    assert (
+        len(
+            [
+                call
+                for call in calls
+                if call["url"].endswith("/rpc")
+                and call["json"]["payload"]["method"] == "tools/call"
+            ]
+        )
+        == 1
+    )
+
+
 def _backend_client(
     runtime_context: AgentRuntimeContext,
-    responses: list["FakeHttpResponse"],
+    responses: list[object],
     calls: list[dict[str, object]],
 ) -> BackendMcpClient:
     return BackendMcpClient(
@@ -586,13 +691,18 @@ class FakeHttpResponse:
         return self.payload
 
     def raise_for_status(self) -> None:
-        return None
+        if self.status_code >= 400:
+            request = httpx.Request("POST", "http://backend.local")
+            response = httpx.Response(self.status_code, request=request)
+            raise httpx.HTTPStatusError(
+                "request failed", request=request, response=response
+            )
 
 
 class FakeAsyncClient:
     def __init__(
         self,
-        responses: list[FakeHttpResponse],
+        responses: list[object],
         calls: list[dict[str, object]],
     ) -> None:
         self.responses = responses
@@ -606,7 +716,11 @@ class FakeAsyncClient:
 
     async def post(self, url: str, **kwargs: object) -> FakeHttpResponse:
         self.calls.append({"url": url, "method": "POST", **kwargs})
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        assert isinstance(response, FakeHttpResponse)
+        return response
 
     async def get(self, url: str, **kwargs: object) -> FakeHttpResponse:
         self.calls.append({"url": url, "method": "GET", **kwargs})

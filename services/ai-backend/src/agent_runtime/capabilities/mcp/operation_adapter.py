@@ -30,6 +30,7 @@ from agent_runtime.capabilities.mcp.cards import McpLoadError, McpServerCard
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
+    McpAmbiguousDispatchError,
     McpClientError,
     McpConnectionError,
     McpLeaseError,
@@ -445,6 +446,12 @@ class McpOperationAdapter(OperationAdapter):
                     exc.acquisition_safe
                     and exc.code in _RETRYABLE_ACQUISITION_LEASE_CODES
                 ),
+            ) from exc
+        except McpAmbiguousDispatchError as exc:
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                _CONNECTOR_UNAVAILABLE,
+                retryable=False,
             ) from exc
         except McpAuthError as exc:
             # A connector can revoke credentials between the pre-dispatch gate

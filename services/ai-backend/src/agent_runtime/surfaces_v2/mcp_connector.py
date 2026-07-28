@@ -30,6 +30,7 @@ from typing import Any
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpLoadError
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
+    McpAmbiguousDispatchError,
     McpClientError,
     McpConnectionError,
     McpTimeoutError,
@@ -114,7 +115,12 @@ class McpStageCommitConnector:
                 timeout=self._timeout_seconds,
             )
             cancel_client = False
-        except (McpTimeoutError, asyncio.TimeoutError, TimeoutError) as exc:
+        except (
+            McpAmbiguousDispatchError,
+            McpTimeoutError,
+            asyncio.TimeoutError,
+            TimeoutError,
+        ) as exc:
             # The send may have left the building — INDETERMINATE, never resend.
             raise StageCommitTimeout() from exc
         except (

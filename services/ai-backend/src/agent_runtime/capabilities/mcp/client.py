@@ -75,6 +75,10 @@ class McpConnectionError(McpClientError):
     """The MCP server was unavailable or disconnected during loading."""
 
 
+class McpAmbiguousDispatchError(McpConnectionError):
+    """A proxied RPC may have dispatched; callers must never replay it."""
+
+
 class McpTimeoutError(McpClientError):
     """The MCP server exceeded the loader timeout budget."""
 
