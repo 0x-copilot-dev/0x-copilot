@@ -2,14 +2,21 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+import random
+
 from langchain_core.messages import SystemMessage
+import pytest
 
 from agent_runtime.prompts import (
+    AnthropicProductPromptCacheAdapter,
     PromptAssembler,
     PromptCacheEligibility,
     PromptFragment,
     PromptFragmentScope,
     PromptFragmentTier,
+    ProviderCacheAdapterRegistry,
+    ProviderCacheFallbackSignal,
     ProviderCacheOwner,
     ProviderPromptDecorator,
 )
@@ -128,3 +135,107 @@ def test_product_owner_requires_model_qualification() -> None:
     assert decoration.system_prompt == plan.rendered_prompt
     assert not decoration.provider_cache_enabled
     assert decoration.reason_code == "model_not_qualified_for_explicit_cache_controls"
+
+
+def test_product_and_framework_owners_cannot_stack() -> None:
+    with pytest.raises(RuntimeError, match="cannot be combined"):
+        ProviderCacheAdapterRegistry.default().decorate(
+            provider="anthropic",
+            model_family="claude-sonnet-4-6",
+            plan=_plan(),
+            cache_owner=ProviderCacheOwner.PRODUCT,
+            framework_cache_installed=True,
+        )
+
+
+def test_framework_delegation_is_semantically_undecorated() -> None:
+    plan = _plan()
+
+    decoration = ProviderCacheAdapterRegistry.default().decorate(
+        provider="anthropic",
+        model_family="claude-sonnet-4-6",
+        plan=plan,
+        cache_owner=ProviderCacheOwner.FRAMEWORK,
+        framework_cache_installed=True,
+    )
+
+    assert decoration.system_prompt == plan.rendered_prompt
+    assert decoration.cache_owner is ProviderCacheOwner.FRAMEWORK
+    assert decoration.adapter_ref is None
+    assert decoration.reason_code == "delegated_to_framework_middleware"
+
+
+def test_product_decoration_deep_copies_every_outbound_block() -> None:
+    plan = _plan()
+    plan_before = deepcopy(plan)
+
+    decoration = ProviderCacheAdapterRegistry.default().decorate(
+        provider="anthropic",
+        model_family="claude-sonnet-4-6",
+        plan=plan,
+        cache_owner=ProviderCacheOwner.PRODUCT,
+        framework_cache_installed=False,
+    )
+
+    assert isinstance(decoration.system_prompt, SystemMessage)
+    blocks = decoration.system_prompt.content
+    assert isinstance(blocks, list)
+    blocks[0]["text"] = "mutated outbound copy"
+    assert plan == plan_before
+    assert plan.fragments[0].content == "Policy text"
+
+
+def test_registry_order_is_deterministic() -> None:
+    refs: set[tuple[str, ...]] = set()
+    adapters = [
+        AnthropicProductPromptCacheAdapter(),
+    ]
+    for seed in range(20):
+        randomized = list(adapters)
+        random.Random(seed).shuffle(randomized)
+        refs.add(ProviderCacheAdapterRegistry(randomized).adapter_refs)
+
+    assert refs == {("anthropic-system-prefix:v1",)}
+
+
+def test_unsupported_or_model_unqualified_routes_are_byte_identical() -> None:
+    plan = _plan()
+    for provider, model in (
+        ("openai", "gpt-5.4-mini"),
+        ("anthropic", ""),
+        ("anthropic", "not-a-claude-model"),
+    ):
+        decoration = ProviderCacheAdapterRegistry.default().decorate(
+            provider=provider,
+            model_family=model,
+            plan=plan,
+            cache_owner=ProviderCacheOwner.PRODUCT,
+            framework_cache_installed=False,
+        )
+        assert decoration.system_prompt.encode() == plan.rendered_prompt.encode()
+        assert not decoration.provider_cache_enabled
+
+
+def test_pre_content_fallback_signal_is_closed_after_any_provider_observation() -> None:
+    signal = ProviderCacheFallbackSignal.before_content(
+        provider="anthropic",
+        model_family="claude-sonnet-4-6",
+        plan_digest="a" * 64,
+        rejected_adapter_ref="anthropic-system-prefix:v1",
+    )
+    assert signal.next_cache_owner is ProviderCacheOwner.NONE
+
+    for observed in (
+        "provider_acknowledged",
+        "content_observed",
+        "tool_call_observed",
+        "usage_observed",
+    ):
+        with pytest.raises(RuntimeError, match="fallback is forbidden"):
+            ProviderCacheFallbackSignal.before_content(
+                provider="anthropic",
+                model_family="claude-sonnet-4-6",
+                plan_digest="a" * 64,
+                rejected_adapter_ref="anthropic-system-prefix:v1",
+                **{observed: True},
+            )

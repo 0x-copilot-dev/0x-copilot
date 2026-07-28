@@ -4,6 +4,19 @@ import pytest
 from langchain_core.tools import StructuredTool
 
 from agent_runtime.capabilities.middleware import RuntimeControlMiddleware
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    RunControlContext,
+)
+from agent_runtime.control_plane.contracts import (
+    RunControlSnapshot,
+    RunPolicyRevisions,
+)
+from agent_runtime.control_plane.feature_modes import (
+    AgentQualityFeature,
+    FeatureMode,
+    FeatureModeSet,
+)
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     RuntimeDependencies,
@@ -21,6 +34,8 @@ from tests.unit.fakes import (
     FakeSubagentCatalog,
     FakeToolRegistry,
 )
+
+_SHA256 = "0" * 64
 
 
 async def test_factory_propagates_permissions_to_runtime_ports(
@@ -65,6 +80,61 @@ async def test_factory_propagates_permissions_to_runtime_ports(
     assert isinstance(call.middleware[0], RuntimeControlMiddleware)
     assert call.universal_middleware_factories == (RuntimeControlMiddleware,)
     assert not any(isinstance(tool, ToolBudgetGuardedTool) for tool in call.tools)
+
+
+async def test_factory_installs_per_call_prompt_binding_for_verified_run(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    builder = CapturingAgentBuilder()
+    feature_modes = FeatureModeSet.model_validate(
+        {
+            feature.value: (
+                FeatureMode.ENFORCE
+                if feature is AgentQualityFeature.F2_PROMPT_ASSEMBLY
+                else FeatureMode.OFF
+            )
+            for feature in AgentQualityFeature
+        }
+    )
+    snapshot = RunControlSnapshot.create(
+        run_id=runtime_context_admin.run_id,
+        conversation_id="conversation-1",
+        subject_fingerprint=_SHA256,
+        deployment_profile="single_user_desktop",
+        harness_variant_ref="harness-f2-v1",
+        task_policy_selection_ref="task-policy-v1",
+        policy_revisions=RunPolicyRevisions.model_validate(
+            {field: "v1" for field in RunPolicyRevisions.model_fields}
+        ),
+        feature_modes=feature_modes,
+        budget_envelope_ref=f"budget://v1/sha256/{_SHA256}",
+        assignment_revision="assignment-v1",
+    )
+    control = RunControlBinding(
+        snapshot=snapshot,
+        effective_modes=feature_modes,
+        decisions=(),
+    )
+
+    token = RunControlContext.bind_for_run(control)
+    try:
+        harness = await acreate_agent_runtime(
+            context=runtime_context_admin,
+            dependencies=fake_dependencies,
+            agent_builder=builder,
+        )
+        installed = RunControlContext.prompt_runtime()
+    finally:
+        RunControlContext.unbind(token)
+
+    assert harness.prompt_runtime_binding is installed
+    assert installed is not None
+    assert installed.mode is FeatureMode.ENFORCE
+    assert installed.framework_cache_installed
+    assert builder.calls[0].system_prompt == (
+        harness.prompt_assembly_plan.rendered_prompt
+    )
 
 
 class FakeMcpProvider:

@@ -8,7 +8,15 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import Lock
-from typing import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Protocol
+from typing import (
+    TYPE_CHECKING,
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Iterator,
+    Mapping,
+    Protocol,
+)
 
 from pydantic import Field, NonNegativeInt, PositiveInt
 
@@ -27,6 +35,9 @@ from agent_runtime.control_plane.feature_modes import (
     FeatureModeSet,
 )
 from agent_runtime.execution.contracts import RuntimeContract
+
+if TYPE_CHECKING:
+    from agent_runtime.prompts.runtime_binding import PromptRuntimeBinding
 
 
 class RunControlBinding(RuntimeContract):
@@ -170,6 +181,19 @@ _CURRENT_TASK_POLICY: ContextVar[TaskPolicyRuntimeBinding | None] = ContextVar(
 )
 
 
+@dataclass(slots=True)
+class _PromptRuntimeSlot:
+    """Run-lifetime slot shared by graph tasks and local child graphs."""
+
+    binding: PromptRuntimeBinding | None = None
+
+
+_CURRENT_PROMPT_RUNTIME: ContextVar[_PromptRuntimeSlot | None] = ContextVar(
+    "agent_runtime_prompt_runtime_slot",
+    default=None,
+)
+
+
 class RuntimeToolControlOutcome(StrEnum):
     """Content-free terminal classifications at the graph tool seam."""
 
@@ -308,6 +332,7 @@ class _RunControlContextToken:
     serial_admission: Token[RunSerialAdmission | None]
     lifecycle_reducer: Token[RuntimeToolLifecycleReducer | None]
     task_policy: Token[TaskPolicyRuntimeBinding | None]
+    prompt_runtime: Token[_PromptRuntimeSlot | None]
 
 
 class RunControlContext:
@@ -328,6 +353,7 @@ class RunControlContext:
                 RuntimeToolLifecycleReducer()
             ),
             task_policy=_CURRENT_TASK_POLICY.set(task_policy),
+            prompt_runtime=_CURRENT_PROMPT_RUNTIME.set(_PromptRuntimeSlot()),
         )
 
     @staticmethod
@@ -371,9 +397,28 @@ class RunControlContext:
         return None if binding is None else binding.progress()
 
     @staticmethod
+    def install_prompt_runtime(binding: PromptRuntimeBinding) -> None:
+        """Install the run-scoped F2 provider once during harness construction."""
+
+        slot = _CURRENT_PROMPT_RUNTIME.get()
+        if slot is None:
+            raise RuntimeError("run control is not bound")
+        if slot.binding is not None and slot.binding is not binding:
+            raise RuntimeError("prompt runtime binding is already installed")
+        slot.binding = binding
+
+    @staticmethod
+    def prompt_runtime() -> PromptRuntimeBinding | None:
+        """Return the per-call F2 binding inherited by every local child."""
+
+        slot = _CURRENT_PROMPT_RUNTIME.get()
+        return None if slot is None else slot.binding
+
+    @staticmethod
     def unbind(token: _RunControlContextToken) -> None:
         """Restore the binding that preceded ``token``."""
 
+        _CURRENT_PROMPT_RUNTIME.reset(token.prompt_runtime)
         _CURRENT_TASK_POLICY.reset(token.task_policy)
         _CURRENT_LIFECYCLE_REDUCER.reset(token.lifecycle_reducer)
         _CURRENT_SERIAL_ADMISSION.reset(token.serial_admission)

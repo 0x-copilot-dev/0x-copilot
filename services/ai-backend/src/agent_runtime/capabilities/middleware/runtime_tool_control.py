@@ -177,6 +177,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
         """Synchronous compatibility adapter with identical observation."""
 
         provider_request = self._provider_visible_request(request)
+        provider_request = self._assemble_prompt_for_call(provider_request)
         self._observe_final_tool_surface(provider_request)
         return handler(provider_request)
 
@@ -188,6 +189,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
         """Apply reviewed exclusions, observe the surface, then delegate."""
 
         provider_request = self._provider_visible_request(request)
+        provider_request = self._assemble_prompt_for_call(provider_request)
         self._observe_final_tool_surface(provider_request)
         return await handler(provider_request)
 
@@ -253,6 +255,36 @@ class RuntimeControlMiddleware(AgentMiddleware):
     def _observe_final_tool_surface(self, request: ModelRequest[Any]) -> None:
         self._final_tool_surface = RuntimeToolSurfaceSnapshot.from_tools(
             request.tools or []
+        )
+
+    @classmethod
+    def _assemble_prompt_for_call(
+        cls,
+        request: ModelRequest[Any],
+    ) -> ModelRequest[Any]:
+        """Apply the run-scoped F2 plan at the one graph-wide model seam."""
+
+        binding = RunControlContext.prompt_runtime()
+        if binding is None:
+            return request
+        state = request.state if isinstance(request.state, Mapping) else {}
+        result = binding.prepare(
+            system_message=request.system_message,
+            state=state,
+            tools=request.tools or (),
+            execution_scope=cls._execution_scope_for_runtime(request.runtime),
+            task_policy_progress=RunControlContext.task_policy_progress(),
+            model_family=_model_family(request.model, fallback=binding.model_family),
+        )
+        binding.observe(result)
+        if not result.observation.sent_assembled_prompt:
+            return request
+        # ModelRequest.override follows an immutable replace contract. These
+        # are the only model-call fields F2 owns; durable conversation messages,
+        # runtime state, model routing, and provider settings remain untouched.
+        return request.override(
+            system_message=result.system_message,
+            tools=list(result.tools),
         )
 
     def _provider_visible_request(
@@ -745,6 +777,16 @@ def _request_facts(request: ToolCallRequest) -> tuple[str, dict[str, Any], int]:
         else {"input": raw_arguments}
     )
     return (tool_name, arguments, estimate_tool_input_tokens(arguments))
+
+
+def _model_family(model: object, *, fallback: str) -> str:
+    """Read a provider model identifier without serializing model state."""
+
+    for attribute in ("model_name", "model"):
+        value = getattr(model, attribute, None)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return fallback
 
 
 def _surface_rejection(
