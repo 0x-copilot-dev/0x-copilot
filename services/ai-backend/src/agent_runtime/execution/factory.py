@@ -74,7 +74,11 @@ from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyEnforcer,
     ToolUsePolicyResolver,
 )
-from agent_runtime.control_plane.context import RunControlContext
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    RunControlContext,
+    TaskPolicyRuntimeBinding,
+)
 from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
     DEFAULT_INSTRUCTIONS,
@@ -90,6 +94,7 @@ from agent_runtime.prompts import (
     PromptCacheEligibility,
     PromptFragmentScope,
     FactoryPromptFragmentProvider,
+    LockedTaskProfile,
     PromptRuntimeBinding,
     ProviderCacheAdapterRegistry,
     PromptSensitivity,
@@ -293,6 +298,8 @@ async def _assemble_harness(
             ),
         )
         model_tools = enforced_tools.tools
+        control_binding = RunControlContext.current()
+        task_policy_binding = RunControlContext.task_policy()
         prompt_assembly_plan = _prompt_assembly_plan(
             instructions=instructions,
             runtime_context=runtime_context,
@@ -308,18 +315,19 @@ async def _assemble_harness(
             code_mode_active=runtime_dependencies.code_mode_tool is not None,
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
             is not None,
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
         )
         # This remains the graph-construction input and temporary legacy/golden
         # diagnostic. The effective request is rebuilt for every supervisor and
         # local-child provider call by RuntimeControlMiddleware.
         model_instructions = prompt_assembly_plan.rendered_prompt
-        control_binding = RunControlContext.current()
         prompt_runtime_binding = (
             PromptRuntimeBinding(
                 mode=control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY),
                 provider=runtime_context.model_profile.provider,
                 model_family=runtime_context.model_profile.model_name,
-                harness_revision=control_binding.snapshot.harness_variant_ref,
+                harness_revision=prompt_assembly_plan.harness_revision,
                 fragment_provider=FactoryPromptFragmentProvider(
                     legacy_plan=prompt_assembly_plan,
                     run_scope_fingerprint=_prompt_scope_fingerprint(
@@ -575,6 +583,8 @@ def _prompt_assembly_plan(
     workspace_effect_staging: bool,
     code_mode_active: bool,
     sandbox_execute_active: bool,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
 ) -> PromptAssemblyPlan:
     """Build the F2 prompt plan without changing established rendered order.
 
@@ -626,14 +636,11 @@ def _prompt_assembly_plan(
         PromptFragmentScope.INSTALLATION if base_cacheable else PromptFragmentScope.RUN
     )
     inputs = PromptAssemblyInputs(
-        context=PromptAssemblyContext(
-            provider=runtime_context.model_profile.provider,
-            model_family=runtime_context.model_profile.model_name,
-            harness_revision="deep-agents-runtime-v1",
-            capability_bridge_revision="runtime-capability-bridge-v1",
+        context=_prompt_assembly_context(
+            runtime_context=runtime_context,
             tool_schema_revision=tool_schema_revision,
-            policy_revision=_prompt_policy_revision(runtime_context),
-            authorization_revision=_prompt_authorization_revision(runtime_context),
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
         ),
         base_runtime_safety=PromptSourceMaterial(
             source_owner="agent_runtime.prompts.runtime",
@@ -713,6 +720,89 @@ def _prompt_assembly_plan(
     return DEFAULT_PROMPT_FRAGMENT_PROVIDERS.assemble(inputs)
 
 
+def _prompt_assembly_context(
+    *,
+    runtime_context: AgentRuntimeContext,
+    tool_schema_revision: str,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
+) -> PromptAssemblyContext:
+    """Bind prompt authority only from verified run-owned typed records.
+
+    The worker binds ``RunControlBinding`` after verifying the persisted run
+    and immutable snapshot. The optional F4 binding was replayed from the same
+    run journal. Model/user text and request metadata are intentionally absent.
+    A missing control binding is the legacy/direct-factory path; its metadata
+    remains available for diagnostics, while F2 cannot be installed or
+    enforced without the verified binding.
+    """
+
+    snapshot = control_binding.snapshot if control_binding is not None else None
+    return PromptAssemblyContext(
+        provider=runtime_context.model_profile.provider,
+        model_family=runtime_context.model_profile.model_name,
+        harness_revision=(
+            snapshot.harness_variant_ref
+            if snapshot is not None
+            else "deep-agents-runtime-v1"
+        ),
+        capability_bridge_revision=(
+            snapshot.policy_revisions.capability
+            if snapshot is not None
+            else "runtime-capability-bridge-v1"
+        ),
+        tool_schema_revision=tool_schema_revision,
+        policy_revision=(
+            snapshot.policy_revisions.prompt
+            if snapshot is not None
+            else _prompt_policy_revision(runtime_context)
+        ),
+        authorization_revision=_prompt_authorization_revision(
+            runtime_context,
+            subject_fingerprint=(
+                snapshot.subject_fingerprint if snapshot is not None else None
+            ),
+        ),
+        locked_task_profile=_locked_task_profile(
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
+        ),
+    )
+
+
+def _locked_task_profile(
+    *,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
+) -> LockedTaskProfile | None:
+    """Project the verified, immutable F4 selection into F2 cache authority."""
+
+    if task_policy_binding is None:
+        return None
+    if control_binding is None:
+        raise RuntimeError("F4 task policy cannot be bound without run control")
+
+    snapshot = control_binding.snapshot
+    selection = task_policy_binding.selection
+    profile = task_policy_binding.profile
+    if selection.run_id != snapshot.run_id:
+        raise RuntimeError("F4 task profile does not match the prompt run")
+    if selection.profile_id != profile.profile_id:
+        raise RuntimeError("F4 task profile identity does not match its selection")
+    if selection.profile_revision != profile.revision:
+        raise RuntimeError("F4 task profile revision does not match its selection")
+    if selection.task_family != profile.task_family:
+        raise RuntimeError("F4 task family does not match its selected profile")
+    if selection.profile_revision != snapshot.policy_revisions.tool_controller:
+        raise RuntimeError("F4 task profile revision does not match run control")
+
+    return LockedTaskProfile(
+        task_family=selection.task_family.value,
+        profile_revision=selection.profile_revision,
+        lock_revision=selection.selection_digest,
+    )
+
+
 def _standalone_prompt_block(rendered: str) -> str:
     """Remove only the separator introduced by a legacy empty-base helper."""
 
@@ -773,20 +863,27 @@ def _prompt_scope_fingerprint(
     )
 
 
-def _prompt_authorization_revision(runtime_context: AgentRuntimeContext) -> str:
+def _prompt_authorization_revision(
+    runtime_context: AgentRuntimeContext,
+    *,
+    subject_fingerprint: str | None = None,
+) -> str:
     return canonical_json_sha256(
-        runtime_context.model_dump(
-            mode="json",
-            include={
-                "org_id",
-                "user_id",
-                "roles",
-                "permission_scopes",
-                "connector_scopes",
-                "paused_connectors",
-                "connector_access_modes",
-            },
-        )
+        {
+            "subject_fingerprint": subject_fingerprint,
+            "authorization": runtime_context.model_dump(
+                mode="json",
+                include={
+                    "org_id",
+                    "user_id",
+                    "roles",
+                    "permission_scopes",
+                    "connector_scopes",
+                    "paused_connectors",
+                    "connector_access_modes",
+                },
+            ),
+        }
     )
 
 
