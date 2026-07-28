@@ -64,6 +64,8 @@ def _catalog(cards: tuple[ToolCard, ...]):
             policy_revision="policy_1",
             connector_scope_revision="scope_1",
         ),
+        task_policy_selection_ref="task-policy-selection://run_rank/default/sha256/"
+        + "a" * 64,
         tool_cards=cards,
         expires_at=_NOW + timedelta(minutes=15),
     )

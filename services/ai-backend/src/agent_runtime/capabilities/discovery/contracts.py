@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal, Self
+import json
+import re
+from typing import Annotated, Any, Literal, Protocol, Self, runtime_checkable
 
 from pydantic import (
     Field,
@@ -21,6 +23,8 @@ from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 _SHA256_HEX_PATTERN = r"^[a-f0-9]{64}$"
 _ZERO_DIGEST = "0" * 64
 _MAX_DESCRIPTOR_REVISIONS = 4_096
+_CAPABILITY_REF_PATTERN = r"^cap_[0-9a-f]{32}$"
+_OPAQUE_TOKEN_PATTERN = r"^[!-~]+$"
 
 
 class CapabilitySource(StrEnum):
@@ -49,8 +53,54 @@ class ApprovalCue(StrEnum):
     UNKNOWN = "unknown"
 
 
+class CapabilityBridgeToolName(StrEnum):
+    """The closed set of model-facing F3 bridge tool names.
+
+    This enum is the *single* source of truth for what counts as a bridge tool.
+    The reserved-name guard is derived from its members by iteration rather than
+    from a parallel literal list, so a fourth bridge tool cannot be added
+    without the guard covering it, and the recursion invariant cannot drift.
+    """
+
+    SEARCH_CAPABILITIES = "search_capabilities"
+    DESCRIBE_CAPABILITY = "describe_capability"
+    INVOKE_CAPABILITY = "invoke_capability"
+
+    @classmethod
+    def reserved_names(cls) -> frozenset[str]:
+        """Return every name a discoverable capability may never claim."""
+
+        return frozenset(member.value for member in cls)
+
+    @classmethod
+    def is_reserved(cls, name: str) -> bool:
+        """Return whether ``name`` denotes a bridge tool under any casing."""
+
+        return name.strip().casefold() in cls.reserved_names()
+
+
 class CapabilityCatalogIdentityError(ValueError):
     """Typed, model-safe failure of a catalog identity or ref binding."""
+
+
+class CapabilityBridgeRecursionError(ValueError):
+    """A bridge tool was about to become reachable from another bridge tool.
+
+    The F3 bridge must never be able to resolve to itself.  That invariant is
+    enforced structurally at every construction site a bridge name could enter
+    -- catalog membership and dispatch target -- rather than by a call-site
+    check a later edit could route around.
+    """
+
+    class Messages:
+        """Safe public messages for bridge-recursion refusals."""
+
+        RESERVED_CATALOG_NAME = (
+            "a bridge tool name can never be a member of a capability catalog"
+        )
+        RESERVED_TARGET_NAME = (
+            "a bridge invocation can never dispatch to another bridge tool"
+        )
 
 
 class CatalogDescriptorRevision(RuntimeContract):
@@ -259,10 +309,15 @@ class CapabilityCatalogScope(RuntimeContract):
 
 
 class CapabilityIndexEntry(RuntimeContract):
-    """Schema-free, model-searchable metadata for one authorized source record."""
+    """Schema-free, model-searchable metadata for one authorized source record.
+
+    Catalog membership is the *only* way a capability becomes resolvable by the
+    bridge, so refusing a reserved bridge name here makes bridge recursion
+    unrepresentable for every construction path -- builder, adapter, or test.
+    """
 
     capability_ref: str = Field(
-        pattern=r"^cap_[0-9a-f]{32}$",
+        pattern=_CAPABILITY_REF_PATTERN,
         min_length=36,
         max_length=36,
     )
@@ -334,6 +389,14 @@ class CapabilityIndexEntry(RuntimeContract):
         if len(self.parameter_names) != len(set(self.parameter_names)):
             msg = "parameter_names must be unique"
             raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
+    def _never_names_a_bridge_tool(self) -> Self:
+        if CapabilityBridgeToolName.is_reserved(self.stable_name):
+            raise CapabilityBridgeRecursionError(
+                CapabilityBridgeRecursionError.Messages.RESERVED_CATALOG_NAME
+            )
         return self
 
 
@@ -470,21 +533,25 @@ class CapabilityRefBinding(RuntimeContract):
     This is the F3 half of the shared revision-binding rule: a reference
     captured at plan time must be re-resolved and reauthorized at use time, and
     a revision mismatch fails closed.  This module deliberately implements only
-    the *binding*.  It does not define ``revalidate_at_use`` or its outcome
-    vocabulary — the shared control-plane primitive owns those, and F3 binds to
-    it rather than reimplementing staleness semantics.
+    the *binding*.  It does not define ``revalidate_at_use``, its outcome
+    vocabulary, or any predicate that answers "is this still current" — the
+    shared control-plane primitive owns those, and
+    :class:`~agent_runtime.capabilities.discovery.revision_authority.CapabilityRefRevisionBinding`
+    projects this binding onto it.  Asking a binding about its own currency is
+    exactly the second staleness implementation Step RB exists to prevent.
 
     Field mapping onto that primitive:
 
     * ``capability_ref`` is the opaque reference;
-    * ``catalog_id`` plus ``issued_generation`` is the issuing scope;
+    * ``issued_generation.generation_ref`` is the bound catalog-generation
+      scope, alongside the run subject;
     * ``issued_generation.generation_digest`` is the revision it was minted
       against, compared for equality only; and
     * ``binding_digest`` is the digest that proves the binding.
     """
 
     schema_version: Literal[1] = 1
-    capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
     catalog_id: str = Field(pattern=r"^cat_[0-9a-f]{32}$")
     catalog_revision: str = Field(pattern=r"^rev_[0-9a-f]{32}$")
     issued_generation: CapabilityCatalogGeneration
@@ -517,11 +584,6 @@ class CapabilityRefBinding(RuntimeContract):
         """Return an opaque reference that discloses no capability identity."""
 
         return f"capability-ref-binding://sha256/{self.binding_digest}"
-
-    def is_bound_to(self, generation: CapabilityCatalogGeneration) -> bool:
-        """Return whether this ref was minted against ``generation`` exactly."""
-
-        return self.issued_generation.is_same_generation(generation)
 
     @classmethod
     def create(
@@ -592,7 +654,7 @@ class CapabilitySearchRequest(RuntimeContract):
 class CapabilityCandidate(RuntimeContract):
     """One bounded search result containing no full schema or private payload."""
 
-    capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
     stable_name: str = Field(min_length=1, max_length=256)
     score: PositiveInt
     matched_terms: tuple[
@@ -618,11 +680,20 @@ class CapabilitySearchResult(RuntimeContract):
 
 
 class CapabilityDiscoveryErrorCode(StrEnum):
-    """Stable model-safe failure classes for discovery bridge calls."""
+    """Stable model-safe failure classes for discovery bridge calls.
+
+    A bridge tool reference is deliberately *not* given its own code.  Bridge
+    names can never be catalog members, so asking to invoke one is answered by
+    :attr:`CAPABILITY_NOT_FOUND` exactly like any other unknown reference, and
+    the model cannot probe for the bridge's own existence.
+    """
 
     INVALID_REQUEST = "invalid_request"
     CATALOG_INACTIVE = "catalog_inactive"
     CAPABILITY_NOT_FOUND = "capability_not_found"
+    CAPABILITY_STALE = "capability_stale"
+    CAPABILITY_UNAVAILABLE = "capability_unavailable"
+    EXECUTION_FAILED = "execution_failed"
 
 
 class CapabilityDiscoveryError(RuntimeContract):
@@ -670,7 +741,7 @@ class CapabilitySearchToolResult(RuntimeContract):
 class CapabilityDescribeRequest(RuntimeContract):
     """Request compact metadata by the opaque ref returned from search."""
 
-    capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
 
 
 class CapabilityParameterHint(RuntimeContract):
@@ -683,7 +754,7 @@ class CapabilityParameterHint(RuntimeContract):
 class CapabilityDescription(RuntimeContract):
     """Bounded compact metadata for one member of the active catalog."""
 
-    capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
     stable_name: str = Field(min_length=1, max_length=256)
     display_name: str = Field(min_length=1, max_length=256)
     concise_description: str = Field(min_length=1, max_length=512)
@@ -744,3 +815,220 @@ class CapabilityDescribeToolResult(RuntimeContract):
                 safe_message=safe_message,
             )
         )
+
+
+class CapabilityArgumentBounds:
+    """The structural bounds every model-supplied argument object must satisfy.
+
+    Arguments are untrusted model output.  These bounds are deliberately about
+    *shape and size only*; validating arguments against the revalidated
+    descriptor schema happens at invocation, behind the Operation Gateway.
+    """
+
+    MAX_KEYS = 64
+    MAX_DEPTH = 8
+    MAX_SERIALIZED_BYTES = 16_384
+    KEY_PATTERN = r"^[A-Za-z_][A-Za-z0-9_]{0,63}$"
+
+    class Messages:
+        """Safe public messages for argument-bound failures."""
+
+        NOT_A_MAPPING = "capability arguments must be a JSON object"
+        TOO_MANY_KEYS = "capability arguments exceed the argument-count bound"
+        INVALID_KEY = "capability argument names are not well formed"
+        TOO_DEEP = "capability arguments exceed the argument-nesting bound"
+        NOT_SERIALIZABLE = "capability arguments must be JSON serializable"
+        TOO_LARGE = "capability arguments exceed the argument-size bound"
+
+    @classmethod
+    def validate(cls, value: object) -> dict[str, Any]:
+        """Return the bounded argument object, or raise a safe typed failure."""
+
+        if not isinstance(value, Mapping):
+            raise ValueError(cls.Messages.NOT_A_MAPPING)
+        arguments = dict(value)
+        if len(arguments) > cls.MAX_KEYS:
+            raise ValueError(cls.Messages.TOO_MANY_KEYS)
+        key_pattern = re.compile(cls.KEY_PATTERN)
+        if any(
+            not isinstance(key, str) or key_pattern.match(key) is None
+            for key in arguments
+        ):
+            raise ValueError(cls.Messages.INVALID_KEY)
+        cls._reject_excess_depth(arguments)
+        try:
+            encoded = json.dumps(
+                arguments,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError, RecursionError) as exc:
+            raise ValueError(cls.Messages.NOT_SERIALIZABLE) from exc
+        if len(encoded) > cls.MAX_SERIALIZED_BYTES:
+            raise ValueError(cls.Messages.TOO_LARGE)
+        return arguments
+
+    @classmethod
+    def _reject_excess_depth(cls, arguments: Mapping[str, Any]) -> None:
+        """Bound nesting iteratively so a hostile shape cannot recurse."""
+
+        pending: list[tuple[object, int]] = [(arguments, 1)]
+        while pending:
+            value, depth = pending.pop()
+            if depth > cls.MAX_DEPTH:
+                raise ValueError(cls.Messages.TOO_DEEP)
+            if isinstance(value, Mapping):
+                pending.extend((item, depth + 1) for item in value.values())
+            elif isinstance(value, (list, tuple)):
+                pending.extend((item, depth + 1) for item in value)
+
+
+class CapabilityInvokeRequest(RuntimeContract):
+    """Bounded invocation request naming one opaque catalog member."""
+
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=_OPAQUE_TOKEN_PATTERN,
+    )
+
+    @field_validator("arguments", mode="before")
+    @classmethod
+    def _bounded_arguments(cls, value: object) -> dict[str, Any]:
+        if value is None:
+            return {}
+        return CapabilityArgumentBounds.validate(value)
+
+
+class CapabilityInvocationTarget(RuntimeContract):
+    """The only value a bridge invocation may dispatch to.
+
+    This is the third structural chokepoint of the bridge-recursion guard.  A
+    target can only be produced from a catalog entry, and its own validator
+    re-asserts the reserved-name refusal, so even an entry forged past
+    validation (``model_construct``) cannot reach an executor.
+    """
+
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
+    stable_name: str = Field(min_length=1, max_length=256)
+    source: CapabilitySource
+    connector_label: str = Field(min_length=1, max_length=256)
+    effect_class: CatalogEffectClass
+    approval_cue: ApprovalCue
+    descriptor_revision: str | None = Field(default=None, max_length=256)
+
+    @model_validator(mode="after")
+    def _never_targets_a_bridge_tool(self) -> Self:
+        if CapabilityBridgeToolName.is_reserved(self.stable_name):
+            raise CapabilityBridgeRecursionError(
+                CapabilityBridgeRecursionError.Messages.RESERVED_TARGET_NAME
+            )
+        return self
+
+    @classmethod
+    def from_catalog_entry(cls, entry: CapabilityIndexEntry) -> Self:
+        """Project one authorized catalog member into a dispatchable target."""
+
+        return cls(
+            capability_ref=entry.capability_ref,
+            stable_name=entry.stable_name,
+            source=entry.source,
+            connector_label=entry.connector_label,
+            effect_class=entry.effect_class,
+            approval_cue=entry.approval_cue,
+            descriptor_revision=entry.descriptor_revision,
+        )
+
+
+class CapabilityInvocationStatus(StrEnum):
+    """Closed model-visible disposition of one bridge invocation."""
+
+    COMPLETED = "completed"
+    STAGED = "staged"
+    REFUSED = "refused"
+
+
+class CapabilityInvocationReceipt(RuntimeContract):
+    """Body-free receipt returned by the non-model capability executor.
+
+    Raw results stay behind :attr:`invocation_ref`.  The receipt carries an
+    opaque reference, a closed status, and one bounded safe summary — never
+    connector payloads, arguments, or credentials.
+    """
+
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
+    invocation_ref: str = Field(
+        min_length=1,
+        max_length=256,
+        pattern=_OPAQUE_TOKEN_PATTERN,
+    )
+    status: CapabilityInvocationStatus
+    safe_summary: str = Field(min_length=1, max_length=512)
+
+
+class CapabilityInvokeResult(RuntimeContract):
+    """Receipt plus the catalog revision that made the opaque ref meaningful."""
+
+    catalog_id: str = Field(pattern=r"^cat_[0-9a-f]{32}$")
+    catalog_revision: str = Field(pattern=r"^rev_[0-9a-f]{32}$")
+    receipt: CapabilityInvocationReceipt
+
+
+class CapabilityInvokeToolResult(RuntimeContract):
+    """Exactly-one-outcome envelope returned by the invoke adapter."""
+
+    invocation: CapabilityInvokeResult | None = None
+    error: CapabilityDiscoveryError | None = None
+
+    @model_validator(mode="after")
+    def _require_exactly_one_outcome(self) -> Self:
+        if (self.invocation is None) == (self.error is None):
+            msg = "invoke result must contain exactly one outcome"
+            raise ValueError(msg)
+        return self
+
+    @classmethod
+    def ok(cls, invocation: CapabilityInvokeResult) -> Self:
+        """Return a successful bounded invocation receipt."""
+
+        return cls(invocation=invocation)
+
+    @classmethod
+    def fail(
+        cls,
+        code: CapabilityDiscoveryErrorCode,
+        safe_message: str,
+    ) -> Self:
+        """Return a safe failure without catalog metadata."""
+
+        return cls(
+            error=CapabilityDiscoveryError(
+                code=code,
+                safe_message=safe_message,
+            )
+        )
+
+
+@runtime_checkable
+class CapabilityExecutorPort(Protocol):
+    """Non-model executor that enters the ordinary Operation Gateway.
+
+    The port accepts only a :class:`CapabilityInvocationTarget`, so the type
+    system — not a call-site string comparison — is what keeps a bridge tool
+    from ever being dispatched.  Implementations own descriptor re-resolution,
+    canonical argument validation against the revalidated schema, approval, and
+    budget; this lane supplies the bounded seam and fails closed without one.
+    """
+
+    async def execute(
+        self,
+        *,
+        target: CapabilityInvocationTarget,
+        arguments: Mapping[str, Any],
+        idempotency_key: str | None,
+        runtime_context: AgentRuntimeContext,
+    ) -> CapabilityInvocationReceipt: ...
