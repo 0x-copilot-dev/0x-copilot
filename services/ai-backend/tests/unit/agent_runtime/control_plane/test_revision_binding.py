@@ -53,6 +53,7 @@ class InMemoryRevisionAuthority:
         self._issued = 0
         self._unavailable = False
         self.calls = 0
+        self.handles: list[object | None] = []
 
     def _key(
         self,
@@ -99,7 +100,12 @@ class InMemoryRevisionAuthority:
         *,
         feature: AgentQualityFeature,
         scope: RevisionBoundScope,
+        resolution_handle: object | None = None,
     ) -> RevisionAuthorityResult:
+        # The reference resolver keys its own store by the bound scope, so it
+        # accepts the RB.3 handle and has no use for it. Recording it proves the
+        # primitive forwards exactly what the call site supplied.
+        self.handles.append(resolution_handle)
         self.calls += 1
         if self._unavailable:
             return RevisionAuthorityResult(state=RevisionAuthorityState.UNAVAILABLE)
@@ -125,6 +131,7 @@ class ExplodingRevisionAuthority:
         *,
         feature: AgentQualityFeature,
         scope: RevisionBoundScope,
+        resolution_handle: object | None = None,
     ) -> RevisionAuthorityResult:
         raise RuntimeError(self.INTERNAL_DETAIL)
 
@@ -137,6 +144,7 @@ class UntypedRevisionAuthority:
         *,
         feature: AgentQualityFeature,
         scope: RevisionBoundScope,
+        resolution_handle: object | None = None,
     ) -> RevisionAuthorityResult:
         return {"state": "active", "current_revision": {"value": "rev-1"}}  # type: ignore[return-value]
 
@@ -176,6 +184,11 @@ class InMemoryRevisionBindingHarness:
 
     async def set_authority_unavailable(self, *, unavailable: bool) -> None:
         self.authority.set_unavailable(unavailable=unavailable)
+
+    def resolution_handle(self, ref: RevisionBoundRef) -> object | None:
+        """Resolve from the bound scope alone, as the reference resolver does."""
+
+        return None
 
 
 class InMemoryHarnessMixin:
@@ -383,9 +396,52 @@ class TestRevisionBoundScope(RevisionBindingCaseMixin):
         assert fully_bound.covers(frozenset({RevisionScopeDimension.RUN})) is True
         assert subject_only.covers(frozenset({RevisionScopeDimension.RUN})) is False
 
-    def test_use_context_requires_a_verified_run(self) -> None:
+    def test_use_context_requires_a_verified_subject_and_nothing_else(self) -> None:
+        # RB.3: a process-wide, subject-scoped adopter has no run at the layer
+        # where it revalidates. Requiring one only bought an invented sentinel.
+        run_less = RevisionUseContext(subject_fingerprint=self.SUBJECT_A)
+
+        assert run_less.run_id is None
+        assert run_less.catalog_generation is None
         with pytest.raises(ValidationError):
-            RevisionUseContext(subject_fingerprint=self.SUBJECT_A)  # type: ignore[call-arg]
+            RevisionUseContext()  # type: ignore[call-arg]
+        with pytest.raises(ValidationError):
+            RevisionUseContext(subject_fingerprint="org-acme|user-sarah")
+
+    def test_the_context_reports_the_same_dimensions_as_a_scope(self) -> None:
+        # The two are compared against each other on every call, so they must
+        # not be able to disagree about what "bound to a dimension" means.
+        for run_id, catalog_generation in (
+            (None, None),
+            (self.RUN_A, None),
+            (None, self.GENERATION_A),
+            (self.RUN_A, self.GENERATION_A),
+        ):
+            scope = RevisionBoundScope(
+                subject_fingerprint=self.SUBJECT_A,
+                run_id=run_id,
+                catalog_generation=catalog_generation,
+            )
+            context = RevisionUseContext(
+                subject_fingerprint=self.SUBJECT_A,
+                run_id=run_id,
+                catalog_generation=catalog_generation,
+            )
+
+            assert context.dimensions == scope.dimensions
+            for required in (
+                frozenset({RevisionScopeDimension.RUN}),
+                frozenset({RevisionScopeDimension.CATALOG_GENERATION}),
+                frozenset(RevisionScopeDimension),
+            ):
+                assert context.covers(required) == scope.covers(required)
+
+    def test_a_scope_and_a_context_are_not_interchangeable_types(self) -> None:
+        # Same fields, different meanings: one is what a reference was minted
+        # for, the other is what the runtime verified. Sharing a base class
+        # would let a caller check a reference against itself.
+        assert not issubclass(RevisionUseContext, RevisionBoundScope)
+        assert not issubclass(RevisionBoundScope, RevisionUseContext)
 
 
 class TestRevalidationOutcomeVocabulary(RevisionBindingCaseMixin):
@@ -613,3 +669,231 @@ class TestRevalidatorFailsClosed(RevisionBindingCaseMixin):
 
         assert in_run_a.outcome is RevalidationOutcome.CURRENT
         assert in_run_b.outcome is RevalidationOutcome.CURRENT
+
+
+class TestOptionalRunDimension(RevisionBindingCaseMixin):
+    """Relaxing the context's run field must not relax any check."""
+
+    def run_policy(self) -> RevalidationPolicy:
+        return RevalidationPolicy(
+            feature=self.FEATURE,
+            required_dimensions=frozenset({RevisionScopeDimension.RUN}),
+        )
+
+    async def test_a_run_less_context_never_satisfies_a_run_bound_reference(
+        self,
+    ) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+
+        decision = await harness.revalidator.revalidate_at_use(
+            ref,
+            RevisionUseContext(subject_fingerprint=self.SUBJECT_A),
+            self.feature_policy(),
+        )
+
+        assert decision.outcome is RevalidationOutcome.OUT_OF_SCOPE
+        assert decision.reason is RevalidationReason.RUN_MISMATCH
+
+    async def test_a_required_run_is_demanded_of_the_context_too(self) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+        calls_after_mint = harness.authority.calls
+
+        decision = await harness.revalidator.revalidate_at_use(
+            ref,
+            RevisionUseContext(subject_fingerprint=self.SUBJECT_A),
+            self.run_policy(),
+        )
+
+        assert decision.outcome is RevalidationOutcome.OUT_OF_SCOPE
+        assert decision.reason is RevalidationReason.SCOPE_DIMENSION_MISSING
+        # Refused structurally: the authority is never asked to adjudicate a
+        # dimension the call site could not supply a verified fact for.
+        assert harness.authority.calls == calls_after_mint
+
+    async def test_a_required_generation_is_demanded_of_the_context_too(self) -> None:
+        harness = self.harness()
+        scope = self.scope(run_id=self.RUN_A, catalog_generation=self.GENERATION_A)
+        ref = await harness.mint(scope)
+        calls_after_mint = harness.authority.calls
+
+        decision = await harness.revalidator.revalidate_at_use(
+            ref,
+            self.use_context(),
+            RevalidationPolicy(
+                feature=self.FEATURE,
+                required_dimensions=frozenset(
+                    {RevisionScopeDimension.CATALOG_GENERATION}
+                ),
+            ),
+        )
+
+        assert decision.reason is RevalidationReason.SCOPE_DIMENSION_MISSING
+        assert harness.authority.calls == calls_after_mint
+
+    async def test_a_run_less_reference_and_context_still_revalidate(self) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope())
+
+        decision = await harness.revalidator.revalidate_at_use(
+            ref,
+            RevisionUseContext(subject_fingerprint=self.SUBJECT_A),
+            self.feature_policy(),
+        )
+
+        assert decision.outcome is RevalidationOutcome.CURRENT
+        assert decision.reason is RevalidationReason.REVISION_MATCHES
+
+
+class TestResolutionHandleIsOpaqueAndUnretained(RevisionBindingCaseMixin):
+    """The handle reaches the adopter's authority and nothing else."""
+
+    class _Handle:
+        """A handle whose contents the primitive must never look at."""
+
+        def __init__(self) -> None:
+            self.org_id = "org-acme"
+            self.user_id = "user-sarah"
+
+    async def test_the_handle_reaches_the_authority_verbatim(self) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+        handle = self._Handle()
+
+        await harness.revalidator.revalidate_at_use(
+            ref,
+            self.use_context(),
+            self.feature_policy(),
+            resolution_handle=handle,
+        )
+
+        assert harness.authority.handles[-1] is handle
+
+    async def test_an_omitted_handle_arrives_as_none(self) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+
+        await harness.revalidator.revalidate_at_use(
+            ref,
+            self.use_context(),
+            self.feature_policy(),
+        )
+
+        assert harness.authority.handles[-1] is None
+
+    async def test_the_handle_changes_no_verdict_for_a_scope_keyed_authority(
+        self,
+    ) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+        context = self.use_context()
+        policy = self.feature_policy()
+
+        without = await harness.revalidator.revalidate_at_use(ref, context, policy)
+        with_handle = await harness.revalidator.revalidate_at_use(
+            ref,
+            context,
+            policy,
+            resolution_handle=self._Handle(),
+        )
+
+        assert with_handle == without
+
+    async def test_the_handle_never_enters_the_reference_or_the_decision(self) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+        handle = self._Handle()
+
+        decision = await harness.revalidator.revalidate_at_use(
+            ref,
+            self.use_context(),
+            self.feature_policy(),
+            resolution_handle=handle,
+        )
+
+        # The no-raw-identity property: nothing that persists or logs a
+        # reference gains a field the handle could travel in, so the raw
+        # identity it carries cannot be written down by the primitive.
+        assert "resolution_handle" not in RevisionBinding.model_fields
+        assert "resolution_handle" not in RevisionBoundScope.model_fields
+        assert "resolution_handle" not in RevalidationDecision.model_fields
+        assert handle.org_id not in ref.model_dump_json()
+        assert handle.org_id not in decision.model_dump_json()
+        assert handle.user_id not in decision.model_dump_json()
+
+    async def test_the_handle_is_not_digested_into_the_binding(self) -> None:
+        # Freshness is the authority's verdict, never a property of the handle:
+        # two references minted for the same body are identical regardless of
+        # what any call site later passes alongside them.
+        harness = self.harness()
+        scope = self.scope(run_id=self.RUN_A)
+        ref = await harness.mint(scope)
+        digest_before = ref.binding_digest
+
+        await harness.revalidator.revalidate_at_use(
+            ref,
+            self.use_context(),
+            self.feature_policy(),
+            resolution_handle=self._Handle(),
+        )
+
+        assert ref.binding_digest == digest_before
+        assert ref.binding_is_intact is True
+
+    async def test_the_revalidator_retains_no_handle_between_calls(self) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+        context = self.use_context()
+        policy = self.feature_policy()
+        handle = self._Handle()
+
+        await harness.revalidator.revalidate_at_use(
+            ref,
+            context,
+            policy,
+            resolution_handle=handle,
+        )
+        await harness.revalidator.revalidate_at_use(ref, context, policy)
+
+        assert harness.authority.handles[-1] is None
+        assert handle not in vars(harness.revalidator).values()
+
+    async def test_a_structural_refusal_never_forwards_a_handle(self) -> None:
+        harness = self.harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+        calls_after_mint = harness.authority.calls
+
+        decision = await harness.revalidator.revalidate_at_use(
+            ref,
+            self.use_context(subject_fingerprint=self.SUBJECT_B),
+            self.feature_policy(),
+            resolution_handle=self._Handle(),
+        )
+
+        assert decision.outcome is RevalidationOutcome.OUT_OF_SCOPE
+        assert harness.authority.calls == calls_after_mint
+
+    async def test_an_authority_predating_the_handle_fails_closed(self) -> None:
+        class LegacyAuthority:
+            """An authority whose signature never learned about the handle."""
+
+            async def current_revision(
+                self,
+                *,
+                feature: AgentQualityFeature,
+                scope: RevisionBoundScope,
+            ) -> RevisionAuthorityResult:
+                return RevisionAuthorityResult(
+                    state=RevisionAuthorityState.ACTIVE,
+                    current_revision=BoundRevision(value="rev-never-issued"),
+                )
+
+        decision = await self.revalidator(LegacyAuthority()).revalidate_at_use(
+            self.unbound_ref(),
+            self.use_context(),
+            self.feature_policy(),
+        )
+
+        assert decision.outcome is RevalidationOutcome.UNAVAILABLE
+        assert decision.reason is RevalidationReason.AUTHORITY_ERROR

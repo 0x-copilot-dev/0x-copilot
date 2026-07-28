@@ -45,6 +45,31 @@ a careless call site:
   coerced to a boolean, so ``unavailable`` cannot be mistaken for success.  Use
   :attr:`RevalidationDecision.is_current` or
   :meth:`RevalidationDecision.require_current`.
+
+Two shapes come from adoption rather than design (RB.3), because two adopters
+bound to the primitive independently and hit the same two limits:
+
+* **The run dimension is optional on both sides.**  A process-wide,
+  subject-scoped consumer has no run at the layer where it revalidates, and
+  fabricating an inert sentinel to satisfy a mandatory field is a lie the
+  primitive should not require.  :attr:`RevisionUseContext.run_id` is therefore
+  optional exactly as :attr:`RevisionBoundScope.run_id` is.  Relaxing the field
+  does not relax the check: a policy that *requires* a dimension now demands it
+  of the use context as well as the reference, so a call site that asks to be
+  fenced by run and then presents no run is refused structurally.
+* **An authority may be handed an opaque resolution handle.**  The subject
+  fingerprint is deliberately one-way, so an authority that must ask a backend
+  keyed by the original identity cannot recover it from the scope, and every
+  adopter was otherwise forced into a scope-keyed side registry populated at
+  mint time -- with the lifetime management that implies.
+  :meth:`RevisionRevalidatorPort.revalidate_at_use` therefore accepts an
+  optional ``resolution_handle`` and forwards it to the domain authority
+  untouched.  It is **not** part of the bound body: it is never digested, never
+  compared, never stored on the revalidator, and never placed in a decision, so
+  a reference and a decision carry exactly what they carried before it existed.
+  That is what keeps the no-raw-identity property intact -- the handle travels
+  from an adopter's call site to that same adopter's authority, both of which
+  already hold the verified identity, and nothing in between retains it.
 """
 
 from __future__ import annotations
@@ -89,6 +114,23 @@ OpaqueRefValue = Annotated[
     ),
 ]
 """Bounded printable-ASCII reference value that can never carry a body."""
+
+RevisionResolutionHandle = object
+"""An adopter-owned handle the primitive forwards to that adopter's authority.
+
+Typed as :class:`object` on purpose: the primitive has no vocabulary for its
+contents and must not acquire one.  It is never interpreted, compared,
+digested, serialized, logged, or retained here -- forwarding it verbatim is the
+whole contract.  Adopters use it to carry whatever their own authority needs to
+resolve directly (the verified identity a fingerprint destroyed, a revision the
+caller already resolved, a connection), which is what removes the scope-keyed
+side registry the port previously forced on every adopter.
+
+It is deliberately *not* a field of :class:`RevisionBinding`,
+:class:`RevisionBoundScope`, or :class:`RevalidationDecision`.  Those are the
+values that get minted, persisted, replayed, and logged; keeping the handle out
+of all three is what preserves the no-raw-identity property.
+"""
 
 
 class RevisionBindingError(RuntimeError):
@@ -167,6 +209,28 @@ class RevisionScopeDimension(StrEnum):
     CATALOG_GENERATION = "catalog_generation"
 
 
+def _bound_dimensions(
+    *,
+    run_id: str | None,
+    catalog_generation: str | None,
+) -> frozenset[RevisionScopeDimension]:
+    """Return the dimensions a subject-anchored value is actually narrowed to.
+
+    Shared by the issuing scope and the use context so the two can never drift
+    into disagreeing about what "bound to a dimension" means.  They stay
+    separate types rather than sharing a base: a scope and a use context must
+    not be structurally interchangeable, because confusing them would mean
+    checking a reference against itself.
+    """
+
+    bound = {RevisionScopeDimension.SUBJECT}
+    if run_id is not None:
+        bound.add(RevisionScopeDimension.RUN)
+    if catalog_generation is not None:
+        bound.add(RevisionScopeDimension.CATALOG_GENERATION)
+    return frozenset(bound)
+
+
 class RevisionBoundScope(RuntimeContract):
     """The closed issuing scope a reference is bound to.
 
@@ -184,12 +248,10 @@ class RevisionBoundScope(RuntimeContract):
     def dimensions(self) -> frozenset[RevisionScopeDimension]:
         """Return every dimension this scope is actually bound to."""
 
-        bound = {RevisionScopeDimension.SUBJECT}
-        if self.run_id is not None:
-            bound.add(RevisionScopeDimension.RUN)
-        if self.catalog_generation is not None:
-            bound.add(RevisionScopeDimension.CATALOG_GENERATION)
-        return frozenset(bound)
+        return _bound_dimensions(
+            run_id=self.run_id,
+            catalog_generation=self.catalog_generation,
+        )
 
     def covers(self, required: frozenset[RevisionScopeDimension]) -> bool:
         """Return whether this scope is at least as narrow as ``required``."""
@@ -204,11 +266,33 @@ class RevisionUseContext(RuntimeContract):
     output, tool results, MCP descriptors, and other untrusted sources must
     never populate it -- a forged context would widen nothing here, but it would
     defeat the scope checks this primitive performs on the caller's behalf.
+
+    Every dimension except the subject is optional, matching
+    :class:`RevisionBoundScope`: a process-wide, subject-scoped consumer has no
+    run at the layer where it revalidates, and inventing an inert sentinel to
+    satisfy a mandatory field would state a verified fact that nobody verified.
+    ``None`` means "this context carries no such fact", never "the dimension is
+    satisfied" -- a reference bound to a dimension the context cannot supply is
+    refused, and so is a policy that requires one.
     """
 
     subject_fingerprint: Sha256Hex
-    run_id: ControlToken
+    run_id: ControlToken | None = None
     catalog_generation: ControlToken | None = None
+
+    @property
+    def dimensions(self) -> frozenset[RevisionScopeDimension]:
+        """Return every dimension this context actually carries a fact for."""
+
+        return _bound_dimensions(
+            run_id=self.run_id,
+            catalog_generation=self.catalog_generation,
+        )
+
+    def covers(self, required: frozenset[RevisionScopeDimension]) -> bool:
+        """Return whether this context supplies every ``required`` dimension."""
+
+        return required <= self.dimensions
 
 
 class RevisionBinding(RuntimeContract):
@@ -544,6 +628,15 @@ class RevisionAuthorityPort(Protocol):
     Implementations answer one question only -- what is authoritative *now* for
     this bound scope.  They never inspect the minted revision, never compare
     revisions themselves, and never widen a scope.
+
+    ``resolution_handle`` is the adopter's own opaque value, forwarded verbatim
+    from its own call site (see :data:`RevisionResolutionHandle`).  It exists
+    because ``scope.subject_fingerprint`` is one-way: an authority that must ask
+    a backend keyed by the original identity cannot recover it from the scope,
+    and would otherwise need a scope-keyed side registry populated at mint time.
+    It is a resolution *key*, never an answer -- an authority that reads
+    freshness out of a caller-supplied handle it did not derive is validating
+    the caller against itself.
     """
 
     async def current_revision(
@@ -551,6 +644,7 @@ class RevisionAuthorityPort(Protocol):
         *,
         feature: AgentQualityFeature,
         scope: RevisionBoundScope,
+        resolution_handle: RevisionResolutionHandle | None = None,
     ) -> RevisionAuthorityResult: ...
 
 
@@ -563,6 +657,8 @@ class RevisionRevalidatorPort(Protocol):
         ref: RevisionBoundRef,
         runtime_context: RevisionUseContext,
         policy: RevalidationPolicy,
+        *,
+        resolution_handle: RevisionResolutionHandle | None = None,
     ) -> RevalidationDecision: ...
 
 
@@ -584,8 +680,18 @@ class RevisionBindingRevalidator:
         ref: RevisionBoundRef,
         runtime_context: RevisionUseContext,
         policy: RevalidationPolicy,
+        *,
+        resolution_handle: RevisionResolutionHandle | None = None,
     ) -> RevalidationDecision:
-        """Re-resolve ``ref`` against current authority and narrow accordingly."""
+        """Re-resolve ``ref`` against current authority and narrow accordingly.
+
+        ``resolution_handle`` is forwarded to the domain authority untouched and
+        is never retained: it is a parameter of this call and not of the
+        revalidator, so it cannot outlive the resolution it was supplied for.
+        No structural refusal consults it, so a handle can neither rescue a
+        reference the checks above reject nor cause an authority call the
+        checks above prevent.
+        """
 
         presented_digest = ref.computed_binding_digest
         refusal = self._refusal_reason(ref, runtime_context, policy)
@@ -595,7 +701,7 @@ class RevisionBindingRevalidator:
                 reason=refusal,
                 ref_binding_digest=presented_digest,
             )
-        result = await self._resolve(ref)
+        result = await self._resolve(ref, resolution_handle)
         if isinstance(result, RevalidationReason):
             return RevalidationDecision.for_reason(
                 feature=policy.feature,
@@ -635,6 +741,12 @@ class RevisionBindingRevalidator:
             return RevalidationReason.FEATURE_MISMATCH
         if not ref.scope.covers(policy.required_dimensions):
             return RevalidationReason.SCOPE_DIMENSION_MISSING
+        if not runtime_context.covers(policy.required_dimensions):
+            # The required dimensions bind both sides.  A call site that asks to
+            # be fenced by a dimension and then presents no verified fact for it
+            # has nothing to compare against, so the optional context fields
+            # relax what is representable without relaxing what is checked.
+            return RevalidationReason.SCOPE_DIMENSION_MISSING
         if ref.scope.subject_fingerprint != runtime_context.subject_fingerprint:
             return RevalidationReason.SUBJECT_MISMATCH
         if ref.scope.run_id is not None and ref.scope.run_id != runtime_context.run_id:
@@ -649,6 +761,7 @@ class RevisionBindingRevalidator:
     async def _resolve(
         self,
         ref: RevisionBoundRef,
+        resolution_handle: RevisionResolutionHandle | None,
     ) -> RevisionAuthorityResult | RevalidationReason:
         """Consult the domain authority, converting every failure to a reason."""
 
@@ -656,11 +769,14 @@ class RevisionBindingRevalidator:
             result = await self._authority.current_revision(
                 feature=ref.feature,
                 scope=ref.scope,
+                resolution_handle=resolution_handle,
             )
         except Exception:
             # The resolver is domain-supplied and may wrap network or store
             # failures. Internal detail never reaches the caller, the model, or
-            # an event: an unusable authority is simply unavailable.
+            # an event: an unusable authority is simply unavailable. An
+            # authority whose signature predates the handle raises TypeError
+            # here and lands on the same fail-closed path.
             return RevalidationReason.AUTHORITY_ERROR
         if not isinstance(result, RevisionAuthorityResult):
             return RevalidationReason.AUTHORITY_CONTRACT_VIOLATION
@@ -701,6 +817,7 @@ __all__ = [
     "RevisionBoundRefNotCurrent",
     "RevisionBoundScope",
     "RevisionOrderingNotSupported",
+    "RevisionResolutionHandle",
     "RevisionRevalidatorPort",
     "RevisionScopeDimension",
     "RevisionUseContext",

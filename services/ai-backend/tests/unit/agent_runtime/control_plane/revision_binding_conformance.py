@@ -31,6 +31,7 @@ from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.control_plane.revision_binding import (
     BoundRevision,
     RevalidationBooleanCoercion,
+    RevalidationDecision,
     RevalidationOutcome,
     RevalidationPolicy,
     RevalidationReason,
@@ -71,6 +72,17 @@ class RevisionBindingConformanceHarness(Protocol):
     async def set_authority_unavailable(self, *, unavailable: bool) -> None:
         """Make every authority answer unavailable, or restore it."""
 
+    def resolution_handle(self, ref: RevisionBoundRef) -> object | None:
+        """Return the domain's opaque resolution handle for ``ref``, if any.
+
+        Required of every harness so the suite drives each adopter exactly as
+        that adopter's own call site does.  A domain whose authority resolves
+        from the bound scope alone returns ``None``; a domain whose authority
+        needs the identity the fingerprint hides returns whatever its own call
+        site would pass.  Returning ``None`` is not a weaker instantiation --
+        the 15 behaviors below are asserted either way.
+        """
+
 
 class RevisionBindingConformanceFixtures:
     """Scope, context, and policy builders shared by every conformance case."""
@@ -110,6 +122,19 @@ class RevisionBindingConformanceFixtures:
         return RevisionUseContext(
             subject_fingerprint=subject_fingerprint or self.SUBJECT_A,
             run_id=run_id or self.RUN_A,
+            catalog_generation=catalog_generation,
+        )
+
+    def run_less_use_context(
+        self,
+        *,
+        subject_fingerprint: str | None = None,
+        catalog_generation: str | None = None,
+    ) -> RevisionUseContext:
+        """Build at-use facts that carry no run, as a run-less adopter does."""
+
+        return RevisionUseContext(
+            subject_fingerprint=subject_fingerprint or self.SUBJECT_A,
             catalog_generation=catalog_generation,
         )
 
@@ -158,6 +183,27 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
 
         raise NotImplementedError(self.Messages.HARNESS_REQUIRED)
 
+    async def revalidate(
+        self,
+        harness: RevisionBindingConformanceHarness,
+        ref: RevisionBoundRef,
+        runtime_context: RevisionUseContext,
+        policy: RevalidationPolicy,
+    ) -> RevalidationDecision:
+        """Revalidate through the harness's own resolution handle.
+
+        Every case goes through here so an adopter is driven exactly as its own
+        call site drives it, rather than through a handle-free shape no adopter
+        actually uses.
+        """
+
+        return await harness.revalidator.revalidate_at_use(
+            ref,
+            runtime_context,
+            policy,
+            resolution_handle=harness.resolution_handle(ref),
+        )
+
     async def test_harness_satisfies_the_published_conformance_surface(self) -> None:
         harness = await self.build_harness()
         assert isinstance(harness, RevisionBindingConformanceHarness)
@@ -168,7 +214,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         scope = self.scope(run_id=self.RUN_A)
         ref = await harness.mint(scope)
 
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             ref,
             self.use_context(),
             self.policy(harness),
@@ -185,9 +232,9 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         context = self.use_context()
         policy = self.policy(harness)
 
-        first = await harness.revalidator.revalidate_at_use(ref, context, policy)
-        second = await harness.revalidator.revalidate_at_use(ref, context, policy)
-        third = await harness.revalidator.revalidate_at_use(ref, context, policy)
+        first = await self.revalidate(harness, ref, context, policy)
+        second = await self.revalidate(harness, ref, context, policy)
+        third = await self.revalidate(harness, ref, context, policy)
 
         assert first == second == third
         assert first.outcome is RevalidationOutcome.CURRENT
@@ -196,7 +243,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         harness = await self.build_harness()
         ref = await harness.mint(self.scope(run_id=self.RUN_A))
 
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             ref,
             self.use_context(subject_fingerprint=self.SUBJECT_B),
             self.policy(harness),
@@ -210,7 +258,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         harness = await self.build_harness()
         ref = await harness.mint(self.scope(run_id=self.RUN_A))
 
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             ref,
             self.use_context(run_id=self.RUN_B),
             self.policy(harness),
@@ -224,12 +273,14 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         scope = self.scope(run_id=self.RUN_A, catalog_generation=self.GENERATION_A)
         ref = await harness.mint(scope)
 
-        superseded_generation = await harness.revalidator.revalidate_at_use(
+        superseded_generation = await self.revalidate(
+            harness,
             ref,
             self.use_context(catalog_generation=self.GENERATION_B),
             self.policy(harness),
         )
-        missing_generation = await harness.revalidator.revalidate_at_use(
+        missing_generation = await self.revalidate(
+            harness,
             ref,
             self.use_context(),
             self.policy(harness),
@@ -248,7 +299,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         harness = await self.build_harness()
         ref = await harness.mint(self.scope())
 
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             ref,
             self.use_context(),
             self.policy(
@@ -260,11 +312,36 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         assert decision.outcome is RevalidationOutcome.OUT_OF_SCOPE
         assert decision.reason is RevalidationReason.SCOPE_DIMENSION_MISSING
 
+    async def test_a_required_dimension_absent_from_the_context_is_enforced(
+        self,
+    ) -> None:
+        # RB.3 made the run optional in the use context so a run-less adopter
+        # need not invent a sentinel. That relaxes what is representable, never
+        # what is checked: a call site that demands the run dimension and then
+        # presents no verified run is refused before any authority is asked.
+        harness = await self.build_harness()
+        ref = await harness.mint(self.scope(run_id=self.RUN_A))
+
+        decision = await self.revalidate(
+            harness,
+            ref,
+            self.run_less_use_context(),
+            self.policy(
+                harness,
+                required_dimensions=frozenset({RevisionScopeDimension.RUN}),
+            ),
+        )
+
+        assert decision.outcome is RevalidationOutcome.OUT_OF_SCOPE
+        assert decision.reason is RevalidationReason.SCOPE_DIMENSION_MISSING
+        assert decision.current_revision is None
+
     async def test_reference_cannot_be_replayed_on_another_feature(self) -> None:
         harness = await self.build_harness()
         ref = await harness.mint(self.scope(run_id=self.RUN_A))
 
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             ref,
             self.use_context(),
             self.policy(harness, feature=self.foreign_feature(harness)),
@@ -281,8 +358,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         policy = self.policy(harness)
 
         await harness.supersede(scope)
-        first = await harness.revalidator.revalidate_at_use(ref, context, policy)
-        replayed = await harness.revalidator.revalidate_at_use(ref, context, policy)
+        first = await self.revalidate(harness, ref, context, policy)
+        replayed = await self.revalidate(harness, ref, context, policy)
 
         assert first.outcome is RevalidationOutcome.SUPERSEDED
         assert first.reason is RevalidationReason.REVISION_CHANGED
@@ -297,7 +374,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         ref = await harness.mint(scope)
 
         await harness.revoke(scope)
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             ref,
             self.use_context(),
             self.policy(harness),
@@ -317,7 +395,7 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         policy = self.policy(harness)
 
         await harness.set_authority_unavailable(unavailable=True)
-        decision = await harness.revalidator.revalidate_at_use(ref, context, policy)
+        decision = await self.revalidate(harness, ref, context, policy)
 
         assert decision.outcome is RevalidationOutcome.UNAVAILABLE
         assert decision.outcome.admits_use is False
@@ -327,7 +405,7 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
             decision.require_current()
 
         await harness.set_authority_unavailable(unavailable=False)
-        restored = await harness.revalidator.revalidate_at_use(ref, context, policy)
+        restored = await self.revalidate(harness, ref, context, policy)
         assert restored.outcome is RevalidationOutcome.CURRENT
 
     async def test_revalidation_results_cannot_be_coerced_to_a_boolean(self) -> None:
@@ -335,7 +413,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         ref = await harness.mint(self.scope(run_id=self.RUN_A))
 
         await harness.set_authority_unavailable(unavailable=True)
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             ref,
             self.use_context(),
             self.policy(harness),
@@ -351,7 +430,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
         ref = await harness.mint(self.scope(run_id=self.RUN_A))
         forged = ref.model_copy(update={"binding_digest": "f" * 64})
 
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             forged,
             self.use_context(),
             self.policy(harness),
@@ -372,7 +452,8 @@ class RevisionBindingConformanceSuite(RevisionBindingConformanceFixtures):
             }
         )
 
-        decision = await harness.revalidator.revalidate_at_use(
+        decision = await self.revalidate(
+            harness,
             widened,
             self.use_context(),
             self.policy(harness),

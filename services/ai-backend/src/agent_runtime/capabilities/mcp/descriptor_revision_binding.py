@@ -16,17 +16,24 @@ catalog generation, and revision equality -- belongs to
 :class:`~agent_runtime.control_plane.revision_binding.RevisionBindingRevalidator`
 and is deliberately not reimplemented here.
 
-No authority is introduced.  :meth:`McpDescriptorRevisionAuthority.publish`
-only ever records a revision that the trusted backend revision path (exact
-check or feed notice) already resolved for a verified subject, so this class is
-a projection of the backend authority rather than a second one.  It also
-narrows: §9.2 keeps ai-backend on *opaque* revisions, so both the subject and
-the revision cross this boundary as digests and no org, user, server, or
-provider-shaped revision string is ever placed in a control contract.
+No authority is introduced.  The only revision this module ever reports is one
+the trusted backend revision path (exact check or feed notice) already resolved
+for a verified subject, so this class is a projection of the backend authority
+rather than a second one.  It also narrows: §9.2 keeps ai-backend on *opaque*
+revisions, so both the subject and the revision cross this boundary as digests
+and no org, user, server, or provider-shaped revision string is ever placed in
+a control contract.
+
+RB.3 removed the side registry this adoption originally needed.  The backend's
+answer arrives with the request that asks the question, so the authority is
+handed it directly as the RB.3 resolution handle instead of writing it into a
+fingerprint-keyed dict at the top of every call and reading it back one frame
+later.  Nothing is cached, so nothing has to be released.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import ClassVar
 
 from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCacheKey
@@ -40,6 +47,7 @@ from agent_runtime.control_plane.revision_binding import (
     RevisionBindingRevalidator,
     RevisionBoundRef,
     RevisionBoundScope,
+    RevisionResolutionHandle,
     RevisionScopeDimension,
     RevisionUseContext,
 )
@@ -66,11 +74,6 @@ class McpDescriptorBindingIdentity:
     SCHEMA_VERSION: ClassVar[int] = 1
     REF_PREFIX: ClassVar[str] = "mcp-descriptor-"
     FEATURE: ClassVar[AgentQualityFeature] = AgentQualityFeature.F8_MCP_CONTROL_PLANE
-    # The descriptor cache is process-wide and subject-scoped: it is shared by
-    # every run in the worker, so no run may narrow it.  F8 therefore never
-    # binds ``RevisionBoundScope.run_id``, which makes the run dimension inert
-    # and this mandatory context value unable to admit or refuse anything.
-    CACHE_RUN_SENTINEL: ClassVar[str] = "mcp-descriptor-cache"
 
     @classmethod
     def subject_fingerprint(cls, key: McpDiscoveryCacheKey) -> str:
@@ -134,11 +137,16 @@ class McpDescriptorBindingIdentity:
         *,
         catalog_generation: int,
     ) -> RevisionUseContext:
-        """Project the verified at-use facts the cache already holds."""
+        """Project the verified at-use facts the cache already holds.
+
+        The descriptor cache is process-wide and subject-scoped: it is shared by
+        every run in the worker, so no run may narrow it and F8 binds no run on
+        either side.  Since RB.3 the context can say so instead of asserting an
+        invented run that no verified state backs.
+        """
 
         return RevisionUseContext(
             subject_fingerprint=subject_fingerprint,
-            run_id=cls.CACHE_RUN_SENTINEL,
             catalog_generation=str(catalog_generation),
         )
 
@@ -154,47 +162,66 @@ class McpDescriptorBindingIdentity:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class McpDescriptorAuthorityResolution:
+    """The RB.3 resolution handle F8 hands its own authority.
+
+    The backend revision path resolves a subject's current revision *before*
+    the cache asks whether a bound view is still usable -- the answer arrives on
+    the request itself.  Carrying it here is what lets the authority resolve
+    directly, and it is exactly the identity-recovery problem RB.3 names: the
+    subject fingerprint is one-way, so an authority handed only a scope cannot
+    re-ask the backend and has to keep a fingerprint-keyed dict instead.
+
+    The handle is opaque to the shared primitive, which forwards it without
+    interpreting it.  It never reaches a minted reference or a decision, so no
+    org, user, server, or provider-shaped revision string is persisted or
+    logged because of it; the state below is the same closed control vocabulary
+    the port already speaks.
+    """
+
+    state: RevisionAuthorityState
+    revision: BoundRevision | None = None
+
+    @classmethod
+    def active(cls, revision: str) -> "McpDescriptorAuthorityResolution":
+        """Carry the trusted revision the backend already resolved."""
+
+        return cls(
+            state=RevisionAuthorityState.ACTIVE,
+            revision=McpDescriptorBindingIdentity.bound_revision(revision),
+        )
+
+    @classmethod
+    def for_state(
+        cls,
+        state: RevisionAuthorityState,
+    ) -> "McpDescriptorAuthorityResolution":
+        """Carry a non-active answer, which never admits a reference."""
+
+        return cls(state=state)
+
+
 class McpDescriptorRevisionAuthority:
     """What the MCP control plane says is current *now* for one subject.
 
     It answers, and never compares: revision equality, scope narrowing, and
     binding integrity all belong to the shared revalidator.
 
-    State is process-local, matching the descriptor cache it projects.  Every
-    mutation happens on the event loop from a caller that already holds the
-    cache's state lock, and :meth:`current_revision` reaches no suspension
-    point, so the read is atomic with respect to those mutations without taking
-    a second lock (which would introduce a lock-ordering hazard).
+    It also keeps no per-subject state.  Before RB.3 the port could only be
+    handed ``(feature, scope)``, so this class kept a fingerprint-keyed
+    projection that every call wrote and then immediately read back, plus the
+    ``forget`` path that dict's unbounded growth required.  The handle removes
+    both: an answer the caller already holds is passed in, and a call that
+    presents no answer resolves to ``unknown`` rather than to something stale.
+
+    The one piece of state left is the reachability flag, which is a property of
+    the authority itself rather than of any subject.  It is read on the event
+    loop with no suspension point, so it needs no lock of its own.
     """
 
     def __init__(self) -> None:
-        self._current: dict[str, BoundRevision] = {}
-        self._revoked: set[str] = set()
         self._unavailable = False
-
-    def publish(self, *, subject_fingerprint: str, revision: str) -> None:
-        """Record the trusted current revision resolved for one subject."""
-
-        self._current[subject_fingerprint] = (
-            McpDescriptorBindingIdentity.bound_revision(revision)
-        )
-        self._revoked.discard(subject_fingerprint)
-
-    def revoke(self, *, subject_fingerprint: str) -> None:
-        """Record that this subject's descriptor authority no longer exists."""
-
-        self._current.pop(subject_fingerprint, None)
-        self._revoked.add(subject_fingerprint)
-
-    def forget(self, *, subject_fingerprint: str) -> None:
-        """Drop a projection whose backing generation state is being released.
-
-        Forgetting yields ``unknown`` rather than ``active``: a reference is
-        never admitted because the projection went missing.
-        """
-
-        self._current.pop(subject_fingerprint, None)
-        self._revoked.discard(subject_fingerprint)
 
     def set_unavailable(self, *, unavailable: bool) -> None:
         """Simulate or record an unreachable authority without losing state."""
@@ -206,6 +233,7 @@ class McpDescriptorRevisionAuthority:
         *,
         feature: AgentQualityFeature,
         scope: RevisionBoundScope,
+        resolution_handle: RevisionResolutionHandle | None = None,
     ) -> RevisionAuthorityResult:
         """Return what is authoritative now for ``scope``, or why it is not."""
 
@@ -216,15 +244,17 @@ class McpDescriptorRevisionAuthority:
             # reaches any authority.  Answering ``unknown`` keeps this adapter
             # fail-closed even if it is ever consulted directly.
             return RevisionAuthorityResult(state=RevisionAuthorityState.UNKNOWN)
-        fingerprint = scope.subject_fingerprint
-        if fingerprint in self._revoked:
-            return RevisionAuthorityResult(state=RevisionAuthorityState.REVOKED)
-        revision = self._current.get(fingerprint)
-        if revision is None:
+        if not isinstance(resolution_handle, McpDescriptorAuthorityResolution):
+            # No handle, or one belonging to another domain: this authority has
+            # nothing to resolve from and must not guess.
+            return RevisionAuthorityResult(state=RevisionAuthorityState.UNKNOWN)
+        if resolution_handle.state is not RevisionAuthorityState.ACTIVE:
+            return RevisionAuthorityResult(state=resolution_handle.state)
+        if resolution_handle.revision is None:
             return RevisionAuthorityResult(state=RevisionAuthorityState.UNKNOWN)
         return RevisionAuthorityResult(
             state=RevisionAuthorityState.ACTIVE,
-            current_revision=revision,
+            current_revision=resolution_handle.revision,
         )
 
 
@@ -265,11 +295,14 @@ class McpDescriptorRevisionBinder:
         return self._revalidator
 
     def forget(self, key: McpDiscoveryCacheKey) -> None:
-        """Release the projection for ``key`` alongside its generation state."""
+        """Release whatever this binder held for ``key``.
 
-        self._authority.forget(
-            subject_fingerprint=McpDescriptorBindingIdentity.subject_fingerprint(key)
-        )
+        Since RB.3 that is nothing: the authority keeps no per-subject
+        projection, so there is no lifetime to manage and no memory to bound.
+        The method survives only because its two call sites live in the shipped
+        Step 7 cache, which this lane may not edit; it is inert, not deferred
+        work, and root can delete it together with those calls.
+        """
 
     async def revalidate(
         self,
@@ -287,13 +320,14 @@ class McpDescriptorRevisionBinder:
         ``trusted_revision`` is what the backend revision authority resolved
         for this subject, and ``observed_generation`` is the barrier value read
         at the moment of use.
+
+        The trusted revision is handed to the authority as the RB.3 resolution
+        handle.  It is the same value the authority used to answer with, from
+        the same source, so the verdict is unchanged -- it simply travels as an
+        argument rather than through a dict this binder had to keep alive.
         """
 
         fingerprint = McpDescriptorBindingIdentity.subject_fingerprint(key)
-        self._authority.publish(
-            subject_fingerprint=fingerprint,
-            revision=trusted_revision,
-        )
         ref = McpDescriptorBindingIdentity.mint(
             scope=McpDescriptorBindingIdentity.scope(
                 fingerprint,
@@ -308,10 +342,12 @@ class McpDescriptorRevisionBinder:
                 catalog_generation=observed_generation,
             ),
             self.POLICY,
+            resolution_handle=McpDescriptorAuthorityResolution.active(trusted_revision),
         )
 
 
 __all__ = [
+    "McpDescriptorAuthorityResolution",
     "McpDescriptorBindingIdentity",
     "McpDescriptorRevisionAuthority",
     "McpDescriptorRevisionBinder",

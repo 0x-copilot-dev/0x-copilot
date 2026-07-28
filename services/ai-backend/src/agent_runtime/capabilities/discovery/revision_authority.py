@@ -26,6 +26,16 @@ The catalog a run holds is a *snapshot*.  The authority is what the catalog
 would be rebuilt as right now.  Projecting a snapshot-minted ref and asking the
 shared revalidator whether the authority still reports the same generation is
 therefore the whole staleness question, asked in one place.
+
+RB.3 threads an optional resolution handle from the call site through to the
+generation source.  ``subject_fingerprint`` is one-way by design, so a source
+that must rebuild — or ask a store to rebuild — the catalog for the *original*
+identity cannot recover it from the bound scope, and would otherwise need a
+scope-keyed registry populated when the catalog was minted.  The handle is
+supplied once, where the verified identity already lives, and forwarded
+untouched.  It is deliberately not the run's own held generation: an authority
+that answered from the snapshot under test would be validating the snapshot
+against itself.
 """
 
 from __future__ import annotations
@@ -48,6 +58,7 @@ from agent_runtime.control_plane.revision_binding import (
     RevisionAuthorityState,
     RevisionBoundRef,
     RevisionBoundScope,
+    RevisionResolutionHandle,
     RevisionRevalidatorPort,
     RevisionScopeDimension,
     RevisionUseContext,
@@ -119,12 +130,18 @@ class CapabilityCatalogGenerationPort(Protocol):
     authoritative *now* for this scope.  They never inspect the generation a
     reference was minted against, never compare generations, and never widen a
     scope; comparison is the shared revalidator's job.
+
+    ``resolution_handle`` is the F3-owned value supplied at the call site (see
+    :class:`CapabilityRefRevalidation`).  A source that keys its own store by
+    the bound scope may ignore it; one that must ask a backend keyed by the
+    original identity uses it instead of keeping a scope-keyed registry.
     """
 
     async def live_generation(
         self,
         *,
         scope: RevisionBoundScope,
+        resolution_handle: RevisionResolutionHandle | None = None,
     ) -> LiveCapabilityCatalogGeneration: ...
 
 
@@ -148,12 +165,16 @@ class CapabilityCatalogRevisionAuthority:
         *,
         feature: AgentQualityFeature,
         scope: RevisionBoundScope,
+        resolution_handle: RevisionResolutionHandle | None = None,
     ) -> RevisionAuthorityResult:
         """Return the live catalog generation for ``scope`` as a revision."""
 
         if feature is not self.FEATURE:
             return RevisionAuthorityResult(state=RevisionAuthorityState.UNKNOWN)
-        live = await self._source.live_generation(scope=scope)
+        live = await self._source.live_generation(
+            scope=scope,
+            resolution_handle=resolution_handle,
+        )
         if not isinstance(live, LiveCapabilityCatalogGeneration):
             return RevisionAuthorityResult(state=RevisionAuthorityState.UNAVAILABLE)
         if live.state is not RevisionAuthorityState.ACTIVE or live.generation is None:
@@ -273,6 +294,13 @@ class CapabilityRefRevalidation:
     This is a two-line composition over the shared primitive on purpose.  When
     it is absent from a bridge tool, the tool refuses rather than dispatching:
     an unrevalidatable reference is never usable.
+
+    ``resolution_handle`` is bound here, next to the verified subject
+    fingerprint and for the same reason: this object is constructed once per
+    verified runtime context, which is the only place that legitimately holds
+    the identity a fingerprint hides.  Binding it here rather than accepting it
+    per call keeps it out of the bridge's untrusted request path — a model
+    cannot influence which identity the authority resolves for.
     """
 
     def __init__(
@@ -280,9 +308,11 @@ class CapabilityRefRevalidation:
         *,
         revalidator: RevisionRevalidatorPort,
         subject_fingerprint: str,
+        resolution_handle: RevisionResolutionHandle | None = None,
     ) -> None:
         self._revalidator = revalidator
         self._subject_fingerprint = subject_fingerprint
+        self._resolution_handle = resolution_handle
 
     async def decide(
         self,
@@ -301,6 +331,7 @@ class CapabilityRefRevalidation:
                 generation=live_generation,
             ),
             CapabilityRefRevisionBinding.policy(),
+            resolution_handle=self._resolution_handle,
         )
 
 

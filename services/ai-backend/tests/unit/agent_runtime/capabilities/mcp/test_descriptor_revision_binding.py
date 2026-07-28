@@ -26,6 +26,7 @@ from agent_runtime.capabilities.mcp.cards import (
     McpTransport,
 )
 from agent_runtime.capabilities.mcp.descriptor_revision_binding import (
+    McpDescriptorAuthorityResolution,
     McpDescriptorBindingIdentity,
     McpDescriptorRevisionAuthority,
     McpDescriptorRevisionBinder,
@@ -219,6 +220,33 @@ class TestDescriptorBoundRevision(DescriptorBindingFixturesMixin):
         assert "secret-looking-revision" not in bound.value
 
 
+class TestDescriptorRunDimension(DescriptorBindingFixturesMixin):
+    """F8 binds no run on either side, and no longer invents one."""
+
+    def test_the_use_context_asserts_no_run(self) -> None:
+        fingerprint = McpDescriptorBindingIdentity.subject_fingerprint(self.key())
+
+        context = McpDescriptorBindingIdentity.use_context(
+            fingerprint,
+            catalog_generation=3,
+        )
+
+        assert context.run_id is None
+        assert context.catalog_generation == "3"
+        assert RevisionScopeDimension.RUN not in context.dimensions
+
+    def test_no_run_sentinel_survives_anywhere_in_the_binding(self) -> None:
+        # The sentinel existed only to satisfy a mandatory field. Nothing may
+        # reintroduce it: an inert value in a verified-facts contract is a
+        # claim nobody checked.
+        assert not hasattr(McpDescriptorBindingIdentity, "CACHE_RUN_SENTINEL")
+        assert RevisionScopeDimension.RUN not in self.scope().dimensions
+        assert (
+            RevisionScopeDimension.RUN
+            not in McpDescriptorRevisionBinder.POLICY.required_dimensions
+        )
+
+
 class TestDescriptorOutcomeProjection:
     """The RB outcome projects onto F8's freshness vocabulary totally."""
 
@@ -262,7 +290,6 @@ class TestDescriptorGenerationBarrier(DescriptorBindingFixturesMixin):
     async def test_unfenced_reference_is_refused_before_the_authority(self) -> None:
         binder = McpDescriptorRevisionBinder()
         fingerprint = McpDescriptorBindingIdentity.subject_fingerprint(self.key())
-        binder.authority.publish(subject_fingerprint=fingerprint, revision="revision-1")
         unfenced = McpDescriptorBindingIdentity.mint(
             scope=RevisionBoundScope(subject_fingerprint=fingerprint),
             revision="revision-1",
@@ -272,6 +299,7 @@ class TestDescriptorGenerationBarrier(DescriptorBindingFixturesMixin):
             unfenced,
             McpDescriptorBindingIdentity.use_context(fingerprint, catalog_generation=0),
             McpDescriptorRevisionBinder.POLICY,
+            resolution_handle=McpDescriptorAuthorityResolution.active("revision-1"),
         )
 
         assert decision.outcome is RevalidationOutcome.OUT_OF_SCOPE
@@ -411,9 +439,12 @@ class TestDescriptorAuthorityFailsClosed(DescriptorBindingFixturesMixin):
         assert refused.record is None
         assert refused.decision.state is McpDescriptorFreshnessState.NOT_TRACKED
 
-    async def test_authority_projection_is_released_with_its_generation_state(
-        self,
-    ) -> None:
+    async def test_the_authority_holds_no_projection_to_go_stale(self) -> None:
+        # RB.3 removed the fingerprint-keyed projection this adoption used to
+        # write and read back on every call, and with it the lifetime problem
+        # ``forget`` existed to bound. Having used the cache normally, the
+        # authority still answers ``unknown`` to anyone who asks without the
+        # backend answer in hand -- there is nothing left to leak or release.
         authority = McpDescriptorRevisionAuthority()
         cache = RevisionAwareMcpDiscoveryCache(
             McpDiscoveryCache(),
@@ -422,7 +453,7 @@ class TestDescriptorAuthorityFailsClosed(DescriptorBindingFixturesMixin):
         )
         request = self.request()
         await cache.put(request, self.loaded())
-        await cache.invalidate_subject(request.subject, server_name=request.server_name)
+        assert (await cache.get(request)).record is not None
 
         result = await authority.current_revision(
             feature=AgentQualityFeature.F8_MCP_CONTROL_PLANE,
@@ -431,19 +462,65 @@ class TestDescriptorAuthorityFailsClosed(DescriptorBindingFixturesMixin):
 
         assert result.state is RevisionAuthorityState.UNKNOWN
         assert result.current_revision is None
+        assert vars(authority) == {"_unavailable": False}
+
+    async def test_releasing_a_key_keeps_working_and_releases_nothing(self) -> None:
+        authority = McpDescriptorRevisionAuthority()
+        binder = McpDescriptorRevisionBinder(authority)
+        cache = RevisionAwareMcpDiscoveryCache(
+            McpDiscoveryCache(),
+            max_staleness_seconds=60,
+            revision_binder=binder,
+        )
+        request = self.request()
+        await cache.put(request, self.loaded())
+        await cache.invalidate_subject(request.subject, server_name=request.server_name)
+
+        binder.forget(self.key())
+
+        result = await authority.current_revision(
+            feature=AgentQualityFeature.F8_MCP_CONTROL_PLANE,
+            scope=self.scope(),
+        )
+
+        assert result.state is RevisionAuthorityState.UNKNOWN
+
+    async def test_a_foreign_domain_handle_is_never_answered_as_active(self) -> None:
+        authority = McpDescriptorRevisionAuthority()
+
+        result = await authority.current_revision(
+            feature=AgentQualityFeature.F8_MCP_CONTROL_PLANE,
+            scope=self.scope(),
+            resolution_handle={"revision": "revision-1"},
+        )
+
+        assert result.state is RevisionAuthorityState.UNKNOWN
+        assert result.current_revision is None
+
+    async def test_a_non_active_handle_is_reported_verbatim(self) -> None:
+        authority = McpDescriptorRevisionAuthority()
+
+        for state in (
+            RevisionAuthorityState.REVOKED,
+            RevisionAuthorityState.UNKNOWN,
+            RevisionAuthorityState.UNAVAILABLE,
+        ):
+            result = await authority.current_revision(
+                feature=AgentQualityFeature.F8_MCP_CONTROL_PLANE,
+                scope=self.scope(),
+                resolution_handle=McpDescriptorAuthorityResolution.for_state(state),
+            )
+
+            assert result.state is state
+            assert result.current_revision is None
 
     async def test_foreign_feature_is_never_answered_as_active(self) -> None:
         authority = McpDescriptorRevisionAuthority()
-        authority.publish(
-            subject_fingerprint=McpDescriptorBindingIdentity.subject_fingerprint(
-                self.key()
-            ),
-            revision="revision-1",
-        )
 
         result = await authority.current_revision(
             feature=AgentQualityFeature.F5_CONTEXT_BUDGETING,
             scope=self.scope(),
+            resolution_handle=McpDescriptorAuthorityResolution.active("revision-1"),
         )
 
         assert result.state is RevisionAuthorityState.UNKNOWN
