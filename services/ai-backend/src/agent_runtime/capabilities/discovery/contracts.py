@@ -104,15 +104,44 @@ class CapabilityExpansionBounds:
     MAX_SERVERS: ClassVar[int] = 8
     MAX_TOTAL_DEADLINE_SECONDS: ClassVar[float] = 120.0
     MAX_CAPABILITIES_PER_SERVER: ClassVar[int] = 256
-    MAX_TRIGGER_CANDIDATES: ClassVar[int] = 10
     MAX_EXPANDED_CAPABILITIES: ClassVar[int] = 2_048
 
 
 class CapabilitySource(StrEnum):
-    """Trusted compact-record source represented by a catalog entry."""
+    """Trusted compact-record source represented by a catalog entry.
+
+    Only a source that owns a *non-model dispatch seam* may become a catalog
+    member.  The bridge has exactly one such seam --
+    :class:`~agent_runtime.capabilities.mcp.middleware.call_tool.CallMcpTool`,
+    which the F3 executor delegates to -- and a product tool card has no
+    equivalent.  Product tools stay directly registered in every activation
+    mode, so a catalog entry for one would be a record the model can search and
+    describe and then be refused on invoke.
+
+    :attr:`TOOL_CARD` therefore stays in the vocabulary while being inadmissible
+    as a member: dispatch still has to be able to name, and refuse, a source it
+    cannot route, and a search filter still has to be able to express it.
+    """
 
     TOOL_CARD = "tool_card"
     MCP_SERVER = "mcp_server"
+
+    @property
+    def has_non_model_dispatch(self) -> bool:
+        """Return whether this source can reach the gateway without the model."""
+
+        return self is CapabilitySource.MCP_SERVER
+
+    @classmethod
+    def catalog_admissible(cls) -> frozenset["CapabilitySource"]:
+        """Return every source a bridge-searchable catalog may hold.
+
+        Derived by iterating the closed enum rather than restated as a literal,
+        so a future source becomes admissible by declaring its dispatch seam
+        once instead of by editing a membership list that could drift.
+        """
+
+        return frozenset(member for member in cls if member.has_non_model_dispatch)
 
 
 class CatalogEffectClass(StrEnum):
@@ -162,6 +191,29 @@ class CapabilityBridgeToolName(StrEnum):
 
 class CapabilityCatalogIdentityError(ValueError):
     """Typed, model-safe failure of a catalog identity or ref binding."""
+
+
+class CapabilityCatalogMembershipError(ValueError):
+    """An undispatchable record was about to become a catalog member.
+
+    Catalog membership is the only way the bridge surfaces a capability, so
+    membership and dispatchability have to describe the same set.  Admitting a
+    source with no non-model dispatch seam would let the model search it,
+    describe it, and only then be refused at invoke -- the bridge advertising
+    what it cannot deliver.
+
+    The refusal is deliberately at the contract rather than at the builder: the
+    builder is only one construction path, and an adapter, a test, or a later
+    lane could otherwise reintroduce the dead end by assembling entries itself.
+    """
+
+    class Messages:
+        """Safe public messages for catalog-membership refusals."""
+
+        UNDISPATCHABLE_SOURCE = (
+            "only a capability source with a non-model dispatch seam "
+            "can be a member of a capability catalog"
+        )
 
 
 class CapabilityBridgeRecursionError(ValueError):
@@ -502,8 +554,11 @@ class CapabilityIndexEntry(RuntimeContract):
     """Schema-free, model-searchable metadata for one authorized source record.
 
     Catalog membership is the *only* way a capability becomes resolvable by the
-    bridge, so refusing a reserved bridge name here makes bridge recursion
-    unrepresentable for every construction path -- builder, adapter, or test.
+    bridge, so this contract is where both membership invariants are enforced
+    for every construction path -- builder, adapter, or test.  Refusing a
+    reserved bridge name makes bridge recursion unrepresentable; refusing a
+    source with no non-model dispatch seam makes an undispatchable member
+    unrepresentable.
     """
 
     capability_ref: str = Field(
@@ -586,6 +641,17 @@ class CapabilityIndexEntry(RuntimeContract):
         if CapabilityBridgeToolName.is_reserved(self.stable_name):
             raise CapabilityBridgeRecursionError(
                 CapabilityBridgeRecursionError.Messages.RESERVED_CATALOG_NAME
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _only_dispatchable_sources_are_members(self) -> Self:
+        # Ordered after the recursion guard on purpose: a reserved name is the
+        # more specific refusal, so a record that is both keeps answering as
+        # bridge recursion rather than changing error class.
+        if self.source not in CapabilitySource.catalog_admissible():
+            raise CapabilityCatalogMembershipError(
+                CapabilityCatalogMembershipError.Messages.UNDISPATCHABLE_SOURCE
             )
         return self
 

@@ -8,7 +8,6 @@ import hashlib
 import json
 
 from agent_runtime.capabilities.discovery.contracts import (
-    ApprovalCue,
     CapabilityBridgeToolName,
     CapabilityCatalog,
     CapabilityCatalogGeneration,
@@ -23,13 +22,25 @@ from agent_runtime.capabilities.discovery.contracts import (
 )
 from agent_runtime.capabilities.mcp.cards import McpServerCard
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
-from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
-from agent_runtime.capabilities.tools.permissions import ToolPermissionChecker
 from agent_runtime.execution.contracts import AgentRuntimeContext
 
 
 class AuthorizedCatalogBuilder:
-    """Build a schema-free catalog and defensively recheck every compact card."""
+    """Build a schema-free catalog and defensively recheck every compact card.
+
+    The catalog is the bridge's index, so it holds only records the bridge can
+    actually dispatch: authorized MCP server cards.  Product tool cards are
+    deliberately absent.  They have no non-model dispatcher and stay directly
+    registered in ``direct``, ``server``, ``shadow``, and ``deferred`` alike, so
+    a catalog entry for one is unreachable by design -- the model could search
+    it and describe it, and would then be refused at invoke.
+
+    The exclusion is structural in both directions rather than a filter applied
+    here.  There is no parameter through which tool cards could arrive, so a
+    future caller cannot pass them and have them quietly dropped, and
+    :class:`CapabilityIndexEntry` refuses the source outright, so no other
+    construction path can assemble one either.
+    """
 
     def __init__(self, *, reference_key: bytes) -> None:
         # Both derivations go through the one reference minter, so opaque refs
@@ -57,13 +68,12 @@ class AuthorizedCatalogBuilder:
         context: AgentRuntimeContext,
         scope: CapabilityCatalogScope,
         task_policy_selection_ref: str,
-        tool_cards: Sequence[ToolCard] = (),
         mcp_server_cards: Sequence[McpServerCard] = (),
         descriptor_revisions: Sequence[CatalogDescriptorRevision] = (),
         deferred_schema_tokens: int = 0,
         expires_at: datetime,
     ) -> CapabilityCatalog:
-        """Project only cards visible under the supplied verified run context.
+        """Project only server cards visible under the verified run context.
 
         The catalog is always stamped with the generation identity of the four
         trusted inputs it was projected from — the verified subject, the
@@ -86,15 +96,6 @@ class AuthorizedCatalogBuilder:
             scope_identity=self._scope_identity(scope)
         )
         entries = [
-            self._tool_entry(
-                catalog_id=catalog_id,
-                card=card,
-            )
-            for card in tool_cards
-            if ToolPermissionChecker.is_card_authorized(context, card)
-            and not self._claims_a_bridge_name(card.name)
-        ]
-        entries.extend(
             self._mcp_server_entry(
                 catalog_id=catalog_id,
                 card=card,
@@ -102,7 +103,7 @@ class AuthorizedCatalogBuilder:
             for card in mcp_server_cards
             if McpPermissionPolicy.is_server_card_visible(context, card)
             and not self._claims_a_bridge_name(card.name)
-        )
+        ]
         entries.sort(
             key=lambda entry: (
                 entry.source.value,
@@ -148,32 +149,6 @@ class AuthorizedCatalogBuilder:
         """
 
         return CapabilityBridgeToolName.is_reserved(name)
-
-    def _tool_entry(
-        self,
-        *,
-        catalog_id: str,
-        card: ToolCard,
-    ) -> CapabilityIndexEntry:
-        identity = f"{CapabilitySource.TOOL_CARD.value}:{card.connector}:{card.name}"
-        approval_cue = (
-            ApprovalCue.POLICY_DEPENDENT
-            if card.risk_level in {ToolRiskLevel.HIGH, ToolRiskLevel.CRITICAL}
-            else ApprovalCue.UNKNOWN
-        )
-        return CapabilityIndexEntry(
-            capability_ref=self._minter.mint(
-                catalog_id=catalog_id,
-                identity=identity,
-            ),
-            source=CapabilitySource.TOOL_CARD,
-            stable_name=card.name,
-            display_name=card.display_name,
-            concise_description=card.short_description,
-            intent_tags=tuple(card.tags),
-            connector_label=card.connector,
-            approval_cue=approval_cue,
-        )
 
     def _mcp_server_entry(
         self,

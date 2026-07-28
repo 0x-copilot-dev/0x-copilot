@@ -379,6 +379,13 @@ class CapabilityExpansionLimits(RuntimeContract):
     is the ``K`` of the ``O(NQ + R log K)`` budget and of the "cold discovery
     opens at most K servers" exit criterion; the first release ceiling from the
     F3 PRD is ``K <= 3``.
+
+    There is deliberately no knob for *whether* to expand.  A catalog holds only
+    MCP server cards, so tier one can never answer at capability granularity and
+    a suppression threshold would have nothing it could measure; cost is bounded
+    by the values here plus the F8 discovery cache instead.  Defining "the
+    catalog cannot answer this confidently" as a real rule is open work, and a
+    knob would belong to that rule rather than exist ahead of it.
     """
 
     max_servers: PositiveInt = Field(
@@ -393,10 +400,6 @@ class CapabilityExpansionLimits(RuntimeContract):
         default=64,
         le=CapabilityExpansionBounds.MAX_CAPABILITIES_PER_SERVER,
     )
-    expansion_trigger_candidates: PositiveInt = Field(
-        default=3,
-        le=CapabilityExpansionBounds.MAX_TRIGGER_CANDIDATES,
-    )
 
     class Env:
         """Environment keys that may narrow or widen the bounded defaults."""
@@ -405,9 +408,6 @@ class CapabilityExpansionLimits(RuntimeContract):
         TOTAL_DEADLINE_SECONDS: ClassVar[str] = "F3_DISCOVERY_TOTAL_DEADLINE_SECONDS"
         MAX_CAPABILITIES_PER_SERVER: ClassVar[str] = (
             "F3_DISCOVERY_MAX_CAPABILITIES_PER_SERVER"
-        )
-        EXPANSION_TRIGGER_CANDIDATES: ClassVar[str] = (
-            "F3_DISCOVERY_EXPANSION_TRIGGER_CANDIDATES"
         )
 
     @classmethod
@@ -448,12 +448,6 @@ class CapabilityExpansionLimits(RuntimeContract):
                 cls.Env.MAX_CAPABILITIES_PER_SERVER,
                 default=defaults.max_capabilities_per_server,
                 maximum=CapabilityExpansionBounds.MAX_CAPABILITIES_PER_SERVER,
-            ),
-            expansion_trigger_candidates=cls._read_int(
-                source,
-                cls.Env.EXPANSION_TRIGGER_CANDIDATES,
-                default=defaults.expansion_trigger_candidates,
-                maximum=CapabilityExpansionBounds.MAX_TRIGGER_CANDIDATES,
             ),
         )
 

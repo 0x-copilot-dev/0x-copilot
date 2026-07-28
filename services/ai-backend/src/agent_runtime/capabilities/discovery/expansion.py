@@ -1,11 +1,12 @@
 """Bounded, deadline-governed second-tier expansion of authorized server cards.
 
-Tier one is the compact catalog: authorized tool cards plus authorized MCP
-*server* cards, none of which cost a connection.  Tier two is this module.
-When tier one cannot answer a query confidently, at most ``K`` ranked server
-cards are expanded through the existing :class:`McpLoader` — and therefore
-through the F8 revision-aware discovery cache — and their descriptors are
-projected into schema-free records the same ranker can score.
+Tier one is the compact catalog: authorized MCP *server* cards, which cost no
+connection to rank.  A server card names where capabilities live, not a
+capability, so tier two is what turns one into records the model can actually
+act on: at most ``K`` ranked server cards are expanded through the existing
+:class:`McpLoader` — and therefore through the F8 revision-aware discovery
+cache — and their descriptors are projected into schema-free records the same
+ranker can score.
 
 Four properties are load-bearing, and each is enforced structurally rather
 than by convention:
@@ -497,10 +498,26 @@ class BoundedCapabilityExpander:
 class TwoTierCapabilitySearch:
     """Compose compact-card search with bounded server expansion.
 
-    Tier one always runs and is always sufficient on its own. Tier two runs
-    only when tier one produced fewer confident capability-tier candidates than
-    the configured trigger, so a query the catalog already answers costs no
-    connection at all.
+    Tier one ranks the catalog, which holds only MCP *server* cards. A server
+    card names a connector rather than a capability, so no tier-one candidate is
+    ever something the model can invoke; every capability-granularity answer
+    comes from tier two. Expansion is therefore not a fallback for a weak tier
+    one — it is the only tier that can produce one.
+
+    There is consequently no suppression heuristic here. The predecessor gate
+    counted tier-one candidates whose source was ``TOOL_CARD``; product tool
+    cards are no longer catalog members — they have no non-model dispatcher and
+    stay directly registered — so that count is now structurally zero, and a
+    gate reading it could only be an always-expand switch wearing the costume of
+    a threshold. Cost is bounded by the expander's own contract instead: at most
+    ``K`` servers under one shared deadline, resolved through the F8 discovery
+    cache, so a warm expansion issues no list call. A caller filter that
+    excludes MCP servers still disables tier two outright, inside
+    :meth:`BoundedCapabilityExpander.expand`.
+
+    Defining "the catalog cannot satisfy this query confidently" as a real,
+    specified rule is open work. When one exists it belongs here, measured
+    against something that can be true.
     """
 
     def __init__(
@@ -523,12 +540,11 @@ class TwoTierCapabilitySearch:
         """Return one bounded ranked answer over catalog plus expanded records."""
 
         first_tier = self._ranker.rank_entries(catalog.entries, request)
-        expansion = await self._expand_if_needed(
+        expansion = await self._expander.expand(
             catalog=catalog,
             context=context,
             request=request,
             local_tool_names=local_tool_names,
-            first_tier=first_tier,
         )
         second_tier = self._ranker.rank_entries(
             (capability.entry for capability in expansion.capabilities),
@@ -544,38 +560,6 @@ class TwoTierCapabilitySearch:
                 candidates=merged.candidates,
             ),
             expansion=expansion,
-        )
-
-    async def _expand_if_needed(
-        self,
-        *,
-        catalog: CapabilityCatalog,
-        context: AgentRuntimeContext,
-        request: CapabilitySearchRequest,
-        local_tool_names: frozenset[str],
-        first_tier: RankedCapabilitySelection,
-    ) -> CapabilityExpansionResult:
-        limits = self._expander.limits
-        if (
-            self._capability_tier_hits(first_tier)
-            >= limits.expansion_trigger_candidates
-        ):
-            return CapabilityExpansionResult.empty(max_servers=limits.max_servers)
-        return await self._expander.expand(
-            catalog=catalog,
-            context=context,
-            request=request,
-            local_tool_names=local_tool_names,
-        )
-
-    @staticmethod
-    def _capability_tier_hits(selection: RankedCapabilitySelection) -> int:
-        """Count candidates that are already capabilities, not server cards."""
-
-        return sum(
-            1
-            for candidate in selection.candidates
-            if candidate.source is CapabilitySource.TOOL_CARD
         )
 
 
