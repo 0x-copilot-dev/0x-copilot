@@ -1,5 +1,10 @@
 export { ADAPTER_ALLOWLIST, type AdapterAllowlist } from "./adapterAllowlist";
-import { LEDGER_EVENT_TYPES as WORK_LEDGER_EVENT_TYPES } from "./ledger";
+import {
+  LEDGER_EVENT_TYPES as WORK_LEDGER_EVENT_TYPES,
+  ARTIFACT_EVENT_TYPES as WORK_LEDGER_ARTIFACT_EVENT_TYPES,
+  EFFECT_EVENT_TYPES as WORK_LEDGER_EFFECT_EVENT_TYPES,
+  OPERATION_EVENT_TYPES as WORK_LEDGER_OPERATION_EVENT_TYPES,
+} from "./ledger";
 
 export type {
   ArtifactCreateMultipartFields,
@@ -555,15 +560,28 @@ export type RuntimeEventSource =
 // silently, with no error anywhere.
 //
 // This used to hand-pick positional indices into the ledger vocabulary, and it
-// skipped three: index 22 (`artifact.presentation_decided`) and 31/32 (the v2
-// gate pair). The client therefore received `artifact.created` but never the
-// decision event that promotes an artifact onto the Studio canvas, so the fold
-// found no canvas subject and Studio reported "no artifact was created" about
-// an artifact that existed. Index-based selection cannot survive an insertion
-// into the source tuple; taking the vocabulary whole is what makes the
-// guarantee hold. Overlap with the literals below is harmless — this is a
-// membership test, not a set.
-const RUNTIME_LEDGER_V21_EVENT_TYPES = WORK_LEDGER_EVENT_TYPES;
+// skipped index 22, `artifact.presentation_decided`. The client therefore
+// received `artifact.created` but never the decision event that promotes an
+// artifact onto the Studio canvas, so the fold found no canvas subject and
+// Studio reported "no artifact was created" about an artifact that existed.
+//
+// Composed from the ledger's own named families instead: an insertion into
+// `LEDGER_EVENT_TYPES` silently reassigns every index after it, which is
+// exactly how the omission survived review, while a family tuple carries its
+// members by meaning. Re-typing the values as string literals here is not an
+// option either — `test_event_literal_gate_v2_1.py` requires ledger values to
+// come from the mirror rather than be duplicated inline.
+//
+// The set must equal the backend's `RuntimeApiEventType` enum, which
+// `test_api_type_contracts.py` asserts across the language boundary, so this is
+// not free to grow. `GATE_V2_EVENT_TYPES` is deliberately excluded: those two
+// exist in the ledger vocabulary but the runtime never emits them over this
+// transport.
+const RUNTIME_LEDGER_V21_EVENT_TYPES = [
+  ...WORK_LEDGER_OPERATION_EVENT_TYPES,
+  ...WORK_LEDGER_ARTIFACT_EVENT_TYPES,
+  ...WORK_LEDGER_EFFECT_EVENT_TYPES,
+] as const;
 type RuntimeLedgerV21EventType =
   (typeof RUNTIME_LEDGER_V21_EVENT_TYPES)[number];
 

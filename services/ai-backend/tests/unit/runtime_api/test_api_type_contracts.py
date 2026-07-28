@@ -97,7 +97,9 @@ class TestApiTypeContracts:
         api_types = (repo_root / "packages/api-types/src/index.ts").read_text()
         ledger_types = (repo_root / "packages/api-types/src/ledger.ts").read_text()
 
-        runtime_types = self._string_array(api_types, "RUNTIME_API_EVENT_TYPES")
+        runtime_types = self._string_array(
+            api_types, "RUNTIME_API_EVENT_TYPES", extra_sources=(ledger_types,)
+        )
         runtime_types.update(
             self._string_array(ledger_types, "ARTIFACT_RUNTIME_EVENT_TYPES")
         )
@@ -118,13 +120,32 @@ class TestApiTypeContracts:
         }
 
     @classmethod
-    def _string_array(cls, source: str, name: str) -> set[str]:
-        match = re.search(
-            rf"(?:export )?const {name} = \[(.*?)\] as const",
-            source,
-            re.S,
-        )
-        assert match is not None
+    def _string_array(
+        cls,
+        source: str,
+        name: str,
+        *,
+        extra_sources: tuple[str, ...] = (),
+    ) -> set[str]:
+        """Resolve a TS ``as const`` tuple to its set of string values.
+
+        ``extra_sources`` lets a spread resolve against a sibling module. The
+        transport tuple composes the ledger's named event families (which live
+        in ``ledger.ts``) rather than re-typing their values, because
+        ``test_event_literal_gate_v2_1`` forbids inline duplicates of ledger
+        event values — so following a spread across the file boundary is the
+        only way to read it.
+        """
+
+        for candidate in (source, *extra_sources):
+            match = re.search(
+                rf"(?:export )?const {name} = \[(.*?)\] as const",
+                candidate,
+                re.S,
+            )
+            if match is not None:
+                break
+        assert match is not None, f"missing TypeScript tuple {name}"
         body = match.group(1)
         values = set(re.findall(r'"([^"]+)"', body))
         values.update(
@@ -135,5 +156,17 @@ class TestApiTypeContracts:
             )
         )
         for spread in re.findall(r"\.\.\.([A-Z][A-Z0-9_]*)", body):
-            values.update(cls._string_array(source, spread))
+            # Import aliases (``X as WORK_LEDGER_X``) resolve under their local
+            # name here; fall back to the original export name in the sibling.
+            local = spread.removeprefix("WORK_LEDGER_")
+            for alias in (spread, local):
+                try:
+                    values.update(
+                        cls._string_array(source, alias, extra_sources=extra_sources)
+                    )
+                except AssertionError:
+                    continue
+                break
+            else:  # pragma: no cover - a genuinely unresolvable spread
+                raise AssertionError(f"unresolved TypeScript spread {spread}")
         return values
