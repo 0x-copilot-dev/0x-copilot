@@ -86,6 +86,32 @@ Boot, sign-in, BYOK, model catalog, run, UI, or facade assertion failures are
 hard failures. Screenshots and driver logs stay under the git-ignored
 `tools/desktop-journeys/runs/generative-workflows-g0-plain-chat/` directory.
 
+## G3–G10 executable status
+
+The G3–G10 scripts are executable release stories backed by
+[`_g3_g10_support.py`](./_g3_g10_support.py). They all require the installed
+payload, production supervisor posture, a unique Desktop user-data subdirectory,
+authenticated facade reads, deterministic screenshot names, and a fresh
+throwaway root for authored workspace files. Preflight exits `2` with
+`"outcome":"blocked"` when a declared local capability is absent; it never turns
+a missing surface, fixture bridge, or provider into a pass.
+
+| Journey | Script and exact executable assertions                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               | Current real-run status                                                                                                                                                                                                                                                                          |
+| ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| G3      | [`g3_code_artifact.py`](./g3_code_artifact.py) reads `src/normalize.ts` and its test before publication; verifies exact TypeScript bytes/SHA-256, inert code renderer with no executable descendant or raw fallback, unified held diff, immutable proposal material, facade surface/provenance, native digest-pinned approval, exact final file bytes, and absence of shell/sandbox/test execution. Screenshots are `g3-<mode>-workspace-grant`, `-code-renderer-provenance`, `-unified-held-diff`, and `-approved-receipt`.                                                                         | Live lane can run with staged host runtime, macOS native-dialog automation, and local BYOK. Deterministic lane blocks until the installed supervisor propagates the fake-model environment (`GENUI_DETERMINISTIC_SUPERVISED_READY=stdio-v1`).                                                    |
+| G4      | [`g4_docx_artifact.py`](./g4_docx_artifact.py) requires valid ZIP/WordprocessingML bytes, document preview plus safe fallback, export byte equality without source revision mutation, immutable title revision switch, binary replacement diff metadata, native approval, and exact final DOCX bytes. Screenshots cover preview, export/fallback, version switch/diff, and receipt.                                                                                                                                                                                                                  | Live blocks until binary DOCX publication, streaming, preview/export, and fallback are model-visible (`GENUI_BINARY_ARTIFACTS_READY=docx-v1`); deterministic also lacks a create/revise/stage phase switch. Current inline-text publication and Markdown/plain-text rendering cannot satisfy G4. |
+| G5      | [`g5_local_email_triage.py`](./g5_local_email_triage.py) resets the fixture, lists/reads only `thr_q3_renewal`, proves trusted `fixture://mail` provenance, edits to a higher draft revision, approves one exact recipient/thread/revision, and reconciles the facade receipt with the hash-chained fixture audit. Screenshots cover the mail record, edited draft, and local-send receipt.                                                                                                                                                                                                          | Both lanes block until the authenticated public MCP registry can own the checked-in stdio fixture for the lifetime of the fresh profile (`GENUI_LOCAL_FIXTURE_BRIDGE=stdio-v1`). No real address can pass target assertions.                                                                     |
+| G6      | [`g6_local_x_timeline.py`](./g6_local_x_timeline.py) reads the Northstar fixture post/account, proves the exact reply target, revises tone, rejects once with an unchanged timeline audit, then restores/approves exactly one fixture publication and receipt. Screenshots cover timeline context, rejected diff, and approved fixture post.                                                                                                                                                                                                                                                         | Same local stdio fixture prerequisite as G5; no X URL/account or non-`fixture://` receipt is accepted.                                                                                                                                                                                           |
+| G7      | [`g7_local_discord_moderation.py`](./g7_local_discord_moderation.py) preserves Launch Week guild/channel identity and exactly `@maya`/`@leo`, holds one pinned announcement, surfaces the injected first retryable failure, retries the same stage, and proves one failure plus one idempotent publish in fixture audit. Screenshots cover context/diff, retryable failure, and final retry receipt.                                                                                                                                                                                                 | Same local stdio fixture prerequisite as G5; no Discord endpoint can pass target assertions.                                                                                                                                                                                                     |
+| G8      | [`g8_mixed_work.py`](./g8_mixed_work.py) reads fixture mail and Discord before exactly two independent held writes, proves two tabs plus Sources/Approvals/Agents routing, approves in reverse order, reads both exact outputs back, and reconciles two ordered fixture writes with the receipt. Screenshots cover multi-surface rails and the two-effect receipt.                                                                                                                                                                                                                                   | Same local stdio fixture prerequisite as G5, including staged-write projection from the fixture's prepare/commit contract.                                                                                                                                                                       |
+| G9      | [`g9_recovery_honesty.py`](./g9_recovery_honesty.py) proves the expired-grant gate resumes one operation ID, the declared unknown operation remains visible in raw fallback without a success claim, revision 1 receives HTTP 409 after revision 2 exists, the current revision is rejected without apply, a streaming run terminates cancelled without a final answer, and fixture audit records exactly one grant fault/unknown operation and no write. Screenshots cover gate, resumed call, raw fallback, stale/rejected diff, and cancellation.                                                 | Same local stdio fixture prerequisite as G5, with bridge support for the scenario-declared unknown-operation fault and a cancellable streaming checkpoint. Missing recovery projection is a hard failure.                                                                                        |
+| G10     | [`g10_retention_reopen.py`](./g10_retention_reopen.py) publishes exact Markdown/CSV artifacts, applies two separately approved native workspace stages, closes and reopens the same profile/conversation, deep-links event replay to reconstruct document/table tabs, receipt, Sources, and Approvals, proves both pending-work endpoints contain no terminal stage, reads effective retention, and requires live run/conversation/purpose usage rows without BYOK or prompt-marker/content leakage. Screenshots cover creation, each held stage, reopened Sources, and terminal no-pending receipt. | Live lane can run with the same installed-runtime/macOS/BYOK prerequisites as G3. Deterministic lane blocks on installed-supervisor fake-model propagation.                                                                                                                                      |
+
+The capability flags above are attestations, not bypasses: setting one only
+allows the script to attempt the authenticated registration or artifact path.
+Every UI, event-ledger, target, digest, audit, and postcondition assertion still
+fails closed.
+
 ## Local communications fixture
 
 `scenarios/local-communications.json` defines stable users, mailbox threads,
@@ -109,7 +135,8 @@ case and asserts exact postconditions afterward.
 
 ## Two-step execution protocol
 
-For every G1–G10 case, the future `*.py` journey executes:
+The G3–G10 scripts encode this protocol directly. G1/G2 keep their existing
+release entry points until the shared driver is consolidated:
 
 1. **Keyless / deterministic:** sign in locally, seed the local fixture,
    perform the required user interactions, and assert the surfaces, diffs,
@@ -140,21 +167,21 @@ run events and final fixture audit rows through `DriverSession.transport()`.
 - **Durability/accountability:** G10 proves replay, receipts, provenance,
   pending-work disappearance, and attributed usage.
 
-## Implementation order
+## Remaining harness prerequisites
 
-1. Add `local-fixture-connector/` with a process-local MCP fixture server,
-   reset/audit API, and the JSON scenario loader. It must be usable by the
-   supervised desktop app without a network account.
-2. Add shared `DriverSession` helpers for fixture seeding, authenticated
-   postcondition reads, tool-card/surface/diff/approval selectors, and safe
-   BYOK setup. Secrets remain opaque end-to-end.
-3. Implement G0, G1, G2, G5, and G9 first: together they cover the primary
-   product claims and the critical safety/error paths.
-4. Add G3/G4/G6/G7/G8/G10 plus the parity surfaces for editor, diff, table,
-   record, gate, receipt, and rail states.
-5. Only after all deterministic cases are green, run the credentialed live
-   matrix with OpenAI and Anthropic separately; save screenshots/logs as CI or
-   release artifacts, never in git.
+The executable stories are now checked in. They stay fail-closed until the
+shipping product/harness supplies these capabilities:
+
+1. propagate the deterministic model configuration through the installed
+   supervised Desktop runtime;
+2. let a fresh authenticated Desktop profile own the checked-in stdio fixture
+   connector for the full journey, including reset/audit and staged-write
+   projection;
+3. expose binary DOCX publication, streaming, preview/export, immutable
+   revision, and replacement staging;
+4. expose the G9 fixture faults and cancellable streaming checkpoint;
+5. run the deterministic matrix first, then OpenAI and Anthropic live passes;
+   retain screenshots/logs as release artifacts, never in git.
 
 ## Non-goals
 
