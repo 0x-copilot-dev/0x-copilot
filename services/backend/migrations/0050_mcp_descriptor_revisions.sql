@@ -55,6 +55,7 @@ CREATE INDEX IF NOT EXISTS idx_mcp_descriptor_revision_notices_feed
 -- Stable retry key; the copied fields mean an idempotent publish can return
 -- the original view after later revisions have superseded current state.
 CREATE TABLE IF NOT EXISTS mcp_descriptor_revision_idempotency (
+    sequence_no bigserial NOT NULL,
     org_id text NOT NULL,
     user_id text NOT NULL,
     server_id text NOT NULL,
@@ -73,6 +74,8 @@ CREATE TABLE IF NOT EXISTS mcp_descriptor_revision_idempotency (
     source text NOT NULL,
     PRIMARY KEY (org_id, user_id, server_id, idempotency_key)
 );
+CREATE INDEX IF NOT EXISTS idx_mcp_descriptor_revision_idempotency_retention
+    ON mcp_descriptor_revision_idempotency (org_id, user_id, sequence_no);
 
 -- Match the backend's tenant-isolation convention.  API transactions stamp
 -- app.current_org_id; the service role is allowed only for migration/admin
@@ -94,3 +97,17 @@ CREATE POLICY mcp_descriptor_revision_notices_tenant_isolation ON mcp_descriptor
 CREATE POLICY mcp_descriptor_revision_idempotency_tenant_isolation ON mcp_descriptor_revision_idempotency
     USING (org_id = current_setting('app.current_org_id', true))
     WITH CHECK (org_id = current_setting('app.current_org_id', true));
+
+-- The role exists only in provisioned environments. Guarding grants keeps
+-- local bootstrap and migration verification independent of role creation.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'enterprise_app') THEN
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON mcp_descriptor_revisions TO enterprise_app';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON mcp_descriptor_revision_generations TO enterprise_app';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON mcp_descriptor_revision_notices TO enterprise_app';
+        EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON mcp_descriptor_revision_idempotency TO enterprise_app';
+        EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE mcp_descriptor_revision_notices_sequence_no_seq TO enterprise_app';
+        EXECUTE 'GRANT USAGE, SELECT ON SEQUENCE mcp_descriptor_revision_idempotency_sequence_no_seq TO enterprise_app';
+    END IF;
+END $$;

@@ -42,8 +42,17 @@ def _scope_hash(
     ).hexdigest()
 
 
-def _revision(*, digest: str, generations: tuple[int, int, int, int]) -> str:
-    return sha256(f"{digest}|{generations}".encode()).hexdigest()
+def _revision(
+    *,
+    descriptor_digest: str,
+    subject_scope_hash: str,
+    generations: tuple[int, int, int, int],
+) -> str:
+    """Digest a complete descriptor against the credential/profile scope."""
+
+    return sha256(
+        f"{descriptor_digest}|{subject_scope_hash}|{generations}".encode()
+    ).hexdigest()
 
 
 class InMemoryMcpRevisionStore:
@@ -64,6 +73,7 @@ class InMemoryMcpRevisionStore:
             tuple[str, str, str, str],
             tuple[tuple[str, int, int, str], McpDescriptorRevision],
         ] = {}
+        self._idempotency_order: deque[tuple[str, str, str, str]] = deque()
         self._sequence = 0
 
     @staticmethod
@@ -186,16 +196,21 @@ class InMemoryMcpRevisionStore:
             else (0, 0, 0, 0),
         )
         now = datetime.now(timezone.utc)
+        subject_scope_hash = _scope_hash(
+            org_id=org_id,
+            user_id=user_id,
+            server_id=server_id,
+            credential_subject=credential_subject,
+        )
         view = McpDescriptorRevision(
             server_id=server_id,
             profile_id=user_id,
-            subject_scope_hash=_scope_hash(
-                org_id=org_id,
-                user_id=user_id,
-                server_id=server_id,
-                credential_subject=credential_subject,
+            subject_scope_hash=subject_scope_hash,
+            revision=_revision(
+                descriptor_digest=descriptor_digest,
+                subject_scope_hash=subject_scope_hash,
+                generations=generations,
             ),
-            revision=_revision(digest=descriptor_digest, generations=generations),
             config_generation=generations[0],
             auth_generation=generations[1],
             transport_generation=generations[2],
@@ -211,6 +226,9 @@ class InMemoryMcpRevisionStore:
             (descriptor_digest, tool_count, resource_count, source),
             view,
         )
+        self._idempotency_order.append(idem_key)
+        while len(self._idempotency_order) > self._retain_max:
+            self._idempotency.pop(self._idempotency_order.popleft(), None)
         self._append_memory_notice(
             org_id=org_id,
             user_id=user_id,
@@ -271,6 +289,27 @@ class InMemoryMcpRevisionStore:
         self._notices.append((org_id, user_id, notice))
         while len(self._notices) > self._retain_max:
             self._notices.popleft()
+
+
+class _PostgresMcpRevisionPersistence:
+    """Postgres-only persistence implementation; never mixed into memory."""
+
+    def __init__(self, *, store: PostgresMcpStore, retain_max: int) -> None:
+        if retain_max < 1:
+            raise ValueError("retain_max must be positive")
+        self._store = store
+        self._retain_max = retain_max
+
+    @staticmethod
+    def _take_scope_lock(
+        cur: Any, *, org_id: str, user_id: str, server_id: str
+    ) -> None:
+        """Serialize one descriptor scope for invalidate/publish ordering."""
+
+        cur.execute(
+            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+            (f"mcp-revision:{org_id}:{user_id}:{server_id}",),
+        )
 
     @contextmanager
     def _pg_connection(self, *, conn: Any | None, org_id: str) -> Iterator[Any]:
@@ -345,6 +384,9 @@ class InMemoryMcpRevisionStore:
             self._pg_connection(conn=conn, org_id=org_id) as connection,
             connection.cursor() as cur,
         ):
+            self._take_scope_lock(
+                cur, org_id=org_id, user_id=user_id, server_id=server_id
+            )
             cur.execute(
                 "SELECT revision FROM mcp_descriptor_revisions WHERE org_id=%s AND user_id=%s AND server_id=%s FOR UPDATE",
                 (org_id, user_id, server_id),
@@ -404,6 +446,9 @@ class InMemoryMcpRevisionStore:
             self._pg_connection(conn=kwargs.get("conn"), org_id=org_id) as connection,
             connection.cursor() as cur,
         ):
+            self._take_scope_lock(
+                cur, org_id=org_id, user_id=user_id, server_id=server_id
+            )
             cur.execute(
                 """SELECT * FROM mcp_descriptor_revision_idempotency
                     WHERE org_id=%(org_id)s AND user_id=%(user_id)s AND server_id=%(server_id)s AND idempotency_key=%(idempotency_key)s""",
@@ -440,7 +485,6 @@ class InMemoryMcpRevisionStore:
                 int(generation["transport_generation"]) if generation else 0,
                 int(generation["tool_filter_generation"]) if generation else 0,
             )
-            revision = _revision(digest=kwargs["descriptor_digest"], generations=gens)
             params = {
                 **kwargs,
                 "profile_id": user_id,
@@ -450,12 +494,16 @@ class InMemoryMcpRevisionStore:
                     server_id=server_id,
                     credential_subject=kwargs.get("credential_subject"),
                 ),
-                "revision": revision,
                 "config": gens[0],
                 "auth": gens[1],
                 "transport": gens[2],
                 "tool_filter": gens[3],
             }
+            params["revision"] = _revision(
+                descriptor_digest=kwargs["descriptor_digest"],
+                subject_scope_hash=params["scope"],
+                generations=gens,
+            )
             cur.execute(
                 """INSERT INTO mcp_descriptor_revisions (org_id,user_id,server_id,profile_id,subject_scope_hash,revision,config_generation,auth_generation,transport_generation,tool_filter_generation,tool_count,resource_count,descriptor_digest,observed_at,source)
                     VALUES (%(org_id)s,%(user_id)s,%(server_id)s,%(profile_id)s,%(scope)s,%(revision)s,%(config)s,%(auth)s,%(transport)s,%(tool_filter)s,%(tool_count)s,%(resource_count)s,%(descriptor_digest)s,now(),%(source)s)
@@ -488,6 +536,12 @@ class InMemoryMcpRevisionStore:
                 "WHERE org_id=%s AND user_id=%s ORDER BY sequence_no DESC OFFSET %s)",
                 (org_id, user_id, self._retain_max),
             )
+            cur.execute(
+                "DELETE FROM mcp_descriptor_revision_idempotency WHERE sequence_no IN ("
+                "SELECT sequence_no FROM mcp_descriptor_revision_idempotency "
+                "WHERE org_id=%s AND user_id=%s ORDER BY sequence_no DESC OFFSET %s)",
+                (org_id, user_id, self._retain_max),
+            )
         return self._view_from_row(row)
 
     @staticmethod
@@ -499,12 +553,11 @@ class InMemoryMcpRevisionStore:
         return McpDescriptorRevisionNotice(**dict(row))
 
 
-class PostgresMcpRevisionStore(InMemoryMcpRevisionStore):
+class PostgresMcpRevisionStore(_PostgresMcpRevisionPersistence):
     """Postgres revision-store adapter using the registry's existing pool."""
 
     def __init__(self, *, store: PostgresMcpStore, retain_max: int = 10_000) -> None:
-        super().__init__(retain_max=retain_max)
-        self._store = store
+        super().__init__(store=store, retain_max=retain_max)
 
     def get_current(
         self, *, org_id: str, user_id: str, server_id: str

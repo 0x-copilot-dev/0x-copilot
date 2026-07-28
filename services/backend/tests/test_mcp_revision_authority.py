@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 import pytest
@@ -39,6 +40,65 @@ def test_in_memory_and_postgres_adapters_conform_to_the_revision_store_port() ->
     assert isinstance(
         PostgresMcpRevisionStore(store=cast(PostgresMcpStore, object())),
         McpRevisionStorePort,
+    )
+    assert not hasattr(InMemoryMcpRevisionStore, "_pg_publish")
+    assert not issubclass(PostgresMcpRevisionStore, InMemoryMcpRevisionStore)
+
+
+def test_revision_digest_is_bound_to_the_credential_subject_scope() -> None:
+    authority = McpRevisionAuthority()
+    first = authority.publish_complete_descriptor_view(
+        org_id="org_123",
+        user_id="user_123",
+        server_id="server_123",
+        descriptor_digest="a" * 64,
+        tool_count=2,
+        resource_count=1,
+        source="complete_paginated_observer",
+        idempotency_key="one",
+        credential_subject="connection-one",
+    )
+    second = authority.publish_complete_descriptor_view(
+        org_id="org_123",
+        user_id="user_123",
+        server_id="server_123",
+        descriptor_digest="a" * 64,
+        tool_count=2,
+        resource_count=1,
+        source="complete_paginated_observer",
+        idempotency_key="two",
+        credential_subject="connection-two",
+    )
+    assert first.subject_scope_hash != second.subject_scope_hash
+    assert first.revision != second.revision
+
+
+def test_in_memory_idempotency_records_are_bounded() -> None:
+    store = InMemoryMcpRevisionStore(retain_max=2)
+    authority = McpRevisionAuthority(store)
+    _publish(authority, key="one")
+    _publish(authority, key="two")
+    _publish(authority, key="three")
+    assert len(store._idempotency) == 2
+
+
+def test_postgres_adapter_lock_prune_and_migration_grants_are_present() -> None:
+    store_source = Path(
+        "services/backend/src/backend_app/mcp_revision_store.py"
+    ).read_text()
+    migration = Path(
+        "services/backend/migrations/0050_mcp_descriptor_revisions.sql"
+    ).read_text()
+    assert "pg_advisory_xact_lock" in store_source
+    assert store_source.count("self._take_scope_lock(") >= 2
+    assert "mcp_descriptor_revision_idempotency WHERE sequence_no" in store_source
+    assert (
+        "GRANT USAGE, SELECT ON SEQUENCE mcp_descriptor_revision_notices_sequence_no_seq"
+        in migration
+    )
+    assert (
+        "GRANT USAGE, SELECT ON SEQUENCE mcp_descriptor_revision_idempotency_sequence_no_seq"
+        in migration
     )
 
 
