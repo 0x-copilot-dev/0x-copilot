@@ -138,7 +138,7 @@ class GoldenTrace(RuntimeContract):
 
     @staticmethod
     def _without_empty_task_policy_projection(value: object) -> object:
-        """Keep pre-F4 compact trace digests stable for absent fields."""
+        """Keep pre-F4/F2 compact trace digests stable for absent fields."""
 
         if isinstance(value, list):
             return [
@@ -152,11 +152,20 @@ class GoldenTrace(RuntimeContract):
             "policy_disposition",
             "policy_reason_codes",
             "policy_exhausted_dimensions",
+            "prompt_record_kind",
+            "prompt_cache_outcome",
+            "prompt_cache_owner",
+            "prompt_reason_code",
+            "prompt_provider_reported",
+            "prompt_input_tokens",
+            "prompt_cached_input_tokens",
+            "prompt_cache_creation_input_tokens",
         }
         return {
             key: GoldenTrace._without_empty_task_policy_projection(item)
             for key, item in value.items()
-            if key not in projection_keys or (item is not None and item != [])
+            if key not in projection_keys
+            or (item is not None and item != [] and item != 0)
         }
 
     def as_manifest(

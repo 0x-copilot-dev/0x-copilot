@@ -291,6 +291,99 @@ class TaskPolicyTrajectoryScorer:
         )
 
 
+class PromptCacheTrajectoryScorer:
+    """Require provider-authoritative cache evidence for F2 corpus cases."""
+
+    scorer_id = "prompt_cache_trajectory"
+
+    def score(
+        self,
+        *,
+        case: EvaluationCase,
+        trajectory: TrajectoryManifest,
+    ) -> ScorerResult:
+        assertion = _assertion(case, self.scorer_id)
+        if assertion is None:
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=1.0,
+                passed=True,
+                hard_gate=False,
+                reason_code="prompt_cache_not_applicable",
+            )
+        expected = assertion.expected
+        if not isinstance(expected, Mapping):
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=0,
+                passed=False,
+                hard_gate=assertion.hard_gate,
+                reason_code="prompt_cache_assertion_invalid",
+            )
+        prompt_steps = tuple(
+            step for step in trajectory.ordered_steps if step.prompt_record_kind
+        )
+        record_kinds = {step.prompt_record_kind for step in prompt_steps}
+        outcomes = {step.prompt_cache_outcome for step in prompt_steps}
+        owners = {step.prompt_cache_owner for step in prompt_steps}
+        reason_codes = {step.prompt_reason_code for step in prompt_steps}
+        cache_steps = tuple(
+            step for step in prompt_steps if step.prompt_record_kind == "cache_observed"
+        )
+        missing_records = (
+            _string_set(expected.get("required_record_kinds", ())) - record_kinds
+        )
+        missing_outcomes = _string_set(expected.get("required_outcomes", ())) - outcomes
+        missing_owners = _string_set(expected.get("required_cache_owners", ())) - owners
+        forbidden_reasons = (
+            _string_set(expected.get("forbidden_reason_codes", ())) & reason_codes
+        )
+        cached_tokens = sum(step.prompt_cached_input_tokens for step in cache_steps)
+        created_tokens = sum(
+            step.prompt_cache_creation_input_tokens for step in cache_steps
+        )
+        minimum_cached = _non_negative_int(
+            expected.get("minimum_cached_input_tokens", 0)
+        )
+        minimum_created = _non_negative_int(
+            expected.get("minimum_cache_creation_input_tokens", 0)
+        )
+        require_provider_reported = expected.get("require_provider_reported", False)
+        provider_report_missing = bool(
+            require_provider_reported
+            and (
+                not cache_steps
+                or any(
+                    step.prompt_provider_reported is not True for step in cache_steps
+                )
+            )
+        )
+        if missing_records:
+            reason = "prompt_cache_record_missing"
+        elif missing_outcomes:
+            reason = "prompt_cache_outcome_missing"
+        elif missing_owners:
+            reason = "prompt_cache_owner_missing"
+        elif forbidden_reasons:
+            reason = "prompt_cache_forbidden_reason_observed"
+        elif provider_report_missing:
+            reason = "prompt_cache_provider_report_missing"
+        elif cached_tokens < minimum_cached:
+            reason = "prompt_cache_read_tokens_below_minimum"
+        elif created_tokens < minimum_created:
+            reason = "prompt_cache_write_tokens_below_minimum"
+        else:
+            reason = "prompt_cache_trajectory_passed"
+        passed = reason == "prompt_cache_trajectory_passed"
+        return ScorerResult(
+            scorer_id=self.scorer_id,
+            score=1.0 if passed else 0.0,
+            passed=passed,
+            hard_gate=assertion.hard_gate,
+            reason_code=reason,
+        )
+
+
 class RedactedGradeRequest(RuntimeContract):
     """The complete, content-free payload available to an optional grader."""
 
@@ -427,6 +520,7 @@ DEFAULT_HARD_SCORERS = (
     HardGroundednessScorer(),
     HardConstraintScorer(),
     TaskPolicyTrajectoryScorer(),
+    PromptCacheTrajectoryScorer(),
 )
 
 
@@ -512,5 +606,6 @@ __all__ = [
     "HardSafetyScorer",
     "RedactedGradeRequest",
     "RedactedGraderPort",
+    "PromptCacheTrajectoryScorer",
     "TaskPolicyTrajectoryScorer",
 ]

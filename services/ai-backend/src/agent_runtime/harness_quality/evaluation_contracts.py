@@ -136,6 +136,14 @@ class TrajectoryStep(RuntimeContract):
     policy_disposition: str | None = Field(default=None, max_length=80)
     policy_reason_codes: tuple[str, ...] = Field(default=(), max_length=16)
     policy_exhausted_dimensions: tuple[str, ...] = Field(default=(), max_length=8)
+    prompt_record_kind: str | None = Field(default=None, max_length=80)
+    prompt_cache_outcome: str | None = Field(default=None, max_length=80)
+    prompt_cache_owner: str | None = Field(default=None, max_length=80)
+    prompt_reason_code: str | None = Field(default=None, max_length=120)
+    prompt_provider_reported: bool | None = None
+    prompt_input_tokens: Annotated[int, Field(ge=0)] = 0
+    prompt_cached_input_tokens: Annotated[int, Field(ge=0)] = 0
+    prompt_cache_creation_input_tokens: Annotated[int, Field(ge=0)] = 0
     payload_digest: Sha256
 
 
@@ -989,11 +997,11 @@ def _digest_json_safe(values: object) -> str:
 
 
 def _without_empty_task_policy_projection(value: object) -> object:
-    """Preserve legacy F1 digests while binding populated F4 projections.
+    """Preserve legacy F1 digests while binding populated F4/F2 projections.
 
-    F4-safe fields were appended to ``TrajectoryStep`` after F1 manifests and
-    golden traces were already immutable. Omitting an absent field is wire
-    compatible with those records; a populated field remains digest-bound.
+    Safe controller/prompt fields were appended after F1 manifests and golden
+    traces were immutable. Omitting absent/zero fields is wire compatible with
+    those records; populated fields remain digest-bound.
     """
 
     if isinstance(value, list):
@@ -1005,11 +1013,19 @@ def _without_empty_task_policy_projection(value: object) -> object:
         "policy_disposition",
         "policy_reason_codes",
         "policy_exhausted_dimensions",
+        "prompt_record_kind",
+        "prompt_cache_outcome",
+        "prompt_cache_owner",
+        "prompt_reason_code",
+        "prompt_provider_reported",
+        "prompt_input_tokens",
+        "prompt_cached_input_tokens",
+        "prompt_cache_creation_input_tokens",
     }
     return {
         key: _without_empty_task_policy_projection(item)
         for key, item in value.items()
-        if key not in projection_keys or (item is not None and item != [])
+        if key not in projection_keys or (item is not None and item != [] and item != 0)
     }
 
 

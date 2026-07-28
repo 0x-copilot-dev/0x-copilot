@@ -91,6 +91,14 @@ class FixtureTrajectoryObservation(RuntimeContract):
     policy_disposition: str | None = Field(default=None, max_length=80)
     policy_reason_codes: tuple[str, ...] = Field(default=(), max_length=16)
     policy_exhausted_dimensions: tuple[str, ...] = Field(default=(), max_length=8)
+    prompt_record_kind: str | None = Field(default=None, max_length=80)
+    prompt_cache_outcome: str | None = Field(default=None, max_length=80)
+    prompt_cache_owner: str | None = Field(default=None, max_length=80)
+    prompt_reason_code: str | None = Field(default=None, max_length=120)
+    prompt_provider_reported: bool | None = None
+    prompt_input_tokens: int = Field(default=0, ge=0)
+    prompt_cached_input_tokens: int = Field(default=0, ge=0)
+    prompt_cache_creation_input_tokens: int = Field(default=0, ge=0)
     payload_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -235,6 +243,16 @@ class FixtureOnlyCaseExecutor:
             policy_disposition=observation.policy_disposition,
             policy_reason_codes=observation.policy_reason_codes,
             policy_exhausted_dimensions=observation.policy_exhausted_dimensions,
+            prompt_record_kind=observation.prompt_record_kind,
+            prompt_cache_outcome=observation.prompt_cache_outcome,
+            prompt_cache_owner=observation.prompt_cache_owner,
+            prompt_reason_code=observation.prompt_reason_code,
+            prompt_provider_reported=observation.prompt_provider_reported,
+            prompt_input_tokens=observation.prompt_input_tokens,
+            prompt_cached_input_tokens=observation.prompt_cached_input_tokens,
+            prompt_cache_creation_input_tokens=(
+                observation.prompt_cache_creation_input_tokens
+            ),
             payload_digest=observation.payload_digest,
         )
 

@@ -169,6 +169,23 @@ class TrajectoryProjector:
                 payload,
                 "exhausted_dimensions",
             ),
+            prompt_record_kind=cls._prompt_text(payload, "record_kind"),
+            prompt_cache_outcome=cls._prompt_text(payload, "outcome"),
+            prompt_cache_owner=cls._prompt_text(payload, "cache_owner"),
+            prompt_reason_code=cls._prompt_text(payload, "reason_code"),
+            prompt_provider_reported=cls._prompt_bool(
+                payload,
+                "provider_reported",
+            ),
+            prompt_input_tokens=cls._prompt_int(payload, "input_tokens"),
+            prompt_cached_input_tokens=cls._prompt_int(
+                payload,
+                "cached_input_tokens",
+            ),
+            prompt_cache_creation_input_tokens=cls._prompt_int(
+                payload,
+                "cache_creation_input_tokens",
+            ),
             payload_digest=canonical_json_sha256(payload),
         )
 
@@ -204,6 +221,37 @@ class TrajectoryProjector:
             for item in value
             if isinstance(item, str) and item.strip() and len(item) <= 80
         )
+
+    @staticmethod
+    def _prompt_text(payload: Mapping[str, object], key: str) -> str | None:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        record_kind = record.get("record_kind")
+        if record_kind not in {"assembled", "cache_observed"}:
+            return None
+        value = record.get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _prompt_int(payload: Mapping[str, object], key: str) -> int:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return 0
+        if record.get("record_kind") != "cache_observed":
+            return 0
+        value = record.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    @staticmethod
+    def _prompt_bool(payload: Mapping[str, object], key: str) -> bool | None:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        if record.get("record_kind") != "cache_observed":
+            return None
+        value = record.get(key)
+        return value if isinstance(value, bool) else None
 
     @staticmethod
     def _validate_contiguous(events: Sequence[RuntimeEventEnvelope]) -> None:

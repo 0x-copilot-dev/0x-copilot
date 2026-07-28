@@ -74,6 +74,7 @@ class TestOpenAIChatCompletionsChunk:
         assert usage.input_tokens == 1200
         assert usage.output_tokens == 200
         assert usage.cached_input_tokens == 800
+        assert usage.provider_cache_metadata_observed is True
         assert usage.reasoning_tokens == 0
         assert usage.audio_input_tokens == 0
 
@@ -96,6 +97,7 @@ class TestOpenAIOSeriesChunk:
         usage = self.extractor.extract(chunk)
         assert usage is not None
         assert usage.reasoning_tokens == 900
+        assert usage.provider_cache_metadata_observed is True
         assert usage.output_tokens == 1200
         # total_tokens computed = input + output + reasoning = 500 + 1200 + 900.
         assert usage.total_tokens == 2600
@@ -158,6 +160,7 @@ class TestAnthropicChunk:
         assert usage.input_tokens == 1700  # 200 + 1000 + 500
         assert usage.cache_creation_input_tokens == 1000
         assert usage.cached_input_tokens == 500
+        assert usage.provider_cache_metadata_observed is True
         assert usage.output_tokens == 150
 
     def test_langchain_short_cache_keys(self) -> None:
@@ -203,6 +206,24 @@ class TestAnthropicChunk:
         usage = self.extractor.extract(chunk)
         assert usage is not None
         assert usage.reasoning_tokens == 2200
+        assert usage.provider_cache_metadata_observed is False
+
+    def test_explicit_zero_cache_counters_are_observed_as_provider_metadata(
+        self,
+    ) -> None:
+        usage = self.extractor.extract(
+            _chunk_with_response_metadata(
+                {
+                    "input_tokens": 400,
+                    "output_tokens": 20,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0,
+                }
+            )
+        )
+
+        assert usage is not None
+        assert usage.provider_cache_metadata_observed is True
 
 
 class TestGeminiChunk:

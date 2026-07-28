@@ -131,6 +131,39 @@ def test_projector_retains_only_closed_task_policy_journal_vocabulary() -> None:
     assert "private customer query" not in manifest.model_dump_json()
 
 
+def test_projector_retains_only_body_free_prompt_cache_vocabulary() -> None:
+    payload = {
+        "record": {
+            "record_kind": "cache_observed",
+            "outcome": "read",
+            "cache_owner": "product",
+            "reason_code": "provider_reported_read",
+            "provider_reported": True,
+            "input_tokens": 1000,
+            "cached_input_tokens": 800,
+            "cache_creation_input_tokens": 0,
+            "rendered_prompt": "private system prompt",
+            "response_body": "private provider response",
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(_event(1, payload),),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.prompt_record_kind == "cache_observed"
+    assert step.prompt_cache_outcome == "read"
+    assert step.prompt_cache_owner == "product"
+    assert step.prompt_reason_code == "provider_reported_read"
+    assert step.prompt_provider_reported is True
+    assert step.prompt_input_tokens == 1000
+    assert step.prompt_cached_input_tokens == 800
+    assert "private system prompt" not in manifest.model_dump_json()
+    assert "private provider response" not in manifest.model_dump_json()
+
+
 def test_projector_rejects_a_gap_in_the_canonical_event_timeline() -> None:
     with pytest.raises(ValueError, match=r"expected 2, got 3"):
         TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
