@@ -37,6 +37,7 @@ from agent_runtime.capabilities.discovery import (
     CapabilityRefRevisionBinding,
     CapabilitySource,
 )
+from agent_runtime.capabilities.discovery.tool_bridge import CapabilityExecutionRefused
 from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.control_plane.revision_binding import RevisionBindingRevalidator
@@ -568,6 +569,67 @@ class TestCapabilityInvokeTool:
 
         assert result["error"]["code"] == CapabilityDiscoveryErrorCode.EXECUTION_FAILED
         assert "secret-host" not in json.dumps(result)
+
+    @pytest.mark.parametrize(
+        ("code", "safe_message"),
+        [
+            (
+                CapabilityDiscoveryErrorCode.INVALID_REQUEST,
+                "Those arguments do not match the capability's current schema. "
+                "Describe it again before retrying.",
+            ),
+            (
+                CapabilityDiscoveryErrorCode.CAPABILITY_STALE,
+                "That capability reference is no longer current. "
+                "Search again before invoking.",
+            ),
+            (
+                CapabilityDiscoveryErrorCode.CAPABILITY_UNAVAILABLE,
+                "Capability invocation is unavailable for this run. "
+                "Use the direct tools instead.",
+            ),
+            (
+                CapabilityDiscoveryErrorCode.EXECUTION_FAILED,
+                "That capability could not be invoked. Try a different approach.",
+            ),
+        ],
+    )
+    async def test_a_typed_refusal_maps_to_its_code_and_this_modules_message(
+        self,
+        code: CapabilityDiscoveryErrorCode,
+        safe_message: str,
+    ) -> None:
+        """The executor names a code; the bridge owns every model-visible word."""
+
+        class RefusingExecutor:
+            async def execute(self, **kwargs: object) -> CapabilityInvocationReceipt:
+                raise CapabilityExecutionRefused(code)
+
+        harness = InvokeHarness(executor=RefusingExecutor())
+
+        result = await harness.tool().ainvoke(
+            {"capability_ref": harness.capability_ref}
+        )
+
+        assert result["error"]["code"] == code
+        assert result["error"]["safe_message"] == safe_message
+
+    async def test_a_refusal_cannot_answer_with_the_membership_code(self) -> None:
+        """An executor must never become the catalog-existence oracle."""
+
+        class ProbingExecutor:
+            async def execute(self, **kwargs: object) -> CapabilityInvocationReceipt:
+                raise CapabilityExecutionRefused(
+                    CapabilityDiscoveryErrorCode.CAPABILITY_NOT_FOUND
+                )
+
+        harness = InvokeHarness(executor=ProbingExecutor())
+
+        result = await harness.tool().ainvoke(
+            {"capability_ref": harness.capability_ref}
+        )
+
+        assert result["error"]["code"] == CapabilityDiscoveryErrorCode.EXECUTION_FAILED
 
     async def test_an_executor_cannot_substitute_another_capability(self) -> None:
         class SubstitutingExecutor:

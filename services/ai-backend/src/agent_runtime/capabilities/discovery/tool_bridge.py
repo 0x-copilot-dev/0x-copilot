@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, ClassVar
 
 from pydantic import ValidationError
 
@@ -68,10 +68,62 @@ _UNAVAILABLE_CAPABILITY_MESSAGE = (
 _EXECUTION_FAILED_MESSAGE = (
     "That capability could not be invoked. Try a different approach."
 )
+_INVALID_ARGUMENTS_MESSAGE = (
+    "Those arguments do not match the capability's current schema. "
+    "Describe it again before retrying."
+)
 
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+class CapabilityExecutionRefused(Exception):
+    """A typed refusal a non-model executor raises instead of dispatching.
+
+    It deliberately carries a *code only*.  The model-visible sentence is chosen
+    by this module from :data:`_REFUSAL_MESSAGES`, so no connector, loader,
+    registry, or store string can reach model output through the executor seam —
+    sanitization is structural rather than a discipline each executor must
+    remember.
+
+    The admissible codes are a strict subset of
+    :class:`CapabilityDiscoveryErrorCode`.  Two exclusions are load-bearing:
+    an executor may not answer ``catalog_inactive``, which only the bridge's own
+    subject/expiry recheck can decide, and it may not answer
+    ``capability_not_found``, which is the bridge's membership answer — allowing
+    it here would let a downstream component become the existence oracle the
+    closed error vocabulary exists to prevent.  Any other code is coerced to
+    :attr:`CapabilityDiscoveryErrorCode.EXECUTION_FAILED` rather than trusted.
+    """
+
+    ADMISSIBLE_CODES: ClassVar[frozenset[CapabilityDiscoveryErrorCode]] = frozenset(
+        {
+            CapabilityDiscoveryErrorCode.INVALID_REQUEST,
+            CapabilityDiscoveryErrorCode.CAPABILITY_STALE,
+            CapabilityDiscoveryErrorCode.CAPABILITY_UNAVAILABLE,
+            CapabilityDiscoveryErrorCode.EXECUTION_FAILED,
+        }
+    )
+
+    def __init__(self, code: CapabilityDiscoveryErrorCode) -> None:
+        admitted = (
+            code
+            if code in self.ADMISSIBLE_CODES
+            else CapabilityDiscoveryErrorCode.EXECUTION_FAILED
+        )
+        self.code = admitted
+        super().__init__(admitted.value)
+
+
+_REFUSAL_MESSAGES: dict[CapabilityDiscoveryErrorCode, str] = {
+    CapabilityDiscoveryErrorCode.INVALID_REQUEST: _INVALID_ARGUMENTS_MESSAGE,
+    CapabilityDiscoveryErrorCode.CAPABILITY_STALE: _STALE_CAPABILITY_MESSAGE,
+    CapabilityDiscoveryErrorCode.CAPABILITY_UNAVAILABLE: (
+        _UNAVAILABLE_CAPABILITY_MESSAGE
+    ),
+    CapabilityDiscoveryErrorCode.EXECUTION_FAILED: _EXECUTION_FAILED_MESSAGE,
+}
 
 
 @dataclass(frozen=True)
@@ -372,6 +424,16 @@ class CapabilityInvokeTool:
                 idempotency_key=request.idempotency_key,
                 runtime_context=self.access.runtime_context,
             )
+        except CapabilityExecutionRefused as refusal:
+            # A typed refusal names one closed code and no text. The sentence
+            # comes from this module's own table, so a refusal cannot smuggle
+            # connector detail into model output.
+            return _dump(
+                CapabilityInvokeToolResult.fail(
+                    refusal.code,
+                    _REFUSAL_MESSAGES.get(refusal.code, _EXECUTION_FAILED_MESSAGE),
+                )
+            )
         except Exception:
             # The executor is domain-supplied and may wrap connector, network,
             # or store failures. Internal detail never reaches model output.
@@ -476,6 +538,7 @@ def _dump(
 __all__ = (
     "CapabilityCatalogAccess",
     "CapabilityDescribeTool",
+    "CapabilityExecutionRefused",
     "CapabilityInvokeTool",
     "CapabilitySearchTool",
 )
