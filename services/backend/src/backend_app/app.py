@@ -308,6 +308,7 @@ from backend_app.token_vault import TokenVault, TokenVaultFactory
 from backend_app.service import (
     ConnectorAccessDenied,
     DeployAuditService,
+    InternalMcpLeaseFailureError,
     McpRegistryService,
     SkillRegistryService,
     ToolCatalogService,
@@ -1419,6 +1420,10 @@ def create_app(
             )
         except ConnectorAccessDenied as exc:
             raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
+        except InternalMcpLeaseFailureError as exc:
+            raise HTTPException(
+                exc.status_code, exc.failure.model_dump(mode="json")
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 
@@ -1451,14 +1456,12 @@ def create_app(
             # ``connector_access_read_only``); the ai-backend surfaces it as a
             # recoverable ``PERMISSION_DENIED`` tool failure, not a run kill.
             raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
+        except InternalMcpLeaseFailureError as exc:
+            raise HTTPException(
+                exc.status_code, exc.failure.model_dump(mode="json")
+            ) from exc
         except ValueError as exc:
-            detail = str(exc)
-            status_code = (
-                status.HTTP_401_UNAUTHORIZED
-                if "authenticated" in detail or "OAuth token" in detail
-                else status.HTTP_400_BAD_REQUEST
-            )
-            raise HTTPException(status_code, detail) from exc
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/client-session/release",
@@ -1481,6 +1484,10 @@ def create_app(
                 lease_token=payload.lease,
                 cancel=payload.cancel,
             )
+        except InternalMcpLeaseFailureError as exc:
+            raise HTTPException(
+                exc.status_code, exc.failure.model_dump(mode="json")
+            ) from exc
         except ValueError as exc:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

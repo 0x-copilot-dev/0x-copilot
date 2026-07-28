@@ -909,6 +909,28 @@ class InternalMcpSessionReleaseResponse(BackendContract):
     outcome: str
 
 
+class InternalMcpLeaseFailureCode(StrEnum):
+    LEASE_STALE_PRE_DISPATCH = "lease_stale_pre_dispatch"
+    LEASE_WRONG_OWNER = "lease_wrong_owner"
+    LEASE_INVALID = "lease_invalid"
+    POOL_SATURATED = "pool_saturated"
+    SERVER_UNAVAILABLE = "server_unavailable"
+    AUTH_REQUIRED = "auth_required"
+    AMBIGUOUS_TRANSPORT_FAILURE = "ambiguous_transport_failure"
+
+
+class InternalMcpLeaseFailure(BackendContract):
+    code: InternalMcpLeaseFailureCode
+    redispatch_safe: bool
+
+    @model_validator(mode="after")
+    def _bound_redispatch_safety(self) -> InternalMcpLeaseFailure:
+        expected = self.code is InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+        if self.redispatch_safe is not expected:
+            raise ValueError("only a pre-dispatch stale lease is safe to redispatch")
+        return self
+
+
 class InternalMcpRpcResponse(BackendContract):
     payload: dict[str, Any]
 

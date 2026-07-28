@@ -24,6 +24,14 @@ from backend_app.token_vault import TokenVault
 _MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 
 
+class McpRemoteAuthError(ValueError):
+    """The remote server rejected backend-held authentication material."""
+
+
+class McpRemoteTransportError(ConnectionError):
+    """A fenced request failed after dispatch became potentially observable."""
+
+
 @runtime_checkable
 class McpRemoteSessionTransport(McpSessionTransport, Protocol):
     """A pool transport capable of issuing one fenced JSON-RPC request."""
@@ -127,20 +135,22 @@ class McpHttpTransport:
             # pre-dispatch.
             if fence is not None:
                 fence.commit()
-            if self._binding.encrypted_access_token is not None:
-                token = self._token_vault.decrypt(self._binding.encrypted_access_token)
-                headers["authorization"] = f"Bearer {token}"
-            if self._session_id is not None:
-                headers["mcp-session-id"] = self._session_id
-            if self._protocol_version is not None:
-                headers["mcp-protocol-version"] = self._protocol_version
-            request = Request(
-                self._binding.endpoint,
-                data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
-                headers=headers,
-                method="POST",
-            )
             try:
+                if self._binding.encrypted_access_token is not None:
+                    token = self._token_vault.decrypt(
+                        self._binding.encrypted_access_token
+                    )
+                    headers["authorization"] = f"Bearer {token}"
+                if self._session_id is not None:
+                    headers["mcp-session-id"] = self._session_id
+                if self._protocol_version is not None:
+                    headers["mcp-protocol-version"] = self._protocol_version
+                request = Request(
+                    self._binding.endpoint,
+                    data=json.dumps(payload, separators=(",", ":")).encode("utf-8"),
+                    headers=headers,
+                    method="POST",
+                )
                 with urlopen(request, timeout=30) as response:
                     self._session_id = (
                         response.headers.get("mcp-session-id") or self._session_id
@@ -151,20 +161,33 @@ class McpHttpTransport:
                     )
                     raw_bytes = response.read(_MAX_RESPONSE_BYTES + 1)
                     if len(raw_bytes) > _MAX_RESPONSE_BYTES:
-                        raise ValueError("MCP server response exceeds the safe limit")
+                        raise McpRemoteTransportError(
+                            "MCP server response exceeds the safe limit"
+                        )
                     raw = raw_bytes.decode("utf-8")
                     content_type = response.headers.get("content-type", "")
             except HTTPError as exc:
                 if exc.code in {401, 403}:
-                    raise ValueError(
+                    raise McpRemoteAuthError(
                         "MCP server rejected the stored OAuth token"
                     ) from exc
-                raise ValueError("MCP server request failed") from exc
+                raise McpRemoteTransportError("MCP server request failed") from exc
             except (URLError, TimeoutError) as exc:
-                raise ConnectionError("MCP server is unavailable") from exc
-        decoded = self._decode(raw, content_type)
+                raise McpRemoteTransportError("MCP server is unavailable") from exc
+            except McpRemoteTransportError:
+                raise
+            except Exception as exc:
+                raise McpRemoteTransportError("MCP server request failed") from exc
+        try:
+            decoded = self._decode(raw, content_type)
+        except Exception as exc:
+            raise McpRemoteTransportError(
+                "MCP server returned an invalid JSON-RPC response"
+            ) from exc
         if not isinstance(decoded, dict):
-            raise ValueError("MCP server returned an invalid JSON-RPC response")
+            raise McpRemoteTransportError(
+                "MCP server returned an invalid JSON-RPC response"
+            )
         return decoded
 
     @staticmethod
@@ -179,4 +202,9 @@ class McpHttpTransport:
         return json.loads(raw or "{}")
 
 
-__all__ = ["McpHttpTransportFactory", "McpRemoteSessionTransport"]
+__all__ = [
+    "McpHttpTransportFactory",
+    "McpRemoteAuthError",
+    "McpRemoteSessionTransport",
+    "McpRemoteTransportError",
+]

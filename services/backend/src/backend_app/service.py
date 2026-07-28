@@ -27,6 +27,8 @@ from backend_app.contracts import (
     InstallMcpServerRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
+    InternalMcpLeaseFailure,
+    InternalMcpLeaseFailureCode,
     InternalMcpRpcRequest,
     InternalMcpRpcResponse,
     InternalMcpSessionReleaseResponse,
@@ -79,7 +81,12 @@ from backend_app.mcp_session_pool import (
     McpSessionPoolRejected,
     VerifiedMcpSessionScopeKey,
 )
-from backend_app.mcp_transport import McpHttpTransportFactory, McpRemoteSessionTransport
+from backend_app.mcp_transport import (
+    McpHttpTransportFactory,
+    McpRemoteAuthError,
+    McpRemoteSessionTransport,
+    McpRemoteTransportError,
+)
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
     InMemoryDeployAuditStore,
@@ -261,6 +268,29 @@ class ConnectorAccessDenied(Exception):
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class InternalMcpLeaseFailureError(ValueError):
+    """Typed, non-secret failure raised by internal pooled-MCP operations."""
+
+    def __init__(self, code: InternalMcpLeaseFailureCode) -> None:
+        status_by_code = {
+            InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH: 409,
+            InternalMcpLeaseFailureCode.LEASE_WRONG_OWNER: 403,
+            InternalMcpLeaseFailureCode.LEASE_INVALID: 400,
+            InternalMcpLeaseFailureCode.POOL_SATURATED: 429,
+            InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE: 503,
+            InternalMcpLeaseFailureCode.AUTH_REQUIRED: 401,
+            InternalMcpLeaseFailureCode.AMBIGUOUS_TRANSPORT_FAILURE: 503,
+        }
+        self.failure = InternalMcpLeaseFailure(
+            code=code,
+            redispatch_safe=(
+                code is InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            ),
+        )
+        self.status_code = status_by_code[code]
+        super().__init__(code.value)
 
 
 class McpRegistryService:
@@ -894,12 +924,16 @@ class McpRegistryService:
             McpServerHealth.DISABLED,
             McpServerHealth.UNAVAILABLE,
         }:
-            raise ValueError("MCP server is unavailable")
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE
+            )
         if (
             record.auth_mode != McpAuthMode.NONE
             and self._effective_auth_state(record) != McpAuthState.AUTHENTICATED
         ):
-            raise ValueError("MCP server is not authenticated")
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            )
 
     def create_internal_client_session(
         self,
@@ -926,7 +960,12 @@ class McpRegistryService:
             or acquired.lease is None
         ):
             self._pool_metrics[acquired.outcome.value] += 1
-            raise ValueError(f"MCP session pool {acquired.outcome.value}")
+            failure_code = (
+                InternalMcpLeaseFailureCode.POOL_SATURATED
+                if acquired.outcome is McpSessionPoolOutcome.SATURATED
+                else InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE
+            )
+            raise InternalMcpLeaseFailureError(failure_code)
         self._remember_session_scope(record, scope)
         lease_token = self.session_pool.export_lease_token(acquired.lease)
         self._remember_lease(lease_token, record, scope)
@@ -941,6 +980,9 @@ class McpRegistryService:
         server_id: str,
         request: InternalMcpRpcRequest,
     ) -> InternalMcpRpcResponse:
+        self._reject_wrong_lease_owner(
+            request.lease, org_id=org_id, user_id=user_id, server_id=server_id
+        )
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
@@ -958,7 +1000,9 @@ class McpRegistryService:
         current_token = self.store.get_token(server_id=server_id)
         if self._scope_for(record, current_token) != owner.scope:
             self._retire_lease(request.lease, owner, cancel=True)
-            raise ValueError("MCP session lease is stale")
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            )
         token = (
             self._require_valid_token(record)
             if record.auth_mode != McpAuthMode.NONE
@@ -967,20 +1011,24 @@ class McpRegistryService:
         scope = self._bind_session_scope(record, token)
         if scope != owner.scope:
             self._retire_lease(request.lease, owner, cancel=True)
-            raise ValueError("MCP session lease is stale")
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            )
         try:
             lease = self.session_pool.import_lease_token(request.lease)
         except ValueError as exc:
-            raise ValueError("MCP session lease is invalid") from exc
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_INVALID
+            ) from exc
         # ``read`` gates side-effecting calls: a ``tools/call`` on a tool that
         # is not read-only is denied. ``tools/list`` (and every other method)
         # is always allowed under ``read``; ``read_act`` and the unjoined
         # (``None``) case allow everything.
-        if access_mode == ConnectorAccessMode.READ and method == "tools/call":
-            tool_name = self._rpc_tool_name(request.payload)
-            if not self._tool_is_read_only(record, scope, lease, tool_name):
-                raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
         try:
+            if access_mode == ConnectorAccessMode.READ and method == "tools/call":
+                tool_name = self._rpc_tool_name(request.payload)
+                if not self._tool_is_read_only(record, scope, lease, tool_name):
+                    raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
             with owner.operation_lock:
                 payload = self.session_pool.invoke(
                     lease,
@@ -1000,7 +1048,24 @@ class McpRegistryService:
                 )
         except McpSessionPoolRejected as exc:
             self._forget_lease(request.lease)
-            raise ValueError("MCP session lease is stale") from exc
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            ) from exc
+        except McpRemoteAuthError as exc:
+            self._forget_lease_observation(request.lease)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            ) from exc
+        except McpRemoteTransportError as exc:
+            self._forget_lease_observation(request.lease)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AMBIGUOUS_TRANSPORT_FAILURE
+            ) from exc
+        except ConnectionError as exc:
+            self._forget_lease_observation(request.lease)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE
+            ) from exc
         except Exception:
             self._forget_lease_observation(request.lease)
             raise
@@ -1021,7 +1086,9 @@ class McpRegistryService:
         try:
             lease = self.session_pool.import_lease_token(lease_token)
         except ValueError as exc:
-            raise ValueError("MCP session lease is invalid") from exc
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_INVALID
+            ) from exc
         with owner.operation_lock:
             outcome = (
                 self.session_pool.cancel(lease, scope=owner.scope)
@@ -1171,15 +1238,33 @@ class McpRegistryService:
         with self._lease_owners_lock:
             owner = self._lease_owners.get(lease_token)
             if owner is None:
-                raise ValueError("MCP session lease is stale")
+                raise InternalMcpLeaseFailureError(
+                    InternalMcpLeaseFailureCode.LEASE_INVALID
+                )
             if (owner.org_id, owner.user_id, owner.server_id) != (
                 org_id,
                 user_id,
                 server_id,
             ):
-                raise ValueError("MCP session lease is stale")
+                raise InternalMcpLeaseFailureError(
+                    InternalMcpLeaseFailureCode.LEASE_WRONG_OWNER
+                )
             self._lease_owners.move_to_end(lease_token)
             return owner
+
+    def _reject_wrong_lease_owner(
+        self, lease_token: str, *, org_id: str, user_id: str, server_id: str
+    ) -> None:
+        with self._lease_owners_lock:
+            owner = self._lease_owners.get(lease_token)
+            if owner is not None and (
+                owner.org_id,
+                owner.user_id,
+                owner.server_id,
+            ) != (org_id, user_id, server_id):
+                raise InternalMcpLeaseFailureError(
+                    InternalMcpLeaseFailureCode.LEASE_WRONG_OWNER
+                )
 
     def _forget_lease(self, lease_token: str) -> None:
         with self._lease_owners_lock:
@@ -1560,30 +1645,39 @@ class McpRegistryService:
     def _require_valid_token(self, record: McpServerRecord) -> TokenEnvelope:
         token = self.store.get_token(server_id=record.server_id)
         if token is None:
-            raise ValueError("MCP server is not authenticated")
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            )
         if token.expires_at is None or token.expires_at > datetime.now(
             timezone.utc
         ) + timedelta(seconds=60):
             return token
         if token.encrypted_refresh_token is None:
-            raise ValueError(
-                "MCP access token expired and no refresh token is available"
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
             )
-        refresh_token = self.token_vault.decrypt(token.encrypted_refresh_token)
         refresher = getattr(self.token_exchanger, "refresh_token", None)
         if not callable(refresher):
-            raise ValueError("MCP access token refresh is not supported")
-        refreshed = refresher(
-            record=record,
-            refresh_token=refresh_token,
-            token_vault=self.token_vault,
-        )
-        encrypted_access = self.token_vault.encrypt(refreshed.access_token)
-        encrypted_refresh = (
-            self.token_vault.encrypt(refreshed.refresh_token)
-            if refreshed.refresh_token is not None
-            else token.encrypted_refresh_token
-        )
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            )
+        try:
+            refresh_token = self.token_vault.decrypt(token.encrypted_refresh_token)
+            refreshed = refresher(
+                record=record,
+                refresh_token=refresh_token,
+                token_vault=self.token_vault,
+            )
+            encrypted_access = self.token_vault.encrypt(refreshed.access_token)
+            encrypted_refresh = (
+                self.token_vault.encrypt(refreshed.refresh_token)
+                if refreshed.refresh_token is not None
+                else token.encrypted_refresh_token
+            )
+        except Exception as exc:
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            ) from exc
         envelope = TokenEnvelope(
             connection_id=token.connection_id,
             server_id=record.server_id,
