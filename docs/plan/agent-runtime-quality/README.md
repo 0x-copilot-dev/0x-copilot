@@ -723,11 +723,35 @@ widens authorization. Every inner operation re-enters the Operation Gateway.
       needless invalidation. `CapabilityCatalogRevision.generation` is optional
       so the untouched builder still constructs; `bind_ref()` fails closed when
       it is absent, which is the seam F3.2 threads a generation through.
-- [ ] **F3.2 — Bounded bridge registration.** Register
+- [x] **F3.2 — Bounded bridge registration.** (`b41dc7d8`; 93 focused tests.)
+      Register
       `search_capabilities`, `describe_capability`, and `invoke_capability` at
       the runtime factory only in deferred/enabled modes, with bounded schemas
       and a bridge-recursion guard so a bridge tool can never resolve to another
-      bridge tool.
+      bridge tool. The guard is structural at three chokepoints rather than a
+      call-site check: a bridge name cannot become a catalog member on any
+      construction path, cannot yield an invocation target even from an entry
+      forged past validation, and dispatch is gated by the target _type_ rather
+      than a string comparison. The reserved set is derived by iterating the
+      closed tool-name enum, so a fourth bridge tool extends the guard
+      automatically. Probing a bridge ref returns the same `capability_not_found`
+      as any unknown ref, so it is not an existence oracle. The builder now
+      always populates the catalog generation, and the package imports no
+      LangChain or LangGraph type — asserted by an AST test — so the factory
+      keeps sole ownership of tool composition.
+
+      **Step RB paid for itself here.** `CapabilityRefBinding.is_bound_to()` is
+      deleted, grep-confirmed absent from `src/`, and a test asserts the binding
+      exposes no currency predicate at all. F3 now carries no staleness logic —
+      only a projection and a small `RevisionAuthorityPort`, with
+      `RevisionBindingRevalidator` owning every scope, ordering, tamper,
+      revocation, and unavailability decision. All 15 conformance cases run for
+      F3.
+
+      Registration returns empty in direct/server/shadow, and also for a catalog
+      with no generation — an unbindable catalog must not be offered. Every
+      emptier result falls back to the untouched pre-F3 disclosure path.
+
 - [x] **F3.3 — Search and bounded expansion.** (`cfafbe3b`; 34 focused tests.)
       Rank authorized compact cards in
       `O(NQ + R log K)` and expand at most the configured top-K server cards
