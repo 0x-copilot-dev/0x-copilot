@@ -6,7 +6,7 @@ import asyncio
 import dataclasses
 import logging
 import os
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from typing import Any
 
 from copilot_service_contracts.scopes import (
@@ -36,6 +36,8 @@ from backend_app.contracts import (
     InternalMcpClientSession,
     InternalMcpRpcRequest,
     InternalMcpRpcResponse,
+    InternalMcpSessionReleaseRequest,
+    InternalMcpSessionReleaseResponse,
     InstallMcpServerRequest,
     InternalMcpServerListResponse,
     InternalSkillBundle,
@@ -431,9 +433,27 @@ async def _lifespan(application: FastAPI):
     connector_bus = getattr(application.state, "connector_activity_bus", None)
     if connector_bus is not None:
         connector_bus.bind_loop(asyncio.get_running_loop())
+    mcp_service = getattr(application.state, "mcp_service", None)
+    maintenance_task: asyncio.Task[None] | None = None
+    if mcp_service is not None:
+        interval = float(os.environ.get("MCP_SESSION_POOL_MAINTENANCE_SECONDS", "30"))
+        interval = min(max(interval, 1.0), 300.0)
+
+        async def maintain_pool() -> None:
+            while True:
+                await asyncio.sleep(interval)
+                await asyncio.to_thread(mcp_service.maintain_session_pool)
+
+        maintenance_task = asyncio.create_task(maintain_pool())
+        application.state.mcp_session_pool_maintenance_task = maintenance_task
     try:
         yield
     finally:
+        if maintenance_task is not None:
+            maintenance_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await maintenance_task
+            await asyncio.to_thread(mcp_service.shutdown_session_pool)
         if connector_bus is not None:
             connector_bus.unbind_loop()
         if sweeper is not None:
@@ -1423,6 +1443,30 @@ def create_app(
                 else status.HTTP_400_BAD_REQUEST
             )
             raise HTTPException(status_code, detail) from exc
+
+    @app.post(
+        "/internal/v1/mcp/servers/{server_id}/client-session/release",
+        response_model=InternalMcpSessionReleaseResponse,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_release_client_session(
+        request: Request,
+        server_id: str,
+        payload: InternalMcpSessionReleaseRequest,
+    ) -> InternalMcpSessionReleaseResponse:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=payload.org_id, user_id=payload.user_id
+        )
+        try:
+            return _AppServices.mcp(app).release_internal_client_session(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                server_id=server_id,
+                lease_token=payload.lease,
+                cancel=payload.cancel,
+            )
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     @app.post(
         "/internal/v1/mcp/servers/{server_id}/test-token",

@@ -7,6 +7,8 @@ from copilot_service_contracts.headers import (
     SERVICE_TOKEN_HEADER,
     USER_HEADER,
 )
+import json
+
 from backend_app.contracts import McpAuthState, OAuthTokenRequest
 from backend_app.mcp_oauth import McpAuthorization
 from backend_app.app import create_app
@@ -85,7 +87,8 @@ def test_public_and_internal_mcp_auth_flow() -> None:
     assert cards_before_auth["servers"][0]["auth_state"] == "unauthenticated"
     assert "state=" in auth["auth_url"]
     assert completed["auth_state"] == "authenticated"
-    assert session["credential_ref"]
+    assert set(session) == {"lease"}
+    assert len(session["lease"]) >= 16
 
 
 def test_restarting_mcp_auth_keeps_existing_token_runtime_loadable() -> None:
@@ -135,24 +138,33 @@ def test_restarting_mcp_auth_keeps_existing_token_runtime_loadable() -> None:
     ).json()
 
     assert cards["servers"][0]["auth_state"] == "authenticated"
-    assert session["auth_state"] == "authenticated"
-    assert session["credential_ref"]
+    assert set(session) == {"lease"}
 
 
 def test_internal_mcp_rpc_proxies_with_backend_held_token(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_remote_rpc(
-        server_url: str, payload: dict[str, object], access_token: str
-    ) -> dict[str, object]:
-        captured["server_url"] = server_url
-        captured["payload"] = payload
-        captured["access_token"] = access_token
-        return {"jsonrpc": "2.0", "id": 1, "result": {"tools": []}}
+    class Response:
+        headers = {"content-type": "application/json"}
 
-    monkeypatch.setattr(
-        McpRegistryService, "_post_remote_mcp_rpc", staticmethod(fake_remote_rpc)
-    )
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}'
+
+    def fake_urlopen(request, timeout):
+        captured["server_url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        captured["access_token"] = request.get_header("Authorization").removeprefix(
+            "Bearer "
+        )
+        return Response()
+
+    monkeypatch.setattr("backend_app.mcp_transport.urlopen", fake_urlopen)
     store = InMemoryMcpStore()
     app = create_app(
         McpRegistryService(
@@ -186,11 +198,16 @@ def test_internal_mcp_rpc_proxies_with_backend_held_token(monkeypatch) -> None:
         params={"state": state, "code": "oauth_code"},
     )
 
+    lease = client.post(
+        f"/internal/v1/mcp/servers/{server_id}/client-session",
+        params={"org_id": "org_123", "user_id": "user_123"},
+    ).json()["lease"]
     proxied = client.post(
         f"/internal/v1/mcp/servers/{server_id}/rpc",
         json={
             "org_id": "org_123",
             "user_id": "user_123",
+            "lease": lease,
             "payload": {"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
         },
     ).json()
@@ -206,21 +223,27 @@ def test_internal_mcp_rpc_proxies_with_backend_held_token(monkeypatch) -> None:
 def test_internal_mcp_rpc_proxies_tools_call(monkeypatch) -> None:
     captured: dict[str, object] = {}
 
-    def fake_remote_rpc(
-        server_url: str, payload: dict[str, object], access_token: str
-    ) -> dict[str, object]:
-        captured["server_url"] = server_url
-        captured["payload"] = payload
-        captured["access_token"] = access_token
-        return {
-            "jsonrpc": "2.0",
-            "id": 2,
-            "result": {"content": [{"type": "text", "text": "task list"}]},
-        }
+    class Response:
+        headers = {"content-type": "application/json"}
 
-    monkeypatch.setattr(
-        McpRegistryService, "_post_remote_mcp_rpc", staticmethod(fake_remote_rpc)
-    )
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b'{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"task list"}]}}'
+
+    def fake_urlopen(request, timeout):
+        captured["server_url"] = request.full_url
+        captured["payload"] = json.loads(request.data)
+        captured["access_token"] = request.get_header("Authorization").removeprefix(
+            "Bearer "
+        )
+        return Response()
+
+    monkeypatch.setattr("backend_app.mcp_transport.urlopen", fake_urlopen)
     store = InMemoryMcpStore()
     app = create_app(
         McpRegistryService(
@@ -263,11 +286,16 @@ def test_internal_mcp_rpc_proxies_tools_call(monkeypatch) -> None:
     _row = next(iter(_conn_store.connectors.values()))
     _conn_store.update_connector(_row.model_copy(update={"access_mode": "read_act"}))
 
+    lease = client.post(
+        f"/internal/v1/mcp/servers/{server_id}/client-session",
+        params={"org_id": "org_123", "user_id": "user_123"},
+    ).json()["lease"]
     proxied = client.post(
         f"/internal/v1/mcp/servers/{server_id}/rpc",
         json={
             "org_id": "org_123",
             "user_id": "user_123",
+            "lease": lease,
             "payload": {
                 "jsonrpc": "2.0",
                 "id": 2,

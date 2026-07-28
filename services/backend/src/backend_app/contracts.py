@@ -869,16 +869,15 @@ class InternalMcpAuthRequest(BackendContract):
 
 
 class InternalMcpClientSession(BackendContract):
-    server_id: str
-    url: str
-    transport: McpTransport
-    auth_state: McpAuthState
-    credential_ref: str | None = None
+    """Opaque backend lease; no transport, endpoint, or credential facts."""
+
+    lease: str
 
 
 class InternalMcpRpcRequest(BackendContract):
     org_id: str
     user_id: str
+    lease: str
     payload: dict[str, Any]
 
     @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
@@ -892,6 +891,22 @@ class InternalMcpRpcRequest(BackendContract):
         if not value:
             raise ValueError("payload must not be empty")
         return value
+
+
+class InternalMcpSessionReleaseRequest(BackendContract):
+    org_id: str
+    user_id: str
+    lease: str
+    cancel: bool = False
+
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class InternalMcpSessionReleaseResponse(BackendContract):
+    outcome: str
 
 
 class InternalMcpRpcResponse(BackendContract):

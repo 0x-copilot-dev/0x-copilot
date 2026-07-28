@@ -9,6 +9,8 @@ decrypts a vault token.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from backend_app.connectors.store import ConnectorAccessMode
@@ -51,22 +53,38 @@ _ADVERTISED_TOOLS = [
     {"name": "read_tool", "annotations": {"readOnlyHint": True}},
     {"name": "act_tool"},
 ]
+_CURRENT_LEASE = "x" * 16
 
 
 class FakeRemote:
-    """Dispatches ``_post_remote_mcp_rpc`` by JSON-RPC method + records calls."""
+    """Dispatches the backend-owned HTTP transport and records calls."""
 
     def __init__(self) -> None:
         self.methods: list[str] = []
 
-    def __call__(
-        self, server_url: str, payload: dict[str, object], access_token: str
-    ) -> dict[str, object]:
+    def __call__(self, request, timeout):
+        payload = json.loads(request.data)
         method = payload.get("method")
         self.methods.append(method)  # type: ignore[arg-type]
-        if method == "tools/list":
-            return {"jsonrpc": "2.0", "id": 1, "result": {"tools": _ADVERTISED_TOOLS}}
-        return {"jsonrpc": "2.0", "id": 2, "result": {"content": []}}
+        body = (
+            {"jsonrpc": "2.0", "id": 1, "result": {"tools": _ADVERTISED_TOOLS}}
+            if method == "tools/list"
+            else {"jsonrpc": "2.0", "id": 2, "result": {"content": []}}
+        )
+
+        class Response:
+            headers = {"content-type": "application/json"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps(body).encode()
+
+        return Response()
 
 
 def _service(
@@ -74,6 +92,7 @@ def _service(
     access_mode: ConnectorAccessMode | None,
     seed_token: bool = True,
 ) -> tuple[McpRegistryService, str, CountingVault, FakeRemote]:
+    global _CURRENT_LEASE
     store = InMemoryMcpStore()
     vault = CountingVault()
     service = McpRegistryService(store=store, token_vault=vault)
@@ -103,7 +122,15 @@ def _service(
     # The gate resolver: return the configured mode for THIS server.
     service.connector_access_resolver = lambda r: access_mode
     remote = FakeRemote()
-    service._post_remote_mcp_rpc = remote  # type: ignore[method-assign,assignment]
+    import backend_app.mcp_transport
+
+    backend_app.mcp_transport.urlopen = remote
+    if seed_token:
+        _CURRENT_LEASE = service.create_internal_client_session(
+            org_id=ORG, user_id=USER, server_id=record.server_id
+        ).lease
+    else:
+        _CURRENT_LEASE = "x" * 16
     return service, record.server_id, vault, remote
 
 
@@ -111,7 +138,9 @@ def _rpc(method: str, *, tool_name: str | None = None) -> InternalMcpRpcRequest:
     payload: dict[str, object] = {"jsonrpc": "2.0", "id": 9, "method": method}
     if tool_name is not None:
         payload["params"] = {"name": tool_name, "arguments": {}}
-    return InternalMcpRpcRequest(org_id=ORG, user_id=USER, payload=payload)
+    return InternalMcpRpcRequest(
+        org_id=ORG, user_id=USER, lease=_CURRENT_LEASE, payload=payload
+    )
 
 
 def test_proxy_internal_rpc_denies_off_connector() -> None:

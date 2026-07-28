@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
 import os
+import threading
 
 import yaml
 from typing import Any, Callable, Protocol
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
 
 from backend_app.identity._pkce import compute_challenge, generate_verifier
 
@@ -26,6 +26,7 @@ from backend_app.contracts import (
     InternalMcpClientSession,
     InternalMcpRpcRequest,
     InternalMcpRpcResponse,
+    InternalMcpSessionReleaseResponse,
     InternalMcpServerCard,
     InternalMcpServerListResponse,
     InternalSkillBundle,
@@ -66,6 +67,16 @@ from backend_app.connectors.store import ConnectorAccessMode
 from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry, catalog_by_slug
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
 from backend_app.mcp_revisions import McpRevisionAuthority
+from backend_app.mcp_session_pool import (
+    McpSessionDispatchFence,
+    McpSessionLease,
+    McpSessionPool,
+    McpSessionPoolConfig,
+    McpSessionPoolOutcome,
+    McpSessionPoolRejected,
+    VerifiedMcpSessionScopeKey,
+)
+from backend_app.mcp_transport import McpHttpTransportFactory, McpRemoteSessionTransport
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
     InMemoryDeployAuditStore,
@@ -83,6 +94,7 @@ from backend_app.token_vault import TokenVault, TokenVaultFactory
 # asserts both sides agree.
 _SUGGESTIONS_OFF = "off"
 _SUGGESTIONS_ALWAYS = "always"
+_BACKEND_COMPATIBILITY_PARTITION = "backend-registry-compat-v1"
 
 
 def _is_unique_violation(ex: Exception) -> bool:
@@ -126,37 +138,6 @@ def _catalog_entry_response(entry: CatalogEntry) -> McpCatalogEntryResponse:
 
 def _catalog_by_slug() -> dict[str, CatalogEntry]:
     return catalog_by_slug()
-
-
-class Keys:
-    """Stable keys and wire values used by backend MCP service calls."""
-
-    class ContentType:
-        EVENT_STREAM = "text/event-stream"
-        JSON = "application/json"
-        JSON_OR_EVENT_STREAM = "application/json, text/event-stream"
-
-    class Encoding:
-        UTF_8 = "utf-8"
-
-    class Header:
-        ACCEPT = "accept"
-        AUTHORIZATION = "authorization"
-        CONTENT_TYPE = "content-type"
-
-    class HttpMethod:
-        POST = "POST"
-
-    class Sse:
-        DATA_PREFIX = "data:"
-        DONE = "[DONE]"
-
-
-class Values:
-    """Stable values used by backend MCP service calls."""
-
-    class Auth:
-        BEARER = "Bearer"
 
 
 class OAuthTokenExchanger(Protocol):
@@ -257,6 +238,8 @@ class McpRegistryService:
         token_exchanger: OAuthTokenExchanger | None = None,
         oauth_client: OAuthDiscoveryClient | None = None,
         revision_authority: McpRevisionAuthority | None = None,
+        session_pool: McpSessionPool | None = None,
+        transport_factory: McpHttpTransportFactory | None = None,
         auth_session_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         self.store = store or self._default_store()
@@ -270,6 +253,17 @@ class McpRegistryService:
         self.revision_authority = (
             revision_authority or McpRevisionAuthority.for_mcp_store(self.store)
         )
+        self._transport_factory = transport_factory or McpHttpTransportFactory(
+            token_vault=self.token_vault
+        )
+        self.session_pool = session_pool or McpSessionPool(
+            factory=self._transport_factory,
+            config=self._session_pool_config_from_environment(),
+        )
+        self._session_scopes: dict[
+            tuple[str, str, str], set[VerifiedMcpSessionScopeKey]
+        ] = {}
+        self._session_scopes_lock = threading.RLock()
         # Post-commit observer invoked with the updated record after
         # ``complete_auth`` lands. Wired at app composition time to the
         # connectors destination's write-through (PR-E.3 Decision D1) so
@@ -285,6 +279,55 @@ class McpRegistryService:
         # leaves every server ungated (the correct default when no connectors
         # store is present, e.g. isolated MCP-registry tests).
         self.connector_access_resolver: ConnectorAccessResolver | None = None
+
+    @staticmethod
+    def _session_pool_config_from_environment() -> McpSessionPoolConfig:
+        """Read bounded operational limits without accepting unbounded input."""
+
+        def integer(name: str, default: int, maximum: int) -> int:
+            raw = os.environ.get(name, str(default)).strip()
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be an integer") from exc
+            if not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be between 1 and {maximum}")
+            return value
+
+        def nonnegative(name: str, default: int, maximum: int) -> int:
+            raw = os.environ.get(name, str(default)).strip()
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be an integer") from exc
+            if not 0 <= value <= maximum:
+                raise ValueError(f"{name} must be between 0 and {maximum}")
+            return value
+
+        def seconds(name: str, default: float, maximum: float) -> float:
+            raw = os.environ.get(name, str(default)).strip()
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be numeric") from exc
+            if not 0 < value <= maximum:
+                raise ValueError(f"{name} must be between 0 and {maximum}")
+            return value
+
+        return McpSessionPoolConfig(
+            max_total_sessions=integer("MCP_SESSION_POOL_MAX_TOTAL", 64, 512),
+            max_sessions_per_key=integer("MCP_SESSION_POOL_MAX_PER_KEY", 4, 32),
+            idle_ttl_seconds=seconds("MCP_SESSION_POOL_IDLE_TTL_SECONDS", 60, 3600),
+            absolute_ttl_seconds=seconds(
+                "MCP_SESSION_POOL_ABSOLUTE_TTL_SECONDS", 900, 86_400
+            ),
+            invalidation_ttl_seconds=seconds(
+                "MCP_SESSION_POOL_INVALIDATION_TTL_SECONDS", 900, 86_400
+            ),
+            max_pre_dispatch_reconnects=nonnegative(
+                "MCP_SESSION_POOL_MAX_PRE_DISPATCH_RECONNECTS", 1, 3
+            ),
+        )
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
         display_name = request.display_name or self._display_name_from_url(request.url)
@@ -327,6 +370,9 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(record, "mcp_server_created", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         return McpServerResponse.from_record(record)
 
     def _server_by_url(
@@ -495,6 +541,9 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(record, "mcp_server_installed", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         return McpServerResponse.from_record(record)
 
     def delete_server(self, *, org_id: str, user_id: str, server_id: str) -> bool:
@@ -516,6 +565,10 @@ class McpRegistryService:
                     conn=conn,
                 )
                 self._audit(record, "mcp_server_deleted", conn=conn)
+        if deleted:
+            self.invalidate_server_sessions(
+                org_id=org_id, user_id=user_id, server_id=server_id
+            )
         return deleted
 
     def update_server(
@@ -555,6 +608,9 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(updated, "mcp_server_updated", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         return McpServerResponse.from_record(updated)
 
     def skip_auth(
@@ -575,6 +631,9 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(updated, "mcp_auth_skipped", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         return McpServerResponse.from_record(updated)
 
     def start_auth(
@@ -646,6 +705,9 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(updated, "mcp_auth_started", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=request.org_id, user_id=request.user_id, server_id=server_id
+        )
         return McpAuthStartResponse(
             server_id=record.server_id,
             auth_url=authorization.auth_url,
@@ -674,6 +736,11 @@ class McpRegistryService:
                     conn=conn,
                 )
                 self._audit(updated, "mcp_auth_failed", conn=conn)
+            self.invalidate_server_sessions(
+                org_id=session.org_id,
+                user_id=session.user_id,
+                server_id=session.server_id,
+            )
             detail = request.error_description or request.error
             raise ValueError(f"MCP auth failed: {detail}")
         if request.code is None:
@@ -714,6 +781,9 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(updated, "mcp_auth_completed", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         # Post-commit: notify the connectors write-through (if wired) so
         # the denormalized ``/v1/connectors`` row flips to ``connected``
         # for both the web callback and the desktop coordinator path.
@@ -787,14 +857,24 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
-        token = self.store.get_token(server_id=server_id)
-        credential_ref = token.connection_id if token is not None else None
+        if self._resolve_access_mode(record) == ConnectorAccessMode.OFF:
+            raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
+        token = (
+            self._require_valid_token(record)
+            if record.auth_mode != McpAuthMode.NONE
+            else None
+        )
+        scope = self._bind_session_scope(record, token)
+        acquired = self.session_pool.acquire(scope)
+        if (
+            acquired.outcome is not McpSessionPoolOutcome.ACQUIRED
+            or acquired.lease is None
+        ):
+            self._transport_factory.unbind(scope)
+            raise ValueError(f"MCP session pool {acquired.outcome.value}")
+        self._remember_session_scope(record, scope)
         return InternalMcpClientSession(
-            server_id=record.server_id,
-            url=record.url,
-            transport=record.transport,
-            auth_state=self._effective_auth_state(record),
-            credential_ref=credential_ref,
+            lease=self.session_pool.export_lease_token(acquired.lease)
         )
 
     def proxy_internal_rpc(
@@ -815,18 +895,60 @@ class McpRegistryService:
         method = request.payload.get("method")
         if access_mode == ConnectorAccessMode.OFF:
             raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
-        token = self._require_valid_token(record)
-        access_token = self.token_vault.decrypt(token.encrypted_access_token)
+        token = (
+            self._require_valid_token(record)
+            if record.auth_mode != McpAuthMode.NONE
+            else None
+        )
+        scope = self._bind_session_scope(record, token)
+        try:
+            lease = self.session_pool.import_lease_token(request.lease)
+        except ValueError as exc:
+            raise ValueError("MCP session lease is invalid") from exc
         # ``read`` gates side-effecting calls: a ``tools/call`` on a tool that
         # is not read-only is denied. ``tools/list`` (and every other method)
         # is always allowed under ``read``; ``read_act`` and the unjoined
         # (``None``) case allow everything.
         if access_mode == ConnectorAccessMode.READ and method == "tools/call":
             tool_name = self._rpc_tool_name(request.payload)
-            if not self._tool_is_read_only(record, access_token, tool_name):
+            if not self._tool_is_read_only(record, scope, lease, tool_name):
                 raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
-        payload = self._post_remote_mcp_rpc(record.url, request.payload, access_token)
+        try:
+            payload = self.session_pool.invoke(
+                lease,
+                scope=scope,
+                operation=lambda transport, fence: self._remote_rpc(
+                    transport, request.payload, fence
+                ),
+            )
+        except McpSessionPoolRejected as exc:
+            raise ValueError("MCP session lease is stale") from exc
         return InternalMcpRpcResponse(payload=payload)
+
+    def release_internal_client_session(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        server_id: str,
+        lease_token: str,
+        cancel: bool,
+    ) -> InternalMcpSessionReleaseResponse:
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        token = self.store.get_token(server_id=server_id)
+        scope = self._bind_session_scope(record, token)
+        try:
+            lease = self.session_pool.import_lease_token(lease_token)
+        except ValueError as exc:
+            raise ValueError("MCP session lease is invalid") from exc
+        outcome = (
+            self.session_pool.cancel(lease, scope=scope)
+            if cancel
+            else self.session_pool.release(lease, scope=scope)
+        )
+        return InternalMcpSessionReleaseResponse(outcome=outcome.value)
 
     @staticmethod
     def _rpc_tool_name(payload: dict[str, object]) -> str | None:
@@ -842,7 +964,8 @@ class McpRegistryService:
     def _tool_is_read_only(
         self,
         record: McpServerRecord,
-        access_token: str,
+        scope: VerifiedMcpSessionScopeKey,
+        lease: McpSessionLease,
         tool_name: str | None,
     ) -> bool:
         """Whether ``tool_name`` advertises ``annotations.readOnlyHint: true``.
@@ -863,7 +986,16 @@ class McpRegistryService:
             "method": "tools/list",
             "params": {},
         }
-        listing = self._post_remote_mcp_rpc(record.url, list_payload, access_token)
+        try:
+            listing = self.session_pool.invoke(
+                lease,
+                scope=scope,
+                operation=lambda transport, fence: self._remote_rpc(
+                    transport, list_payload, fence
+                ),
+            )
+        except McpSessionPoolRejected:
+            return False
         result = listing.get("result") if isinstance(listing, dict) else None
         tools = result.get("tools") if isinstance(result, dict) else None
         if not isinstance(tools, list):
@@ -876,6 +1008,201 @@ class McpRegistryService:
                 return False
             return annotations.get("readOnlyHint") is True
         return False
+
+    @staticmethod
+    def _remote_rpc(
+        transport: object,
+        payload: dict[str, object],
+        fence: McpSessionDispatchFence,
+    ) -> dict[str, object]:
+        if not isinstance(transport, McpRemoteSessionTransport):
+            raise ConnectionError("MCP pool transport cannot issue RPC")
+        return transport.rpc(payload, fence)
+
+    def _bind_session_scope(
+        self, record: McpServerRecord, token: TokenEnvelope | None
+    ) -> VerifiedMcpSessionScopeKey:
+        """Bind a verified registry row to an opaque pool compatibility key."""
+
+        credential_reference = (
+            token.connection_id
+            if token is not None
+            else f"unauthenticated:{record.server_id}"
+        )
+        auth_epoch = (
+            token.updated_at.isoformat()
+            if token is not None
+            else record.updated_at.isoformat()
+        )
+        transport_revision = hashlib.sha256(
+            f"{record.transport.value}\x1f{record.url}\x1f{record.updated_at.isoformat()}".encode()
+        ).hexdigest()
+        scope = VerifiedMcpSessionScopeKey.from_verified_credential_reference(
+            org_id=record.org_id,
+            # This service has no user-selectable MCP profile. The explicit
+            # compatibility partition prevents accidental reuse if one is
+            # introduced later without exposing a deployment identifier.
+            profile_partition=_BACKEND_COMPATIBILITY_PARTITION,
+            user_id=record.user_id,
+            server_id=record.server_id,
+            credential_reference=credential_reference,
+            auth_epoch=auth_epoch,
+            transport_revision=transport_revision,
+            session_scope="internal-rpc",
+        )
+        self._transport_factory.bind(
+            scope=scope,
+            endpoint=record.url,
+            encrypted_access_token=(
+                token.encrypted_access_token if token is not None else None
+            ),
+        )
+        return scope
+
+    def _remember_session_scope(
+        self, record: McpServerRecord, scope: VerifiedMcpSessionScopeKey
+    ) -> None:
+        key = (record.org_id, record.user_id, record.server_id)
+        with self._session_scopes_lock:
+            self._session_scopes.setdefault(key, set()).add(scope)
+            while len(self._session_scopes) > 128:
+                stale_key, stale_scopes = self._session_scopes.popitem(last=False)
+                for stale_scope in stale_scopes:
+                    self.session_pool.invalidate_scope(stale_scope)
+                    self._transport_factory.unbind(stale_scope)
+
+    def invalidate_server_sessions(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> int:
+        """Retire all remembered leases for a registry mutation atomically enough."""
+
+        with self._session_scopes_lock:
+            scopes = self._session_scopes.pop((org_id, user_id, server_id), set())
+        invalidated = 0
+        for scope in scopes:
+            invalidated += self.session_pool.invalidate_scope(scope)
+            self._transport_factory.unbind(scope)
+        return invalidated
+
+    def maintain_session_pool(self) -> None:
+        """One lifecycle-owned maintenance tick; never starts its own thread."""
+
+        self.session_pool.keepalive_idle(limit=1)
+        self.session_pool.reap_expired()
+
+    def shutdown_session_pool(self, *, timeout_seconds: float = 0) -> bool:
+        return self.session_pool.shutdown(timeout_seconds=timeout_seconds)
+
+    def observe_complete_descriptor_view(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        server_id: str,
+        lease_token: str,
+        max_pages: int = 100,
+    ) -> None:
+        """Publish only a fully paginated, body-free tools/resources view.
+
+        Descriptor bodies are streamed into a SHA-256 digest one item at a
+        time.  An exception, malformed page, cursor cycle, or stale lease
+        exits before publication, so it cannot overwrite a prior good view.
+        """
+
+        if not 1 <= max_pages <= 1_000:
+            raise ValueError("MCP descriptor max_pages must be between 1 and 1000")
+        record = self._require_server_for_user(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        token = (
+            self._require_valid_token(record)
+            if record.auth_mode != McpAuthMode.NONE
+            else None
+        )
+        scope = self._bind_session_scope(record, token)
+        lease = self.session_pool.import_lease_token(lease_token)
+        digest = hashlib.sha256()
+        totals = {"tools": 0, "resources": 0}
+        for method, collection in (
+            ("tools/list", "tools"),
+            ("resources/list", "resources"),
+        ):
+            cursor: str | None = None
+            seen: set[str] = set()
+            for _ in range(max_pages):
+                payload: dict[str, object] = {
+                    "jsonrpc": "2.0",
+                    "id": f"descriptor-{collection}",
+                    "method": method,
+                    "params": {} if cursor is None else {"cursor": cursor},
+                }
+                response = self.session_pool.invoke(
+                    lease,
+                    scope=scope,
+                    operation=lambda transport, fence: self._remote_rpc(
+                        transport, payload, fence
+                    ),
+                )
+                result = response.get("result")
+                if not isinstance(result, dict):
+                    raise ValueError("MCP descriptor page is malformed")
+                descriptors = result.get(collection)
+                if not isinstance(descriptors, list):
+                    raise ValueError("MCP descriptor page is malformed")
+                for descriptor in descriptors:
+                    if not isinstance(descriptor, dict):
+                        raise ValueError("MCP descriptor is malformed")
+                    # Keep only deterministic, non-secret descriptor metadata.
+                    safe = {
+                        key: descriptor[key]
+                        for key in (
+                            "name",
+                            "title",
+                            "description",
+                            "uri",
+                            "mimeType",
+                            "inputSchema",
+                            "annotations",
+                        )
+                        if key in descriptor
+                    }
+                    digest.update(
+                        json.dumps(
+                            safe, sort_keys=True, separators=(",", ":"), default=str
+                        ).encode()
+                    )
+                    digest.update(b"\n")
+                    totals[collection] += 1
+                next_cursor = result.get("nextCursor")
+                if next_cursor is None:
+                    break
+                if (
+                    not isinstance(next_cursor, str)
+                    or not next_cursor
+                    or next_cursor in seen
+                ):
+                    raise ValueError("MCP descriptor pagination is incomplete")
+                seen.add(next_cursor)
+                cursor = next_cursor
+            else:
+                raise ValueError("MCP descriptor pagination exceeded its bound")
+        descriptor_digest = digest.hexdigest()
+        existing = self.revision_authority.get_current(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        if existing is not None and existing.descriptor_digest == descriptor_digest:
+            return
+        self.revision_authority.publish_complete_descriptor_view(
+            org_id=org_id,
+            user_id=user_id,
+            server_id=server_id,
+            descriptor_digest=descriptor_digest,
+            tool_count=totals["tools"],
+            resource_count=totals["resources"],
+            source="pooled_mcp_pagination",
+            idempotency_key=f"pooled:{scope.fingerprint}:{descriptor_digest}",
+            credential_subject=(token.connection_id if token is not None else None),
+        )
 
     def upsert_token_for_test(
         self,
@@ -918,6 +1245,9 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(updated, "mcp_token_upserted", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         return McpServerResponse.from_record(updated)
 
     def _update_record(
@@ -1030,50 +1360,10 @@ class McpRegistryService:
                 conn=conn,
             )
             self._audit(record, "mcp_token_refreshed", conn=conn)
-        return updated
-
-    @staticmethod
-    def _post_remote_mcp_rpc(
-        server_url: str, payload: dict[str, object], access_token: str
-    ) -> dict[str, object]:
-        request = Request(
-            server_url,
-            data=json.dumps(payload).encode(Keys.Encoding.UTF_8),
-            headers={
-                Keys.Header.ACCEPT: Keys.ContentType.JSON_OR_EVENT_STREAM,
-                Keys.Header.AUTHORIZATION: f"{Values.Auth.BEARER} {access_token}",
-                Keys.Header.CONTENT_TYPE: Keys.ContentType.JSON,
-            },
-            method=Keys.HttpMethod.POST,
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
         )
-        try:
-            with urlopen(request, timeout=30) as response:
-                decoded = McpRegistryService._decode_remote_mcp_response(
-                    response.read().decode(Keys.Encoding.UTF_8),
-                    response.headers.get(Keys.Header.CONTENT_TYPE, ""),
-                )
-        except HTTPError as exc:
-            if exc.code in {401, 403}:
-                raise ValueError("MCP server rejected the stored OAuth token") from exc
-            raise ValueError("MCP server request failed") from exc
-        except (URLError, TimeoutError) as exc:
-            raise ValueError("MCP server is unavailable") from exc
-        if not isinstance(decoded, dict):
-            raise ValueError("MCP server returned an invalid JSON-RPC response")
-        return decoded
-
-    @staticmethod
-    def _decode_remote_mcp_response(raw: str, content_type: str) -> object:
-        if content_type.lower().startswith(Keys.ContentType.EVENT_STREAM):
-            for line in raw.splitlines():
-                if not line.startswith(Keys.Sse.DATA_PREFIX):
-                    continue
-                data = line.removeprefix(Keys.Sse.DATA_PREFIX).strip()
-                if not data or data == Keys.Sse.DONE:
-                    continue
-                return json.loads(data)
-            return {}
-        return json.loads(raw or "{}")
+        return updated
 
     @classmethod
     def _default_store(cls) -> InMemoryMcpStore | PostgresMcpStore:
