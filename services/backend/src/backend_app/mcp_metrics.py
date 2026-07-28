@@ -22,7 +22,7 @@ _PHASE_OUTCOMES: dict[str, frozenset[str]] = {
             "shutting_down",
         }
     ),
-    "lease_reuse": frozenset({"reused"}),
+    "lease_reuse": frozenset({"reused", "disabled_closed"}),
     "session_initialization": frozenset({"initialized", "unavailable"}),
     "saturation": frozenset({"rejected"}),
     "invalidation": frozenset({"scope", "credential_subject"}),
