@@ -204,19 +204,17 @@ unshipped feature as a regression.
 
 ### ARQ-011 — F8 descriptor freshness has no authoritative revision feed or session reuse
 
-- **Current state:** `RevisionAwareMcpDiscoveryCache` layers opaque
-  subject-scoped revisions, a separate maximum-staleness ceiling, exact
-  invalidation, and cancellation-safe per-key load coalescing over the existing
-  TTL/LRU cache. It fails closed for legacy entries without revision metadata.
-- **Remaining work:** add a backend-owned authoritative revision source and
-  durable cursor; coordinate revision invalidation with the F3 catalog;
-  introduce an in-flight invalidation generation barrier before wiring a feed;
-  add cache/refresh metrics and diagnostics; and implement or explicitly
-  verify backend-owned remote MCP session pooling, isolation, keepalive, and
-  reconnect behavior. ai-backend must not own credentials or a remote session
-  pool.
-- **Status:** open; the wrapper is not yet wired into descriptor loading and
-  provides no cross-process freshness convergence.
+- **Current state:** backend owns the durable descriptor revision authority,
+  authenticated paginated feed, exact checks, credential-scoped remote session
+  pool, and independent session-reuse backout. Each active ai-backend worker
+  owns one bounded active-subject poller, a revision-aware generation-fenced
+  descriptor cache, atomic descriptor/F3 invalidation, and a desktop cursor
+  adapter. Diagnostics use closed, body-free vocabularies and the operational
+  dashboard/runbook covers rollout, recovery, and independent backout.
+- **Remaining work:** none within the F8 scope. Future hosted adapters remain
+  optional and must preserve the same service and credential boundaries.
+- **Status:** closed; F8.1-F8.10 and the Step 7 qualification gates are
+  complete.
 
 ### ARQ-012 — F9 coordinator is not on the production task dispatch path
 
