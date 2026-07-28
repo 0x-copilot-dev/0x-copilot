@@ -1,10 +1,19 @@
 """Policy-aware compact capability discovery."""
 
+from agent_runtime.capabilities.discovery.activation import (
+    CapabilityActivationDecision,
+    CapabilityActivationError,
+    CapabilityActivationMode,
+    CapabilityActivationReason,
+    CapabilityActivationResolver,
+)
 from agent_runtime.capabilities.discovery.builder import AuthorizedCatalogBuilder
 from agent_runtime.capabilities.discovery.contracts import (
     ApprovalCue,
     CapabilityCandidate,
     CapabilityCatalog,
+    CapabilityCatalogGeneration,
+    CapabilityCatalogIdentityError,
     CapabilityDescribeRequest,
     CapabilityDescribeResult,
     CapabilityDescribeToolResult,
@@ -15,11 +24,13 @@ from agent_runtime.capabilities.discovery.contracts import (
     CapabilityCatalogScope,
     CapabilityIndexEntry,
     CapabilityParameterHint,
+    CapabilityRefBinding,
     CapabilitySearchFilters,
     CapabilitySearchRequest,
     CapabilitySearchResult,
     CapabilitySearchToolResult,
     CapabilitySource,
+    CatalogDescriptorRevision,
     CatalogEffectClass,
 )
 from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRanker
@@ -32,9 +43,16 @@ from agent_runtime.capabilities.discovery.tool_bridge import (
 __all__ = [
     "ApprovalCue",
     "AuthorizedCatalogBuilder",
+    "CapabilityActivationDecision",
+    "CapabilityActivationError",
+    "CapabilityActivationMode",
+    "CapabilityActivationReason",
+    "CapabilityActivationResolver",
     "CapabilityCandidate",
     "CapabilityCatalog",
     "CapabilityCatalogAccess",
+    "CapabilityCatalogGeneration",
+    "CapabilityCatalogIdentityError",
     "CapabilityCatalogRevision",
     "CapabilityCatalogScope",
     "CapabilityDescribeRequest",
@@ -46,12 +64,14 @@ __all__ = [
     "CapabilityDiscoveryErrorCode",
     "CapabilityIndexEntry",
     "CapabilityParameterHint",
+    "CapabilityRefBinding",
     "CapabilitySearchFilters",
     "CapabilitySearchRequest",
     "CapabilitySearchResult",
     "CapabilitySearchTool",
     "CapabilitySearchToolResult",
     "CapabilitySource",
+    "CatalogDescriptorRevision",
     "CatalogEffectClass",
     "DeterministicLexicalRanker",
 ]
