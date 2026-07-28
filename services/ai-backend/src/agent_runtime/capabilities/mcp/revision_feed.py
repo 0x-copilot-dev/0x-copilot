@@ -22,6 +22,13 @@ from pydantic import Field
 from agent_runtime.capabilities.mcp.revision_resolver import (
     McpDescriptorRevisionResolverPort,
 )
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneEvent,
+    McpControlPlaneMetricsPort,
+    McpControlPlaneMeasure,
+    McpControlPlaneOutcome,
+    NoopMcpControlPlaneMetrics,
+)
 from agent_runtime.capabilities.mcp.revision_wire import (
     BackendMcpRevisionClient,
     BackendMcpRevisionCursorExpired,
@@ -337,6 +344,7 @@ class McpRevisionFeedRunner:
         backoff_base_seconds: float = 1,
         backoff_max_seconds: float = 60,
         random: Callable[[], float] = __import__("random").random,
+        metrics: McpControlPlaneMetricsPort | None = None,
     ) -> None:
         if (
             max_pages <= 0
@@ -358,6 +366,7 @@ class McpRevisionFeedRunner:
         self._backoff_base = backoff_base_seconds
         self._backoff_max = backoff_max_seconds
         self._random = random
+        self._metrics = metrics or NoopMcpControlPlaneMetrics()
         self._offline_attempts = 0
         self._diagnostics: dict[McpRevisionFeedSubjectState, int] = {
             state: 0 for state in McpRevisionFeedSubjectState
@@ -383,6 +392,11 @@ class McpRevisionFeedRunner:
 
     async def run_once(self) -> McpRevisionFeedRunResult:
         active = await self._subjects.active_subjects()
+        self._metrics.count(
+            event=McpControlPlaneEvent.FEED,
+            measure=McpControlPlaneMeasure.ACTIVE_SUBJECTS,
+            value=len(active),
+        )
         if not active:
             return McpRevisionFeedRunResult(subjects=0, http_calls=0, results=())
         calls = 0
@@ -472,6 +486,32 @@ class McpRevisionFeedRunner:
                     McpRevisionFeedSubjectState.FAILED, pages, notices, bytes_read
                 )
             self._diagnostics[result.state] += 1
+            self._metrics.event(
+                event=McpControlPlaneEvent.FEED,
+                outcome={
+                    McpRevisionFeedSubjectState.APPLIED: McpControlPlaneOutcome.APPLIED,
+                    McpRevisionFeedSubjectState.OFFLINE: McpControlPlaneOutcome.OFFLINE,
+                    McpRevisionFeedSubjectState.CURSOR_EXPIRED: McpControlPlaneOutcome.CURSOR_EXPIRED,
+                    McpRevisionFeedSubjectState.BOUND_EXCEEDED: McpControlPlaneOutcome.BOUND,
+                    McpRevisionFeedSubjectState.CURSOR_STALLED: McpControlPlaneOutcome.STALLED,
+                    McpRevisionFeedSubjectState.FAILED: McpControlPlaneOutcome.FAILED,
+                }[result.state],
+            )
+            self._metrics.count(
+                event=McpControlPlaneEvent.FEED,
+                measure=McpControlPlaneMeasure.PAGES,
+                value=result.pages,
+            )
+            self._metrics.count(
+                event=McpControlPlaneEvent.FEED,
+                measure=McpControlPlaneMeasure.NOTICES,
+                value=result.notices,
+            )
+            self._metrics.count(
+                event=McpControlPlaneEvent.FEED,
+                measure=McpControlPlaneMeasure.BYTES,
+                value=result.bytes_read,
+            )
             results.append(result)
         if any_offline:
             self._offline_attempts += 1
@@ -479,6 +519,11 @@ class McpRevisionFeedRunner:
         else:
             self._offline_attempts = 0
             retry_after = None
+        self._metrics.count(
+            event=McpControlPlaneEvent.FEED,
+            measure=McpControlPlaneMeasure.HTTP_CALLS,
+            value=calls,
+        )
         return McpRevisionFeedRunResult(
             subjects=len(active),
             http_calls=calls,

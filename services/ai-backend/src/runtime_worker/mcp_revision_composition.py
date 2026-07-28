@@ -6,6 +6,11 @@ import os
 from dataclasses import dataclass
 
 from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneMetrics,
+    McpControlPlaneMetricsPort,
+    NoopMcpControlPlaneMetrics,
+)
 from agent_runtime.capabilities.mcp.freshness import (
     McpDescriptorSubject,
     RevisionAwareMcpDiscoveryCache,
@@ -88,6 +93,7 @@ class McpRevisionControlPlane:
     coordinator: McpRevisionFeedCoordinator | None
     runner: McpRevisionFeedRunner | None
     poller: McpRevisionFeedPoller | None
+    metrics: McpControlPlaneMetricsPort
 
     @property
     def enabled(self) -> bool:
@@ -162,7 +168,9 @@ class McpRevisionControlPlaneBuilder:
                 coordinator=None,
                 runner=None,
                 poller=None,
+                metrics=NoopMcpControlPlaneMetrics(),
             )
+        metrics = McpControlPlaneMetrics()
         backend_url = (
             settings.mcp.backend_registry_url
             if settings is not None
@@ -252,6 +260,7 @@ class McpRevisionControlPlaneBuilder:
             ),
             backoff_base_seconds=backoff_base_seconds,
             backoff_max_seconds=backoff_max_seconds,
+            metrics=metrics,
         )
         poller = McpRevisionFeedPoller(
             runner=runner,
@@ -261,6 +270,7 @@ class McpRevisionControlPlaneBuilder:
             stop_grace_seconds=env.positive_float(
                 "RUNTIME_MCP_REVISION_STOP_GRACE_SECONDS", 5, maximum=60
             ),
+            metrics=metrics,
         )
         return McpRevisionControlPlane(
             base_cache=base,
@@ -274,6 +284,7 @@ class McpRevisionControlPlaneBuilder:
             coordinator=coordinator,
             runner=runner,
             poller=poller,
+            metrics=metrics,
         )
 
     @staticmethod

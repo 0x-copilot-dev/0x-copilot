@@ -7,6 +7,12 @@ from collections.abc import Awaitable, Callable
 from typing import Protocol
 
 from agent_runtime.capabilities.mcp.revision_feed import McpRevisionFeedRunner
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneEvent,
+    McpControlPlaneMetricsPort,
+    McpControlPlaneOutcome,
+    NoopMcpControlPlaneMetrics,
+)
 
 
 class McpRevisionFeedPoller:
@@ -24,6 +30,7 @@ class McpRevisionFeedPoller:
         interval_seconds: float = 15,
         stop_grace_seconds: float = 5,
         sleep: Callable[[float], Awaitable[object]] = asyncio.sleep,
+        metrics: McpControlPlaneMetricsPort | None = None,
     ) -> None:
         if interval_seconds <= 0 or stop_grace_seconds <= 0:
             raise ValueError("poller interval and stop grace must be positive")
@@ -31,6 +38,7 @@ class McpRevisionFeedPoller:
         self._interval = float(interval_seconds)
         self._stop_grace = float(stop_grace_seconds)
         self._sleep = sleep
+        self._metrics = metrics or NoopMcpControlPlaneMetrics()
         self._task: asyncio.Task[None] | None = None
         self._guard = asyncio.Lock()
         self._stopping = False
@@ -55,6 +63,10 @@ class McpRevisionFeedPoller:
                 return
             self._task = None
             self._task = asyncio.create_task(self._run(), name="mcp-revision-feed")
+            self._metrics.event(
+                event=McpControlPlaneEvent.POLLER,
+                outcome=McpControlPlaneOutcome.STARTED,
+            )
 
     async def stop(self) -> None:
         """Idempotently cancel and boundedly drain the scheduled pass."""
@@ -92,6 +104,10 @@ class McpRevisionFeedPoller:
             # bounded first drain, send one explicit final cancellation, and
             # require that task to finish before reporting shutdown complete.
             self._stop_timeouts += 1
+            self._metrics.event(
+                event=McpControlPlaneEvent.POLLER,
+                outcome=McpControlPlaneOutcome.TIMED_OUT,
+            )
             task.cancel()
             try:
                 await asyncio.wait_for(asyncio.shield(task), timeout=self._stop_grace)
@@ -104,12 +120,17 @@ class McpRevisionFeedPoller:
                 # Python cannot forcibly terminate a coroutine which ignores
                 # cancellation. Do not lie by clearing its reference or report
                 # a successful stop while it is live; fail closed so the host
-                # keeps the worker process alive rather than closing shared
-                # HTTP/store resources underneath an orphan.
+                # leaves the task live; the host must not claim shutdown or
+                # close shared HTTP/store resources underneath it.
                 raise RuntimeError("MCP revision feed poller did not stop") from exc
         else:
             await self._clear_completed(task)
         finally:
+            if task.done():
+                self._metrics.event(
+                    event=McpControlPlaneEvent.POLLER,
+                    outcome=McpControlPlaneOutcome.STOPPED,
+                )
             async with self._guard:
                 self._stopping = False
 
