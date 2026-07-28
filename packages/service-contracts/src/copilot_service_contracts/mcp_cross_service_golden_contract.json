@@ -1,0 +1,172 @@
+{
+  "contract_version": "f8.1",
+  "limits": {
+    "id_max_length": 256,
+    "revision_max_length": 512,
+    "cursor_max_length": 512,
+    "source_max_length": 128,
+    "lease_min_length": 16,
+    "lease_max_length": 512,
+    "revision_feed_page_max_length": 100
+  },
+  "identity_scope_invariants": {
+    "identity_source": "backend verifies org_id and user_id from trusted internal service identity before every session, RPC, and release operation",
+    "scope_binding": "every opaque lease is bound to verified org_id, user_id, server_id, profile partition, credential subject, auth epoch, transport revision, and session scope inside backend",
+    "revision_scope": "descriptor revisions and notices are scoped to server_id, profile_id, and one-way subject_scope_hash; no descriptor body or credential material crosses the boundary",
+    "opaque_values": "revision, cursor, subject_scope_hash, and lease are opaque equality tokens; consumers must not parse or synthesize them"
+  },
+  "forbidden_field_names": [
+    "url",
+    "endpoint",
+    "token",
+    "access_token",
+    "refresh_token",
+    "credential",
+    "transport",
+    "transport_handle",
+    "authorization",
+    "client_secret"
+  ],
+  "revision_reason_values": [
+    "config_changed",
+    "auth_changed",
+    "transport_changed",
+    "tool_filter_changed",
+    "server_deleted",
+    "descriptor_observed"
+  ],
+  "exact_revision_response": {
+    "server_id": "server_demo",
+    "profile_id": "profile_default",
+    "subject_scope_hash": "31e9d7e6b1a3cbec0a6b79ec1bc3b764af8c3e3bb9d5e6a0d95a8c4f730b2561",
+    "revision": "rev_opaque_7f3b20a9",
+    "config_generation": 3,
+    "auth_generation": 5,
+    "transport_generation": 2,
+    "tool_filter_generation": 7,
+    "tool_count": 4,
+    "resource_count": 1,
+    "descriptor_digest": "e4f61954c8b7bb4f146ff9e3ae1dbf26fce4b7d632c0cbfeef8d6947ee2a214c",
+    "observed_at": "2026-07-28T09:30:00Z",
+    "source": "complete_paginated_observer"
+  },
+  "revision_notice": {
+    "cursor": "cursor_opaque_000042",
+    "notice_id": "notice_demo_42",
+    "sequence_no": 42,
+    "server_id": "server_demo",
+    "profile_id": "profile_default",
+    "subject_scope_hash": "31e9d7e6b1a3cbec0a6b79ec1bc3b764af8c3e3bb9d5e6a0d95a8c4f730b2561",
+    "old_revision": "rev_opaque_7f3b20a8",
+    "new_revision": "rev_opaque_7f3b20a9",
+    "reason": "descriptor_observed",
+    "occurred_at": "2026-07-28T09:30:01Z"
+  },
+  "revision_feed_page": {
+    "notices": [
+      {
+        "cursor": "cursor_opaque_000042",
+        "notice_id": "notice_demo_42",
+        "sequence_no": 42,
+        "server_id": "server_demo",
+        "profile_id": "profile_default",
+        "subject_scope_hash": "31e9d7e6b1a3cbec0a6b79ec1bc3b764af8c3e3bb9d5e6a0d95a8c4f730b2561",
+        "old_revision": "rev_opaque_7f3b20a8",
+        "new_revision": "rev_opaque_7f3b20a9",
+        "reason": "descriptor_observed",
+        "occurred_at": "2026-07-28T09:30:01Z"
+      }
+    ],
+    "next_cursor": "cursor_opaque_000042"
+  },
+  "cursor_expired_error": {
+    "status_code": 410,
+    "body": {
+      "detail": "revision feed cursor expired"
+    },
+    "client_error": "BackendMcpRevisionCursorExpired"
+  },
+  "client_session_acquire_success": {
+    "lease": "lease_opaque_0123456789abcdef"
+  },
+  "rpc_request": {
+    "org_id": "org_demo",
+    "user_id": "user_demo",
+    "lease": "lease_opaque_0123456789abcdef",
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "method": "tools/list",
+      "params": {}
+    }
+  },
+  "rpc_response": {
+    "payload": {
+      "jsonrpc": "2.0",
+      "id": 1,
+      "result": {
+        "tools": []
+      }
+    }
+  },
+  "release_cancel_request": {
+    "org_id": "org_demo",
+    "user_id": "user_demo",
+    "lease": "lease_opaque_0123456789abcdef",
+    "cancel": true
+  },
+  "release_success": {
+    "outcome": "released"
+  },
+  "failure_matrix": [
+    {
+      "code": "lease_stale_pre_dispatch",
+      "status_code": 409,
+      "redispatch_safe": true,
+      "acquisition_retryable": false,
+      "rpc_resend_safe": true
+    },
+    {
+      "code": "lease_wrong_owner",
+      "status_code": 403,
+      "redispatch_safe": false,
+      "acquisition_retryable": false,
+      "rpc_resend_safe": false
+    },
+    {
+      "code": "lease_invalid",
+      "status_code": 400,
+      "redispatch_safe": false,
+      "acquisition_retryable": false,
+      "rpc_resend_safe": false
+    },
+    {
+      "code": "pool_saturated",
+      "status_code": 429,
+      "redispatch_safe": false,
+      "acquisition_retryable": true,
+      "rpc_resend_safe": false
+    },
+    {
+      "code": "server_unavailable",
+      "status_code": 503,
+      "redispatch_safe": false,
+      "acquisition_retryable": true,
+      "rpc_resend_safe": false
+    },
+    {
+      "code": "auth_required",
+      "status_code": 401,
+      "redispatch_safe": false,
+      "acquisition_retryable": false,
+      "rpc_resend_safe": false
+    },
+    {
+      "code": "ambiguous_transport_failure",
+      "status_code": 503,
+      "redispatch_safe": false,
+      "acquisition_retryable": false,
+      "rpc_resend_safe": false
+    }
+  ]
+}

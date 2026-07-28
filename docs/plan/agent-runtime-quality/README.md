@@ -542,7 +542,7 @@ ai-backend consumes authenticated metadata and retains the existing
 process-local descriptor cache. This step adds no Redis, second database,
 backend-to-ai callback, or desktop daemon.
 
-- [ ] **F8.1 — Canonical revision, cursor, and lease contracts.** Define
+- [x] **F8.1 — Canonical revision, cursor, and lease contracts.** Define
       versioned body-free contracts for descriptor views, append-only notices,
       paginated feed state, exact revision checks, cursor expiry, transport
       sessions, lease outcomes, and sanitized failures. Bind each view to the
