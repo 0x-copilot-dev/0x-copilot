@@ -2894,13 +2894,16 @@ export interface ModelRouteEligibleRecord extends ModelInvocationRecordBase {
   route_digest: string;
   route_ordinal: number;
   deployment_id: string;
+  deployment_revision: string;
   descriptor_revision: string;
   endpoint_ref: string;
+  endpoint_revision: string;
   provider: string;
   model_name: string;
   region: string;
   credential_mode: ModelCredentialMode;
   price_revision: string;
+  qualification_revision: string;
   max_input_tokens: number;
   max_output_tokens: number;
 }

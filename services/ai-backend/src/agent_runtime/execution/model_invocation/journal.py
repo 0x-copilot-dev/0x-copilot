@@ -229,13 +229,16 @@ class ModelRouteEligibleRecord(_ModelInvocationRecord):
     route_digest: str = Field(pattern=_ROUTE_DIGEST_PATTERN)
     route_ordinal: PositiveInt
     deployment_id: Annotated[str, Field(min_length=1, max_length=255)]
+    deployment_revision: Annotated[str, Field(min_length=1, max_length=255)]
     descriptor_revision: Annotated[str, Field(min_length=1, max_length=255)]
     endpoint_ref: str = Field(pattern=_ENDPOINT_REF_PATTERN)
+    endpoint_revision: Annotated[str, Field(min_length=1, max_length=255)]
     provider: str = Field(pattern=_PROVIDER_PATTERN, max_length=64)
     model_name: Annotated[str, Field(min_length=1, max_length=200)]
     region: Annotated[str, Field(min_length=1, max_length=64)]
     credential_mode: ModelCredentialMode
     price_revision: Annotated[str, Field(min_length=1, max_length=255)]
+    qualification_revision: Annotated[str, Field(min_length=1, max_length=255)]
     max_input_tokens: PositiveInt = Field(le=2_000_000)
     max_output_tokens: PositiveInt = Field(le=2_000_000)
 
