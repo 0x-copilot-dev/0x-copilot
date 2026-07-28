@@ -433,13 +433,10 @@ class McpRevisionFeedRunner:
                             bytes_read,
                         )
                         break
-                    quiescent = (
-                        not feed.notices
-                        or len(feed.notices) < self._page_limit
-                        or feed.next_cursor is None
-                    )
-                    if not quiescent and (
-                        feed.next_cursor == cursor or feed.next_cursor in seen_cursors
+                    if feed.notices and (
+                        feed.next_cursor is None
+                        or feed.next_cursor == cursor
+                        or feed.next_cursor in seen_cursors
                     ):
                         result = McpRevisionFeedSubjectResult(
                             McpRevisionFeedSubjectState.CURSOR_STALLED,
@@ -448,6 +445,7 @@ class McpRevisionFeedRunner:
                             bytes_read,
                         )
                         break
+                    quiescent = not feed.notices or len(feed.notices) < self._page_limit
                     await self._coordinator.apply_page(subject=subject, feed=feed)
                     notices += len(feed.notices)
                     bytes_read += page_bytes

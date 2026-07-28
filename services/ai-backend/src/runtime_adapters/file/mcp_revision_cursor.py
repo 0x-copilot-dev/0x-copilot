@@ -20,6 +20,10 @@ from agent_runtime.capabilities.mcp.revision_feed import (
 _CURSOR_DIRECTORY = "mcp-revision-cursors"
 
 
+class McpRevisionCursorStoreUnsupported(RuntimeError):
+    """The host cannot provide the descriptor-relative safety contract."""
+
+
 class DesktopFilesystemMcpRevisionCursorStore:
     """Filesystem cursor adapter rooted beneath ``RUNTIME_FILE_STORE_ROOT``.
 
@@ -44,9 +48,23 @@ class DesktopFilesystemMcpRevisionCursorStore:
             )
         if max_bytes <= 0 or max_bytes > MCP_REVISION_CURSOR_MAX_BYTES:
             raise ValueError("max_bytes must be between 1 and 1024")
+        if not self._supports_descriptor_operations():
+            raise McpRevisionCursorStoreUnsupported(
+                "MCP revision cursor storage requires POSIX directory-fd support"
+            )
         self._root = Path(configured_root).absolute()
         self._max_bytes = max_bytes
         self._guard = asyncio.Lock()
+
+    @staticmethod
+    def _supports_descriptor_operations() -> bool:
+        return (
+            os.name == "posix"
+            and hasattr(os, "O_DIRECTORY")
+            and hasattr(os, "O_NOFOLLOW")
+            and os.open in os.supports_dir_fd
+            and os.rename in os.supports_dir_fd
+        )
 
     @staticmethod
     def _directory_flags() -> int:
@@ -134,12 +152,21 @@ class DesktopFilesystemMcpRevisionCursorStore:
                     file_stat = os.fstat(file_fd)
                     if (
                         not stat.S_ISREG(file_stat.st_mode)
+                        or file_stat.st_mode & 0o077
                         or file_stat.st_size > self._max_bytes
                     ):
                         raise McpRevisionCursorStoreError(
                             "cursor file is invalid or too large"
                         )
-                    raw = os.read(file_fd, self._max_bytes + 1)
+                    chunks: list[bytes] = []
+                    remaining = self._max_bytes + 1
+                    while remaining:
+                        chunk = os.read(file_fd, remaining)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                        remaining -= len(chunk)
+                    raw = b"".join(chunks)
                 finally:
                     os.close(file_fd)
             finally:

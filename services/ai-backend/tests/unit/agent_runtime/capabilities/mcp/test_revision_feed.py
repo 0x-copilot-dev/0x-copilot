@@ -26,6 +26,7 @@ from agent_runtime.capabilities.mcp.revision_wire import (
 )
 from runtime_adapters.file.mcp_revision_cursor import (
     DesktopFilesystemMcpRevisionCursorStore,
+    McpRevisionCursorStoreUnsupported,
 )
 
 
@@ -179,6 +180,18 @@ async def test_filesystem_cursor_rejects_a_symlinked_root(tmp_path: Path) -> Non
     store = DesktopFilesystemMcpRevisionCursorStore(linked_root)
     with pytest.raises(McpRevisionCursorStoreError):
         await store.load(_subject())
+
+
+def test_filesystem_cursor_fails_construction_without_dirfd_support(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        DesktopFilesystemMcpRevisionCursorStore,
+        "_supports_descriptor_operations",
+        staticmethod(lambda: False),
+    )
+    with pytest.raises(McpRevisionCursorStoreUnsupported):
+        DesktopFilesystemMcpRevisionCursorStore(tmp_path)
 
 
 @pytest.mark.asyncio
@@ -414,6 +427,44 @@ async def test_runner_rejects_nonempty_stalled_or_cyclic_cursors_before_reapply(
         page_limit=1,
     )
     assert (await stalled.run_once()).results[
+        0
+    ].state is McpRevisionFeedSubjectState.CURSOR_STALLED
+    assert events == []
+    assert await cursors.load(_subject()) == "old"
+
+    short_stalled = McpRevisionFeedRunner(
+        client=_FeedClient(
+            [
+                BackendMcpRevisionFeed(
+                    notices=(_notice(notice_id="short"),), next_cursor="old"
+                )
+            ]
+        ),  # type: ignore[arg-type]
+        subjects=registry,
+        cursors=cursors,
+        coordinator=coordinator,
+        page_limit=2,
+    )
+    assert (await short_stalled.run_once()).results[
+        0
+    ].state is McpRevisionFeedSubjectState.CURSOR_STALLED
+    assert events == []
+    assert await cursors.load(_subject()) == "old"
+
+    terminal_stalled = McpRevisionFeedRunner(
+        client=_FeedClient(
+            [
+                BackendMcpRevisionFeed(
+                    notices=(_notice(notice_id="terminal"),), next_cursor=None
+                )
+            ]
+        ),  # type: ignore[arg-type]
+        subjects=registry,
+        cursors=cursors,
+        coordinator=coordinator,
+        page_limit=2,
+    )
+    assert (await terminal_stalled.run_once()).results[
         0
     ].state is McpRevisionFeedSubjectState.CURSOR_STALLED
     assert events == []
