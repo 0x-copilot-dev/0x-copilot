@@ -107,6 +107,7 @@ class _LeaseOwner:
     user_id: str
     server_id: str
     scope: VerifiedMcpSessionScopeKey
+    operation_lock: threading.RLock = field(default_factory=threading.RLock)
 
 
 @dataclass(slots=True)
@@ -114,6 +115,10 @@ class _DescriptorCycle:
     expected_cursor: str | None = None
     complete: bool = False
     count: int = 0
+    page_count: int = 0
+    descriptor_count: int = 0
+    canonical_bytes: int = 0
+    requested_cursors: set[str | None] = field(default_factory=set)
     digest: object = field(default_factory=hashlib.sha256)
 
 
@@ -121,6 +126,11 @@ class _DescriptorCycle:
 class _DescriptorObservation:
     tools: _DescriptorCycle = field(default_factory=_DescriptorCycle)
     resources: _DescriptorCycle = field(default_factory=_DescriptorCycle)
+
+
+_MAX_DESCRIPTOR_PAGES = 100
+_MAX_DESCRIPTOR_COUNT = 10_000
+_MAX_DESCRIPTOR_BYTES = 4 * 1024 * 1024
 
 
 def _is_unique_violation(ex: Exception) -> bool:
@@ -981,6 +991,9 @@ class McpRegistryService:
         except McpSessionPoolRejected as exc:
             self._forget_lease(request.lease)
             raise ValueError("MCP session lease is stale") from exc
+        except Exception:
+            self._forget_lease_observation(request.lease)
+            raise
         self._observe_proxied_descriptor_page(
             lease_token=request.lease,
             owner=owner,
@@ -1293,9 +1306,16 @@ class McpRegistryService:
             self._forget_lease_observation(lease_token)
             return
         with self._lease_owners_lock:
-            observation = self._descriptor_observations.setdefault(
-                lease_token, _DescriptorObservation()
-            )
+            if collection == "tools" and cursor is None:
+                observation = _DescriptorObservation()
+                self._descriptor_observations[lease_token] = observation
+            else:
+                observation = self._descriptor_observations.get(lease_token)
+                if observation is None or (
+                    collection == "resources" and not observation.tools.complete
+                ):
+                    self._descriptor_observations.pop(lease_token, None)
+                    return
             self._descriptor_observations.move_to_end(lease_token)
             while len(self._descriptor_observations) > 512:
                 self._descriptor_observations.popitem(last=False)
@@ -1306,8 +1326,21 @@ class McpRegistryService:
                 cycle.expected_cursor = None
                 cycle.complete = False
                 cycle.count = 0
+                cycle.page_count = 0
+                cycle.descriptor_count = 0
+                cycle.canonical_bytes = 0
+                cycle.requested_cursors.clear()
                 cycle.digest = hashlib.sha256()
-            elif cycle.complete or cycle.expected_cursor != cursor:
+            elif (
+                cycle.complete
+                or cycle.expected_cursor != cursor
+                or cursor in cycle.requested_cursors
+            ):
+                self._descriptor_observations.pop(lease_token, None)
+                return
+            cycle.requested_cursors.add(cursor)
+            cycle.page_count += 1
+            if cycle.page_count > _MAX_DESCRIPTOR_PAGES:
                 self._descriptor_observations.pop(lease_token, None)
                 return
             for descriptor in result[collection]:
@@ -1327,11 +1360,18 @@ class McpRegistryService:
                     )
                     if key in descriptor
                 }
-                cycle.digest.update(
-                    json.dumps(
-                        safe, sort_keys=True, separators=(",", ":"), default=str
-                    ).encode()
-                )
+                canonical = json.dumps(
+                    safe, sort_keys=True, separators=(",", ":"), default=str
+                ).encode()
+                cycle.descriptor_count += 1
+                cycle.canonical_bytes += len(canonical)
+                if (
+                    cycle.descriptor_count > _MAX_DESCRIPTOR_COUNT
+                    or cycle.canonical_bytes > _MAX_DESCRIPTOR_BYTES
+                ):
+                    self._descriptor_observations.pop(lease_token, None)
+                    return
+                cycle.digest.update(canonical)
                 cycle.digest.update(b"\n")
                 cycle.count += 1
             next_cursor = result.get("nextCursor")
