@@ -426,6 +426,97 @@ and one explicitly deselected live evaluation. Full-service ruff and format
 checks, compile validation, API-types TypeScript checking, commit hooks, and
 `git diff --check` also passed.
 
+### Active execution — Step 6 model invocation routing and reliability
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. The existing pure
+`execution/model_invocation` contracts and `O(D)` route/admission policies are
+the source of truth; this step composes them into the real root/subagent model
+path and does not introduce a second router or retry policy.
+
+- [ ] **F10.1 — Trusted deployment-catalog and requirements adapters.** Adapt
+      the existing resolved `ModelConfig`, curated model catalog, workspace
+      enablement, ephemeral BYOK availability, user privacy/region policy,
+      current-call capability/context/deadline budgets, and bounded health
+      facts into `ModelDeploymentDescriptor` and
+      `ModelInvocationRequirements`. Give deployment, descriptor, endpoint,
+      price, and qualification revisions stable non-secret identities; retain
+      endpoint URLs and plaintext keys only in the existing ephemeral runtime
+      context. Preserve an explicit-model default of
+      `ModelFallbackPolicy.NONE`.
+- [ ] **F10.2 — Replay-stable invocation identity and route authority.** Bind
+      each invocation to the Step 5 `RuntimeModelCallIdentity`, purpose,
+      request digest, verified run/control revisions, requirements revision,
+      descriptor-set revision, and route-plan digest. Reject stale or
+      mismatched plans before dispatch. Keep deterministic route planning
+      `O(D)` with one catalog pass and a measured p95 planning target below
+      5 ms for the bounded local catalog.
+- [ ] **F10.3 — Canonical model-invocation event journal.** Define body-free,
+      versioned invocation, route, exclusion, attempt-admission, attempt-state,
+      usage, completion, failure, and recovery records behind a
+      `ModelInvocationStorePort`. Implement the port over the existing
+      tenant-scoped run event journal so in-memory, file/desktop, and Postgres
+      inherit stable event IDs, idempotency-conflict detection, replay,
+      retention, and deletion without a new table, JSONL ledger, queue, or
+      daemon.
+- [ ] **F10.4 — Graph-wide per-call middleware and central model construction.**
+      Install one `ModelInvocationMiddleware.awrap_model_call` for the
+      supervisor and every locally compiled subagent, ordered after final
+      Step 5 prompt/tool assembly and before provider dispatch. Persist the
+      invocation, route plan, and admitted attempt before calling the handler.
+      Select only the admitted route through `ModelRequest.override(model=...)`
+      using the existing `build_chat_model` funnel and an ephemeral
+      credential/endpoint resolver; never rebuild the graph or import provider
+      SDKs into the domain.
+- [ ] **F10.5 — Provider lifecycle attestation and failure normalization.**
+      Observe dispatch acknowledgement, stream start, first visible text,
+      first tool-call content, usage, completion, cancellation, and sanitized
+      failure through LangChain callbacks/stream observers at the concrete
+      model boundary. Provider-specific adapters may inspect typed exception
+      classes/status fields, but must output only reviewed
+      `ProviderFailureObservation` facts; exception-string heuristics are
+      forbidden and unknown progress becomes ambiguous.
+- [ ] **F10.6 — Bounded attempt controller with no mixed streams.** Execute the
+      existing `ModelAttemptAdmissionPolicy` with default two attempts, hard
+      maximum three, and no hedging. Permit only proven pre-content,
+      pre-effect recovery, including the Step 5 one-time undecorated cache
+      retry signal. Deny replay after visible text, tool-call content, usage
+      with uncertain completion, child/effect observation, cancellation,
+      invalid/auth/policy failures, or ambiguous provider state. Keep
+      alternate/equivalent routes release-disabled until a named F1
+      qualification record authorizes the exact task-family/revision pair.
+- [ ] **F10.7 — Per-attempt metering and aggregate reconciliation.** Record
+      successful and failed attempt usage/cost independently using only
+      provider-reported metadata, charge every attempt against the shared
+      invocation budget, and reconcile exactly once into the existing
+      run/model-call usage path. Attribute the user-visible response to one
+      terminal attempt and prove that discarded attempts cannot leak duplicate
+      deltas, tool calls, or final content.
+- [ ] **F10.8 — Bounded circuit health and release controls.** Add a
+      process-local bounded health reducer keyed by provider, deployment,
+      region, and credential scope, with an optional capped file snapshot only
+      for desktop restart continuity. User-specific BYOK authentication
+      failures may affect only that user credential scope and must never open a
+      deployment-global circuit. Supply independent modes/kill switches for
+      retry, alternate route, equivalent route, and circuit influence, plus
+      immediate feature-off parity.
+- [ ] **F10.9 — Crash, resume, and worker retry fences.** On worker claim or
+      approval resume, replay the journal before a new attempt. Treat an open
+      provider attempt after process loss as ambiguous and require honest
+      reconciliation/failure; never blindly replay it. Limit queue/worker
+      retry to failures proven before model-handler entry, and preserve the
+      original invocation/attempt lineage across continuation.
+- [ ] **F10.10 — Qualification, operations, and step gate.** Extend the
+      existing F1 corpus with primary/subagent lineage, deterministic route
+      ordering, BYOK/region/privacy exclusion, safe pre-content retry, cache
+      rejection, visible-output interruption, ambiguous crash recovery,
+      budget exhaustion, circuit isolation, and feature-off parity cases.
+      Document desktop support/recovery/backout. Run focused F10 and
+      graph-surface tests, the full `ai-backend` suite, API-types typecheck,
+      ruff, formatting, compile validation, `git diff --check`, and every Step
+      6 exit criterion before marking the normative checklist complete.
+
 ## Complete PRD index
 
 ### Wave F — Harness quality and efficiency
