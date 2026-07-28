@@ -981,26 +981,29 @@ class McpRegistryService:
             if not self._tool_is_read_only(record, scope, lease, tool_name):
                 raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
         try:
-            payload = self.session_pool.invoke(
-                lease,
-                scope=scope,
-                operation=lambda transport, fence: self._remote_rpc(
-                    transport, request.payload, fence
-                ),
-            )
+            with owner.operation_lock:
+                payload = self.session_pool.invoke(
+                    lease,
+                    scope=scope,
+                    operation=lambda transport, fence: self._remote_rpc(
+                        transport, request.payload, fence
+                    ),
+                )
+                self._observe_proxied_descriptor_page(
+                    lease_token=request.lease,
+                    owner=owner,
+                    request_payload=request.payload,
+                    response=payload,
+                    credential_subject=(
+                        token.connection_id if token is not None else None
+                    ),
+                )
         except McpSessionPoolRejected as exc:
             self._forget_lease(request.lease)
             raise ValueError("MCP session lease is stale") from exc
         except Exception:
             self._forget_lease_observation(request.lease)
             raise
-        self._observe_proxied_descriptor_page(
-            lease_token=request.lease,
-            owner=owner,
-            request_payload=request.payload,
-            response=payload,
-            credential_subject=(token.connection_id if token is not None else None),
-        )
         return InternalMcpRpcResponse(payload=payload)
 
     def release_internal_client_session(
@@ -1019,11 +1022,12 @@ class McpRegistryService:
             lease = self.session_pool.import_lease_token(lease_token)
         except ValueError as exc:
             raise ValueError("MCP session lease is invalid") from exc
-        outcome = (
-            self.session_pool.cancel(lease, scope=owner.scope)
-            if cancel
-            else self.session_pool.release(lease, scope=owner.scope)
-        )
+        with owner.operation_lock:
+            outcome = (
+                self.session_pool.cancel(lease, scope=owner.scope)
+                if cancel
+                else self.session_pool.release(lease, scope=owner.scope)
+            )
         self._forget_lease(lease_token)
         return InternalMcpSessionReleaseResponse(outcome=outcome.value)
 
