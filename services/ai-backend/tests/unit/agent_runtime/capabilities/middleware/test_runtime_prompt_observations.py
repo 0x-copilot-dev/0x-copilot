@@ -100,6 +100,16 @@ class _FailingObservationStore(_IdempotentObservationStore):
         raise RuntimeError("observation store unavailable")
 
 
+class _CacheFailingObservationStore(_IdempotentObservationStore):
+    async def append(
+        self,
+        write: PromptObservationWrite,
+    ) -> SequencedPromptObservationRecord:
+        if write.record.record_kind == "cache_observed":
+            raise RuntimeError("cache observation unavailable")
+        return await super().append(write)
+
+
 def _control_binding() -> RunControlBinding:
     modes = FeatureModeSet.model_validate(
         {
@@ -421,6 +431,46 @@ async def test_provider_failure_leaves_assembly_without_fabricated_cache_usage()
     finally:
         RunControlContext.unbind(token)
 
+    assert [item.record.record_kind for item in store.items] == ["assembled"]
+
+
+async def test_enforce_cache_persistence_failure_preserves_provider_response() -> None:
+    control = _control_binding()
+    store = _CacheFailingObservationStore()
+    middleware = RuntimeControlMiddleware()
+    expected = ModelResponse(
+        result=[
+            AIMessage(
+                content="done",
+                response_metadata={
+                    "token_usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 10,
+                        "prompt_tokens_details": {"cached_tokens": 80},
+                    }
+                },
+            )
+        ]
+    )
+
+    async def handler(_request: ModelRequest[Any]) -> ModelResponse[Any]:
+        return expected
+
+    token = RunControlContext.bind_for_run(control)
+    try:
+        RunControlContext.install_prompt_runtime(
+            _prompt_binding(
+                control=control,
+                store=store,
+                provider="openai",
+                model_family="gpt-5.4-mini",
+            )
+        )
+        observed = await middleware.awrap_model_call(_request(), handler)
+    finally:
+        RunControlContext.unbind(token)
+
+    assert observed is expected
     assert [item.record.record_kind for item in store.items] == ["assembled"]
 
 

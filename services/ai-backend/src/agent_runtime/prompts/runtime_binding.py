@@ -12,6 +12,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Protocol
 
 from langchain_core.messages import SystemMessage
@@ -111,6 +112,14 @@ class PromptRuntimeResult:
     plan: PromptAssemblyPlan | None
     decoration: ProviderPromptDecoration | None
     observation: PromptRuntimeObservation
+
+
+class PromptCacheRecordStatus(StrEnum):
+    """Explicit outcome of post-response cache-observation persistence."""
+
+    RECORDED = "recorded"
+    NOT_CONFIGURED = "not_configured"
+    PERSISTENCE_FAILED = "persistence_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,12 +319,18 @@ class PromptRuntimeBinding:
         assembly: PromptAssembledRecord,
         usage: NormalizedTokenUsage,
         result: PromptRuntimeResult,
-    ) -> None:
-        """Persist actual provider cache metadata after a model response."""
+    ) -> PromptCacheRecordStatus:
+        """Persist cache metadata without ever invalidating provider output.
+
+        Assembly persistence is the pre-dispatch fail-closed boundary. Once a
+        provider response exists, an observation-store failure leaves that
+        durable assembly unpaired so replay and evaluation can detect the
+        incomplete cache observation without causing a second model call.
+        """
 
         publisher = self.observation_publisher
         if publisher is None:
-            return
+            return PromptCacheRecordStatus.NOT_CONFIGURED
         try:
             await publisher.record_cache(
                 assembly=assembly,
@@ -323,9 +338,8 @@ class PromptRuntimeBinding:
                 reason_code=_cache_reason_override(result, usage=usage),
             )
         except Exception:
-            if self.mode is FeatureMode.SHADOW:
-                return
-            raise
+            return PromptCacheRecordStatus.PERSISTENCE_FAILED
+        return PromptCacheRecordStatus.RECORDED
 
 
 class FactoryPromptFragmentProvider:
@@ -583,6 +597,7 @@ def _cache_reason_override(
 __all__ = (
     "FactoryPromptFragmentProvider",
     "PromptAssemblyObserverPort",
+    "PromptCacheRecordStatus",
     "PromptFragmentProviderPort",
     "PromptRuntimeBinding",
     "PromptRuntimeCall",

@@ -30,6 +30,7 @@ from agent_runtime.prompts.provider_cache import (
 from agent_runtime.prompts.runtime_binding import (
     FactoryPromptFragmentProvider,
     PromptAssemblyObserverPort,
+    PromptCacheRecordStatus,
     PromptFragmentProviderPort,
     PromptRuntimeBinding,
     PromptRuntimeCall,
@@ -62,6 +63,7 @@ __all__ = [
     "PromptAssemblyPlan",
     "PromptAssemblyValidationError",
     "PromptCacheEligibility",
+    "PromptCacheRecordStatus",
     "PromptFragment",
     "PromptFragmentDiagnostic",
     "PromptFragmentProvider",
