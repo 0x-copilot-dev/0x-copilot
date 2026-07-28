@@ -1311,15 +1311,19 @@ class RuntimeApiAppFactory:
 
     @classmethod
     def build_mcp_discovery_cache(cls, app: FastAPI) -> None:
-        """Construct the cache only for an actual in-process worker owner."""
+        """Construct the worker MCP assembly only for an in-process owner."""
 
-        from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
-
-        app.state.mcp_discovery_cache = (
-            DefaultRuntimeDependenciesFactory.build_default_discovery_cache(
-                getattr(app.state, "runtime_settings", None)
-            )
+        from runtime_worker.mcp_revision_composition import (
+            McpRevisionControlPlaneBuilder,
         )
+
+        assembly = McpRevisionControlPlaneBuilder.build(
+            getattr(app.state, "runtime_settings", None)
+        )
+        # State holds these only because this API process is also the worker.
+        # API-only topology returns before this builder is invoked.
+        app.state.mcp_revision_control_plane = assembly
+        app.state.mcp_discovery_cache = assembly.discovery_cache
 
     @classmethod
     async def open_async_store(cls, app: FastAPI) -> None:
@@ -1508,6 +1512,11 @@ class RuntimeApiAppFactory:
             ),
             citation_store=getattr(ports, "citation_store", None),
             mcp_discovery_cache=getattr(app.state, "mcp_discovery_cache", None),
+            mcp_revision_poller=getattr(
+                getattr(app.state, "mcp_revision_control_plane", None),
+                "poller",
+                None,
+            ),
             user_policies_resolver=getattr(
                 app.state, "runtime_user_policies_resolver", None
             ),

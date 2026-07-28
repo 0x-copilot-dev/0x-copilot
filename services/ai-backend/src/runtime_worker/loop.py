@@ -89,6 +89,7 @@ from runtime_worker.staged_write_effect_dispatch import (
     RuntimeStagedWriteEffectDispatcherFactory,
 )
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.mcp_revision_poller import McpRevisionPollerLifecyclePort
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -201,6 +202,7 @@ class RuntimeWorker:
         terminal_run_observer: TerminalRunObserverPort | None = None,
         evaluation_projection_runner: BackgroundJobRunnerPort | None = None,
         evaluation_repository: EvaluationRepositoryPort | None = None,
+        mcp_revision_poller: McpRevisionPollerLifecyclePort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -251,6 +253,9 @@ class RuntimeWorker:
         # default run / approval handler dependencies factories so every
         # ``McpLoader`` built for a run in this process shares one cache.
         self.mcp_discovery_cache = mcp_discovery_cache
+        # The assembly is constructed at the worker root, but its one feed
+        # task is not started until ``run_forever`` owns a fully-built worker.
+        self._mcp_revision_poller = mcp_revision_poller
         self.artifact_service = artifact_service
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
@@ -806,11 +811,15 @@ class RuntimeWorker:
         """Continuously process queue claims."""
 
         try:
+            if self._mcp_revision_poller is not None:
+                await self._mcp_revision_poller.start()
             while True:
                 did_work = await self.run_once()
                 if not did_work:
                     await asyncio.sleep(poll_interval_seconds)
         finally:
+            if self._mcp_revision_poller is not None:
+                await self._mcp_revision_poller.stop()
             if self._provider_circuit_snapshot is not None:
                 self._provider_circuit_snapshot.flush(self._provider_circuit_health)
 

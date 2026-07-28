@@ -35,6 +35,10 @@ from agent_runtime.capabilities.mcp.revision_resolver import (
     McpDescriptorRevisionResolverPort,
     RevisionResolveState,
 )
+from agent_runtime.capabilities.mcp.revision_feed import (
+    ActiveMcpRevisionSubjectRegistry,
+    McpRevisionSubject,
+)
 from agent_runtime.execution.contracts import RuntimeContract
 
 
@@ -154,6 +158,7 @@ class RevisionAwareMcpDiscoveryCache:
         *,
         max_staleness_seconds: float,
         revision_resolver: McpDescriptorRevisionResolverPort | None = None,
+        active_subjects: ActiveMcpRevisionSubjectRegistry | None = None,
         revision_checks_enabled: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -166,6 +171,8 @@ class RevisionAwareMcpDiscoveryCache:
             )
         self._cache = cache
         self._revision_resolver = revision_resolver
+        self._active_subjects = active_subjects
+        self._subject_registration_declined = 0
         self._revision_checks_enabled = revision_checks_enabled
         self._max_staleness_seconds = float(max_staleness_seconds)
         self._clock = clock
@@ -242,6 +249,18 @@ class RevisionAwareMcpDiscoveryCache:
             )
 
         async with self._lock_for(key):
+            # McpLoader calls this cache only after it has resolved the card and
+            # performed its live permission check.  Never move this touch into a
+            # registry/provider path: cache keys are derived from that verified
+            # runtime identity, and an unauthorised card must not activate a
+            # background feed subject.  A full registry changes only polling;
+            # exact resolution and the normal live-load fallback still run.
+            if self._active_subjects is not None:
+                admitted = await self._active_subjects.touch_verified(
+                    McpRevisionSubject(org_id=key.org_id, user_id=key.user_id)
+                )
+                if not admitted:
+                    self._subject_registration_declined += 1
             resolver = self._revision_resolver
             if resolver is not None and source_id is not None:
                 await resolver.register(
@@ -357,6 +376,41 @@ class RevisionAwareMcpDiscoveryCache:
             revision_records_removed=revision_records_removed,
             generation_barriers_advanced=len(matching_keys),
         )
+
+    async def invalidate_descriptor_subject(
+        self,
+        subject: McpDescriptorSubject,
+        *,
+        server_name: str | None = None,
+    ) -> McpDescriptorInvalidationResult:
+        """Evict descriptor material without changing resolver state.
+
+        Feed notices first update the resolver.  The production feed adapter
+        uses this narrow operation immediately afterwards so the notice cannot
+        be overwritten by a second resolver invalidation before catalog
+        generation advances.
+        """
+
+        matching_keys, revision_records_removed = await self._invalidate_metadata(
+            server_name=server_name,
+            org_id=subject.org_id,
+            user_id=subject.user_id,
+        )
+        cached_removed = await self._cache.invalidate(
+            server_name=server_name,
+            org_id=subject.org_id,
+            user_id=subject.user_id,
+        )
+        return McpDescriptorInvalidationResult(
+            cached_records_removed=cached_removed,
+            revision_records_removed=revision_records_removed,
+            generation_barriers_advanced=len(matching_keys),
+        )
+
+    def subject_registration_diagnostics(self) -> dict[str, int]:
+        """Bounded, content-free diagnostics for declined feed activation."""
+
+        return {"subject_registration_declined": self._subject_registration_declined}
 
     async def _get_or_load_locked(
         self,
