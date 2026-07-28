@@ -316,6 +316,9 @@ class RuntimeApiEventType(StrEnum):
     # contain only refs, revisions, modes, digests, limits, and timestamps.
     QUALITY_CONTROL_BOUND = "quality.control_bound.v1"
     QUALITY_DECISION = "quality.decision.v1"
+    # F4 task-aware controller. One strict discriminated, body-free record per
+    # event; the canonical run stream remains the sole mutable journal.
+    TOOL_POLICY_JOURNAL = "tool_policy.journal.v1"
 
     @classmethod
     def from_stream_event_type(

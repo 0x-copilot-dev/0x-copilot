@@ -6,6 +6,10 @@ import re
 from copilot_service_contracts.work_ledger import LEDGER_EVENT_TYPES
 
 from agent_runtime.control_plane import AgentQualityFeature, FeatureMode
+from agent_runtime.capabilities.task_policy_journal import (
+    TaskPolicyJournalRecordKind,
+    TaskPolicyReasonCode,
+)
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.pending_work_v2_service import (
     PendingWorkV2Response,
@@ -19,6 +23,7 @@ from runtime_api.schemas import (
     RunHistoryEntry,
     RuntimeActivityKind,
     RuntimeApiEventType,
+    TaskPolicyJournalPayload,
 )
 
 
@@ -119,11 +124,22 @@ class TestApiTypeContracts:
             api_types,
             "QualityDecisionPayload",
         ) == set(QualityDecisionPayload.model_fields)
+        assert _typescript_interface_fields(
+            api_types,
+            "TaskPolicyJournalPayload",
+        ) == set(TaskPolicyJournalPayload.model_fields)
         assert _typescript_string_union(api_types, "AgentQualityFeature") == {
             feature.value for feature in AgentQualityFeature
         }
         assert _typescript_string_union(api_types, "QualityFeatureMode") == {
             mode.value for mode in FeatureMode
+        }
+        assert _typescript_string_union(
+            api_types,
+            "TaskPolicyJournalRecordKind",
+        ) == {kind.value for kind in TaskPolicyJournalRecordKind}
+        assert _typescript_string_union(api_types, "TaskPolicyReasonCode") == {
+            code.value for code in TaskPolicyReasonCode
         }
 
     def test_typescript_runtime_event_constants_match_backend_enums(self) -> None:

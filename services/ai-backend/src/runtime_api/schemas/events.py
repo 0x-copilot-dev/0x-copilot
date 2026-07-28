@@ -24,6 +24,7 @@ from agent_runtime.execution.contracts import (
     StreamEventType,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.capabilities.task_policy_journal import TaskPolicyJournalRecord
 
 # Lazy import: ``McpDispatcherUnwrap`` lives under ``agent_runtime.capabilities.mcp``,
 # whose package ``__init__`` eagerly imports the MCP middleware. That middleware
@@ -210,6 +211,12 @@ class QualityDecisionPayload(RuntimeContract):
         return value
 
 
+class TaskPolicyJournalPayload(RuntimeContract):
+    """Strict content-free F4 record carried by the canonical run journal."""
+
+    record: TaskPolicyJournalRecord
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -347,6 +354,8 @@ class RuntimeEventPresentationProjector:
             return cls._quality_control_payload(payload)
         if event_type is RuntimeApiEventType.QUALITY_DECISION:
             return cls._quality_decision_payload(payload)
+        if event_type is RuntimeApiEventType.TOOL_POLICY_JOURNAL:
+            return cls._tool_policy_journal_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -493,6 +502,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.EFFECT_INDETERMINATE,
             RuntimeApiEventType.EFFECT_RECONCILED,
             RuntimeApiEventType.EFFECT_ROW_DECISIONS_RECORDED,
+            RuntimeApiEventType.TOOL_POLICY_JOURNAL,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -1749,6 +1759,19 @@ class RuntimeEventPresentationProjector:
         except ValidationError:
             logging.getLogger(__name__).warning(
                 "Rejected malformed quality.decision.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _tool_policy_journal_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one strict discriminated F4 record and reject extra data."""
+
+        try:
+            validated = TaskPolicyJournalPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed tool_policy.journal.v1 payload"
             )
             return {}
         return validated.model_dump(mode="json")
