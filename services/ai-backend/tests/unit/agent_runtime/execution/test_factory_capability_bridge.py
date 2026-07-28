@@ -420,6 +420,32 @@ class TestDeferredBridgeRegistration:
             *_PRE_F3_SURFACE[_BRIDGE_INSERTION_INDEX:],
         )
 
+    def test_the_bridge_is_added_to_the_pre_f3_surface_and_removes_nothing(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        """F3.9 suppresses a *prompt block*, never a tool.
+
+        Search and describe replace the MCP card block's per-server
+        enumeration. They do not replace ``load_mcp_server`` (describe returns
+        no schema, and an MCP-server catalog entry carries no parameters),
+        ``call_mcp_tool`` (its superseder ``invoke_capability`` is not
+        registered), or ``auth_mcp`` (nothing in the bridge authenticates, and
+        a catalog entry has no auth field at all). Dropping any of them would
+        leave a deferred run unable to reach MCP.
+        """
+
+        names, _digest = _surface(
+            _compose(
+                runtime_context_admin,
+                capability_activation=_decision(CapabilityActivationMode.DEFERRED),
+                capability_catalog=_catalog(runtime_context_admin),
+            )
+        )
+
+        assert set(_PRE_F3_SURFACE) <= set(names)
+        assert names.index("load_mcp_server") < names.index("call_mcp_tool")
+
     def test_invoke_capability_is_absent_until_its_seam_is_wired(
         self,
         runtime_context_admin: AgentRuntimeContext,
