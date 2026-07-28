@@ -31,6 +31,7 @@ from agent_runtime.artifacts.contracts import (
 )
 from agent_runtime.artifacts.errors import (
     ArtifactBlobUnavailableError,
+    ArtifactConflictError,
     ArtifactInvalidSourceError,
     ArtifactNotFoundError,
     ArtifactRangeError,
@@ -322,11 +323,24 @@ class ArtifactService:
             user_id=user_id,
             artifact_id=request.artifact_id,
         )
+        # The revision is causal in the run the user is acting in, not in the run
+        # that first created the artifact. ``_require_run_scope`` re-proves the
+        # caller owns that run, so a forged ``acting_run_id`` cannot redirect a
+        # ledger event into someone else's run — the claim is verified, never
+        # trusted. Unset falls back to the creating run, preserving the
+        # agent-authored path where the two are the same.
         scope = await self._require_run_scope(
             org_id=org_id,
             user_id=user_id,
-            run_id=current.artifact.run_id,
+            run_id=request.acting_run_id or current.artifact.run_id,
         )
+        if request.acting_run_id is not None and scope.run_is_terminal:
+            # A claimed run whose ledger is already sealed cannot carry the
+            # causal ``artifact.revised`` this mutation produces. Committing
+            # anyway would repeat the exact defect PRD-02 fixes — a revision that
+            # lands durably while no open stream ever reports it — so the claim
+            # is refused before the blob is written.
+            raise ArtifactConflictError()
         limit = self._limits.for_kind(current.artifact.kind)
         written = await self._blobs.put_stream(
             expected_digest=request.expected_digest,

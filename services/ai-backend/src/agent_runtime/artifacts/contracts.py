@@ -160,6 +160,12 @@ class ArtifactScope(RuntimeContract):
     conversation_id: str = Field(min_length=1, max_length=255)
     run_id: str = Field(min_length=1, max_length=255)
     trace_id: str = Field(min_length=1, max_length=255)
+    #: Whether the resolved run has already sealed its ledger. Only consulted
+    #: when a caller *claims* a run to act in (PRD-02 ``acting_run_id``): a
+    #: terminal run cannot accept the causal event the mutation would produce,
+    #: so the claim is refused rather than silently producing an unrefreshable
+    #: surface. Defaults false so every existing in-run caller is unchanged.
+    run_is_terminal: bool = False
 
 
 class ArtifactCreateRequest(RuntimeContract):
@@ -179,10 +185,27 @@ class ArtifactCreateRequest(RuntimeContract):
 
 
 class ArtifactRevisionRequest(RuntimeContract):
+    """Compare-and-append one immutable revision.
+
+    ``acting_run_id`` is the run the *user is in* when the edit is made, which is
+    not necessarily the run that created the artifact. A revision is caused by
+    activity in the acting run, so that is where its ledger event belongs.
+
+    Attributing it to the creating run instead — as this did before PRD-02 —
+    produces a surface that can be written to but never refreshes: the creating
+    run is sealed, so ``artifact.revised`` is rejected there, the acting run's
+    stream never carries it, the open tab stays on the old revision forever, and
+    the next edit fails its compare-and-append against a stale parent.
+
+    Optional so existing callers (agent-authored revisions, which act inside the
+    creating run) keep working unchanged; when unset the creating run is used.
+    """
+
     artifact_id: str
     parent_revision: PositiveInt
     expected_digest: Sha256Hex | None = None
     idempotency_key: str = Field(min_length=1, max_length=255)
+    acting_run_id: str | None = Field(default=None, min_length=1, max_length=255)
 
     @field_validator("artifact_id")
     @classmethod
