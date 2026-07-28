@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
+import logging
 from typing import Any, Protocol, runtime_checkable
 
 from pydantic import Field, field_validator
@@ -81,6 +83,15 @@ class McpUnsupportedMethodError(McpClientError):
     """The MCP server does not implement an optional JSON-RPC method."""
 
 
+class McpLeaseError(McpConnectionError):
+    """The backend rejected an opaque MCP session lease."""
+
+    def __init__(self, code: str, *, redispatch_safe: bool = False) -> None:
+        super().__init__("MCP session lease was rejected.")
+        self.code = code
+        self.redispatch_safe = redispatch_safe
+
+
 @runtime_checkable
 class McpClient(Protocol):
     """Async-ready MCP client boundary used by the dynamic loader."""
@@ -101,6 +112,41 @@ class McpClient(Protocol):
         arguments: Mapping[str, Any],
     ) -> RawMcpToolCallResult:
         """Invoke a selected MCP tool and return the raw JSON-RPC result."""
+
+
+@runtime_checkable
+class CloseableMcpClient(Protocol):
+    """Optional request-scoped client cleanup boundary."""
+
+    async def aclose(self, *, cancel: bool = False) -> None:
+        """Release the request-scoped client, cancelling unfinished work when needed."""
+
+
+async def aclose_mcp_client(client: McpClient, *, cancel: bool = False) -> None:
+    """Close a client structurally when it exposes the optional close protocol."""
+    if isinstance(client, CloseableMcpClient):
+        await client.aclose(cancel=cancel)
+
+
+async def aclose_mcp_client_safely(client: McpClient, *, cancel: bool = False) -> bool:
+    """Close without replacing a completed operation's outcome.
+
+    When the surrounding task is cancelled, shield the release request long
+    enough to send the backend cancellation before re-raising cancellation.
+    """
+    close_task = asyncio.create_task(aclose_mcp_client(client, cancel=cancel))
+    try:
+        await asyncio.shield(close_task)
+    except asyncio.CancelledError:
+        try:
+            await asyncio.shield(close_task)
+        except Exception:  # noqa: BLE001 - cleanup never replaces cancellation.
+            logging.getLogger(__name__).warning("MCP client cleanup failed")
+        raise
+    except Exception:  # noqa: BLE001 - cleanup never replaces the primary outcome.
+        logging.getLogger(__name__).warning("MCP client cleanup failed")
+        return False
+    return True
 
 
 @runtime_checkable

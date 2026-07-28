@@ -26,10 +26,123 @@ from agent_runtime.capabilities.mcp import (
 )
 from agent_runtime.capabilities.mcp.constants import Keys, Messages, Values
 from agent_runtime.capabilities.mcp.middleware.dynamic_loader import LoadMcpServerTool
+from agent_runtime.capabilities.mcp.client import McpConnectionError
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
 
 class TestDynamicMcpLoading(DynamicMcpLoadingMixin):
+    def test_loader_closes_closeable_clients_after_success_and_error(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        success_client = self.FakeMcpClient(
+            tools=(self.make_tool(),), resources=(self.make_resource(),)
+        )
+        success_closes: list[bool] = []
+
+        async def close_success(*, cancel: bool = False) -> None:
+            success_closes.append(cancel)
+
+        success_client.aclose = close_success  # type: ignore[attr-defined]
+        assert asyncio.run(
+            self.make_loader(success_client).load_server(
+                McpLoadRequest(
+                    server_name=self.TestValues.Names.DRIVE_MCP,
+                    runtime_context=runtime_context_admin,
+                )
+            )
+        ).succeeded
+        assert success_closes == [False]
+
+        failing_client = self.FakeMcpClient(
+            tools=(),
+            resources=(),
+            connect_error=McpConnectionError("offline"),
+        )
+        failing_closes: list[bool] = []
+
+        async def close_failure(*, cancel: bool = False) -> None:
+            failing_closes.append(cancel)
+
+        failing_client.aclose = close_failure  # type: ignore[attr-defined]
+        result = asyncio.run(
+            self.make_loader(failing_client).load_server(
+                McpLoadRequest(
+                    server_name=self.TestValues.Names.DRIVE_MCP,
+                    runtime_context=runtime_context_admin,
+                )
+            )
+        )
+        assert result.succeeded is False
+        assert failing_closes == [True]
+
+        cleanup_failure_client = self.FakeMcpClient(
+            tools=(self.make_tool(),), resources=(self.make_resource(),)
+        )
+
+        async def close_raises(*, cancel: bool = False) -> None:
+            del cancel
+            raise RuntimeError("release failed")
+
+        cleanup_failure_client.aclose = close_raises  # type: ignore[attr-defined]
+        cleanup_failure_result = asyncio.run(
+            self.make_loader(cleanup_failure_client).load_server(
+                McpLoadRequest(
+                    server_name=self.TestValues.Names.DRIVE_MCP,
+                    runtime_context=runtime_context_admin,
+                )
+            )
+        )
+        assert cleanup_failure_result.succeeded
+
+        primary_and_cleanup_failure_client = self.FakeMcpClient(
+            tools=(),
+            resources=(),
+            connect_error=McpConnectionError("offline"),
+        )
+        primary_and_cleanup_failure_client.aclose = close_raises  # type: ignore[attr-defined]
+        primary_and_cleanup_failure_result = asyncio.run(
+            self.make_loader(primary_and_cleanup_failure_client).load_server(
+                McpLoadRequest(
+                    server_name=self.TestValues.Names.DRIVE_MCP,
+                    runtime_context=runtime_context_admin,
+                )
+            )
+        )
+        assert primary_and_cleanup_failure_result.succeeded is False
+
+    async def test_loader_cancels_closeable_client_on_task_cancellation(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+    ) -> None:
+        started = asyncio.Event()
+        release = asyncio.Event()
+        client = self.FakeMcpClient(tools=(), resources=())
+        closes: list[bool] = []
+
+        async def connect() -> None:
+            started.set()
+            await release.wait()
+
+        async def close(*, cancel: bool = False) -> None:
+            closes.append(cancel)
+
+        client.connect = connect  # type: ignore[method-assign]
+        client.aclose = close  # type: ignore[attr-defined]
+        task = asyncio.create_task(
+            self.make_loader(client).load_server(
+                McpLoadRequest(
+                    server_name=self.TestValues.Names.DRIVE_MCP,
+                    runtime_context=runtime_context_admin,
+                )
+            )
+        )
+        await started.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        assert closes == [True]
+
     def test_mcp_server_card_normalizes_visibility_metadata(self) -> None:
         card = self.make_card(
             name=self.TestValues.Names.DISPLAY_CARD,

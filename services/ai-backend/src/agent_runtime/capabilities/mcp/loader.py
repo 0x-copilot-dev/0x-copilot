@@ -37,6 +37,7 @@ from agent_runtime.capabilities.mcp.client import (
     McpToolDiscoveryPage,
     PaginatedMcpClient,
     RawMcpConnectionMetadata,
+    aclose_mcp_client_safely,
 )
 from agent_runtime.capabilities.mcp.constants import Defaults, Keys, Messages
 from agent_runtime.capabilities.mcp.discovery_cache import (
@@ -187,6 +188,8 @@ class McpLoader:
         runtime_context = request.runtime_context
         card = resolution.card
 
+        client: McpClient | None = None
+        cancel_client = True
         try:
             client = resolution.provider.create_client(card)
             metadata = await self._connect(client, resolution)
@@ -257,6 +260,11 @@ class McpLoader:
                 server_name=card.name,
                 correlation_id=runtime_context.trace_id,
             )
+        else:
+            cancel_client = False
+        finally:
+            if client is not None:
+                await aclose_mcp_client_safely(client, cancel=cancel_client)
 
         raw_tools = McpLoaderHelpers.coerce_raw_sequence(raw_tools)
         raw_resources = McpLoaderHelpers.coerce_raw_sequence(raw_resources)

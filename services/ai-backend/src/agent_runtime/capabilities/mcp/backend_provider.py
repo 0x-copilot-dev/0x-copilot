@@ -30,7 +30,9 @@ from agent_runtime.capabilities.mcp.cards import (
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
     McpClient,
+    McpClientError,
     McpConnectionError,
+    McpLeaseError,
     McpResourceDiscoveryPage,
     McpTimeoutError,
     McpToolDiscoveryPage,
@@ -156,10 +158,23 @@ class BackendMcpClient:
     runtime_context: AgentRuntimeContext
     card: McpServerCard
     timeout_seconds: float = 10
-    server_url: str | None = None
+    lease: str | None = None
     initialized: bool = False
     request_id: int = 0
     _MAX_DISCOVERY_PAGES: ClassVar[int] = 100
+    _MIN_LEASE_LENGTH: ClassVar[int] = 16
+    _MAX_LEASE_LENGTH: ClassVar[int] = 512
+    _LEASE_FAILURE_CODES: ClassVar[frozenset[str]] = frozenset(
+        {
+            "ambiguous_transport_failure",
+            "auth_required",
+            "lease_invalid",
+            "lease_stale_pre_dispatch",
+            "lease_wrong_owner",
+            "pool_saturated",
+            "server_unavailable",
+        }
+    )
     http_client: httpx.AsyncClient = field(
         default_factory=BackendHttpPool.get,
         repr=False,
@@ -173,22 +188,13 @@ class BackendMcpClient:
             McpAuthState.AUTH_SKIPPED,
         }:
             raise McpAuthError("MCP server is not authenticated.")
-        server_id = self.card.server_id or self.card.name
-        response = await self.http_client.post(
-            f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/client-session",
-            params={
-                Keys.Field.ORG_ID: self.runtime_context.org_id,
-                Keys.Field.USER_ID: self.runtime_context.user_id,
-            },
-            headers=BackendMcpServiceAuth.headers(self.runtime_context),
-            timeout=self.timeout_seconds,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if payload.get(Keys.Field.AUTH_STATE) != McpAuthState.AUTHENTICATED.value:
-            raise McpAuthError("MCP server is not authenticated.")
-        self.server_url = str(payload[Keys.Field.URL]).rstrip("/")
-        await self._initialize()
+        if self.lease is None:
+            await self._acquire_lease()
+        try:
+            await self._initialize()
+        except BaseException:
+            await self._discard_lease()
+            raise
         return McpConnectionMetadata(
             server_name=self.card.name,
             transport=self.card.transport,
@@ -289,36 +295,11 @@ class BackendMcpClient:
             },
         )
 
-    async def _initialize(self) -> None:
-        """Send the MCP initialize + notifications/initialized handshake; idempotent."""
-        if self.initialized:
-            return
-        await self._rpc_result(
-            Values.JsonRpcMethod.INITIALIZE,
-            {
-                Keys.JsonRpc.PROTOCOL_VERSION: Values.McpClientInfo.PROTOCOL_VERSION,
-                Keys.JsonRpc.CAPABILITIES: {},
-                Keys.JsonRpc.CLIENT_INFO: {
-                    Keys.Field.NAME: Values.McpClientInfo.NAME,
-                    Keys.Field.VERSION: Values.McpClientInfo.VERSION,
-                },
-            },
-        )
-        await self._rpc(
-            {
-                Keys.JsonRpc.JSONRPC: Values.JsonRpc.VERSION,
-                Keys.JsonRpc.METHOD: Values.JsonRpcMethod.INITIALIZED,
-            }
-        )
-        self.initialized = True
-
     async def _rpc_result(
         self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Build and send a JSON-RPC request; return the ``result`` dict or ``{}``."""
-        if self.server_url is None and method != Values.JsonRpcMethod.INITIALIZE:
-            # Lazy connect: ``initialize`` itself drives ``connect`` first, so only
-            # subsequent methods need this guard.
+        if self.lease is None:
             await self.connect()
         self.request_id += 1
         payload: dict[str, Any] = {
@@ -355,9 +336,28 @@ class BackendMcpClient:
                 return False
         return False
 
-    async def _rpc(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """POST a JSON-RPC envelope through the backend proxy and unwrap the result."""
+    async def _rpc(
+        self,
+        payload: dict[str, Any],
+        *,
+        allow_lease_reacquire: bool = True,
+    ) -> dict[str, Any]:
+        """POST through the backend proxy, replaying only explicit pre-dispatch failures."""
+        try:
+            return await self._post_rpc(payload)
+        except McpLeaseError as exc:
+            if not allow_lease_reacquire or not exc.redispatch_safe:
+                raise
+            replay_required = await self._recover_lease_for_replay(payload)
+            if not replay_required:
+                return {}
+            return await self._rpc(payload, allow_lease_reacquire=False)
+
+    async def _post_rpc(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """POST one JSON-RPC envelope through the backend proxy and unwrap it."""
         server_id = self.card.server_id or self.card.name
+        if self.lease is None:
+            raise McpLeaseError("lease_unknown")
         try:
             response = await self.http_client.post(
                 f"{self.backend_url.rstrip('/')}"
@@ -365,6 +365,7 @@ class BackendMcpClient:
                 json={
                     Keys.Field.ORG_ID: self.runtime_context.org_id,
                     Keys.Field.USER_ID: self.runtime_context.user_id,
+                    Keys.Field.LEASE: self.lease,
                     Keys.JsonRpc.PAYLOAD: payload,
                 },
                 headers=BackendMcpServiceAuth.headers(self.runtime_context),
@@ -374,6 +375,9 @@ class BackendMcpClient:
             raise McpTimeoutError("MCP JSON-RPC request timed out.") from exc
         except httpx.HTTPError as exc:
             raise McpConnectionError("MCP JSON-RPC request failed.") from exc
+        lease_error = self._lease_error_from_response(response)
+        if lease_error is not None:
+            raise lease_error
         if response.status_code in {401, 403}:
             raise McpAuthError("MCP server is not authenticated.")
         try:
@@ -387,6 +391,179 @@ class BackendMcpClient:
         if not isinstance(rpc_payload, dict):
             raise McpConnectionError("MCP JSON-RPC proxy returned an invalid response.")
         return rpc_payload
+
+    async def _acquire_lease(self) -> None:
+        """Acquire one backend-owned opaque lease without exposing transport details."""
+        server_id = self.card.server_id or self.card.name
+        try:
+            response = await self.http_client.post(
+                f"{self.backend_url.rstrip('/')}/internal/v1/mcp/servers/{server_id}/client-session",
+                params={
+                    Keys.Field.ORG_ID: self.runtime_context.org_id,
+                    Keys.Field.USER_ID: self.runtime_context.user_id,
+                },
+                headers=BackendMcpServiceAuth.headers(self.runtime_context),
+                timeout=self.timeout_seconds,
+            )
+        except httpx.TimeoutException as exc:
+            raise McpTimeoutError("MCP client-session request timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise McpConnectionError("MCP client-session request failed.") from exc
+        lease_error = self._lease_error_from_response(response)
+        if lease_error is not None:
+            raise lease_error
+        if response.status_code in {401, 403}:
+            raise McpAuthError("MCP server is not authenticated.")
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise McpConnectionError("MCP client-session request failed.") from exc
+        payload = response.json()
+        lease = payload.get(Keys.Field.LEASE) if isinstance(payload, dict) else None
+        if (
+            not isinstance(lease, str)
+            or lease != lease.strip()
+            or not self._MIN_LEASE_LENGTH <= len(lease) <= self._MAX_LEASE_LENGTH
+        ):
+            raise McpConnectionError("MCP client-session returned an invalid lease.")
+        self.lease = lease
+        self.initialized = False
+
+    async def aclose(self, *, cancel: bool = False) -> None:
+        """Release the opaque lease; never expose backend transport or credentials."""
+        lease = self.lease
+        self.lease = None
+        self.initialized = False
+        if lease is None:
+            return
+        server_id = self.card.server_id or self.card.name
+        try:
+            response = await self.http_client.post(
+                f"{self.backend_url.rstrip('/')}"
+                f"{Values.Route.INTERNAL_MCP_CLIENT_SESSION_RELEASE.format(server_id=server_id)}",
+                json={
+                    Keys.Field.ORG_ID: self.runtime_context.org_id,
+                    Keys.Field.USER_ID: self.runtime_context.user_id,
+                    Keys.Field.LEASE: lease,
+                    Keys.Field.CANCEL: cancel,
+                },
+                headers=BackendMcpServiceAuth.headers(self.runtime_context),
+                timeout=self.timeout_seconds,
+            )
+        except httpx.TimeoutException as exc:
+            raise McpTimeoutError("MCP client-session release timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise McpConnectionError("MCP client-session release failed.") from exc
+        lease_error = self._lease_error_from_response(response)
+        if lease_error is not None:
+            raise lease_error
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise McpConnectionError("MCP client-session release failed.") from exc
+
+    async def _recover_lease_for_replay(self, payload: Mapping[str, Any]) -> bool:
+        """Transition to a new lease and return whether the original RPC needs replay."""
+        await self._discard_lease()
+        await self._acquire_lease()
+        method = payload.get(Keys.JsonRpc.METHOD)
+        if method == Values.JsonRpcMethod.INITIALIZED:
+            # The replacement handshake includes the notification. Replaying
+            # the original notification would be a second, needless dispatch.
+            await self._initialize(allow_lease_reacquire=False)
+            return False
+        # Replaying ``initialize`` is itself the handshake. Every other RPC,
+        # requires a fully initialized replacement session before its one
+        # permitted replay.
+        if method != Values.JsonRpcMethod.INITIALIZE:
+            await self._initialize(allow_lease_reacquire=False)
+        return True
+
+    async def _discard_lease(self) -> None:
+        """Best-effort cancellation for a lease already proven safe to replace."""
+        try:
+            await self.aclose(cancel=True)
+        except McpClientError:
+            # A stale/unknown release cannot make a backend-confirmed
+            # pre-dispatch replay unsafe. The local capability is cleared by
+            # ``aclose`` before it performs I/O.
+            pass
+
+    async def _initialize(self, *, allow_lease_reacquire: bool = True) -> None:
+        """Send the MCP initialize handshake over the currently held lease."""
+        if self.initialized:
+            return
+        await self._rpc_result_with_retry_policy(
+            Values.JsonRpcMethod.INITIALIZE,
+            {
+                Keys.JsonRpc.PROTOCOL_VERSION: Values.McpClientInfo.PROTOCOL_VERSION,
+                Keys.JsonRpc.CAPABILITIES: {},
+                Keys.JsonRpc.CLIENT_INFO: {
+                    Keys.Field.NAME: Values.McpClientInfo.NAME,
+                    Keys.Field.VERSION: Values.McpClientInfo.VERSION,
+                },
+            },
+            allow_lease_reacquire=allow_lease_reacquire,
+        )
+        await self._rpc(
+            {
+                Keys.JsonRpc.JSONRPC: Values.JsonRpc.VERSION,
+                Keys.JsonRpc.METHOD: Values.JsonRpcMethod.INITIALIZED,
+            },
+            allow_lease_reacquire=allow_lease_reacquire,
+        )
+        self.initialized = True
+
+    async def _rpc_result_with_retry_policy(
+        self,
+        method: str,
+        params: dict[str, Any],
+        *,
+        allow_lease_reacquire: bool,
+    ) -> dict[str, Any]:
+        self.request_id += 1
+        payload = {
+            Keys.JsonRpc.JSONRPC: Values.JsonRpc.VERSION,
+            Keys.JsonRpc.ID: self.request_id,
+            Keys.JsonRpc.METHOD: method,
+            Keys.JsonRpc.PARAMS: params,
+        }
+        response = await self._rpc(
+            payload,
+            allow_lease_reacquire=allow_lease_reacquire,
+        )
+        error = response.get(Keys.JsonRpc.ERROR)
+        if isinstance(error, dict):
+            if self._is_method_not_found(error):
+                raise McpUnsupportedMethodError("MCP JSON-RPC method is not supported.")
+            raise McpConnectionError("MCP JSON-RPC request failed.")
+        result = response.get(Keys.JsonRpc.RESULT)
+        return result if isinstance(result, dict) else {}
+
+    @staticmethod
+    def _lease_error_from_response(response: httpx.Response) -> McpClientError | None:
+        """Strictly parse the backend's bounded typed lease-failure envelope."""
+        try:
+            body = response.json()
+        except (TypeError, ValueError):
+            return None
+        detail = body.get("detail") if isinstance(body, dict) else None
+        if not isinstance(detail, dict):
+            return None
+        code = detail.get("code")
+        if (
+            not isinstance(code, str)
+            or code not in BackendMcpClient._LEASE_FAILURE_CODES
+        ):
+            return None
+        if code == "auth_required":
+            return McpAuthError("MCP server is not authenticated.")
+        redispatch_safe = (
+            response.status_code == 409
+            and code == "lease_stale_pre_dispatch"
+            and detail.get("redispatch_safe") is True
+        )
+        return McpLeaseError(code, redispatch_safe=redispatch_safe)
 
     def _tool_descriptor(self, tool: dict[str, Any]) -> McpToolDescriptor:
         """Build a validated ``McpToolDescriptor`` from raw server data, synthesising display metadata."""

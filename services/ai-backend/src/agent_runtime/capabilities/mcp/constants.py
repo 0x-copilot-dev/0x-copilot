@@ -29,6 +29,7 @@ class Keys:
         ARGUMENTS = "arguments"
         AUTH_MODE = "auth_mode"
         AUTH_STATE = "auth_state"
+        CANCEL = "cancel"
         CODE = "code"
         CONNECTED_AT = "connected_at"
         CONNECTION_ID = "connection_id"
@@ -39,6 +40,7 @@ class Keys:
         HEALTH = "health"
         INPUT_SCHEMA = "input_schema"
         LATENCY_MS = "latency_ms"
+        LEASE = "lease"
         LOAD_COST = "load_cost"
         LOADED_SERVER = "loaded_server"
         LOCAL_TOOL_NAMES = "local_tool_names"
@@ -220,6 +222,9 @@ class Values:
         """Internal API route templates."""
 
         INTERNAL_MCP_RPC = "/internal/v1/mcp/servers/{server_id}/rpc"
+        INTERNAL_MCP_CLIENT_SESSION_RELEASE = (
+            "/internal/v1/mcp/servers/{server_id}/client-session/release"
+        )
 
     class Transport:
         """MCP transport string values."""

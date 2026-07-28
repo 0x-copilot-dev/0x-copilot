@@ -33,6 +33,7 @@ from agent_runtime.capabilities.mcp.client import (
     McpClientError,
     McpConnectionError,
     McpTimeoutError,
+    aclose_mcp_client_safely,
 )
 from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
     CitationProjectingMcpMiddleware,
@@ -416,6 +417,8 @@ class McpOperationAdapter(OperationAdapter):
             )
 
     async def _dispatch(self, resolution: RegisteredMcpServer) -> Mapping[str, object]:
+        client = None
+        cancel_client = True
         try:
             client = resolution.provider.create_client(resolution.card)
             output = await asyncio.wait_for(
@@ -425,6 +428,7 @@ class McpOperationAdapter(OperationAdapter):
                 ),
                 timeout=self._timeout_seconds,
             )
+            cancel_client = False
         except (McpTimeoutError, asyncio.TimeoutError, TimeoutError) as exc:
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,
@@ -465,6 +469,9 @@ class McpOperationAdapter(OperationAdapter):
                 _CONNECTOR_UNAVAILABLE,
                 retryable=True,
             ) from exc
+        finally:
+            if client is not None:
+                await aclose_mcp_client_safely(client, cancel=cancel_client)
         if not isinstance(output, Mapping):
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,

@@ -33,6 +33,7 @@ from agent_runtime.capabilities.mcp.client import (
     McpClientError,
     McpConnectionError,
     McpTimeoutError,
+    aclose_mcp_client_safely,
 )
 from agent_runtime.capabilities.mcp.outcomes import McpToolCallOutcome
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
@@ -101,6 +102,8 @@ class McpStageCommitConnector:
         # the transport repeats it here to close the race between that check
         # and ``create_client``.
         resolution = await self.authorize(request)
+        client = None
+        cancel_client = True
         try:
             client = resolution.provider.create_client(resolution.card)
             output = await asyncio.wait_for(
@@ -110,6 +113,7 @@ class McpStageCommitConnector:
                 ),
                 timeout=self._timeout_seconds,
             )
+            cancel_client = False
         except (McpTimeoutError, asyncio.TimeoutError, TimeoutError) as exc:
             # The send may have left the building — INDETERMINATE, never resend.
             raise StageCommitTimeout() from exc
@@ -123,6 +127,9 @@ class McpStageCommitConnector:
             raise StageCommitConnectorError(_DISPATCH_FAILED) from exc
         except Exception as exc:  # noqa: BLE001 — any dispatch fault fails closed.
             raise StageCommitConnectorError(_DISPATCH_FAILED) from exc
+        finally:
+            if client is not None:
+                await aclose_mcp_client_safely(client, cancel=cancel_client)
 
         # A successful transport response can still carry ``isError: true`` — that
         # is a failure, not a send (MCP spec). Treat it as a connector error.
