@@ -36,7 +36,12 @@ from agent_runtime.capabilities.operations.catalog import (
 from agent_runtime.capabilities.operations.conformance import (
     OperationConformanceGate,
 )
-from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
+from agent_runtime.capabilities.mcp.cards import (
+    McpAuthMode,
+    McpServerCard,
+    McpServerHealth,
+    McpTransport,
+)
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.delegation.subagents.atlas_task_tool import build_atlas_task_tool
 from agent_runtime.effects.composition import EFFECT_DESCRIPTOR_STAGE_MAPPINGS
@@ -175,16 +180,17 @@ def _capability_catalog(context: AgentRuntimeContext) -> CapabilityCatalog:
             connector_scope_revision="scope_9",
         ),
         task_policy_selection_ref=_SELECTION_REF,
-        tool_cards=(
-            ToolCard(
-                name="drive_search",
-                display_name="Drive Search",
+        mcp_server_cards=(
+            McpServerCard(
+                name="drive_server",
+                display_name="Drive Server",
                 short_description="Find relevant drive records.",
-                connector="Google-Drive",
-                tags={"search"},
+                transport=McpTransport.HTTP,
+                auth_mode=McpAuthMode.OAUTH2,
                 required_scopes=frozenset({"Docs:Read"}),
-                risk_level=ToolRiskLevel.LOW,
-                load_cost=1,
+                health=McpServerHealth.HEALTHY,
+                load_cost=2,
+                connector_slug="Google-Drive",
             ),
         ),
         expires_at=datetime.now(UTC) + timedelta(minutes=15),
