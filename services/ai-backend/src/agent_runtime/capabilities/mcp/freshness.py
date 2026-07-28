@@ -597,11 +597,6 @@ class RevisionAwareMcpDiscoveryCache:
                 if key in self._revisions:
                     revision_records_removed += 1
                 self._revisions.pop(key, None)
-                # The projection of the backend authority is no longer trusted
-                # once the key is invalidated.  Every revalidation republishes
-                # the request's trusted revision first, so dropping it here
-                # only bounds memory; it can neither admit nor refuse a view.
-                self._binder.forget(key)
                 if key not in self._key_locks:
                     self._generations.pop(key, None)
         return matching_keys, revision_records_removed
@@ -816,6 +811,3 @@ class RevisionAwareMcpDiscoveryCache:
                     self._key_locks.pop(key, None)
                     if key not in self._revisions:
                         self._generations.pop(key, None)
-                        # Keep the authority projection bounded by exactly the
-                        # same invariant as the generation state it fences.
-                        self._binder.forget(key)

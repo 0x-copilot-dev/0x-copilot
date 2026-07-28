@@ -294,16 +294,6 @@ class McpDescriptorRevisionBinder:
 
         return self._revalidator
 
-    def forget(self, key: McpDiscoveryCacheKey) -> None:
-        """Release whatever this binder held for ``key``.
-
-        Since RB.3 that is nothing: the authority keeps no per-subject
-        projection, so there is no lifetime to manage and no memory to bound.
-        The method survives only because its two call sites live in the shipped
-        Step 7 cache, which this lane may not edit; it is inert, not deferred
-        work, and root can delete it together with those calls.
-        """
-
     async def revalidate(
         self,
         *,

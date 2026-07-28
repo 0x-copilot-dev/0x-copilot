@@ -476,8 +476,6 @@ class TestDescriptorAuthorityFailsClosed(DescriptorBindingFixturesMixin):
         await cache.put(request, self.loaded())
         await cache.invalidate_subject(request.subject, server_name=request.server_name)
 
-        binder.forget(self.key())
-
         result = await authority.current_revision(
             feature=AgentQualityFeature.F8_MCP_CONTROL_PLANE,
             scope=self.scope(),
