@@ -41,7 +41,7 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.constants import Defaults, Keys, Messages
 from agent_runtime.capabilities.mcp.discovery_cache import (
-    McpDiscoveryCache,
+    McpDiscoveryCachePort,
     McpDiscoveryCacheKey,
 )
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
@@ -81,7 +81,7 @@ class McpLoader:
     max_tool_descriptors: int = Defaults.MAX_TOOL_DESCRIPTORS
     max_resource_descriptors: int = Defaults.MAX_RESOURCE_DESCRIPTORS
     max_discovery_pages: int = 100
-    cache: McpDiscoveryCache | None = None
+    cache: McpDiscoveryCachePort | None = None
 
     async def load_server(self, request: McpLoadRequest) -> McpLoadResult:
         """Load a selected MCP server while rechecking permissions and validation.
@@ -125,6 +125,17 @@ class McpLoader:
         if self.cache is None:
             # No-cache path matches pre-cache behaviour exactly.
             return await self._load_uncached(request, resolution)
+        if card.server_id is None:
+            # Revision-aware admission requires the backend-owned source ID.
+            # A display/stable name is not an authority identifier and must
+            # never be substituted into the exact-revision route.
+            return McpLoadResult.fail(
+                McpLoadErrorCode.CONNECTION_FAILED,
+                Messages.Loader.LOAD_FAILED,
+                retryable=True,
+                server_name=card.name,
+                correlation_id=runtime_context.trace_id,
+            )
 
         cache_key = McpDiscoveryCacheKey(
             server_name=card.name,
@@ -142,7 +153,11 @@ class McpLoader:
             captured_result["value"] = result
             return result.loaded_server if result.succeeded else None
 
-        cached_record = await self.cache.get_or_load(cache_key, _load)
+        cached_record = await self.cache.get_or_load_cache_entry(
+            cache_key,
+            source_id=card.server_id,
+            load=_load,
+        )
         if "value" in captured_result:
             live_result = captured_result["value"]
             if live_result.succeeded and cached_record is None:

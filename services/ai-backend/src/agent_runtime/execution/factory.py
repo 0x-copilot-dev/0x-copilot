@@ -478,16 +478,13 @@ def _model_visible_tools(
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
         include_mcp_discovery=True,
     )
-    # The cache is constructed at lifespan startup (API) or worker dependency
-    # wiring (worker) and threaded through via ``RuntimeDependencies``. We
-    # accept ``object | None`` here so test fakes can pass ``None`` without
-    # importing the cache type, but the loader and auth tool require the
-    # concrete ``McpDiscoveryCache`` to opt in.
-    from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+    # The loader consumes the explicit cache port, allowing the revision-aware
+    # decorator to compose here without a concrete-cache ``isinstance`` gate.
+    from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCachePort
 
-    typed_discovery_cache: McpDiscoveryCache | None = (
+    typed_discovery_cache: McpDiscoveryCachePort | None = (
         mcp_discovery_cache
-        if isinstance(mcp_discovery_cache, McpDiscoveryCache)
+        if isinstance(mcp_discovery_cache, McpDiscoveryCachePort)
         else None
     )
     if callable(getattr(mcp_registry, "resolve_server", None)):

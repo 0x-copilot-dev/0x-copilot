@@ -21,9 +21,10 @@ Design invariants:
   callers for the same cold key run ``load()`` exactly once and both
   receive the loaded value.
 
-API + worker run in **separate processes** in production. Each gets its
-own cache; the warm-up cost is per-process. That trade-off is
-deliberate — a shared cache would need a Redis-backed adapter (which
+The execution-owning worker gets one cache per process. In-process-worker
+deployments keep it on API state solely because that process also owns
+execution; API-only processes do not construct one. The warm-up cost remains
+per worker process. A shared cache would need a Redis-backed adapter (which
 this contract supports — see ``McpDiscoveryCache.__doc__``).
 """
 
@@ -35,6 +36,7 @@ from collections import OrderedDict
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from typing import Protocol, runtime_checkable
 
 from pydantic import Field, NonNegativeInt
 
@@ -65,6 +67,32 @@ class McpDiscoveryCacheStats(RuntimeContract):
     expired: NonNegativeInt = 0
     invalidations: NonNegativeInt = 0
     current_size: NonNegativeInt = 0
+
+
+@runtime_checkable
+class McpDiscoveryCachePort(Protocol):
+    """Cache-aside port consumed by ``McpLoader``.
+
+    The loader deliberately depends on this small behavior contract rather
+    than the in-process cache class, so a revision-aware decorator can compose
+    without weakening cache safety through an ``isinstance`` gate.
+    """
+
+    async def get_or_load_cache_entry(
+        self,
+        key: McpDiscoveryCacheKey,
+        *,
+        source_id: str,
+        load: Callable[[], Awaitable[LoadedMcpServer | None]],
+    ) -> LoadedMcpServer | None: ...
+
+    async def invalidate(
+        self,
+        *,
+        server_name: str | None = None,
+        org_id: str | None = None,
+        user_id: str | None = None,
+    ) -> int: ...
 
 
 @dataclass(slots=True)
@@ -217,6 +245,18 @@ class McpDiscoveryCache:
             # Return a fresh defensive copy via the ``get`` path so
             # callers and the cache hold independent objects.
             return await self.get(key)
+
+    async def get_or_load_cache_entry(
+        self,
+        key: McpDiscoveryCacheKey,
+        *,
+        source_id: str,
+        load: Callable[[], Awaitable[LoadedMcpServer | None]],
+    ) -> LoadedMcpServer | None:
+        """Port-named alias preserving the established cache-aside behavior."""
+
+        del source_id
+        return await self.get_or_load(key, load)
 
     async def invalidate(
         self,

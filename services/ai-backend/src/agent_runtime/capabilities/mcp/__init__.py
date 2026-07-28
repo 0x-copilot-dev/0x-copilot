@@ -37,6 +37,7 @@ from agent_runtime.capabilities.mcp.client import (
 )
 from agent_runtime.capabilities.mcp.discovery_cache import (
     McpDiscoveryCache,
+    McpDiscoveryCachePort,
     McpDiscoveryCacheKey,
     McpDiscoveryCacheStats,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "McpConnectionError",
     "McpConnectionMetadata",
     "McpDiscoveryCache",
+    "McpDiscoveryCachePort",
     "McpDescriptorCacheResult",
     "McpDescriptorFreshnessDecision",
     "McpDescriptorFreshnessRequest",
