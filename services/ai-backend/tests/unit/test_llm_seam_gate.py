@@ -38,6 +38,8 @@ def test_canonical_chat_model_consumer_inventory_is_reviewed() -> None:
         "ProposalExtractor._invoke_model -> build_chat_model",
         "runtime_worker/jobs/todo_extractor.py:"
         "TodoExtractor._invoke_model -> build_chat_model",
+        "runtime_worker/model_invocation_composition.py:"
+        "_RouteModelResolver.resolve -> build_chat_model",
     )
 
 
