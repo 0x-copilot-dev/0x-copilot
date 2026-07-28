@@ -29,12 +29,12 @@
     },
     "F1": {
       "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F1-harness-observability-evaluation-promotion.md",
-      "sha256": "6888daa15f85adfc0761089d6e7b9ea099c0fa3d4e9544c49b225c049756cbbb",
+      "sha256": "7ff52c6e17adda7bf399080356b5a9c0f2661a6a0d0847cbb032b32586dc8532",
       "digest_scope": "full_document"
     },
     "F2": {
       "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F2-cache-aware-prompt-assembly.md",
-      "sha256": "4910139aa9c861ccc02a2b30feb8d4ff0bf4b7e168437500d68eb4cdab21769c",
+      "sha256": "1ce966d782bc76be7afed5be4797b255bd79bc9c63e089855c6f1483c12b2ddc",
       "digest_scope": "full_document"
     },
     "F3": {
@@ -44,7 +44,7 @@
     },
     "F4": {
       "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F4-task-aware-tool-use-controller.md",
-      "sha256": "bf61c90099c43c44fd8ecd59354c5d9ed3d49badc4dc95a52122d8f97b41355a",
+      "sha256": "82fe1af2a30a1d65de33019bd867ac700d083639b4a64455bf7e8d5659a07e12",
       "digest_scope": "full_document"
     },
     "F5": {
@@ -74,7 +74,7 @@
     },
     "F10": {
       "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F10-model-invocation-reliability-routing.md",
-      "sha256": "a7f1f8b9530b0c73972f1106b6e27a652af491ff9b44125f741e11e4aa3b22f8",
+      "sha256": "3f02e93be212889e8251238f669f38b955fae1a1cdaa84801b54639ba5dc559e",
       "digest_scope": "full_document"
     },
     "F11": {
@@ -665,6 +665,6 @@
   "integrity": {
     "algorithm": "sha256",
     "canonicalization": "UTF-8 JSON with sorted keys and compact separators; omit integrity.digest",
-    "digest": "e047051a980827c7d0386d4ea746f8ce29b8184c909f219f7bbbc34df8382a9c"
+    "digest": "225e7f4d2bde9db1960c6e03dfbe3a6d2350021d4e30c667f1554f5aa57b9042"
   }
 }

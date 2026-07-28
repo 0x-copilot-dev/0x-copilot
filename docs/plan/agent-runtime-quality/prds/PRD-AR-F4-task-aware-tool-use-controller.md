@@ -1,6 +1,6 @@
 # PRD-AR-F4 — Task-aware tool-use controller
 
-**Status:** proposed\
+**Status:** implemented\
 **Priority:** P1\
 **Owners:** AI Runtime, Applied AI, Product Safety\
 **Depends on:** [A3 operation gateway](../../generative-surfaces-v2-1/prds/PRD-A3-operation-gateway.md),
