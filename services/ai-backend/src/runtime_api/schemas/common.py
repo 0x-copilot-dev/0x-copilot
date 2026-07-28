@@ -343,6 +343,12 @@ class RuntimeApiEventType(StrEnum):
     MODEL_INVOCATION_RECOVERY = "model.invocation.recovery.v1"
     MODEL_INVOCATION_COMPLETED = "model.invocation.completed.v1"
     MODEL_INVOCATION_FAILED = "model.invocation.failed.v1"
+    # F6.2 capability-concurrency batch plans. One strict, body-free record per
+    # event: identities, closed vocabularies, keyed resource-scope digests,
+    # allowances, and reason codes. The plan is durable on this stream BEFORE
+    # any child of the batch is dispatched, so a restart recovers the ordering
+    # by replay rather than by re-deriving it.
+    OPERATION_BATCH_JOURNAL = "operation_batch.journal.v1"
 
     @classmethod
     def from_stream_event_type(
