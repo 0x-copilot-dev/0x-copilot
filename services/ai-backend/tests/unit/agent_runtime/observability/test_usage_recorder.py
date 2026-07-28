@@ -19,7 +19,6 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
-
 from agent_runtime.observability.usage_recorder import (
     InMemoryUsageRecorder,
     NullUsageRecorder,
@@ -33,7 +32,6 @@ from agent_runtime.persistence.records import (
     RuntimeModelCallUsageRecord,
     RuntimeRunUsageRecord,
 )
-
 
 # ---------------------------------------------------------------------------
 # Test doubles
@@ -277,6 +275,24 @@ class TestPostgresUsageRecorderHappyPath:
         assert len(catalog.lookup_calls) == 2
         assert catalog.lookup_calls[0]["at"] == pricing_at
         assert catalog.lookup_calls[1]["at"] == pricing_at
+
+    async def test_provider_reported_journal_cost_is_not_overwritten(self) -> None:
+        persistence = _FakePersistence()
+        catalog = _FakePricingCatalog(pricing=_pricing_record())
+        recorder = PostgresUsageRecorder(
+            persistence=persistence,  # type: ignore[arg-type]
+            pricing_catalog=catalog,  # type: ignore[arg-type]
+        )
+
+        result = await recorder.record_call(
+            _model_call_record(cost_micro_usd=73, pricing_version="journal-price-r7"),
+            pricing_at=_pricing_at(),
+        )
+
+        assert result.cost_micro_usd == 73
+        assert result.pricing_version == "journal-price-r7"
+        assert catalog.lookup_calls == []
+        assert persistence.call_cost_updates == []
 
 
 class TestPostgresUsageRecorderPricingMiss:
