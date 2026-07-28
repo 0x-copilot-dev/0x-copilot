@@ -639,7 +639,8 @@ commits for root to integrate. This step adds no authority: the primitive can
 only narrow, and every existing call-time authorization boundary stays where it
 is.
 
-- [ ] **RB.1 — Primitive and conformance suite.** Define `RevisionBoundRef`
+- [x] **RB.1 — Primitive and conformance suite.** (`14260424`; 45 focused tests
+      — 30 primitive, 15 inherited conformance cases.) Define `RevisionBoundRef`
       (opaque ref, issuing scope, minted-against revision, binding digest) and
       the `revalidate_at_use(ref, runtime_context, policy)` protocol returning a
       closed `current`/`superseded`/`revoked`/`out_of_scope`/`unavailable`
@@ -647,7 +648,13 @@ is.
       equality only. Publish one reusable conformance suite covering scope
       isolation, cross-subject rejection, superseded replay, revocation between
       mint and use, unavailable-authority fail-closed, and idempotent repeated
-      revalidation.
+      revalidation. Three properties are structural rather than documented:
+      `BoundRevision` raises on every ordering operator so freshness can never
+      be inferred from order; `bool()` raises on both the outcome and the
+      decision so `unavailable` cannot read as success; and structural refusals
+      (digest, feature, scope) never reach the authority at all. Adopters supply
+      only a small `RevisionAuthorityPort`; the staleness logic itself exists
+      once.
 - [ ] **RB.2 — F8 adoption and parity proof.** Bind the shipped Step 7
       descriptor-revision check to the primitive, instantiate the conformance
       suite for it, and prove behavioral parity with the merged Step 7 path
@@ -660,12 +667,21 @@ checklist. Implementation lanes use isolated worktrees and return reviewed
 commits for root to integrate. F3 reduces prompt and tool-schema load; it never
 widens authorization. Every inner operation re-enters the Operation Gateway.
 
-- [ ] **F3.1 — Catalog and activation contracts.** Extend the existing compact
+- [x] **F3.1 — Catalog and activation contracts.** (`12a6a000`; 56 focused
+      tests.) Extend the existing compact
       catalog contracts with a generation identity keyed to verified identity,
       connector scope, the F4 policy selection, and the F8 descriptor revision.
       Add the closed activation policy `direct`/`server`/`deferred`/`shadow`
       with a conservative default for unknown values, resolved through the
-      existing `FeatureModeResolver` rather than a second mode vocabulary.
+      existing `FeatureModeResolver` rather than a second mode vocabulary. The
+      resolved feature mode is a hard ceiling (`off`→direct, `shadow`→shadow,
+      `enforce`→deferred) and the decision validator rejects any posture above
+      the ceiling or above the request, so widening is unrepresentable.
+      Activation is deliberately **not** keyed into the catalog generation — a
+      narrowing kill switch must not look like a different catalog and force
+      needless invalidation. `CapabilityCatalogRevision.generation` is optional
+      so the untouched builder still constructs; `bind_ref()` fails closed when
+      it is absent, which is the seam F3.2 threads a generation through.
 - [ ] **F3.2 — Bounded bridge registration.** Register
       `search_capabilities`, `describe_capability`, and `invoke_capability` at
       the runtime factory only in deferred/enabled modes, with bounded schemas
@@ -736,9 +752,16 @@ Scheduling convenience is never treated as safety metadata.
       cancellable reads, bounded-drain active children, and mark uncertain work
       `in_flight`/`indeterminate`. On restart, resume only never-started safe
       reads and never replay a started write. Never invent rollback or success.
-- [ ] **F6.7 — Kill switches.** Add global, per-connector, and per-capability
+- [x] **F6.7 — Kill switches.** Add global, per-connector, and per-capability
       serial kill switches through the existing authority-narrowing kill-switch
-      seam, effective on an active run without restart.
+      seam, effective on an active run without restart (`8e90fde5`; 58 focused
+      tests). Widening is refused at three independent layers: a directive can
+      only name a target, composition is an idempotent `least_authoritative`/
+      `min` fold, and `ConcurrencyKillSwitchDecision` fails validation if the
+      effective allowance exceeds the run snapshot in mode rank or ceiling.
+      Unavailable, unparseable, and unknown-target sources all resolve to
+      serial. Not yet exported or mounted; root wires it as the outermost §8
+      layer at the Step 10 gate.
 - [ ] **F6.8 — Step gate.** Prove missing/unknown metadata is serial; writes,
       effects, approvals, and resource conflicts never overlap improperly;
       independent curated reads improve measured p95; child successes survive
