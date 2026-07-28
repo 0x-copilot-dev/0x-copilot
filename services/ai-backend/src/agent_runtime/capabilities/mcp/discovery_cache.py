@@ -82,7 +82,7 @@ class McpDiscoveryCachePort(Protocol):
         self,
         key: McpDiscoveryCacheKey,
         *,
-        source_id: str,
+        source_id: str | None,
         load: Callable[[], Awaitable[LoadedMcpServer | None]],
     ) -> LoadedMcpServer | None: ...
 
@@ -250,7 +250,7 @@ class McpDiscoveryCache:
         self,
         key: McpDiscoveryCacheKey,
         *,
-        source_id: str,
+        source_id: str | None,
         load: Callable[[], Awaitable[LoadedMcpServer | None]],
     ) -> LoadedMcpServer | None:
         """Port-named alias preserving the established cache-aside behavior."""

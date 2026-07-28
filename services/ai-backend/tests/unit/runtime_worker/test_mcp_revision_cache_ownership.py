@@ -6,6 +6,8 @@ import asyncio
 from contextlib import suppress
 from types import SimpleNamespace
 
+import pytest
+
 from agent_runtime.capabilities.mcp.discovery_cache import (
     McpDiscoveryCache,
     McpDiscoveryCachePort,
@@ -77,6 +79,14 @@ def test_external_worker_root_builds_shared_resolver_when_enabled(
 
     _assert_single_composition(cache, enabled=True)
     assert isinstance(cache._revision_resolver, McpDescriptorRevisionResolver)
+
+
+def test_enabled_external_worker_requires_backend_url(monkeypatch) -> None:
+    monkeypatch.setenv("RUNTIME_ENABLE_F8_MCP_CONTROL_PLANE", "true")
+    monkeypatch.delenv("MCP_BACKEND_REGISTRY_URL", raising=False)
+
+    with pytest.raises(ValueError, match="requires MCP_BACKEND_REGISTRY_URL"):
+        DefaultRuntimeDependenciesFactory.build_default_discovery_cache()
 
 
 async def test_in_process_worker_owns_one_composition(monkeypatch) -> None:

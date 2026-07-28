@@ -154,12 +154,16 @@ class RevisionAwareMcpDiscoveryCache:
         *,
         max_staleness_seconds: float,
         revision_resolver: McpDescriptorRevisionResolverPort | None = None,
-        revision_checks_enabled: bool = True,
+        revision_checks_enabled: bool = False,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if max_staleness_seconds <= 0:
             msg = "max_staleness_seconds must be positive"
             raise ValueError(msg)
+        if revision_checks_enabled and revision_resolver is None:
+            raise ValueError(
+                "revision_resolver is required when revision checks are enabled"
+            )
         self._cache = cache
         self._revision_resolver = revision_resolver
         self._revision_checks_enabled = revision_checks_enabled
@@ -218,7 +222,7 @@ class RevisionAwareMcpDiscoveryCache:
         self,
         key: McpDiscoveryCacheKey,
         *,
-        source_id: str,
+        source_id: str | None,
         load: Callable[[], Awaitable[LoadedMcpServer | None]],
     ) -> LoadedMcpServer | None:
         """Resolve one trusted revision and compose it over the base cache.
@@ -239,7 +243,7 @@ class RevisionAwareMcpDiscoveryCache:
 
         async with self._lock_for(key):
             resolver = self._revision_resolver
-            if resolver is not None:
+            if resolver is not None and source_id is not None:
                 await resolver.register(
                     org_id=key.org_id,
                     user_id=key.user_id,
@@ -298,7 +302,16 @@ class RevisionAwareMcpDiscoveryCache:
         )
         resolver = self._revision_resolver
         if resolver is not None:
-            for key in matching_keys:
+            resolver_keys = list(matching_keys)
+            if server_name is not None and org_id is not None and user_id is not None:
+                explicit_key = McpDiscoveryCacheKey(
+                    server_name=server_name,
+                    org_id=org_id,
+                    user_id=user_id,
+                )
+                if explicit_key not in resolver_keys:
+                    resolver_keys.append(explicit_key)
+            for key in resolver_keys:
                 await resolver.invalidate(
                     org_id=key.org_id,
                     user_id=key.user_id,

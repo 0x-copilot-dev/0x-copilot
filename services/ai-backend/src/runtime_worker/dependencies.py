@@ -291,6 +291,10 @@ class DefaultRuntimeDependenciesFactory:
             if settings is not None
             else os.environ.get("MCP_BACKEND_REGISTRY_URL", "").strip() or None
         )
+        if revision_checks_enabled and backend_url is None:
+            raise ValueError(
+                "RUNTIME_ENABLE_F8_MCP_CONTROL_PLANE requires MCP_BACKEND_REGISTRY_URL"
+            )
         resolver = (
             McpDescriptorRevisionResolver(
                 BackendMcpRevisionClient(backend_url=backend_url),
@@ -301,7 +305,7 @@ class DefaultRuntimeDependenciesFactory:
                     "RUNTIME_MCP_REVISION_CACHE_MAX_ENTRIES", 1000
                 ),
             )
-            if revision_checks_enabled and backend_url is not None
+            if revision_checks_enabled
             else None
         )
         return RevisionAwareMcpDiscoveryCache(

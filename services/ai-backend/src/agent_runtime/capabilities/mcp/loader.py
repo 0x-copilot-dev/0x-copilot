@@ -125,17 +125,6 @@ class McpLoader:
         if self.cache is None:
             # No-cache path matches pre-cache behaviour exactly.
             return await self._load_uncached(request, resolution)
-        if card.server_id is None:
-            # Revision-aware admission requires the backend-owned source ID.
-            # A display/stable name is not an authority identifier and must
-            # never be substituted into the exact-revision route.
-            return McpLoadResult.fail(
-                McpLoadErrorCode.CONNECTION_FAILED,
-                Messages.Loader.LOAD_FAILED,
-                retryable=True,
-                server_name=card.name,
-                correlation_id=runtime_context.trace_id,
-            )
 
         cache_key = McpDiscoveryCacheKey(
             server_name=card.name,

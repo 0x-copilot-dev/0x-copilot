@@ -23,6 +23,7 @@ from agent_runtime.capabilities.mcp import (
     McpLoader,
     McpResourceDiscoveryPage,
     McpToolDiscoveryPage,
+    RevisionAwareMcpDiscoveryCache,
 )
 
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
@@ -266,7 +267,7 @@ class TestLoaderCacheIntegration(LoaderCacheMixin):
 
         asyncio.run(run())
 
-    def test_cache_fails_closed_without_backend_source_id(self) -> None:
+    def test_feature_off_cache_preserves_cards_without_backend_source_id(self) -> None:
         async def run() -> None:
             client = self.FakeMcpClient(
                 tools=(self.make_tool(),),
@@ -278,7 +279,11 @@ class TestLoaderCacheIntegration(LoaderCacheMixin):
             )
             loader = McpLoader(
                 DynamicMcpRegistry(providers=(provider,)),
-                cache=McpDiscoveryCache(),
+                cache=RevisionAwareMcpDiscoveryCache(
+                    McpDiscoveryCache(),
+                    max_staleness_seconds=60,
+                    revision_checks_enabled=False,
+                ),
             )
             request = McpLoadRequest(
                 server_name=self.TestValues.Names.DRIVE_MCP,
@@ -293,11 +298,12 @@ class TestLoaderCacheIntegration(LoaderCacheMixin):
                 ),
             )
 
-            result = await loader.load_server(request)
+            first = await loader.load_server(request)
+            second = await loader.load_server(request)
 
-            assert result.error is not None
-            assert result.error.code is McpLoadErrorCode.CONNECTION_FAILED
-            assert provider.created_clients == []
+            assert first.succeeded
+            assert second.succeeded
+            assert provider.created_clients == [self.TestValues.Names.DRIVE_MCP]
 
         asyncio.run(run())
 

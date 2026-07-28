@@ -156,6 +156,15 @@ def _cache(
     )
 
 
+def test_enabled_constructor_requires_revision_resolver() -> None:
+    with pytest.raises(ValueError, match="revision_resolver is required"):
+        RevisionAwareMcpDiscoveryCache(
+            McpDiscoveryCache(),
+            max_staleness_seconds=60,
+            revision_checks_enabled=True,
+        )
+
+
 @pytest.mark.asyncio
 async def test_cold_warm_and_single_flight_use_trusted_source_mapping() -> None:
     resolver = _Resolver()
@@ -312,6 +321,43 @@ async def test_invalidation_racing_load_neither_publishes_nor_returns() -> None:
 
     assert await pending is None
     assert await base.get(key) is None
+    assert resolver.invalidations == [("org-a", "user-a", "drive")]
+
+
+@pytest.mark.asyncio
+async def test_enabled_missing_source_id_loads_live_without_admission() -> None:
+    resolver = _Resolver()
+    key = _key()
+    cache, base = _cache(resolver)
+    calls = 0
+
+    async def load() -> LoadedMcpServer:
+        nonlocal calls
+        calls += 1
+        return _loaded(f"live-{calls}")
+
+    first = await cache.get_or_load_cache_entry(key, source_id=None, load=load)
+    second = await cache.get_or_load_cache_entry(key, source_id=None, load=load)
+
+    assert first is not None and first.tools[0].name == "live-1"
+    assert second is not None and second.tools[0].name == "live-2"
+    assert await base.get(key) is None
+    assert resolver.registrations == []
+
+
+@pytest.mark.asyncio
+async def test_exact_invalidate_reaches_resolver_without_wrapper_metadata() -> None:
+    resolver = _Resolver()
+    key = _key()
+    cache, _base = _cache(resolver)
+
+    removed = await cache.invalidate(
+        server_name=key.server_name,
+        org_id=key.org_id,
+        user_id=key.user_id,
+    )
+
+    assert removed == 0
     assert resolver.invalidations == [("org-a", "user-a", "drive")]
 
 
