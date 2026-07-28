@@ -655,10 +655,51 @@ is.
       (digest, feature, scope) never reach the authority at all. Adopters supply
       only a small `RevisionAuthorityPort`; the staleness logic itself exists
       once.
-- [ ] **RB.2 — F8 adoption and parity proof.** Bind the shipped Step 7
+- [x] **RB.2 — F8 adoption and parity proof.** (`ee345d5e`; 38 focused tests —
+      15 inherited conformance cases run against the production authority and
+      binder, not a double.) Bind the shipped Step 7
       descriptor-revision check to the primitive, instantiate the conformance
       suite for it, and prove behavioral parity with the merged Step 7 path
       including the generation barrier. No F8 behavior may change.
+      **Parity proof: 74 pre-existing F8 tests pass unmodified**, 17 of them
+      directly over the substituted path, with zero assertions changed. The
+      subject fingerprint is a canonical-JSON SHA-256 over a fixed closed key
+      set, so the classic `"acme:sales"+"u1"` vs `"acme"+"sales:u1"` delimiter
+      collision is structurally impossible; a `kind` label adds domain
+      separation so an F8 fingerprint can never equal an F3/F5/F9/F11 one over a
+      same-shaped tuple.
+
+      **Adoption findings — Steps 9, 12, and 13 must read these before binding.**
+      The lane's most valuable output is where the shared primitive could *not*
+      express F8, because the remaining adopters will hit the same limits:
+
+      1. **No vocabulary for bounded local staleness** — no outcome means "the
+         binding is current but the material is too old to reuse". F8 keeps
+         `MAX_STALENESS_EXCEEDED` local. **F5 (Step 9) will hit this.**
+      2. **No vocabulary for "binding current, material gone"** — `VALUE_EVICTED`
+         also stays local. Same likely impact on F5.
+      3. **A pure generation barrier still requires a revision.** Fencing a live
+         load that has no trusted revision would mean fabricating one, which the
+         primitive rightly forbids, so that one barrier stays local. **F9 and
+         F11 will hit this wherever material is fenced but not revisioned.**
+      4. **`RevisionUseContext.run_id` is mandatory even for adopters that have
+         no run** — F8's descriptor cache is process-wide and subject-scoped, so
+         it passes an inert documented sentinel. `run_id` should be optional in
+         the context, matching the scope. Contract defect; see RB.3.
+      5. **`RevisionAuthorityPort.current_revision` receives only
+         `(feature, scope)`, and the subject fingerprint is one-way**, so an
+         authority that must call a backend keyed by the original identity
+         cannot recover it. Every adopter is therefore forced into a scope-keyed
+         registry populated at mint time, and inherits its lifetime management.
+         **Every remaining adopter hits this.** Contract defect; see RB.3.
+      6. `RevalidationOutcome` does not map onto an adopter's existing state
+         enum, so each needs a total reason→state projection the suite does not
+         cover. Unavoidable per-adopter work, not a defect.
+
+      Also flagged, deliberately not changed: the shipped post-I/O check is a
+      conjunction whose two halves are mutually redundant in every reachable
+      state. That was equally true before this lane; parity was preserved rather
+      than silently simplified, so root can collapse it as a deliberate change.
 
 ### In progress — Step 8 policy-aware capability discovery
 
@@ -687,11 +728,30 @@ widens authorization. Every inner operation re-enters the Operation Gateway.
       the runtime factory only in deferred/enabled modes, with bounded schemas
       and a bridge-recursion guard so a bridge tool can never resolve to another
       bridge tool.
-- [ ] **F3.3 — Search and bounded expansion.** Rank authorized compact cards in
+- [x] **F3.3 — Search and bounded expansion.** (`cfafbe3b`; 34 focused tests.)
+      Rank authorized compact cards in
       `O(NQ + R log K)` and expand at most the configured top-K server cards
       through the existing `McpLoader` and F8 cache. Coalesce safe independent
       descriptor loads, respect one total discovery deadline, and guarantee that
-      partial failure narrows rather than widens the result.
+      partial failure narrows rather than widens the result. The bound is proven
+      structurally, not by timing: a bounded-heap selector is asserted equal to
+      a full sort's prefix over 200 candidates with deliberate score collisions,
+      and peak retention is asserted exactly `K` after 1,000 offers. Widening is
+      unrepresentable — a result validator refuses any capability whose owner is
+      not an `EXPANDED` outcome, so a stalling or failing server can only
+      shrink the set. The deadline is injected and asserted granted **once** for
+      the whole expansion (a per-server implementation would record `K` timers),
+      and coalescing was verified with a negative control: the same scenario
+      without the cache issues two loads, with it exactly one. Invalid or
+      missing configuration resolves to the conservative default rather than the
+      ceiling, so a typo cannot raise fan-out.
+
+      Deliberate conservative choice worth ratifying: an expanded MCP tool's
+      effect class is always `UNKNOWN`. A server's own `readOnlyHint` is
+      untrusted, so server-supplied risk signals are honored only when they
+      *escalate* the approval cue — never when they would present a capability
+      as safer than an unclassified one.
+
 - [ ] **F3.4 — Opaque refs and describe.** Mint refs scoped to
       run/subject/catalog generation through the Step RB primitive. `describe`
       returns a bounded schema or a protected schema-artifact ref, never an
