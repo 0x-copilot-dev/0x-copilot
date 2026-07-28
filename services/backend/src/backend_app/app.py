@@ -1263,7 +1263,7 @@ def create_app(
         identity = BackendServiceAuthenticator.internal_scoped_identity(
             request, org_id=org_id, user_id=user_id
         )
-        revision = _AppServices.mcp(app).revision_authority.get_current(
+        revision = _AppServices.mcp(app).get_descriptor_revision(
             org_id=identity.org_id, user_id=identity.user_id, server_id=server_id
         )
         if revision is None:
@@ -1288,7 +1288,7 @@ def create_app(
             request, org_id=org_id, user_id=user_id
         )
         try:
-            return _AppServices.mcp(app).revision_authority.feed(
+            return _AppServices.mcp(app).feed_descriptor_revisions(
                 org_id=identity.org_id,
                 user_id=identity.user_id,
                 after_cursor=after_cursor,
