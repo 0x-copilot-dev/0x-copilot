@@ -110,11 +110,10 @@ def test_in_memory_idempotency_records_are_bounded() -> None:
 
 
 def test_postgres_adapter_lock_prune_and_migration_grants_are_present() -> None:
-    store_source = Path(
-        "services/backend/src/backend_app/mcp_revision_store.py"
-    ).read_text()
-    migration = Path(
-        "services/backend/migrations/0050_mcp_descriptor_revisions.sql"
+    backend_root = Path(__file__).resolve().parents[1]
+    store_source = (backend_root / "src/backend_app/mcp_revision_store.py").read_text()
+    migration = (
+        backend_root / "migrations/0050_mcp_descriptor_revisions.sql"
     ).read_text()
     assert "pg_advisory_xact_lock" in store_source
     assert store_source.count("self._take_scope_lock(") >= 2
