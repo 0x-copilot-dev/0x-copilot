@@ -435,9 +435,21 @@ async def _lifespan(application: FastAPI):
         connector_bus.bind_loop(asyncio.get_running_loop())
     mcp_service = getattr(application.state, "mcp_service", None)
     maintenance_task: asyncio.Task[None] | None = None
+    shutdown_timeout = 5.0
     if mcp_service is not None:
-        interval = float(os.environ.get("MCP_SESSION_POOL_MAINTENANCE_SECONDS", "30"))
-        interval = min(max(interval, 1.0), 300.0)
+        try:
+            interval = float(
+                os.environ.get("MCP_SESSION_POOL_MAINTENANCE_SECONDS", "30")
+            )
+            shutdown_timeout = float(
+                os.environ.get("MCP_SESSION_POOL_SHUTDOWN_SECONDS", "5")
+            )
+        except ValueError as exc:
+            raise RuntimeError(
+                "MCP session-pool lifecycle values must be numeric"
+            ) from exc
+        if not 1.0 <= interval <= 300.0 or not 0.0 <= shutdown_timeout <= 30.0:
+            raise RuntimeError("MCP session-pool lifecycle values are out of bounds")
 
         async def maintain_pool() -> None:
             while True:
@@ -453,7 +465,9 @@ async def _lifespan(application: FastAPI):
             maintenance_task.cancel()
             with suppress(asyncio.CancelledError):
                 await maintenance_task
-            await asyncio.to_thread(mcp_service.shutdown_session_pool)
+            await asyncio.to_thread(
+                mcp_service.shutdown_session_pool, timeout_seconds=shutdown_timeout
+            )
         if connector_bus is not None:
             connector_bus.unbind_loop()
         if sweeper is not None:
@@ -1403,6 +1417,8 @@ def create_app(
                 user_id=identity.user_id,
                 server_id=server_id,
             )
+        except ConnectorAccessDenied as exc:
+            raise HTTPException(status.HTTP_403_FORBIDDEN, exc.reason) from exc
         except ValueError as exc:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
 

@@ -5,8 +5,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import logging
 import os
 import threading
+from collections import Counter, OrderedDict
+from dataclasses import dataclass, field
 
 import yaml
 from typing import Any, Callable, Protocol
@@ -95,6 +98,29 @@ from backend_app.token_vault import TokenVault, TokenVaultFactory
 _SUGGESTIONS_OFF = "off"
 _SUGGESTIONS_ALWAYS = "always"
 _BACKEND_COMPATIBILITY_PARTITION = "backend-registry-compat-v1"
+_logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _LeaseOwner:
+    org_id: str
+    user_id: str
+    server_id: str
+    scope: VerifiedMcpSessionScopeKey
+
+
+@dataclass(slots=True)
+class _DescriptorCycle:
+    expected_cursor: str | None = None
+    complete: bool = False
+    count: int = 0
+    digest: object = field(default_factory=hashlib.sha256)
+
+
+@dataclass(slots=True)
+class _DescriptorObservation:
+    tools: _DescriptorCycle = field(default_factory=_DescriptorCycle)
+    resources: _DescriptorCycle = field(default_factory=_DescriptorCycle)
 
 
 def _is_unique_violation(ex: Exception) -> bool:
@@ -260,10 +286,16 @@ class McpRegistryService:
             factory=self._transport_factory,
             config=self._session_pool_config_from_environment(),
         )
-        self._session_scopes: dict[
+        self._session_scopes: OrderedDict[
             tuple[str, str, str], set[VerifiedMcpSessionScopeKey]
-        ] = {}
+        ] = OrderedDict()
         self._session_scopes_lock = threading.RLock()
+        self._lease_owners: OrderedDict[str, _LeaseOwner] = OrderedDict()
+        self._lease_owners_lock = threading.RLock()
+        self._descriptor_observations: OrderedDict[str, _DescriptorObservation] = (
+            OrderedDict()
+        )
+        self._pool_metrics: Counter[str] = Counter()
         # Post-commit observer invoked with the updated record after
         # ``complete_auth`` lands. Wired at app composition time to the
         # connectors destination's write-through (PR-E.3 Decision D1) so
@@ -847,6 +879,15 @@ class McpRegistryService:
         except Exception:  # pragma: no cover - defensive; never fail closed here
             return None
 
+    def _require_live_server(self, record: McpServerRecord) -> None:
+        if not record.enabled or record.health is not McpServerHealth.HEALTHY:
+            raise ValueError("MCP server is unavailable")
+        if (
+            record.auth_mode != McpAuthMode.NONE
+            and self._effective_auth_state(record) != McpAuthState.AUTHENTICATED
+        ):
+            raise ValueError("MCP server is not authenticated")
+
     def create_internal_client_session(
         self,
         *,
@@ -859,6 +900,7 @@ class McpRegistryService:
         )
         if self._resolve_access_mode(record) == ConnectorAccessMode.OFF:
             raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
+        self._require_live_server(record)
         token = (
             self._require_valid_token(record)
             if record.auth_mode != McpAuthMode.NONE
@@ -870,12 +912,13 @@ class McpRegistryService:
             acquired.outcome is not McpSessionPoolOutcome.ACQUIRED
             or acquired.lease is None
         ):
-            self._transport_factory.unbind(scope)
+            self._pool_metrics[acquired.outcome.value] += 1
             raise ValueError(f"MCP session pool {acquired.outcome.value}")
         self._remember_session_scope(record, scope)
-        return InternalMcpClientSession(
-            lease=self.session_pool.export_lease_token(acquired.lease)
-        )
+        lease_token = self.session_pool.export_lease_token(acquired.lease)
+        self._remember_lease(lease_token, record, scope)
+        self._pool_metrics["acquired"] += 1
+        return InternalMcpClientSession(lease=lease_token)
 
     def proxy_internal_rpc(
         self,
@@ -895,12 +938,23 @@ class McpRegistryService:
         method = request.payload.get("method")
         if access_mode == ConnectorAccessMode.OFF:
             raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
+        self._require_live_server(record)
+        owner = self._require_lease_owner(
+            request.lease, org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        current_token = self.store.get_token(server_id=server_id)
+        if self._scope_for(record, current_token) != owner.scope:
+            self._retire_lease(request.lease, owner, cancel=True)
+            raise ValueError("MCP session lease is stale")
         token = (
             self._require_valid_token(record)
             if record.auth_mode != McpAuthMode.NONE
             else None
         )
         scope = self._bind_session_scope(record, token)
+        if scope != owner.scope:
+            self._retire_lease(request.lease, owner, cancel=True)
+            raise ValueError("MCP session lease is stale")
         try:
             lease = self.session_pool.import_lease_token(request.lease)
         except ValueError as exc:
@@ -922,7 +976,15 @@ class McpRegistryService:
                 ),
             )
         except McpSessionPoolRejected as exc:
+            self._forget_lease(request.lease)
             raise ValueError("MCP session lease is stale") from exc
+        self._observe_proxied_descriptor_page(
+            lease_token=request.lease,
+            owner=owner,
+            request_payload=request.payload,
+            response=payload,
+            credential_subject=(token.connection_id if token is not None else None),
+        )
         return InternalMcpRpcResponse(payload=payload)
 
     def release_internal_client_session(
@@ -934,20 +996,19 @@ class McpRegistryService:
         lease_token: str,
         cancel: bool,
     ) -> InternalMcpSessionReleaseResponse:
-        record = self._require_server_for_user(
-            org_id=org_id, user_id=user_id, server_id=server_id
+        owner = self._require_lease_owner(
+            lease_token, org_id=org_id, user_id=user_id, server_id=server_id
         )
-        token = self.store.get_token(server_id=server_id)
-        scope = self._bind_session_scope(record, token)
         try:
             lease = self.session_pool.import_lease_token(lease_token)
         except ValueError as exc:
             raise ValueError("MCP session lease is invalid") from exc
         outcome = (
-            self.session_pool.cancel(lease, scope=scope)
+            self.session_pool.cancel(lease, scope=owner.scope)
             if cancel
-            else self.session_pool.release(lease, scope=scope)
+            else self.session_pool.release(lease, scope=owner.scope)
         )
+        self._forget_lease(lease_token)
         return InternalMcpSessionReleaseResponse(outcome=outcome.value)
 
     @staticmethod
@@ -1024,6 +1085,21 @@ class McpRegistryService:
     ) -> VerifiedMcpSessionScopeKey:
         """Bind a verified registry row to an opaque pool compatibility key."""
 
+        scope = self._scope_for(record, token)
+        self._transport_factory.bind(
+            scope=scope,
+            endpoint=record.url,
+            encrypted_access_token=(
+                token.encrypted_access_token if token is not None else None
+            ),
+        )
+        return scope
+
+    @staticmethod
+    def _scope_for(
+        record: McpServerRecord, token: TokenEnvelope | None
+    ) -> VerifiedMcpSessionScopeKey:
+
         credential_reference = (
             token.connection_id
             if token is not None
@@ -1037,7 +1113,7 @@ class McpRegistryService:
         transport_revision = hashlib.sha256(
             f"{record.transport.value}\x1f{record.url}\x1f{record.updated_at.isoformat()}".encode()
         ).hexdigest()
-        scope = VerifiedMcpSessionScopeKey.from_verified_credential_reference(
+        return VerifiedMcpSessionScopeKey.from_verified_credential_reference(
             org_id=record.org_id,
             # This service has no user-selectable MCP profile. The explicit
             # compatibility partition prevents accidental reuse if one is
@@ -1050,14 +1126,57 @@ class McpRegistryService:
             transport_revision=transport_revision,
             session_scope="internal-rpc",
         )
-        self._transport_factory.bind(
-            scope=scope,
-            endpoint=record.url,
-            encrypted_access_token=(
-                token.encrypted_access_token if token is not None else None
-            ),
-        )
-        return scope
+
+    def _remember_lease(
+        self,
+        lease_token: str,
+        record: McpServerRecord,
+        scope: VerifiedMcpSessionScopeKey,
+    ) -> None:
+        with self._lease_owners_lock:
+            self._lease_owners[lease_token] = _LeaseOwner(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                scope=scope,
+            )
+            self._lease_owners.move_to_end(lease_token)
+            while len(self._lease_owners) > 512:
+                stale_token, stale_owner = self._lease_owners.popitem(last=False)
+                self._retire_lease(stale_token, stale_owner, cancel=True)
+
+    def _require_lease_owner(
+        self, lease_token: str, *, org_id: str, user_id: str, server_id: str
+    ) -> _LeaseOwner:
+        with self._lease_owners_lock:
+            owner = self._lease_owners.get(lease_token)
+            if owner is None:
+                raise ValueError("MCP session lease is stale")
+            if (owner.org_id, owner.user_id, owner.server_id) != (
+                org_id,
+                user_id,
+                server_id,
+            ):
+                raise ValueError("MCP session lease is stale")
+            self._lease_owners.move_to_end(lease_token)
+            return owner
+
+    def _forget_lease(self, lease_token: str) -> None:
+        with self._lease_owners_lock:
+            self._lease_owners.pop(lease_token, None)
+            self._descriptor_observations.pop(lease_token, None)
+
+    def _retire_lease(
+        self, lease_token: str, owner: _LeaseOwner, *, cancel: bool
+    ) -> None:
+        try:
+            lease = self.session_pool.import_lease_token(lease_token)
+            if cancel:
+                self.session_pool.cancel(lease, scope=owner.scope)
+            else:
+                self.session_pool.release(lease, scope=owner.scope)
+        finally:
+            self._forget_lease(lease_token)
 
     def _remember_session_scope(
         self, record: McpServerRecord, scope: VerifiedMcpSessionScopeKey
@@ -1076,6 +1195,15 @@ class McpRegistryService:
     ) -> int:
         """Retire all remembered leases for a registry mutation atomically enough."""
 
+        with self._lease_owners_lock:
+            owners = [
+                (lease_token, owner)
+                for lease_token, owner in self._lease_owners.items()
+                if (owner.org_id, owner.user_id, owner.server_id)
+                == (org_id, user_id, server_id)
+            ]
+        for lease_token, owner in owners:
+            self._retire_lease(lease_token, owner, cancel=True)
         with self._session_scopes_lock:
             scopes = self._session_scopes.pop((org_id, user_id, server_id), set())
         invalidated = 0
@@ -1087,11 +1215,190 @@ class McpRegistryService:
     def maintain_session_pool(self) -> None:
         """One lifecycle-owned maintenance tick; never starts its own thread."""
 
-        self.session_pool.keepalive_idle(limit=1)
-        self.session_pool.reap_expired()
+        try:
+            outcome = self.session_pool.keepalive_idle(limit=1)
+            self._pool_metrics[f"keepalive_{outcome.value}"] += 1
+            self._pool_metrics["reaped"] += self.session_pool.reap_expired()
+        except Exception:
+            self._pool_metrics["maintenance_failed"] += 1
+            _logger.warning("mcp_session_pool_maintenance_failed", exc_info=True)
 
-    def shutdown_session_pool(self, *, timeout_seconds: float = 0) -> bool:
-        return self.session_pool.shutdown(timeout_seconds=timeout_seconds)
+    def shutdown_session_pool(self, *, timeout_seconds: float = 5) -> bool:
+        drained = self.session_pool.shutdown(timeout_seconds=timeout_seconds)
+        if not drained:
+            with self._lease_owners_lock:
+                owners = tuple(self._lease_owners.items())
+            for lease_token, owner in owners:
+                self._retire_lease(lease_token, owner, cancel=True)
+            self.session_pool.shutdown(timeout_seconds=0)
+        return drained
+
+    def session_pool_diagnostics(self) -> dict[str, int | bool]:
+        diagnostics = self.session_pool.diagnostics()
+        return {
+            "total_sessions": diagnostics.total_sessions,
+            "active_leases": diagnostics.active_leases,
+            "idle_sessions": diagnostics.idle_sessions,
+            "maintenance_sessions": diagnostics.maintenance_sessions,
+            "opening_sessions": diagnostics.opening_sessions,
+            "invalidated_sessions": diagnostics.invalidated_sessions,
+            "draining": diagnostics.draining,
+            **dict(self._pool_metrics),
+        }
+
+    def _observe_proxied_descriptor_page(
+        self,
+        *,
+        lease_token: str,
+        owner: _LeaseOwner,
+        request_payload: dict[str, object],
+        response: dict[str, object],
+        credential_subject: str | None,
+    ) -> None:
+        method = request_payload.get("method")
+        if method not in {"tools/list", "resources/list"}:
+            return
+        collection = "tools" if method == "tools/list" else "resources"
+        params = request_payload.get("params")
+        cursor = params.get("cursor") if isinstance(params, dict) else None
+        if cursor is not None and not isinstance(cursor, str):
+            self._forget_lease_observation(lease_token)
+            return
+        if "error" in response:
+            error = response.get("error")
+            if (
+                collection == "resources"
+                and isinstance(error, dict)
+                and error.get("code") == -32601
+                and cursor is None
+            ):
+                self._complete_empty_resources(
+                    lease_token,
+                    owner=owner,
+                    credential_subject=credential_subject,
+                )
+            else:
+                self._forget_lease_observation(lease_token)
+            return
+        result = response.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get(collection), list):
+            self._forget_lease_observation(lease_token)
+            return
+        with self._lease_owners_lock:
+            observation = self._descriptor_observations.setdefault(
+                lease_token, _DescriptorObservation()
+            )
+            self._descriptor_observations.move_to_end(lease_token)
+            while len(self._descriptor_observations) > 512:
+                self._descriptor_observations.popitem(last=False)
+            cycle = (
+                observation.tools if collection == "tools" else observation.resources
+            )
+            if cursor is None:
+                cycle.expected_cursor = None
+                cycle.complete = False
+                cycle.count = 0
+                cycle.digest = hashlib.sha256()
+            elif cycle.complete or cycle.expected_cursor != cursor:
+                self._descriptor_observations.pop(lease_token, None)
+                return
+            for descriptor in result[collection]:
+                if not isinstance(descriptor, dict):
+                    self._descriptor_observations.pop(lease_token, None)
+                    return
+                safe = {
+                    key: descriptor[key]
+                    for key in (
+                        "name",
+                        "title",
+                        "description",
+                        "uri",
+                        "mimeType",
+                        "inputSchema",
+                        "annotations",
+                    )
+                    if key in descriptor
+                }
+                cycle.digest.update(
+                    json.dumps(
+                        safe, sort_keys=True, separators=(",", ":"), default=str
+                    ).encode()
+                )
+                cycle.digest.update(b"\n")
+                cycle.count += 1
+            next_cursor = result.get("nextCursor")
+            if next_cursor is None:
+                cycle.complete = True
+                cycle.expected_cursor = None
+            elif isinstance(next_cursor, str) and next_cursor:
+                cycle.expected_cursor = next_cursor
+            else:
+                self._descriptor_observations.pop(lease_token, None)
+                return
+            if not (observation.tools.complete and observation.resources.complete):
+                return
+            digest = hashlib.sha256(
+                observation.tools.digest.digest()
+                + observation.resources.digest.digest()
+            ).hexdigest()
+            self._descriptor_observations.pop(lease_token, None)
+        existing = self.revision_authority.get_current(
+            org_id=owner.org_id, user_id=owner.user_id, server_id=owner.server_id
+        )
+        if existing is None or existing.descriptor_digest != digest:
+            self.revision_authority.publish_complete_descriptor_view(
+                org_id=owner.org_id,
+                user_id=owner.user_id,
+                server_id=owner.server_id,
+                descriptor_digest=digest,
+                tool_count=observation.tools.count,
+                resource_count=observation.resources.count,
+                source="pooled_mcp_pagination",
+                idempotency_key=f"pooled:{owner.scope.fingerprint}:{digest}",
+                credential_subject=credential_subject,
+            )
+
+    def _complete_empty_resources(
+        self,
+        lease_token: str,
+        *,
+        owner: _LeaseOwner,
+        credential_subject: str | None,
+    ) -> None:
+        with self._lease_owners_lock:
+            observation = self._descriptor_observations.setdefault(
+                lease_token, _DescriptorObservation()
+            )
+            observation.resources.complete = True
+            observation.resources.count = 0
+            observation.resources.digest = hashlib.sha256()
+            if not observation.tools.complete:
+                return
+            digest = hashlib.sha256(
+                observation.tools.digest.digest()
+                + observation.resources.digest.digest()
+            ).hexdigest()
+            tool_count = observation.tools.count
+            self._descriptor_observations.pop(lease_token, None)
+        existing = self.revision_authority.get_current(
+            org_id=owner.org_id, user_id=owner.user_id, server_id=owner.server_id
+        )
+        if existing is None or existing.descriptor_digest != digest:
+            self.revision_authority.publish_complete_descriptor_view(
+                org_id=owner.org_id,
+                user_id=owner.user_id,
+                server_id=owner.server_id,
+                descriptor_digest=digest,
+                tool_count=tool_count,
+                resource_count=0,
+                source="pooled_mcp_pagination",
+                idempotency_key=f"pooled:{owner.scope.fingerprint}:{digest}",
+                credential_subject=credential_subject,
+            )
+
+    def _forget_lease_observation(self, lease_token: str) -> None:
+        with self._lease_owners_lock:
+            self._descriptor_observations.pop(lease_token, None)
 
     def observe_complete_descriptor_view(
         self,
@@ -1108,6 +1415,10 @@ class McpRegistryService:
         time.  An exception, malformed page, cursor cycle, or stale lease
         exits before publication, so it cannot overwrite a prior good view.
         """
+
+        raise RuntimeError(
+            "Descriptor observation is driven by the proxied pagination stream"
+        )
 
         if not 1 <= max_pages <= 1_000:
             raise ValueError("MCP descriptor max_pages must be between 1 and 1000")

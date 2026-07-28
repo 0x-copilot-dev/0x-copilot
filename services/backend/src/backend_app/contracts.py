@@ -871,13 +871,13 @@ class InternalMcpAuthRequest(BackendContract):
 class InternalMcpClientSession(BackendContract):
     """Opaque backend lease; no transport, endpoint, or credential facts."""
 
-    lease: str
+    lease: str = Field(min_length=16, max_length=512)
 
 
 class InternalMcpRpcRequest(BackendContract):
     org_id: str
     user_id: str
-    lease: str
+    lease: str = Field(min_length=16, max_length=512)
     payload: dict[str, Any]
 
     @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
@@ -896,7 +896,7 @@ class InternalMcpRpcRequest(BackendContract):
 class InternalMcpSessionReleaseRequest(BackendContract):
     org_id: str
     user_id: str
-    lease: str
+    lease: str = Field(min_length=16, max_length=512)
     cancel: bool = False
 
     @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
