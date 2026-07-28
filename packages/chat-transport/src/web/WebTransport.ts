@@ -109,6 +109,9 @@ export class WebTransport implements ArtifactCapableTransport {
     if (request.expectedDigest !== undefined) {
       form.append("expected_digest", request.expectedDigest);
     }
+    if (request.actingRunId !== undefined) {
+      form.append("acting_run_id", request.actingRunId);
+    }
     form.append(
       "content",
       // Copy into an ArrayBuffer so TS cannot treat a caller-owned

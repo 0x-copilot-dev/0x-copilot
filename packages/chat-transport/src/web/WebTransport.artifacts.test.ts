@@ -73,4 +73,45 @@ describe("WebTransport artifact bytes", () => {
     expect(body.get("expected_digest")).toBe("a".repeat(64));
     expect(body.get("content")).toBeInstanceOf(File);
   });
+
+  it.each([
+    ["run-42", "run-42"],
+    [undefined, null],
+  ])(
+    "forwards actingRunId=%s as the acting_run_id field",
+    async (actingRunId, expected) => {
+      // PRD-02 Flow B. Once a canvas outlives a turn, the artifact being edited
+      // can belong to an earlier, already-sealed run. Omitting this makes the
+      // server attribute the revision to that creating run, where the seal
+      // rejects the ledger event — the revision commits but the open tab never
+      // learns it changed, and the next edit hits an unclearable CAS conflict.
+      //
+      // Absent must stay absent rather than becoming an empty string: the
+      // server treats unset as "attribute to the creating run", which is the
+      // correct behaviour for agent-authored revisions.
+      const fetchImpl = vi.fn<
+        (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+      >(
+        async () =>
+          new Response(JSON.stringify({ ok: true }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      const transport = new WebTransport({ fetch: fetchImpl });
+      await transport.createArtifactRevision({
+        artifactId: "artifact_1",
+        parentRevision: 1,
+        content: new Uint8Array([1]),
+        contentType: "text/csv",
+        filename: "forecast.csv",
+        idempotencyKey: "idem-2",
+        ...(actingRunId !== undefined ? { actingRunId } : {}),
+      });
+      const init = fetchImpl.mock.calls[0]?.[1];
+      if (init === undefined)
+        throw new Error("fetch was not called with RequestInit");
+      expect((init.body as FormData).get("acting_run_id")).toBe(expected);
+    },
+  );
 });

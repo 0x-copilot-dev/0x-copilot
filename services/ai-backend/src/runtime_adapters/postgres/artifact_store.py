@@ -369,12 +369,19 @@ class PostgresArtifactMetadataStore:
         return self._revision_from_row(row) if row is not None else None
 
     async def list_artifacts(self, query: ArtifactListQuery) -> ArtifactListPage:
+        # Exactly one subject scope, guaranteed by ``ArtifactListQuery``. Built as
+        # a parameterised clause rather than a formatted column name so the scope
+        # column is chosen by this code, never by request content.
+        scope_column = "a.run_id" if query.run_id is not None else "a.conversation_id"
+        scope_value = (
+            query.run_id if query.run_id is not None else query.conversation_id
+        )
         clauses = [
             "a.org_id = %s",
             "a.user_id = %s",
-            "a.run_id = %s",
+            f"{scope_column} = %s",
         ]
-        params: list[object] = [query.org_id, query.user_id, query.run_id]
+        params: list[object] = [query.org_id, query.user_id, scope_value]
         if query.kind is not None:
             clauses.append("a.kind = %s")
             params.append(query.kind.value)

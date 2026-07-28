@@ -67,6 +67,14 @@ export interface ArtifactRevisionRequest {
   readonly contentType: string;
   readonly filename: string;
   readonly idempotencyKey: string;
+  /**
+   * The run the user is acting in — not necessarily the run that created the
+   * artifact, once a canvas outlives a single turn (PRD-02 Flow B). Omitting it
+   * makes the server attribute the revision to the CREATING run, which for a
+   * persisted artifact has already sealed: the revision commits, the ledger
+   * event is rejected, and the open tab never learns it changed.
+   */
+  readonly actingRunId?: string;
   readonly signal?: AbortSignal;
 }
 

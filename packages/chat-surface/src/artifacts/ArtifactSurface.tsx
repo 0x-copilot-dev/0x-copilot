@@ -38,6 +38,14 @@ export function ArtifactSurface(props: {
   readonly transport: Transport;
   readonly downloadPort?: ArtifactDownloadPort;
   readonly onNavigateRevision?: (uri: string) => void;
+  /**
+   * The run the user is editing in (PRD-02 Flow B). Once the canvas outlives a
+   * single turn, an open artifact can belong to an earlier, already-sealed run;
+   * without this the server attributes the revision there, the ledger event is
+   * rejected, and the tab never learns it changed. Optional so surfaces mounted
+   * outside a run cockpit keep the creating-run behaviour.
+   */
+  readonly actingRunId?: string;
 }): ReactElement {
   const parsed = parseArtifactSurfaceUri(props.uri);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
@@ -82,6 +90,9 @@ export function ArtifactSurface(props: {
           filename:
             data.detail.suggested_filename ?? data.detail.artifact.title,
           idempotencyKey: idempotencyKey(),
+          ...(props.actingRunId !== undefined
+            ? { actingRunId: props.actingRunId }
+            : {}),
         });
         if (!isArtifactMutationResponse(response)) return "error";
         setSelectedRevision(response.current_revision.revision);
