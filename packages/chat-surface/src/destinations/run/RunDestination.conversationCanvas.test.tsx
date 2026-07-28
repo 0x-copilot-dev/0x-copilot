@@ -15,7 +15,7 @@ import { act, render, screen, within } from "@testing-library/react";
 import { type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
 
-import type { ConversationId } from "@0x-copilot/api-types";
+import type { ConversationId, RunId } from "@0x-copilot/api-types";
 import type {
   Session,
   SseSubscribeOptions,
@@ -186,10 +186,11 @@ function lifecycle(): string | null {
 }
 
 function ui(runId: string, transport: Transport, store: KeyValueStore) {
+  const boundRunId = runId as unknown as RunId;
   return (
     <TransportProvider transport={transport}>
       <KeyValueStoreProvider store={store}>
-        <RunDestination conversationId={CONV} runId={runId} surfacesV2 />
+        <RunDestination conversationId={CONV} runId={boundRunId} surfacesV2 />
       </KeyValueStoreProvider>
     </TransportProvider>
   ) as ReactElement;
@@ -218,20 +219,43 @@ describe("RunDestination — canvas identity across turns (PRD-02)", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("still reports the current run honestly as chat-only", async () => {
-    // The surface persisting must not make the cockpit claim this run produced
-    // it. Identity is conversation-scoped; lifecycle stays run-scoped.
+  it("widens identity without duplicating the surface", async () => {
+    // The same artifact is both a live subject of run 1 and an archived subject
+    // of the conversation. Merging on `subjectKey` must yield ONE tab — a second
+    // would mean live and archived identities had drifted apart, which is the
+    // failure mode a reconciliation table would paper over.
     const transport = new FakeTransport();
     const store = makeStore();
     const { rerender } = render(ui("run-1", transport, store));
     await screen.findByTestId("thread-canvas");
     stream(transport, "run-1", new RunLedger("run-1").publishedArtifact());
+    const afterTurnOne = canvasTabs().length;
 
     rerender(ui("run-2", transport, store));
     stream(transport, "run-2", new RunLedger("run-2").chatOnly());
 
-    // Not asserted via the empty-state panel — that panel is exactly what must
-    // NOT be showing. The run's own narrative lives beside the canvas.
-    expect(screen.getByText(/Row 2 is the EMEA forecast/)).toBeInTheDocument();
+    expect(canvasTabs()).toHaveLength(afterTurnOne);
+  });
+
+  it("does not resubscribe the conversation canvas per run", async () => {
+    // Keyed on the conversation, never the run — re-fetching on every turn is
+    // exactly the coupling this hook removes, and would also reintroduce a
+    // window where the strip is empty while the refetch is in flight.
+    const transport = new FakeTransport();
+    const store = makeStore();
+    const { rerender } = render(ui("run-1", transport, store));
+    await screen.findByTestId("thread-canvas");
+    stream(transport, "run-1", new RunLedger("run-1").publishedArtifact());
+    const before = transport.requests.filter((r) =>
+      r.path.endsWith("/canvas"),
+    ).length;
+
+    rerender(ui("run-2", transport, store));
+    stream(transport, "run-2", new RunLedger("run-2").chatOnly());
+
+    const after = transport.requests.filter((r) =>
+      r.path.endsWith("/canvas"),
+    ).length;
+    expect(after).toBe(before);
   });
 });

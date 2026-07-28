@@ -173,6 +173,10 @@ import { CanvasLifecyclePanel } from "./CanvasLifecyclePanel";
 import { EffectStageCard } from "./EffectStageCard";
 import { projectCanvasLifecycle } from "./canvasLifecycle";
 import {
+  useConversationCanvas,
+  type ConversationCanvasSubject,
+} from "./useConversationCanvas";
+import {
   projectMcpEffectStages,
   type McpEffectStageReview,
 } from "./effectStageLifecycle";
@@ -2209,6 +2213,34 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     }
     return map;
   }, [stageById]);
+  // PRD-02 — the run fold's artifact subjects, in the conversation hook's shape.
+  // Derived from the SAME fold the canvas already trusts, so a subject seen live
+  // and the same subject fetched from the archive are byte-identical keys.
+  const liveCanvasSubjects = useMemo<ConversationCanvasSubject[]>(() => {
+    if (canvasLifecycle === null) return [];
+    return canvasLifecycle.tabs
+      .filter((subject) => subject.kind === "artifact")
+      .map((subject) => ({
+        subjectKey: subject.key,
+        kind: "artifact" as const,
+        subjectId: subject.subjectId,
+        runId: session.runId ?? "",
+        title: subject.title,
+        revision: subject.revision,
+        rendererHint: subject.rendererHint ?? "",
+        createdAt: "",
+      }));
+  }, [canvasLifecycle, session.runId]);
+
+  // Subjects openable in this CONVERSATION. Operation state stays run-scoped;
+  // only identity widens, which is what keeps a chat-only follow-up from wiping
+  // the canvas while still reporting the current run honestly.
+  const conversationCanvas = useConversationCanvas(
+    conversationId,
+    liveCanvasSubjects,
+    surfacesV2,
+  );
+
   const v2CanvasTabs = useMemo(() => {
     const uriBySubjectKey = new Map<string, string>();
     const legacyUris = new Set<string>();
@@ -2315,6 +2347,25 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         surface.last_sequence_no,
         `legacy-v2:${surface.origin}:${surface.subject_id}`,
         true,
+      );
+    }
+    // Subjects this conversation holds that the CURRENT run did not produce.
+    // Appended after the run's own tabs (which win on `uri` via `add`), so the
+    // active run stays leftmost and prior turns trail it in stable order.
+    //
+    // Scrubbing deliberately does not narrow these: they have no position in
+    // this run's sequence, and hiding them mid-scrub would make tabs appear and
+    // disappear as the scrubber moves.
+    for (const subject of conversationCanvas.subjects) {
+      if (subject.kind !== "artifact" || subject.revision === null) continue;
+      const kind = artifactKindForRendererHint(subject.rendererHint);
+      if (kind === null) continue;
+      add(
+        artifactUri(kind, subject.subjectId, subject.revision),
+        `${subject.title} · r${subject.revision}`,
+        // Prior-run subjects sort behind everything this run emitted.
+        -1,
+        subject.subjectKey,
       );
     }
     const preferredUri =
