@@ -318,6 +318,63 @@ def test_universal_middleware_is_materialized_for_supervisor_and_local_subagents
     assert id(root_control) not in subagent_controls
 
 
+def test_pinned_framework_cache_middleware_remains_on_root_and_local_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Product ownership stays dormant without a supported per-run skip seam."""
+
+    import deepagents.graph as deepagents_graph
+    import deepagents.middleware.subagents as deepagents_subagents
+
+    captured_stacks: list[list[object]] = []
+
+    class _Compiled:
+        def with_config(self, _config: object) -> "_Compiled":
+            return self
+
+    def capture_create_agent(
+        _model: object,
+        *,
+        middleware: list[object],
+        **_kwargs: object,
+    ) -> _Compiled:
+        captured_stacks.append(middleware)
+        return _Compiled()
+
+    monkeypatch.setenv("RUNTIME_FAKE_MODEL", "1")
+    monkeypatch.setattr(deepagents_graph, "create_agent", capture_create_agent)
+    monkeypatch.setattr(
+        deepagents_subagents,
+        "create_agent",
+        capture_create_agent,
+    )
+    monkeypatch.setattr(builder_module, "_web_harness_profiles_registered", False)
+
+    request = DeepAgentBuildRequest(
+        tools=(),
+        model_config=_model_config(),
+        system_prompt="Follow policy.",
+        subagents=(
+            {
+                "name": "researcher",
+                "description": "Research reviewed sources.",
+                "system_prompt": "Return a concise source review.",
+            },
+        ),
+        middleware=(RuntimeControlMiddleware(),),
+        universal_middleware_factories=(RuntimeControlMiddleware,),
+    )
+
+    build_deep_agent(request)
+
+    assert len(captured_stacks) >= 3
+    assert all(
+        "AnthropicPromptCachingMiddleware"
+        in {type(middleware).__name__ for middleware in stack}
+        for stack in captured_stacks
+    )
+
+
 def test_immutable_middleware_order_is_forwarded_even_when_empty(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

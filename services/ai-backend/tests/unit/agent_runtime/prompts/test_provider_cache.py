@@ -8,7 +8,9 @@ import random
 from langchain_core.messages import SystemMessage
 import pytest
 
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.prompts import (
+    AnthropicCacheControlRejectedError,
     AnthropicProductPromptCacheAdapter,
     PromptAssembler,
     PromptAssemblyContext,
@@ -19,6 +21,7 @@ from agent_runtime.prompts import (
     PromptFragmentScope,
     PromptFragmentTier,
     ProviderCacheAdapterRegistry,
+    ProviderCacheComposition,
     ProviderCacheFallbackSignal,
     ProviderCacheRejectionAdapterRegistry,
     ProviderCacheRejectionRule,
@@ -314,3 +317,64 @@ def test_cache_rejection_adapter_matches_exact_class_and_never_message_text() ->
         )
         is None
     )
+
+
+def test_dedicated_product_wrapper_is_the_only_opt_in_rejection_shape() -> None:
+    plan = _plan()
+    production = ProviderCacheComposition.from_signed_mode(FeatureMode.ENFORCE)
+    generic = type("BadRequestError", (Exception,), {})
+    generic.__module__ = "anthropic"
+
+    assert production.cache_owner is ProviderCacheOwner.FRAMEWORK
+    assert production.framework_prompt_cache_enabled
+    assert (
+        production.cache_rejection_adapters.observe(
+            provider="anthropic",
+            adapter_ref="anthropic-system-prefix:v1",
+            error=generic("cache_control rejected"),
+        )
+        is None
+    )
+
+    registry = ProviderCacheRejectionAdapterRegistry(
+        (
+            ProviderCacheRejectionRule.for_dedicated_wrapper(
+                provider="anthropic",
+                adapter_ref="anthropic-system-prefix:v1",
+                error_type=AnthropicCacheControlRejectedError,
+            ),
+        )
+    )
+    assert (
+        registry.observe(
+            provider="anthropic",
+            adapter_ref="anthropic-system-prefix:v1",
+            error=AnthropicCacheControlRejectedError(),
+        )
+        is not None
+    )
+    assert (
+        registry.observe(
+            provider="anthropic",
+            adapter_ref="anthropic-system-prefix:v1",
+            error=generic("cache_control rejected"),
+        )
+        is None
+    )
+    # The product decorator remains a typed dormant contract, but production
+    # cannot activate it while the framework owns the pinned graph topology.
+    decoration = production.cache_registry.decorate(
+        provider="anthropic",
+        model_family="claude-sonnet-4-6",
+        plan=plan,
+        cache_owner=ProviderCacheOwner.PRODUCT,
+        framework_cache_installed=False,
+    )
+    assert decoration.provider_cache_enabled
+
+
+def test_every_signed_mode_preserves_framework_cache_topology() -> None:
+    for mode in FeatureMode:
+        composition = ProviderCacheComposition.from_signed_mode(mode)
+        assert composition.cache_owner is ProviderCacheOwner.FRAMEWORK
+        assert composition.framework_prompt_cache_enabled

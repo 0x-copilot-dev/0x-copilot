@@ -9,6 +9,7 @@ from langchain.agents.middleware.types import ModelRequest, ModelResponse
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.tools import StructuredTool
+import pytest
 
 from agent_runtime.capabilities.middleware import RuntimeControlMiddleware
 from agent_runtime.control_plane.context import RunControlBinding, RunControlContext
@@ -1242,6 +1243,44 @@ async def test_framework_owned_cache_fallback_is_explicitly_unsupported() -> Non
         pass
     else:  # pragma: no cover - assertion guard
         raise AssertionError("framework-owned rejection was not propagated")
+    assert calls == 1
+    assert not any(
+        isinstance(item.record, ModelInvocationRecoveryRecord)
+        for item in journal.records
+    )
+
+
+async def test_framework_owned_f2_generic_cache_rejection_never_retries() -> None:
+    """A framework-owned graph cannot reinterpret generic provider errors."""
+
+    journal = _Journal()
+    authority = _AuthorityAdapter(
+        provider="anthropic",
+        model_name="claude-sonnet-4-6",
+        budget=ModelInvocationBudget(
+            max_attempts=2,
+            max_same_deployment_attempts=2,
+        ),
+    )
+    calls = 0
+
+    async def handler(_inner: ModelRequest[Any]) -> ModelResponse[Any]:
+        nonlocal calls
+        calls += 1
+        raise _GenericAnthropicBadRequest("cache_control rejected")
+
+    with pytest.raises(_GenericAnthropicBadRequest):
+        await _invoke_with_f2(
+            prompt_binding=_cache_prompt_binding(owner=ProviderCacheOwner.FRAMEWORK),
+            model_binding=_binding(
+                journal=journal,
+                authority=authority,
+                cache_posture=ModelCacheFallbackPosture.ENABLED,
+            ),
+            request=_cache_request(),
+            provider_handler=handler,
+        )
+
     assert calls == 1
     assert not any(
         isinstance(item.record, ModelInvocationRecoveryRecord)

@@ -45,6 +45,18 @@ class ProviderCacheFallbackReason(StrEnum):
     CACHE_METADATA_REJECTED = "cache_metadata_rejected"
 
 
+class AnthropicCacheControlRejectedError(RuntimeError):
+    """Dedicated product wrapper for a reviewed Anthropic cache rejection.
+
+    This wrapper is intentionally *not* constructed from an HTTP status,
+    provider exception name, or exception text.  A pinned transport adapter
+    may raise it only after it validates a provider-documented,
+    machine-readable cache-control field against its reviewed closed values.
+    Until that adapter exists, production composition registers no fallback
+    rule and a generic Anthropic bad request is propagated unchanged.
+    """
+
+
 class ProviderCacheRejectionRule(RuntimeContract):
     """Reviewed exact exception identity for one product cache adapter."""
 
@@ -55,6 +67,23 @@ class ProviderCacheRejectionRule(RuntimeContract):
     reason: ProviderCacheFallbackReason = (
         ProviderCacheFallbackReason.CACHE_METADATA_REJECTED
     )
+
+    @classmethod
+    def for_dedicated_wrapper(
+        cls,
+        *,
+        provider: str,
+        adapter_ref: str,
+        error_type: type[BaseException],
+    ) -> "ProviderCacheRejectionRule":
+        """Bind a reviewed product wrapper without broad provider matching."""
+
+        return cls(
+            provider=provider,
+            adapter_ref=adapter_ref,
+            exception_module=error_type.__module__,
+            exception_qualname=error_type.__qualname__,
+        )
 
 
 class ProviderCacheRejectionObservation(RuntimeContract):
@@ -463,6 +492,7 @@ def _undecorated(
 
 
 __all__ = (
+    "AnthropicCacheControlRejectedError",
     "AnthropicProductPromptCacheAdapter",
     "ProviderCacheAdapterDescriptor",
     "ProviderCacheAdapterRegistry",

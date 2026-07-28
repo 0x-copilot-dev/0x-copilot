@@ -21,6 +21,7 @@ from agent_runtime.prompts.cache_fallback import (
     PromptCacheFallbackHandoff,
 )
 from agent_runtime.prompts.provider_cache import (
+    AnthropicCacheControlRejectedError,
     AnthropicProductPromptCacheAdapter,
     ProviderCacheAdapterDescriptor,
     ProviderCacheAdapterRegistry,
@@ -34,6 +35,7 @@ from agent_runtime.prompts.provider_cache import (
     ProviderPromptDecoration,
     ProviderPromptDecorator,
 )
+from agent_runtime.prompts.provider_cache_composition import ProviderCacheComposition
 from agent_runtime.prompts.runtime_binding import (
     FactoryPromptFragmentProvider,
     PromptAssemblyObserverPort,
@@ -59,6 +61,7 @@ from agent_runtime.prompts.sources import (
 
 __all__ = [
     "AnthropicProductPromptCacheAdapter",
+    "AnthropicCacheControlRejectedError",
     "DEFAULT_PROMPT_FRAGMENT_PROVIDERS",
     "FactoryPromptFragmentProvider",
     "LockedTaskProfile",
@@ -91,6 +94,7 @@ __all__ = [
     "PromptTrustLabel",
     "ProviderCacheAdapterDescriptor",
     "ProviderCacheAdapterRegistry",
+    "ProviderCacheComposition",
     "ProviderCacheFallbackReason",
     "ProviderCacheFallbackSignal",
     "ProviderCacheOwner",

@@ -246,6 +246,7 @@ async def test_factory_installs_per_call_prompt_binding_for_verified_run(
     assert harness.prompt_runtime_binding is installed
     assert installed is not None
     assert installed.mode is FeatureMode.ENFORCE
+    assert installed.cache_owner.value == "framework"
     assert installed.framework_cache_installed
     assert installed.observation_publisher is observer
     assert builder.calls[0].system_prompt == (
@@ -331,6 +332,8 @@ async def test_factory_verified_feature_off_preserves_the_exact_model_request(
     assert result.plan is None
     assert result.decoration is None
     assert result.observation.cache_reason_code == "feature_off"
+    assert binding.framework_cache_installed
+    assert binding.cache_owner.value == "framework"
     assert builder.calls[0].system_prompt == plan.rendered_prompt
 
 

@@ -98,11 +98,10 @@ from agent_runtime.prompts import (
     FactoryPromptFragmentProvider,
     LockedTaskProfile,
     PromptRuntimeBinding,
-    ProviderCacheAdapterRegistry,
+    ProviderCacheComposition,
     PromptSensitivity,
     PromptSourceMaterial,
     PromptTrustLabel,
-    ProviderCacheOwner,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
@@ -331,6 +330,13 @@ async def _assemble_harness(
             raise RuntimeError(
                 "prompt_assembly_observer must be a PromptAssemblyObserver"
             )
+        prompt_cache_composition = (
+            ProviderCacheComposition.from_signed_mode(
+                control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY)
+            )
+            if control_binding is not None
+            else None
+        )
         prompt_runtime_binding = (
             PromptRuntimeBinding(
                 mode=control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY),
@@ -344,13 +350,15 @@ async def _assemble_harness(
                         scope=PromptFragmentScope.RUN,
                     ),
                 ),
-                cache_registry=ProviderCacheAdapterRegistry.default(),
-                # Deep Agents 0.6.12 installs its model-qualified cache
-                # middleware at the tail of every root/child graph. The
-                # product seam must delegate rather than stack controls.
-                cache_owner=ProviderCacheOwner.FRAMEWORK,
-                framework_cache_installed=True,
+                cache_registry=prompt_cache_composition.cache_registry,
+                cache_owner=prompt_cache_composition.cache_owner,
+                framework_cache_installed=(
+                    prompt_cache_composition.framework_prompt_cache_enabled
+                ),
                 observation_publisher=prompt_observer,
+                cache_rejection_adapters=(
+                    prompt_cache_composition.cache_rejection_adapters
+                ),
             )
             if control_binding is not None
             else None
