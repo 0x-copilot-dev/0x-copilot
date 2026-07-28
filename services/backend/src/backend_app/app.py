@@ -44,6 +44,8 @@ from backend_app.contracts import (
     McpAuthStartRequest,
     McpAuthStartResponse,
     McpCatalogResponse,
+    McpDescriptorRevision,
+    McpDescriptorRevisionFeed,
     McpServerListResponse,
     McpServerRecord,
     McpServerResponse,
@@ -54,6 +56,7 @@ from backend_app.contracts import (
     UpdateMcpServerRequest,
     UpdateSkillRequest,
 )
+from backend_app.mcp_revisions import RevisionCursorExpired
 from backend_app.identity import (
     AuthProviderDomainStore,
     BootstrapAdminService,
@@ -1210,6 +1213,58 @@ def create_app(
         return _AppServices.mcp(app).list_internal_cards(
             org_id=identity.org_id, user_id=identity.user_id
         )
+
+    @app.get(
+        "/internal/v1/mcp/servers/{server_id}/revision",
+        response_model=McpDescriptorRevision,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_mcp_revision(
+        request: Request,
+        server_id: str,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+    ) -> McpDescriptorRevision:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        revision = _AppServices.mcp(app).revision_authority.get_current(
+            org_id=identity.org_id, user_id=identity.user_id, server_id=server_id
+        )
+        if revision is None:
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND, "MCP descriptor revision not found"
+            )
+        return revision
+
+    @app.get(
+        "/internal/v1/mcp/descriptor-revisions",
+        response_model=McpDescriptorRevisionFeed,
+        dependencies=[Depends(RequireScopes(RUNTIME_USE))],
+    )
+    def internal_mcp_revision_feed(
+        request: Request,
+        org_id: str = Query(..., min_length=1),
+        user_id: str = Query(..., min_length=1),
+        after_cursor: str | None = Query(None, min_length=1),
+        limit: int = Query(100, ge=1, le=100),
+    ) -> McpDescriptorRevisionFeed:
+        identity = BackendServiceAuthenticator.internal_scoped_identity(
+            request, org_id=org_id, user_id=user_id
+        )
+        try:
+            return _AppServices.mcp(app).revision_authority.feed(
+                org_id=identity.org_id,
+                user_id=identity.user_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except RevisionCursorExpired as exc:
+            # At-least-once consumers must recover by doing exact checks. A
+            # generic response also prevents cursor/profile probing.
+            raise HTTPException(
+                status.HTTP_410_GONE, "revision feed cursor expired"
+            ) from exc
 
     # PR 4.4.7 Phase 2 (Slice B) — catalog entries the agent may surface
     # as progressive-discovery suggestions. The ai-backend calls this at

@@ -395,6 +395,31 @@ class PostgresMergeData:
         ("mcp_servers", "retenant", "org_id", "user_id", ()),
         ("mcp_auth_sessions", "retenant", "org_id", "user_id", ()),
         ("mcp_auth_connections", "retenant", "org_id", "user_id", ()),
+        # F8 current views, retry keys, and body-free feed follow the MCP
+        # installation on account merge. Keeping them aligned with
+        # mcp_servers avoids stale cross-profile cursor rows after retenant.
+        ("mcp_descriptor_revisions", "retenant", "org_id", "user_id", ()),
+        (
+            "mcp_descriptor_revision_generations",
+            "retenant",
+            "org_id",
+            "user_id",
+            (),
+        ),
+        (
+            "mcp_descriptor_revision_notices",
+            "retenant",
+            "org_id",
+            "user_id",
+            (),
+        ),
+        (
+            "mcp_descriptor_revision_idempotency",
+            "retenant",
+            "org_id",
+            "user_id",
+            (),
+        ),
         # Connectors destination (0043): denormalized read model over
         # mcp_servers + token_vault meta. It must move WITH the mcp_servers
         # rows it mirrors (both retenant) or the read model re-diverges from

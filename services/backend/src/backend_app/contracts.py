@@ -196,6 +196,59 @@ class McpServerHealth(StrEnum):
     DISABLED = "disabled"
 
 
+class McpRevisionReason(StrEnum):
+    """Why an MCP descriptor view changed or became unusable.
+
+    Values are deliberately operational only: they never disclose endpoint,
+    token, OAuth, or descriptor-body material to the runtime feed.
+    """
+
+    CONFIG_CHANGED = "config_changed"
+    AUTH_CHANGED = "auth_changed"
+    TRANSPORT_CHANGED = "transport_changed"
+    TOOL_FILTER_CHANGED = "tool_filter_changed"
+    SERVER_DELETED = "server_deleted"
+    DESCRIPTOR_OBSERVED = "descriptor_observed"
+
+
+class McpDescriptorRevision(BackendContract):
+    """Body-free, complete descriptor view owned by the MCP registry."""
+
+    server_id: str
+    profile_id: str
+    subject_scope_hash: str
+    revision: str
+    config_generation: int = Field(ge=0)
+    auth_generation: int = Field(ge=0)
+    transport_generation: int = Field(ge=0)
+    tool_filter_generation: int = Field(ge=0)
+    tool_count: int = Field(ge=0)
+    resource_count: int = Field(ge=0)
+    descriptor_digest: str
+    observed_at: datetime
+    source: str
+
+
+class McpDescriptorRevisionNotice(BackendContract):
+    """Append-only invalidation/feed record; intentionally descriptor-body free."""
+
+    cursor: str
+    notice_id: str
+    sequence_no: int = Field(ge=1)
+    server_id: str
+    profile_id: str
+    subject_scope_hash: str
+    old_revision: str | None = None
+    new_revision: str | None = None
+    reason: McpRevisionReason
+    occurred_at: datetime
+
+
+class McpDescriptorRevisionFeed(BackendContract):
+    notices: tuple[McpDescriptorRevisionNotice, ...] = ()
+    next_cursor: str | None = None
+
+
 class SkillScope(StrEnum):
     USER = "user"
     ORG = "org"

@@ -44,6 +44,7 @@ from backend_app.contracts import (
     McpServerHealth,
     McpServerListResponse,
     McpServerRecord,
+    McpRevisionReason,
     McpServerResponse,
     OAuthTokenRequest,
     SkillAuditEventRecord,
@@ -64,6 +65,7 @@ from backend_app.contracts import (
 from backend_app.connectors.store import ConnectorAccessMode
 from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry, catalog_by_slug
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
+from backend_app.mcp_revisions import McpRevisionAuthority
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
     InMemoryDeployAuditStore,
@@ -254,6 +256,7 @@ class McpRegistryService:
         token_vault: TokenVault | None = None,
         token_exchanger: OAuthTokenExchanger | None = None,
         oauth_client: OAuthDiscoveryClient | None = None,
+        revision_authority: McpRevisionAuthority | None = None,
         auth_session_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         self.store = store or self._default_store()
@@ -261,6 +264,12 @@ class McpRegistryService:
         self.oauth_client = oauth_client or HttpOAuthTokenExchanger()
         self.token_exchanger = token_exchanger or self.oauth_client
         self.auth_session_ttl = auth_session_ttl
+        # F8: registry mutations and their feed notices share the same store
+        # transaction. Discovery remains outside this service and can only
+        # publish complete descriptor observations through this authority.
+        self.revision_authority = (
+            revision_authority or McpRevisionAuthority.for_mcp_store(self.store)
+        )
         # Post-commit observer invoked with the updated record after
         # ``complete_auth`` lands. Wired at app composition time to the
         # connectors destination's write-through (PR-E.3 Decision D1) so
@@ -308,8 +317,15 @@ class McpRegistryService:
             health=McpServerHealth.HEALTHY,
             oauth_client=self._oauth_client_config(request.oauth_client),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.create_server(record, conn=conn)
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.CONFIG_CHANGED,
+                conn=conn,
+            )
             self._audit(record, "mcp_server_created", conn=conn)
         return McpServerResponse.from_record(record)
 
@@ -469,8 +485,15 @@ class McpRegistryService:
             default_scopes=entry.default_scopes,
             oauth_client=self._oauth_client_config(request.oauth_client),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.create_server(record, conn=conn)
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.CONFIG_CHANGED,
+                conn=conn,
+            )
             self._audit(record, "mcp_server_installed", conn=conn)
         return McpServerResponse.from_record(record)
 
@@ -480,11 +503,18 @@ class McpRegistryService:
         )
         if record is None:
             return False
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=org_id) as conn:
             deleted = self.store.delete_server(
                 org_id=org_id, server_id=server_id, conn=conn
             )
             if deleted:
+                self.revision_authority.invalidate(
+                    org_id=org_id,
+                    user_id=user_id,
+                    server_id=server_id,
+                    reason=McpRevisionReason.SERVER_DELETED,
+                    conn=conn,
+                )
                 self._audit(record, "mcp_server_deleted", conn=conn)
         return deleted
 
@@ -515,8 +545,15 @@ class McpRegistryService:
         if not changes:
             return McpServerResponse.from_record(record)
 
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=org_id) as conn:
             updated = self._update_record(record, conn=conn, **changes)
+            self.revision_authority.invalidate(
+                org_id=org_id,
+                user_id=user_id,
+                server_id=server_id,
+                reason=McpRevisionReason.CONFIG_CHANGED,
+                conn=conn,
+            )
             self._audit(updated, "mcp_server_updated", conn=conn)
         return McpServerResponse.from_record(updated)
 
@@ -526,9 +563,16 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=org_id) as conn:
             updated = self._update_record(
                 record, conn=conn, auth_state=McpAuthState.AUTH_SKIPPED
+            )
+            self.revision_authority.invalidate(
+                org_id=org_id,
+                user_id=user_id,
+                server_id=server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                conn=conn,
             )
             self._audit(updated, "mcp_auth_skipped", conn=conn)
         return McpServerResponse.from_record(updated)
@@ -545,11 +589,18 @@ class McpRegistryService:
             server_id=server_id,
         )
         if record.auth_mode != McpAuthMode.OAUTH2:
-            with self.store.transaction() as conn:
+            with self.store.transaction(org_id=request.org_id) as conn:
                 updated = self._update_record(
                     record,
                     conn=conn,
                     auth_state=McpAuthState.AUTH_UNSUPPORTED,
+                )
+                self.revision_authority.invalidate(
+                    org_id=request.org_id,
+                    user_id=request.user_id,
+                    server_id=server_id,
+                    reason=McpRevisionReason.AUTH_CHANGED,
+                    conn=conn,
                 )
                 self._audit(updated, "mcp_auth_unsupported", conn=conn)
             raise ValueError("MCP server does not support OAuth authentication")
@@ -579,13 +630,20 @@ class McpRegistryService:
             if self._has_usable_token(record)
             else McpAuthState.AUTH_PENDING
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=request.org_id) as conn:
             updated = self._update_record(
                 record,
                 conn=conn,
                 auth_state=next_auth_state,
                 last_discovery=authorization.discovery,
                 required_scopes=authorization.required_scopes,
+            )
+            self.revision_authority.invalidate(
+                org_id=request.org_id,
+                user_id=request.user_id,
+                server_id=server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                conn=conn,
             )
             self._audit(updated, "mcp_auth_started", conn=conn)
         return McpAuthStartResponse(
@@ -604,9 +662,16 @@ class McpRegistryService:
             server_id=session.server_id,
         )
         if request.error is not None:
-            with self.store.transaction() as conn:
+            with self.store.transaction(org_id=session.org_id) as conn:
                 updated = self._update_record(
                     record, conn=conn, auth_state=McpAuthState.AUTH_FAILED
+                )
+                self.revision_authority.invalidate(
+                    org_id=session.org_id,
+                    user_id=session.user_id,
+                    server_id=session.server_id,
+                    reason=McpRevisionReason.AUTH_CHANGED,
+                    conn=conn,
                 )
                 self._audit(updated, "mcp_auth_failed", conn=conn)
             detail = request.error_description or request.error
@@ -635,10 +700,18 @@ class McpRegistryService:
             expires_at=tokens.expires_at,
             kms_key_id=self.token_vault.key_id_for(encrypted_access),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.put_token(token_envelope, conn=conn)
             updated = self._update_record(
                 record, conn=conn, auth_state=McpAuthState.AUTHENTICATED
+            )
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                credential_subject=token_envelope.connection_id,
+                conn=conn,
             )
             self._audit(updated, "mcp_auth_completed", conn=conn)
         # Post-commit: notify the connectors write-through (if wired) so
@@ -831,10 +904,18 @@ class McpRegistryService:
             expires_at=request.expires_at,
             kms_key_id=self.token_vault.key_id_for(encrypted_access),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.put_token(token_envelope, conn=conn)
             updated = self._update_record(
                 record, conn=conn, auth_state=McpAuthState.AUTHENTICATED
+            )
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                credential_subject=token_envelope.connection_id,
+                conn=conn,
             )
             self._audit(updated, "mcp_token_upserted", conn=conn)
         return McpServerResponse.from_record(updated)
@@ -925,21 +1006,30 @@ class McpRegistryService:
             if refreshed.refresh_token is not None
             else token.encrypted_refresh_token
         )
-        updated = self.store.put_token(
-            TokenEnvelope(
-                connection_id=token.connection_id,
-                server_id=record.server_id,
+        envelope = TokenEnvelope(
+            connection_id=token.connection_id,
+            server_id=record.server_id,
+            org_id=record.org_id,
+            user_id=record.user_id,
+            encrypted_access_token=encrypted_access,
+            encrypted_refresh_token=encrypted_refresh,
+            token_type=refreshed.token_type,
+            expires_at=refreshed.expires_at,
+            created_at=token.created_at,
+            updated_at=datetime.now(timezone.utc),
+            kms_key_id=self.token_vault.key_id_for(encrypted_access),
+        )
+        with self.store.transaction(org_id=record.org_id) as conn:
+            updated = self.store.put_token(envelope, conn=conn)
+            self.revision_authority.invalidate(
                 org_id=record.org_id,
                 user_id=record.user_id,
-                encrypted_access_token=encrypted_access,
-                encrypted_refresh_token=encrypted_refresh,
-                token_type=refreshed.token_type,
-                expires_at=refreshed.expires_at,
-                created_at=token.created_at,
-                updated_at=datetime.now(timezone.utc),
-                kms_key_id=self.token_vault.key_id_for(encrypted_access),
+                server_id=record.server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                credential_subject=envelope.connection_id,
+                conn=conn,
             )
-        )
+            self._audit(record, "mcp_token_refreshed", conn=conn)
         return updated
 
     @staticmethod
