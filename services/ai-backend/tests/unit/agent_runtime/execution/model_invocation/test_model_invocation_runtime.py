@@ -12,6 +12,10 @@ from agent_runtime.capabilities.middleware import RuntimeControlMiddleware
 from agent_runtime.control_plane.context import RunControlBinding, RunControlContext
 from agent_runtime.control_plane.contracts import RunControlSnapshot, RunPolicyRevisions
 from agent_runtime.control_plane.feature_modes import FeatureMode, FeatureModeSet
+from agent_runtime.control_plane.model_reliability import (
+    ModelReliabilityControlSnapshot,
+    ModelReliabilityReleaseResolver,
+)
 from agent_runtime.api.model_invocation_store import EventJournalModelInvocationStore
 from agent_runtime.execution.model_invocation.contracts import (
     ModelCapability,
@@ -37,9 +41,6 @@ from agent_runtime.execution.model_invocation.journal import (
     ModelInvocationRecoveryRecord,
     ModelInvocationWrite,
     SequencedModelInvocationRecord,
-)
-from agent_runtime.execution.model_invocation.release_controls import (
-    ModelReliabilityReleaseControls,
 )
 from agent_runtime.execution.model_invocation.runtime import (
     ModelCacheFallbackPosture,
@@ -258,16 +259,23 @@ def _binding(
     resolver: _Resolver | None = None,
     diagnostics: list[Exception] | None = None,
 ) -> ModelInvocationRuntimeBinding:
-    controls = ModelReliabilityReleaseControls(
-        retry_mode=FeatureMode.ENFORCE if retry else FeatureMode.OFF,
-        alternate_route_mode=(FeatureMode.ENFORCE if alternate else FeatureMode.OFF),
+    release = ModelReliabilityReleaseResolver().resolve(
+        run_id="run-1",
+        snapshot_id="snapshot-1",
+        snapshot_digest=_SHA,
+        snapshot=ModelReliabilityControlSnapshot(
+            same_deployment_retry=(FeatureMode.ENFORCE if retry else FeatureMode.OFF),
+            alternate_route=(FeatureMode.ENFORCE if alternate else FeatureMode.OFF),
+        ),
+        snapshot_f10_mode=FeatureMode.ENFORCE,
+        effective_f10_mode=FeatureMode.ENFORCE,
     )
     return ModelInvocationRuntimeBinding(
         authority_adapter=authority,
         authority_input_factory=lambda digest: digest,
         journal=journal,
         route_model_resolver=resolver,
-        release=controls.resolve(),
+        release=release,
         org_id="org-1",
         subject_fingerprint=_SHA,
         trace_id="trace-1",

@@ -32,6 +32,15 @@ from agent_runtime.control_plane.feature_modes import (
     FeatureModeSet,
     feature_mode_policy,
 )
+from agent_runtime.control_plane.model_reliability import (
+    ModelReliabilityControl,
+    ModelReliabilityControlSnapshot,
+    ModelReliabilityDecisionReason,
+    ModelReliabilityLiveConstraints,
+    ModelReliabilityReleaseDecision,
+    ModelReliabilityReleaseResolver,
+    ModelReliabilitySubcontrolDecision,
+)
 from agent_runtime.control_plane.ports import (
     RunControlDecisionConflict,
     RunControlDecisionStorePort,
@@ -55,6 +64,13 @@ __all__ = [
     "FeatureModePolicy",
     "FeatureModeResolver",
     "FeatureModeSet",
+    "ModelReliabilityControl",
+    "ModelReliabilityControlSnapshot",
+    "ModelReliabilityDecisionReason",
+    "ModelReliabilityLiveConstraints",
+    "ModelReliabilityReleaseDecision",
+    "ModelReliabilityReleaseResolver",
+    "ModelReliabilitySubcontrolDecision",
     "RunControlDecision",
     "RunControlDecisionConflict",
     "RunControlDecisionStorePort",

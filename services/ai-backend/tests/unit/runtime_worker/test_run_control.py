@@ -21,6 +21,12 @@ from agent_runtime.control_plane.feature_modes import (
     FeatureMode,
     FeatureModeSet,
 )
+from agent_runtime.control_plane.model_reliability import (
+    ModelReliabilityControl,
+    ModelReliabilityControlSnapshot,
+    ModelReliabilityDecisionReason,
+    ModelReliabilityLiveConstraints,
+)
 from agent_runtime.control_plane.ports import (
     RunControlScopeConflict,
     RunControlSnapshotConflict,
@@ -120,6 +126,22 @@ def _assignment(revision: str, mode: FeatureMode) -> RunControlAssignment:
     )
 
 
+def _assignment_with_reliability(
+    *,
+    revision: str,
+    f10_mode: FeatureMode,
+    controls: ModelReliabilityControlSnapshot,
+) -> RunControlAssignment:
+    base = _assignment(revision, FeatureMode.OFF)
+    return RunControlAssignment.model_validate(
+        {
+            **base.model_dump(exclude={"feature_modes", "model_reliability_controls"}),
+            "feature_modes": FeatureModeSet(f10=f10_mode),
+            "model_reliability_controls": controls,
+        }
+    )
+
+
 def test_subject_assignment_is_stable_per_verified_user_and_profile() -> None:
     hmac_assignment = StableUserProfileHmac(b"k" * 32)
 
@@ -143,6 +165,54 @@ def test_subject_assignment_is_stable_per_verified_user_and_profile() -> None:
         user_id="user-1",
         deployment_profile="saas_multi_tenant",
     )
+
+
+def test_assignment_digest_binds_model_reliability_authority() -> None:
+    base = _assignment_with_reliability(
+        revision="release-v1",
+        f10_mode=FeatureMode.ENFORCE,
+        controls=ModelReliabilityControlSnapshot(),
+    )
+    released = _assignment_with_reliability(
+        revision="release-v1",
+        f10_mode=FeatureMode.ENFORCE,
+        controls=ModelReliabilityControlSnapshot(
+            same_deployment_retry=FeatureMode.ENFORCE,
+        ),
+    )
+
+    assert base.digest != released.digest
+    assert RunControlAssignment.safe_active_v1().model_reliability_controls.is_all_off
+    assert (
+        RunControlAssignment.safe_active_v1().model_reliability_controls.alternate_route
+        is FeatureMode.OFF
+    )
+    assert (
+        RunControlAssignment.safe_active_v1().model_reliability_controls.equivalent_route
+        is FeatureMode.OFF
+    )
+
+
+@pytest.mark.parametrize(
+    ("parent", "child"),
+    (
+        (FeatureMode.OFF, FeatureMode.SHADOW),
+        (FeatureMode.OFF, FeatureMode.ENFORCE),
+        (FeatureMode.SHADOW, FeatureMode.ENFORCE),
+    ),
+)
+def test_assignment_rejects_subcontrol_broader_than_f10(
+    parent: FeatureMode,
+    child: FeatureMode,
+) -> None:
+    with pytest.raises(ValidationError, match="cannot exceed the parent F10"):
+        _assignment_with_reliability(
+            revision="invalid-release",
+            f10_mode=parent,
+            controls=ModelReliabilityControlSnapshot(
+                same_deployment_retry=child,
+            ),
+        )
 
 
 @pytest.mark.asyncio
@@ -178,6 +248,68 @@ async def test_new_run_get_or_create_is_restart_stable_and_order_independent() -
     assert restarted is first
     assert restarted.snapshot_digest == first.snapshot_digest
     assert store.creations == 1
+
+
+@pytest.mark.asyncio
+async def test_assignment_subcontrols_are_snapshot_bound_and_live_narrowed() -> None:
+    cutover = datetime.now(timezone.utc)
+    assignment = _assignment_with_reliability(
+        revision="f10-release-v7",
+        f10_mode=FeatureMode.ENFORCE,
+        controls=ModelReliabilityControlSnapshot(
+            same_deployment_retry=FeatureMode.ENFORCE,
+            alternate_route=FeatureMode.ENFORCE,
+            equivalent_route=FeatureMode.ENFORCE,
+            circuit_influence=FeatureMode.ENFORCE,
+            qualification_authority_ref="qualification://f1/public-research",
+            qualification_authority_revision="f1-qualification-r7",
+        ),
+    )
+    live = LiveRunControlConstraints(
+        modes={AgentQualityFeature.F10_MODEL_INVOCATION: FeatureMode.SHADOW},
+        model_reliability=ModelReliabilityLiveConstraints(
+            modes={
+                # This attempted broadening is still capped by parent SHADOW.
+                ModelReliabilityControl.SAME_DEPLOYMENT_RETRY: FeatureMode.ENFORCE,
+            },
+            kill_switches=frozenset({ModelReliabilityControl.ALTERNATE_ROUTE}),
+        ),
+    )
+    builder = _builder(
+        store=_SnapshotStore(),
+        cutover_at=cutover,
+        assignments=(assignment,),
+        live_constraints=lambda: live,
+    )
+
+    snapshot = await builder.ensure_snapshot(
+        run=_run(created_at=cutover + timedelta(seconds=1)),
+        trace_id="trace-f10",
+    )
+    binding = builder.binding_for(snapshot)
+
+    assert snapshot.schema_version == 2
+    assert snapshot.model_reliability_controls == (
+        assignment.model_reliability_controls
+    )
+    assert binding.model_reliability.effective_f10_mode is FeatureMode.SHADOW
+    assert (
+        binding.model_reliability.same_deployment_retry.effective_mode
+        is FeatureMode.SHADOW
+    )
+    assert (
+        binding.model_reliability.same_deployment_retry.reason
+        is ModelReliabilityDecisionReason.LIVE_CONSTRAINT
+    )
+    assert binding.model_reliability.alternate_route.effective_mode is FeatureMode.OFF
+    assert binding.model_reliability.alternate_route.kill_switch_asserted
+    assert (
+        binding.model_reliability.equivalent_route.effective_mode is FeatureMode.SHADOW
+    )
+    assert (
+        binding.model_reliability.qualification_authority_revision
+        == "f1-qualification-r7"
+    )
 
 
 @pytest.mark.asyncio

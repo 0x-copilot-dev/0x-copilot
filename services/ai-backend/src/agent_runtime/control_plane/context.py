@@ -18,7 +18,7 @@ from typing import (
     Protocol,
 )
 
-from pydantic import Field, NonNegativeInt, PositiveInt
+from pydantic import Field, NonNegativeInt, PositiveInt, model_validator
 
 from agent_runtime.capabilities.task_policy import (
     TaskPolicyProfile,
@@ -33,6 +33,11 @@ from agent_runtime.control_plane.feature_modes import (
     FeatureMode,
     FeatureModeDecision,
     FeatureModeSet,
+)
+from agent_runtime.control_plane.model_reliability import (
+    ModelReliabilityControl,
+    ModelReliabilityReleaseDecision,
+    ModelReliabilityReleaseResolver,
 )
 from agent_runtime.execution.contracts import RuntimeContract
 
@@ -49,6 +54,52 @@ class RunControlBinding(RuntimeContract):
     snapshot: RunControlSnapshot
     effective_modes: FeatureModeSet
     decisions: tuple[FeatureModeDecision, ...]
+    model_reliability: ModelReliabilityReleaseDecision
+
+    @model_validator(mode="before")
+    @classmethod
+    def _default_model_reliability_off(
+        cls,
+        value: object,
+    ) -> object:
+        if not isinstance(value, Mapping) or value.get("model_reliability") is not None:
+            return value
+        snapshot = RunControlSnapshot.model_validate(value.get("snapshot"))
+        effective_modes = FeatureModeSet.model_validate(value.get("effective_modes"))
+        normalized = dict(value)
+        normalized["model_reliability"] = ModelReliabilityReleaseResolver().resolve(
+            run_id=snapshot.run_id,
+            snapshot_id=snapshot.snapshot_id,
+            snapshot_digest=snapshot.snapshot_digest,
+            snapshot=snapshot.model_reliability_controls,
+            snapshot_f10_mode=snapshot.feature_modes.f10,
+            effective_f10_mode=effective_modes.f10,
+        )
+        return normalized
+
+    @model_validator(mode="after")
+    def _model_reliability_matches_snapshot(self) -> "RunControlBinding":
+        release = self.model_reliability
+        if (
+            release.run_id != self.snapshot.run_id
+            or release.snapshot_id != self.snapshot.snapshot_id
+            or release.snapshot_digest != self.snapshot.snapshot_digest
+        ):
+            raise ValueError(
+                "model reliability decision does not match the run snapshot"
+            )
+        if release.effective_f10_mode is not self.effective_modes.f10:
+            raise ValueError(
+                "model reliability decision does not match effective F10 mode"
+            )
+        for control in ModelReliabilityControl:
+            if release.for_control(control).snapshot_mode is not (
+                self.snapshot.model_reliability_controls.mode_for(control)
+            ):
+                raise ValueError(
+                    "model reliability decision does not match snapshot subcontrols"
+                )
+        return self
 
     def mode_for(self, feature: AgentQualityFeature) -> FeatureMode:
         """Return the effective, never-broadened mode for ``feature``."""

@@ -147,7 +147,7 @@ _QualityMode = Literal["off", "shadow", "enforce"]
 class QualityControlBoundPayload(RuntimeContract):
     """Closed, content-free canonical snapshot row carried by one run event."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     snapshot_id: str = Field(min_length=1, max_length=160)
     snapshot_digest: str = Field(pattern=_SHA256_PATTERN)
     subject_fingerprint: str = Field(pattern=_SHA256_PATTERN)
@@ -180,6 +180,18 @@ class QualityControlBoundPayload(RuntimeContract):
     feature_mode_f10: _QualityMode
     feature_mode_f11: _QualityMode
     feature_mode_f12: _QualityMode
+    model_same_deployment_retry_mode: _QualityMode = "off"
+    model_alternate_route_mode: _QualityMode = "off"
+    model_equivalent_route_mode: _QualityMode = "off"
+    model_circuit_influence_mode: _QualityMode = "off"
+    model_qualification_authority_ref: str | None = Field(
+        default=None,
+        max_length=256,
+    )
+    model_qualification_authority_revision: str | None = Field(
+        default=None,
+        max_length=256,
+    )
     budget_envelope_ref: str = Field(min_length=1, max_length=_QUALITY_REF_MAX)
     assignment_revision: str = Field(min_length=1, max_length=256)
     created_at: datetime

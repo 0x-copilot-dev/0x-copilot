@@ -2386,7 +2386,7 @@ export type QualityFeatureMode = "off" | "shadow" | "enforce";
 
 /** Internal, closed, flat, content-free run-control journal payloads. */
 export interface QualityControlBoundPayload {
-  schema_version: 1;
+  schema_version: 1 | 2;
   snapshot_id: string;
   snapshot_digest: string;
   subject_fingerprint: string;
@@ -2416,6 +2416,12 @@ export interface QualityControlBoundPayload {
   feature_mode_f10: QualityFeatureMode;
   feature_mode_f11: QualityFeatureMode;
   feature_mode_f12: QualityFeatureMode;
+  model_same_deployment_retry_mode?: QualityFeatureMode;
+  model_alternate_route_mode?: QualityFeatureMode;
+  model_equivalent_route_mode?: QualityFeatureMode;
+  model_circuit_influence_mode?: QualityFeatureMode;
+  model_qualification_authority_ref?: string | null;
+  model_qualification_authority_revision?: string | null;
   budget_envelope_ref: string;
   assignment_revision: string;
   created_at: string;

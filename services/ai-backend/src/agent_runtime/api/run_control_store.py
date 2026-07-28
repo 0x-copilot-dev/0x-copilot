@@ -309,6 +309,20 @@ class EventJournalRunControlStore(
                         "f11": payload.feature_mode_f11,
                         "f12": payload.feature_mode_f12,
                     },
+                    "model_reliability_controls": {
+                        "same_deployment_retry": (
+                            payload.model_same_deployment_retry_mode
+                        ),
+                        "alternate_route": payload.model_alternate_route_mode,
+                        "equivalent_route": payload.model_equivalent_route_mode,
+                        "circuit_influence": (payload.model_circuit_influence_mode),
+                        "qualification_authority_ref": (
+                            payload.model_qualification_authority_ref
+                        ),
+                        "qualification_authority_revision": (
+                            payload.model_qualification_authority_revision
+                        ),
+                    },
                     "budget_envelope_ref": payload.budget_envelope_ref,
                     "assignment_revision": payload.assignment_revision,
                     "created_at": payload.created_at,
@@ -380,7 +394,8 @@ class EventJournalRunControlStore(
     def _snapshot_payload(snapshot: RunControlSnapshot) -> dict[str, object]:
         revisions = snapshot.policy_revisions
         modes = snapshot.feature_modes
-        return QualityControlBoundPayload(
+        reliability = snapshot.model_reliability_controls
+        payload = QualityControlBoundPayload(
             schema_version=snapshot.schema_version,
             snapshot_id=snapshot.snapshot_id,
             snapshot_digest=snapshot.snapshot_digest,
@@ -411,10 +426,31 @@ class EventJournalRunControlStore(
             feature_mode_f10=modes.f10.value,
             feature_mode_f11=modes.f11.value,
             feature_mode_f12=modes.f12.value,
+            model_same_deployment_retry_mode=(reliability.same_deployment_retry.value),
+            model_alternate_route_mode=reliability.alternate_route.value,
+            model_equivalent_route_mode=reliability.equivalent_route.value,
+            model_circuit_influence_mode=reliability.circuit_influence.value,
+            model_qualification_authority_ref=(reliability.qualification_authority_ref),
+            model_qualification_authority_revision=(
+                reliability.qualification_authority_revision
+            ),
             budget_envelope_ref=snapshot.budget_envelope_ref,
             assignment_revision=snapshot.assignment_revision,
             created_at=snapshot.created_at,
-        ).model_dump(mode="json")
+        )
+        excluded = (
+            {
+                "model_same_deployment_retry_mode",
+                "model_alternate_route_mode",
+                "model_equivalent_route_mode",
+                "model_circuit_influence_mode",
+                "model_qualification_authority_ref",
+                "model_qualification_authority_revision",
+            }
+            if snapshot.schema_version == 1
+            else set()
+        )
+        return payload.model_dump(mode="json", exclude=excluded)
 
     @staticmethod
     def _decision_payload(decision: RunControlDecision) -> dict[str, object]:

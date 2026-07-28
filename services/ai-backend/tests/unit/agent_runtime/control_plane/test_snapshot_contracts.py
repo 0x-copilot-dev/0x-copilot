@@ -13,10 +13,12 @@ from agent_runtime.control_plane import (
     BudgetEnvelope,
     FeatureMode,
     FeatureModeSet,
+    ModelReliabilityControlSnapshot,
     RunControlDecision,
     RunControlSnapshot,
     RunPolicyRevisions,
 )
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 _FINGERPRINT = "a" * 64
 _INPUT_DIGEST = "b" * 64
@@ -41,6 +43,8 @@ def _revision_values() -> dict[str, str]:
 def _snapshot(
     *,
     policy_revisions: RunPolicyRevisions | None = None,
+    model_reliability_controls: ModelReliabilityControlSnapshot | None = None,
+    f10_mode: FeatureMode = FeatureMode.OFF,
 ) -> RunControlSnapshot:
     budget = BudgetEnvelope.create(
         budget_envelope_id="budget-default",
@@ -58,7 +62,12 @@ def _snapshot(
         task_policy_selection_ref="task-policy://unknown.general/r1",
         policy_revisions=policy_revisions
         or RunPolicyRevisions.model_validate(_revision_values()),
-        feature_modes=FeatureModeSet(f2=FeatureMode.SHADOW, f4=FeatureMode.ENFORCE),
+        feature_modes=FeatureModeSet(
+            f2=FeatureMode.SHADOW,
+            f4=FeatureMode.ENFORCE,
+            f10=f10_mode,
+        ),
+        model_reliability_controls=model_reliability_controls,
         budget_envelope_ref=budget.revision_ref,
         assignment_revision="assignment-r1",
         snapshot_id="snapshot-control",
@@ -120,6 +129,57 @@ def test_snapshot_digest_excludes_record_identity_but_binds_policy() -> None:
 
     assert equivalent.snapshot_digest == first.snapshot_digest
     assert changed.snapshot_digest != first.snapshot_digest
+
+
+def test_v2_snapshot_digest_binds_model_reliability_subcontrols() -> None:
+    baseline = _snapshot()
+    released = _snapshot(
+        model_reliability_controls=ModelReliabilityControlSnapshot(
+            same_deployment_retry=FeatureMode.SHADOW,
+        ),
+        f10_mode=FeatureMode.SHADOW,
+    )
+
+    assert baseline.schema_version == 2
+    assert baseline.model_reliability_controls.is_all_off
+    assert released.snapshot_digest != baseline.snapshot_digest
+    with pytest.raises(ValidationError, match="digest does not match"):
+        RunControlSnapshot.model_validate(
+            {
+                **released.model_dump(),
+                "model_reliability_controls": (ModelReliabilityControlSnapshot()),
+            }
+        )
+
+
+def test_v1_snapshot_replay_defaults_unsigned_subcontrols_off() -> None:
+    current = _snapshot()
+    legacy_payload = current.model_dump(
+        exclude={"model_reliability_controls", "snapshot_digest"}
+    )
+    legacy_payload["schema_version"] = 1
+    legacy_payload["snapshot_digest"] = canonical_json_sha256(
+        {
+            key: value
+            for key, value in legacy_payload.items()
+            if key not in {"snapshot_id", "created_at"}
+        }
+    )
+
+    replayed = RunControlSnapshot.model_validate(legacy_payload)
+
+    assert replayed.schema_version == 1
+    assert replayed.model_reliability_controls.is_all_off
+    assert replayed.snapshot_digest == legacy_payload["snapshot_digest"]
+
+    unsigned = {
+        **legacy_payload,
+        "model_reliability_controls": {
+            "same_deployment_retry": "shadow",
+        },
+    }
+    with pytest.raises(ValidationError, match="cannot carry unsigned"):
+        RunControlSnapshot.model_validate(unsigned)
 
 
 def test_snapshot_rejects_tampered_digest_and_naive_timestamp() -> None:

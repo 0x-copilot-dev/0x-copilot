@@ -81,8 +81,8 @@ from agent_runtime.execution.model_invocation.journal import (
     route_records,
 )
 from agent_runtime.execution.model_invocation.release_controls import (
-    ModelReliabilityReleaseControls,
     ModelReliabilityReleaseDecision,
+    ModelReliabilityReleaseResolver,
 )
 from agent_runtime.execution.model_invocation.runtime import (
     AtomicModelInvocationAuthorityAdapterPort,
@@ -147,8 +147,8 @@ __all__ = (
     "ModelRecoveryScope",
     "ModelRecoveryKind",
     "ModelRecoveryOutcome",
-    "ModelReliabilityReleaseControls",
     "ModelReliabilityReleaseDecision",
+    "ModelReliabilityReleaseResolver",
     "ModelRouteEligibleRecord",
     "ModelRouteExcludedRecord",
     "ModelRouteExclusion",

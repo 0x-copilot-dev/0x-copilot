@@ -24,6 +24,9 @@ from agent_runtime.control_plane.feature_modes import (
     AgentQualityFeature,
     FeatureModeSet,
 )
+from agent_runtime.control_plane.model_reliability import (
+    ModelReliabilityControlSnapshot,
+)
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
@@ -155,7 +158,7 @@ class BudgetEnvelope(RuntimeContract):
 class RunControlSnapshot(RuntimeContract):
     """One immutable, replayable policy assignment for a run."""
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     snapshot_id: str = Field(min_length=1, max_length=160)
     run_id: str = Field(min_length=1, max_length=160)
     conversation_id: str = Field(min_length=1, max_length=160)
@@ -168,6 +171,9 @@ class RunControlSnapshot(RuntimeContract):
     )
     policy_revisions: RunPolicyRevisions
     feature_modes: FeatureModeSet = Field(default_factory=FeatureModeSet)
+    model_reliability_controls: ModelReliabilityControlSnapshot = Field(
+        default_factory=ModelReliabilityControlSnapshot
+    )
     budget_envelope_ref: str = Field(pattern=_BUDGET_REF_PATTERN)
     assignment_revision: str = Field(min_length=1, max_length=_MAX_REF_LENGTH)
     created_at: datetime
@@ -193,6 +199,17 @@ class RunControlSnapshot(RuntimeContract):
         return normalized
 
     @model_validator(mode="after")
+    def _model_reliability_authority_is_narrowed(self) -> "RunControlSnapshot":
+        if self.schema_version == 1 and (
+            self.model_reliability_controls != ModelReliabilityControlSnapshot()
+        ):
+            raise ValueError(
+                "legacy run-control snapshots cannot carry unsigned F10 subcontrols"
+            )
+        self.model_reliability_controls.validate_parent(self.feature_modes.f10)
+        return self
+
+    @model_validator(mode="after")
     def _digest_matches(self) -> "RunControlSnapshot":
         if self.snapshot_digest != canonical_json_sha256(self.digest_payload()):
             raise ValueError(
@@ -208,9 +225,14 @@ class RunControlSnapshot(RuntimeContract):
         semantic digest and converge on the first durable record.
         """
 
+        excluded = {"snapshot_id", "created_at", "snapshot_digest"}
+        if self.schema_version == 1:
+            # V1 records predate F10 subcontrols. They replay only with the
+            # validated all-OFF default and retain their historical digest.
+            excluded.add("model_reliability_controls")
         return self.model_dump(
             mode="json",
-            exclude={"snapshot_id", "created_at", "snapshot_digest"},
+            exclude=excluded,
         )
 
     @classmethod
@@ -225,13 +247,17 @@ class RunControlSnapshot(RuntimeContract):
         task_policy_selection_ref: str,
         policy_revisions: RunPolicyRevisions,
         feature_modes: FeatureModeSet,
+        model_reliability_controls: ModelReliabilityControlSnapshot | None = None,
         budget_envelope_ref: str,
         assignment_revision: str,
         snapshot_id: str | None = None,
         created_at: datetime | None = None,
     ) -> "RunControlSnapshot":
+        resolved_model_reliability = ModelReliabilityControlSnapshot.model_validate(
+            model_reliability_controls or ModelReliabilityControlSnapshot()
+        )
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "snapshot_id": snapshot_id or uuid4().hex,
             "run_id": run_id,
             "conversation_id": conversation_id,
@@ -241,6 +267,7 @@ class RunControlSnapshot(RuntimeContract):
             "task_policy_selection_ref": task_policy_selection_ref,
             "policy_revisions": policy_revisions,
             "feature_modes": feature_modes,
+            "model_reliability_controls": resolved_model_reliability,
             "budget_envelope_ref": budget_envelope_ref,
             "assignment_revision": assignment_revision,
             "created_at": created_at or datetime.now(timezone.utc),

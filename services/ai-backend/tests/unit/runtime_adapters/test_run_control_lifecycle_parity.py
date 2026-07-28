@@ -16,6 +16,7 @@ from agent_runtime.control_plane import (
     BudgetEnvelope,
     FeatureMode,
     FeatureModeSet,
+    ModelReliabilityControlSnapshot,
     RunControlDecision,
     RunControlDecisionWrite,
     RunControlSnapshot,
@@ -24,6 +25,7 @@ from agent_runtime.control_plane import (
 )
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from runtime_adapters.file.runtime_api_store import FileRuntimeApiStore
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import (
@@ -104,7 +106,13 @@ def _policy_revisions() -> RunPolicyRevisions:
     )
 
 
-def _snapshot(run, conversation, *, suffix: str = "one") -> RunControlSnapshot:
+def _snapshot(
+    run,
+    conversation,
+    *,
+    suffix: str = "one",
+    model_reliability_controls: ModelReliabilityControlSnapshot | None = None,
+) -> RunControlSnapshot:
     budget = BudgetEnvelope.create(
         budget_envelope_id="budget-control-lifecycle",
         revision="budget-r1",
@@ -119,7 +127,15 @@ def _snapshot(run, conversation, *, suffix: str = "one") -> RunControlSnapshot:
         harness_variant_ref="harness://stable/r1",
         task_policy_selection_ref="task-policy://unknown.general/r1",
         policy_revisions=_policy_revisions(),
-        feature_modes=FeatureModeSet(f4=FeatureMode.ENFORCE),
+        feature_modes=FeatureModeSet(
+            f4=FeatureMode.ENFORCE,
+            f10=(
+                FeatureMode.ENFORCE
+                if model_reliability_controls is not None
+                else FeatureMode.OFF
+            ),
+        ),
+        model_reliability_controls=model_reliability_controls,
         budget_envelope_ref=budget.revision_ref,
         assignment_revision="assignment-r1",
         snapshot_id=f"snapshot-{suffix}",
@@ -148,6 +164,22 @@ def _decision(snapshot: RunControlSnapshot, run) -> RunControlDecision:
         outcome_code="assembled",
         created_at=datetime(2026, 7, 27, 8, 10, tzinfo=timezone.utc),
     )
+
+
+def _legacy_snapshot(run, conversation) -> RunControlSnapshot:
+    current = _snapshot(run, conversation, suffix="legacy")
+    payload = current.model_dump(
+        exclude={"model_reliability_controls", "snapshot_digest"}
+    )
+    payload["schema_version"] = 1
+    payload["snapshot_digest"] = canonical_json_sha256(
+        {
+            key: value
+            for key, value in payload.items()
+            if key not in {"snapshot_id", "created_at"}
+        }
+    )
+    return RunControlSnapshot.model_validate(payload)
 
 
 async def _seed_controls(store, conversation, run):
@@ -205,6 +237,68 @@ async def test_same_run_concurrent_get_or_create_converges(adapter_case) -> None
         )
         == 1
     )
+
+
+async def test_model_reliability_authority_roundtrips_through_run_event(
+    adapter_case,
+) -> None:
+    _kind, store, _coordinator, conversation, run = adapter_case
+    controls = EventJournalRunControlStore(store)
+    expected = _snapshot(
+        run,
+        conversation,
+        suffix="f10",
+        model_reliability_controls=ModelReliabilityControlSnapshot(
+            same_deployment_retry=FeatureMode.ENFORCE,
+            alternate_route=FeatureMode.SHADOW,
+            equivalent_route=FeatureMode.ENFORCE,
+            circuit_influence=FeatureMode.SHADOW,
+            qualification_authority_ref="qualification://f1/public-research",
+            qualification_authority_revision="f1-qualification-r7",
+        ),
+    )
+
+    persisted = await controls.get_or_create(_snapshot_write(expected, run))
+    replayed = await controls.get(
+        org_id=_ORG,
+        run_id=run.run_id,
+        subject_fingerprint=_SUBJECT,
+    )
+
+    assert persisted == expected
+    assert replayed == expected
+    assert replayed is not None
+    assert replayed.model_reliability_controls.equivalent_route is (FeatureMode.ENFORCE)
+
+
+async def test_legacy_snapshot_event_replays_with_implicit_off_subcontrols(
+    adapter_case,
+) -> None:
+    _kind, store, _coordinator, conversation, run = adapter_case
+    controls = EventJournalRunControlStore(store)
+    legacy = _legacy_snapshot(run, conversation)
+
+    await controls.get_or_create(_snapshot_write(legacy, run))
+    replayed = await controls.get(
+        org_id=_ORG,
+        run_id=run.run_id,
+        subject_fingerprint=_SUBJECT,
+    )
+    event = next(
+        item
+        for item in await store.list_events_after(
+            org_id=_ORG,
+            run_id=run.run_id,
+            after_sequence=0,
+        )
+        if item.event_type is RuntimeApiEventType.QUALITY_CONTROL_BOUND
+    )
+
+    assert replayed == legacy
+    assert replayed is not None
+    assert replayed.model_reliability_controls.is_all_off
+    assert "model_same_deployment_retry_mode" not in event.payload
+    assert "model_qualification_authority_ref" not in event.payload
 
 
 async def test_missing_conversation_row_preserves_legacy_run_replay(

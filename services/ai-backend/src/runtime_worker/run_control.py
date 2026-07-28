@@ -17,7 +17,7 @@ import json
 import os
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from agent_runtime.control_plane.contracts import (
     BudgetEnvelope,
@@ -34,6 +34,11 @@ from agent_runtime.control_plane.feature_modes import (
     FeatureMode,
     FeatureModeResolver,
     FeatureModeSet,
+)
+from agent_runtime.control_plane.model_reliability import (
+    ModelReliabilityControlSnapshot,
+    ModelReliabilityLiveConstraints,
+    ModelReliabilityReleaseResolver,
 )
 from agent_runtime.control_plane.ports import (
     RunControlSnapshotStorePort,
@@ -64,8 +69,16 @@ class RunControlAssignment(RuntimeContract):
     task_policy_selection_ref: str
     policy_revisions: RunPolicyRevisions
     feature_modes: FeatureModeSet = FeatureModeSet()
+    model_reliability_controls: ModelReliabilityControlSnapshot = (
+        ModelReliabilityControlSnapshot()
+    )
     budget_envelope_ref: str
     assignment_revision: str
+
+    @model_validator(mode="after")
+    def _model_reliability_authority_is_narrowed(self) -> "RunControlAssignment":
+        self.model_reliability_controls.validate_parent(self.feature_modes.f10)
+        return self
 
     @property
     def digest(self) -> str:
@@ -99,6 +112,7 @@ class RunControlAssignment(RuntimeContract):
             task_policy_selection_ref=f"task-policy://{revision}",
             policy_revisions=policy_revisions,
             feature_modes=FeatureModeSet(),
+            model_reliability_controls=ModelReliabilityControlSnapshot(),
             budget_envelope_ref=budget_envelope.revision_ref,
             assignment_revision=revision,
         )
@@ -171,6 +185,9 @@ class LiveRunControlConstraints(RuntimeContract):
 
     modes: Mapping[AgentQualityFeature, object] = {}
     kill_switches: frozenset[AgentQualityFeature] = frozenset()
+    model_reliability: ModelReliabilityLiveConstraints = (
+        ModelReliabilityLiveConstraints()
+    )
 
 
 LiveConstraintsProvider = Callable[[], LiveRunControlConstraints]
@@ -358,6 +375,7 @@ class RunControlPlaneBuilder:
             task_policy_selection_ref=assignment.task_policy_selection_ref,
             policy_revisions=assignment.policy_revisions,
             feature_modes=assignment.feature_modes,
+            model_reliability_controls=assignment.model_reliability_controls,
             budget_envelope_ref=assignment.budget_envelope_ref,
             assignment_revision=assignment.assignment_revision,
         )
@@ -388,10 +406,20 @@ class RunControlPlaneBuilder:
         effective_modes = FeatureModeSet.model_validate(
             {decision.feature.value: decision.effective_mode for decision in decisions}
         )
+        model_reliability = ModelReliabilityReleaseResolver().resolve(
+            run_id=snapshot.run_id,
+            snapshot_id=snapshot.snapshot_id,
+            snapshot_digest=snapshot.snapshot_digest,
+            snapshot=snapshot.model_reliability_controls,
+            snapshot_f10_mode=snapshot.feature_modes.f10,
+            effective_f10_mode=effective_modes.f10,
+            live=live.model_reliability,
+        )
         return RunControlBinding(
             snapshot=snapshot,
             effective_modes=effective_modes,
             decisions=decisions,
+            model_reliability=model_reliability,
         )
 
     async def prepare_binding(
