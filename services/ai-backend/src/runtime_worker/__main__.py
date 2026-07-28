@@ -141,6 +141,7 @@ class RuntimeWorkerEntrypoint:
                 settings=settings,
                 repository=async_ports.evaluation_repository,
                 store=async_ports.run_control_snapshot_store,
+                event_store=async_ports.event_store,
             )
             worker = RuntimeWorker(
                 persistence=async_ports.persistence,

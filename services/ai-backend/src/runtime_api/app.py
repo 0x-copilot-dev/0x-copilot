@@ -1532,6 +1532,7 @@ class RuntimeApiAppFactory:
             settings=settings,
             repository=getattr(ports, "evaluation_repository", None),
             store=ports.run_control_snapshot_store,
+            event_store=ports.event_store,
         )
         worker = RuntimeWorker(
             persistence=ports.persistence,

@@ -196,6 +196,7 @@ class VerifiedTaskPolicySignals(RuntimeContract):
     snapshot_id: str = Field(min_length=1, max_length=160)
     task_policy_selection_ref: str = Field(min_length=1, max_length=256)
     task_policy_revision: str = Field(min_length=1, max_length=256)
+    budget_envelope_ref: str = Field(min_length=1, max_length=256)
     subject_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
     model_declared_tool_call_limit: int | None = Field(default=None, ge=1, le=100)
 
@@ -444,6 +445,7 @@ class RunControlPlaneBuilder:
                 snapshot_id=snapshot.snapshot_id,
                 task_policy_selection_ref=snapshot.task_policy_selection_ref,
                 task_policy_revision=snapshot.policy_revisions.tool_controller,
+                budget_envelope_ref=snapshot.budget_envelope_ref,
                 subject_fingerprint=snapshot.subject_fingerprint,
                 model_declared_tool_call_limit=self._model_tool_call_limit(run),
             ),

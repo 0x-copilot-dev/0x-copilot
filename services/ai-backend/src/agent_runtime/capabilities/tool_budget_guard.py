@@ -24,6 +24,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetWarn,
 )
 from agent_runtime.capabilities.task_policy import (
+    ToolUseController,
     ToolOperationOutcome,
     ToolPolicyRejected,
     ToolUseDisposition,
@@ -355,8 +356,16 @@ class ToolBudgetGuard:
                 )
         except Exception:  # noqa: BLE001 - optional controller fails open.
             _LOGGER.warning("task_policy_before_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
             return None
         self._enforce_task_policy_feedback(feedback)
+        if (
+            self._task_policy_mode is FeatureMode.SHADOW
+            and feedback.disposition is not ToolUseDisposition.CONTINUE
+            and isinstance(controller, ToolUseController)
+        ):
+            controller.observe_dispatched(intent)
         return intent
 
     async def aadmit_task_policy(
@@ -382,8 +391,16 @@ class ToolBudgetGuard:
                 feedback = await feedback
         except Exception:  # noqa: BLE001 - existing hard gates remain active.
             _LOGGER.warning("task_policy_before_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
             return None
         self._enforce_task_policy_feedback(feedback)
+        if (
+            self._task_policy_mode is FeatureMode.SHADOW
+            and feedback.disposition is not ToolUseDisposition.CONTINUE
+            and isinstance(controller, ToolUseController)
+        ):
+            controller.observe_dispatched(intent)
         return intent
 
     def observe_upstream_policy_block(
@@ -413,6 +430,8 @@ class ToolBudgetGuard:
             _LOGGER.warning(
                 "task_policy_upstream_block_observation_failed", exc_info=True
             )
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
 
     async def aobserve_upstream_policy_block(
         self,
@@ -438,6 +457,8 @@ class ToolBudgetGuard:
             _LOGGER.warning(
                 "task_policy_upstream_block_observation_failed", exc_info=True
             )
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
 
     def admit_model_turn(
         self,
@@ -465,6 +486,8 @@ class ToolBudgetGuard:
                 )
         except Exception:  # noqa: BLE001 - existing provider limits remain active.
             _LOGGER.warning("task_policy_model_turn_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
             return
         disposition = getattr(feedback, "disposition", ToolUseDisposition.CONTINUE)
         reason_code = str(getattr(feedback, "reason_code", "model_turn_admitted"))
@@ -501,6 +524,8 @@ class ToolBudgetGuard:
                 feedback = await feedback
         except Exception:  # noqa: BLE001 - provider/platform limits remain active.
             _LOGGER.warning("task_policy_model_turn_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
             return
         disposition = getattr(feedback, "disposition", ToolUseDisposition.CONTINUE)
         reason_code = str(getattr(feedback, "reason_code", "model_turn_admitted"))
@@ -520,6 +545,8 @@ class ToolBudgetGuard:
         intent: ToolUseIntent | None,
         succeeded: bool,
         error_class: str | None = None,
+        result: object | None = None,
+        retryable: bool = False,
     ) -> None:
         """Best-effort fold of observable completion facts into F4 state."""
 
@@ -527,12 +554,40 @@ class ToolBudgetGuard:
         if controller is None or intent is None:
             return
         try:
+            result_fingerprint = (
+                self._task_request_fingerprint.for_result(
+                    capability_id=intent.capability_id,
+                    result_metadata={
+                        "result_type": type(result).__name__,
+                        "value": str(result),
+                    },
+                )
+                if succeeded and self._task_request_fingerprint is not None
+                else None
+            )
+            error_fingerprint = (
+                self._task_request_fingerprint.for_error(
+                    capability_id=intent.capability_id,
+                    request_fingerprint=intent.canonical_request_fingerprint,
+                    error_class=error_class or "unknown",
+                    retryable=retryable,
+                )
+                if not succeeded and self._task_request_fingerprint is not None
+                else None
+            )
             feedback = controller.after_operation(
                 ToolOperationOutcome(
                     operation_id=intent.operation_id,
                     capability_id=intent.capability_id,
                     succeeded=succeeded,
                     error_class=error_class,
+                    retryable=retryable,
+                    result_fingerprint=result_fingerprint,
+                    # Until tools expose a common typed evidence envelope, the
+                    # protected full-result digest is only an advisory yield
+                    # marker. It is not an exact source identity.
+                    evidence_fingerprint=result_fingerprint,
+                    error_fingerprint=error_fingerprint,
                 )
             )
             if inspect.isawaitable(feedback):
@@ -542,6 +597,8 @@ class ToolBudgetGuard:
                 )
         except Exception:  # noqa: BLE001 - must not alter a tool outcome.
             _LOGGER.warning("task_policy_after_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
 
     async def arecord_task_policy_outcome(
         self,
@@ -549,6 +606,8 @@ class ToolBudgetGuard:
         intent: ToolUseIntent | None,
         succeeded: bool,
         error_class: str | None = None,
+        result: object | None = None,
+        retryable: bool = False,
     ) -> None:
         """Async durable fold of a terminal observable tool outcome."""
 
@@ -556,18 +615,47 @@ class ToolBudgetGuard:
         if controller is None or intent is None:
             return
         try:
+            result_fingerprint = (
+                self._task_request_fingerprint.for_result(
+                    capability_id=intent.capability_id,
+                    result_metadata={
+                        "result_type": type(result).__name__,
+                        "value": str(result),
+                    },
+                )
+                if succeeded and self._task_request_fingerprint is not None
+                else None
+            )
+            error_fingerprint = (
+                self._task_request_fingerprint.for_error(
+                    capability_id=intent.capability_id,
+                    request_fingerprint=intent.canonical_request_fingerprint,
+                    error_class=error_class or "unknown",
+                    retryable=retryable,
+                )
+                if not succeeded and self._task_request_fingerprint is not None
+                else None
+            )
             feedback = controller.after_operation(
                 ToolOperationOutcome(
                     operation_id=intent.operation_id,
                     capability_id=intent.capability_id,
                     succeeded=succeeded,
                     error_class=error_class,
+                    retryable=retryable,
+                    result_fingerprint=result_fingerprint,
+                    # See the synchronous seam: this is bounded controller
+                    # advice, never a claim about a canonical source.
+                    evidence_fingerprint=result_fingerprint,
+                    error_fingerprint=error_fingerprint,
                 )
             )
             if inspect.isawaitable(feedback):
                 await feedback
         except Exception:  # noqa: BLE001 - must not alter the tool outcome.
             _LOGGER.warning("task_policy_after_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
 
     def _task_policy_intent(
         self,
@@ -792,7 +880,11 @@ class ToolBudgetGuardedTool(DelegatingTool):
             )
             raise
         else:
-            guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
+            guard.record_task_policy_outcome(
+                intent=policy_intent,
+                succeeded=True,
+                result=result,
+            )
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         return self._model_visible_result(result, guard=guard, call_id=call_id)
@@ -837,6 +929,7 @@ class ToolBudgetGuardedTool(DelegatingTool):
             await guard.arecord_task_policy_outcome(
                 intent=policy_intent,
                 succeeded=True,
+                result=result,
             )
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)

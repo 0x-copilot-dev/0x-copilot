@@ -2420,7 +2420,8 @@ export type TaskPolicyJournalRecordKind =
   | "outcome_recorded"
   | "feedback_recorded"
   | "budget_recorded"
-  | "progress_recorded";
+  | "progress_recorded"
+  | "model_turn_recorded";
 
 export type TaskPolicyTaskFamily =
   | "public_research"
@@ -2513,6 +2514,8 @@ export interface TaskPolicyIntentRecordedRecord extends TaskPolicyJournalRecordB
   plan_digest: string | null;
   plan_step_id: string | null;
   expected_evidence_kind: string | null;
+  semantic_fingerprint: string | null;
+  objective_fingerprint: string | null;
 }
 
 export interface TaskPolicyAdmissionRecordedRecord extends TaskPolicyJournalRecordBase {
@@ -2542,6 +2545,9 @@ export interface TaskPolicyOutcomeRecordedRecord extends TaskPolicyJournalRecord
   retryable: boolean;
   new_evidence_count: number;
   observed_source_count: number;
+  source_fingerprints: readonly string[];
+  evidence_fingerprint: string | null;
+  cost_microusd: number;
   latency_ms: number;
 }
 
@@ -2598,6 +2604,16 @@ export interface TaskPolicyProgressRecordedRecord extends TaskPolicyJournalRecor
   waiting_for_approval: boolean;
 }
 
+export interface TaskPolicyModelTurnRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "model_turn_recorded";
+  turn_id: string;
+  model_turn_ordinal: number;
+  execution_scope_fingerprint: string;
+  disposition: "admitted" | "blocked" | "shadow_admitted";
+  reason_codes: readonly TaskPolicyReasonCode[];
+  cost_microusd: number;
+}
+
 export type TaskPolicyJournalRecord =
   | TaskPolicyProfileSelectedRecord
   | TaskPolicyPlanBoundRecord
@@ -2606,7 +2622,8 @@ export type TaskPolicyJournalRecord =
   | TaskPolicyOutcomeRecordedRecord
   | TaskPolicyFeedbackRecordedRecord
   | TaskPolicyBudgetRecordedRecord
-  | TaskPolicyProgressRecordedRecord;
+  | TaskPolicyProgressRecordedRecord
+  | TaskPolicyModelTurnRecordedRecord;
 
 /** Internal F4 journal payload. All detail is content-free and digest-bound. */
 export interface TaskPolicyJournalPayload {

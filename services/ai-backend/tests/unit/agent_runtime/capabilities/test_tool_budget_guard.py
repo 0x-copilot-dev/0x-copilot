@@ -32,6 +32,7 @@ from agent_runtime.capabilities.task_policy import (
     RequestFingerprint,
     TaskFamily,
     TaskPolicyProfile,
+    ToolOperationOutcome,
     ToolPolicyRejected,
     ToolUseController,
     ToolUseDisposition,
@@ -128,8 +129,13 @@ class _ModelTurnStoppingController:
 
 
 class _AsyncDurableController:
-    def __init__(self, observations: list[str]) -> None:
+    def __init__(
+        self,
+        observations: list[str],
+        outcomes: list[ToolOperationOutcome] | None = None,
+    ) -> None:
         self._observations = observations
+        self._outcomes = outcomes
 
     async def before_operation(self, _intent):
         self._observations.append("intent_persisted")
@@ -138,8 +144,10 @@ class _AsyncDurableController:
             reason_code="admitted",
         )
 
-    async def after_operation(self, _outcome):
+    async def after_operation(self, outcome: ToolOperationOutcome):
         self._observations.append("outcome_persisted")
+        if self._outcomes is not None:
+            self._outcomes.append(outcome)
         return ToolUseFeedback(
             disposition=ToolUseDisposition.CONTINUE,
             reason_code="completed",
@@ -387,6 +395,33 @@ class TestToolBudgetGuardedTool(_FakeProducerMixin):
             "tool_dispatched",
             "outcome_persisted",
         ]
+
+    async def test_generic_result_digest_is_advisory_not_source_identity(
+        self,
+    ) -> None:
+        outcomes: list[ToolOperationOutcome] = []
+        guard = ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(()),
+            ledger=ToolCallLedger(run_id="run-result-fallback"),
+            task_policy_controller=_AsyncDurableController([], outcomes),
+            task_request_fingerprint=RequestFingerprint(key=b"f" * 32),
+        )
+        wrapped = ToolBudgetGuardedTool(
+            name="echo",
+            description="echo",
+            inner=_RecordingTool(),
+        )
+        token = ToolBudgetGuard.bind_for_run(guard)
+        try:
+            await wrapped._arun("request")
+        finally:
+            ToolBudgetGuard.unbind(token)
+
+        assert len(outcomes) == 1
+        outcome = outcomes[0]
+        assert outcome.result_fingerprint is not None
+        assert outcome.evidence_fingerprint == outcome.result_fingerprint
+        assert outcome.source_fingerprints == ()
 
     @staticmethod
     def _capped_guard(

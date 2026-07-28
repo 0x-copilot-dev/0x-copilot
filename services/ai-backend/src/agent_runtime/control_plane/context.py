@@ -73,13 +73,30 @@ class TaskPolicyRuntimeControllerPort(TaskPolicyControllerPort, Protocol):
 
 
 class TaskPolicyFingerprintPort(Protocol):
-    """Keyed canonical request fingerprinting without exposing arguments."""
+    """Keyed canonical fingerprints; protected bodies never leave the process."""
 
     def for_request(
         self,
         *,
         capability_id: str,
         arguments: Mapping[str, object],
+    ) -> str: ...
+
+    def for_result(
+        self,
+        *,
+        capability_id: str,
+        result_metadata: Mapping[str, object],
+    ) -> str: ...
+
+    def for_error(
+        self,
+        *,
+        capability_id: str,
+        request_fingerprint: str,
+        error_class: str,
+        retryable: bool,
+        retry_hint: str | None = None,
     ) -> str: ...
 
 
