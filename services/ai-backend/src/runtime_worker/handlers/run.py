@@ -69,6 +69,7 @@ from agent_runtime.api.user_policies_resolver import (
     ProviderKeysHydrator,
     UserPoliciesResolver,
 )
+from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
 from agent_runtime.capabilities.mcp.annotations import (
     McpToolAnnotations,
     McpToolAnnotationsRegistry,
@@ -169,6 +170,10 @@ from runtime_worker.run_control import (
     RunControlContext,
     RunControlPlaneBuilder,
 )
+from runtime_worker.model_invocation_composition import (
+    ModelInvocationEffectTracker,
+    ModelInvocationWorkerComposer,
+)
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
@@ -263,6 +268,8 @@ class RuntimeRunHandler:
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
+        model_invocation_store: ModelInvocationStorePort | None = None,
+        model_invocation_composer: ModelInvocationWorkerComposer | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
@@ -292,6 +299,15 @@ class RuntimeRunHandler:
         self._run_control_builder = run_control_builder
         self._prompt_observation_store = prompt_observation_store
         self.settings = settings or RuntimeSettings.load()
+        self._model_invocation_composer = (
+            model_invocation_composer
+            or ModelInvocationWorkerComposer(
+                settings=self.settings,
+                persistence=self.persistence,
+                event_store=self.event_store,
+                journal=model_invocation_store,
+            )
+        )
         # The sole runtime gate for explicitly enabled E2 lanes. It is
         # deliberately run-scoped: every capability receives persisted
         # server-owned identity facts before it can appear in dependencies.
@@ -426,6 +442,10 @@ class RuntimeRunHandler:
             and run_control_snapshot is not None
             else None
         )
+        # Queue payload serialization excludes BYOK keys.  Hydrate exactly once
+        # before F10 authority composition and before graph construction; the
+        # same in-memory copy is then used by both seams.
+        hydrated_context = await self._hydrated_runtime_context(command.runtime_context)
         run = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.RUNNING
@@ -490,6 +510,7 @@ class RuntimeRunHandler:
         operation_context_token: object | None = None
         shadow_comparison_token: object | None = None
         mcp_operation_gateway_token: object | None = None
+        model_invocation_effect_tracker: ModelInvocationEffectTracker | None = None
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -541,6 +562,20 @@ class RuntimeRunHandler:
                     prepared_run_control.control,
                     task_policy=prepared_run_control.task_policy,
                 )
+                composed_model_invocation = (
+                    await self._model_invocation_composer.compose(
+                        run=run,
+                        context=hydrated_context,
+                        control=prepared_run_control.control,
+                    )
+                )
+                if composed_model_invocation is not None:
+                    RunControlContext.install_model_invocation_runtime(
+                        composed_model_invocation.binding
+                    )
+                    model_invocation_effect_tracker = (
+                        composed_model_invocation.effect_tracker
+                    )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
                     resolution=self.settings.execution.rollout
@@ -557,7 +592,10 @@ class RuntimeRunHandler:
                     policy_snapshot=ToolUsePolicyResolver.resolve(
                         command.runtime_context
                     ),
-                    ledger_emitter=self._build_operation_ledger_emitter(run),
+                    ledger_emitter=self._build_operation_ledger_emitter(
+                        run,
+                        external_effect_tracker=model_invocation_effect_tracker,
+                    ),
                     artifact_service=(
                         self.artifact_service
                         if self._artifact_publication_enabled(run)
@@ -600,7 +638,7 @@ class RuntimeRunHandler:
             )
             discovery_token = McpDiscoveryService.bind_for_run(discovery_service)
             harness_or_coro = self.agent_factory(
-                context=await self._hydrated_runtime_context(command.runtime_context),
+                context=hydrated_context,
                 dependencies=dependencies,
             )
             harness = (
@@ -2480,7 +2518,10 @@ class RuntimeRunHandler:
         return WorkLedgerEmitter(emit=_emit)
 
     def _build_operation_ledger_emitter(
-        self, run: RunRecord
+        self,
+        run: RunRecord,
+        *,
+        external_effect_tracker: ModelInvocationEffectTracker | None = None,
     ) -> OperationEventEmitterAdapter:
         """Bind v2.1 operation rows to the existing append-only run transport."""
 
@@ -2489,13 +2530,16 @@ class RuntimeRunHandler:
             payload: Mapping[str, object],
             summary: str | None,
         ) -> None:
+            event_type = RuntimeApiEventType(event_type_value)
             await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.SYSTEM,
-                event_type=RuntimeApiEventType(event_type_value),
+                event_type=event_type,
                 summary=summary,
                 payload=dict(payload),
             )
+            if external_effect_tracker is not None:
+                external_effect_tracker.mark_event(event_type)
 
         return OperationEventEmitterAdapter(emit_fn=_emit)
 

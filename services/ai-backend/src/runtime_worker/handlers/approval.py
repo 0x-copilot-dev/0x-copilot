@@ -71,6 +71,7 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
 from agent_runtime.prompts.observation import (
     PromptAssemblyObserver,
     PromptObservationStorePort,
@@ -112,6 +113,10 @@ from runtime_worker.run_metrics import AssistantRunMetrics
 from runtime_worker.run_control import (
     RunControlContext,
     RunControlPlaneBuilder,
+)
+from runtime_worker.model_invocation_composition import (
+    ModelInvocationEffectTracker,
+    ModelInvocationWorkerComposer,
 )
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
@@ -183,11 +188,22 @@ class RuntimeApprovalHandler:
         artifact_service: object | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
+        model_invocation_store: ModelInvocationStorePort | None = None,
+        model_invocation_composer: ModelInvocationWorkerComposer | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
         self.settings = settings or RuntimeSettings.load()
+        self._model_invocation_composer = (
+            model_invocation_composer
+            or ModelInvocationWorkerComposer(
+                settings=self.settings,
+                persistence=self.persistence,
+                event_store=self.event_store,
+                journal=model_invocation_store,
+            )
+        )
         self._e2_rollout_admission = E2RolloutAdmission(
             resolution=self.settings.execution.rollout,
             cohorts=self.settings.execution.rollout_cohorts,
@@ -378,6 +394,11 @@ class RuntimeApprovalHandler:
             and run_control_snapshot is not None
             else None
         )
+        # Rehydrate exactly once before the F10 binding and resumed graph are
+        # constructed.  The binding captures only this ephemeral copy.
+        resume_context = run.runtime_context
+        if self._provider_keys_hydrator is not None:
+            resume_context = await self._provider_keys_hydrator.hydrate(resume_context)
         running = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=run.run_id,
@@ -410,6 +431,7 @@ class RuntimeApprovalHandler:
         workspace_backend = await self._workspace_backend_for_resume(running)
         operation_context_token: object | None = None
         shadow_comparison_token: object | None = None
+        model_invocation_effect_tracker: ModelInvocationEffectTracker | None = None
         # A resumed graph is a fresh tool-execution context. Bind the desktop
         # model-admission boundary again even when the org has no tool-budget
         # rows. Empty middleware carries admission without changing policy.
@@ -449,6 +471,20 @@ class RuntimeApprovalHandler:
                     prepared_run_control.control,
                     task_policy=prepared_run_control.task_policy,
                 )
+                composed_model_invocation = (
+                    await self._model_invocation_composer.compose(
+                        run=running,
+                        context=resume_context,
+                        control=prepared_run_control.control,
+                    )
+                )
+                if composed_model_invocation is not None:
+                    RunControlContext.install_model_invocation_runtime(
+                        composed_model_invocation.binding
+                    )
+                    model_invocation_effect_tracker = (
+                        composed_model_invocation.effect_tracker
+                    )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
                     resolution=self.settings.execution.rollout
@@ -460,13 +496,16 @@ class RuntimeApprovalHandler:
                     payload: Mapping[str, object],
                     summary: str | None,
                 ) -> None:
+                    event_type = RuntimeApiEventType(event_type_value)
                     await self.event_producer.append_api_event(
                         run=running,
                         source=StreamEventSource.SYSTEM,
-                        event_type=RuntimeApiEventType(event_type_value),
+                        event_type=event_type,
                         summary=summary,
                         payload=dict(payload),
                     )
+                    if model_invocation_effect_tracker is not None:
+                        model_invocation_effect_tracker.mark_event(event_type)
 
                 operation_context_token = OperationContext.bind_for_run(
                     identity=VerifiedOperationIdentity(
@@ -488,11 +527,6 @@ class RuntimeApprovalHandler:
                     ),
                     mode=self.settings.execution.operation_gateway_mode,
                     canonical_arguments_durable=False,
-                )
-            resume_context = running.runtime_context
-            if self._provider_keys_hydrator is not None:
-                resume_context = await self._provider_keys_hydrator.hydrate(
-                    resume_context
                 )
             harness_or_coro = self.agent_factory(
                 context=resume_context,

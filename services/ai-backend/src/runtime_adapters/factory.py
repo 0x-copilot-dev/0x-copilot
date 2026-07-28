@@ -16,6 +16,7 @@ from agent_runtime.api.artifact_repository import (
     RuntimeArtifactSourceLookup,
 )
 from agent_runtime.api.run_control_store import EventJournalRunControlStore
+from agent_runtime.api.model_invocation_store import EventJournalModelInvocationStore
 from agent_runtime.api.prompt_observation_store import (
     EventJournalPromptObservationStore,
 )
@@ -41,6 +42,7 @@ from agent_runtime.control_plane.ports import (
     RunControlSnapshotStorePort,
 )
 from agent_runtime.prompts.observation import PromptObservationStorePort
+from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -217,6 +219,10 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
             events=file_store,
             snapshots=run_control_store,
         ),
+        model_invocation_store=EventJournalModelInvocationStore(
+            events=file_store,
+            snapshots=run_control_store,
+        ),
         # Pure projectors over the file store's file-backed materialized view.
         subagent_store=InMemorySubagentStore(file_store),
         source_store=InMemorySourceStore(citation_store),
@@ -270,6 +276,7 @@ class RuntimePorts:
     run_control_snapshot_store: RunControlSnapshotStorePort
     run_control_decision_store: RunControlDecisionStorePort
     prompt_observation_store: PromptObservationStorePort
+    model_invocation_store: ModelInvocationStorePort
     subagent_store: SubagentStorePort
     source_store: SourceStorePort
     # F1 local evaluation/release spine. In-memory is test/dev only; desktop
@@ -419,6 +426,10 @@ class RuntimeAdapterFactory:
                 events=store,
                 snapshots=run_control_store,
             ),
+            model_invocation_store=EventJournalModelInvocationStore(
+                events=store,
+                snapshots=run_control_store,
+            ),
             subagent_store=InMemorySubagentStore(store),
             # One citation store shared by the read-side projector and the
             # write-side port, so a run's citations are visible to Sources.
@@ -484,6 +495,10 @@ class RuntimeAdapterFactory:
                 run_control_snapshot_store=run_control_store,
                 run_control_decision_store=run_control_store,
                 prompt_observation_store=EventJournalPromptObservationStore(
+                    events=in_memory_store,
+                    snapshots=run_control_store,
+                ),
+                model_invocation_store=EventJournalModelInvocationStore(
                     events=in_memory_store,
                     snapshots=run_control_store,
                 ),
@@ -558,6 +573,10 @@ class RuntimeAdapterFactory:
                 run_control_snapshot_store=run_control_store,
                 run_control_decision_store=run_control_store,
                 prompt_observation_store=EventJournalPromptObservationStore(
+                    events=postgres_store,
+                    snapshots=run_control_store,
+                ),
+                model_invocation_store=EventJournalModelInvocationStore(
                     events=postgres_store,
                     snapshots=run_control_store,
                 ),
