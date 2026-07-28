@@ -102,7 +102,9 @@ class BackendMcpRevisionNotice(RuntimeContract):
 
 
 class BackendMcpRevisionFeed(RuntimeContract):
-    notices: tuple[BackendMcpRevisionNotice, ...] = ()
+    notices: tuple[BackendMcpRevisionNotice, ...] = Field(
+        default=(), max_length=_MAX_PAGE_LENGTH
+    )
     next_cursor: str | None = Field(default=None, max_length=_CURSOR_MAX_LENGTH)
 
 

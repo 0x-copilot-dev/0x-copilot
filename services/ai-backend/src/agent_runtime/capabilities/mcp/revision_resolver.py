@@ -46,7 +46,13 @@ class McpDescriptorRevisionResolverPort(Protocol):
         self, *, org_id: str, user_id: str, server_name: str
     ) -> None: ...
 
-    async def apply_notice(self, notice: BackendMcpRevisionNotice) -> None: ...
+    async def apply_notice(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        notice: BackendMcpRevisionNotice,
+    ) -> None: ...
 
 
 @dataclass
@@ -138,10 +144,16 @@ class McpDescriptorRevisionResolver:
                 self._invalidate_entry(entry)
                 self._entries.move_to_end(key)
 
-    async def apply_notice(self, notice: BackendMcpRevisionNotice) -> None:
-        """Invalidate matching mappings without assuming an order for revisions.
+    async def apply_notice(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        notice: BackendMcpRevisionNotice,
+    ) -> None:
+        """Apply a notice only within its verified feed subject.
 
-        Revisions are opaque strings.  Equality is the only meaningful relation:
+        Revisions are opaque strings. Equality is the only meaningful relation:
         a notice saying the cached revision is still current is a no-op; every
         other notice (including duplicates and out-of-order deliveries) makes
         the next resolve fetch the authoritative exact revision.
@@ -149,7 +161,7 @@ class McpDescriptorRevisionResolver:
 
         async with self._guard:
             for key, entry in list(self._entries.items()):
-                if entry.server_id != notice.server_id:
+                if key[:2] != (org_id, user_id) or entry.server_id != notice.server_id:
                     continue
                 if entry.revision is None:
                     self._invalidate_entry(entry)

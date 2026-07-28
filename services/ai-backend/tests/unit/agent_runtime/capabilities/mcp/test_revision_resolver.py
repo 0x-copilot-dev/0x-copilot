@@ -15,8 +15,10 @@ from agent_runtime.capabilities.mcp.revision_wire import (
     BackendMcpRevision,
     BackendMcpRevisionClient,
     BackendMcpRevisionCursorExpired,
+    BackendMcpRevisionFeed,
     BackendMcpRevisionNotFound,
     BackendMcpRevisionNotice,
+    BackendMcpRevisionUnavailable,
 )
 from copilot_service_contracts.headers import ORG_HEADER, USER_HEADER
 
@@ -59,13 +61,16 @@ def _notice(new_revision: str | None = "revision-b") -> BackendMcpRevisionNotice
 
 
 class _HttpClient:
-    def __init__(self, responses: list[httpx.Response]) -> None:
+    def __init__(self, responses: list[httpx.Response | httpx.HTTPError]) -> None:
         self.responses = responses
         self.requests: list[Mapping[str, object]] = []
 
     async def get(self, _url: str, **kwargs: object) -> httpx.Response:
         self.requests.append(kwargs)
-        return self.responses.pop(0)
+        response = self.responses.pop(0)
+        if isinstance(response, httpx.HTTPError):
+            raise response
+        return response
 
 
 class _Client:
@@ -77,6 +82,15 @@ class _Client:
         self.calls.append(kwargs["server_id"])
         await self.gate.wait()
         return BackendMcpRevision.model_validate(_revision(kwargs["server_id"]))
+
+
+class _NotFoundClient:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def get_exact(self, **_kwargs: str) -> BackendMcpRevision:
+        self.calls += 1
+        raise BackendMcpRevisionNotFound("server-a")
 
 
 def _response(status_code: int, payload: object) -> httpx.Response:
@@ -129,6 +143,10 @@ async def test_wire_parses_complete_backend_payloads_and_rejects_extra_fields() 
         BackendMcpRevision.model_validate(
             {**_revision(), "observed_at": "2026-01-01T00:00:00"}
         )
+    with pytest.raises(ValidationError):
+        BackendMcpRevisionFeed.model_validate(
+            {"notices": [_notice().model_dump(mode="json")] * 101}
+        )
     with pytest.raises(ValueError):
         await wire.get_exact(org_id="org-a", user_id="user-a", server_id="")
 
@@ -144,6 +162,27 @@ async def test_wire_uses_typed_not_found_and_cursor_expired_errors() -> None:
         await wire.feed(org_id="org-a", user_id="user-a", after_cursor="expired")
     with pytest.raises(ValueError):
         await wire.feed(org_id="org-a", user_id="user-a", after_cursor=None, limit=101)
+
+
+@pytest.mark.asyncio
+async def test_wire_fails_closed_for_5xx_network_and_invalid_body() -> None:
+    wire = BackendMcpRevisionClient(
+        "http://backend.test",
+        http_client=_HttpClient(
+            [
+                _response(503, {}),
+                httpx.ConnectError("offline"),
+                _response(200, {"server_id": "server-a"}),
+            ]
+        ),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(BackendMcpRevisionUnavailable):
+        await wire.get_exact(org_id="org-a", user_id="user-a", server_id="server-a")
+    with pytest.raises(BackendMcpRevisionUnavailable):
+        await wire.get_exact(org_id="org-a", user_id="user-a", server_id="server-a")
+    with pytest.raises(ValidationError):
+        await wire.get_exact(org_id="org-a", user_id="user-a", server_id="server-a")
 
 
 @pytest.mark.asyncio
@@ -185,12 +224,16 @@ async def test_notice_only_uses_opaque_revision_equality_and_lru_is_capped() -> 
     assert (
         await resolver.resolve(org_id="org-a", user_id="user-a", server_name="one")
     ).state is RevisionResolveState.FRESH
-    await resolver.apply_notice(_notice("revision-a"))
+    await resolver.apply_notice(
+        org_id="org-a", user_id="user-a", notice=_notice("revision-a")
+    )
     assert (
         await resolver.resolve(org_id="org-a", user_id="user-a", server_name="one")
     ).state is RevisionResolveState.FRESH
     assert client.calls == ["server-a"]
-    await resolver.apply_notice(_notice("not-an-ordered-revision"))
+    await resolver.apply_notice(
+        org_id="org-a", user_id="user-a", notice=_notice("not-an-ordered-revision")
+    )
     assert (
         await resolver.resolve(org_id="org-a", user_id="user-a", server_name="one")
     ).state is RevisionResolveState.FRESH
@@ -199,6 +242,71 @@ async def test_notice_only_uses_opaque_revision_equality_and_lru_is_capped() -> 
         org_id="org-a", user_id="user-a", server_name="two", server_id="server-b"
     )
     assert len(resolver._entries) == 1
+
+
+@pytest.mark.asyncio
+async def test_notice_isolated_to_verified_feed_subject() -> None:
+    client = _Client()
+    client.gate.set()
+    resolver = McpDescriptorRevisionResolver(client, ttl_seconds=10, max_entries=2)
+    await resolver.register(
+        org_id="org-a", user_id="user-a", server_name="name", server_id="server-a"
+    )
+    await resolver.register(
+        org_id="org-b", user_id="user-b", server_name="name", server_id="server-a"
+    )
+    await resolver.resolve(org_id="org-a", user_id="user-a", server_name="name")
+    await resolver.resolve(org_id="org-b", user_id="user-b", server_name="name")
+
+    await resolver.apply_notice(
+        org_id="org-a", user_id="user-a", notice=_notice("revision-b")
+    )
+
+    assert (
+        await resolver.resolve(org_id="org-a", user_id="user-a", server_name="name")
+    ).state is RevisionResolveState.FRESH
+    assert (
+        await resolver.resolve(org_id="org-b", user_id="user-b", server_name="name")
+    ).state is RevisionResolveState.FRESH
+    assert client.calls == ["server-a", "server-a", "server-a"]
+
+
+@pytest.mark.asyncio
+async def test_not_found_is_cached_for_the_ttl() -> None:
+    client = _NotFoundClient()
+    resolver = McpDescriptorRevisionResolver(client, ttl_seconds=10)
+    await resolver.register(
+        org_id="org-a", user_id="user-a", server_name="name", server_id="server-a"
+    )
+
+    assert (
+        await resolver.resolve(org_id="org-a", user_id="user-a", server_name="name")
+    ).state is RevisionResolveState.NOT_FOUND
+    assert (
+        await resolver.resolve(org_id="org-a", user_id="user-a", server_name="name")
+    ).state is RevisionResolveState.NOT_FOUND
+    assert client.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_invalidation_fences_an_in_flight_fetch() -> None:
+    client = _Client()
+    resolver = McpDescriptorRevisionResolver(client, ttl_seconds=10)
+    await resolver.register(
+        org_id="org-a", user_id="user-a", server_name="name", server_id="server-a"
+    )
+    resolving = asyncio.create_task(
+        resolver.resolve(org_id="org-a", user_id="user-a", server_name="name")
+    )
+    await asyncio.sleep(0)
+    await resolver.invalidate(org_id="org-a", user_id="user-a", server_name="name")
+    client.gate.set()
+
+    assert (await resolving).state is RevisionResolveState.UNAVAILABLE
+    assert (
+        await resolver.resolve(org_id="org-a", user_id="user-a", server_name="name")
+    ).state is RevisionResolveState.FRESH
+    assert client.calls == ["server-a", "server-a"]
 
 
 def test_invalid_resolver_bounds() -> None:
