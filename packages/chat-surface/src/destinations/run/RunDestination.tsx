@@ -2357,6 +2357,16 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     // this run's sequence, and hiding them mid-scrub would make tabs appear and
     // disappear as the scrubber moves.
     for (const subject of conversationCanvas.subjects) {
+      // Flow D — conversation scope grants VISIBILITY, never AUTHORITY.
+      //
+      // Only artifacts cross the run boundary. Effect stages and gates are
+      // operation state: their decisions route through the run that staged
+      // them, and that run has sealed. Surfacing one from an earlier turn would
+      // offer an approve button whose request the seal rejects — a stale
+      // control that fails confusingly, which is worse than not showing it.
+      //
+      // Enforced here, at the one place conversation subjects become tabs, so
+      // widening the merge later cannot quietly expose a decision affordance.
       if (subject.kind !== "artifact" || subject.revision === null) continue;
       const kind = artifactKindForRendererHint(subject.rendererHint);
       if (kind === null) continue;
@@ -3417,6 +3427,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             uri={uri}
             transport={transport}
             downloadPort={artifactDownloadPort}
+            // Flow D in one line: conversation scope grants VISIBILITY of an
+            // artifact from an earlier turn, but the authority to mutate it
+            // stays bound to the run the user is actually in. Sending the
+            // acting run is what keeps an edit causal — and therefore visible.
+            {...(session.runId !== null ? { actingRunId: session.runId } : {})}
           />
         );
       }

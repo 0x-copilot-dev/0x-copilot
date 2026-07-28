@@ -326,6 +326,7 @@ class ArtifactRoutes:
                         parent_revision=metadata.parent_revision,
                         expected_digest=metadata.expected_digest,
                         idempotency_key=idempotency_key,
+                        acting_run_id=metadata.acting_run_id,
                     ),
                     provenance=ArtifactProvenance(
                         author=ArtifactAuthor.USER,

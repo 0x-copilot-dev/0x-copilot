@@ -258,4 +258,47 @@ describe("RunDestination — canvas identity across turns (PRD-02)", () => {
     ).length;
     expect(after).toBe(before);
   });
+
+  it("never surfaces a decision affordance from another run", async () => {
+    // Flow D — conversation scope grants visibility, never authority. An effect
+    // stage from run-1 must not become a tab in run-2: its approve/reject route
+    // through a sealed run, so the control would fail rather than work.
+    const transport = new FakeTransport();
+    const store = makeStore();
+    transport.requestHandler = async (req) => {
+      if (req.path.endsWith("/canvas")) {
+        return {
+          subjects: [
+            {
+              subject_key: "effect:stg-1",
+              kind: "surface",
+              subject_id: "stg-1",
+              run_id: "run-1",
+              title: "Proposed change",
+              revision: 1,
+              renderer_hint: "effect-stage",
+              created_at: "2026-07-28T00:00:00Z",
+            },
+          ],
+        };
+      }
+      return req.path.includes("/messages")
+        ? { messages: [] }
+        : {
+            latest_run_id: "run-2",
+            latest_run_id_any_status: "run-2",
+            runs: [],
+          };
+    };
+    render(ui("run-2", transport, store));
+    await screen.findByTestId("thread-canvas");
+
+    // The stage is deliberately not mounted, so no approve/reject exists.
+    expect(
+      screen.queryByRole("button", { name: /approve/i }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /reject/i }),
+    ).not.toBeInTheDocument();
+  });
 });

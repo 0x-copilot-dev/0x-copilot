@@ -38,6 +38,11 @@ class ArtifactRevisionMetadata(BaseModel):
 
     parent_revision: PositiveInt
     expected_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # The run the user is acting in, which is not necessarily the run that
+    # created the artifact once a canvas outlives a single turn (PRD-02 Flow B).
+    # Verified server-side as owned and non-terminal — never trusted. Absent
+    # keeps the pre-PRD-02 behaviour of attributing to the creating run.
+    acting_run_id: str | None = Field(default=None, min_length=1, max_length=255)
 
 
 class ArtifactPromotionBody(BaseModel):
