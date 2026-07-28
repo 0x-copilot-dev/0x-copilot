@@ -84,6 +84,9 @@ from runtime_worker.run_control import (
     RunControlPlaneBuilder,
     StableUserProfileHmac,
 )
+from runtime_worker.run_control_release_composition import (
+    install_default_task_policy_runtime,
+)
 from agent_runtime.surfaces_v2.ledger_models import EffectExecutorKind
 
 
@@ -229,11 +232,23 @@ class RuntimeWorker:
         worker_environment = dict(os.environ)
         if capability_env is not None:
             worker_environment.update(capability_env)
-        self.run_control_builder = run_control_builder or RunControlPlaneBuilder(
-            store=EventJournalRunControlStore(self.event_store),
-            deployment_profile=DeploymentProfileLoader.load(worker_environment).name,
-            subject_hmac=StableUserProfileHmac.from_environment(worker_environment),
-        )
+        if run_control_builder is None:
+            run_control_store = EventJournalRunControlStore(self.event_store)
+            run_control_builder = install_default_task_policy_runtime(
+                builder=RunControlPlaneBuilder(
+                    store=run_control_store,
+                    deployment_profile=DeploymentProfileLoader.load(
+                        worker_environment
+                    ).name,
+                    subject_hmac=StableUserProfileHmac.from_environment(
+                        worker_environment
+                    ),
+                ),
+                store=run_control_store,
+                event_store=self.event_store,
+                environment=worker_environment,
+            )
+        self.run_control_builder = run_control_builder
         if (
             terminal_run_observer is None
             and evaluation_projection_runner is None

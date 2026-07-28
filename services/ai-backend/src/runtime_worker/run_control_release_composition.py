@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 import os
 
+from agent_runtime.api.ports import EventStorePort
+from agent_runtime.api.task_policy_store import EventJournalTaskPolicyStore
+from agent_runtime.capabilities.task_policy_journal import (
+    TaskPolicyJournalWrite,
+    validate_task_policy_journal_record,
+)
 from agent_runtime.control_plane.ports import RunControlSnapshotStorePort
 from agent_runtime.deployment.profile import DeploymentProfileLoader
 from agent_runtime.harness_quality.evaluation_contracts import EvaluationScope
@@ -32,6 +38,10 @@ from runtime_worker.run_control_release_configuration import (
     RunControlReleaseDeploymentConfiguration,
     load_run_control_release_configuration,
 )
+from runtime_worker.task_policy_runtime import (
+    DefaultTaskPolicyRuntimeFactory,
+    TaskPolicyFingerprinter,
+)
 
 
 class RunControlReleaseCompositionError(RuntimeError):
@@ -43,6 +53,7 @@ async def build_run_control_plane_builder(
     settings: RuntimeSettings,
     repository: EvaluationRepositoryPort | None,
     store: RunControlSnapshotStorePort,
+    event_store: EventStorePort | None = None,
     environment: Mapping[str, str] | None = None,
     task_policy_runtime_factory: TaskPolicyRuntimeFactoryPort | None = None,
     load_task_policy_records: TaskPolicyRecordLoader | None = None,
@@ -54,6 +65,18 @@ async def build_run_control_plane_builder(
     env = dict(os.environ if environment is None else environment)
     deployment_profile = DeploymentProfileLoader.load(env).name
     subject_hmac = StableUserProfileHmac.from_environment(env)
+    (
+        task_policy_runtime_factory,
+        load_task_policy_records,
+        append_task_policy_record,
+    ) = _task_policy_composition(
+        store=store,
+        event_store=event_store,
+        environment=env,
+        factory=task_policy_runtime_factory,
+        load_records=load_task_policy_records,
+        append_record=append_task_policy_record,
+    )
     path = settings.evaluation.release_config_path
     if repository is None:
         if path is not None:
@@ -236,8 +259,100 @@ def _install_task_policy_runtime(
     )
 
 
+def _task_policy_composition(
+    *,
+    store: RunControlSnapshotStorePort,
+    event_store: EventStorePort | None,
+    environment: Mapping[str, str],
+    factory: TaskPolicyRuntimeFactoryPort | None,
+    load_records: TaskPolicyRecordLoader | None,
+    append_record: TaskPolicyRecordAppender | None,
+) -> tuple[
+    TaskPolicyRuntimeFactoryPort | None,
+    TaskPolicyRecordLoader | None,
+    TaskPolicyRecordAppender | None,
+]:
+    supplied = (
+        factory is not None,
+        load_records is not None,
+        append_record is not None,
+    )
+    if any(supplied):
+        if not all(supplied):
+            raise RunControlReleaseCompositionError(
+                "task-policy runtime requires factory and durable journal callbacks"
+            )
+        return factory, load_records, append_record
+    if event_store is None:
+        return None, None, None
+    journal = EventJournalTaskPolicyStore(events=event_store, snapshots=store)
+    runtime_factory = DefaultTaskPolicyRuntimeFactory(
+        fingerprinter=TaskPolicyFingerprinter.from_environment(environment)
+    )
+
+    async def load(
+        org_id: str,
+        run_id: str,
+        subject_fingerprint: str,
+    ) -> Sequence[object]:
+        return await journal.list_for_run(
+            org_id=org_id,
+            run_id=run_id,
+            subject_fingerprint=subject_fingerprint,
+        )
+
+    async def append(
+        org_id: str,
+        run_id: str,
+        subject_fingerprint: str,
+        record: object,
+    ) -> object:
+        parsed = validate_task_policy_journal_record(record)
+        if parsed.run_id != run_id:
+            raise RunControlReleaseCompositionError(
+                "task-policy callback run identity mismatch"
+            )
+        return await journal.append(
+            TaskPolicyJournalWrite(
+                org_id=org_id,
+                trace_id=f"f4-{parsed.record_id}",
+                subject_fingerprint=subject_fingerprint,
+                record=parsed,
+            )
+        )
+
+    return runtime_factory, load, append
+
+
+def install_default_task_policy_runtime(
+    *,
+    builder: RunControlPlaneBuilder,
+    store: RunControlSnapshotStorePort,
+    event_store: EventStorePort,
+    environment: Mapping[str, str] | None = None,
+) -> RunControlPlaneBuilder:
+    """Attach the canonical F4 journal composition to a direct worker builder."""
+
+    factory, load, append = _task_policy_composition(
+        store=store,
+        event_store=event_store,
+        environment=dict(os.environ if environment is None else environment),
+        factory=None,
+        load_records=None,
+        append_record=None,
+    )
+    assert factory is not None and load is not None and append is not None
+    builder.install_task_policy_runtime(
+        factory=factory,
+        load_records=load,
+        append_record=append,
+    )
+    return builder
+
+
 __all__ = (
     "RunControlReleaseCompositionError",
     "build_local_release_control_service",
     "build_run_control_plane_builder",
+    "install_default_task_policy_runtime",
 )

@@ -650,6 +650,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 intent=intent,
                 succeeded=succeeded,
                 error_class=None if succeeded else "ToolMessageError",
+                result=result,
             )
         finally:
             guard.record_settled(
@@ -714,6 +715,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 intent=intent,
                 succeeded=succeeded,
                 error_class=None if succeeded else "ToolMessageError",
+                result=result,
             )
         finally:
             guard.record_settled(

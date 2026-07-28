@@ -872,6 +872,50 @@ class RequestFingerprint:
         }
         return self._digest(payload)
 
+    def for_result(
+        self,
+        *,
+        capability_id: str,
+        result_metadata: Mapping[str, Any],
+    ) -> str:
+        """Return a keyed digest for protected result metadata."""
+
+        if not capability_id.strip():
+            raise ValueError("capability_id must be non-empty")
+        return self._digest(
+            {
+                "kind": "result",
+                "capability_id": capability_id,
+                "result": self._scrub(result_metadata),
+            }
+        )
+
+    def for_error(
+        self,
+        *,
+        capability_id: str,
+        request_fingerprint: str,
+        error_class: str,
+        retryable: bool,
+        retry_hint: str | None = None,
+    ) -> str:
+        """Return a keyed digest for a normalized retry-relevant failure."""
+
+        if not error_class.strip():
+            raise ValueError("error_class must be non-empty")
+        if len(request_fingerprint) != 64:
+            raise ValueError("request_fingerprint must be a sha256 hex digest")
+        return self._digest(
+            {
+                "kind": "error",
+                "capability_id": capability_id,
+                "request_fingerprint": request_fingerprint,
+                "error_class": error_class.strip().lower(),
+                "retryable": retryable,
+                "retry_hint": retry_hint,
+            }
+        )
+
     @classmethod
     def _scrub(cls, value: object, *, parent_key: str | None = None) -> object:
         if isinstance(value, Mapping):
@@ -1170,8 +1214,9 @@ class ToolUseController:
             calls_by_capability=tuple(sorted(self._calls_by_capability.items())),
             source_fingerprint_count=len(self._source_fingerprints),
             semantic_history_count=len(self._semantic_history),
-            evidence_count=len(self._evidence_fingerprints)
-            + len(self._source_fingerprints),
+            evidence_count=len(
+                self._evidence_fingerprints.union(self._source_fingerprints)
+            ),
             low_yield_streak=self._low_yield_streak,
             objective_satisfied=self._objective_satisfied,
         )
@@ -1226,6 +1271,11 @@ class ToolUseController:
             disposition=ToolUseDisposition.CONTINUE,
             reason_code="model_turn_recorded",
         )
+
+    def observe_model_turn(self, record: ModelTurnRecord) -> None:
+        """Account for a shadow-admitted turn after preserving its policy decision."""
+
+        self._apply_model_turn(record)
 
     def bind_budget(self, record: TaskPolicyBudgetRecord) -> None:
         """Bind the one durable effective budget snapshot idempotently."""
@@ -1296,6 +1346,11 @@ class ToolUseController:
                 else None
             ),
         )
+
+    def observe_dispatched(self, intent: ToolUseIntent) -> None:
+        """Account for a shadow-admitted dispatch without changing its decision."""
+
+        self._apply_intent(intent)
 
     def after_operation(self, outcome: ToolOperationOutcome) -> ToolUseFeedback:
         """Fold one outcome idempotently and emit only bounded structured advice."""
@@ -1397,7 +1452,10 @@ class ToolUseController:
                     budget_remaining=remaining,
                 )
         else:
-            if new_sources == 0 and source_fingerprints:
+            observed_evidence = bool(
+                source_fingerprints or outcome.evidence_fingerprint
+            )
+            if new_sources == 0 and new_evidence == 0 and observed_evidence:
                 self._low_yield_streak += 1
             else:
                 self._low_yield_streak = 0

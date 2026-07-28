@@ -31,7 +31,7 @@ from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 _DIGEST_PATTERN = r"^[0-9a-f]{64}$"
-_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$"
+_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:~-]{0,159}$"
 _CAPABILITY_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,239}$"
 _CODE_PATTERN = r"^[a-z][a-z0-9._:-]{0,119}$"
 _SELECTION_REF_PATTERN = (
@@ -55,6 +55,7 @@ class TaskPolicyJournalRecordKind(StrEnum):
     FEEDBACK_RECORDED = "feedback_recorded"
     BUDGET_RECORDED = "budget_recorded"
     PROGRESS_RECORDED = "progress_recorded"
+    MODEL_TURN_RECORDED = "model_turn_recorded"
 
 
 class TaskPolicyAdmissionDisposition(StrEnum):
@@ -234,6 +235,8 @@ class TaskPolicyIntentRecordedRecord(_TaskPolicyJournalRecordBase):
     plan_digest: str | None = Field(default=None, pattern=_DIGEST_PATTERN)
     plan_step_id: str | None = Field(default=None, pattern=_ID_PATTERN)
     expected_evidence_kind: str | None = Field(default=None, pattern=_CODE_PATTERN)
+    semantic_fingerprint: str | None = Field(default=None, pattern=_DIGEST_PATTERN)
+    objective_fingerprint: str | None = Field(default=None, pattern=_DIGEST_PATTERN)
 
     @model_validator(mode="after")
     def _plan_binding_is_complete(self) -> Self:
@@ -290,7 +293,22 @@ class TaskPolicyOutcomeRecordedRecord(_TaskPolicyJournalRecordBase):
     retryable: bool = False
     new_evidence_count: NonNegativeInt = 0
     observed_source_count: NonNegativeInt = 0
+    source_fingerprints: tuple[str, ...] = Field(default=(), max_length=500)
+    evidence_fingerprint: str | None = Field(default=None, pattern=_DIGEST_PATTERN)
+    cost_microusd: NonNegativeInt = 0
     latency_ms: NonNegativeInt = 0
+
+    @field_validator("source_fingerprints")
+    @classmethod
+    def _unique_source_fingerprints(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(set(value)) != len(value):
+            raise ValueError("source fingerprints must be unique")
+        if any(
+            len(item) != 64 or any(char not in "0123456789abcdef" for char in item)
+            for item in value
+        ):
+            raise ValueError("source fingerprints must be sha256 hex digests")
+        return value
 
     @model_validator(mode="after")
     def _outcome_shape_matches_status(self) -> Self:
@@ -409,6 +427,28 @@ class TaskPolicyProgressRecordedRecord(_TaskPolicyJournalRecordBase):
         return self
 
 
+class TaskPolicyModelTurnRecordedRecord(_TaskPolicyJournalRecordBase):
+    """One content-free model-turn decision and its durable accounting fact."""
+
+    record_kind: Literal[TaskPolicyJournalRecordKind.MODEL_TURN_RECORDED] = (
+        TaskPolicyJournalRecordKind.MODEL_TURN_RECORDED
+    )
+    turn_id: str = Field(pattern=_ID_PATTERN)
+    model_turn_ordinal: PositiveInt
+    execution_scope_fingerprint: str = Field(pattern=_DIGEST_PATTERN)
+    disposition: TaskPolicyAdmissionDisposition
+    reason_codes: tuple[TaskPolicyReasonCode, ...] = Field(min_length=1, max_length=16)
+    cost_microusd: NonNegativeInt = 0
+
+    @field_validator("reason_codes")
+    @classmethod
+    def _bounded_unique_reasons(
+        cls,
+        value: tuple[TaskPolicyReasonCode, ...],
+    ) -> tuple[TaskPolicyReasonCode, ...]:
+        return TaskPolicyAdmissionRecordedRecord._bounded_unique_reasons(value)
+
+
 TaskPolicyJournalRecord: TypeAlias = Annotated[
     TaskPolicyProfileSelectedRecord
     | TaskPolicyPlanBoundRecord
@@ -417,7 +457,8 @@ TaskPolicyJournalRecord: TypeAlias = Annotated[
     | TaskPolicyOutcomeRecordedRecord
     | TaskPolicyFeedbackRecordedRecord
     | TaskPolicyBudgetRecordedRecord
-    | TaskPolicyProgressRecordedRecord,
+    | TaskPolicyProgressRecordedRecord
+    | TaskPolicyModelTurnRecordedRecord,
     Field(discriminator="record_kind"),
 ]
 TASK_POLICY_JOURNAL_RECORD_ADAPTER = TypeAdapter(TaskPolicyJournalRecord)
@@ -515,6 +556,7 @@ __all__ = [
     "TaskPolicyJournalSnapshotConflict",
     "TaskPolicyJournalStorePort",
     "TaskPolicyJournalWrite",
+    "TaskPolicyModelTurnRecordedRecord",
     "TaskPolicyOutcomeRecordedRecord",
     "TaskPolicyOutcomeStatus",
     "TaskPolicyPlanBoundRecord",
