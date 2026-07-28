@@ -232,9 +232,9 @@ afterwards append after the seal as **amendments**, carrying
 `ledger_amendment_reason` (and `ledger_amends` when they point at a specific
 sealed fact) in event metadata:
 
-| Reason | When |
-| --- | --- |
-| `reconciliation` | An A5 effect claim settled after its run ended — its disposition was unknowable while the run was open. |
+| Reason                 | When                                                                                                                                                                               |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `reconciliation`       | An A5 effect claim settled after its run ended — its disposition was unknowable while the run was open.                                                                            |
 | `late_causal_recovery` | A causal event whose in-run emission was lost to a crash, recovered by the outbox bridge. Not "pretending to be causal": the label keeps the prefix's completeness claim truthful. |
 
 **Producing events.** Emit causal events before termination. Enforcement is
