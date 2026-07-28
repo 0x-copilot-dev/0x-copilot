@@ -16,14 +16,16 @@ The following implementation boundaries matter during an incident:
 - `RunControlSnapshot.feature_modes.f10` is the persisted `off`, `shadow`, or
   `enforce` authority for a run. Signed release configuration and controlled
   restart are the existing deployment path for changing it.
-- `ModelReliabilityReleaseControls` defines independent modes and kill switches
-  for same-deployment retry, alternate route, equivalent route, and circuit
-  influence. On this revision it is a typed composition input, not an
-  environment-backed operator API. Do not invent or set `F10_*` variables.
+- `RunControlBinding.model_reliability` is derived from the signed run-control
+  snapshot. It independently narrows same-deployment retry, alternate route,
+  equivalent route, and circuit influence. It is not an environment-backed
+  operator API; do not invent or set `F10_*` variables.
 - `ProcessLocalProviderCircuitHealth` is bounded process-local state.
-  `DesktopProviderCircuitSnapshotStore` is an optional capped, atomic file
-  adapter, but no production path or shutdown composition is assigned on this
-  revision. Do not assume a snapshot exists.
+  In the desktop file-store profile, the worker restores it at startup and
+  flushes it on normal worker shutdown through the optional capped, atomic
+  `DesktopProviderCircuitSnapshotStore`. Web and multi-worker deployments are
+  memory-only; do not assume a snapshot exists outside the desktop conditions
+  documented below.
 - The OpenTelemetry projector is available for composition after a validated
   journal append or bounded replay. A deployment must wire that producer and an
   OTLP collector before treating the signals below as live alerts.
@@ -58,10 +60,25 @@ Each recovery control resolves independently from `off`, `shadow`, or
 | equivalent route  | Exact F1-qualified task-family/revision pair and product permission. | No cross-model fallback.                    |
 | circuit influence | Open circuit can exclude a route; a bounded probe may be admitted.   | Circuit state cannot alter route admission. |
 
-These fields exist in `ModelReliabilityReleaseControls`; the deployment adapter
-that supplies them must be reviewed before operators use them. Until that
-composition exists, the supported emergency action is signed `f10=off`
-rollback, not an undocumented environment override.
+These fields are signed in `RunControlBinding.model_reliability`. The supported
+emergency action is signed `f10=off` rollback (or narrowing the relevant
+signed subcontrol), not an undocumented environment override.
+
+### Usage reconciliation at an outer terminal boundary
+
+After the enclosing run is terminal, the worker reads the validated F10
+journal, materializes each finalized provider-reported attempt through the
+existing idempotent usage recorder using its stable `attempt_id`, and then
+persists the run aggregate. This applies to normal completion, failure,
+timeout, queued cancellation, and an approval-resume terminal outcome.
+
+`usage_record_id` only deduplicates a terminal streaming row that has already
+been materialized. It never creates a second charge. Journal cost is canonical
+provider-reported cost (including a billed failed attempt); it is preserved with
+the route's price revision and is not repriced by the current catalog. An
+explicit unreported finalizer remains zero usage/cost. The projector is replayed
+and sealed only after that outer terminal fact, so ordinary stream handling
+cannot emit terminal metrics twice.
 
 ## Metric safety and inventory
 
@@ -185,9 +202,10 @@ policy.
 
 On suspected corruption:
 
-1. Confirm whether the host composition actually configured
-   `DesktopProviderCircuitSnapshotStore` and obtain its host-owned path. There
-   is no F10 snapshot environment variable or standard path on this revision.
+1. Confirm all three desktop gates: `ENTERPRISE_DEPLOYMENT_PROFILE` is
+   `single_user_desktop`, `RUNTIME_FILE_STORE_ROOT` is configured, and
+   `RUNTIME_PROVIDER_CIRCUIT_SNAPSHOT_ENABLED=true`. The standard local path
+   is `<RUNTIME_FILE_STORE_ROOT>/runtime-health/provider-circuit-health.v1.json`.
 2. Stop new-run admission and quit through the normal desktop lifecycle.
 3. Preserve a read-only forensic copy under the same local access controls.
    Never print the file or credential fingerprints into logs or a ticket.
@@ -250,9 +268,9 @@ in-flight socket, deadline, or snapshot write pauses safely. After resume:
 
 Electron's normal `before-quit` path stops facade → ai-backend → backend and
 then the embedded database. The Python supervisor uses `SIGTERM` with bounded
-`SIGKILL` escalation. The circuit snapshot is durable only if the host has
-explicitly composed and awaited its save; the adapter's existence alone does
-not guarantee that.
+`SIGKILL` escalation. The worker's normal shutdown flushes the shared desktop
+circuit registry when the three snapshot gates are active; forced termination
+can still lose the last in-memory observations.
 
 After force quit or process crash, reopen the file store normally and replay
 the journal. Any open provider attempt is ambiguous. Do not delete lock files,

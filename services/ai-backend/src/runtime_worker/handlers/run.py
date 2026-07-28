@@ -174,6 +174,7 @@ from runtime_worker.model_invocation_composition import (
     ModelInvocationEffectTracker,
     ModelInvocationWorkerComposer,
 )
+from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
@@ -270,6 +271,7 @@ class RuntimeRunHandler:
         prompt_observation_store: PromptObservationStorePort | None = None,
         model_invocation_store: ModelInvocationStorePort | None = None,
         model_invocation_composer: ModelInvocationWorkerComposer | None = None,
+        model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
@@ -378,6 +380,14 @@ class RuntimeRunHandler:
         self.usage_recorder: UsageRecorder = usage_recorder or PostgresUsageRecorder(
             persistence=self.persistence,
             pricing_catalog=self.pricing_catalog,
+        )
+        self._model_invocation_terminal = (
+            model_invocation_terminal
+            or ModelInvocationTerminalIntegration(
+                journal=model_invocation_store,
+                usage_recorder=self.usage_recorder,
+                persistence=self.persistence,
+            )
         )
 
     async def handle(self, command: RuntimeRunCommand) -> None:
@@ -768,6 +778,11 @@ class RuntimeRunHandler:
                 completed_at=failed.completed_at or datetime.now(timezone.utc),
                 status=AgentRunStatus.TIMED_OUT.value,
                 budget_reservations=budget_reservations,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
             )
             await self._observe_e2_shadow_projections(failed)
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
@@ -813,6 +828,11 @@ class RuntimeRunHandler:
                 completed_at=failed.completed_at or datetime.now(timezone.utc),
                 status=AgentRunStatus.FAILED.value,
                 budget_reservations=budget_reservations,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
             )
             await self._observe_e2_shadow_projections(failed)
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
@@ -877,6 +897,11 @@ class RuntimeRunHandler:
             completed_at=completed_at,
             status=AgentRunStatus.COMPLETED.value,
             budget_reservations=budget_reservations,
+            subject_fingerprint=(
+                prepared_run_control.control.snapshot.subject_fingerprint
+                if prepared_run_control is not None
+                else None
+            ),
         )
         await self._observe_e2_shadow_projections(completed)
 
@@ -1165,6 +1190,7 @@ class RuntimeRunHandler:
         completed_at: datetime,
         status: str,
         budget_reservations: Sequence[BudgetReservationRecord] = (),
+        subject_fingerprint: str | None = None,
     ) -> None:
         """Persist the per-run and per-LLM-call usage records, then charge budgets.
 
@@ -1173,11 +1199,20 @@ class RuntimeRunHandler:
         failures are absorbed rather than propagated to the run lifecycle.
         """
 
+        await self._model_invocation_terminal.finalize(
+            run=run,
+            metrics=metrics,
+            subject_fingerprint=subject_fingerprint,
+            completed_at=completed_at,
+        )
         usage_record = metrics.to_usage_record(
             run, completed_at=completed_at, status=status
         )
-        run_result = await self.usage_recorder.record_run(
-            usage_record, pricing_at=completed_at
+        run_cost_micro_usd = await self._model_invocation_terminal.record_run_usage(
+            run=run,
+            metrics=metrics,
+            completed_at=completed_at,
+            status=status,
         )
         for call_record in metrics.model_call_usage_records(run, trace_id=run.trace_id):
             await self.usage_recorder.record_call(call_record, pricing_at=completed_at)
@@ -1185,7 +1220,7 @@ class RuntimeRunHandler:
         # reservations are consumed in the same call so the budget reaper skips them.
         await self._charge_budgets(
             run,
-            observed_micro_usd=run_result.cost_micro_usd,
+            observed_micro_usd=run_cost_micro_usd,
             observed_tokens=usage_record.total_tokens,
             reservations=budget_reservations,
         )

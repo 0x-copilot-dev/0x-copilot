@@ -85,6 +85,7 @@ class ModelInvocationUsageReconciler:
         pricing_at: datetime,
         streamed_usage_ids: frozenset[str] = frozenset(),
         already_materialized_ids: frozenset[str] = frozenset(),
+        already_materialized_usage_ids: frozenset[str] = frozenset(),
     ) -> ModelInvocationUsageReconciliation:
         emitted: dict[str, RuntimeModelCallUsageRecord] = {}
         total = NormalizedTokenUsage()
@@ -123,13 +124,13 @@ class ModelInvocationUsageReconciler:
                 audio_output_tokens=record.audio_output_tokens,
             )
             # An explicit non-reported finalizer is intentionally a zero-cost,
-            # explicit fact, not an inferred missing usage charge.
+            # explicit journal fact, not an inferred missing usage charge.
             if not record.provider_reported:
                 continue
             cost_micro_usd += record.cost_microusd
-            if (
-                record.usage_record_id is not None
-                and record.usage_record_id in streamed_usage_ids
+            if record.usage_record_id is not None and (
+                record.usage_record_id in streamed_usage_ids
+                or record.usage_record_id in already_materialized_usage_ids
             ):
                 streamed.add(record.attempt_id)
                 continue

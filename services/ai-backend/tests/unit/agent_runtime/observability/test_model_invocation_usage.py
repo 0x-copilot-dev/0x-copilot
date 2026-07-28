@@ -37,7 +37,9 @@ from agent_runtime.observability.model_invocation_usage import (
     ModelInvocationUsageReconciler,
 )
 from agent_runtime.observability.token_usage import NormalizedTokenUsage
+from agent_runtime.observability.usage_recorder import InMemoryUsageRecorder
 from runtime_api.schemas import RunRecord
+from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
 from runtime_worker.run_metrics import AssistantRunMetrics
 
 _NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
@@ -395,3 +397,98 @@ async def test_projection_coordinator_replays_once_then_seals_at_outer_terminal(
     assert checkpoint is not None
     assert checkpoint.after_sequence == rows[-1].sequence_no
     assert checkpoint.projected_records == len(rows)
+
+
+async def test_terminal_integration_merges_stream_dedupe_and_billed_retry_before_run_usage() -> (
+    None
+):
+    """The terminal worker seam owns only the journal delta and canonical cost."""
+
+    invocation = _invocation()
+    streamed = _usage(
+        invocation,
+        ordinal=1,
+        stream_id="message-success",
+        input_tokens=10,
+        output_tokens=4,
+        cost=23,
+    )
+    failed_retry = _usage(
+        invocation,
+        ordinal=2,
+        input_tokens=7,
+        output_tokens=3,
+        cost=19,
+    )
+    rows = _journal_rows(invocation, streamed, failed_retry)
+
+    class _Journal:
+        async def list_for_run(
+            self, **kwargs: object
+        ) -> tuple[SequencedModelInvocationRecord, ...]:
+            after = kwargs.get("after_sequence", 0)
+            return tuple(row for row in rows if row.sequence_no > after)
+
+    recorder = InMemoryUsageRecorder()
+    metrics = AssistantRunMetrics(started_at=_NOW, provider="openai")
+    metrics.per_call.observe(
+        NormalizedTokenUsage(input_tokens=10, output_tokens=4),
+        message_id="message-success",
+    )
+    metrics.per_call.mark_completed("message-success", completed_at=_NOW)
+    metrics.usage = NormalizedTokenUsage(input_tokens=10, output_tokens=4)
+    integration = ModelInvocationTerminalIntegration(
+        journal=_Journal(),  # type: ignore[arg-type]
+        usage_recorder=recorder,
+    )
+
+    await integration.finalize(
+        run=_run(),
+        metrics=metrics,
+        subject_fingerprint="a" * 64,
+        completed_at=_NOW,
+    )
+    cost = await integration.record_run_usage(
+        run=_run(),
+        metrics=metrics,
+        completed_at=_NOW,
+        status="completed",
+    )
+
+    assert [row.id for row in recorder.calls] == [failed_retry.attempt_id]
+    assert recorder.runs[0].total_tokens == 24
+    assert recorder.runs[0].cost_micro_usd == 42
+    assert cost == 42
+
+
+async def test_terminal_integration_without_f10_journal_preserves_legacy_metrics() -> (
+    None
+):
+    """F10 off does not add a call row or alter the existing run aggregate."""
+
+    recorder = InMemoryUsageRecorder()
+    metrics = AssistantRunMetrics(started_at=_NOW, provider="openai")
+    metrics.record_model_invocation_usage(
+        NormalizedTokenUsage(input_tokens=3, output_tokens=2), cost_micro_usd=7
+    )
+    integration = ModelInvocationTerminalIntegration(
+        journal=None,
+        usage_recorder=recorder,
+    )
+
+    await integration.finalize(
+        run=_run(),
+        metrics=metrics,
+        subject_fingerprint=None,
+        completed_at=_NOW,
+    )
+    await integration.record_run_usage(
+        run=_run(),
+        metrics=metrics,
+        completed_at=_NOW,
+        status="completed",
+    )
+
+    assert recorder.calls == []
+    assert recorder.runs[0].total_tokens == 5
+    assert recorder.runs[0].cost_micro_usd == 7

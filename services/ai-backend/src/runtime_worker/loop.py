@@ -29,6 +29,12 @@ from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
 from agent_runtime.control_plane.ports import RunControlSnapshotStorePort
 from agent_runtime.prompts.observation import PromptObservationStorePort
 from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
+from agent_runtime.execution.model_invocation.circuit_health import (
+    ProcessLocalProviderCircuitHealth,
+)
+from agent_runtime.execution.model_invocation.circuit_snapshot_lifecycle import (
+    DesktopProviderCircuitSnapshotLifecycle,
+)
 from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
@@ -42,6 +48,8 @@ from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.effects.claims import EffectClaimStore
 from agent_runtime.observability.http_logging import LoggingConfigurator
 from agent_runtime.observability.queue_propagation import QueueTracePropagator
+from agent_runtime.observability.usage_recorder import PostgresUsageRecorder
+from agent_runtime.pricing import ModelPricingCatalog
 from agent_runtime.persistence.constants import Values as PersistenceValues
 from agent_runtime.persistence.records import RuntimeWorkerClaim, RuntimeWorkerResult
 from agent_runtime.settings import RuntimeSettings
@@ -87,6 +95,9 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_worker.handlers.run import RuntimeRunHandler
+from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
+from runtime_worker.model_invocation_circuit import ProviderCircuitHealthRegistry
+from runtime_worker.model_invocation_composition import ModelInvocationWorkerComposer
 from runtime_worker.run_control import (
     RunControlPlaneBuilder,
     StableUserProfileHmac,
@@ -273,6 +284,33 @@ class RuntimeWorker:
         self.run_control_builder = run_control_builder
         self.prompt_observation_store = prompt_observation_store
         self.model_invocation_store = model_invocation_store
+        self._provider_circuit_health = ProcessLocalProviderCircuitHealth()
+        self._provider_circuit_snapshot = (
+            DesktopProviderCircuitSnapshotLifecycle.from_environment(worker_environment)
+        )
+        if self._provider_circuit_snapshot is not None:
+            self._provider_circuit_snapshot.restore(self._provider_circuit_health)
+        circuit_registry = ProviderCircuitHealthRegistry(self._provider_circuit_health)
+        model_invocation_composer = ModelInvocationWorkerComposer(
+            settings=self.settings,
+            persistence=self.persistence,
+            event_store=self.event_store,
+            journal=self.model_invocation_store,
+            circuit_health=circuit_registry,
+        )
+        # One worker-owned reconciliation coordinator and recorder serves all
+        # terminal command families.  A run may suspend in the normal handler
+        # and reach its outer terminal fact from approval-resume or cancellation;
+        # recreating this seam per handler would lose the per-run projector cursor.
+        usage_recorder = PostgresUsageRecorder(
+            persistence=self.persistence,
+            pricing_catalog=ModelPricingCatalog.from_litellm(),
+        )
+        model_invocation_terminal = ModelInvocationTerminalIntegration(
+            journal=self.model_invocation_store,
+            usage_recorder=usage_recorder,
+            persistence=self.persistence,
+        )
         if (
             terminal_run_observer is None
             and evaluation_projection_runner is None
@@ -348,12 +386,19 @@ class RuntimeWorker:
             run_control_builder=self.run_control_builder,
             prompt_observation_store=self.prompt_observation_store,
             model_invocation_store=self.model_invocation_store,
+            model_invocation_composer=model_invocation_composer,
+            usage_recorder=usage_recorder,
+            model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
             persistence=self.persistence,
             event_store=self.event_store,
             terminal_run_observer=terminal_run_observer,
+            run_control_builder=self.run_control_builder,
+            model_invocation_store=self.model_invocation_store,
+            usage_recorder=usage_recorder,
+            model_invocation_terminal=model_invocation_terminal,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
             persistence=self.persistence,
@@ -368,6 +413,9 @@ class RuntimeWorker:
             run_control_builder=self.run_control_builder,
             prompt_observation_store=self.prompt_observation_store,
             model_invocation_store=self.model_invocation_store,
+            model_invocation_composer=model_invocation_composer,
+            usage_recorder=usage_recorder,
+            model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
         )
         self.artifact_event_handler = (
@@ -730,10 +778,14 @@ class RuntimeWorker:
     async def run_forever(self, *, poll_interval_seconds: float = 1.0) -> None:
         """Continuously process queue claims."""
 
-        while True:
-            did_work = await self.run_once()
-            if not did_work:
-                await asyncio.sleep(poll_interval_seconds)
+        try:
+            while True:
+                did_work = await self.run_once()
+                if not did_work:
+                    await asyncio.sleep(poll_interval_seconds)
+        finally:
+            if self._provider_circuit_snapshot is not None:
+                self._provider_circuit_snapshot.flush(self._provider_circuit_health)
 
     async def _handle_claim(self, claim: RuntimeWorkerClaim) -> None:
         """Dispatch the claim and mark it complete, retry, or dead-letter on error."""

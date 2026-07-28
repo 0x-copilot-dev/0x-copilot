@@ -337,6 +337,20 @@ class RunControlPlaneBuilder:
         self._append_task_policy_record = append_record
         self._load_budget_envelope = load_budget_envelope
 
+    def subject_fingerprint_for(self, run: RunRecord) -> str:
+        """Derive the trusted journal scope without creating a snapshot.
+
+        Queue cancellation needs this narrow helper: a queued run may never
+        have reached model execution, so cancellation must not manufacture a
+        run-control snapshot merely to discover that its F10 journal is empty.
+        """
+
+        return self._subject_hmac.fingerprint(
+            org_id=run.org_id,
+            user_id=run.user_id,
+            deployment_profile=self._deployment_profile,
+        )
+
     async def ensure_snapshot(
         self,
         *,
@@ -345,11 +359,7 @@ class RunControlPlaneBuilder:
     ) -> RunControlSnapshot:
         """Return the one durable snapshot for an already-verified run."""
 
-        subject_fingerprint = self._subject_hmac.fingerprint(
-            org_id=run.org_id,
-            user_id=run.user_id,
-            deployment_profile=self._deployment_profile,
-        )
+        subject_fingerprint = self.subject_fingerprint_for(run)
         existing = await self._store.get(
             org_id=run.org_id,
             run_id=run.run_id,

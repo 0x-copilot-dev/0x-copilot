@@ -55,6 +55,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetMiddleware,
     WorkspaceToolBudgetOverride,
 )
+from agent_runtime.budgets import BudgetCharger
 from agent_runtime.control_plane.context import (
     RunControlBinding,
     TaskPolicyRuntimeBinding,
@@ -95,6 +96,10 @@ from agent_runtime.persistence.records import (
     BatchTransitionOutcome,
     ToolBudgetRecord,
 )
+from agent_runtime.observability.usage_recorder import (
+    NullUsageRecorder,
+    UsageRecorder,
+)
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
     AgentRunStatus,
@@ -118,6 +123,7 @@ from runtime_worker.model_invocation_composition import (
     ModelInvocationEffectTracker,
     ModelInvocationWorkerComposer,
 )
+from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
@@ -190,6 +196,8 @@ class RuntimeApprovalHandler:
         prompt_observation_store: PromptObservationStorePort | None = None,
         model_invocation_store: ModelInvocationStorePort | None = None,
         model_invocation_composer: ModelInvocationWorkerComposer | None = None,
+        usage_recorder: UsageRecorder | None = None,
+        model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
@@ -204,6 +212,16 @@ class RuntimeApprovalHandler:
                 journal=model_invocation_store,
             )
         )
+        self.usage_recorder: UsageRecorder = usage_recorder or NullUsageRecorder()
+        self._model_invocation_terminal = (
+            model_invocation_terminal
+            or ModelInvocationTerminalIntegration(
+                journal=model_invocation_store,
+                usage_recorder=self.usage_recorder,
+                persistence=self.persistence,
+            )
+        )
+        self._budget_charger = BudgetCharger(self.persistence)
         self._e2_rollout_admission = E2RolloutAdmission(
             resolution=self.settings.execution.rollout,
             cohorts=self.settings.execution.rollout_cohorts,
@@ -465,6 +483,7 @@ class RuntimeApprovalHandler:
             else None
         )
         run_control_token: object | None = None
+        metrics = AssistantRunMetrics.from_run(running)
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -537,7 +556,6 @@ class RuntimeApprovalHandler:
                 if inspect.isawaitable(harness_or_coro)
                 else harness_or_coro
             )
-            metrics = AssistantRunMetrics.from_run(running)
             result = await self._stream_resume(
                 run=running,
                 harness=harness,
@@ -555,7 +573,18 @@ class RuntimeApprovalHandler:
                 )
                 return
             final_text = RuntimeRunHandler._extract_final_text(result)
-            await self._complete_run_with_result(running, final_text, metrics)
+            completed = await self._complete_run_with_result(
+                running, final_text, metrics
+            )
+            await self._record_terminal_usage_safely(
+                run=completed,
+                metrics=metrics,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
+            )
             await self._observe_e2_shadow_projections(
                 running.model_copy(update={"status": AgentRunStatus.COMPLETED})
             )
@@ -572,6 +601,15 @@ class RuntimeApprovalHandler:
                 reason=TerminationReason.EXECUTION_ERROR,
                 summary="Run failed",
                 cause=exc,
+            )
+            await self._record_terminal_usage_safely(
+                run=failed,
+                metrics=metrics,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
             )
             await self._observe_e2_shadow_projections(failed)
             raise
@@ -993,7 +1031,7 @@ class RuntimeApprovalHandler:
         run: RunRecord,
         final_text: str | None,
         metrics: AssistantRunMetrics,
-    ) -> None:
+    ) -> RunRecord:
         """Persist the final assistant message (if any), emit ``FINAL_RESPONSE``, and mark the run completed."""
         metrics_payload = metrics.to_payload(completed_at=datetime.now(timezone.utc))
         if final_text is not None:
@@ -1040,6 +1078,70 @@ class RuntimeApprovalHandler:
             extra_payload=AssistantRunMetrics.with_payload({}, metrics_payload),
             extra_metadata=AssistantRunMetrics.metadata(metrics_payload),
         )
+        return completed
+
+    async def _record_terminal_usage(
+        self,
+        *,
+        run: RunRecord,
+        metrics: AssistantRunMetrics,
+        subject_fingerprint: str | None,
+    ) -> None:
+        """Reconcile the resumed segment after its outer terminal event."""
+
+        completed_at = run.completed_at or datetime.now(timezone.utc)
+        await self._model_invocation_terminal.finalize(
+            run=run,
+            metrics=metrics,
+            subject_fingerprint=subject_fingerprint,
+            completed_at=completed_at,
+        )
+        observed_cost = await self._model_invocation_terminal.record_run_usage(
+            run=run,
+            metrics=metrics,
+            completed_at=completed_at,
+            status=run.status.value,
+        )
+        try:
+            await self._budget_charger.charge_run(
+                org_id=run.org_id,
+                user_id=run.user_id,
+                run_id=run.run_id,
+                observed_micro_usd=observed_cost,
+                observed_tokens=metrics.to_usage_record(
+                    run,
+                    completed_at=completed_at,
+                    status=run.status.value,
+                ).total_tokens,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "approval_resume_budget_charge_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
+
+    async def _record_terminal_usage_safely(
+        self,
+        *,
+        run: RunRecord,
+        metrics: AssistantRunMetrics,
+        subject_fingerprint: str | None,
+    ) -> None:
+        """Never rewrite a durable user-visible terminal outcome on projection loss."""
+
+        try:
+            await self._record_terminal_usage(
+                run=run,
+                metrics=metrics,
+                subject_fingerprint=subject_fingerprint,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "approval_resume_terminal_projection_failed",
+                extra={"metadata": {"run_id": run.run_id}},
+                exc_info=True,
+            )
 
     @classmethod
     def _native_interrupt_id_for(

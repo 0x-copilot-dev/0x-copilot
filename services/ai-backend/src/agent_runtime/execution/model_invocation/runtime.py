@@ -151,6 +151,10 @@ class ModelInvocationRuntimeBinding:
     projected_output_tokens: int | None = None
     external_effect_observed: Callable[[], bool] = lambda: False
     post_response_error_observer: Callable[[Exception], None] | None = None
+    circuit_success_observer: Callable[[ModelRouteEntry], None] | None = None
+    circuit_failure_observer: (
+        Callable[[ModelRouteEntry, ModelFailureClass], None] | None
+    ) = None
     now: Callable[[], datetime] = lambda: datetime.now(timezone.utc)
 
     def __post_init__(self) -> None:
@@ -177,6 +181,7 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
         self._state = ProviderAttemptLifecycle()
         self._usage = NormalizedTokenUsage()
         self._usage_reported = False
+        self._usage_record_id: str | None = None
         self._lock = Lock()
 
     @property
@@ -188,6 +193,13 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
     def usage(self) -> tuple[NormalizedTokenUsage, bool]:
         with self._lock:
             return (self._usage, self._usage_reported)
+
+    @property
+    def usage_record_id(self) -> str | None:
+        """The stream accumulator's stable LangChain message id, when known."""
+
+        with self._lock:
+            return self._usage_record_id
 
     def dispatch_started(self) -> None:
         self._event(ProviderLifecycleEvent.DISPATCH_STARTED)
@@ -319,6 +331,9 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
             message
         )
         if observed is not None:
+            message_id = getattr(message, "id", None)
+            if isinstance(message_id, str) and message_id:
+                self._usage_record_id = message_id
             self._usage = self._usage.merge(observed)
             self._usage_reported = True
             self._state = self._reducer.reduce(
@@ -545,6 +560,8 @@ class ModelInvocationMiddleware(AgentMiddleware):
                     )
                     failure = prior[-1].failure_class
                     assert failure is not None
+                    if binding.circuit_failure_observer is not None:
+                        binding.circuit_failure_observer(route, failure)
                     if cache_signal is not None:
                         next_decision = (
                             ModelAttemptAdmissionPolicy().decide_cache_fallback(
@@ -620,6 +637,8 @@ class ModelInvocationMiddleware(AgentMiddleware):
                     attempt_count=len(prior) + 1,
                     duration_ms=duration_ms,
                 )
+                if binding.circuit_success_observer is not None:
+                    binding.circuit_success_observer(route)
             except Exception:  # post-response telemetry never discards output
                 diagnostic = ModelInvocationPostResponsePersistenceError(
                     "provider response succeeded but F10 telemetry persistence failed"
@@ -985,6 +1004,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 admission=admission,
                 usage=usage,
                 provider_reported=reported,
+                usage_record_id=observer.usage_record_id,
                 duration_ms=duration_ms,
             ),
         )
@@ -1038,6 +1058,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
             admission=admission,
             usage=usage if reported else NormalizedTokenUsage(),
             provider_reported=reported,
+            usage_record_id=observer.usage_record_id,
             duration_ms=duration_ms,
         )
         await self._append(binding, usage_record)

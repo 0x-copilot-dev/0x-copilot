@@ -182,6 +182,34 @@ async def _decide(
 
 
 class TestApprovalBatchFanin:
+    async def test_terminal_projection_failure_keeps_completed_resume_terminal(
+        self,
+    ) -> None:
+        """Post-terminal F10 loss cannot rewrite a completed approval resume."""
+
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await _seed_batch_and_items(store, size=1)
+
+        class _FailingTerminal:
+            async def finalize(self, **_kwargs: object) -> None:
+                raise RuntimeError("projection unavailable")
+
+        handler = RuntimeApprovalHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=lambda **_: _FakeHarness(),
+            runtime_resumer=_resume_capturing_resumer([]),
+            model_invocation_terminal=_FailingTerminal(),  # type: ignore[arg-type]
+        )
+
+        await _decide(handler, item_index=0, decision=ApprovalDecision.APPROVED)
+
+        assert store.runs[_RUN_ID].status is AgentRunStatus.COMPLETED
+        event_types = [event.event_type for event in store.events_by_run[_RUN_ID]]
+        assert event_types.count(RuntimeApiEventType.RUN_COMPLETED) == 1
+        assert event_types.count(RuntimeApiEventType.FINAL_RESPONSE) == 0
+
     async def test_resume_rehydrates_same_snapshot_and_binds_context(self) -> None:
         store = InMemoryRuntimeApiStore()
         await _seed_run(store)

@@ -54,6 +54,7 @@ from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import RunRecord, RuntimeApiEventType
 from runtime_api.schemas.runs import ModelCatalogItem
 from runtime_api.schemas.workspace_defaults import WorkspaceDefaultsRecord
+from runtime_worker.model_invocation_circuit import ProviderCircuitHealthRegistry
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,6 +146,7 @@ class ModelInvocationWorkerComposer:
         facts_factory: FactsFactory | None = None,
         authority_adapter: ModelInvocationAuthorityAdapter | None = None,
         failure_adapters: ProviderFailureAdapterRegistry | None = None,
+        circuit_health: ProviderCircuitHealthRegistry | None = None,
     ) -> None:
         self._settings = settings
         self._persistence = persistence
@@ -155,6 +157,7 @@ class ModelInvocationWorkerComposer:
         self._failure_adapters = (
             failure_adapters or ProviderFailureAdapterRegistry.defaults()
         )
+        self._circuit_health = circuit_health
 
     async def compose(
         self,
@@ -194,7 +197,19 @@ class ModelInvocationWorkerComposer:
                         catalog_items=facts.catalog_items,
                         endpoints=facts.endpoints,
                         qualifications=facts.qualifications,
-                        health=facts.health,
+                        # Take an immutable health view immediately before each
+                        # F10 authority plan. Shadow still observes the same
+                        # shared reducer but deliberately preserves the static
+                        # catalog, while enforce may exclude an open circuit.
+                        health=(
+                            self._circuit_health.authority_facts(
+                                facts=facts,
+                                context=frozen_context,
+                            )
+                            if self._circuit_health is not None
+                            and release.circuit_influence_enabled
+                            else facts.health
+                        ),
                         deployment_credential_providers=(
                             facts.deployment_credential_providers
                         ),
@@ -213,6 +228,31 @@ class ModelInvocationWorkerComposer:
                 trace_id=run.trace_id,
                 failure_adapters=self._failure_adapters,
                 external_effect_observed=lambda: tracker.observed,
+                circuit_success_observer=(
+                    (
+                        lambda route: self._circuit_health.observe_success(
+                            route=route,
+                            context=frozen_context,
+                        )
+                    )
+                    if self._circuit_health is not None
+                    and release.circuit_influence.observes
+                    else None
+                ),
+                circuit_failure_observer=(
+                    (
+                        lambda route, failure_class: (
+                            self._circuit_health.observe_failure(
+                                route=route,
+                                context=frozen_context,
+                                failure_class=failure_class,
+                            )
+                        )
+                    )
+                    if self._circuit_health is not None
+                    and release.circuit_influence.observes
+                    else None
+                ),
             )
             return ComposedModelInvocationRuntime(
                 binding=binding,

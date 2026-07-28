@@ -432,6 +432,11 @@ class AssistantRunMetrics:
             )
         return tuple(records)
 
+    def finalized_model_call_ids(self) -> frozenset[str]:
+        """Stable streamed usage IDs available as F10 journal dedupe witnesses."""
+
+        return frozenset(slot.message_id for slot in self.per_call.finalized_calls())
+
     def to_payload(self, *, completed_at: datetime | None = None) -> JsonObject:
         """Return the public JSON metrics payload."""
 
