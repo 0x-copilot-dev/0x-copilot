@@ -170,22 +170,26 @@ create a second planning queue.
         service gate: 5,777 passed, 127 skipped, one live evaluation
         deselected; API types, ruff, compile validation, formatting/commit
         hooks, and `git diff --check` passed).
-- [ ] **Step 5:** Complete F2 effective-prompt assembly, single cache ownership,
+- [x] **Step 5:** Complete F2 effective-prompt assembly, single cache ownership,
       outcome telemetry, and fallback.
-  - [ ] Complete source/sensitivity/scope/provider/model/harness/tool-revision
+  - [x] Complete source/sensitivity/scope/provider/model/harness/tool-revision
         prompt contracts and deterministic cache-scope validation.
-  - [ ] Convert every current system source into ordered typed fragment
+  - [x] Convert every current system source into ordered typed fragment
         providers while preserving byte-for-byte legacy semantics.
-  - [ ] Assemble on every supervisor/subagent model call through
+  - [x] Assemble on every supervisor/subagent model call through
         `ModelRequest.override` without mutating durable messages.
-  - [ ] Install one versioned provider cache-adapter registry with mutually
+  - [x] Install one versioned provider cache-adapter registry with mutually
         exclusive framework/product ownership and decoration-off backout.
-  - [ ] Persist body-free assembly/cache facts in the canonical event journal
+  - [x] Persist body-free assembly/cache facts in the canonical event journal
         and reconcile only actual provider cache metadata through usage.
-  - [ ] Expose one pre-content undecorated fallback contract to Step 6/F10;
+  - [x] Expose one pre-content undecorated fallback contract to Step 6/F10;
         never create a competing retry loop.
-  - [ ] Golden/F1/desktop operations evidence plus focused and full regression
-        suites and all Step 5 exit criteria.
+  - [x] Golden/F1/desktop operations evidence plus focused and full regression
+        suites and all Step 5 exit criteria (`78fe02d6`; 184 combined
+        prompt/observation/control/F1 tests; 138 post-composition integration
+        tests; final service gate: 5,846 passed, 127 skipped, one live
+        evaluation deselected; API types, full-service ruff/format, compile
+        validation, commit hooks, and `git diff --check` passed).
 - [ ] **Step 6:** Attach F10 route selection, credential mode, attempt journal,
       streaming fences, usage, and reconciliation to every model call.
 - [ ] **Step 7:** Add backend-owned F8 MCP revisions, annotation cache, remote

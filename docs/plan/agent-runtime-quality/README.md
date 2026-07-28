@@ -367,54 +367,64 @@ Root owns architecture, integration, commits, and the normative ordered
 checklist. Implementation lanes use isolated worktrees and return reviewed
 commits for root to integrate.
 
-- [ ] **F2.1 — Complete prompt contracts and cache-scope proof.** Extend the
+- [x] **F2.1 — Complete prompt contracts and cache-scope proof.** Extend the
       existing typed fragments and plan with source owner/revision,
       sensitivity, provider/model family, harness and bridge/tool-schema
       revisions, F4 profile binding, deterministic plan identity, and a
       reusable-prefix digest that contains every authority-changing input.
       Reject duplicate IDs, secret material, broader-than-source cache scope,
       and non-contiguous stable prefixes before provider dispatch.
-- [ ] **F2.2 — Convert every system source into an attributable provider.**
+- [x] **F2.2 — Convert every system source into an attributable provider.**
       Preserve the exact established instruction order while assigning static
       safety/tool protocol, MCP and skill cards, suggested connectors,
       workspace/application boundaries, approval state, F4 progress, and
       capability guidance to typed fragment providers. Untrusted or retrieved
       material must remain after immutable policy and never become an
       installation-wide reusable prefix.
-- [ ] **F2.3 — Assemble at the graph-wide model seam.** Bind one per-run prompt
+- [x] **F2.3 — Assemble at the graph-wide model seam.** Bind one per-run prompt
       runtime through `RunControlContext` and assemble in
       `RuntimeControlMiddleware.awrap_model_call` for every supervisor and
       local-subagent invocation. Apply only
       `ModelRequest.override(system_message=..., tools=...)`; never mutate
       provider-neutral persisted conversation messages or reconstruct the
       graph per turn.
-- [ ] **F2.4 — Single cache owner and versioned provider adapter registry.**
+- [x] **F2.4 — Single cache owner and versioned provider adapter registry.**
       Generalize the current decorator into explicit provider/model-family
       adapters, delegating to the pinned upstream cache middleware where it is
       the selected owner. Product and framework decoration must be mutually
       exclusive, unsupported routes preserve identical prompt semantics, and
       decoration-off remains an immediate release-controlled backout.
-- [ ] **F2.5 — Canonical observation and usage reconciliation.** Persist
+- [x] **F2.5 — Canonical observation and usage reconciliation.** Persist
       body-free `prompt.assembled.v1` and `prompt.cache.observed.v1` facts
       through the existing run event journal with stable IDs, fragment/token
       totals, digests, owner, outcome, and closed reason codes. Normalize only
       provider-reported cache read/write/miss/unsupported metadata through the
       existing model-usage path; never infer a hit from local digests.
-- [ ] **F2.6 — Failure, fallback, and recovery contract.** Fail closed before
+- [x] **F2.6 — Failure, fallback, and recovery contract.** Fail closed before
       dispatch on assembly/scope errors, make replay idempotent, preserve one
       undecorated semantic-equivalent fallback signal for Step 6/F10, and
       prohibit an independent retry loop or fallback after provider content,
       tool calls, or ambiguous acknowledgement.
-- [ ] **F2.7 — Golden parity, F1 evaluation, and desktop operations.** Prove
+- [x] **F2.7 — Golden parity, F1 evaluation, and desktop operations.** Prove
       byte-for-byte legacy rendering parity, randomized provider/registry
       ordering determinism, auth/profile/task revision invalidation,
       supervisor/subagent parity, feature-off behavior, prefix reuse, and no
       protected-task regression. Extend the existing F1 corpus and desktop
       runbook rather than creating another evaluator or service.
-- [ ] **F2.8 — Step gate.** Focused prompt/cache/middleware/usage/replay tests,
+- [x] **F2.8 — Step gate.** Focused prompt/cache/middleware/usage/replay tests,
       full `ai-backend` suite, API contract typecheck, ruff, formatting,
       `git diff --check`, and all Step 5 exit criteria must pass before the
       normative ordered checklist is marked complete.
+
+Step 5 completion evidence: typed prompt contracts, per-call model/cache seam,
+verified snapshot/F4 authority binding, canonical observation/F1 evaluation,
+worker/approval-resume composition, and post-response retry-safety fixes were
+merged through `78fe02d6`. The merged tree passed 184 combined
+prompt/observation/control/F1 tests, 138 post-composition integration tests,
+and the final service gate of 5,846 tests with 127 environment-dependent skips
+and one explicitly deselected live evaluation. Full-service ruff and format
+checks, compile validation, API-types TypeScript checking, commit hooks, and
+`git diff --check` also passed.
 
 ## Complete PRD index
 
