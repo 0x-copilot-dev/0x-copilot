@@ -721,6 +721,12 @@ class EventJournalModelInvocationStore(ModelInvocationStorePort):
                                 or candidate.reason
                                 is not ModelAttemptDecisionReason.SAFE_ALTERNATE_ROUTE
                             )
+                        elif recovery.kind is ModelRecoveryKind.CACHE_UNDECORATED_RETRY:
+                            invalid = invalid or (
+                                candidate.deployment_id != source.deployment_id
+                                or candidate.reason
+                                is not ModelAttemptDecisionReason.SAFE_CACHE_UNDECORATED_RETRY
+                            )
         if invalid:
             cls._invalid(
                 run_id=run_id,
@@ -855,12 +861,6 @@ class EventJournalModelInvocationStore(ModelInvocationStorePort):
             invalid = invalid or (
                 source_failure is None
                 or source_ambiguous
-                or source_failure.failure_class
-                not in {
-                    ModelFailureClass.PRE_DISPATCH_TRANSIENT,
-                    ModelFailureClass.PROVIDER_OVERLOADED,
-                    ModelFailureClass.STREAM_INTERRUPTED_BEFORE_CONTENT,
-                }
                 or source_failure.visible_text_emitted
                 or source_failure.tool_call_content_emitted
                 or source_failure.external_effect_observed
@@ -868,6 +868,21 @@ class EventJournalModelInvocationStore(ModelInvocationStorePort):
                     item.attempt_id == candidate.source_attempt_id for item in usages
                 )
             )
+            if source_failure is not None:
+                if candidate.kind is ModelRecoveryKind.CACHE_UNDECORATED_RETRY:
+                    invalid = invalid or (
+                        source_failure.failure_class
+                        is not ModelFailureClass.REQUEST_INVALID
+                    )
+                else:
+                    invalid = invalid or (
+                        source_failure.failure_class
+                        not in {
+                            ModelFailureClass.PRE_DISPATCH_TRANSIENT,
+                            ModelFailureClass.PROVIDER_OVERLOADED,
+                            ModelFailureClass.STREAM_INTERRUPTED_BEFORE_CONTENT,
+                        }
+                    )
         if candidate.kind is ModelRecoveryKind.SAME_DEPLOYMENT_RETRY:
             invalid = invalid or (
                 candidate.decision_reason
@@ -877,6 +892,11 @@ class EventJournalModelInvocationStore(ModelInvocationStorePort):
             invalid = invalid or (
                 candidate.decision_reason
                 is not ModelAttemptDecisionReason.SAFE_ALTERNATE_ROUTE
+            )
+        elif candidate.kind is ModelRecoveryKind.CACHE_UNDECORATED_RETRY:
+            invalid = invalid or (
+                candidate.decision_reason
+                is not ModelAttemptDecisionReason.SAFE_CACHE_UNDECORATED_RETRY
             )
         if invalid:
             cls._invalid(

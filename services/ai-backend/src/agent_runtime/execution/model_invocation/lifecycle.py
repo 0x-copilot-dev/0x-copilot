@@ -177,6 +177,39 @@ class ProviderLifecycleReducer:
             raise ProviderLifecycleTransitionError("unsupported lifecycle event")
         return ProviderAttemptLifecycle.model_validate(values)
 
+    def refine_cache_rejection(
+        self,
+        state: ProviderAttemptLifecycle,
+    ) -> ProviderAttemptLifecycle:
+        """Apply late typed proof that dispatch rejected cache metadata.
+
+        Provider callbacks can report a generic failure before the SDK raises
+        to F10. This refinement is monotonic only while no acknowledgement,
+        stream, content, tool call, or usage has been observed.
+        """
+
+        self._require(state.dispatch_started, "cache rejection")
+        self._require(
+            state.dispatch_state is not ModelDispatchState.ACCEPTED,
+            "cache rejection",
+        )
+        self._require(not state.stream_started, "cache rejection")
+        self._require(not state.visible_output_observed, "cache rejection")
+        self._require(not state.usage_observed, "cache rejection")
+        self._require(
+            state.terminal_state
+            in {
+                None,
+                ProviderTerminalState.FAILED,
+            },
+            "cache rejection",
+        )
+        values = state.model_dump()
+        values["dispatch_state"] = ModelDispatchState.NOT_ACCEPTED
+        values["terminal_state"] = ProviderTerminalState.FAILED
+        values["failure_signal"] = ModelFailureSignal.REQUEST_INVALID
+        return ProviderAttemptLifecycle.model_validate(values)
+
     @staticmethod
     def _require(condition: bool, event_name: str) -> None:
         if not condition:

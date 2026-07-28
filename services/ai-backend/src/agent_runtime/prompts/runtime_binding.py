@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol
 
@@ -35,6 +35,7 @@ from agent_runtime.prompts.assembly import (
 from agent_runtime.prompts.provider_cache import (
     ProviderCacheAdapterRegistry,
     ProviderCacheOwner,
+    ProviderCacheRejectionAdapterRegistry,
     ProviderPromptDecoration,
 )
 from agent_runtime.prompts.observation import (
@@ -136,6 +137,9 @@ class PromptRuntimeBinding:
     framework_cache_installed: bool
     observer: PromptAssemblyObserverPort | None = None
     observation_publisher: PromptAssemblyObserver | None = None
+    cache_rejection_adapters: ProviderCacheRejectionAdapterRegistry = field(
+        default_factory=ProviderCacheRejectionAdapterRegistry
+    )
 
     def prepare(
         self,

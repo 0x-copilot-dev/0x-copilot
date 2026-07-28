@@ -509,6 +509,28 @@ def test_first_attempt_and_safe_same_route_retry_are_bounded() -> None:
     assert (retry.deployment_id, retry.ordinal) == ("primary", 2)
 
 
+def test_typed_cache_fallback_has_a_distinct_bounded_policy_path() -> None:
+    budget = ModelInvocationBudget(
+        max_attempts=2,
+        max_same_deployment_attempts=2,
+        deadline_at=NOW + timedelta(seconds=30),
+    )
+    request = ModelAttemptAdmissionRequest(
+        route_plan=_plan(budget=budget),
+        now=NOW,
+        prior_attempts=(_attempt(failure_class=ModelFailureClass.REQUEST_INVALID),),
+    )
+
+    generic = ModelAttemptAdmissionPolicy().decide(request)
+    cache = ModelAttemptAdmissionPolicy().decide_cache_fallback(request)
+
+    assert generic.kind is ModelAttemptDecisionKind.DENY
+    assert generic.reason is ModelAttemptDecisionReason.FAILURE_NOT_RETRYABLE
+    assert cache.kind is ModelAttemptDecisionKind.ADMIT
+    assert cache.reason is ModelAttemptDecisionReason.SAFE_CACHE_UNDECORATED_RETRY
+    assert (cache.deployment_id, cache.ordinal) == ("primary", 2)
+
+
 def test_safe_failure_uses_next_route_after_same_deployment_limit() -> None:
     plan = _plan(
         deployments=("primary", "alternate"),

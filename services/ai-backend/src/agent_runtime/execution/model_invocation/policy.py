@@ -372,6 +372,34 @@ class ModelAttemptAdmissionPolicy:
             return self._deny(ModelAttemptDecisionReason.SAME_DEPLOYMENT_LIMIT_REACHED)
         return self._deny(ModelAttemptDecisionReason.ROUTE_SET_EXHAUSTED)
 
+    def decide_cache_fallback(
+        self,
+        request: ModelAttemptAdmissionRequest,
+    ) -> ModelAttemptDecision:
+        """Admit one same-route undecorated retry from an external typed signal."""
+
+        denial = self._preflight_denial(request)
+        if denial is not None:
+            return self._deny(denial)
+        if not request.prior_attempts:
+            return self._deny(ModelAttemptDecisionReason.PRIOR_ATTEMPT_NOT_FAILED)
+        last_attempt = request.prior_attempts[-1]
+        if last_attempt.stream_state is ModelStreamState.VISIBLE_OUTPUT:
+            return self._deny(ModelAttemptDecisionReason.VISIBLE_OUTPUT_ALREADY_EMITTED)
+        if last_attempt.failure_class is not ModelFailureClass.REQUEST_INVALID:
+            return self._deny(ModelAttemptDecisionReason.FAILURE_NOT_RETRYABLE)
+        same_route_count = sum(
+            attempt.deployment_id == last_attempt.deployment_id
+            for attempt in request.prior_attempts
+        )
+        if same_route_count >= request.route_plan.budget.max_same_deployment_attempts:
+            return self._deny(ModelAttemptDecisionReason.SAME_DEPLOYMENT_LIMIT_REACHED)
+        return self._admit(
+            deployment_id=last_attempt.deployment_id,
+            ordinal=len(request.prior_attempts) + 1,
+            reason=ModelAttemptDecisionReason.SAFE_CACHE_UNDECORATED_RETRY,
+        )
+
     @classmethod
     def _preflight_denial(
         cls,

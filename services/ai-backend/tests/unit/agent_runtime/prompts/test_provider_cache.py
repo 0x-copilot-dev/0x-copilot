@@ -20,6 +20,8 @@ from agent_runtime.prompts import (
     PromptFragmentTier,
     ProviderCacheAdapterRegistry,
     ProviderCacheFallbackSignal,
+    ProviderCacheRejectionAdapterRegistry,
+    ProviderCacheRejectionRule,
     PromptSensitivity,
     PromptTrustLabel,
     ProviderCacheOwner,
@@ -278,3 +280,37 @@ def test_pre_content_fallback_signal_is_closed_after_any_provider_observation() 
                 rejected_adapter_ref="anthropic-system-prefix:v1",
                 **{observed: True},
             )
+
+
+def test_cache_rejection_adapter_matches_exact_class_and_never_message_text() -> None:
+    generic = type("BadRequestError", (Exception,), {})
+    generic.__module__ = "anthropic"
+    recognized = type("CacheMetadataRejectedError", (generic,), {})
+    recognized.__module__ = "reviewed_cache_adapter"
+    registry = ProviderCacheRejectionAdapterRegistry(
+        (
+            ProviderCacheRejectionRule(
+                provider="anthropic",
+                adapter_ref="anthropic-system-prefix:v1",
+                exception_module=recognized.__module__,
+                exception_qualname=recognized.__qualname__,
+            ),
+        )
+    )
+
+    assert (
+        registry.observe(
+            provider="anthropic",
+            adapter_ref="anthropic-system-prefix:v1",
+            error=recognized("opaque"),
+        )
+        is not None
+    )
+    assert (
+        registry.observe(
+            provider="anthropic",
+            adapter_ref="anthropic-system-prefix:v1",
+            error=generic("cache metadata rejected"),
+        )
+        is None
+    )

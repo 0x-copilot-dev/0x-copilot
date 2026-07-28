@@ -67,6 +67,36 @@ def test_unknown_progress_and_unknown_signal_classify_as_ambiguous() -> None:
     )
 
 
+def test_typed_cache_rejection_refines_an_early_generic_failure() -> None:
+    reducer = ProviderLifecycleReducer()
+    started = reducer.reduce(
+        ProviderAttemptLifecycle(), ProviderLifecycleEvent.DISPATCH_STARTED
+    )
+    generic = reducer.reduce(
+        started,
+        ProviderLifecycleEvent.FAILED,
+        failure_signal=ModelFailureSignal.UNKNOWN,
+    )
+
+    refined = reducer.refine_cache_rejection(generic)
+
+    assert refined.dispatch_state is ModelDispatchState.NOT_ACCEPTED
+    assert refined.failure_observation().signal is ModelFailureSignal.REQUEST_INVALID
+
+
+def test_typed_cache_rejection_cannot_override_acknowledged_dispatch() -> None:
+    reducer = ProviderLifecycleReducer()
+    state = reducer.reduce(
+        reducer.reduce(
+            ProviderAttemptLifecycle(), ProviderLifecycleEvent.DISPATCH_STARTED
+        ),
+        ProviderLifecycleEvent.DISPATCH_ACKNOWLEDGED,
+    )
+
+    with pytest.raises(ProviderLifecycleTransitionError):
+        reducer.refine_cache_rejection(state)
+
+
 @pytest.mark.parametrize(
     "events",
     [

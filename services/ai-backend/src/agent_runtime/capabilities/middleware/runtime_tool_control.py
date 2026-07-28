@@ -58,6 +58,10 @@ from agent_runtime.observability.token_usage import (
     NormalizedTokenUsage,
     TokenUsageExtractorRegistry,
 )
+from agent_runtime.prompts.cache_fallback import (
+    PromptCacheFallbackContext,
+    PromptCacheFallbackHandoff,
+)
 from agent_runtime.prompts.runtime_binding import (
     PromptRuntimeBinding,
     PromptRuntimeResult,
@@ -196,7 +200,9 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 )
             binding.observe(prompt_result)
         self._observe_final_tool_surface(provider_request)
-        return handler(provider_request)
+        handoff = self._cache_fallback_handoff(binding, prompt_result)
+        with PromptCacheFallbackContext.bind(handoff):
+            return handler(provider_request)
 
     async def awrap_model_call(
         self,
@@ -223,7 +229,9 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 model_call_id=model_call_id,
             )
         self._observe_final_tool_surface(provider_request)
-        response = await handler(provider_request)
+        handoff = self._cache_fallback_handoff(binding, prompt_result)
+        with PromptCacheFallbackContext.bind(handoff):
+            response = await handler(provider_request)
         if binding is not None and prompt_result is not None and assembly is not None:
             await binding.record_cache(
                 assembly=assembly,
@@ -234,6 +242,18 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 result=prompt_result,
             )
         return response
+
+    @staticmethod
+    def _cache_fallback_handoff(
+        binding: PromptRuntimeBinding | None,
+        result: PromptRuntimeResult | None,
+    ) -> PromptCacheFallbackHandoff | None:
+        if binding is None or not isinstance(result, PromptRuntimeResult):
+            return None
+        return PromptCacheFallbackHandoff(
+            result=result,
+            rejection_adapters=binding.cache_rejection_adapters,
+        )
 
     def after_model(
         self,

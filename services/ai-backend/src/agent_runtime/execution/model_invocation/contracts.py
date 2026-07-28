@@ -173,6 +173,7 @@ class ModelAttemptDecisionReason(StrEnum):
     FIRST_ATTEMPT = "first_attempt"
     SAFE_SAME_DEPLOYMENT_RETRY = "safe_same_deployment_retry"
     SAFE_ALTERNATE_ROUTE = "safe_alternate_route"
+    SAFE_CACHE_UNDECORATED_RETRY = "safe_cache_undecorated_retry"
     WHOLE_RUN_REPLAY_FORBIDDEN = "whole_run_replay_forbidden"
     EXTERNAL_EFFECT_OBSERVED = "external_effect_observed"
     NO_ELIGIBLE_ROUTE = "no_eligible_route"

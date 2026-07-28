@@ -70,6 +70,7 @@ class ModelAttemptLifecycleState(StrEnum):
 class ModelRecoveryKind(StrEnum):
     SAME_DEPLOYMENT_RETRY = "same_deployment_retry"
     ALTERNATE_ROUTE = "alternate_route"
+    CACHE_UNDECORATED_RETRY = "cache_undecorated_retry"
     CRASH_RECONCILIATION = "crash_reconciliation"
 
 

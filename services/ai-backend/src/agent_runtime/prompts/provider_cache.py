@@ -19,7 +19,7 @@ from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
 from fnmatch import fnmatchcase
-from typing import Protocol, Sequence
+from typing import Literal, Protocol, Sequence
 
 from langchain_core.messages import SystemMessage
 from pydantic import Field, model_validator
@@ -43,6 +43,84 @@ class ProviderCacheFallbackReason(StrEnum):
     """Closed reason set consumed by the Step 6/F10 attempt controller."""
 
     CACHE_METADATA_REJECTED = "cache_metadata_rejected"
+
+
+class ProviderCacheRejectionRule(RuntimeContract):
+    """Reviewed exact exception identity for one product cache adapter."""
+
+    provider: str = Field(min_length=1, max_length=80)
+    adapter_ref: str = Field(min_length=1, max_length=240)
+    exception_module: str = Field(min_length=1, max_length=240)
+    exception_qualname: str = Field(min_length=1, max_length=240)
+    reason: ProviderCacheFallbackReason = (
+        ProviderCacheFallbackReason.CACHE_METADATA_REJECTED
+    )
+
+
+class ProviderCacheRejectionObservation(RuntimeContract):
+    """Typed proof that cache metadata was rejected before acknowledgement."""
+
+    provider: str = Field(min_length=1, max_length=80)
+    adapter_ref: str = Field(min_length=1, max_length=240)
+    reason: ProviderCacheFallbackReason
+    provider_acknowledged: Literal[False] = False
+
+
+class ProviderCacheRejectionAdapterRegistry:
+    """Closed exact-class cache rejection adapters; messages are never inspected."""
+
+    def __init__(
+        self,
+        rules: Sequence[ProviderCacheRejectionRule] = (),
+    ) -> None:
+        ordered = tuple(
+            sorted(
+                rules,
+                key=lambda item: (
+                    item.provider,
+                    item.adapter_ref,
+                    item.exception_module,
+                    item.exception_qualname,
+                ),
+            )
+        )
+        keys = tuple(
+            (
+                item.provider.strip().lower(),
+                item.adapter_ref,
+                item.exception_module,
+                item.exception_qualname,
+            )
+            for item in ordered
+        )
+        if len(keys) != len(set(keys)):
+            raise ValueError("provider cache rejection rules must be unique")
+        self._rules = ordered
+
+    def observe(
+        self,
+        *,
+        provider: str,
+        adapter_ref: str,
+        error: BaseException,
+    ) -> ProviderCacheRejectionObservation | None:
+        """Return reviewed structured evidence or ``None``; never read error text."""
+
+        provider_key = provider.strip().lower()
+        error_type = type(error)
+        for rule in self._rules:
+            if (
+                rule.provider.strip().lower() == provider_key
+                and rule.adapter_ref == adapter_ref
+                and error_type.__module__ == rule.exception_module
+                and error_type.__qualname__ == rule.exception_qualname
+            ):
+                return ProviderCacheRejectionObservation(
+                    provider=provider_key,
+                    adapter_ref=adapter_ref,
+                    reason=rule.reason,
+                )
+        return None
 
 
 class ProviderCacheAdapterDescriptor(RuntimeContract):
@@ -391,6 +469,9 @@ __all__ = (
     "ProviderCacheFallbackReason",
     "ProviderCacheFallbackSignal",
     "ProviderCacheOwner",
+    "ProviderCacheRejectionAdapterRegistry",
+    "ProviderCacheRejectionObservation",
+    "ProviderCacheRejectionRule",
     "ProviderPromptCacheAdapter",
     "ProviderPromptDecoration",
     "ProviderPromptDecorator",

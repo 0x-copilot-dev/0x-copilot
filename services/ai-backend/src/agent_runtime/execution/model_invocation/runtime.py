@@ -73,6 +73,11 @@ from agent_runtime.observability.token_usage import (
     NormalizedTokenUsage,
     TokenUsageExtractorRegistry,
 )
+from agent_runtime.prompts.cache_fallback import (
+    PromptCacheFallbackContext,
+    PromptCacheFallbackHandoff,
+)
+from agent_runtime.prompts.provider_cache import ProviderCacheFallbackSignal
 from agent_runtime.prompts import tool_schema_revision
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
@@ -107,6 +112,7 @@ class ModelCacheFallbackPosture(StrEnum):
 
     NOT_CONFIGURED = "not_configured"
     DENY = "deny"
+    ENABLED = "enabled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +121,13 @@ class _PreparedAuthority:
     requirements: ModelInvocationRequirementsSnapshot
     route_plan: ModelRoutePlan
     catalog_revision: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingCacheRetry:
+    decision: ModelAttemptDecision
+    request: ModelRequest[Any]
+    signal: ProviderCacheFallbackSignal
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +221,16 @@ class _ProviderLifecycleCallback(BaseCallbackHandler):
                 ProviderLifecycleEvent.FAILED,
                 failure_signal=observation.signal,
             )
+
+    def observe_cache_rejection(self) -> None:
+        """Apply the F2 adapter result without generic exception classification."""
+
+        with self._lock:
+            if not self._state.dispatch_started:
+                self._state = self._reducer.reduce(
+                    self._state, ProviderLifecycleEvent.DISPATCH_STARTED
+                )
+            self._state = self._reducer.refine_cache_rejection(self._state)
 
     def on_chat_model_start(self, *args: object, **kwargs: object) -> None:
         del args, kwargs
@@ -334,7 +357,21 @@ class ModelInvocationMiddleware(AgentMiddleware):
         )
         if identity is None:  # pragma: no cover - require_current proves this
             raise RuntimeError("model invocation identity is unavailable")
-        request_digest = canonical_model_request_digest(request)
+        cache_handoff = (
+            PromptCacheFallbackContext.current()
+            if binding.cache_fallback_posture is ModelCacheFallbackPosture.ENABLED
+            else None
+        )
+        semantic_request = request
+        if cache_handoff is not None:
+            cache_handoff.validate_provider_request(
+                system_message=request.system_message,
+                tools=request.tools or (),
+            )
+            semantic_request = request.override(
+                system_message=cache_handoff.semantic_system_message()
+            )
+        request_digest = canonical_model_request_digest(semantic_request)
         prepared = self._prepare_authority(
             binding=binding,
             control=control,
@@ -350,25 +387,29 @@ class ModelInvocationMiddleware(AgentMiddleware):
         prior = self._prior_outcomes(records)
         await self._reconcile_replay(binding, invocation, records)
         last_error: BaseException | None = None
+        pending_cache_retry: _PendingCacheRetry | None = None
 
         while True:
-            decision = ModelAttemptAdmissionPolicy().decide(
-                ModelAttemptAdmissionRequest(
-                    route_plan=prepared.route_plan,
-                    now=binding.now(),
-                    prior_attempts=prior,
-                    external_effect_observed=binding.external_effect_observed(),
-                    projected_cost_microusd=binding.projected_cost_microusd,
-                    projected_input_tokens=binding.projected_input_tokens,
-                    projected_output_tokens=binding.projected_output_tokens,
+            cache_retry = pending_cache_retry
+            pending_cache_retry = None
+            if cache_retry is not None:
+                decision = cache_retry.decision
+                provider_request = cache_retry.request
+            else:
+                decision = ModelAttemptAdmissionPolicy().decide(
+                    self._admission_request(
+                        binding=binding,
+                        route_plan=prepared.route_plan,
+                        prior=prior,
+                    )
                 )
-            )
-            decision = self._apply_release(
-                decision=decision,
-                prior=prior,
-                route_plan=prepared.route_plan,
-                release=binding.release,
-            )
+                decision = self._apply_release(
+                    decision=decision,
+                    prior=prior,
+                    route_plan=prepared.route_plan,
+                    release=binding.release,
+                )
+                provider_request = request
             if decision.kind is ModelAttemptDecisionKind.DENY:
                 admission = self._admission_record(
                     binding=binding,
@@ -406,7 +447,7 @@ class ModelInvocationMiddleware(AgentMiddleware):
                 if route.deployment_id == decision.deployment_id
             )
             attempt_request = await self._route_request(
-                request=request,
+                request=provider_request,
                 route=route,
                 primary=prepared.route_plan.routes[0],
                 binding=binding,
@@ -434,9 +475,14 @@ class ModelInvocationMiddleware(AgentMiddleware):
                     or latest_recovery.outcome is not ModelRecoveryOutcome.ADMITTED
                 ):
                     kind = (
-                        ModelRecoveryKind.SAME_DEPLOYMENT_RETRY
-                        if decision.deployment_id == prior[-1].deployment_id
-                        else ModelRecoveryKind.ALTERNATE_ROUTE
+                        ModelRecoveryKind.CACHE_UNDECORATED_RETRY
+                        if decision.reason
+                        is ModelAttemptDecisionReason.SAFE_CACHE_UNDECORATED_RETRY
+                        else (
+                            ModelRecoveryKind.SAME_DEPLOYMENT_RETRY
+                            if decision.deployment_id == prior[-1].deployment_id
+                            else ModelRecoveryKind.ALTERNATE_ROUTE
+                        )
                     )
                     recovery = ModelInvocationRecoveryRecord.create(
                         invocation=invocation,
@@ -475,7 +521,17 @@ class ModelInvocationMiddleware(AgentMiddleware):
             try:
                 response = await handler(attempt_request)
             except BaseException as error:
-                observer.observe_error(error)
+                cache_signal = self._consume_cache_rejection(
+                    handoff=cache_handoff,
+                    error=error,
+                    observer=observer,
+                    binding=binding,
+                    route=route,
+                )
+                if cache_signal is None:
+                    observer.observe_error(error)
+                else:
+                    observer.observe_cache_rejection()
                 duration_ms = max(0, int((monotonic() - started) * 1000))
                 try:
                     prior, records = await self._record_failure(
@@ -489,6 +545,38 @@ class ModelInvocationMiddleware(AgentMiddleware):
                     )
                     failure = prior[-1].failure_class
                     assert failure is not None
+                    if cache_signal is not None:
+                        next_decision = (
+                            ModelAttemptAdmissionPolicy().decide_cache_fallback(
+                                self._admission_request(
+                                    binding=binding,
+                                    route_plan=prepared.route_plan,
+                                    prior=prior,
+                                )
+                            )
+                        )
+                        if next_decision.kind is ModelAttemptDecisionKind.DENY:
+                            await self._append_terminal_failure(
+                                binding,
+                                invocation,
+                                prior,
+                                admission,
+                                failure,
+                                duration_ms,
+                            )
+                            raise error
+                        assert cache_handoff is not None
+                        pending_cache_retry = _PendingCacheRetry(
+                            decision=next_decision,
+                            request=request.override(
+                                system_message=(
+                                    cache_handoff.undecorated_system_message()
+                                )
+                            ),
+                            signal=cache_signal,
+                        )
+                        last_error = error
+                        continue
                     if not self._can_retry(
                         failure, observer.state, binding, route, prepared.route_plan
                     ):
@@ -497,14 +585,10 @@ class ModelInvocationMiddleware(AgentMiddleware):
                         )
                         raise error
                     next_decision = ModelAttemptAdmissionPolicy().decide(
-                        ModelAttemptAdmissionRequest(
+                        self._admission_request(
+                            binding=binding,
                             route_plan=prepared.route_plan,
-                            now=binding.now(),
-                            prior_attempts=prior,
-                            external_effect_observed=binding.external_effect_observed(),
-                            projected_cost_microusd=binding.projected_cost_microusd,
-                            projected_input_tokens=binding.projected_input_tokens,
-                            projected_output_tokens=binding.projected_output_tokens,
+                            prior=prior,
                         )
                     )
                     next_decision = self._apply_release(
@@ -561,6 +645,46 @@ class ModelInvocationMiddleware(AgentMiddleware):
             projected_cost_microusd=binding.projected_cost_microusd,
             projected_input_tokens=binding.projected_input_tokens,
             projected_output_tokens=binding.projected_output_tokens,
+        )
+
+    @staticmethod
+    def _admission_request(
+        *,
+        binding: ModelInvocationRuntimeBinding,
+        route_plan: ModelRoutePlan,
+        prior: tuple[ModelAttemptOutcome, ...],
+    ) -> ModelAttemptAdmissionRequest:
+        return ModelAttemptAdmissionRequest(
+            route_plan=route_plan,
+            now=binding.now(),
+            prior_attempts=prior,
+            external_effect_observed=binding.external_effect_observed(),
+            projected_cost_microusd=binding.projected_cost_microusd,
+            projected_input_tokens=binding.projected_input_tokens,
+            projected_output_tokens=binding.projected_output_tokens,
+        )
+
+    @staticmethod
+    def _consume_cache_rejection(
+        *,
+        handoff: PromptCacheFallbackHandoff | None,
+        error: BaseException,
+        observer: _ProviderLifecycleCallback,
+        binding: ModelInvocationRuntimeBinding,
+        route: ModelRouteEntry,
+    ) -> ProviderCacheFallbackSignal | None:
+        if handoff is None:
+            return None
+        state = observer.state
+        return handoff.consume_rejection(
+            error,
+            provider=route.provider,
+            model_family=route.model_name,
+            provider_acknowledged=(state.dispatch_state is ModelDispatchState.ACCEPTED),
+            content_observed=state.visible_text_observed,
+            tool_call_observed=state.tool_call_content_observed,
+            usage_observed=state.usage_observed,
+            external_effect_observed=binding.external_effect_observed(),
         )
 
     @staticmethod
