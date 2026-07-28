@@ -725,12 +725,23 @@ checklist. Implementation lanes use isolated worktrees and return reviewed
 commits for root to integrate. Missing or unknown metadata always means serial.
 Scheduling convenience is never treated as safety metadata.
 
-- [ ] **F6.1 — Descriptor metadata and precedence.** Extend trusted product
+- [x] **F6.1 — Descriptor metadata and precedence.** (`54d96333`; 70 focused
+      tests.) Extend trusted product
       descriptor metadata with concurrency policy, idempotency, resource-key
       template, ordering, rate-limit scope, and provider/session constraints.
       Implement the precedence chain product catalog → user-approved tightening
       → trusted provider tightening → conservative serial/unknown, where each
-      later source may only narrow.
+      later source may only narrow. Ratified decisions: `NarrowableEnum` makes
+      declaration order the authority rank, so precedence is derived rather than
+      hardcoded and `narrowest()` cannot widen; `UNKNOWN` ranks narrower than an
+      irreversible write, so an undeclared class forbids every overlap;
+      `resolve()` records a typed rejection and continues while
+      `resolve_strict()` raises, because an untrusted MCP server must not be
+      able to fail a run by over-claiming; a provider cannot introduce a
+      resource key the catalog never declared, and two unorderable templates
+      fall to _no key_ rather than an invented merge; `capability_ref` is
+      pattern-locked so raw connector or tool names cannot structurally enter a
+      resolution record.
 - [ ] **F6.2 — Persisted batches.** Construct and persist an ordered
       `OperationBatch` and `BatchPlan` in `aafter_model` before any child is
       dispatched, through the canonical run event journal with stable
