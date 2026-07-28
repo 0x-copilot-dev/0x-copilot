@@ -135,7 +135,8 @@ case and asserts exact postconditions afterward.
 
 ## Two-step execution protocol
 
-For every G1–G10 case, the future `*.py` journey executes:
+The G3–G10 scripts encode this protocol directly. G1/G2 keep their existing
+release entry points until the shared driver is consolidated:
 
 1. **Keyless / deterministic:** sign in locally, seed the local fixture,
    perform the required user interactions, and assert the surfaces, diffs,
@@ -166,21 +167,21 @@ run events and final fixture audit rows through `DriverSession.transport()`.
 - **Durability/accountability:** G10 proves replay, receipts, provenance,
   pending-work disappearance, and attributed usage.
 
-## Implementation order
+## Remaining harness prerequisites
 
-1. Add `local-fixture-connector/` with a process-local MCP fixture server,
-   reset/audit API, and the JSON scenario loader. It must be usable by the
-   supervised desktop app without a network account.
-2. Add shared `DriverSession` helpers for fixture seeding, authenticated
-   postcondition reads, tool-card/surface/diff/approval selectors, and safe
-   BYOK setup. Secrets remain opaque end-to-end.
-3. Implement G0, G1, G2, G5, and G9 first: together they cover the primary
-   product claims and the critical safety/error paths.
-4. Add G3/G4/G6/G7/G8/G10 plus the parity surfaces for editor, diff, table,
-   record, gate, receipt, and rail states.
-5. Only after all deterministic cases are green, run the credentialed live
-   matrix with OpenAI and Anthropic separately; save screenshots/logs as CI or
-   release artifacts, never in git.
+The executable stories are now checked in. They stay fail-closed until the
+shipping product/harness supplies these capabilities:
+
+1. propagate the deterministic model configuration through the installed
+   supervised Desktop runtime;
+2. let a fresh authenticated Desktop profile own the checked-in stdio fixture
+   connector for the full journey, including reset/audit and staged-write
+   projection;
+3. expose binary DOCX publication, streaming, preview/export, immutable
+   revision, and replacement staging;
+4. expose the G9 fixture faults and cancellable streaming checkpoint;
+5. run the deterministic matrix first, then OpenAI and Anthropic live passes;
+   retain screenshots/logs as release artifacts, never in git.
 
 ## Non-goals
 

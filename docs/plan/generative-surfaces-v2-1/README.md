@@ -126,20 +126,20 @@ is routed to the owning architectural item above.
 “Crafted” means an executable-quality script exists and passes static
 validation. It does not mean the real app journey has been executed.
 
-| Journey                     | Script state                            | Execution state                                                 |
-| --------------------------- | --------------------------------------- | --------------------------------------------------------------- |
-| G0 plain chat               | Existing                                | Historical execution only; include in the final current-SHA run |
-| G1 Markdown lifecycle       | Existing                                | Current-SHA supervised execution pending                        |
-| G2 CSV row-set              | Existing                                | Current-SHA supervised execution pending                        |
-| G2A web artifact-only       | Existing                                | Current-SHA web execution pending                               |
-| G3 code artifact            | Being crafted                           | Do not execute in this reconciliation                           |
-| G4 DOCX                     | Being crafted                           | Do not execute in this reconciliation                           |
-| G5 local email triage       | Being crafted against `fixture://` only | Do not execute in this reconciliation                           |
-| G6 local timeline/X         | Being crafted against `fixture://` only | Do not execute in this reconciliation                           |
-| G7 local Discord moderation | Being crafted against `fixture://` only | Do not execute in this reconciliation                           |
-| G8 mixed multi-surface      | Being crafted                           | Do not execute in this reconciliation                           |
-| G9 recovery/honesty         | Being crafted                           | Do not execute in this reconciliation                           |
-| G10 retention/reopen        | Being crafted                           | Do not execute in this reconciliation                           |
+| Journey                     | Script state                      | Execution state                                                 |
+| --------------------------- | --------------------------------- | --------------------------------------------------------------- |
+| G0 plain chat               | Existing                          | Historical execution only; include in the final current-SHA run |
+| G1 Markdown lifecycle       | Existing                          | Current-SHA supervised execution pending                        |
+| G2 CSV row-set              | Existing                          | Current-SHA supervised execution pending                        |
+| G2A web artifact-only       | Existing                          | Current-SHA web execution pending                               |
+| G3 code artifact            | Crafted; static validation passed | Real supervised execution pending                               |
+| G4 DOCX                     | Crafted; static validation passed | Pending binary DOCX publication/preview/export product support  |
+| G5 local email triage       | Crafted; `fixture://` enforced    | Pending profile-scoped local fixture bridge                     |
+| G6 local timeline/X         | Crafted; `fixture://` enforced    | Pending profile-scoped local fixture bridge                     |
+| G7 local Discord moderation | Crafted; `fixture://` enforced    | Pending profile-scoped local fixture bridge                     |
+| G8 mixed multi-surface      | Crafted; static validation passed | Pending deterministic supervisor and local fixture bridge       |
+| G9 recovery/honesty         | Crafted; static validation passed | Pending unknown-operation/cancellable-stream fixture controls   |
+| G10 retention/reopen        | Crafted; static validation passed | Real supervised replay/retention execution pending              |
 
 ## Closed and removed stale items
 
@@ -155,6 +155,9 @@ The following are historical evidence, not active backlog:
 - old GSQA-002/005/006/007 and GSB-009/010/011/012 findings superseded by the
   shared review architecture and current parity;
 - “G0–G2 are plan-only”; executable scripts now exist;
+- “G3–G10 are plan-only”; executable-quality scripts now exist and passed
+  static compilation, offline harness tests, and AST safety checks. Real
+  execution remains an evidence gate;
 - the historical macOS Accessibility block as a product defect. Host
   preflight remains useful release-harness work, but the old machine state is
   not a standing code backlog item;
