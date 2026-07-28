@@ -383,13 +383,34 @@ class ArtifactMutationResult(RuntimeContract):
 
 
 class ArtifactListQuery(RuntimeContract):
+    """A tenant-scoped artifact listing, narrowed to exactly one subject scope.
+
+    ``run_id`` answers "what did this run produce"; ``conversation_id`` answers
+    "what does this conversation hold". The second is what a canvas that outlives
+    a single turn needs, and what retention/reference work needs in order to
+    enumerate a conversation's artifacts at all (GS-ARCH-06, GS-ARCH-12).
+
+    Exactly one must be set. Neither would be an unscoped read across the
+    tenant — the shape most likely to leak — so it fails validation rather than
+    defaulting to something permissive.
+    """
+
     org_id: str = Field(min_length=1, max_length=255)
     user_id: str = Field(min_length=1, max_length=255)
-    run_id: str = Field(min_length=1, max_length=255)
+    run_id: str | None = Field(default=None, min_length=1, max_length=255)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=255)
     kind: ArtifactKind | None = None
     include_deleted: bool = False
     limit: PositiveInt = Field(default=50, le=100)
     cursor: SafeCursor | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_scope(self) -> ArtifactListQuery:
+        if (self.run_id is None) == (self.conversation_id is None):
+            raise ValueError(
+                "artifact list requires exactly one of run_id or conversation_id"
+            )
+        return self
 
 
 class ArtifactListPage(RuntimeContract):
