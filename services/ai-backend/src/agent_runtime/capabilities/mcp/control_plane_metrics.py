@@ -38,6 +38,7 @@ class McpControlPlaneOutcome(StrEnum):
     STARTED = "started"
     STOPPED = "stopped"
     TIMED_OUT = "timed_out"
+    COALESCED = "coalesced"
 
 
 class McpControlPlaneMeasure(StrEnum):
@@ -89,7 +90,7 @@ class McpControlPlaneMetrics:
     ) -> None:
         try:
             self._events.add(1, {"event": event.value, "outcome": outcome.value})
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def count(
@@ -104,7 +105,7 @@ class McpControlPlaneMetrics:
                 self._counts.add(
                     value, {"event": event.value, "measure": measure.value}
                 )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
     def latency(
@@ -118,7 +119,7 @@ class McpControlPlaneMetrics:
             self._latency.record(
                 max(0.0, seconds), {"event": event.value, "measure": measure.value}
             )
-        except Exception:
+        except Exception:  # noqa: BLE001
             return
 
 

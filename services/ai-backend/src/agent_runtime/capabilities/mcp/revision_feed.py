@@ -9,26 +9,26 @@ process from polling every tenant it has ever seen.
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
-import json
-import time
 from datetime import datetime, timezone
+from enum import StrEnum
 from typing import Final, Protocol
 
 from pydantic import Field
 
-from agent_runtime.capabilities.mcp.revision_resolver import (
-    McpDescriptorRevisionResolverPort,
-)
 from agent_runtime.capabilities.mcp.control_plane_metrics import (
     McpControlPlaneEvent,
-    McpControlPlaneMetricsPort,
     McpControlPlaneMeasure,
+    McpControlPlaneMetricsPort,
     McpControlPlaneOutcome,
     NoopMcpControlPlaneMetrics,
+)
+from agent_runtime.capabilities.mcp.revision_resolver import (
+    McpDescriptorRevisionResolverPort,
 )
 from agent_runtime.capabilities.mcp.revision_wire import (
     BackendMcpRevisionClient,

@@ -27,23 +27,23 @@ from enum import StrEnum
 from pydantic import Field, field_validator
 
 from agent_runtime.capabilities.mcp.cards import LoadedMcpServer
-from agent_runtime.capabilities.mcp.discovery_cache import (
-    McpDiscoveryCache,
-    McpDiscoveryCacheKey,
-)
-from agent_runtime.capabilities.mcp.revision_resolver import (
-    McpDescriptorRevisionResolverPort,
-    RevisionResolveState,
-)
-from agent_runtime.capabilities.mcp.revision_feed import (
-    ActiveMcpRevisionSubjectRegistry,
-    McpRevisionSubject,
-)
 from agent_runtime.capabilities.mcp.control_plane_metrics import (
     McpControlPlaneEvent,
     McpControlPlaneMetricsPort,
     McpControlPlaneOutcome,
     NoopMcpControlPlaneMetrics,
+)
+from agent_runtime.capabilities.mcp.discovery_cache import (
+    McpDiscoveryCache,
+    McpDiscoveryCacheKey,
+)
+from agent_runtime.capabilities.mcp.revision_feed import (
+    ActiveMcpRevisionSubjectRegistry,
+    McpRevisionSubject,
+)
+from agent_runtime.capabilities.mcp.revision_resolver import (
+    McpDescriptorRevisionResolverPort,
+    RevisionResolveState,
 )
 from agent_runtime.execution.contracts import RuntimeContract
 
@@ -675,11 +675,17 @@ class RevisionAwareMcpDiscoveryCache:
             if key_lock is None:
                 key_lock = _KeyLock(lock=asyncio.Lock())
                 self._key_locks[key] = key_lock
+            contended = key_lock.lock.locked()
             key_lock.users += 1
         acquired = False
         try:
             await key_lock.lock.acquire()
             acquired = True
+            if contended:
+                self._metrics.event(
+                    event=McpControlPlaneEvent.CACHE,
+                    outcome=McpControlPlaneOutcome.COALESCED,
+                )
             yield
         finally:
             if acquired:
