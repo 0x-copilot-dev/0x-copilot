@@ -607,6 +607,62 @@ Rollback cannot change snapshots already persisted for active runs. Use the
 normal run cancellation policy if those runs must not continue; never mutate
 their snapshots.
 
+## F2 prompt/cache observation operations
+
+F2 uses the existing run event journal; it does not add a prompt log, cache
+ledger, database, or desktop daemon. For each model call the journal may carry:
+
+- one `prompt.assembled.v1` record with the immutable run snapshot binding,
+  plan/revision digests, fragment and token totals, cache owner, rollout
+  outcome, and a closed reason code; and
+- one later `prompt.cache.observed.v1` record bound to that assembly with
+  provider/model, owner, provider-reported input/cache-read/cache-write token
+  counts, a closed outcome, and a closed reason code.
+
+Both event types must be `INTERNAL`, `REDACTED`, runtime-sourced, and free of
+prompt/message/response bodies. The record IDs are stable per run, model call,
+and record kind. Exact retries return the existing event; a different plan or
+usage fact under the same identity is a conflict. Replay fails closed if the
+control snapshot, conversation scope, event identity, record digest, assembly
+link, or sequence is malformed.
+
+Cache outcomes are provider-authoritative:
+
+| Outcome       | Required evidence                                                                  |
+| ------------- | ---------------------------------------------------------------------------------- |
+| `read`        | Provider usage metadata reports cache-read tokens greater than zero.               |
+| `write`       | Provider usage metadata reports cache-creation tokens greater than zero.           |
+| `read_write`  | The provider reports both counters greater than zero.                              |
+| `miss`        | Recognized provider cache counters are present and both are zero.                  |
+| `unsupported` | No recognized provider cache metadata was reported, or the adapter is unsupported. |
+
+Never classify a cache hit or miss from a stable-prefix digest, requested cache
+intent, latency, or a repeated plan ID. The normalized token-usage path carries
+the provider-metadata-observed bit alongside the existing input, cached-input,
+and cache-creation counters. The cache observation must reconcile with those
+same per-call usage facts.
+
+For a local incident, replay the verified run through the existing scoped
+event reader. Inspect event sequence, record kind/ID/digest, snapshot ID,
+plan/system/prefix digests, provider/model family, owner, outcome, reason code,
+and token counters only. Do not inspect, print, or add prompt bodies. If replay
+detects corruption, preserve a normal authorized export, stop the affected
+run, and repair the canonical control/event-store path. Do not edit
+`events.jsonl`, synthesize cache outcomes, or remove a conflicting row.
+
+The F1 operational corpus includes `prompt_cache_prefix_reuse`: a provider
+reports a cache write followed by a cache read for the same reviewed stable
+prefix. Promotion requires the body-free assembly/cache vocabulary, actual
+provider-report evidence, and minimum read/write token totals while retaining
+the existing safety, groundedness, constraint, protected-family, cost, and
+latency gates. A lower bill or matching digest alone is not a pass.
+
+For immediate backout, activate a reviewed manifest with F2 disabled or cache
+decoration disabled and controlled-restart API/worker, then start a new canary.
+An immutable snapshot already bound to an active run does not change. If a
+provider stops reporting cache metadata, observations become `unsupported`;
+do not relabel them as misses.
+
 ### Deletion cascade failure
 
 1. Treat the source data as retained. The fail-closed ordering keeps it intact.
@@ -639,6 +695,8 @@ cd services/ai-backend
   tests/unit/runtime_worker/test_run_control_release_configuration.py \
   tests/unit/agent_runtime/capabilities/test_task_policy.py \
   tests/unit/agent_runtime/capabilities/test_task_policy_journal_store.py \
+  tests/unit/agent_runtime/prompts/test_prompt_observation_store.py \
+  tests/unit/agent_runtime/observability/test_token_usage_extractors.py \
   tests/unit/agent_runtime/harness_quality/test_operational_corpus_scoring.py \
   tests/unit/agent_runtime/harness_quality/test_suite_execution.py
 
@@ -662,4 +720,10 @@ Before enabling projection or changing a signed release, verify:
 - F4 restart/replay and approval-resume retain one selection, plan, budget, and
   operation identity without a duplicate dispatch; and
 - F4 F1 cases pass hard duplicate/error/budget gates while repeated-source
-  feedback remains advisory.
+  feedback remains advisory;
+- F2 observation replay is scope/snapshot-bound, idempotent, and body-free
+  after reopening the desktop file store;
+- cache read/write/miss comes only from recognized provider usage metadata,
+  with absent metadata recorded as unsupported; and
+- the F2 prefix-reuse F1 case passes provider-report and minimum read/write
+  token gates without weakening existing protected-task gates.

@@ -319,6 +319,10 @@ class RuntimeApiEventType(StrEnum):
     # F4 task-aware controller. One strict discriminated, body-free record per
     # event; the canonical run stream remains the sole mutable journal.
     TOOL_POLICY_JOURNAL = "tool_policy.journal.v1"
+    # F2 prompt observability. Both rows are INTERNAL/REDACTED and strictly
+    # exclude prompt bodies and provider response content.
+    PROMPT_ASSEMBLED = "prompt.assembled.v1"
+    PROMPT_CACHE_OBSERVED = "prompt.cache.observed.v1"
 
     @classmethod
     def from_stream_event_type(

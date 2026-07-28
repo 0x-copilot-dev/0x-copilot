@@ -22,8 +22,10 @@ from agent_runtime.harness_quality.suite_execution import (
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 
-OPERATIONAL_CORPUS_REVISION = "operational-corpus-v2"
+OPERATIONAL_CORPUS_REVISION = "operational-corpus-v3"
 _TOOL_POLICY_EVENT = "tool_policy.journal.v1"
+_PROMPT_ASSEMBLED_EVENT = "prompt.assembled.v1"
+_PROMPT_CACHE_EVENT = "prompt.cache.observed.v1"
 _F4_TASK_FAMILIES = (
     "task_policy_one_call_lookup",
     "task_policy_plan_before_tool",
@@ -41,6 +43,7 @@ _F4_TASK_FAMILIES = (
     "task_policy_approval_resume",
     "task_policy_shadow_enforce_comparison",
 )
+_F2_TASK_FAMILIES = ("prompt_cache_prefix_reuse",)
 OPERATIONAL_TASK_FAMILIES = (
     "connector_selection",
     "mcp_auth",
@@ -61,6 +64,7 @@ OPERATIONAL_TASK_FAMILIES = (
     "evidence_stale",
     "evidence_revoked",
     *_F4_TASK_FAMILIES,
+    *_F2_TASK_FAMILIES,
 )
 
 
@@ -126,7 +130,11 @@ class OperationalFixture(RuntimeContract):
             calls=tuple(call.plan() for call in self.calls),
             usage=self.usage,
             redaction_policy_revision="redaction-v1",
-            harness_revisions={"suite": "suite-v1", "task_policy": "f4-v1"},
+            harness_revisions={
+                "suite": "suite-v1",
+                "task_policy": "f4-v1",
+                "prompt_cache": "f2-v1",
+            },
         )
 
 
@@ -138,7 +146,8 @@ def operational_corpus() -> tuple[OperationalFixture, ...]:
 
 def _fixture(family: str) -> OperationalFixture:
     f4 = _f4_scenario(family)
-    call_count = int(f4.get("call_count", 1))
+    f2 = _f2_scenario(family)
+    call_count = int(f4.get("call_count", f2.get("call_count", 1)))
     capability_id = f"fixture.{family}"
     calls = tuple(
         _call(
@@ -146,6 +155,7 @@ def _fixture(family: str) -> OperationalFixture:
             capability_id=capability_id,
             ordinal=ordinal,
             f4=f4,
+            f2=f2,
         )
         for ordinal in range(1, call_count + 1)
     )
@@ -181,6 +191,16 @@ def _fixture(family: str) -> OperationalFixture:
                 hard_gate=bool(f4.get("hard_gate", True)),
             ),
         )
+    prompt_assertion = f2.get("prompt_assertion")
+    if isinstance(prompt_assertion, Mapping):
+        assertions = (
+            *assertions,
+            EvaluationAssertion(
+                scorer_id="prompt_cache_trajectory",
+                expected=dict(prompt_assertion),
+                hard_gate=bool(f2.get("hard_gate", True)),
+            ),
+        )
     case = EvaluationCase(
         case_id=f"case_{family}_v1",
         suite_id="suite_operational_v1",
@@ -199,7 +219,10 @@ def _fixture(family: str) -> OperationalFixture:
         calls=calls,
         usage=FixtureUsage(
             cost_microusd=10 * call_count,
-            model_turns=max(1, int(f4.get("model_turns", 1))),
+            model_turns=max(
+                1,
+                int(f4.get("model_turns", f2.get("model_turns", 1))),
+            ),
             tool_calls=call_count,
             tokens=100 * call_count,
             elapsed_ms=10 * call_count,
@@ -213,6 +236,7 @@ def _call(
     capability_id: str,
     ordinal: int,
     f4: Mapping[str, object],
+    f2: Mapping[str, object],
 ) -> OperationalFixtureCall:
     arguments: dict[str, object] = {
         "scenario_id": family,
@@ -255,17 +279,33 @@ def _call(
             is_error=is_error,
         ),
         evidence_ref=evidence_ref,
-        before_observations=_observations(
-            family=family,
-            ordinal=ordinal,
-            stage="before",
-            f4=f4,
+        before_observations=(
+            *_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="before",
+                f4=f4,
+            ),
+            *_prompt_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="before",
+                f2=f2,
+            ),
         ),
-        after_observations=_observations(
-            family=family,
-            ordinal=ordinal,
-            stage="after",
-            f4=f4,
+        after_observations=(
+            *_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="after",
+                f4=f4,
+            ),
+            *_prompt_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="after",
+                f2=f2,
+            ),
         ),
     )
 
@@ -498,6 +538,119 @@ def _f4_scenario(family: str) -> Mapping[str, object]:
             },
         }
     return scenarios.get(family, {})
+
+
+def _prompt_observations(
+    *,
+    family: str,
+    ordinal: int,
+    stage: str,
+    f2: Mapping[str, object],
+) -> tuple[FixtureTrajectoryObservation, ...]:
+    raw = f2.get(f"{stage}_observations", ())
+    if not isinstance(raw, tuple):
+        return ()
+    observations: list[FixtureTrajectoryObservation] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        target_ordinal = item.get("ordinal")
+        if target_ordinal is not None and target_ordinal != ordinal:
+            continue
+        record_kind = str(item.get("record_kind", ""))
+        event_type = (
+            _PROMPT_ASSEMBLED_EVENT
+            if record_kind == "assembled"
+            else _PROMPT_CACHE_EVENT
+        )
+        payload = {
+            "scenario_id": family,
+            "ordinal": ordinal,
+            "stage": stage,
+            **dict(item),
+        }
+        observations.append(
+            FixtureTrajectoryObservation(
+                event_type=event_type,
+                prompt_record_kind=record_kind,
+                prompt_cache_outcome=_optional_text(item.get("outcome")),
+                prompt_cache_owner=_optional_text(item.get("cache_owner")),
+                prompt_reason_code=_optional_text(item.get("reason_code")),
+                prompt_provider_reported=_optional_bool(item.get("provider_reported")),
+                prompt_input_tokens=_non_negative_int(item.get("input_tokens")),
+                prompt_cached_input_tokens=_non_negative_int(
+                    item.get("cached_input_tokens")
+                ),
+                prompt_cache_creation_input_tokens=_non_negative_int(
+                    item.get("cache_creation_input_tokens")
+                ),
+                payload_digest=canonical_json_sha256(payload),
+            )
+        )
+    return tuple(observations)
+
+
+def _f2_scenario(family: str) -> Mapping[str, object]:
+    if family != "prompt_cache_prefix_reuse":
+        return {}
+    assembled = {
+        "record_kind": "assembled",
+        "cache_owner": "product",
+        "outcome": "enforced",
+        "reason_code": "typed_plan_enforced",
+    }
+    return {
+        "call_count": 2,
+        "model_turns": 2,
+        "before_observations": (assembled,),
+        "after_observations": (
+            {
+                "ordinal": 1,
+                "record_kind": "cache_observed",
+                "cache_owner": "product",
+                "outcome": "write",
+                "reason_code": "provider_reported_write",
+                "provider_reported": True,
+                "input_tokens": 1000,
+                "cached_input_tokens": 0,
+                "cache_creation_input_tokens": 800,
+            },
+            {
+                "ordinal": 2,
+                "record_kind": "cache_observed",
+                "cache_owner": "product",
+                "outcome": "read",
+                "reason_code": "provider_reported_read",
+                "provider_reported": True,
+                "input_tokens": 1000,
+                "cached_input_tokens": 800,
+                "cache_creation_input_tokens": 0,
+            },
+        ),
+        "prompt_assertion": {
+            "required_record_kinds": ["assembled", "cache_observed"],
+            "required_outcomes": ["read", "write"],
+            "required_cache_owners": ["product"],
+            "require_provider_reported": True,
+            "minimum_cached_input_tokens": 800,
+            "minimum_cache_creation_input_tokens": 800,
+            "forbidden_reason_codes": ["provider_metadata_not_reported"],
+        },
+    }
+
+
+def _optional_text(value: object) -> str | None:
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _optional_bool(value: object) -> bool | None:
+    return value if isinstance(value, bool) else None
+
+
+def _non_negative_int(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        return 0
+    return value
 
 
 __all__ = [

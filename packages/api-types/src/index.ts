@@ -638,6 +638,8 @@ export type RuntimeApiEventType =
   | "quality.control_bound.v1"
   | "quality.decision.v1"
   | "tool_policy.journal.v1"
+  | "prompt.assembled.v1"
+  | "prompt.cache.observed.v1"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -718,6 +720,8 @@ export const RUNTIME_API_EVENT_TYPES = [
   "quality.control_bound.v1",
   "quality.decision.v1",
   "tool_policy.journal.v1",
+  "prompt.assembled.v1",
+  "prompt.cache.observed.v1",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2630,6 +2634,95 @@ export interface TaskPolicyJournalPayload {
   record: TaskPolicyJournalRecord;
 }
 
+export type PromptCacheOwner = "none" | "framework" | "product";
+export type PromptAssemblyOutcome =
+  | "enforced"
+  | "shadow"
+  | "legacy_comparison"
+  | "feature_off";
+export type PromptAssemblyReasonCode =
+  | "typed_plan_enforced"
+  | "shadow_plan_assembled"
+  | "legacy_renderer_compared"
+  | "prompt_assembly_disabled";
+export type PromptCacheOutcome =
+  | "read"
+  | "write"
+  | "read_write"
+  | "miss"
+  | "unsupported";
+export type PromptCacheReasonCode =
+  | "provider_reported_read"
+  | "provider_reported_write"
+  | "provider_reported_read_write"
+  | "provider_reported_miss"
+  | "provider_metadata_not_reported"
+  | "adapter_unsupported"
+  | "decoration_disabled";
+
+export interface PromptFragmentTokenTotals {
+  system_policy: number;
+  stable: number;
+  contextual: number;
+  volatile: number;
+  current_turn: number;
+}
+
+export interface PromptObservationRecordBase {
+  schema_version: 1;
+  record_id: string;
+  run_id: string;
+  snapshot_id: string;
+  snapshot_digest: string;
+  model_call_id: string;
+  created_at: string;
+  record_digest: string;
+}
+
+export interface PromptAssembledRecord extends PromptObservationRecordBase {
+  record_kind: "assembled";
+  plan_id: string;
+  plan_revision: string;
+  plan_digest: string;
+  provider: string;
+  model_family: string;
+  complete_system_digest: string;
+  stable_prefix_digest: string | null;
+  fragment_count: number;
+  stable_prefix_fragment_count: number;
+  system_bytes: number;
+  estimated_input_tokens: number;
+  fragment_tokens: PromptFragmentTokenTotals;
+  cache_owner: PromptCacheOwner;
+  outcome: PromptAssemblyOutcome;
+  reason_code: PromptAssemblyReasonCode;
+}
+
+export interface PromptCacheObservedRecord extends PromptObservationRecordBase {
+  record_kind: "cache_observed";
+  assembly_record_id: string;
+  assembly_record_digest: string;
+  plan_id: string;
+  plan_digest: string;
+  provider: string;
+  model_family: string;
+  cache_owner: PromptCacheOwner;
+  outcome: PromptCacheOutcome;
+  reason_code: PromptCacheReasonCode;
+  provider_reported: boolean;
+  input_tokens: number;
+  cached_input_tokens: number;
+  cache_creation_input_tokens: number;
+}
+
+export interface PromptAssembledPayload {
+  record: PromptAssembledRecord;
+}
+
+export interface PromptCacheObservedPayload {
+  record: PromptCacheObservedRecord;
+}
+
 // Citations (PR 1.1). `citation_id` is short ("c<base36>" of the per-run
 // ordinal) and is the token the assistant text embeds inline as
 // `[c<id>]`. The frontend's markdown plugin resolves these tokens by
@@ -3013,6 +3106,8 @@ export interface RuntimeEventPayloadByType
   "quality.control_bound.v1": QualityControlBoundPayload;
   "quality.decision.v1": QualityDecisionPayload;
   "tool_policy.journal.v1": TaskPolicyJournalPayload;
+  "prompt.assembled.v1": PromptAssembledPayload;
+  "prompt.cache.observed.v1": PromptCacheObservedPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

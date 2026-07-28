@@ -25,6 +25,10 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.capabilities.task_policy_journal import TaskPolicyJournalRecord
+from agent_runtime.prompts.observation import (
+    PromptAssembledRecord,
+    PromptCacheObservedRecord,
+)
 
 # Lazy import: ``McpDispatcherUnwrap`` lives under ``agent_runtime.capabilities.mcp``,
 # whose package ``__init__`` eagerly imports the MCP middleware. That middleware
@@ -217,6 +221,18 @@ class TaskPolicyJournalPayload(RuntimeContract):
     record: TaskPolicyJournalRecord
 
 
+class PromptAssembledPayload(RuntimeContract):
+    """Strict body-free F2 assembly record carried by the run journal."""
+
+    record: PromptAssembledRecord
+
+
+class PromptCacheObservedPayload(RuntimeContract):
+    """Strict provider-reported F2 cache fact carried by the run journal."""
+
+    record: PromptCacheObservedRecord
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -356,6 +372,10 @@ class RuntimeEventPresentationProjector:
             return cls._quality_decision_payload(payload)
         if event_type is RuntimeApiEventType.TOOL_POLICY_JOURNAL:
             return cls._tool_policy_journal_payload(payload)
+        if event_type is RuntimeApiEventType.PROMPT_ASSEMBLED:
+            return cls._prompt_assembled_payload(payload)
+        if event_type is RuntimeApiEventType.PROMPT_CACHE_OBSERVED:
+            return cls._prompt_cache_observed_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -503,6 +523,8 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.EFFECT_RECONCILED,
             RuntimeApiEventType.EFFECT_ROW_DECISIONS_RECORDED,
             RuntimeApiEventType.TOOL_POLICY_JOURNAL,
+            RuntimeApiEventType.PROMPT_ASSEMBLED,
+            RuntimeApiEventType.PROMPT_CACHE_OBSERVED,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -1772,6 +1794,32 @@ class RuntimeEventPresentationProjector:
         except ValidationError:
             logging.getLogger(__name__).warning(
                 "Rejected malformed tool_policy.journal.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _prompt_assembled_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one body-free assembly record and reject extra data."""
+
+        try:
+            validated = PromptAssembledPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed prompt.assembled.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _prompt_cache_observed_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one provider-authoritative cache record."""
+
+        try:
+            validated = PromptCacheObservedPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed prompt.cache.observed.v1 payload"
             )
             return {}
         return validated.model_dump(mode="json")

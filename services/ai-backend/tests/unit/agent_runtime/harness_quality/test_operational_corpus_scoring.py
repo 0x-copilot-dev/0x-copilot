@@ -107,6 +107,7 @@ def test_operational_corpus_covers_every_required_family_and_scenario() -> None:
         "task_policy_restart_replay",
         "task_policy_approval_resume",
         "task_policy_shadow_enforce_comparison",
+        "prompt_cache_prefix_reuse",
     )
     entries = operational_corpus()
     assert tuple(entry.family for entry in entries) == OPERATIONAL_TASK_FAMILIES
@@ -153,9 +154,10 @@ def test_hard_safety_groundedness_and_constraints_are_deterministic() -> None:
         "hard_groundedness",
         "hard_constraints",
         "task_policy_trajectory",
+        "prompt_cache_trajectory",
     )
     assert all(result.hard_gate for result in first[:3])
-    assert first[-1].hard_gate is False
+    assert all(result.hard_gate is False for result in first[-2:])
 
 
 def test_groundedness_and_constraint_failures_use_stable_reason_codes() -> None:
@@ -206,11 +208,53 @@ async def test_f4_corpus_cases_execute_and_score_through_existing_fixture_runner
         assert all(result.passed for result in results), entry.family
 
 
+async def test_f2_prefix_reuse_case_executes_and_requires_provider_reports() -> None:
+    entry = next(
+        item
+        for item in operational_corpus()
+        if item.family == "prompt_cache_prefix_reuse"
+    )
+    trajectory = await FixtureOnlyCaseExecutor().execute(
+        suite_run_id="suite_f2",
+        case=entry.case,
+        variant=_variant(),
+        plan=entry.plan(),
+        fixtures=FixtureToolExecutor(entry.fixtures),
+        projected_at=_NOW,
+    )
+    scorer = next(
+        scorer
+        for scorer in DEFAULT_HARD_SCORERS
+        if scorer.scorer_id == "prompt_cache_trajectory"
+    )
+    passed = scorer.score(case=entry.case, trajectory=trajectory)
+    unreported = trajectory.model_copy(
+        update={
+            "ordered_steps": tuple(
+                step.model_copy(update={"prompt_provider_reported": False})
+                if step.prompt_record_kind == "cache_observed"
+                else step
+                for step in trajectory.ordered_steps
+            )
+        }
+    )
+    failed = scorer.score(case=entry.case, trajectory=unreported)
+
+    assert passed.passed
+    assert passed.reason_code == "prompt_cache_trajectory_passed"
+    assert not failed.passed
+    assert failed.reason_code == "prompt_cache_provider_report_missing"
+
+
 def test_f4_hard_and_advisory_trajectory_semantics_are_distinct() -> None:
     entries = {entry.family: entry for entry in operational_corpus()}
     hard = entries["task_policy_exact_duplicate_blocked"]
     advisory = entries["task_policy_same_source_advisory"]
-    scorer = DEFAULT_HARD_SCORERS[-1]
+    scorer = next(
+        scorer
+        for scorer in DEFAULT_HARD_SCORERS
+        if scorer.scorer_id == "task_policy_trajectory"
+    )
     empty = _trajectory(hard)
 
     hard_result = scorer.score(case=hard.case, trajectory=empty)
@@ -299,7 +343,11 @@ def test_f4_shadow_and_enforce_duplicate_trajectories_are_distinct() -> None:
         ),
         usage_summary={"live_effect_dispatches": 0, "tool_calls": 1},
     ).model_copy(update={"variant_id": "enforce"})
-    scorer = DEFAULT_HARD_SCORERS[-1]
+    scorer = next(
+        scorer
+        for scorer in DEFAULT_HARD_SCORERS
+        if scorer.scorer_id == "task_policy_trajectory"
+    )
 
     assert scorer.score(case=shadow_case, trajectory=shadow).passed
     assert scorer.score(case=entry.case, trajectory=enforce).passed
