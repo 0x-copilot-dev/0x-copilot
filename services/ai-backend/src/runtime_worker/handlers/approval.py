@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import inspect
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping, Sequence
 from datetime import datetime, timezone
 
 from agent_runtime.api.ports import EventStorePort, PersistencePort
@@ -51,7 +51,12 @@ from agent_runtime.capabilities.tools.tool_use_enforcement import (
 )
 from agent_runtime.capabilities.tools.cards import ToolDisplayTemplate
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuard
-from agent_runtime.capabilities.tool_budget_middleware import ToolBudgetMiddleware
+from agent_runtime.capabilities.tool_budget_middleware import (
+    ToolBudgetMiddleware,
+    WorkspaceToolBudgetOverride,
+)
+from agent_runtime.control_plane.context import TaskPolicyRuntimeBinding
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
     ConversationOrdinalAllocator,
@@ -80,6 +85,7 @@ from agent_runtime.persistence.ports import (
 from agent_runtime.persistence.records import (
     BatchOutcomeStatus,
     BatchTransitionOutcome,
+    ToolBudgetRecord,
 )
 from agent_runtime.settings import RuntimeSettings
 from runtime_api.schemas import (
@@ -354,6 +360,15 @@ class RuntimeApprovalHandler:
             if self._run_control_builder is not None
             else None
         )
+        prepared_run_control = (
+            await self._run_control_builder.prepare_binding(
+                run=run,
+                snapshot=run_control_snapshot,
+            )
+            if self._run_control_builder is not None
+            and run_control_snapshot is not None
+            else None
+        )
         running = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=run.run_id,
@@ -390,18 +405,14 @@ class RuntimeApprovalHandler:
         # model-admission boundary again even when the org has no tool-budget
         # rows. Empty middleware carries admission without changing policy.
         tool_result_admission = self._file_store_wiring.tool_result_admission()
-        tool_admission_guard = (
-            ToolBudgetGuard(
-                middleware=ToolBudgetMiddleware(()),
-                ledger=self.stream_event_mapper.message_processor.ledger_for_run(
-                    running.run_id
-                ),
-                run=running,
-                event_producer=self.event_producer,
-                tool_result_admission=tool_result_admission,
-            )
-            if tool_result_admission is not None
-            else None
+        tool_admission_guard = await self._build_tool_budget_guard_for_resume(
+            running,
+            task_policy_binding=(
+                prepared_run_control.task_policy
+                if prepared_run_control is not None
+                else None
+            ),
+            tool_result_admission=tool_result_admission,
         )
         dependencies = self._dependencies_for_resume(
             running, workspace_backend=workspace_backend
@@ -418,12 +429,10 @@ class RuntimeApprovalHandler:
         )
         run_control_token: object | None = None
         try:
-            if (
-                self._run_control_builder is not None
-                and run_control_snapshot is not None
-            ):
+            if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
-                    self._run_control_builder.binding_for(run_control_snapshot)
+                    prepared_run_control.control,
+                    task_policy=prepared_run_control.task_policy,
                 )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
@@ -589,6 +598,76 @@ class RuntimeApprovalHandler:
             payload=payload,
             parent_task_id=parent_task_id,
         )
+
+    async def _build_tool_budget_guard_for_resume(
+        self,
+        run: RunRecord,
+        *,
+        task_policy_binding: TaskPolicyRuntimeBinding | None,
+        tool_result_admission: object | None,
+    ) -> ToolBudgetGuard | None:
+        """Rebind capability budgets over durable F4 spend on approval resume."""
+
+        if (
+            task_policy_binding is None
+            or task_policy_binding.mode is not FeatureMode.ENFORCE
+        ):
+            if tool_result_admission is None and task_policy_binding is None:
+                return None
+            return ToolBudgetGuard(
+                middleware=ToolBudgetMiddleware(()),
+                ledger=self.stream_event_mapper.message_processor.ledger_for_run(
+                    run.run_id
+                ),
+                run=run,
+                event_producer=self.event_producer,
+                task_policy_binding=task_policy_binding,
+                tool_result_admission=tool_result_admission,  # type: ignore[arg-type]
+            )
+        loader = getattr(self.persistence, "list_tool_budgets_for_org", None)
+        budgets: Sequence[ToolBudgetRecord] = ()
+        if loader is not None:
+            try:
+                budgets = await loader(org_id=run.org_id)
+            except Exception:
+                _LOGGER.warning("tool_budget_resume_load_failed", exc_info=True)
+                budgets = ()
+            else:
+                budgets = WorkspaceToolBudgetOverride.apply(
+                    budgets,
+                    max_calls_per_run=await self._workspace_tool_call_cap(run),
+                )
+        if (
+            not budgets
+            and tool_result_admission is None
+            and task_policy_binding is None
+        ):
+            return None
+        return ToolBudgetGuard(
+            middleware=ToolBudgetMiddleware(budgets),
+            ledger=self.stream_event_mapper.message_processor.ledger_for_run(
+                run.run_id
+            ),
+            run=run,
+            event_producer=self.event_producer,
+            task_policy_binding=task_policy_binding,
+            tool_result_admission=tool_result_admission,  # type: ignore[arg-type]
+        )
+
+    async def _workspace_tool_call_cap(self, run: RunRecord) -> int | None:
+        loader = getattr(self.persistence, "get_workspace_defaults", None)
+        if loader is None:
+            return None
+        try:
+            record = await loader(org_id=run.org_id)
+        except Exception:
+            _LOGGER.warning("workspace_tool_call_cap_resume_load_failed", exc_info=True)
+            return None
+        if record is None:
+            return None
+        overrides = getattr(record, "behavior_overrides", None)
+        value = getattr(overrides, "tool_calls_per_run", None)
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
     async def _build_allocator_for_resume(
         self,

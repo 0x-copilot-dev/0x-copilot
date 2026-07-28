@@ -68,6 +68,20 @@ async def test_no_active_release_uses_safe_builder_without_configuration() -> No
     assert isinstance(builder, RunControlPlaneBuilder)
 
 
+async def test_task_policy_release_composition_requires_complete_journal_seam() -> None:
+    with pytest.raises(
+        RunControlReleaseCompositionError,
+        match="factory and durable journal callbacks",
+    ):
+        await build_run_control_plane_builder(
+            settings=RuntimeSettings.load(environ=_ENVIRONMENT),
+            repository=InMemoryEvaluationRepository(),
+            store=_SnapshotStore(),
+            environment=_ENVIRONMENT,
+            task_policy_runtime_factory=object(),  # type: ignore[arg-type]
+        )
+
+
 async def test_release_configuration_requires_repository() -> None:
     settings = RuntimeSettings.load(
         environ={

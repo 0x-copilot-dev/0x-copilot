@@ -17,8 +17,12 @@ from agent_runtime.release.local_control import (
 from agent_runtime.release.manifest import ReleaseManifestVerifier
 from agent_runtime.settings import RuntimeEnvironment, RuntimeSettings
 from runtime_worker.run_control import (
+    BudgetEnvelopeLoader,
     RunControlPlaneBuilder,
     StableUserProfileHmac,
+    TaskPolicyRecordAppender,
+    TaskPolicyRecordLoader,
+    TaskPolicyRuntimeFactoryPort,
 )
 from runtime_worker.run_control_release_bootstrap import (
     NoActiveRunControlRelease,
@@ -40,6 +44,10 @@ async def build_run_control_plane_builder(
     repository: EvaluationRepositoryPort | None,
     store: RunControlSnapshotStorePort,
     environment: Mapping[str, str] | None = None,
+    task_policy_runtime_factory: TaskPolicyRuntimeFactoryPort | None = None,
+    load_task_policy_records: TaskPolicyRecordLoader | None = None,
+    append_task_policy_record: TaskPolicyRecordAppender | None = None,
+    load_budget_envelope: BudgetEnvelopeLoader | None = None,
 ) -> RunControlPlaneBuilder:
     """Return the one Step 1 builder, using a verified active release if present."""
 
@@ -56,6 +64,10 @@ async def build_run_control_plane_builder(
             store=store,
             deployment_profile=deployment_profile,
             subject_hmac=subject_hmac,
+            task_policy_runtime_factory=task_policy_runtime_factory,
+            load_task_policy_records=load_task_policy_records,
+            append_task_policy_record=append_task_policy_record,
+            load_budget_envelope=load_budget_envelope,
         )
 
     pointer = await repository.get_active_harness_manifest(_scope(settings))
@@ -68,6 +80,10 @@ async def build_run_control_plane_builder(
             store=store,
             deployment_profile=deployment_profile,
             subject_hmac=subject_hmac,
+            task_policy_runtime_factory=task_policy_runtime_factory,
+            load_task_policy_records=load_task_policy_records,
+            append_task_policy_record=append_task_policy_record,
+            load_budget_envelope=load_budget_envelope,
         )
 
     configuration = load_run_control_release_configuration(path)
@@ -83,7 +99,17 @@ async def build_run_control_plane_builder(
         subject_hmac=subject_hmac,
         development_override=configuration.development_override,
     )
-    return result.builder if isinstance(result, NoActiveRunControlRelease) else result
+    builder = (
+        result.builder if isinstance(result, NoActiveRunControlRelease) else result
+    )
+    _install_task_policy_runtime(
+        builder=builder,
+        factory=task_policy_runtime_factory,
+        load_records=load_task_policy_records,
+        append_record=append_task_policy_record,
+        load_budget_envelope=load_budget_envelope,
+    )
+    return builder
 
 
 def build_local_release_control_service(
@@ -160,11 +186,53 @@ def _safe_builder(
     store: RunControlSnapshotStorePort,
     deployment_profile: str,
     subject_hmac: StableUserProfileHmac,
+    task_policy_runtime_factory: TaskPolicyRuntimeFactoryPort | None,
+    load_task_policy_records: TaskPolicyRecordLoader | None,
+    append_task_policy_record: TaskPolicyRecordAppender | None,
+    load_budget_envelope: BudgetEnvelopeLoader | None,
 ) -> RunControlPlaneBuilder:
-    return RunControlPlaneBuilder(
+    builder = RunControlPlaneBuilder(
         store=store,
         deployment_profile=deployment_profile,
         subject_hmac=subject_hmac,
+    )
+    _install_task_policy_runtime(
+        builder=builder,
+        factory=task_policy_runtime_factory,
+        load_records=load_task_policy_records,
+        append_record=append_task_policy_record,
+        load_budget_envelope=load_budget_envelope,
+    )
+    return builder
+
+
+def _install_task_policy_runtime(
+    *,
+    builder: RunControlPlaneBuilder,
+    factory: TaskPolicyRuntimeFactoryPort | None,
+    load_records: TaskPolicyRecordLoader | None,
+    append_record: TaskPolicyRecordAppender | None,
+    load_budget_envelope: BudgetEnvelopeLoader | None,
+) -> None:
+    supplied = (
+        factory is not None,
+        load_records is not None,
+        append_record is not None,
+    )
+    if not any(supplied):
+        return
+    if not all(supplied):
+        raise RunControlReleaseCompositionError(
+            "task-policy runtime requires factory and durable journal callbacks"
+        )
+    assert factory is not None
+    assert load_records is not None
+    assert append_record is not None
+    builder.install_task_policy_runtime(
+        factory=factory,
+        load_records=load_records,
+        append_record=append_record,
+        load_budget_envelope=load_budget_envelope,
     )
 
 

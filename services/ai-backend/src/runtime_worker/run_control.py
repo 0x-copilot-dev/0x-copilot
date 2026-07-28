@@ -8,12 +8,14 @@ the snapshot's feature modes.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import hmac
 import json
 import os
+from typing import Protocol
 
 from pydantic import Field
 
@@ -25,9 +27,11 @@ from agent_runtime.control_plane.contracts import (
 from agent_runtime.control_plane.context import (
     RunControlBinding,
     RunControlContext,
+    TaskPolicyRuntimeBinding,
 )
 from agent_runtime.control_plane.feature_modes import (
     AgentQualityFeature,
+    FeatureMode,
     FeatureModeResolver,
     FeatureModeSet,
 )
@@ -171,6 +175,52 @@ class LiveRunControlConstraints(RuntimeContract):
 
 LiveConstraintsProvider = Callable[[], LiveRunControlConstraints]
 
+TaskPolicyRecordLoader = Callable[
+    [str, str, str],
+    Awaitable[Sequence[object]],
+]
+TaskPolicyRecordAppender = Callable[
+    [str, str, str, object],
+    Awaitable[object],
+]
+BudgetEnvelopeLoader = Callable[[str], Awaitable[BudgetEnvelope | None]]
+
+
+class VerifiedTaskPolicySignals(RuntimeContract):
+    """Persisted server-owned facts available to F4 before model dispatch."""
+
+    run_id: str = Field(min_length=1, max_length=160)
+    conversation_id: str = Field(min_length=1, max_length=160)
+    org_id: str = Field(min_length=1, max_length=160)
+    user_id: str = Field(min_length=1, max_length=160)
+    snapshot_id: str = Field(min_length=1, max_length=160)
+    task_policy_selection_ref: str = Field(min_length=1, max_length=256)
+    task_policy_revision: str = Field(min_length=1, max_length=256)
+    subject_fingerprint: str = Field(pattern=r"^[a-f0-9]{64}$")
+    model_declared_tool_call_limit: int | None = Field(default=None, ge=1, le=100)
+
+
+class TaskPolicyRuntimeFactoryPort(Protocol):
+    """Domain-owned F4 factory; persistence remains the canonical run journal."""
+
+    async def prepare(
+        self,
+        *,
+        signals: VerifiedTaskPolicySignals,
+        mode: FeatureMode,
+        budget_envelope: BudgetEnvelope | None,
+        load_records: Callable[[], Awaitable[Sequence[object]]],
+        append_record: Callable[[object], Awaitable[object]],
+    ) -> TaskPolicyRuntimeBinding: ...
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedRunControl:
+    """Effective release binding plus the optional replayed F4 controller."""
+
+    control: RunControlBinding
+    task_policy: TaskPolicyRuntimeBinding | None
+
 
 class RunControlPlaneBuilder:
     """Get-or-create and rehydrate a run snapshot at the verified worker seam."""
@@ -185,6 +235,10 @@ class RunControlPlaneBuilder:
         allocations: Sequence[RunControlAssignmentAllocation] = (),
         cutover_at: datetime | None = None,
         live_constraints: LiveConstraintsProvider | None = None,
+        task_policy_runtime_factory: TaskPolicyRuntimeFactoryPort | None = None,
+        load_task_policy_records: TaskPolicyRecordLoader | None = None,
+        append_task_policy_record: TaskPolicyRecordAppender | None = None,
+        load_budget_envelope: BudgetEnvelopeLoader | None = None,
     ) -> None:
         if not deployment_profile.strip():
             raise ValueError("deployment_profile must be non-empty")
@@ -229,6 +283,41 @@ class RunControlPlaneBuilder:
         if self._cutover_at.tzinfo is None or self._cutover_at.utcoffset() is None:
             raise ValueError("cutover_at must be timezone-aware")
         self._live_constraints = live_constraints or LiveRunControlConstraints
+        if (load_task_policy_records is None) != (append_task_policy_record is None):
+            raise ValueError(
+                "task-policy record load and append callbacks must be provided together"
+            )
+        if task_policy_runtime_factory is not None and (
+            load_task_policy_records is None or append_task_policy_record is None
+        ):
+            raise ValueError(
+                "task-policy runtime factory requires durable journal callbacks"
+            )
+        self._task_policy_runtime_factory = task_policy_runtime_factory
+        self._load_task_policy_records = load_task_policy_records
+        self._append_task_policy_record = append_task_policy_record
+        self._load_budget_envelope = load_budget_envelope
+
+    def install_task_policy_runtime(
+        self,
+        *,
+        factory: TaskPolicyRuntimeFactoryPort,
+        load_records: TaskPolicyRecordLoader,
+        append_record: TaskPolicyRecordAppender,
+        load_budget_envelope: BudgetEnvelopeLoader | None = None,
+    ) -> None:
+        """Install the reviewed startup composition before this builder is shared."""
+
+        if (
+            self._task_policy_runtime_factory is not None
+            or self._load_task_policy_records is not None
+            or self._append_task_policy_record is not None
+        ):
+            raise RuntimeError("task-policy runtime composition is already installed")
+        self._task_policy_runtime_factory = factory
+        self._load_task_policy_records = load_records
+        self._append_task_policy_record = append_record
+        self._load_budget_envelope = load_budget_envelope
 
     async def ensure_snapshot(
         self,
@@ -304,6 +393,86 @@ class RunControlPlaneBuilder:
             decisions=decisions,
         )
 
+    async def prepare_binding(
+        self,
+        *,
+        run: RunRecord,
+        snapshot: RunControlSnapshot,
+    ) -> PreparedRunControl:
+        """Replay and bind F4 from verified persisted facts before model use."""
+
+        self._verify_scope(run=run, snapshot=snapshot)
+        control = self.binding_for(snapshot)
+        mode = control.mode_for(AgentQualityFeature.F4_TOOL_USE_CONTROLLER)
+        if mode is FeatureMode.OFF:
+            return PreparedRunControl(control=control, task_policy=None)
+
+        factory = self._task_policy_runtime_factory
+        loader = self._load_task_policy_records
+        appender = self._append_task_policy_record
+        if factory is None or loader is None or appender is None:
+            raise RuntimeError(
+                "enabled F4 task policy has no durable runtime composition"
+            )
+
+        async def load_records() -> Sequence[object]:
+            return await loader(
+                run.org_id,
+                run.run_id,
+                snapshot.subject_fingerprint,
+            )
+
+        async def append_record(record: object) -> object:
+            return await appender(
+                run.org_id,
+                run.run_id,
+                snapshot.subject_fingerprint,
+                record,
+            )
+
+        envelope = (
+            await self._load_budget_envelope(snapshot.budget_envelope_ref)
+            if self._load_budget_envelope is not None
+            else None
+        )
+        task_policy = await factory.prepare(
+            signals=VerifiedTaskPolicySignals(
+                run_id=run.run_id,
+                conversation_id=run.conversation_id,
+                org_id=run.org_id,
+                user_id=run.user_id,
+                snapshot_id=snapshot.snapshot_id,
+                task_policy_selection_ref=snapshot.task_policy_selection_ref,
+                task_policy_revision=snapshot.policy_revisions.tool_controller,
+                subject_fingerprint=snapshot.subject_fingerprint,
+                model_declared_tool_call_limit=self._model_tool_call_limit(run),
+            ),
+            mode=mode,
+            budget_envelope=envelope,
+            load_records=load_records,
+            append_record=append_record,
+        )
+        if task_policy.selection.run_id != run.run_id:
+            raise RuntimeError("F4 selection does not match the verified run")
+        if task_policy.selection.profile_revision != (
+            snapshot.policy_revisions.tool_controller
+        ):
+            raise RuntimeError("F4 selection revision does not match the run snapshot")
+        if task_policy.profile.profile_id != task_policy.selection.profile_id:
+            raise RuntimeError("F4 selected profile identity mismatch")
+        if task_policy.profile.revision != task_policy.selection.profile_revision:
+            raise RuntimeError("F4 selected profile revision mismatch")
+        if task_policy.mode is not mode:
+            raise RuntimeError("F4 runtime mode does not match effective run control")
+        return PreparedRunControl(control=control, task_policy=task_policy)
+
+    @staticmethod
+    def _model_tool_call_limit(run: RunRecord) -> int | None:
+        runtime_context = getattr(run, "runtime_context", None)
+        model_profile = getattr(runtime_context, "model_profile", None)
+        limit = getattr(model_profile, "tool_call_budget", None)
+        return limit if isinstance(limit, int) and not isinstance(limit, bool) else None
+
     def _assignment_for(self, subject_fingerprint: str) -> RunControlAssignment:
         if self._allocations:
             bucket = int(subject_fingerprint, 16) % 10_000
@@ -338,10 +507,16 @@ class RunControlPlaneBuilder:
 
 __all__ = [
     "LiveRunControlConstraints",
+    "PreparedRunControl",
     "RunControlAssignment",
     "RunControlAssignmentAllocation",
     "RunControlBinding",
     "RunControlContext",
     "RunControlPlaneBuilder",
     "StableUserProfileHmac",
+    "BudgetEnvelopeLoader",
+    "TaskPolicyRecordAppender",
+    "TaskPolicyRecordLoader",
+    "TaskPolicyRuntimeFactoryPort",
+    "VerifiedTaskPolicySignals",
 ]

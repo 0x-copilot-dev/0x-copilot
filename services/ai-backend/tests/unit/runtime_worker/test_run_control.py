@@ -8,8 +8,13 @@ import pytest
 from pydantic import ValidationError
 
 from agent_runtime.control_plane.contracts import (
+    BudgetEnvelope,
     RunControlSnapshot,
     RunPolicyRevisions,
+)
+from agent_runtime.control_plane.context import (
+    TaskPolicyProgressProjection,
+    TaskPolicyRuntimeBinding,
 )
 from agent_runtime.control_plane.feature_modes import (
     AgentQualityFeature,
@@ -21,6 +26,14 @@ from agent_runtime.control_plane.ports import (
     RunControlSnapshotConflict,
     RunControlSnapshotWrite,
 )
+from agent_runtime.capabilities.task_policy import (
+    RequestFingerprint,
+    TaskFamily,
+    TaskPolicyProfile,
+    TaskPolicyRequest,
+    TaskPolicyResolver,
+    ToolUseController,
+)
 from runtime_api.schemas import AgentRunStatus, RunRecord
 from runtime_worker.run_control import (
     LiveRunControlConstraints,
@@ -28,6 +41,7 @@ from runtime_worker.run_control import (
     RunControlContext,
     RunControlPlaneBuilder,
     StableUserProfileHmac,
+    VerifiedTaskPolicySignals,
 )
 
 
@@ -167,6 +181,106 @@ async def test_new_run_get_or_create_is_restart_stable_and_order_independent() -
 
 
 @pytest.mark.asyncio
+async def test_f4_prepare_uses_verified_scope_and_durable_callbacks() -> None:
+    cutover = datetime.now(timezone.utc)
+    run = _run(created_at=cutover + timedelta(seconds=1))
+    store = _SnapshotStore()
+    factory = _TaskPolicyFactory()
+    loaded_scopes: list[tuple[str, str, str]] = []
+    appended_scopes: list[tuple[str, str, str, object]] = []
+
+    async def load_records(
+        org_id: str,
+        run_id: str,
+        subject_fingerprint: str,
+    ) -> tuple[object, ...]:
+        loaded_scopes.append((org_id, run_id, subject_fingerprint))
+        return ({"kind": "prior"},)
+
+    async def append_record(
+        org_id: str,
+        run_id: str,
+        subject_fingerprint: str,
+        record: object,
+    ) -> object:
+        appended_scopes.append((org_id, run_id, subject_fingerprint, record))
+        return record
+
+    builder = RunControlPlaneBuilder(
+        store=store,
+        deployment_profile="single_user_desktop",
+        subject_hmac=StableUserProfileHmac(b"x" * 32),
+        assignments=(_assignment("f4-v1", FeatureMode.ENFORCE),),
+        cutover_at=cutover,
+        task_policy_runtime_factory=factory,
+        load_task_policy_records=load_records,
+        append_task_policy_record=append_record,
+    )
+    snapshot = await builder.ensure_snapshot(run=run, trace_id="trace-1")
+    prepared = await builder.prepare_binding(run=run, snapshot=snapshot)
+
+    assert prepared.task_policy is not None
+    assert prepared.task_policy.selection.run_id == run.run_id
+    assert factory.loaded == ({"kind": "prior"},)
+    assert factory.signals is not None
+    assert factory.signals.subject_fingerprint == snapshot.subject_fingerprint
+    assert loaded_scopes == [(run.org_id, run.run_id, snapshot.subject_fingerprint)]
+    assert appended_scopes == [
+        (
+            run.org_id,
+            run.run_id,
+            snapshot.subject_fingerprint,
+            {"kind": "selection"},
+        )
+    ]
+    token = RunControlContext.bind_for_run(
+        prepared.control,
+        task_policy=prepared.task_policy,
+    )
+    try:
+        assert RunControlContext.task_policy() is prepared.task_policy
+        assert RunControlContext.task_policy_progress() == (
+            prepared.task_policy.progress()
+        )
+    finally:
+        RunControlContext.unbind(token)
+
+
+@pytest.mark.asyncio
+async def test_f4_off_preserves_feature_off_without_runtime_factory() -> None:
+    cutover = datetime.now(timezone.utc)
+    run = _run(created_at=cutover + timedelta(seconds=1))
+    builder = _builder(store=_SnapshotStore(), cutover_at=cutover)
+    snapshot = await builder.ensure_snapshot(run=run, trace_id="trace-1")
+
+    prepared = await builder.prepare_binding(run=run, snapshot=snapshot)
+
+    assert prepared.task_policy is None
+    assert (
+        prepared.control.mode_for(AgentQualityFeature.F4_TOOL_USE_CONTROLLER)
+        is FeatureMode.OFF
+    )
+
+
+@pytest.mark.asyncio
+async def test_enabled_f4_without_durable_composition_fails_before_model() -> None:
+    cutover = datetime.now(timezone.utc)
+    run = _run(created_at=cutover + timedelta(seconds=1))
+    builder = _builder(
+        store=_SnapshotStore(),
+        cutover_at=cutover,
+        assignments=(_assignment("f4-v1", FeatureMode.ENFORCE),),
+    )
+    snapshot = await builder.ensure_snapshot(run=run, trace_id="trace-1")
+
+    with pytest.raises(
+        RuntimeError,
+        match="enabled F4 task policy has no durable runtime composition",
+    ):
+        await builder.prepare_binding(run=run, snapshot=snapshot)
+
+
+@pytest.mark.asyncio
 async def test_old_active_run_without_snapshot_gets_legacy_safe_v1() -> None:
     cutover = datetime.now(timezone.utc)
     store = _SnapshotStore()
@@ -224,6 +338,53 @@ async def test_changed_assignment_for_same_run_is_a_hard_conflict() -> None:
 
 async def _return_none() -> None:
     return None
+
+
+class _TaskPolicyFactory:
+    def __init__(self) -> None:
+        self.loaded: tuple[object, ...] = ()
+        self.signals: VerifiedTaskPolicySignals | None = None
+        self.appended: object | None = None
+
+    async def prepare(
+        self,
+        *,
+        signals: VerifiedTaskPolicySignals,
+        mode: FeatureMode,
+        budget_envelope: BudgetEnvelope | None,
+        load_records,
+        append_record,
+    ) -> TaskPolicyRuntimeBinding:
+        del budget_envelope
+        self.signals = signals
+        self.loaded = tuple(await load_records())
+        self.appended = await append_record({"kind": "selection"})
+        profile = TaskPolicyProfile.conservative_unknown(
+            revision=signals.task_policy_revision
+        )
+        selection = TaskPolicyResolver(
+            (profile,),
+            policy_revision=signals.task_policy_revision,
+        ).resolve_selection(
+            TaskPolicyRequest(
+                run_id=signals.run_id,
+                policy_revision=signals.task_policy_revision,
+            )
+        )
+        controller = ToolUseController(profile=profile)
+        projection = TaskPolicyProgressProjection(
+            profile_id=profile.profile_id,
+            profile_revision=profile.revision,
+            task_family=TaskFamily.UNKNOWN.value,
+        )
+        return TaskPolicyRuntimeBinding(
+            selection=selection,
+            profile=profile,
+            controller=controller,
+            fingerprinter=RequestFingerprint(key=b"f" * 32),
+            mode=mode,
+            progress_projector=lambda: projection,
+        )
 
 
 @pytest.mark.asyncio

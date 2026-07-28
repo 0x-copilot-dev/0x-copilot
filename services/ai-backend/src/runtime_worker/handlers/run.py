@@ -39,6 +39,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetMiddleware,
     WorkspaceToolBudgetOverride,
 )
+from agent_runtime.control_plane.context import TaskPolicyRuntimeBinding
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from agent_runtime.execution.contracts import (
@@ -410,6 +411,15 @@ class RuntimeRunHandler:
             if self._run_control_builder is not None
             else None
         )
+        prepared_run_control = (
+            await self._run_control_builder.prepare_binding(
+                run=run,
+                snapshot=run_control_snapshot,
+            )
+            if self._run_control_builder is not None
+            and run_control_snapshot is not None
+            else None
+        )
         run = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.RUNNING
@@ -486,7 +496,14 @@ class RuntimeRunHandler:
         )
         # Per-tool budget guard. Loaded per-run; ``None`` when the org has no budgets,
         # in which case the guard is unbound and tool calls are a passthrough.
-        budget_guard = await self._build_tool_budget_guard(run)
+        budget_guard = await self._build_tool_budget_guard(
+            run,
+            task_policy_binding=(
+                prepared_run_control.task_policy
+                if prepared_run_control is not None
+                else None
+            ),
+        )
         budget_token = (
             ToolBudgetGuard.bind_for_run(budget_guard)
             if budget_guard is not None
@@ -513,12 +530,10 @@ class RuntimeRunHandler:
         workspace_backend: object | None = None
         run_control_token: object | None = None
         try:
-            if (
-                self._run_control_builder is not None
-                and run_control_snapshot is not None
-            ):
+            if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
-                    self._run_control_builder.binding_for(run_control_snapshot)
+                    prepared_run_control.control,
+                    task_policy=prepared_run_control.task_policy,
                 )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
@@ -2243,7 +2258,12 @@ class RuntimeRunHandler:
                     exc_info=True,
                 )
 
-    async def _build_tool_budget_guard(self, run: RunRecord) -> ToolBudgetGuard | None:
+    async def _build_tool_budget_guard(
+        self,
+        run: RunRecord,
+        *,
+        task_policy_binding: TaskPolicyRuntimeBinding | None = None,
+    ) -> ToolBudgetGuard | None:
         """Load the org's per-tool budgets and build a per-run guard.
 
         Returns ``None`` when the persistence port doesn't expose the
@@ -2276,7 +2296,7 @@ class RuntimeRunHandler:
                     budgets,
                     max_calls_per_run=await self._workspace_tool_call_cap(run),
                 )
-        if not budgets and admission is None:
+        if not budgets and admission is None and task_policy_binding is None:
             return None
         ledger = self.stream_event_mapper.message_processor.ledger_for_run(run.run_id)
         return ToolBudgetGuard(
@@ -2284,6 +2304,7 @@ class RuntimeRunHandler:
             ledger=ledger,
             run=run,
             event_producer=self.event_producer,
+            task_policy_binding=task_policy_binding,
             tool_result_admission=admission,
         )
 

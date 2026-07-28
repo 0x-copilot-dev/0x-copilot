@@ -148,8 +148,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
     ) -> dict[str, Any]:
         """Synchronous compatibility adapter for the canonical async hook."""
 
-        del runtime
-        return self._before_model_update(state)
+        return self._before_model_update(state, runtime)
 
     async def abefore_model(
         self,
@@ -158,8 +157,17 @@ class RuntimeControlMiddleware(AgentMiddleware):
     ) -> dict[str, Any]:
         """Advance one checkpointed model turn before provider dispatch."""
 
-        del runtime
-        return self._before_model_update(state)
+        model_turn = self._model_turn(state) + 1
+        guard = ToolBudgetGuard.active()
+        admit_model_turn = (
+            getattr(guard, "aadmit_model_turn", None) if guard is not None else None
+        )
+        if callable(admit_model_turn):
+            await admit_model_turn(
+                model_turn=model_turn,
+                execution_scope=self._execution_scope_for_runtime(runtime),
+            )
+        return {"runtime_control_model_turn": model_turn}
 
     def wrap_model_call(
         self,
@@ -223,13 +231,23 @@ class RuntimeControlMiddleware(AgentMiddleware):
         del state, runtime
         return None
 
-    @classmethod
     def _before_model_update(
-        cls,
+        self,
         state: RuntimeControlState,
+        runtime: object,
     ) -> dict[str, Any]:
+        model_turn = self._model_turn(state) + 1
+        guard = ToolBudgetGuard.active()
+        admit_model_turn = (
+            getattr(guard, "admit_model_turn", None) if guard is not None else None
+        )
+        if callable(admit_model_turn):
+            admit_model_turn(
+                model_turn=model_turn,
+                execution_scope=self._execution_scope_for_runtime(runtime),
+            )
         return {
-            "runtime_control_model_turn": cls._model_turn(state) + 1,
+            "runtime_control_model_turn": model_turn,
         }
 
     def _observe_final_tool_surface(self, request: ModelRequest[Any]) -> None:
@@ -267,7 +285,12 @@ class RuntimeControlMiddleware(AgentMiddleware):
             identity = self._call_identity(request)
             with RuntimeCallContext.bind(identity):
                 execute = (
-                    (lambda: handler(request))
+                    (
+                        lambda: self._execute_policy_blocked(
+                            request=request,
+                            handler=handler,
+                        )
+                    )
                     if isinstance(request.tool, PolicyBlockedTool)
                     else (lambda: self._execute(request=request, handler=handler))
                 )
@@ -295,6 +318,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
                     if isinstance(request.tool, PolicyBlockedTool):
                         # User policy is the outer rejection gate. A blocked
                         # call never reaches budget admission.
+                        await self._aobserve_upstream_policy_block(request)
                         return await handler(request)
                     return await self._aexecute(request=request, handler=handler)
 
@@ -510,7 +534,11 @@ class RuntimeControlMiddleware(AgentMiddleware):
 
     @staticmethod
     def _execution_scope(request: ToolCallRequest) -> str:
-        config = getattr(request.runtime, "config", None)
+        return RuntimeControlMiddleware._execution_scope_for_runtime(request.runtime)
+
+    @staticmethod
+    def _execution_scope_for_runtime(runtime: object) -> str:
+        config = getattr(runtime, "config", None)
         if not isinstance(config, Mapping):
             return "supervisor"
         metadata = config.get("metadata")
@@ -522,6 +550,47 @@ class RuntimeControlMiddleware(AgentMiddleware):
             if isinstance(value, str) and value.strip():
                 return f"subagent:{value.strip()}"
         return "supervisor"
+
+    @staticmethod
+    def _observe_upstream_policy_block(request: ToolCallRequest) -> None:
+        guard = ToolBudgetGuard.active()
+        if guard is None:
+            return
+        observer = getattr(guard, "observe_upstream_policy_block", None)
+        if not callable(observer):
+            return
+        tool_name, arguments, _ = _request_facts(request)
+        observer(
+            tool_name=tool_name,
+            args=(),
+            kwargs=arguments,
+        )
+
+    @staticmethod
+    async def _aobserve_upstream_policy_block(request: ToolCallRequest) -> None:
+        guard = ToolBudgetGuard.active()
+        if guard is None:
+            return
+        observer = getattr(guard, "aobserve_upstream_policy_block", None)
+        if not callable(observer):
+            RuntimeControlMiddleware._observe_upstream_policy_block(request)
+            return
+        tool_name, arguments, _ = _request_facts(request)
+        await observer(
+            tool_name=tool_name,
+            args=(),
+            kwargs=arguments,
+        )
+
+    @classmethod
+    def _execute_policy_blocked(
+        cls,
+        *,
+        request: ToolCallRequest,
+        handler: ToolHandler,
+    ) -> ToolHandlerResult:
+        cls._observe_upstream_policy_block(request)
+        return handler(request)
 
     @staticmethod
     def _model_turn(state: object) -> int:
@@ -606,7 +675,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
             return await handler(request)
         tool_name, arguments, estimated = _request_facts(request)
         try:
-            intent = guard.admit_task_policy(
+            intent = await guard.aadmit_task_policy(
                 tool_name=tool_name,
                 args=(),
                 kwargs=arguments,
@@ -633,7 +702,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
         try:
             result = await handler(request)
         except BaseException as exc:
-            guard.record_task_policy_outcome(
+            await guard.arecord_task_policy_outcome(
                 intent=intent,
                 succeeded=False,
                 error_class=type(exc).__name__,
@@ -641,7 +710,7 @@ class RuntimeControlMiddleware(AgentMiddleware):
             raise
         else:
             succeeded = _succeeded(result)
-            guard.record_task_policy_outcome(
+            await guard.arecord_task_policy_outcome(
                 intent=intent,
                 succeeded=succeeded,
                 error_class=None if succeeded else "ToolMessageError",

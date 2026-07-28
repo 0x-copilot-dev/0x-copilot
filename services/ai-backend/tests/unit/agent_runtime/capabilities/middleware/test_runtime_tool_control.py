@@ -56,9 +56,46 @@ class _RecordingGuard:
         self.settled: list[tuple[str, int]] = []
         self.policy_outcomes: list[bool] = []
         self.admissions: list[object] = []
+        self.policy_blocks: list[str] = []
+        self.model_turns: list[tuple[int, str]] = []
 
     def admit_task_policy(self, **_kwargs: object) -> None:
         return None
+
+    async def aadmit_task_policy(self, **_kwargs: object) -> None:
+        return None
+
+    def observe_upstream_policy_block(
+        self,
+        *,
+        tool_name: str,
+        **_kwargs: object,
+    ) -> None:
+        self.policy_blocks.append(tool_name)
+
+    async def aobserve_upstream_policy_block(self, **kwargs: object) -> None:
+        self.observe_upstream_policy_block(
+            tool_name=str(kwargs.get("tool_name", "")),
+        )
+
+    def admit_model_turn(
+        self,
+        *,
+        model_turn: int,
+        execution_scope: str,
+    ) -> None:
+        self.model_turns.append((model_turn, execution_scope))
+
+    async def aadmit_model_turn(
+        self,
+        *,
+        model_turn: int,
+        execution_scope: str,
+    ) -> None:
+        self.admit_model_turn(
+            model_turn=model_turn,
+            execution_scope=execution_scope,
+        )
 
     def check_admit(self, **_kwargs: object) -> object:
         if not self.reject:
@@ -98,6 +135,14 @@ class _RecordingGuard:
         self.settled.append((call_id, observed_input_tokens))
 
     def record_task_policy_outcome(
+        self,
+        *,
+        succeeded: bool,
+        **_kwargs: object,
+    ) -> None:
+        self.policy_outcomes.append(succeeded)
+
+    async def arecord_task_policy_outcome(
         self,
         *,
         succeeded: bool,
@@ -364,5 +409,19 @@ async def test_policy_blocked_tool_precedes_budget_admission() -> None:
         ToolBudgetGuard.unbind(token)
 
     assert result.content == "Blocked by policy."
+    assert guard.policy_blocks == ["call_mcp_tool"]
     assert guard.started == []
     assert guard.admissions == []
+
+
+def test_model_turn_admission_uses_the_same_graph_wide_guard() -> None:
+    middleware = RuntimeToolControlMiddleware()
+    guard = _RecordingGuard()
+    token = ToolBudgetGuard.bind_for_run(cast(ToolBudgetGuard, guard))
+    try:
+        update = middleware.before_model({}, object())
+    finally:
+        ToolBudgetGuard.unbind(token)
+
+    assert update == {"runtime_control_model_turn": 1}
+    assert guard.model_turns == [(1, "supervisor")]
