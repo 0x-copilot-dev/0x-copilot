@@ -9,16 +9,24 @@ process from polling every tenant it has ever seen.
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import StrEnum
-import json
-import time
 from typing import Final, Protocol
 
 from pydantic import Field
 
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneEvent,
+    McpControlPlaneMeasure,
+    McpControlPlaneMetricsPort,
+    McpControlPlaneOutcome,
+    NoopMcpControlPlaneMetrics,
+)
 from agent_runtime.capabilities.mcp.revision_resolver import (
     McpDescriptorRevisionResolverPort,
 )
@@ -56,12 +64,14 @@ class ActiveMcpRevisionSubjectRegistry:
         max_subjects: int = 256,
         inactivity_ttl_seconds: float = 300,
         clock: Callable[[], float] = time.monotonic,
+        metrics: McpControlPlaneMetricsPort | None = None,
     ) -> None:
         if max_subjects <= 0 or inactivity_ttl_seconds <= 0:
             raise ValueError("max_subjects and inactivity_ttl_seconds must be positive")
         self._max_subjects = max_subjects
         self._ttl = inactivity_ttl_seconds
         self._clock = clock
+        self._metrics = metrics or NoopMcpControlPlaneMetrics()
         self._active: dict[McpRevisionSubject, float] = {}
         self._guard = asyncio.Lock()
 
@@ -77,8 +87,16 @@ class ActiveMcpRevisionSubjectRegistry:
         async with self._guard:
             self._prune_locked()
             if subject not in self._active and len(self._active) >= self._max_subjects:
+                self._metrics.event(
+                    event=McpControlPlaneEvent.SUBJECT,
+                    outcome=McpControlPlaneOutcome.DECLINED,
+                )
                 return False
             self._active[subject] = self._clock()
+            self._metrics.event(
+                event=McpControlPlaneEvent.SUBJECT,
+                outcome=McpControlPlaneOutcome.ADMITTED,
+            )
             return True
 
     async def active_subjects(self) -> tuple[McpRevisionSubject, ...]:
@@ -244,6 +262,7 @@ class McpRevisionFeedCoordinator:
         catalog: McpCatalogGenerationAuthorityPort,
         cursors: McpRevisionCursorStorePort,
         max_dedupe_notices: int = 4096,
+        metrics: McpControlPlaneMetricsPort | None = None,
     ) -> None:
         self._resolver = resolver
         self._descriptors = descriptors
@@ -251,6 +270,7 @@ class McpRevisionFeedCoordinator:
         self._cursors = cursors
         self._dedupe = _BoundedNoticeMemory(max_dedupe_notices)
         self._guard = asyncio.Lock()
+        self._metrics = metrics or NoopMcpControlPlaneMetrics()
 
     async def apply_page(
         self, *, subject: McpRevisionSubject, feed: BackendMcpRevisionFeed
@@ -279,9 +299,38 @@ class McpRevisionFeedCoordinator:
                 except Exception:
                     # Do not record a partially applied notice as deduplicated.
                     self._dedupe.forget(notice_key)
+                    self._metrics.event(
+                        event=McpControlPlaneEvent.INVALIDATION,
+                        outcome=McpControlPlaneOutcome.FAILED,
+                    )
                     raise
+                self._metrics.event(
+                    event=McpControlPlaneEvent.INVALIDATION,
+                    outcome=McpControlPlaneOutcome.APPLIED,
+                )
+                self._metrics.count(
+                    event=McpControlPlaneEvent.INVALIDATION,
+                    measure=McpControlPlaneMeasure.INVALIDATIONS,
+                    value=1,
+                )
             if feed.next_cursor is not None:
-                await self._cursors.save(subject, feed.next_cursor)
+                try:
+                    await self._cursors.save(subject, feed.next_cursor)
+                except Exception:
+                    self._metrics.event(
+                        event=McpControlPlaneEvent.CURSOR_ACK,
+                        outcome=McpControlPlaneOutcome.FAILED,
+                    )
+                    raise
+                self._metrics.event(
+                    event=McpControlPlaneEvent.CURSOR_ACK,
+                    outcome=McpControlPlaneOutcome.APPLIED,
+                )
+                self._metrics.count(
+                    event=McpControlPlaneEvent.CURSOR_ACK,
+                    measure=McpControlPlaneMeasure.CURSOR_ACKS,
+                    value=1,
+                )
 
     async def reset_expired_subject(self, *, subject: McpRevisionSubject) -> None:
         """Flush exactly one subject before resetting its expired feed cursor."""
@@ -337,6 +386,8 @@ class McpRevisionFeedRunner:
         backoff_base_seconds: float = 1,
         backoff_max_seconds: float = 60,
         random: Callable[[], float] = __import__("random").random,
+        metrics: McpControlPlaneMetricsPort | None = None,
+        wall_clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         if (
             max_pages <= 0
@@ -358,6 +409,8 @@ class McpRevisionFeedRunner:
         self._backoff_base = backoff_base_seconds
         self._backoff_max = backoff_max_seconds
         self._random = random
+        self._metrics = metrics or NoopMcpControlPlaneMetrics()
+        self._wall_clock = wall_clock
         self._offline_attempts = 0
         self._diagnostics: dict[McpRevisionFeedSubjectState, int] = {
             state: 0 for state in McpRevisionFeedSubjectState
@@ -383,6 +436,11 @@ class McpRevisionFeedRunner:
 
     async def run_once(self) -> McpRevisionFeedRunResult:
         active = await self._subjects.active_subjects()
+        self._metrics.count(
+            event=McpControlPlaneEvent.FEED,
+            measure=McpControlPlaneMeasure.ACTIVE_SUBJECTS,
+            value=len(active),
+        )
         if not active:
             return McpRevisionFeedRunResult(subjects=0, http_calls=0, results=())
         calls = 0
@@ -447,6 +505,15 @@ class McpRevisionFeedRunner:
                         break
                     quiescent = not feed.notices or len(feed.notices) < self._page_limit
                     await self._coordinator.apply_page(subject=subject, feed=feed)
+                    now = self._wall_clock()
+                    for notice in feed.notices:
+                        self._metrics.latency(
+                            event=McpControlPlaneEvent.FEED,
+                            measure=McpControlPlaneMeasure.LAG,
+                            seconds=max(
+                                0.0, (now - notice.occurred_at).total_seconds()
+                            ),
+                        )
                     notices += len(feed.notices)
                     bytes_read += page_bytes
                     if quiescent:
@@ -472,13 +539,49 @@ class McpRevisionFeedRunner:
                     McpRevisionFeedSubjectState.FAILED, pages, notices, bytes_read
                 )
             self._diagnostics[result.state] += 1
+            self._metrics.event(
+                event=McpControlPlaneEvent.FEED,
+                outcome={
+                    McpRevisionFeedSubjectState.APPLIED: McpControlPlaneOutcome.APPLIED,
+                    McpRevisionFeedSubjectState.OFFLINE: McpControlPlaneOutcome.OFFLINE,
+                    McpRevisionFeedSubjectState.CURSOR_EXPIRED: McpControlPlaneOutcome.CURSOR_EXPIRED,
+                    McpRevisionFeedSubjectState.BOUND_EXCEEDED: McpControlPlaneOutcome.BOUND,
+                    McpRevisionFeedSubjectState.CURSOR_STALLED: McpControlPlaneOutcome.STALLED,
+                    McpRevisionFeedSubjectState.FAILED: McpControlPlaneOutcome.FAILED,
+                }[result.state],
+            )
+            self._metrics.count(
+                event=McpControlPlaneEvent.FEED,
+                measure=McpControlPlaneMeasure.PAGES,
+                value=result.pages,
+            )
+            self._metrics.count(
+                event=McpControlPlaneEvent.FEED,
+                measure=McpControlPlaneMeasure.NOTICES,
+                value=result.notices,
+            )
+            self._metrics.count(
+                event=McpControlPlaneEvent.FEED,
+                measure=McpControlPlaneMeasure.BYTES,
+                value=result.bytes_read,
+            )
             results.append(result)
         if any_offline:
             self._offline_attempts += 1
             retry_after = self._retry_after()
+            self._metrics.latency(
+                event=McpControlPlaneEvent.FEED,
+                measure=McpControlPlaneMeasure.BACKOFF,
+                seconds=retry_after,
+            )
         else:
             self._offline_attempts = 0
             retry_after = None
+        self._metrics.count(
+            event=McpControlPlaneEvent.FEED,
+            measure=McpControlPlaneMeasure.HTTP_CALLS,
+            value=calls,
+        )
         return McpRevisionFeedRunResult(
             subjects=len(active),
             http_calls=calls,

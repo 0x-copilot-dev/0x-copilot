@@ -27,17 +27,23 @@ from enum import StrEnum
 from pydantic import Field, field_validator
 
 from agent_runtime.capabilities.mcp.cards import LoadedMcpServer
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneEvent,
+    McpControlPlaneMetricsPort,
+    McpControlPlaneOutcome,
+    NoopMcpControlPlaneMetrics,
+)
 from agent_runtime.capabilities.mcp.discovery_cache import (
     McpDiscoveryCache,
     McpDiscoveryCacheKey,
 )
-from agent_runtime.capabilities.mcp.revision_resolver import (
-    McpDescriptorRevisionResolverPort,
-    RevisionResolveState,
-)
 from agent_runtime.capabilities.mcp.revision_feed import (
     ActiveMcpRevisionSubjectRegistry,
     McpRevisionSubject,
+)
+from agent_runtime.capabilities.mcp.revision_resolver import (
+    McpDescriptorRevisionResolverPort,
+    RevisionResolveState,
 )
 from agent_runtime.execution.contracts import RuntimeContract
 
@@ -161,6 +167,7 @@ class RevisionAwareMcpDiscoveryCache:
         active_subjects: ActiveMcpRevisionSubjectRegistry | None = None,
         revision_checks_enabled: bool = False,
         clock: Callable[[], float] = time.monotonic,
+        metrics: McpControlPlaneMetricsPort | None = None,
     ) -> None:
         if max_staleness_seconds <= 0:
             msg = "max_staleness_seconds must be positive"
@@ -176,6 +183,7 @@ class RevisionAwareMcpDiscoveryCache:
         self._revision_checks_enabled = revision_checks_enabled
         self._max_staleness_seconds = float(max_staleness_seconds)
         self._clock = clock
+        self._metrics = metrics or NoopMcpControlPlaneMetrics()
         self._revisions: dict[McpDiscoveryCacheKey, _RevisionRecord] = {}
         self._key_locks: dict[McpDiscoveryCacheKey, _KeyLock] = {}
         self._generations: dict[McpDiscoveryCacheKey, int] = {}
@@ -294,9 +302,24 @@ class RevisionAwareMcpDiscoveryCache:
                         request=request,
                         load=load,
                     )
+                    self._metrics.event(
+                        event=McpControlPlaneEvent.CACHE,
+                        outcome={
+                            McpDescriptorFreshnessState.FRESH: McpControlPlaneOutcome.FRESH,
+                            McpDescriptorFreshnessState.NOT_TRACKED: McpControlPlaneOutcome.NOT_TRACKED,
+                            McpDescriptorFreshnessState.REVISION_CHANGED: McpControlPlaneOutcome.REVISION_CHANGED,
+                            McpDescriptorFreshnessState.MAX_STALENESS_EXCEEDED: McpControlPlaneOutcome.EXPIRED,
+                            McpDescriptorFreshnessState.VALUE_EVICTED: McpControlPlaneOutcome.EVICTED,
+                            McpDescriptorFreshnessState.INVALIDATION_RACED: McpControlPlaneOutcome.RACE,
+                        }[result.decision.state],
+                    )
                     return result.record
 
             await self._invalidate_exact(key, advance_generation=True)
+            self._metrics.event(
+                event=McpControlPlaneEvent.CACHE,
+                outcome=McpControlPlaneOutcome.UNTRACKED,
+            )
             return await self._load_untracked_locked(key=key, load=load)
 
     async def invalidate(
@@ -652,11 +675,17 @@ class RevisionAwareMcpDiscoveryCache:
             if key_lock is None:
                 key_lock = _KeyLock(lock=asyncio.Lock())
                 self._key_locks[key] = key_lock
+            contended = key_lock.lock.locked()
             key_lock.users += 1
         acquired = False
         try:
             await key_lock.lock.acquire()
             acquired = True
+            if contended:
+                self._metrics.event(
+                    event=McpControlPlaneEvent.CACHE,
+                    outcome=McpControlPlaneOutcome.COALESCED,
+                )
             yield
         finally:
             if acquired:

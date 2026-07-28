@@ -6,6 +6,11 @@ import os
 from dataclasses import dataclass
 
 from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneMetrics,
+    McpControlPlaneMetricsPort,
+    NoopMcpControlPlaneMetrics,
+)
 from agent_runtime.capabilities.mcp.freshness import (
     McpDescriptorSubject,
     RevisionAwareMcpDiscoveryCache,
@@ -88,6 +93,7 @@ class McpRevisionControlPlane:
     coordinator: McpRevisionFeedCoordinator | None
     runner: McpRevisionFeedRunner | None
     poller: McpRevisionFeedPoller | None
+    metrics: McpControlPlaneMetricsPort
 
     @property
     def enabled(self) -> bool:
@@ -162,7 +168,9 @@ class McpRevisionControlPlaneBuilder:
                 coordinator=None,
                 runner=None,
                 poller=None,
+                metrics=NoopMcpControlPlaneMetrics(),
             )
+        metrics = McpControlPlaneMetrics()
         backend_url = (
             settings.mcp.backend_registry_url
             if settings is not None
@@ -181,6 +189,7 @@ class McpRevisionControlPlaneBuilder:
             max_entries=env.positive_int(
                 "RUNTIME_MCP_REVISION_CACHE_MAX_ENTRIES", 1000, maximum=100_000
             ),
+            metrics=metrics,
         )
         subjects = ActiveMcpRevisionSubjectRegistry(
             max_subjects=env.positive_int(
@@ -189,6 +198,7 @@ class McpRevisionControlPlaneBuilder:
             inactivity_ttl_seconds=env.positive_float(
                 "RUNTIME_MCP_REVISION_SUBJECT_TTL_SECONDS", 300, maximum=86_400
             ),
+            metrics=metrics,
         )
         cache = RevisionAwareMcpDiscoveryCache(
             base,
@@ -198,6 +208,7 @@ class McpRevisionControlPlaneBuilder:
             revision_resolver=resolver,
             revision_checks_enabled=True,
             active_subjects=subjects,
+            metrics=metrics,
         )
         cursors = cls._cursor_store(settings)
         catalog = ProcessLocalMcpCatalogGenerationAuthority(
@@ -219,6 +230,7 @@ class McpRevisionControlPlaneBuilder:
             max_dedupe_notices=env.positive_int(
                 "RUNTIME_MCP_REVISION_MAX_DEDUPE_NOTICES", 4096, maximum=100_000
             ),
+            metrics=metrics,
         )
         backoff_base_seconds = env.positive_float(
             "RUNTIME_MCP_REVISION_BACKOFF_BASE_SECONDS", 1, maximum=3600
@@ -252,6 +264,7 @@ class McpRevisionControlPlaneBuilder:
             ),
             backoff_base_seconds=backoff_base_seconds,
             backoff_max_seconds=backoff_max_seconds,
+            metrics=metrics,
         )
         poller = McpRevisionFeedPoller(
             runner=runner,
@@ -261,6 +274,7 @@ class McpRevisionControlPlaneBuilder:
             stop_grace_seconds=env.positive_float(
                 "RUNTIME_MCP_REVISION_STOP_GRACE_SECONDS", 5, maximum=60
             ),
+            metrics=metrics,
         )
         return McpRevisionControlPlane(
             base_cache=base,
@@ -274,6 +288,7 @@ class McpRevisionControlPlaneBuilder:
             coordinator=coordinator,
             runner=runner,
             poller=poller,
+            metrics=metrics,
         )
 
     @staticmethod
