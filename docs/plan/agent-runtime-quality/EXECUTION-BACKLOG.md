@@ -1,0 +1,75 @@
+# Execution backlog — F1–F12 production integration
+
+Living record of what the implementation program has actually found: defects,
+gaps that block a step from activating, and places where the code we wrote may
+be heavier than the problem deserves.
+
+This is **not** the same list as
+[`IMPLEMENTATION-BACKLOG.md`](./IMPLEMENTATION-BACKLOG.md). That file tracks the
+ARQ items — the architectural gaps each F-series feature must close. This file
+tracks what execution surfaced along the way, and it is updated by the
+integration owner as lanes land.
+
+Nothing here is a live production defect unless the status says so. The F3 and
+F6 code is dark: it is not composed into any running path yet. F8 is live, and
+was changed only by a substitution with a proven parity property.
+
+## 1. Defects
+
+| ID     | Defect                                                                                                                                                                                                                                                                                                                                                                                                 | Found by   | Status                                                                                          |
+| ------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------- | ----------------------------------------------------------------------------------------------- |
+| BUG-01 | Subject-scope enforcement was silently skipped for the **default** `required_dimensions` — Pydantic does not validate defaults, so any policy built with defaults did not enforce subject scoping                                                                                                                                                                                                      | RB.1       | **Fixed** `14260424` (`validate_default=True`)                                                  |
+| BUG-02 | `ConcurrencyScope.UNKNOWN` reached `PermitScope._REQUIRED_COMPONENTS[kind]` and raised a bare `KeyError` instead of refusing conservatively. Latent — would have gone live the moment F6.2/F6.3 wired permits                                                                                                                                                                                          | F6.R       | **Fixed** `d489affa` (typed refusals; `UNKNOWN → GLOBAL`, the pool admitting least concurrency) |
+| BUG-03 | Lanes F3.2 and F3.3 merged with **zero textual conflict and 20 broken tests**: F3.2 made `task_policy_selection_ref` required, F3.3's tests were written against the old signature on different lines                                                                                                                                                                                                  | root       | **Fixed** `4608367a`                                                                            |
+| BUG-04 | Expanded capabilities carry `descriptor_revision = None`, because `McpLoadResult` does not surface the F8 revision. Expanded descriptors therefore cannot fold into `CapabilityCatalogGeneration`, so **F8 invalidation will not correctly fire for them** once expansion is enabled                                                                                                                   | F3.3       | **Open** — needs a `capabilities/mcp/` change no lane was allowed to make                       |
+| BUG-05 | The shipped F8 post-I/O check is `A and B` where mutation testing shows **either half alone passes the entire suite** — mutually redundant in every reachable state. Pre-existing, not introduced; parity was preserved deliberately rather than silently simplified                                                                                                                                   | RB.2       | **Open** — needs a deliberate decision, not a cleanup                                           |
+| BUG-06 | `test_factory_async.py::TestAsyncFactoryParallelism::test_total_latency_tracks_max_not_sum` asserts three 100 ms sleeps finish within ~220 ms. Fails under full-suite load, passes in isolation. Confirmed failing on an untouched base commit by two independent lanes                                                                                                                                | F3.1, F6.R | **Open** — assigned to a separate session                                                       |
+| BUG-07 | `search_capabilities`, `describe_capability`, and `invoke_capability` have **no entries in `builtin_operation_catalog.json`** and no operation descriptors. `test_every_assembled_model_tool_has_one_catalog_descriptor` stays green only because the inventory composes the dark path; it goes red the moment anything composes the deferred surface. Verified against the F-014 canary, not inferred | W1         | **Open — blocks F3 activation**                                                                 |
+| GAP-01 | **No pinned proof asserted model-visible tool ordering** before W1. The three existing architecture assertions used `issubset`, `frozenset`, and set equality, so a reordering was invisible to CI                                                                                                                                                                                                     | W1         | **Fixed** `4882f173` (pinned order tuple)                                                       |
+
+## 2. Missing or blocked
+
+Work a step needs before it can activate, which no lane was scoped or permitted
+to do.
+
+| ID   | Missing                                                                                                                                                                                                                                | Blocks                 | Status                                  |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | --------------------------------------- |
+| M-01 | `CapabilityCatalogGenerationPort` has a port and an authority adapter but **no production implementation**. The live generation source is whatever rebuilds the catalog per run                                                        | F3 activation          | Open                                    |
+| M-02 | `runtime_worker/dependencies.py::_build_dependencies` sets neither `capability_activation` nor `capability_catalog`, so the factory has nothing to compose even in `deferred`                                                          | F3 activation          | Open                                    |
+| M-03 | The `executor` and `revalidation` seams are unthreaded, so `invoke_capability` can never register                                                                                                                                      | F3 invoke path         | Lane F3.5 in flight                     |
+| M-04 | Two `RevisionBoundRef` contract defects, hit independently by both adopters: `run_id` is mandatory even for adopters with no run, and the one-way fingerprint forces every adopter into a scope-keyed registry it must lifetime-manage | F5, F9, F11 adoption   | Lane RB.3 in flight                     |
+| M-05 | The shared revalidation primitive has no vocabulary for (a) bounded local staleness, (b) "binding current, material gone", or (c) a generation barrier over material that has no revision                                              | Steps 9, 12, 13        | Open — recorded on the RB.2 lane bullet |
+| M-06 | `HmacCapabilityReferenceMinter` duplicates `AuthorizedCatalogBuilder._opaque_id` — same HMAC-SHA256, two implementations, two keys                                                                                                     | F3 correctness hygiene | Lane F3.M in flight                     |
+| M-07 | F3.3's `expansion_trigger_candidates` heuristic ("tier one returned fewer than 3 tool cards") is invented. The PRD says "when a query cannot be satisfied confidently" without defining it                                             | F3.8 cohort matrix     | Open — needs a product call             |
+
+## 3. Proportionality and library reuse
+
+Places where what we built may exceed what the problem needs. Recorded so the
+question is answered once, with evidence, rather than relitigated per lane.
+
+| ID   | Subject                                        | Assessment                                                                                                                                                                                                                                                                                           | Recommendation                                                                                                                                                    |
+| ---- | ---------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| L-01 | `concurrency/permits.py` (396 lines)           | `anyio.CapacityLimiter` is already in the dependency tree and covers **single-scope** capacity. What no library provides is **atomic multi-scope acquisition** — a call needing global AND connector AND capability permits at once without deadlock or starvation — and that is most of the file    | **Do not rewrite.** A library removes maybe 100 lines and adds real risk to merged, mutation-verified code                                                        |
+| L-02 | `concurrency/kill_switches.py` (653 lines)     | Conceptually: read operator config → fold to the narrowest value → report which switch narrowed it. It is **larger than `descriptor_policy.py` (444)**, which solves the genuinely harder problem. Three independent anti-widening layers on a two-field value object is more than the problem needs | **Candidate to slim to roughly half**, with every safety property and every existing assertion preserved. Cheap to attempt because the tests already pin behavior |
+| L-03 | LangGraph tool concurrency                     | `ToolNode` runs tool calls concurrently and `RunnableConfig` exposes `max_concurrency`. That is one global integer with no notion of which operations may overlap — it cannot express "two writes to the same page must serialize". PRD §6.6 already rejects it as the safety boundary               | **Settled: do not adopt.** Recorded here so it is not reopened                                                                                                    |
+| L-04 | `concurrency/descriptor_policy.py` (444 lines) | Domain policy: which of _this product's_ connector operations are safe to overlap, and how a provider claim narrows a catalog claim. No library can supply this                                                                                                                                      | **Irreducible.** Leave alone                                                                                                                                      |
+| L-05 | `concurrency/contracts.py` (1,312 lines)       | Pydantic contract surface, mandated by the service's own engineering rules (typed boundaries, closed enums, no `dict[str, Any]` domain state)                                                                                                                                                        | **Leave alone.** Size here is the house style, not overbuild                                                                                                      |
+
+## 4. Process findings
+
+Worth keeping because they change how the remaining waves should be run.
+
+- **A clean three-way merge is not evidence of a correct merge.** BUG-03 produced
+  zero conflicts and twenty failures. The integration owner runs the affected
+  suite after _every_ lane merge, not once per round.
+- **Isolated concurrent lanes necessarily duplicate types.** Barring lanes from
+  each other's files is what makes parallelism safe, and the cost is a
+  reconciliation lane afterwards (F6.R, F3.M). Budget one per module per round
+  rather than treating it as rework.
+- **Agent worktrees are created from `main`, not from the integration branch.**
+  Every lane prompt must pin its base commit explicitly, or lanes silently build
+  on stale code. Round 1 survived this only because it depended on nothing
+  unmerged.
+- **The most valuable lane output is where a shared contract did not fit.**
+  RB.2's six adoption findings are worth more than its code, because they price
+  the next three adoptions. Ask for that explicitly in lane briefs.

@@ -297,6 +297,7 @@ architecture:
 
 - [F1–F12 production integration implementation PRD](./IMPLEMENTATION-PRD-F1-F12-PRODUCTION-INTEGRATION.md)
 - [Implementation history and resolved/open ARQ record](./IMPLEMENTATION-BACKLOG.md)
+- [Execution backlog — defects, blockers, and proportionality findings](./EXECUTION-BACKLOG.md)
 
 The implementation PRD contains the normative checkbox queue. Work proceeds in
 order and a step is not marked complete until its code, adapters, tests,
@@ -793,6 +794,31 @@ widens authorization. Every inner operation re-enters the Operation Gateway.
       search/describe/invoke decisions plus token, model-turn, and latency
       metrics through the existing closed event vocabulary. Add F1 cases for
       selection recall, unauthorized-name probing, and end-to-end quality.
+- [x] **W1 — Factory wiring** (integration lane; `4882f173`; 19 focused tests).
+      Mount `CapabilityBridgeRegistrar` in `_model_visible_tools` in the slot
+      F3.2 specified, and thread `capability_activation`/`capability_catalog`
+      through `RuntimeDependencies`. **Feature-off parity is proven, not
+      assumed:** the composed tool surface with F3 dark is byte-identical before
+      and after — same names, same order, same body-free tool-schema digest
+      (`43aa0ea5…`), which is what F2 binds as `tool_schema_revision`, so the
+      prompt is unmoved too. Parity is asserted for `None` inputs, all three
+      inactive activation modes, a `shadow` ceiling under a requested `deferred`,
+      an ungenerated catalog, partial inputs, wrongly-typed inputs, and a
+      registrar that raises. No middleware was inserted, so the composed
+      middleware sequence is unchanged.
+
+      Discipline rule 7 turned out to be addressing a real gap: **no pinned proof
+      asserted tool ordering at all** — the three existing architecture
+      assertions used `issubset`, `frozenset`, and set equality, so a reordering
+      was invisible to CI. A normative order tuple is now pinned.
+
+      Two things root must still supply before F3 can activate, both recorded in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md): the production catalog
+      generation source and worker wiring (M-01, M-02), and operation-catalog
+      entries for the three bridge tools (BUG-07) — without them the
+      model-visible inventory proof goes red the moment anything composes the
+      deferred surface.
+
 - [ ] **F3.8 — Cohort matrix and step gate.** Declare the named promotion cohort
       matrix Step 15 evaluates. Prove: unauthorized capability names cannot be
       searched, described, guessed, or invoked; revocation or schema change
