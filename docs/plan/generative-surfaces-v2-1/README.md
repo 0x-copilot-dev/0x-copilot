@@ -39,6 +39,10 @@ This ledger separates:
 **Audited baseline:** `origin/main` at
 `e96d55d5bd54aac1674c1f0c7b11b5e535f406f4` (2026-07-27). The reconciliation
 was source- and committed-test-based. It did not claim fresh execution evidence.
+The integration branch was then rebased onto `origin/main` at
+`b4a2463e8f930a1b7996a1f6af0fbf714c26ec6e`; the six-commit delta was inspected
+and adds causal-prefix sealing, complete ledger transport enumeration, and G2B
+CSV auto-presentation coverage without changing the gap classifications below.
 
 ## What D3 “hosted sandbox” means
 
@@ -132,6 +136,7 @@ validation. It does not mean the real app journey has been executed.
 | G1 Markdown lifecycle       | Existing                          | Current-SHA supervised execution pending                        |
 | G2 CSV row-set              | Existing                          | Current-SHA supervised execution pending                        |
 | G2A web artifact-only       | Existing                          | Current-SHA web execution pending                               |
+| G2B CSV canvas auto-present | Existing                          | Current-SHA live execution pending                              |
 | G3 code artifact            | Crafted; static validation passed | Real supervised execution pending                               |
 | G4 DOCX                     | Crafted; static validation passed | Pending binary DOCX publication/preview/export product support  |
 | G5 local email triage       | Crafted; `fixture://` enforced    | Pending profile-scoped local fixture bridge                     |
