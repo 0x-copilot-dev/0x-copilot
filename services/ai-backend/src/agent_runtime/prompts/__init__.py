@@ -1,29 +1,63 @@
 """Model-facing prompt catalogs for the agent runtime."""
 
 from agent_runtime.prompts.assembly import (
+    LockedTaskProfile,
     PromptAssembler,
+    PromptAssemblyContext,
+    PromptAssemblyFailureReason,
     PromptAssemblyPlan,
+    PromptAssemblyValidationError,
     PromptCacheEligibility,
     PromptFragment,
     PromptFragmentDiagnostic,
     PromptFragmentScope,
     PromptFragmentTier,
+    PromptSensitivity,
+    PromptTierTotals,
+    PromptTrustLabel,
 )
 from agent_runtime.prompts.provider_cache import (
     ProviderCacheOwner,
     ProviderPromptDecoration,
     ProviderPromptDecorator,
 )
+from agent_runtime.prompts.sources import (
+    DEFAULT_PROMPT_FRAGMENT_PROVIDERS,
+    PromptAssemblyInputs,
+    PromptFragmentProvider,
+    PromptFragmentProviderRegistry,
+    PromptSource,
+    PromptSourceMaterial,
+    RegisteredPromptFragmentProvider,
+    render_task_policy_progress,
+    task_policy_progress_material,
+)
 
 __all__ = [
+    "DEFAULT_PROMPT_FRAGMENT_PROVIDERS",
+    "LockedTaskProfile",
     "PromptAssembler",
+    "PromptAssemblyContext",
+    "PromptAssemblyFailureReason",
+    "PromptAssemblyInputs",
     "PromptAssemblyPlan",
+    "PromptAssemblyValidationError",
     "PromptCacheEligibility",
     "PromptFragment",
     "PromptFragmentDiagnostic",
+    "PromptFragmentProvider",
+    "PromptFragmentProviderRegistry",
     "PromptFragmentScope",
     "PromptFragmentTier",
+    "PromptSensitivity",
+    "PromptSource",
+    "PromptSourceMaterial",
+    "PromptTierTotals",
+    "PromptTrustLabel",
     "ProviderCacheOwner",
     "ProviderPromptDecoration",
     "ProviderPromptDecorator",
+    "RegisteredPromptFragmentProvider",
+    "render_task_policy_progress",
+    "task_policy_progress_material",
 ]

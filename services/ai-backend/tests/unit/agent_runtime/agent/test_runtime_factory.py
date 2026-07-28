@@ -10,7 +10,17 @@ from agent_runtime.execution.contracts import (
     RuntimeErrorCode,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
-from agent_runtime.execution.factory import RuntimeHarness, acreate_agent_runtime
+from agent_runtime.execution.factory import (
+    RuntimeHarness,
+    _instructions_with_application_context,
+    _instructions_with_capability_tools,
+    _instructions_with_mcp_cards,
+    _instructions_with_skill_cards,
+    _instructions_with_suggested_connectors,
+    _instructions_with_workspace,
+    acreate_agent_runtime,
+)
+from agent_runtime.prompts.runtime import DEFAULT_INSTRUCTIONS
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
@@ -65,6 +75,46 @@ async def test_factory_propagates_permissions_to_runtime_ports(
     assert isinstance(call.middleware[0], RuntimeControlMiddleware)
     assert call.universal_middleware_factories == (RuntimeControlMiddleware,)
     assert not any(isinstance(tool, ToolBudgetGuardedTool) for tool in call.tools)
+
+
+async def test_factory_typed_plan_is_byte_identical_to_legacy_prompt_order(
+    runtime_context_admin: AgentRuntimeContext,
+    fake_dependencies: RuntimeDependencies,
+) -> None:
+    builder = CapturingAgentBuilder()
+
+    harness = await acreate_agent_runtime(
+        context=runtime_context_admin,
+        dependencies=fake_dependencies,
+        agent_builder=builder,
+    )
+
+    expected = _instructions_with_application_context(instructions=DEFAULT_INSTRUCTIONS)
+    expected = _instructions_with_mcp_cards(
+        instructions=expected,
+        mcp_servers=harness.mcp_servers,
+    )
+    expected = _instructions_with_skill_cards(
+        instructions=expected,
+        skill_cards=harness.skill_cards,
+    )
+    expected = _instructions_with_suggested_connectors(
+        instructions=expected,
+        suggestions=runtime_context_admin.suggested_connectors,
+    )
+    expected = _instructions_with_workspace(
+        instructions=expected,
+        workspace_active=False,
+    )
+    expected = _instructions_with_capability_tools(
+        instructions=expected,
+        code_mode_active=False,
+        sandbox_execute_active=False,
+    )
+
+    assert harness.prompt_assembly_plan is not None
+    assert harness.prompt_assembly_plan.rendered_prompt == expected
+    assert builder.calls[0].system_prompt == expected
 
 
 class FakeMcpProvider:
