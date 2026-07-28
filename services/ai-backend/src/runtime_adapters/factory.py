@@ -16,6 +16,9 @@ from agent_runtime.api.artifact_repository import (
     RuntimeArtifactSourceLookup,
 )
 from agent_runtime.api.run_control_store import EventJournalRunControlStore
+from agent_runtime.api.prompt_observation_store import (
+    EventJournalPromptObservationStore,
+)
 from agent_runtime.api.ports import (
     EventStorePort,
     PersistencePort,
@@ -37,6 +40,7 @@ from agent_runtime.control_plane.ports import (
     RunControlDecisionStorePort,
     RunControlSnapshotStorePort,
 )
+from agent_runtime.prompts.observation import PromptObservationStorePort
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -209,6 +213,10 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         conversation_tool_ordinal_store=FileConversationToolOrdinalStore(layout),
         run_control_snapshot_store=run_control_store,
         run_control_decision_store=run_control_store,
+        prompt_observation_store=EventJournalPromptObservationStore(
+            events=file_store,
+            snapshots=run_control_store,
+        ),
         # Pure projectors over the file store's file-backed materialized view.
         subagent_store=InMemorySubagentStore(file_store),
         source_store=InMemorySourceStore(citation_store),
@@ -261,6 +269,7 @@ class RuntimePorts:
     conversation_tool_ordinal_store: ConversationToolOrdinalStorePort
     run_control_snapshot_store: RunControlSnapshotStorePort
     run_control_decision_store: RunControlDecisionStorePort
+    prompt_observation_store: PromptObservationStorePort
     subagent_store: SubagentStorePort
     source_store: SourceStorePort
     # F1 local evaluation/release spine. In-memory is test/dev only; desktop
@@ -406,6 +415,10 @@ class RuntimeAdapterFactory:
             conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
             run_control_snapshot_store=run_control_store,
             run_control_decision_store=run_control_store,
+            prompt_observation_store=EventJournalPromptObservationStore(
+                events=store,
+                snapshots=run_control_store,
+            ),
             subagent_store=InMemorySubagentStore(store),
             # One citation store shared by the read-side projector and the
             # write-side port, so a run's citations are visible to Sources.
@@ -470,6 +483,10 @@ class RuntimeAdapterFactory:
                 conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
                 run_control_snapshot_store=run_control_store,
                 run_control_decision_store=run_control_store,
+                prompt_observation_store=EventJournalPromptObservationStore(
+                    events=in_memory_store,
+                    snapshots=run_control_store,
+                ),
                 subagent_store=InMemorySubagentStore(in_memory_store),
                 # Shared instance: read-side projector and write-side port agree.
                 source_store=InMemorySourceStore(in_memory_citation),
@@ -540,6 +557,10 @@ class RuntimeAdapterFactory:
                 ),
                 run_control_snapshot_store=run_control_store,
                 run_control_decision_store=run_control_store,
+                prompt_observation_store=EventJournalPromptObservationStore(
+                    events=postgres_store,
+                    snapshots=run_control_store,
+                ),
                 subagent_store=PostgresSubagentStore(postgres_store),
                 source_store=PostgresSourceStore(postgres_store),
                 evaluation_repository=cls._shared_evaluation_repository(settings),

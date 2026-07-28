@@ -16,6 +16,53 @@ from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.surfaces_v2.ledger_ids import OperationIdCodec
 
 
+class RuntimeModelCallIdentity(RuntimeContract):
+    """Checkpoint-derived identity for one graph model turn.
+
+    The identity is independent of prompt and response bodies. A replay or
+    process restart reconstructs the same value from the durable model-turn
+    reducer and the Deep Agents execution scope, while parallel local
+    subagents remain disjoint through their supervisor task-call id.
+    """
+
+    run_id: str = Field(min_length=1, max_length=160)
+    snapshot_id: str = Field(min_length=1, max_length=160)
+    execution_scope: str = Field(min_length=1, max_length=320)
+    model_turn: PositiveInt
+    model_call_id: str = Field(min_length=1, max_length=160)
+
+    @classmethod
+    def from_current(
+        cls,
+        *,
+        execution_scope: str,
+        model_turn: int,
+    ) -> "RuntimeModelCallIdentity | None":
+        """Build the stable identity for the active verified run."""
+
+        binding = RunControlContext.current()
+        if binding is None:
+            return None
+        if model_turn < 1:
+            raise ValueError("model_turn must be positive")
+        snapshot = binding.snapshot
+        digest = canonical_json_sha256(
+            {
+                "execution_scope": execution_scope,
+                "model_turn": model_turn,
+                "run_id": snapshot.run_id,
+                "snapshot_id": snapshot.snapshot_id,
+            }
+        )
+        return cls(
+            run_id=snapshot.run_id,
+            snapshot_id=snapshot.snapshot_id,
+            execution_scope=execution_scope,
+            model_turn=model_turn,
+            model_call_id=f"model-call:{digest}",
+        )
+
+
 class RuntimeToolCallIdentity(RuntimeContract):
     """Content-free identity for one model-visible tool call.
 
@@ -143,4 +190,8 @@ class RuntimeCallContext:
         return None if binding is None else binding.allocate_operation_id()
 
 
-__all__ = ["RuntimeCallContext", "RuntimeToolCallIdentity"]
+__all__ = [
+    "RuntimeCallContext",
+    "RuntimeModelCallIdentity",
+    "RuntimeToolCallIdentity",
+]

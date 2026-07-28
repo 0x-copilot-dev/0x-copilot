@@ -57,6 +57,10 @@ from agent_runtime.api.run_termination import (
     TerminalRunObserverPort,
     TerminationReason,
 )
+from agent_runtime.prompts.observation import (
+    PromptAssemblyObserver,
+    PromptObservationStorePort,
+)
 from agent_runtime.api.presentation import (
     ToolDisplayLookup,
     ToolDisplayLookupContext,
@@ -258,6 +262,7 @@ class RuntimeRunHandler:
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
+        prompt_observation_store: PromptObservationStorePort | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
@@ -285,6 +290,7 @@ class RuntimeRunHandler:
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
         self._run_control_builder = run_control_builder
+        self._prompt_observation_store = prompt_observation_store
         self.settings = settings or RuntimeSettings.load()
         # The sole runtime gate for explicitly enabled E2 lanes. It is
         # deliberately run-scoped: every capability receives persisted
@@ -1442,6 +1448,15 @@ class RuntimeRunHandler:
         update: dict[str, object] = {
             "subagent_artifacts_backend": self._subagent_artifacts_backend(command),
         }
+        control_binding = RunControlContext.current()
+        if self._prompt_observation_store is not None and control_binding is not None:
+            update["prompt_assembly_observer"] = PromptAssemblyObserver(
+                store=self._prompt_observation_store,
+                binding=control_binding,
+                org_id=run.org_id if run is not None else command.org_id,
+                subject_fingerprint=control_binding.snapshot.subject_fingerprint,
+                trace_id=command.trace_id,
+            )
         # Route `/workspace/<mount>/<path>` reads to the user-granted host
         # folders exposed by the desktop capability broker. Desktop only —
         # `None` (unrouted) on every other backend and when no folders are

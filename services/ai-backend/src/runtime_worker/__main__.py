@@ -161,6 +161,8 @@ class RuntimeWorkerEntrypoint:
                 artifact_reference_store=async_ports.artifact_reference_provider,
                 evaluation_repository=async_ports.evaluation_repository,
                 run_control_builder=run_control_builder,
+                run_control_snapshot_store=async_ports.run_control_snapshot_store,
+                prompt_observation_store=async_ports.prompt_observation_store,
                 effect_claim_store=effect_claim_store,
                 workspace_attestation_registry=(
                     DesktopWorkspaceAttestationRegistry.from_environment()

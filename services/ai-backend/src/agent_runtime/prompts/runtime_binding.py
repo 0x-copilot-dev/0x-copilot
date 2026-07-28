@@ -36,6 +36,17 @@ from agent_runtime.prompts.provider_cache import (
     ProviderCacheOwner,
     ProviderPromptDecoration,
 )
+from agent_runtime.prompts.observation import (
+    PromptAssembledRecord,
+    PromptAssemblyObservationInput,
+    PromptAssemblyObserver,
+    PromptAssemblyOutcome,
+    PromptAssemblyReasonCode,
+    PromptCacheOwner,
+    PromptCacheReasonCode,
+    PromptFragmentTokenTotals,
+)
+from agent_runtime.observability.token_usage import NormalizedTokenUsage
 from agent_runtime.prompts.sources import render_task_policy_progress
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
@@ -115,6 +126,7 @@ class PromptRuntimeBinding:
     cache_owner: ProviderCacheOwner
     framework_cache_installed: bool
     observer: PromptAssemblyObserverPort | None = None
+    observation_publisher: PromptAssemblyObserver | None = None
 
     def prepare(
         self,
@@ -246,6 +258,74 @@ class PromptRuntimeBinding:
 
         if self.observer is not None:
             self.observer.observe(result.observation)
+
+    async def record_assembled(
+        self,
+        *,
+        result: PromptRuntimeResult,
+        model_call_id: str,
+    ) -> PromptAssembledRecord | None:
+        """Persist the canonical body-free assembly before provider dispatch."""
+
+        try:
+            self.observe(result)
+            publisher = self.observation_publisher
+            plan = result.plan
+            if publisher is None or plan is None:
+                return None
+            sequenced = await publisher.record_assembled(
+                PromptAssemblyObservationInput(
+                    model_call_id=model_call_id,
+                    plan_id=plan.plan_id,
+                    plan_revision=plan.plan_revision,
+                    plan_digest=plan.plan_digest,
+                    provider=result.observation.provider,
+                    model_family=result.observation.model_family,
+                    complete_system_digest=plan.complete_system_digest,
+                    stable_prefix_digest=plan.stable_prefix_digest,
+                    fragment_count=len(plan.fragments),
+                    stable_prefix_fragment_count=plan.stable_prefix_fragment_count,
+                    system_bytes=plan.total_bytes,
+                    estimated_input_tokens=plan.estimated_tokens,
+                    fragment_tokens=_fragment_token_totals(plan),
+                    cache_owner=PromptCacheOwner(result.observation.cache_owner.value),
+                    outcome=_assembly_outcome(result.observation.mode),
+                    reason_code=_assembly_reason(result.observation.mode),
+                )
+            )
+        except Exception:
+            if self.mode is FeatureMode.SHADOW:
+                return None
+            raise
+        record = sequenced.record
+        if not isinstance(record, PromptAssembledRecord):
+            raise RuntimeError(
+                "prompt assembly observer returned a non-assembly record"
+            )
+        return record
+
+    async def record_cache(
+        self,
+        *,
+        assembly: PromptAssembledRecord,
+        usage: NormalizedTokenUsage,
+        result: PromptRuntimeResult,
+    ) -> None:
+        """Persist actual provider cache metadata after a model response."""
+
+        publisher = self.observation_publisher
+        if publisher is None:
+            return
+        try:
+            await publisher.record_cache(
+                assembly=assembly,
+                usage=usage,
+                reason_code=_cache_reason_override(result, usage=usage),
+            )
+        except Exception:
+            if self.mode is FeatureMode.SHADOW:
+                return
+            raise
 
 
 class FactoryPromptFragmentProvider:
@@ -452,6 +532,52 @@ def _approval_projection(state: Mapping[str, object]) -> str:
     if value not in {"pending", "approved", "rejected"}:
         return ""
     return f"Trusted approval state for the current call: {value}."
+
+
+def _fragment_token_totals(plan: PromptAssemblyPlan) -> PromptFragmentTokenTotals:
+    totals = {item.tier: item.estimated_tokens for item in plan.totals_by_tier}
+    return PromptFragmentTokenTotals(
+        system_policy=totals.get(PromptFragmentTier.SYSTEM_POLICY, 0),
+        stable=totals.get(PromptFragmentTier.STABLE, 0),
+        contextual=totals.get(PromptFragmentTier.CONTEXTUAL, 0),
+        volatile=totals.get(PromptFragmentTier.VOLATILE, 0),
+        current_turn=totals.get(PromptFragmentTier.CURRENT_TURN, 0),
+    )
+
+
+def _assembly_outcome(mode: FeatureMode) -> PromptAssemblyOutcome:
+    if mode is FeatureMode.ENFORCE:
+        return PromptAssemblyOutcome.ENFORCED
+    if mode is FeatureMode.SHADOW:
+        return PromptAssemblyOutcome.SHADOW
+    return PromptAssemblyOutcome.FEATURE_OFF
+
+
+def _assembly_reason(mode: FeatureMode) -> PromptAssemblyReasonCode:
+    if mode is FeatureMode.ENFORCE:
+        return PromptAssemblyReasonCode.TYPED_PLAN_ENFORCED
+    if mode is FeatureMode.SHADOW:
+        return PromptAssemblyReasonCode.SHADOW_PLAN_ASSEMBLED
+    return PromptAssemblyReasonCode.PROMPT_ASSEMBLY_DISABLED
+
+
+def _cache_reason_override(
+    result: PromptRuntimeResult,
+    *,
+    usage: NormalizedTokenUsage,
+) -> PromptCacheReasonCode | None:
+    if usage.provider_cache_metadata_observed:
+        return None
+    observation = result.observation
+    if observation.cache_owner is ProviderCacheOwner.NONE:
+        return PromptCacheReasonCode.DECORATION_DISABLED
+    if observation.cache_reason_code in {
+        "provider_or_model_unsupported",
+        "model_not_qualified_for_explicit_cache_controls",
+        "framework_cache_middleware_absent",
+    }:
+        return PromptCacheReasonCode.ADAPTER_UNSUPPORTED
+    return None
 
 
 __all__ = (

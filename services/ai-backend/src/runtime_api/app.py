@@ -1557,6 +1557,8 @@ class RuntimeApiAppFactory:
             ),
             evaluation_repository=getattr(ports, "evaluation_repository", None),
             run_control_builder=run_control_builder,
+            run_control_snapshot_store=ports.run_control_snapshot_store,
+            prompt_observation_store=ports.prompt_observation_store,
             workspace_attestation_registry=getattr(
                 app.state, "desktop_workspace_attestation_registry", None
             ),

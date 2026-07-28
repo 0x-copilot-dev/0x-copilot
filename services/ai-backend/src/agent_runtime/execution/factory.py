@@ -86,6 +86,7 @@ from agent_runtime.prompts.runtime import (
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
     SKILL_CARDS_INSTRUCTIONS,
 )
+from agent_runtime.prompts.observation import PromptAssemblyObserver
 from agent_runtime.prompts import (
     DEFAULT_PROMPT_FRAGMENT_PROVIDERS,
     PromptAssemblyContext,
@@ -322,6 +323,13 @@ async def _assemble_harness(
         # diagnostic. The effective request is rebuilt for every supervisor and
         # local-child provider call by RuntimeControlMiddleware.
         model_instructions = prompt_assembly_plan.rendered_prompt
+        prompt_observer = runtime_dependencies.prompt_assembly_observer
+        if prompt_observer is not None and not isinstance(
+            prompt_observer, PromptAssemblyObserver
+        ):
+            raise RuntimeError(
+                "prompt_assembly_observer must be a PromptAssemblyObserver"
+            )
         prompt_runtime_binding = (
             PromptRuntimeBinding(
                 mode=control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY),
@@ -341,6 +349,7 @@ async def _assemble_harness(
                 # product seam must delegate rather than stack controls.
                 cache_owner=ProviderCacheOwner.FRAMEWORK,
                 framework_cache_installed=True,
+                observation_publisher=prompt_observer,
             )
             if control_binding is not None
             else None

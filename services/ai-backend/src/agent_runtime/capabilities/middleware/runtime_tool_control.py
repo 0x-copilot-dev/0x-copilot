@@ -51,7 +51,16 @@ from agent_runtime.execution.tool_surface import (
 )
 from agent_runtime.execution.call_identity import (
     RuntimeCallContext,
+    RuntimeModelCallIdentity,
     RuntimeToolCallIdentity,
+)
+from agent_runtime.observability.token_usage import (
+    NormalizedTokenUsage,
+    TokenUsageExtractorRegistry,
+)
+from agent_runtime.prompts.runtime_binding import (
+    PromptRuntimeBinding,
+    PromptRuntimeResult,
 )
 from agent_runtime.delegation.subagents.operation_identity import (
     SUPERVISOR_TASK_CALL_ID_KEY,
@@ -177,7 +186,15 @@ class RuntimeControlMiddleware(AgentMiddleware):
         """Synchronous compatibility adapter with identical observation."""
 
         provider_request = self._provider_visible_request(request)
-        provider_request = self._assemble_prompt_for_call(provider_request)
+        provider_request, binding, prompt_result, _ = self._prepare_prompt_for_call(
+            provider_request
+        )
+        if binding is not None and prompt_result is not None:
+            if binding.observation_publisher is not None:
+                raise RuntimeError(
+                    "durable prompt observations require the async model-call seam"
+                )
+            binding.observe(prompt_result)
         self._observe_final_tool_surface(provider_request)
         return handler(provider_request)
 
@@ -189,9 +206,34 @@ class RuntimeControlMiddleware(AgentMiddleware):
         """Apply reviewed exclusions, observe the surface, then delegate."""
 
         provider_request = self._provider_visible_request(request)
-        provider_request = self._assemble_prompt_for_call(provider_request)
+        (
+            provider_request,
+            binding,
+            prompt_result,
+            model_call_id,
+        ) = self._prepare_prompt_for_call(provider_request)
+        assembly = None
+        if (
+            binding is not None
+            and prompt_result is not None
+            and model_call_id is not None
+        ):
+            assembly = await binding.record_assembled(
+                result=prompt_result,
+                model_call_id=model_call_id,
+            )
         self._observe_final_tool_surface(provider_request)
-        return await handler(provider_request)
+        response = await handler(provider_request)
+        if binding is not None and prompt_result is not None and assembly is not None:
+            await binding.record_cache(
+                assembly=assembly,
+                usage=_model_response_usage(
+                    response,
+                    provider=prompt_result.observation.provider,
+                ),
+                result=prompt_result,
+            )
+        return response
 
     def after_model(
         self,
@@ -258,33 +300,52 @@ class RuntimeControlMiddleware(AgentMiddleware):
         )
 
     @classmethod
-    def _assemble_prompt_for_call(
+    def _prepare_prompt_for_call(
         cls,
         request: ModelRequest[Any],
-    ) -> ModelRequest[Any]:
-        """Apply the run-scoped F2 plan at the one graph-wide model seam."""
+    ) -> tuple[
+        ModelRequest[Any],
+        PromptRuntimeBinding | None,
+        PromptRuntimeResult | None,
+        str | None,
+    ]:
+        """Prepare one F2 request plus its replay-stable observation identity."""
 
         binding = RunControlContext.prompt_runtime()
         if binding is None:
-            return request
+            return (request, None, None, None)
         state = request.state if isinstance(request.state, Mapping) else {}
+        execution_scope = cls._execution_scope_for_runtime(request.runtime)
         result = binding.prepare(
             system_message=request.system_message,
             state=state,
             tools=request.tools or (),
-            execution_scope=cls._execution_scope_for_runtime(request.runtime),
+            execution_scope=execution_scope,
             task_policy_progress=RunControlContext.task_policy_progress(),
             model_family=_model_family(request.model, fallback=binding.model_family),
         )
-        binding.observe(result)
+        identity = RuntimeModelCallIdentity.from_current(
+            execution_scope=execution_scope,
+            model_turn=max(cls._model_turn(request.state), 1),
+        )
+        model_call_id = identity.model_call_id if identity is not None else None
+        if binding.observation_publisher is not None and model_call_id is None:
+            raise RuntimeError(
+                "durable prompt observations require a verified run binding"
+            )
         if not result.observation.sent_assembled_prompt:
-            return request
+            return (request, binding, result, model_call_id)
         # ModelRequest.override follows an immutable replace contract. These
         # are the only model-call fields F2 owns; durable conversation messages,
         # runtime state, model routing, and provider settings remain untouched.
-        return request.override(
-            system_message=result.system_message,
-            tools=list(result.tools),
+        return (
+            request.override(
+                system_message=result.system_message,
+                tools=list(result.tools),
+            ),
+            binding,
+            result,
+            model_call_id,
         )
 
     def _provider_visible_request(
@@ -787,6 +848,23 @@ def _model_family(model: object, *, fallback: str) -> str:
         if isinstance(value, str) and value.strip():
             return value.strip()
     return fallback
+
+
+def _model_response_usage(
+    response: ModelResponse[Any],
+    *,
+    provider: str,
+) -> NormalizedTokenUsage:
+    """Normalize only usage metadata carried by the actual model response."""
+
+    extractor = TokenUsageExtractorRegistry.for_provider(provider)
+    merged: NormalizedTokenUsage | None = None
+    for message in response.result:
+        observed = extractor.extract(message)
+        if observed is None:
+            continue
+        merged = observed if merged is None else merged.merge(observed)
+    return merged or NormalizedTokenUsage()
 
 
 def _surface_rejection(

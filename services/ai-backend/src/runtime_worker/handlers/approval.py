@@ -55,7 +55,10 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetMiddleware,
     WorkspaceToolBudgetOverride,
 )
-from agent_runtime.control_plane.context import TaskPolicyRuntimeBinding
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    TaskPolicyRuntimeBinding,
+)
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.capabilities.citation_resolver import CitationResolver
 from agent_runtime.capabilities.conversation_ordinals import (
@@ -68,6 +71,10 @@ from agent_runtime.execution.contracts import (
     StreamEventSource,
 )
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.prompts.observation import (
+    PromptAssemblyObserver,
+    PromptObservationStorePort,
+)
 from agent_runtime.execution.factory import (
     RuntimeHarness,
     acreate_agent_runtime,
@@ -175,6 +182,7 @@ class RuntimeApprovalHandler:
         user_policies_resolver: UserPoliciesResolver | None = None,
         artifact_service: object | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
+        prompt_observation_store: PromptObservationStorePort | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
@@ -187,6 +195,7 @@ class RuntimeApprovalHandler:
         )
         self.artifact_service = artifact_service
         self._run_control_builder = run_control_builder
+        self._prompt_observation_store = prompt_observation_store
         # BYOK re-hydration on resume: the persisted run record's context was
         # serialized without ``provider_keys`` (excluded field), so the resumed
         # harness re-fetches them in memory only — same seam as the run handler.
@@ -415,7 +424,13 @@ class RuntimeApprovalHandler:
             tool_result_admission=tool_result_admission,
         )
         dependencies = self._dependencies_for_resume(
-            running, workspace_backend=workspace_backend
+            running,
+            workspace_backend=workspace_backend,
+            control_binding=(
+                prepared_run_control.control
+                if prepared_run_control is not None
+                else None
+            ),
         )
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)
@@ -735,6 +750,7 @@ class RuntimeApprovalHandler:
         run: RunRecord,
         *,
         workspace_backend: object | None = None,
+        control_binding: RunControlBinding | None = None,
     ) -> RuntimeDependencies:
         """Build ``RuntimeDependencies`` for a resumed run with per-run backends.
 
@@ -763,6 +779,14 @@ class RuntimeApprovalHandler:
         else:
             dependencies = self.dependencies_factory(run.runtime_context)
         update: dict[str, object] = {}
+        if self._prompt_observation_store is not None and control_binding is not None:
+            update["prompt_assembly_observer"] = PromptAssemblyObserver(
+                store=self._prompt_observation_store,
+                binding=control_binding,
+                org_id=run.org_id,
+                subject_fingerprint=control_binding.snapshot.subject_fingerprint,
+                trace_id=run.trace_id,
+            )
         if workspace_backend is not None:
             update["workspace_backend"] = workspace_backend
         subagent_backend = self._file_store_wiring.subagent_artifacts_backend(

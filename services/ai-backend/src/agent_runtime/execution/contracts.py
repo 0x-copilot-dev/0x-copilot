@@ -639,6 +639,12 @@ class RuntimeDependencies(RuntimeContract):
     # at worker dependency wiring; one instance per process (API and
     # worker run in separate processes and each gets its own cache).
     mcp_discovery_cache: object | None = None
+    # Optional run-bound PromptAssemblyObserver. The worker constructs it from
+    # the canonical run event journal plus the already-verified control
+    # snapshot, then the factory binds it to every root/child model invocation.
+    # Kept as an object here to preserve the execution-contract module's
+    # dependency direction; PromptRuntimeBinding validates the concrete use.
+    prompt_assembly_observer: object | None = None
 
     @field_validator(
         "tool_registry",

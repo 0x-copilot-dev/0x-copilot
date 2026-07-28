@@ -20,8 +20,13 @@ from agent_runtime.api.ports import (
     RuntimeQueuePort,
 )
 from agent_runtime.api.run_control_store import EventJournalRunControlStore
+from agent_runtime.api.prompt_observation_store import (
+    EventJournalPromptObservationStore,
+)
 from agent_runtime.api.run_termination import TerminalRunObserverPort
 from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
+from agent_runtime.control_plane.ports import RunControlSnapshotStorePort
+from agent_runtime.prompts.observation import PromptObservationStorePort
 from agent_runtime.capabilities.operations.context import (
     OperationGatewayStartupGuard,
 )
@@ -173,6 +178,8 @@ class RuntimeWorker:
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
+        run_control_snapshot_store: RunControlSnapshotStorePort | None = None,
+        prompt_observation_store: PromptObservationStorePort | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
         evaluation_projection_runner: BackgroundJobRunnerPort | None = None,
         evaluation_repository: EvaluationRepositoryPort | None = None,
@@ -232,11 +239,18 @@ class RuntimeWorker:
         worker_environment = dict(os.environ)
         if capability_env is not None:
             worker_environment.update(capability_env)
+        if run_control_snapshot_store is None and run_control_builder is None:
+            run_control_snapshot_store = EventJournalRunControlStore(self.event_store)
+        if prompt_observation_store is None and run_control_snapshot_store is not None:
+            prompt_observation_store = EventJournalPromptObservationStore(
+                events=self.event_store,
+                snapshots=run_control_snapshot_store,
+            )
         if run_control_builder is None:
-            run_control_store = EventJournalRunControlStore(self.event_store)
+            assert run_control_snapshot_store is not None
             run_control_builder = install_default_task_policy_runtime(
                 builder=RunControlPlaneBuilder(
-                    store=run_control_store,
+                    store=run_control_snapshot_store,
                     deployment_profile=DeploymentProfileLoader.load(
                         worker_environment
                     ).name,
@@ -244,11 +258,12 @@ class RuntimeWorker:
                         worker_environment
                     ),
                 ),
-                store=run_control_store,
+                store=run_control_snapshot_store,
                 event_store=self.event_store,
                 environment=worker_environment,
             )
         self.run_control_builder = run_control_builder
+        self.prompt_observation_store = prompt_observation_store
         if (
             terminal_run_observer is None
             and evaluation_projection_runner is None
@@ -322,6 +337,7 @@ class RuntimeWorker:
             sandbox_provider_overrides=sandbox_provider_overrides,
             capability_env=capability_env,
             run_control_builder=self.run_control_builder,
+            prompt_observation_store=self.prompt_observation_store,
             terminal_run_observer=terminal_run_observer,
         )
         self.cancel_handler = cancel_handler or RuntimeCancelHandler(
@@ -340,6 +356,7 @@ class RuntimeWorker:
             user_policies_resolver=user_policies_resolver,  # type: ignore[arg-type]
             artifact_service=artifact_service,
             run_control_builder=self.run_control_builder,
+            prompt_observation_store=self.prompt_observation_store,
             terminal_run_observer=terminal_run_observer,
         )
         self.artifact_event_handler = (

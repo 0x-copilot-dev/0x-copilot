@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any, cast
+
 import pytest
 from langchain_core.messages import SystemMessage
 from langchain_core.tools import StructuredTool
@@ -42,6 +44,7 @@ from agent_runtime.execution.factory import (
     acreate_agent_runtime,
 )
 from agent_runtime.prompts.runtime import DEFAULT_INSTRUCTIONS
+from agent_runtime.prompts.observation import PromptAssemblyObserver
 from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.mcp.cards import McpAuthState, McpServerCard
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
@@ -211,12 +214,22 @@ async def test_factory_installs_per_call_prompt_binding_for_verified_run(
         effective_modes=feature_modes,
         decisions=(),
     )
+    observer = PromptAssemblyObserver(
+        store=cast(Any, object()),
+        binding=control,
+        org_id=runtime_context_admin.org_id,
+        subject_fingerprint=snapshot.subject_fingerprint,
+        trace_id=runtime_context_admin.trace_id,
+    )
+    observed_dependencies = fake_dependencies.model_copy(
+        update={"prompt_assembly_observer": observer}
+    )
 
     token = RunControlContext.bind_for_run(control)
     try:
         harness = await acreate_agent_runtime(
             context=runtime_context_admin,
-            dependencies=fake_dependencies,
+            dependencies=observed_dependencies,
             agent_builder=builder,
         )
         installed = RunControlContext.prompt_runtime()
@@ -227,6 +240,7 @@ async def test_factory_installs_per_call_prompt_binding_for_verified_run(
     assert installed is not None
     assert installed.mode is FeatureMode.ENFORCE
     assert installed.framework_cache_installed
+    assert installed.observation_publisher is observer
     assert builder.calls[0].system_prompt == (
         harness.prompt_assembly_plan.rendered_prompt
     )
