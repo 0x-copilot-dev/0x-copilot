@@ -26,20 +26,23 @@ from typing import ClassVar, Self
 from pydantic import Field, model_validator
 
 from agent_runtime.capabilities.concurrency.contracts import (
-    ConcurrencyDeclarationRejected,
+    ConcurrencyBounds,
     ConcurrencyMode,
     ConcurrencyPolicy,
     ConcurrencyPolicyField,
-    ConcurrencyPolicyWideningRejected,
-    ConcurrencyRejectionReason,
+    ConcurrencyScope,
     IdempotencyKind,
     NarrowableEnum,
     OrderingRequirement,
     PolicySource,
     ProviderSessionConstraint,
-    RateLimitScope,
     ResourceKeyTemplate,
     SideEffectKind,
+)
+from agent_runtime.capabilities.concurrency.errors import (
+    ConcurrencyDeclarationRejected,
+    ConcurrencyPolicyWideningRejected,
+    ConcurrencyRejectionReason,
 )
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes
@@ -98,8 +101,12 @@ class CapabilityConcurrencyDeclaration(RuntimeContract):
     side_effect: SideEffectKind | None = None
     idempotency: IdempotencyKind | None = None
     resource_key_template: ResourceKeyTemplate | None = None
-    max_parallelism: int | None = Field(default=None, ge=1, le=16)
-    rate_limit_scope: RateLimitScope | None = None
+    max_parallelism: int | None = Field(
+        default=None,
+        ge=ConcurrencyBounds.SERIAL_PARALLELISM,
+        le=ConcurrencyBounds.MAX_PARALLELISM,
+    )
+    rate_limit_scope: ConcurrencyScope | None = None
     ordering_requirement: OrderingRequirement | None = None
     provider_session_constraint: ProviderSessionConstraint | None = None
     rejections: tuple[ConcurrencyPolicyRejection, ...] = ()
@@ -206,11 +213,10 @@ class ConcurrencyDescriptorParser:
         ConcurrencyPolicyField.MODE: ConcurrencyMode,
         ConcurrencyPolicyField.SIDE_EFFECT: SideEffectKind,
         ConcurrencyPolicyField.IDEMPOTENCY: IdempotencyKind,
-        ConcurrencyPolicyField.RATE_LIMIT_SCOPE: RateLimitScope,
+        ConcurrencyPolicyField.RATE_LIMIT_SCOPE: ConcurrencyScope,
         ConcurrencyPolicyField.ORDERING_REQUIREMENT: OrderingRequirement,
         ConcurrencyPolicyField.PROVIDER_SESSION_CONSTRAINT: ProviderSessionConstraint,
     }
-    _SERIAL_PARALLELISM: ClassVar[int] = 1
 
     def parse(
         self,
@@ -258,10 +264,16 @@ class ConcurrencyDescriptorParser:
                 return None, ConcurrencyRejectionReason.MALFORMED_TEMPLATE
             return template, None
         if policy_field is ConcurrencyPolicyField.MAX_PARALLELISM:
-            if isinstance(raw, int) and not isinstance(raw, bool) and 1 <= raw <= 16:
+            if (
+                isinstance(raw, int)
+                and not isinstance(raw, bool)
+                and ConcurrencyBounds.SERIAL_PARALLELISM
+                <= raw
+                <= ConcurrencyBounds.MAX_PARALLELISM
+            ):
                 return raw, None
             return (
-                cls._SERIAL_PARALLELISM,
+                ConcurrencyBounds.SERIAL_PARALLELISM,
                 ConcurrencyRejectionReason.UNPARSEABLE_DEFAULTED_SAFE,
             )
         vocabulary = cls._ENUM_BY_FIELD[policy_field]

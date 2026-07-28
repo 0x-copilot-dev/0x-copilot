@@ -25,7 +25,7 @@ from agent_runtime.capabilities.concurrency import (
     OrderingRequirement,
     PolicySource,
     ProviderSessionConstraint,
-    RateLimitScope,
+    ConcurrencyScope,
     ResourceKeyDimension,
     ResourceKeyRenderRejected,
     ResourceKeyTemplate,
@@ -41,7 +41,7 @@ class ConcurrencyVocabularyMixin:
         ConcurrencyMode,
         SideEffectKind,
         IdempotencyKind,
-        RateLimitScope,
+        ConcurrencyScope,
         OrderingRequirement,
         ProviderSessionConstraint,
         PolicySource,
@@ -61,7 +61,7 @@ class DescriptorFixtureMixin:
         ConcurrencyPolicyField.IDEMPOTENCY.value: IdempotencyKind.NATURAL.value,
         ConcurrencyPolicyField.RESOURCE_KEY_TEMPLATE.value: "{connector}/{object}",
         ConcurrencyPolicyField.MAX_PARALLELISM.value: 4,
-        ConcurrencyPolicyField.RATE_LIMIT_SCOPE.value: RateLimitScope.CONNECTOR.value,
+        ConcurrencyPolicyField.RATE_LIMIT_SCOPE.value: ConcurrencyScope.CONNECTOR.value,
         ConcurrencyPolicyField.ORDERING_REQUIREMENT.value: (
             OrderingRequirement.NONE.value
         ),
@@ -133,7 +133,7 @@ class DescriptorFixtureMixin:
             OperationBatch(
                 batch_id="batch_1",
                 operations=operations,
-                max_parallelism=4,
+                allowance=4,
             ),
             {operation.operation_id: policy for operation in operations},
         )
@@ -179,7 +179,7 @@ class TestConservativeDefaults(ConcurrencyVocabularyMixin, DescriptorFixtureMixi
         assert policy.idempotency is IdempotencyKind.NONE
         assert policy.resource_key_template is None
         assert policy.max_parallelism is None
-        assert policy.rate_limit_scope is RateLimitScope.UNKNOWN
+        assert policy.rate_limit_scope is ConcurrencyScope.UNKNOWN
         assert policy.ordering_requirement is OrderingRequirement.INPUT_ORDER
         assert policy.provider_session_constraint is ProviderSessionConstraint.UNKNOWN
         assert policy.policy_source is PolicySource.CONSERVATIVE_DEFAULT
@@ -235,7 +235,7 @@ class TestAbsentAndUnknownMetadataIsSerial(DescriptorFixtureMixin):
         [
             (ConcurrencyPolicyField.SIDE_EFFECT, SideEffectKind.UNKNOWN),
             (ConcurrencyPolicyField.IDEMPOTENCY, IdempotencyKind.NONE),
-            (ConcurrencyPolicyField.RATE_LIMIT_SCOPE, RateLimitScope.UNKNOWN),
+            (ConcurrencyPolicyField.RATE_LIMIT_SCOPE, ConcurrencyScope.UNKNOWN),
             (
                 ConcurrencyPolicyField.ORDERING_REQUIREMENT,
                 OrderingRequirement.INPUT_ORDER,
@@ -306,7 +306,7 @@ class TestPrecedenceCannotWiden(DescriptorFixtureMixin):
                 ),
                 ConcurrencyPolicyField.MAX_PARALLELISM.value: 2,
                 ConcurrencyPolicyField.RATE_LIMIT_SCOPE.value: (
-                    RateLimitScope.USER.value
+                    ConcurrencyScope.USER.value
                 ),
             }
         )
@@ -316,7 +316,7 @@ class TestPrecedenceCannotWiden(DescriptorFixtureMixin):
             side_effect=SideEffectKind.NONE,
             idempotency=IdempotencyKind.NATURAL,
             max_parallelism=16,
-            rate_limit_scope=RateLimitScope.CAPABILITY,
+            rate_limit_scope=ConcurrencyScope.CAPABILITY,
             provider_session_constraint=(
                 ProviderSessionConstraint.SESSION_PARALLEL_SAFE
             ),
@@ -328,7 +328,7 @@ class TestPrecedenceCannotWiden(DescriptorFixtureMixin):
         assert resolution.policy.side_effect is SideEffectKind.READ
         assert resolution.policy.idempotency is IdempotencyKind.NATURAL
         assert resolution.policy.max_parallelism == 2
-        assert resolution.policy.rate_limit_scope is RateLimitScope.USER
+        assert resolution.policy.rate_limit_scope is ConcurrencyScope.USER
         assert self.rejected_fields(resolution) == {
             ConcurrencyPolicyField.MODE,
             ConcurrencyPolicyField.SIDE_EFFECT,

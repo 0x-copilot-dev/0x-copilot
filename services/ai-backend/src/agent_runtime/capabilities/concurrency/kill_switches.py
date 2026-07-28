@@ -41,11 +41,8 @@ from typing import ClassVar, Final, Protocol, Self, runtime_checkable
 
 from pydantic import Field, model_validator
 
-from agent_runtime.control_plane.feature_modes import FeatureMode
+from agent_runtime.capabilities.concurrency.contracts import ConcurrencyAllowance
 from agent_runtime.execution.contracts import RuntimeContract
-
-SERIAL_PARALLELISM: Final[int] = 1
-MAX_PARALLELISM: Final[int] = 16
 
 _MAX_IDENTIFIER_LENGTH: Final[int] = 128
 _MAX_DIRECTIVES: Final[int] = 256
@@ -69,7 +66,21 @@ class _DirectiveDocumentKeys:
 
 
 class ConcurrencyKillSwitchScope(StrEnum):
-    """Closed set of scopes at which an operator may force serial execution."""
+    """Closed set of scopes at which an operator may force serial execution.
+
+    This vocabulary is deliberately **not** folded into
+    :class:`~agent_runtime.capabilities.concurrency.contracts.ConcurrencyScope`,
+    even though its three members are spelled the same as three of that enum's
+    seven. Its smallness is a safety property, not an accident of authorship: a
+    kill switch must not silently gain ``USER``, ``INSTALLATION``, or
+    ``PROFILE`` scopes because someone added a rate-limit scope to an unrelated
+    enum. Sharing the type would make an emergency control's blast radius a
+    side effect of an edit made for a different reason.
+
+    Adding a member here is therefore an explicit decision about what an
+    operator may disable, and it must be made in this file, with the
+    corresponding :class:`ConcurrencyKillSwitchReason` and precedence entry.
+    """
 
     GLOBAL = "global"
     CONNECTOR = "connector"
@@ -253,68 +264,6 @@ class ConcurrencyKillSwitchTarget(RuntimeContract):
         if self.identifier is None:
             return self.scope.value
         return f"{self.scope.value}{self._LOOKUP_KEY_SEPARATOR}{self.identifier}"
-
-
-class ConcurrencyAllowance(RuntimeContract):
-    """Monotonically narrowable authority to overlap capability work.
-
-    ``mode`` is the F6 posture and ``max_parallelism`` the ceiling.  Only
-    ``enforce`` lets F6 own execution; ``off`` and ``shadow`` both use the F6
-    safe fallback, which the Step-0 policy map defines as serial.
-    """
-
-    mode: FeatureMode = FeatureMode.OFF
-    max_parallelism: int = Field(
-        default=SERIAL_PARALLELISM,
-        ge=SERIAL_PARALLELISM,
-        le=MAX_PARALLELISM,
-    )
-
-    @classmethod
-    def serial(cls) -> Self:
-        """Return the narrowest possible allowance."""
-
-        return cls(mode=FeatureMode.OFF, max_parallelism=SERIAL_PARALLELISM)
-
-    @property
-    def permits_parallel(self) -> bool:
-        """Return whether F6 may actually overlap work."""
-
-        return (
-            self.mode is FeatureMode.ENFORCE
-            and self.max_parallelism > SERIAL_PARALLELISM
-        )
-
-    @property
-    def is_serial(self) -> bool:
-        """Return whether work must run one operation at a time."""
-
-        return not self.permits_parallel
-
-    @property
-    def effective_max_parallelism(self) -> int:
-        """Return the width a scheduler may actually use."""
-
-        return self.max_parallelism if self.permits_parallel else SERIAL_PARALLELISM
-
-    def narrowed_by(self, other: ConcurrencyAllowance) -> ConcurrencyAllowance:
-        """Return the narrowest of two allowances.
-
-        This is the only composition this module performs.  ``min`` and
-        :meth:`FeatureMode.least_authoritative` are each idempotent,
-        commutative, and associative, so the result cannot depend on evaluation
-        order and cannot exceed either input.
-        """
-
-        return ConcurrencyAllowance(
-            mode=FeatureMode.least_authoritative(self.mode, other.mode),
-            max_parallelism=min(self.max_parallelism, other.max_parallelism),
-        )
-
-    def narrowed_to_serial(self) -> ConcurrencyAllowance:
-        """Return this allowance forced to serial by an emergency control."""
-
-        return self.narrowed_by(ConcurrencyAllowance.serial())
 
 
 class ConcurrencyKillSwitchSourceStatus(StrEnum):
@@ -690,9 +639,6 @@ class ConcurrencyKillSwitchGate:
 
 
 __all__ = (
-    "MAX_PARALLELISM",
-    "SERIAL_PARALLELISM",
-    "ConcurrencyAllowance",
     "ConcurrencyKillSwitchDecision",
     "ConcurrencyKillSwitchDirectives",
     "ConcurrencyKillSwitchError",

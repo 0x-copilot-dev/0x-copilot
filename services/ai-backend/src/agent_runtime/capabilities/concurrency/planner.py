@@ -10,6 +10,8 @@ from agent_runtime.capabilities.concurrency.contracts import (
     BatchSegment,
     BatchSegmentMode,
     BatchSegmentReason,
+    ConcurrencyAllowance,
+    ConcurrencyBounds,
     ConcurrencyMode,
     ConcurrencyPolicy,
     OperationBatch,
@@ -37,6 +39,7 @@ class BatchPlanner:
         if unknown_policy_ids:
             raise ValueError("policies must reference operations in the batch")
 
+        batch_limit = batch.effective_max_parallelism
         segments: list[BatchSegment] = []
         candidates: list[tuple[BatchOperation, ConcurrencyPolicy]] = []
 
@@ -50,7 +53,7 @@ class BatchPlanner:
                     mode=BatchSegmentMode.SERIAL,
                     operation_ids=(operation.operation_id,),
                     reason=reason,
-                    max_parallelism=1,
+                    allowance=ConcurrencyAllowance.serial(),
                 )
             )
 
@@ -67,9 +70,9 @@ class BatchPlanner:
                 )
             else:
                 segment_limit = min(
-                    batch.max_parallelism,
+                    batch_limit,
                     *(
-                        policy.max_parallelism or batch.max_parallelism
+                        policy.max_parallelism or batch_limit
                         for _operation, policy in candidates
                     ),
                 )
@@ -79,7 +82,9 @@ class BatchPlanner:
                         mode=BatchSegmentMode.PARALLEL,
                         operation_ids=candidate_ids,
                         reason=BatchSegmentReason.INDEPENDENT_READS,
-                        max_parallelism=segment_limit,
+                        allowance=batch.allowance.narrowed_by(
+                            ConcurrencyAllowance.enforcing(segment_limit)
+                        ),
                     )
                 )
             candidates.clear()
@@ -87,7 +92,7 @@ class BatchPlanner:
         for operation in batch.operations:
             policy = supplied_policies.get(operation.operation_id, ConcurrencyPolicy())
             barrier_reason = self._barrier_reason(
-                batch=batch,
+                batch_limit=batch_limit,
                 operation=operation,
                 policy=policy,
             )
@@ -120,10 +125,10 @@ class BatchPlanner:
                     continue
 
             effective_limit = min(
-                batch.max_parallelism,
-                policy.max_parallelism or batch.max_parallelism,
+                batch_limit,
+                policy.max_parallelism or batch_limit,
                 *(
-                    candidate_policy.max_parallelism or batch.max_parallelism
+                    candidate_policy.max_parallelism or batch_limit
                     for _candidate, candidate_policy in candidates
                 ),
             )
@@ -132,9 +137,9 @@ class BatchPlanner:
 
             candidates.append((operation, policy))
             candidate_limit = min(
-                batch.max_parallelism,
+                batch_limit,
                 *(
-                    candidate_policy.max_parallelism or batch.max_parallelism
+                    candidate_policy.max_parallelism or batch_limit
                     for _candidate, candidate_policy in candidates
                 ),
             )
@@ -151,17 +156,17 @@ class BatchPlanner:
     @staticmethod
     def _barrier_reason(
         *,
-        batch: OperationBatch,
+        batch_limit: int,
         operation: BatchOperation,
         policy: ConcurrencyPolicy,
     ) -> BatchSegmentReason | None:
-        if batch.max_parallelism == 1:
+        if batch_limit == ConcurrencyBounds.SERIAL_PARALLELISM:
             return BatchSegmentReason.BATCH_SERIAL_DEFAULT
         if policy.policy_source is PolicySource.CONSERVATIVE_DEFAULT:
             return BatchSegmentReason.CONSERVATIVE_POLICY_DEFAULT
         if policy.mode is ConcurrencyMode.SERIAL:
             return BatchSegmentReason.POLICY_REQUIRES_SERIAL
-        if policy.max_parallelism == 1:
+        if policy.max_parallelism == ConcurrencyBounds.SERIAL_PARALLELISM:
             return BatchSegmentReason.POLICY_PARALLELISM_DISABLED
         if policy.side_effect is SideEffectKind.UNKNOWN:
             return BatchSegmentReason.UNKNOWN_SIDE_EFFECT

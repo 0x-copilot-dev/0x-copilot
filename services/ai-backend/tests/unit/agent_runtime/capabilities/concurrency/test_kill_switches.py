@@ -7,10 +7,9 @@ from itertools import permutations
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.capabilities.concurrency.kill_switches import (
-    MAX_PARALLELISM,
-    SERIAL_PARALLELISM,
+from agent_runtime.capabilities.concurrency import (
     ConcurrencyAllowance,
+    ConcurrencyBounds,
     ConcurrencyKillSwitchDecision,
     ConcurrencyKillSwitchDirectives,
     ConcurrencyKillSwitchGate,
@@ -22,12 +21,16 @@ from agent_runtime.capabilities.concurrency.kill_switches import (
     ConcurrencyKillSwitchTarget,
     ConcurrencyKillSwitchTargetError,
 )
+
 from agent_runtime.control_plane.feature_modes import (
     AgentQualityFeature,
     FeatureFallback,
     FeatureMode,
     feature_mode_policy,
 )
+
+MAX_PARALLELISM = ConcurrencyBounds.MAX_PARALLELISM
+SERIAL_PARALLELISM = ConcurrencyBounds.SERIAL_PARALLELISM
 
 
 class MutableKillSwitchSource:

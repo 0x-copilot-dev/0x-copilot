@@ -1,13 +1,30 @@
-"""Pure domain contracts for deterministic, conservative batch planning.
+"""Pure domain contracts for deterministic, conservative capability concurrency.
 
-Every concurrency-relevant vocabulary in this module is a :class:`NarrowableEnum`
-whose members are declared **narrowest first**. Declaration order *is* the
-authority rank, so the conservative member is the structural default rather than
-a documented convention, and the only composition operator exposed anywhere in
-F6 is :meth:`NarrowableEnum.narrowest` — a minimum over that rank. There is no
-operator that can widen a resolved policy, which is what makes the precedence
-chain in :mod:`agent_runtime.capabilities.concurrency.descriptor_policy`
-structurally safe rather than merely careful.
+This is the single vocabulary the whole F6 domain shares: the descriptor
+precedence resolver, the batch planner, the scoped permit table, and the serial
+kill switches all narrow *these* types. They were built as three isolated lanes
+and each defined its own local copy of the same idea; those copies are collapsed
+here so a change to the authority model is one edit, not three.
+
+Every concurrency-relevant vocabulary is a :class:`NarrowableEnum` whose members
+are declared **narrowest first**. Declaration order *is* the authority rank, so
+the conservative member is the structural default rather than a documented
+convention, and the only composition operator exposed anywhere in F6 is
+:meth:`NarrowableEnum.narrowest` — a minimum over that rank. There is no operator
+that can widen a resolved policy, which is what makes the precedence chain in
+:mod:`agent_runtime.capabilities.concurrency.descriptor_policy` structurally safe
+rather than merely careful.
+
+Two things deliberately did **not** collapse:
+
+- :class:`agent_runtime.capabilities.concurrency.kill_switches.ConcurrencyKillSwitchScope`
+  stays its own three-member vocabulary. See its docstring for why smallness is
+  the safety property there.
+- :class:`ConcurrencyPolicy.max_parallelism` stays a bare optional ``int``,
+  because it is the one non-safety field: it is a scheduling bound a capability
+  may declare, not authority to overlap. Authority is
+  :class:`ConcurrencyAllowance`, and it is what a batch, a segment, and a kill
+  switch all speak.
 """
 
 from __future__ import annotations
@@ -18,12 +35,39 @@ from enum import StrEnum
 import hashlib
 import hmac
 import re
-from typing import ClassVar, Self
+from typing import ClassVar, Final, Self
 
 from pydantic import Field, field_validator, model_validator
 
+from agent_runtime.capabilities.concurrency.errors import (
+    ConcurrencyRejectionReason,
+    ResourceKeyRenderRejected,
+    ResourceKeyTemplateRejected,
+)
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.execution.contracts import RuntimeContract
-from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes
+from agent_runtime.surfaces_v2.canonical_json import (
+    canonical_json_bytes,
+    canonical_json_sha256,
+)
+
+
+class ConcurrencyBounds:
+    """The one parallelism ceiling every F6 contract is bound by.
+
+    Before this class existed the pair ``(1, 16)`` was restated at five
+    independent sites — the declared policy bound, the batch ceiling, the
+    segment ceiling, the permit capacity, and the requested permit width — so
+    raising the ceiling meant finding all five. Every site now imports these two
+    names, and changing the ceiling is exactly one edit.
+
+    ``SERIAL_PARALLELISM`` is not merely the lower bound: it is the value every
+    conservative fallback in F6 resolves to, so an unknown, unparseable, or
+    unreadable input lands on it by construction.
+    """
+
+    SERIAL_PARALLELISM: Final[int] = 1
+    MAX_PARALLELISM: Final[int] = 16
 
 
 class NarrowableEnum(StrEnum):
@@ -89,20 +133,55 @@ class IdempotencyKind(NarrowableEnum):
     NATURAL = "natural"
 
 
-class RateLimitScope(NarrowableEnum):
+class ConcurrencyScope(NarrowableEnum):
     """Scope at which an executor must acquire a permit.
+
+    One vocabulary serves both halves of F6. A capability *declares* the scope
+    its rate limit applies at (``ConcurrencyPolicy.rate_limit_scope``), and the
+    permit table *bounds* capacity at that same scope
+    (:class:`PermitCapacity`). Those were two enums with two orderings until
+    they were folded here; a declared scope and an enforced scope are now the
+    same value, so a rate limit cannot be declared at a scope the permit table
+    has no pool for.
 
     A broader scope shares one permit pool across more work, so it admits less
     concurrency and is therefore narrower. ``UNKNOWN`` is narrower still: an
-    undeclared scope must acquire at the broadest available pool.
+    undeclared scope must acquire at the broadest available pool, which
+    :meth:`permit_pool` resolves to ``GLOBAL``.
+
+    ``PROFILE`` bounds one deployment profile. Every scope narrower than
+    ``PROFILE`` is additionally qualified by the verified subject, so one
+    subject can never consume another subject's capacity.
+
+    ``UNKNOWN`` is a declarable posture but never a permit identity: it names no
+    pool. :class:`PermitScope` refuses it, so the fail-closed answer is always
+    :meth:`permit_pool`'s broadest pool rather than an unbounded one.
     """
 
     UNKNOWN = "unknown"
     GLOBAL = "global"
+    PROFILE = "profile"
     INSTALLATION = "installation"
     USER = "user"
     CONNECTOR = "connector"
     CAPABILITY = "capability"
+
+    def permit_pool(self) -> ConcurrencyScope:
+        """Return the scope a permit for this declaration is actually taken at.
+
+        An undeclared scope resolves to ``GLOBAL``: the broadest pool shares one
+        permit across the most work and therefore admits the least concurrency,
+        which is the conservative reading of "we do not know what this rate
+        limit applies to". Every declared scope is its own pool.
+        """
+
+        return ConcurrencyScope.GLOBAL if self is ConcurrencyScope.UNKNOWN else self
+
+    @classmethod
+    def permit_pool_kinds(cls) -> tuple[ConcurrencyScope, ...]:
+        """Return every scope that can identify a permit pool, broadest first."""
+
+        return tuple(scope for scope in cls if scope is not cls.UNKNOWN)
 
 
 class OrderingRequirement(NarrowableEnum):
@@ -159,67 +238,100 @@ class ConcurrencyPolicyField(StrEnum):
     PROVIDER_SESSION_CONSTRAINT = "provider_session_constraint"
 
 
-class ConcurrencyRejectionReason(StrEnum):
-    """Stable, content-free reason for refusing declared concurrency metadata."""
+class ConcurrencyAllowance(RuntimeContract):
+    """Monotonically narrowable authority to overlap capability work.
 
-    WIDER_THAN_ESTABLISHED = "wider_than_established"
-    UNPARSEABLE_DEFAULTED_SAFE = "unparseable_defaulted_safe"
-    TEMPLATE_NOT_NARROWER = "template_not_narrower"
-    DUPLICATE_SOURCE = "duplicate_source"
-    UNSUPPORTED_SOURCE = "unsupported_source"
-    CAPABILITY_MISMATCH = "capability_mismatch"
-    MALFORMED_TEMPLATE = "malformed_template"
-    MISSING_DIMENSION_VALUE = "missing_dimension_value"
-    UNEXPECTED_DIMENSION_VALUE = "unexpected_dimension_value"
-    OVERSIZED_DIMENSION_VALUE = "oversized_dimension_value"
-    WEAK_DIGEST_SECRET = "weak_digest_secret"
+    This is the general F6 authority value, not a kill-switch detail. A run
+    snapshot, an :class:`OperationBatch`, a :class:`BatchSegment`, and a live
+    kill switch all express their ceiling as one of these, so a kill switch
+    narrows a batch through a single type rather than through two parallel ones
+    that could drift apart.
 
-
-class ConcurrencyPolicyError(Exception):
-    """Base concurrency-policy failure with an already-safe public message.
-
-    ``safe_summary`` is authored at the class level and never interpolates
-    declared metadata, dimension values, or connector payloads. The
-    low-cardinality ``reason`` carries the detail instead.
-
-    This family deliberately does not derive from ``ValueError``: Pydantic
-    converts ``ValueError`` raised inside a validator into a generic
-    ``ValidationError``, which would erase the typed class and the reason code
-    at exactly the boundaries that need them most.
+    ``mode`` is the F6 posture and ``max_parallelism`` the ceiling. Only
+    ``enforce`` lets F6 own execution; ``off`` and ``shadow`` both use the F6
+    safe fallback, which the Step-0 policy map defines as serial. Both bounds
+    must be satisfied at once, which is why width alone can never authorize
+    overlap.
     """
 
-    _SUMMARY: ClassVar[str] = "capability concurrency metadata was rejected"
-
-    def __init__(self, reason: ConcurrencyRejectionReason) -> None:
-        super().__init__(self._SUMMARY)
-        self.reason = reason
-        self.safe_summary = self._SUMMARY
-
-
-class ResourceKeyTemplateRejected(ConcurrencyPolicyError):
-    """A resource-key template is not a closed, well-formed dimension list."""
-
-    _SUMMARY: ClassVar[str] = "resource key template is not a supported template"
-
-
-class ResourceKeyRenderRejected(ConcurrencyPolicyError):
-    """Resource-key material is missing, unexpected, oversized, or unkeyed."""
-
-    _SUMMARY: ClassVar[str] = "resource key could not be rendered from key material"
-
-
-class ConcurrencyDeclarationRejected(ConcurrencyPolicyError):
-    """A declaration cannot participate in precedence resolution at all."""
-
-    _SUMMARY: ClassVar[str] = "capability concurrency declaration was not admitted"
-
-
-class ConcurrencyPolicyWideningRejected(ConcurrencyPolicyError):
-    """A less authoritative source attempted to widen an established policy."""
-
-    _SUMMARY: ClassVar[str] = (
-        "capability concurrency metadata may only narrow an established policy"
+    mode: FeatureMode = FeatureMode.OFF
+    max_parallelism: int = Field(
+        default=ConcurrencyBounds.SERIAL_PARALLELISM,
+        ge=ConcurrencyBounds.SERIAL_PARALLELISM,
+        le=ConcurrencyBounds.MAX_PARALLELISM,
     )
+
+    @classmethod
+    def serial(cls) -> Self:
+        """Return the narrowest possible allowance."""
+
+        return cls(
+            mode=FeatureMode.OFF,
+            max_parallelism=ConcurrencyBounds.SERIAL_PARALLELISM,
+        )
+
+    @classmethod
+    def enforcing(cls, max_parallelism: int) -> Self:
+        """Return the allowance a bare declared ceiling has always meant.
+
+        A bare integer ceiling states "this width is authorized", which is
+        exactly what :class:`OperationBatch` and :class:`BatchSegment` meant by
+        an ``int`` before this type existed. Callers holding a real run
+        allowance — one already narrowed by the kill-switch gate — must pass it
+        directly instead, because this constructor asserts ``enforce``.
+        """
+
+        return cls(mode=FeatureMode.ENFORCE, max_parallelism=max_parallelism)
+
+    @classmethod
+    def coerce(cls, value: object) -> object:
+        """Return ``value`` as an allowance, accepting a bare declared ceiling."""
+
+        if isinstance(value, int) and not isinstance(value, bool):
+            return cls.enforcing(value)
+        return value
+
+    @property
+    def permits_parallel(self) -> bool:
+        """Return whether F6 may actually overlap work."""
+
+        return (
+            self.mode is FeatureMode.ENFORCE
+            and self.max_parallelism > ConcurrencyBounds.SERIAL_PARALLELISM
+        )
+
+    @property
+    def is_serial(self) -> bool:
+        """Return whether work must run one operation at a time."""
+
+        return not self.permits_parallel
+
+    @property
+    def effective_max_parallelism(self) -> int:
+        """Return the width a scheduler may actually use."""
+
+        if self.permits_parallel:
+            return self.max_parallelism
+        return ConcurrencyBounds.SERIAL_PARALLELISM
+
+    def narrowed_by(self, other: ConcurrencyAllowance) -> ConcurrencyAllowance:
+        """Return the narrowest of two allowances.
+
+        This is the only composition F6 performs on authority. ``min`` and
+        :meth:`FeatureMode.least_authoritative` are each idempotent,
+        commutative, and associative, so the result cannot depend on evaluation
+        order and cannot exceed either input.
+        """
+
+        return ConcurrencyAllowance(
+            mode=FeatureMode.least_authoritative(self.mode, other.mode),
+            max_parallelism=min(self.max_parallelism, other.max_parallelism),
+        )
+
+    def narrowed_to_serial(self) -> ConcurrencyAllowance:
+        """Return this allowance forced to serial by an emergency control."""
+
+        return self.narrowed_by(ConcurrencyAllowance.serial())
 
 
 class ResourceKeyDimension(StrEnum):
@@ -460,8 +572,12 @@ class ConcurrencyPolicy(RuntimeContract):
     side_effect: SideEffectKind = SideEffectKind.conservative()
     idempotency: IdempotencyKind = IdempotencyKind.conservative()
     resource_key_template: ResourceKeyTemplate | None = None
-    max_parallelism: int | None = Field(default=None, ge=1, le=16)
-    rate_limit_scope: RateLimitScope = RateLimitScope.conservative()
+    max_parallelism: int | None = Field(
+        default=None,
+        ge=ConcurrencyBounds.SERIAL_PARALLELISM,
+        le=ConcurrencyBounds.MAX_PARALLELISM,
+    )
+    rate_limit_scope: ConcurrencyScope = ConcurrencyScope.conservative()
     ordering_requirement: OrderingRequirement = OrderingRequirement.conservative()
     provider_session_constraint: ProviderSessionConstraint = (
         ProviderSessionConstraint.conservative()
@@ -481,6 +597,445 @@ class ConcurrencyPolicy(RuntimeContract):
         """Return the resolved value for one closed policy field."""
 
         return getattr(self, policy_field.value)
+
+
+class PermitBounds:
+    """Hard, content-free bounds shared by every permit contract.
+
+    The parallelism ceiling itself is not restated here — it belongs to
+    :class:`ConcurrencyBounds`, which every F6 contract shares.
+    """
+
+    MAX_SCOPES_PER_REQUEST: Final[int] = 6
+    MAX_WAITERS: Final[int] = 64
+    MAX_ACTIVE_LEASES: Final[int] = 128
+    MAX_TIMEOUT_SECONDS: Final[float] = 300.0
+    IDENTIFIER_PATTERN: Final[str] = r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    DIGEST_PATTERN: Final[str] = r"^[0-9a-f]{64}$"
+    SCOPE_KEY_DOMAIN: Final[str] = "agent_runtime.capabilities.concurrency.permit.v1"
+    LEASE_ID_PREFIX: Final[str] = "permit_lease_"
+
+
+class PermitScopeKey(RuntimeContract):
+    """Content-free, collision-resistant identity for one permit scope.
+
+    The key exposes the scope kind and a digest only. It is safe to log, meter,
+    and persist.
+    """
+
+    kind: ConcurrencyScope
+    digest: str = Field(pattern=PermitBounds.DIGEST_PATTERN)
+
+    @property
+    def token(self) -> str:
+        """Return the stable ``kind:digest`` string used for internal tables."""
+
+        return f"{self.kind.value}:{self.digest}"
+
+
+class PermitScope(RuntimeContract):
+    """One typed, pattern-constrained scope a permit may be bounded at.
+
+    Component values are opaque identifiers, never bodies. ``subject_fingerprint``
+    must already be a keyed SHA-256 digest produced by the control plane; the
+    remaining components must be plain identifiers, which structurally excludes
+    URLs, filesystem paths, and free text.
+
+    ``ConcurrencyScope.UNKNOWN`` is refused: it names no pool, so it cannot be a
+    permit identity. Callers resolve a declared scope through
+    :meth:`ConcurrencyScope.permit_pool` first, which maps the unknown case onto
+    the broadest pool rather than onto no pool at all.
+    """
+
+    class Keys:
+        """Canonical digest payload keys."""
+
+        DOMAIN = "domain"
+        KIND = "kind"
+        PROFILE_ID = "profile_id"
+        SUBJECT_FINGERPRINT = "subject_fingerprint"
+        INSTALLATION_ID = "installation_id"
+        CONNECTOR_ID = "connector_id"
+        CAPABILITY_NAME = "capability_name"
+
+    _COMPONENT_NAMES: ClassVar[tuple[str, ...]] = (
+        Keys.PROFILE_ID,
+        Keys.SUBJECT_FINGERPRINT,
+        Keys.INSTALLATION_ID,
+        Keys.CONNECTOR_ID,
+        Keys.CAPABILITY_NAME,
+    )
+    _REQUIRED_COMPONENTS: ClassVar[dict[ConcurrencyScope, tuple[str, ...]]] = {
+        ConcurrencyScope.GLOBAL: (),
+        ConcurrencyScope.PROFILE: (Keys.PROFILE_ID,),
+        ConcurrencyScope.USER: (Keys.PROFILE_ID, Keys.SUBJECT_FINGERPRINT),
+        ConcurrencyScope.INSTALLATION: (
+            Keys.PROFILE_ID,
+            Keys.SUBJECT_FINGERPRINT,
+            Keys.INSTALLATION_ID,
+        ),
+        ConcurrencyScope.CONNECTOR: (
+            Keys.PROFILE_ID,
+            Keys.SUBJECT_FINGERPRINT,
+            Keys.CONNECTOR_ID,
+        ),
+        ConcurrencyScope.CAPABILITY: (
+            Keys.PROFILE_ID,
+            Keys.SUBJECT_FINGERPRINT,
+            Keys.CAPABILITY_NAME,
+        ),
+    }
+
+    kind: ConcurrencyScope
+    profile_id: str | None = Field(
+        default=None, pattern=PermitBounds.IDENTIFIER_PATTERN
+    )
+    subject_fingerprint: str | None = Field(
+        default=None,
+        pattern=PermitBounds.DIGEST_PATTERN,
+    )
+    installation_id: str | None = Field(
+        default=None,
+        pattern=PermitBounds.IDENTIFIER_PATTERN,
+    )
+    connector_id: str | None = Field(
+        default=None,
+        pattern=PermitBounds.IDENTIFIER_PATTERN,
+    )
+    capability_name: str | None = Field(
+        default=None,
+        pattern=PermitBounds.IDENTIFIER_PATTERN,
+    )
+
+    @model_validator(mode="after")
+    def _components_match_kind(self) -> Self:
+        required = self._REQUIRED_COMPONENTS.get(self.kind)
+        if required is None:
+            raise ValueError(
+                "an unknown concurrency scope cannot identify a permit pool"
+            )
+        for name in self._COMPONENT_NAMES:
+            value = getattr(self, name)
+            if name in required and value is None:
+                raise ValueError(f"{self.kind.value} permit scope requires {name}")
+            if name not in required and value is not None:
+                raise ValueError(f"{self.kind.value} permit scope must not set {name}")
+        return self
+
+    def digest_payload(self) -> dict[str, str]:
+        """Return the transient canonical body hashed into the scope key."""
+
+        payload: dict[str, str] = {
+            self.Keys.DOMAIN: PermitBounds.SCOPE_KEY_DOMAIN,
+            self.Keys.KIND: self.kind.value,
+        }
+        for name in self._REQUIRED_COMPONENTS[self.kind]:
+            component = getattr(self, name)
+            payload[name] = str(component)
+        return payload
+
+    def key(self) -> PermitScopeKey:
+        """Return the stable digested key for this scope."""
+
+        return PermitScopeKey(
+            kind=self.kind,
+            digest=canonical_json_sha256(self.digest_payload()),
+        )
+
+    @classmethod
+    def for_global(cls) -> Self:
+        """Return the process-wide scope for this run."""
+
+        return cls(kind=ConcurrencyScope.GLOBAL)
+
+    @classmethod
+    def for_profile(cls, *, profile_id: str) -> Self:
+        """Return the deployment-profile scope."""
+
+        return cls(kind=ConcurrencyScope.PROFILE, profile_id=profile_id)
+
+    @classmethod
+    def for_user(cls, *, profile_id: str, subject_fingerprint: str) -> Self:
+        """Return the verified-subject scope."""
+
+        return cls(
+            kind=ConcurrencyScope.USER,
+            profile_id=profile_id,
+            subject_fingerprint=subject_fingerprint,
+        )
+
+    @classmethod
+    def for_installation(
+        cls,
+        *,
+        profile_id: str,
+        subject_fingerprint: str,
+        installation_id: str,
+    ) -> Self:
+        """Return the subject-qualified installed-capability-source scope."""
+
+        return cls(
+            kind=ConcurrencyScope.INSTALLATION,
+            profile_id=profile_id,
+            subject_fingerprint=subject_fingerprint,
+            installation_id=installation_id,
+        )
+
+    @classmethod
+    def for_connector(
+        cls,
+        *,
+        profile_id: str,
+        subject_fingerprint: str,
+        connector_id: str,
+    ) -> Self:
+        """Return the subject-qualified connector scope."""
+
+        return cls(
+            kind=ConcurrencyScope.CONNECTOR,
+            profile_id=profile_id,
+            subject_fingerprint=subject_fingerprint,
+            connector_id=connector_id,
+        )
+
+    @classmethod
+    def for_capability(
+        cls,
+        *,
+        profile_id: str,
+        subject_fingerprint: str,
+        capability_name: str,
+    ) -> Self:
+        """Return the subject-qualified capability scope."""
+
+        return cls(
+            kind=ConcurrencyScope.CAPABILITY,
+            profile_id=profile_id,
+            subject_fingerprint=subject_fingerprint,
+            capability_name=capability_name,
+        )
+
+
+class PermitCapacity(RuntimeContract):
+    """Configured concurrency ceiling for one scope kind."""
+
+    kind: ConcurrencyScope
+    max_concurrency: int = Field(
+        ge=ConcurrencyBounds.SERIAL_PARALLELISM,
+        le=ConcurrencyBounds.MAX_PARALLELISM,
+    )
+
+    @model_validator(mode="after")
+    def _kind_identifies_a_pool(self) -> Self:
+        if self.kind is ConcurrencyScope.UNKNOWN:
+            raise ValueError(
+                "an unknown concurrency scope cannot be given permit capacity"
+            )
+        return self
+
+
+class PermitCapacityPolicy(RuntimeContract):
+    """Configuration-driven capacities with a conservative serial default.
+
+    An empty policy is fully serial. Any scope kind without an explicit entry
+    is serial, so unknown metadata can never authorize overlap.
+    """
+
+    capacities: tuple[PermitCapacity, ...] = Field(
+        default=(),
+        max_length=len(ConcurrencyScope.permit_pool_kinds()),
+    )
+
+    @model_validator(mode="after")
+    def _kinds_are_unique(self) -> Self:
+        kinds = tuple(entry.kind for entry in self.capacities)
+        if len(set(kinds)) != len(kinds):
+            raise ValueError("permit capacity kinds must be unique")
+        return self
+
+    def capacity_for(self, kind: ConcurrencyScope) -> int:
+        """Return the configured ceiling, or serial when unknown or absent."""
+
+        for entry in self.capacities:
+            if entry.kind is kind:
+                return entry.max_concurrency
+        return ConcurrencyBounds.SERIAL_PARALLELISM
+
+    @classmethod
+    def serial(cls) -> Self:
+        """Return the fully conservative policy."""
+
+        return cls()
+
+    @classmethod
+    def from_limits(cls, limits: Mapping[ConcurrencyScope, int]) -> Self:
+        """Build a deterministic policy from a configuration mapping."""
+
+        return cls(
+            capacities=tuple(
+                PermitCapacity(kind=kind, max_concurrency=limits[kind])
+                for kind in sorted(limits, key=lambda entry: entry.value)
+            )
+        )
+
+
+class PermitWaitMode(StrEnum):
+    """Closed set of saturation behaviors a caller may request."""
+
+    REFUSE_IF_SATURATED = "refuse_if_saturated"
+    QUEUE = "queue"
+
+
+class PermitOutcome(StrEnum):
+    """Closed, deterministic result of one acquisition attempt."""
+
+    ADMITTED = "admitted"
+    QUEUED_ADMITTED = "queued_admitted"
+    REFUSED_SATURATED = "refused_saturated"
+    REFUSED_DEADLINE = "refused_deadline"
+    REFUSED_QUEUE_FULL = "refused_queue_full"
+    REFUSED_DISPOSED = "refused_disposed"
+
+    @property
+    def admitted(self) -> bool:
+        """Return whether this outcome holds capacity."""
+
+        return self in (PermitOutcome.ADMITTED, PermitOutcome.QUEUED_ADMITTED)
+
+
+class PermitAcquisitionRequest(RuntimeContract):
+    """One child's declared permit scopes and saturation policy."""
+
+    scopes: tuple[PermitScope, ...] = Field(
+        min_length=1,
+        max_length=PermitBounds.MAX_SCOPES_PER_REQUEST,
+    )
+    wait_mode: PermitWaitMode = PermitWaitMode.REFUSE_IF_SATURATED
+    timeout_seconds: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=PermitBounds.MAX_TIMEOUT_SECONDS,
+    )
+    max_parallelism: int | None = Field(
+        default=None,
+        ge=ConcurrencyBounds.SERIAL_PARALLELISM,
+        le=ConcurrencyBounds.MAX_PARALLELISM,
+    )
+
+    @model_validator(mode="after")
+    def _request_is_well_formed(self) -> Self:
+        if len(set(self.scopes)) != len(self.scopes):
+            raise ValueError("permit scopes must be unique")
+        if self.wait_mode is PermitWaitMode.QUEUE and self.timeout_seconds is None:
+            raise ValueError("queued permit acquisition requires timeout_seconds")
+        if (
+            self.wait_mode is PermitWaitMode.REFUSE_IF_SATURATED
+            and self.timeout_seconds is not None
+        ):
+            raise ValueError("refuse_if_saturated acquisition must not set a timeout")
+        return self
+
+    def scope_keys(self) -> tuple[PermitScopeKey, ...]:
+        """Return this request's digested keys in a deterministic order."""
+
+        return tuple(
+            sorted(
+                (scope.key() for scope in self.scopes),
+                key=lambda key: (key.kind.value, key.digest),
+            )
+        )
+
+    @classmethod
+    def for_operation(
+        cls,
+        *,
+        profile_id: str,
+        subject_fingerprint: str,
+        capability_name: str,
+        connector_id: str | None = None,
+        installation_id: str | None = None,
+        wait_mode: PermitWaitMode = PermitWaitMode.REFUSE_IF_SATURATED,
+        timeout_seconds: float | None = None,
+        max_parallelism: int | None = None,
+    ) -> Self:
+        """Build the canonical broad-to-narrow scope ladder for one child.
+
+        The ladder always includes the ``GLOBAL`` pool, which is why a
+        capability whose declared rate-limit scope is ``UNKNOWN`` is already
+        bounded: :meth:`ConcurrencyScope.permit_pool` resolves it to a pool this
+        ladder always acquires.
+        """
+
+        scopes: list[PermitScope] = [
+            PermitScope.for_global(),
+            PermitScope.for_profile(profile_id=profile_id),
+            PermitScope.for_user(
+                profile_id=profile_id,
+                subject_fingerprint=subject_fingerprint,
+            ),
+        ]
+        if installation_id is not None:
+            scopes.append(
+                PermitScope.for_installation(
+                    profile_id=profile_id,
+                    subject_fingerprint=subject_fingerprint,
+                    installation_id=installation_id,
+                )
+            )
+        if connector_id is not None:
+            scopes.append(
+                PermitScope.for_connector(
+                    profile_id=profile_id,
+                    subject_fingerprint=subject_fingerprint,
+                    connector_id=connector_id,
+                )
+            )
+        scopes.append(
+            PermitScope.for_capability(
+                profile_id=profile_id,
+                subject_fingerprint=subject_fingerprint,
+                capability_name=capability_name,
+            )
+        )
+        return cls(
+            scopes=tuple(scopes),
+            wait_mode=wait_mode,
+            timeout_seconds=timeout_seconds,
+            max_parallelism=max_parallelism,
+        )
+
+
+class PermitLease(RuntimeContract):
+    """Deterministic outcome of one acquisition, admitted or refused.
+
+    A refused lease has no ``lease_id``. Saturation is reported here, never as
+    an exception, so a caller can never mistake it for a tool failure.
+    """
+
+    outcome: PermitOutcome
+    scope_keys: tuple[PermitScopeKey, ...] = Field(
+        min_length=1,
+        max_length=PermitBounds.MAX_SCOPES_PER_REQUEST,
+    )
+    effective_capacity: int = Field(
+        ge=ConcurrencyBounds.SERIAL_PARALLELISM,
+        le=ConcurrencyBounds.MAX_PARALLELISM,
+    )
+    lease_id: str | None = Field(default=None, min_length=1, max_length=128)
+
+    @model_validator(mode="after")
+    def _lease_identity_matches_outcome(self) -> Self:
+        if self.outcome.admitted and self.lease_id is None:
+            raise ValueError("an admitted permit lease requires a lease_id")
+        if not self.outcome.admitted and self.lease_id is not None:
+            raise ValueError("a refused permit lease must not carry a lease_id")
+        return self
+
+    @property
+    def admitted(self) -> bool:
+        """Return whether this lease holds capacity."""
+
+        return self.outcome.admitted
 
 
 class BatchFailurePolicy(StrEnum):
@@ -565,14 +1120,31 @@ class BatchOperation(RuntimeContract):
 
 
 class OperationBatch(RuntimeContract):
-    """Ordered operations and the batch-level concurrency ceiling."""
+    """Ordered operations and the batch-level concurrency authority.
+
+    ``allowance`` carries both the posture and the ceiling, so the same value a
+    kill switch narrows is the value the planner reads. It defaults to
+    :meth:`ConcurrencyAllowance.serial`, which means an unconfigured batch plans
+    every operation into its own serial segment.
+    """
 
     batch_id: str = Field(min_length=1, max_length=255)
     parent_operation_id: str | None = Field(default=None, min_length=1, max_length=255)
     operations: tuple[BatchOperation, ...] = Field(min_length=1, max_length=100)
     deadline: datetime | None = None
-    max_parallelism: int = Field(default=1, ge=1, le=16)
+    allowance: ConcurrencyAllowance = Field(default_factory=ConcurrencyAllowance.serial)
     failure_policy: BatchFailurePolicy = BatchFailurePolicy.STOP_NEW
+
+    @field_validator("allowance", mode="before")
+    @classmethod
+    def _coerce_allowance(cls, value: object) -> object:
+        return ConcurrencyAllowance.coerce(value)
+
+    @property
+    def effective_max_parallelism(self) -> int:
+        """Return the width this batch's authority actually permits."""
+
+        return self.allowance.effective_max_parallelism
 
     @field_validator("batch_id")
     @classmethod
@@ -641,21 +1213,44 @@ class BatchSegmentReason(StrEnum):
 
 
 class BatchSegment(RuntimeContract):
-    """One deterministic serial or parallel section of a plan."""
+    """One deterministic serial or parallel section of a plan.
+
+    ``allowance`` is the same authority type the enclosing batch and any live
+    kill switch speak, so narrowing a segment is the same operation as narrowing
+    a batch. A segment can never be wider than the authority it carries.
+    """
 
     segment_index: int = Field(ge=0)
     mode: BatchSegmentMode
-    operation_ids: tuple[str, ...] = Field(min_length=1, max_length=16)
+    operation_ids: tuple[str, ...] = Field(
+        min_length=1,
+        max_length=ConcurrencyBounds.MAX_PARALLELISM,
+    )
     reason: BatchSegmentReason
-    max_parallelism: int = Field(ge=1, le=16)
+    allowance: ConcurrencyAllowance
+
+    @field_validator("allowance", mode="before")
+    @classmethod
+    def _coerce_allowance(cls, value: object) -> object:
+        return ConcurrencyAllowance.coerce(value)
+
+    @property
+    def effective_max_parallelism(self) -> int:
+        """Return the width this segment's authority actually permits."""
+
+        return self.allowance.effective_max_parallelism
 
     @model_validator(mode="after")
     def _mode_matches_width(self) -> Self:
+        width = self.effective_max_parallelism
         if self.mode is BatchSegmentMode.PARALLEL and len(self.operation_ids) < 2:
             raise ValueError("parallel segments require at least two operations")
-        if self.mode is BatchSegmentMode.SERIAL and self.max_parallelism != 1:
+        if (
+            self.mode is BatchSegmentMode.SERIAL
+            and width != ConcurrencyBounds.SERIAL_PARALLELISM
+        ):
             raise ValueError("serial segments require max_parallelism=1")
-        if len(self.operation_ids) > self.max_parallelism:
+        if len(self.operation_ids) > width:
             raise ValueError("segment width exceeds max_parallelism")
         return self
 
@@ -690,23 +1285,28 @@ __all__ = (
     "BatchSegment",
     "BatchSegmentMode",
     "BatchSegmentReason",
-    "ConcurrencyDeclarationRejected",
+    "ConcurrencyAllowance",
+    "ConcurrencyBounds",
     "ConcurrencyMode",
     "ConcurrencyPolicy",
-    "ConcurrencyPolicyError",
     "ConcurrencyPolicyField",
-    "ConcurrencyPolicyWideningRejected",
-    "ConcurrencyRejectionReason",
+    "ConcurrencyScope",
     "IdempotencyKind",
     "NarrowableEnum",
     "OperationBatch",
     "OrderingRequirement",
+    "PermitAcquisitionRequest",
+    "PermitBounds",
+    "PermitCapacity",
+    "PermitCapacityPolicy",
+    "PermitLease",
+    "PermitOutcome",
+    "PermitScope",
+    "PermitScopeKey",
+    "PermitWaitMode",
     "PolicySource",
     "ProviderSessionConstraint",
-    "RateLimitScope",
     "ResourceKeyDimension",
-    "ResourceKeyRenderRejected",
     "ResourceKeyTemplate",
-    "ResourceKeyTemplateRejected",
     "SideEffectKind",
 )

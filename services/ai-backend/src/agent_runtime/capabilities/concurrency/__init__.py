@@ -1,4 +1,11 @@
-"""Conservative planning contracts for capability concurrency."""
+"""Conservative capability-concurrency domain for F6.
+
+The whole domain shares one vocabulary in
+:mod:`agent_runtime.capabilities.concurrency.contracts` and one error family in
+:mod:`agent_runtime.capabilities.concurrency.errors`. Everything else is a
+policy over those types: descriptor precedence, batch planning, scoped permits,
+and serial kill switches.
+"""
 
 from agent_runtime.capabilities.concurrency.contracts import (
     BatchFailurePolicy,
@@ -7,24 +14,29 @@ from agent_runtime.capabilities.concurrency.contracts import (
     BatchSegment,
     BatchSegmentMode,
     BatchSegmentReason,
-    ConcurrencyDeclarationRejected,
+    ConcurrencyAllowance,
+    ConcurrencyBounds,
     ConcurrencyMode,
     ConcurrencyPolicy,
-    ConcurrencyPolicyError,
     ConcurrencyPolicyField,
-    ConcurrencyPolicyWideningRejected,
-    ConcurrencyRejectionReason,
+    ConcurrencyScope,
     IdempotencyKind,
     NarrowableEnum,
     OperationBatch,
     OrderingRequirement,
+    PermitAcquisitionRequest,
+    PermitBounds,
+    PermitCapacity,
+    PermitCapacityPolicy,
+    PermitLease,
+    PermitOutcome,
+    PermitScope,
+    PermitScopeKey,
+    PermitWaitMode,
     PolicySource,
     ProviderSessionConstraint,
-    RateLimitScope,
     ResourceKeyDimension,
-    ResourceKeyRenderRejected,
     ResourceKeyTemplate,
-    ResourceKeyTemplateRejected,
     SideEffectKind,
 )
 from agent_runtime.capabilities.concurrency.descriptor_policy import (
@@ -35,6 +47,33 @@ from agent_runtime.capabilities.concurrency.descriptor_policy import (
     ConcurrencyPolicyResolution,
     ConcurrencyPolicyResolver,
 )
+from agent_runtime.capabilities.concurrency.errors import (
+    ConcurrencyDeclarationRejected,
+    ConcurrencyPolicyError,
+    ConcurrencyPolicyWideningRejected,
+    ConcurrencyRejectionReason,
+    PermitDoubleReleaseError,
+    PermitError,
+    PermitErrorCode,
+    PermitEventLoopMismatchError,
+    PermitNotAdmittedError,
+    ResourceKeyRenderRejected,
+    ResourceKeyTemplateRejected,
+)
+from agent_runtime.capabilities.concurrency.kill_switches import (
+    ConcurrencyKillSwitchDecision,
+    ConcurrencyKillSwitchDirectives,
+    ConcurrencyKillSwitchError,
+    ConcurrencyKillSwitchGate,
+    ConcurrencyKillSwitchReason,
+    ConcurrencyKillSwitchResolver,
+    ConcurrencyKillSwitchScope,
+    ConcurrencyKillSwitchSourcePort,
+    ConcurrencyKillSwitchSourceStatus,
+    ConcurrencyKillSwitchTarget,
+    ConcurrencyKillSwitchTargetError,
+)
+from agent_runtime.capabilities.concurrency.permits import RunPermitManager
 from agent_runtime.capabilities.concurrency.planner import BatchPlanner
 
 __all__ = (
@@ -46,8 +85,21 @@ __all__ = (
     "BatchSegmentMode",
     "BatchSegmentReason",
     "CapabilityConcurrencyDeclaration",
+    "ConcurrencyAllowance",
+    "ConcurrencyBounds",
     "ConcurrencyDeclarationRejected",
     "ConcurrencyDescriptorParser",
+    "ConcurrencyKillSwitchDecision",
+    "ConcurrencyKillSwitchDirectives",
+    "ConcurrencyKillSwitchError",
+    "ConcurrencyKillSwitchGate",
+    "ConcurrencyKillSwitchReason",
+    "ConcurrencyKillSwitchResolver",
+    "ConcurrencyKillSwitchScope",
+    "ConcurrencyKillSwitchSourcePort",
+    "ConcurrencyKillSwitchSourceStatus",
+    "ConcurrencyKillSwitchTarget",
+    "ConcurrencyKillSwitchTargetError",
     "ConcurrencyMode",
     "ConcurrencyNarrowing",
     "ConcurrencyPolicy",
@@ -58,16 +110,31 @@ __all__ = (
     "ConcurrencyPolicyResolver",
     "ConcurrencyPolicyWideningRejected",
     "ConcurrencyRejectionReason",
+    "ConcurrencyScope",
     "IdempotencyKind",
     "NarrowableEnum",
     "OperationBatch",
     "OrderingRequirement",
+    "PermitAcquisitionRequest",
+    "PermitBounds",
+    "PermitCapacity",
+    "PermitCapacityPolicy",
+    "PermitDoubleReleaseError",
+    "PermitError",
+    "PermitErrorCode",
+    "PermitEventLoopMismatchError",
+    "PermitLease",
+    "PermitNotAdmittedError",
+    "PermitOutcome",
+    "PermitScope",
+    "PermitScopeKey",
+    "PermitWaitMode",
     "PolicySource",
     "ProviderSessionConstraint",
-    "RateLimitScope",
     "ResourceKeyDimension",
     "ResourceKeyRenderRejected",
     "ResourceKeyTemplate",
     "ResourceKeyTemplateRejected",
+    "RunPermitManager",
     "SideEffectKind",
 )

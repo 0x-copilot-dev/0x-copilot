@@ -6,7 +6,8 @@ from collections.abc import Mapping
 import pytest
 from pydantic import ValidationError
 
-from agent_runtime.capabilities.concurrency.permits import (
+from agent_runtime.capabilities.concurrency import (
+    ConcurrencyScope,
     PermitAcquisitionRequest,
     PermitCapacityPolicy,
     PermitDoubleReleaseError,
@@ -15,7 +16,6 @@ from agent_runtime.capabilities.concurrency.permits import (
     PermitNotAdmittedError,
     PermitOutcome,
     PermitScope,
-    PermitScopeKind,
     PermitWaitMode,
     RunPermitManager,
 )
@@ -29,8 +29,8 @@ class PermitFixtureMixin:
     """Deterministic builders shared by every permit test."""
 
     def policy(self, **limits: int) -> PermitCapacityPolicy:
-        mapping: dict[PermitScopeKind, int] = {
-            PermitScopeKind(kind): value for kind, value in limits.items()
+        mapping: dict[ConcurrencyScope, int] = {
+            ConcurrencyScope(kind): value for kind, value in limits.items()
         }
         return PermitCapacityPolicy.from_limits(mapping)
 
@@ -133,7 +133,7 @@ class TestPermitScopeKeys(PermitFixtureMixin):
     def test_keys_are_content_free_digests(self) -> None:
         key = self.connector("google-drive").key()
 
-        assert key.kind is PermitScopeKind.CONNECTOR
+        assert key.kind is ConcurrencyScope.CONNECTOR
         assert len(key.digest) == 64
         assert key.digest == key.digest.lower()
         assert "google-drive" not in key.token
@@ -159,13 +159,13 @@ class TestPermitScopeKeys(PermitFixtureMixin):
         assert len({subject_a.digest, subject_b.digest, other_profile.digest}) == 3
 
     def test_every_narrow_scope_is_subject_and_profile_qualified(self) -> None:
-        for kind in PermitScopeKind:
+        for kind in ConcurrencyScope.permit_pool_kinds():
             required = PermitScope._REQUIRED_COMPONENTS[kind]
-            if kind is PermitScopeKind.GLOBAL:
+            if kind is ConcurrencyScope.GLOBAL:
                 assert required == ()
                 continue
             assert PermitScope.Keys.PROFILE_ID in required
-            if kind is not PermitScopeKind.PROFILE:
+            if kind is not ConcurrencyScope.PROFILE:
                 assert PermitScope.Keys.SUBJECT_FINGERPRINT in required
 
     def test_scope_rejects_urls_paths_and_free_text(self) -> None:
@@ -187,36 +187,36 @@ class TestPermitScopeKeys(PermitFixtureMixin):
 
     def test_scope_requires_exactly_its_kind_components(self) -> None:
         with pytest.raises(ValidationError):
-            PermitScope(kind=PermitScopeKind.CONNECTOR, profile_id=PROFILE)
+            PermitScope(kind=ConcurrencyScope.CONNECTOR, profile_id=PROFILE)
         with pytest.raises(ValidationError):
-            PermitScope(kind=PermitScopeKind.GLOBAL, profile_id=PROFILE)
+            PermitScope(kind=ConcurrencyScope.GLOBAL, profile_id=PROFILE)
 
 
 class TestPermitCapacityPolicy(PermitFixtureMixin):
     def test_absent_or_unknown_capacity_is_serial(self) -> None:
         empty = PermitCapacityPolicy.serial()
 
-        for kind in PermitScopeKind:
+        for kind in ConcurrencyScope:
             assert empty.capacity_for(kind) == 1
 
-        partial = self.policy(**{PermitScopeKind.GLOBAL.value: 8})
-        assert partial.capacity_for(PermitScopeKind.GLOBAL) == 8
-        assert partial.capacity_for(PermitScopeKind.CAPABILITY) == 1
+        partial = self.policy(**{ConcurrencyScope.GLOBAL.value: 8})
+        assert partial.capacity_for(ConcurrencyScope.GLOBAL) == 8
+        assert partial.capacity_for(ConcurrencyScope.CAPABILITY) == 1
 
     def test_duplicate_kinds_are_rejected(self) -> None:
         with pytest.raises(ValidationError):
             PermitCapacityPolicy(
                 capacities=(
-                    {"kind": PermitScopeKind.GLOBAL, "max_concurrency": 2},
-                    {"kind": PermitScopeKind.GLOBAL, "max_concurrency": 4},
+                    {"kind": ConcurrencyScope.GLOBAL, "max_concurrency": 2},
+                    {"kind": ConcurrencyScope.GLOBAL, "max_concurrency": 4},
                 )
             )
 
     def test_capacity_is_bounded(self) -> None:
         with pytest.raises(ValidationError):
-            PermitCapacityPolicy.from_limits({PermitScopeKind.GLOBAL: 0})
+            PermitCapacityPolicy.from_limits({ConcurrencyScope.GLOBAL: 0})
         with pytest.raises(ValidationError):
-            PermitCapacityPolicy.from_limits({PermitScopeKind.GLOBAL: 64})
+            PermitCapacityPolicy.from_limits({ConcurrencyScope.GLOBAL: 64})
 
 
 class TestPermitRequestValidation(PermitFixtureMixin):
@@ -245,8 +245,8 @@ class TestPermitRequestValidation(PermitFixtureMixin):
         )
 
         kinds = {scope.kind for scope in request.scopes}
-        assert kinds == set(PermitScopeKind)
-        assert len(request.scope_keys()) == len(PermitScopeKind)
+        assert kinds == set(ConcurrencyScope.permit_pool_kinds())
+        assert len(request.scope_keys()) == len(ConcurrencyScope.permit_pool_kinds())
 
     def test_operation_ladder_omits_absent_sources(self) -> None:
         request = PermitAcquisitionRequest.for_operation(
@@ -256,10 +256,10 @@ class TestPermitRequestValidation(PermitFixtureMixin):
         )
 
         assert {scope.kind for scope in request.scopes} == {
-            PermitScopeKind.GLOBAL,
-            PermitScopeKind.PROFILE,
-            PermitScopeKind.USER,
-            PermitScopeKind.CAPABILITY,
+            ConcurrencyScope.GLOBAL,
+            ConcurrencyScope.PROFILE,
+            ConcurrencyScope.USER,
+            ConcurrencyScope.CAPABILITY,
         }
 
 
@@ -686,9 +686,9 @@ class TestPermitRunLifecycle(PermitFixtureMixin):
 
 class TestPermitPolicyMapping(PermitFixtureMixin):
     def test_from_limits_is_deterministic(self) -> None:
-        limits: Mapping[PermitScopeKind, int] = {
-            PermitScopeKind.CAPABILITY: 2,
-            PermitScopeKind.GLOBAL: 8,
+        limits: Mapping[ConcurrencyScope, int] = {
+            ConcurrencyScope.CAPABILITY: 2,
+            ConcurrencyScope.GLOBAL: 8,
         }
 
         assert PermitCapacityPolicy.from_limits(limits) == (
