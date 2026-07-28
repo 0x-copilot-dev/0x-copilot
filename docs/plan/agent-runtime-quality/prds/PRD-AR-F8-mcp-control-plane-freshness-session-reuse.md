@@ -1,6 +1,6 @@
 # PRD-AR-F8 — MCP control-plane freshness and session reuse
 
-**Status:** proposed\
+**Status:** implemented\
 **Priority:** P2\
 **Owners:** Connector Platform, Backend, AI Runtime, Reliability\
 **Depends on:** [D1 MCP convergence](../../generative-surfaces-v2-1/prds/PRD-D1-mcp-convergence.md)\

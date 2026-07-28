@@ -618,7 +618,7 @@ backend-to-ai callback, or desktop daemon.
       when the established operation classifier and effect tracker prove no
       provider-side work, while effects and ambiguous calls are never replayed
       by F8.
-- [ ] **F8.10 — Diagnostics, qualification, lifecycle, and step gate.** Emit
+- [x] **F8.10 — Diagnostics, qualification, lifecycle, and step gate.** Emit
       low-cardinality body-free phase timings and counts for card validation,
       lease acquisition/reuse, initialization, descriptor paging/bytes,
       validation/admission, feed lag/convergence, coalescing, stale rejects,
@@ -644,7 +644,7 @@ backend-to-ai callback, or desktop daemon.
 | [ ]  | [F5 — Context budgeting, compression, and evidence recall](prds/PRD-AR-F5-context-budgeting-compression-evidence-recall.md) |    P1    | ai-backend                   | A2, B1, E1, F1                   | Loss-aware allocation and the sole model-facing evidence hydration tool.                         |
 | [ ]  | [F6 — Capability concurrency and safe batching](prds/PRD-AR-F6-capability-concurrency-safe-batching.md)                     |    P2    | ai-backend                   | A3, A5, D1, D2                   | Parallelize only declared independent, rate-safe operations.                                     |
 | [ ]  | [F7 — Governed dataflow and programmatic tool calling](prds/PRD-AR-F7-governed-dataflow-programmatic-tool-calling.md)       |    P2    | ai-backend                   | A3–A5, D2, F6                    | Collapse mechanical loops without arbitrary code or approval compression.                        |
-| [ ]  | [F8 — MCP control-plane freshness and session reuse](prds/PRD-AR-F8-mcp-control-plane-freshness-session-reuse.md)           |    P2    | backend, ai-backend          | D1; integrates F3                | Descriptor revisions, pull invalidation feed, connection reuse, measured cache policy.           |
+| [x]  | [F8 — MCP control-plane freshness and session reuse](prds/PRD-AR-F8-mcp-control-plane-freshness-session-reuse.md)           |    P2    | backend, ai-backend          | D1; integrates F3                | Descriptor revisions, pull invalidation feed, connection reuse, measured cache policy.           |
 | [ ]  | [F9 — Parallel delegation quality controller](prds/PRD-AR-F9-parallel-delegation-quality-controller.md)                     |    P2    | ai-backend                   | D2, F1, F6                       | Evidence-complete decomposition, budgets, verification, bounded fan-out.                         |
 | [ ]  | [F10 — Model invocation reliability and routing](prds/PRD-AR-F10-model-invocation-reliability-routing.md)                   |    P2    | ai-backend, backend settings | E1, F1                           | BYOK/region/capability-aware retry, fallback, limits, and circuit breaking.                      |
 | [ ]  | [F11 — Workspace edit planning, patch sets, and validation](prds/PRD-AR-F11-workspace-edit-planning-patch-validation.md)    |    P1    | ai-backend, desktop          | C1–C3, D3, F1, F4, F6            | One preimage-bound multi-file overlay patch, bounded validation/repair, and exact staged review. |
@@ -1019,7 +1019,7 @@ tail latency, serialization, and retries must be measured.
 
 - [ ] F6 safe concurrency.
 - [ ] F7 governed dataflow.
-- [ ] F8 MCP freshness/session reuse.
+- [x] F8 MCP freshness/session reuse.
 - [ ] F9 delegation quality.
 - [ ] F10 model reliability/routing.
 - [ ] H4 skill curation.

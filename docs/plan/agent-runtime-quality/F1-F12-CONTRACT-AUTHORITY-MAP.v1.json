@@ -64,7 +64,7 @@
     },
     "F8": {
       "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F8-mcp-control-plane-freshness-session-reuse.md",
-      "sha256": "ab5338a35b39c022cdc75e88e6ae24487a9477aebd41a692acb2a311d51ed637",
+      "sha256": "036f719048e5e144b82b3de79028733713330e12533db403c0add30caf37835d",
       "digest_scope": "full_document"
     },
     "F9": {
@@ -665,6 +665,6 @@
   "integrity": {
     "algorithm": "sha256",
     "canonicalization": "UTF-8 JSON with sorted keys and compact separators; omit integrity.digest",
-    "digest": "16a3fdf023ba1fa924f582ebb8a49f447b7113b35b67ba19d5905183a8f1d606"
+    "digest": "e047051a980827c7d0386d4ea746f8ce29b8184c909f219f7bbbc34df8382a9c"
   }
 }

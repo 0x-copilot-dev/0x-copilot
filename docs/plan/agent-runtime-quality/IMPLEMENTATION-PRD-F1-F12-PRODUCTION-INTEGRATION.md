@@ -214,7 +214,7 @@ create a second planning queue.
         `ce938056`; 275 combined integration tests; final service gate: 5,901
         passed, 97 skipped; API-types/desktop typechecks, 42 desktop env tests,
         full ruff/format/compile, hooks, and diff checks passed).
-- [ ] **Step 7:** Add backend-owned F8 MCP revisions, annotation cache, remote
+- [x] **Step 7:** Add backend-owned F8 MCP revisions, annotation cache, remote
       session pooling, and generation-safe ai-backend invalidation.
 - [ ] **Step 8:** Enable F3 catalog activation, top-K expansion,
       search/describe/invoke, gateway revalidation, and fallback.
