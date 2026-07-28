@@ -739,11 +739,20 @@ Scheduling convenience is never treated as safety metadata.
       `BatchExecutionCoordinator` so framework-started coroutines wait on
       persisted segment gates instead of racing. Preserve input-order results
       with actual completion timestamps.
-- [ ] **F6.4 — Scoped permits.** Implement bounded
+- [x] **F6.4 — Scoped permits.** (`9e9c30d7`; 45 focused tests, each assertion
+      mutation-verified.) Implement bounded
       global/profile/user/connector/installation/capability permits with
       digested scope keys, fair acquisition, and deterministic saturation
       outcomes. Permits narrow the existing run-scoped serial permit from Step
-      2; they never widen it.
+      2; they never widen it. A default-constructed manager is fully serial for
+      every scope. Saturation, deadline, queue-full, and disposed are typed
+      outcomes, never exceptions a caller could mistake for a tool failure; only
+      genuine faults raise. Queueing without a timeout is a validation error, so
+      an unbounded wait is unconstructible. Fairness is head-of-line per scope:
+      a newcomer is refused if any queued waiter owns a scope it needs, which
+      only ever reduces concurrency. `INSTALLATION` is subject-qualified, which
+      matches this codebase — agent installs are per-user
+      (`services/backend/src/backend_app/agents/schema.sql`).
 - [ ] **F6.5 — Child gateway re-entry.** Each admitted child re-enters the
       Operation Gateway with its own deadline, cancellation, usage, citation,
       result, and audit identity, and a sibling failure never invalidates a
