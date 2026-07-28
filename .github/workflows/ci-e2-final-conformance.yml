@@ -62,6 +62,18 @@ jobs:
           python -m pip install --upgrade pip pytest
           python -m pip install ./packages/service-contracts
           python -m pip install -r services/ai-backend/requirements.txt
+      # Two invocations, deliberately. Mixing `services/ai-backend/tests/...`
+      # with `../../tools/...` in ONE pytest run makes pytest resolve rootdir to
+      # services/ai-backend and adopt its pyproject.toml as the config authority
+      # for a repo-root tool test that lives outside that project. The tools file
+      # is then imported under a different module name, its own directory never
+      # reaches sys.path, and its sibling import fails at collection:
+      #
+      #   ModuleNotFoundError: No module named 'check_service_boundaries'
+      #
+      # Each project therefore runs under its own rootdir. The sibling workflows
+      # (ci-dark-capabilities-gate, ci-orphan-destinations) already invoke their
+      # tools tests from the repo root and were never affected.
       - name: Prove D9 runner and planted canaries
         run: |
           cd services/ai-backend
@@ -70,8 +82,9 @@ jobs:
             tests/unit/agent_runtime/capabilities/mcp/test_operation_gateway_adapter.py \
             tests/unit/runtime_worker/test_mcp_operation_composition.py \
             tests/unit/runtime_worker/test_builtin_rowset_effect_executor.py \
-            tests/unit/runtime_worker/test_rowset_effect_staging.py \
-            ../../tools/test_check_service_boundaries.py -q
+            tests/unit/runtime_worker/test_rowset_effect_staging.py -q
+      - name: Prove service-boundary canaries
+        run: python -m pytest tools/test_check_service_boundaries.py -q
       - name: Publish D9 conformance report
         run: |
           PYTHONPATH="services/ai-backend/src:packages/service-contracts/src" \

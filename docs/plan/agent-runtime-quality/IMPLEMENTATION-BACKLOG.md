@@ -102,45 +102,32 @@ lands so the design history remains auditable.
   not introduce a parallel delegation implementation.
 - **Status:** open; blocking F9 parallel delegation enablement.
 
-## Open implementation tasks
+## Implementation task history and open work
 
 These are planned PRD slices, not independently confirmed production defects.
 They remain here to make the next integration work visible without treating an
-unshipped feature as a regression.
+unshipped feature as a regression. Individual status lines distinguish closed
+implementation work from the remaining queue.
 
 ### ARQ-018 — F1 evaluation and promotion contracts are not an operating control plane
 
-- **Current state:** F1 has deterministic, content-safe trajectory projection,
-  closed fixture execution, immutable in-memory evaluation records, scorers,
-  and promotion-decision contracts. The projector reads the established event
-  timeline rather than duplicating production events.
-- **Remaining work:** add RuntimePorts-backed desktop persistence and deletion
-  cascades for cases, fixtures, manifests, reports, and promotion decisions;
-  schedule consent/profile-gated low-priority projection after runs; implement
-  bounded offline evaluation execution and report export; bind a versioned
-  experiment assignment before the first model call; atomically update and
-  roll back promotion pointers; ship local diagnostics, cost caps, runbooks,
-  and the full synthetic evaluation corpus. This must remain local-first and
-  must not introduce telemetry upload or a hosted database by default.
-- **Status:** open; F1 provides testable foundations but no operating
-  evaluation/promotion workflow.
+- **Current state:** F1 now has the local operating control plane: canonical
+  RuntimePorts-backed desktop/in-memory repositories, deletion and recovery,
+  bounded fixture-only execution, deterministic scorers, consent-gated terminal
+  projection, immutable assignment, signed promotion/rollback, local export,
+  diagnostics, and operations guidance.
+- **Remaining work:** none within the F1 scope.
+- **Status:** closed; Step 3 qualification and exit criteria passed.
 
 ### ARQ-019 — F2 lacks cache-outcome telemetry and full provider conformance
 
-- **Current state:** the runtime factory builds typed, deterministic prompt
-  fragments for the active harness and applies a scoped Anthropic stable-prefix
-  decorator. Unsupported providers retain the same rendered prompt without
-  cache metadata, and prompt bodies are excluded from diagnostics.
-- **Remaining work:** adapt every remaining system-prompt source into a
-  revisioned fragment provider; emit body-free `prompt.assembled` and actual
-  provider cache-outcome facts through the existing usage/event path; normalize
-  provider response metadata; add bounded pre-output cache-metadata fallback;
-  support only explicitly validated provider/model adapters; add feature flags,
-  local diagnostics, and F1 quality/cache-reuse gates; remove legacy prompt
-  construction only after conformance. No provider cache identifier or
-  user/profile-scoped prompt content may become durable shared state.
-- **Status:** open; typed assembly is active, but F2's observability,
-  rollout, and multi-provider Definition of Done are not met.
+- **Current state:** F2 now assembles every supervisor/subagent prompt from
+  typed, revision-bound fragments at the common model seam, uses one selected
+  cache owner, persists body-free assembly/provider-cache observations, and
+  provides bounded pre-content fallback, rollout modes, F1 evidence, and
+  desktop operations guidance.
+- **Remaining work:** none within the F2 scope.
+- **Status:** closed; Step 5 qualification and exit criteria passed.
 
 ### ARQ-007 — F3 catalog is shadow-only and has no model bridge
 
@@ -173,20 +160,12 @@ unshipped feature as a regression.
 
 ### ARQ-009 — F10 attempt policy is not attached to live provider invocation
 
-- **Current state:** generic worker replay after run-handler entry is blocked.
-  The pure F10 control plane now constructs versioned deployment,
-  requirements, credential, and budget contracts; deterministically derives
-  route eligibility and stable exclusions; classifies sanitized failures; and
-  admits bounded attempts. It denies whole-run replay, retries after visible
-  output, and ambiguous provider state.
-- **Remaining work:** adapt the current model catalog/enablement and verified
-  region/privacy/BYOK facts into deployment descriptors; persist invocation,
-  route, and attempt lineage; add provider-specific error adapters and
-  attempt-scoped invocation/usage metering; preserve streaming discontinuities;
-  reconcile ambiguous post-crash attempts; add circuit health and
-  F1-qualified equivalent routes. Worker retries must remain outside this
-  policy and must never replay a run.
-- **Status:** open; no live provider fallback or routing behavior has changed.
+- **Current state:** F10 now binds trusted deployment/BYOK/region/privacy
+  facts, journaled route and attempt lineage, provider lifecycle attestation,
+  bounded pre-content retry, per-attempt usage, circuit health, independent
+  release controls, and crash/restart reconciliation to every model call.
+- **Remaining work:** none within the F10 scope.
+- **Status:** closed; Step 6 qualification and exit criteria passed.
 
 ### ARQ-010 — F6 planner is not yet an execution control plane
 
@@ -249,21 +228,13 @@ unshipped feature as a regression.
 
 ### ARQ-014 — F4 policy selection and plans are not bound to production runs
 
-- **Current state:** the existing F4 module now derives a closed,
-  revision-bound `TaskPolicySelection` from server-derived signals, prevents
-  effect/delegation facts from being downgraded by a selected route, and
-  supplies a bounded `unknown.general` fallback. `RunToolPlan` is bound to that
-  selection and validates public steps and success-evidence requirements. The
-  optional duplicate controller remains behind the common guarded-tool seam.
-- **Remaining work:** construct the resolver from a deployment-owned versioned
-  profile bundle during run creation; persist selection and plan facts and
-  reconstruct them after restart; bind the selected controller/fingerprint to
-  every governed tool guard; emit profile, plan, feedback, and budget events;
-  enforce the planning/model-turn/cost/wall-time hierarchy; add a progress
-  projector; and cover rollout/F1 quality evaluation. Profile selection must
-  never become an authorization or capability-discovery path.
-- **Status:** open; no production run currently selects, persists, or displays
-  a task policy plan.
+- **Current state:** F4 now selects a signed, deployment-owned profile before
+  the first governed call; persists/reconstructs the plan and controller
+  state; enforces it graph-wide before budget admission; emits body-free
+  progress/feedback facts; and supplies rollout, backout, F1, desktop, and
+  restart evidence.
+- **Remaining work:** none within the F4 scope.
+- **Status:** closed; Step 4 qualification and exit criteria passed.
 
 ### ARQ-015 — F7 dataflow has no executor, evidence path, or model surface
 

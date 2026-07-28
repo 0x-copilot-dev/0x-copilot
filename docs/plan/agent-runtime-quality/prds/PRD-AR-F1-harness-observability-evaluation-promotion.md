@@ -1,6 +1,6 @@
 # PRD-AR-F1 — Harness observability, evaluation, and promotion gates
 
-**Status:** proposed\
+**Status:** implemented\
 **Priority:** P0\
 **Owners:** AI Runtime, Applied AI, Security/Data Governance\
 **Depends on:** [A1 contracts](../../generative-surfaces-v2-1/prds/PRD-A1-artifact-effect-contracts.md),
