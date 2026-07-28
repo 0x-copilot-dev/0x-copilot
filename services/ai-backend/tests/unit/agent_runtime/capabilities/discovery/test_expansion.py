@@ -164,6 +164,8 @@ class ExpansionMixin(DynamicMcpLoadingMixin):
                 policy_revision="policy_1",
                 connector_scope_revision="scope_1",
             ),
+            task_policy_selection_ref="task-policy-selection://run_expand/default/sha256/"
+            + "b" * 64,
             tool_cards=tuple(self.tool_card(name) for name in tool_names),
             mcp_server_cards=tuple(self.server_card(name) for name in server_names),
             expires_at=datetime.now(UTC) + timedelta(minutes=15),
