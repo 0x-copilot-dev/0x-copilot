@@ -5,8 +5,36 @@ The whole domain shares one vocabulary in
 :mod:`agent_runtime.capabilities.concurrency.errors`. Everything else is a
 policy over those types: descriptor precedence, batch planning, scoped permits,
 and serial kill switches.
+
+:mod:`agent_runtime.capabilities.concurrency.batch_journal_store` is
+deliberately **not** re-exported here. It is the one F6 module that knows the
+run-event transport schema, and that schema imports this package's record
+vocabulary — so importing the adapter from this ``__init__`` would close a
+cycle. Import it by module path.
 """
 
+from agent_runtime.capabilities.concurrency.batch_journal import (
+    BATCH_JOURNAL_RECORD_ADAPTER,
+    BatchJournalConflict,
+    BatchJournalCorruption,
+    BatchJournalError,
+    BatchJournalLimits,
+    BatchJournalPatterns,
+    BatchJournalRecord,
+    BatchJournalRecordKind,
+    BatchJournalScopeConflict,
+    BatchJournalSnapshotConflict,
+    BatchJournalWrite,
+    BatchPlanBoundRecord,
+    BatchPlanRecorder,
+    BatchPlanRequest,
+    BatchPlanStorePort,
+    BatchRecoveryView,
+    DurableBatchPlan,
+    PlannedOperation,
+    SequencedBatchJournalRecord,
+    validate_batch_journal_record,
+)
 from agent_runtime.capabilities.concurrency.contracts import (
     BatchFailurePolicy,
     BatchOperation,
@@ -77,10 +105,26 @@ from agent_runtime.capabilities.concurrency.permits import RunPermitManager
 from agent_runtime.capabilities.concurrency.planner import BatchPlanner
 
 __all__ = (
+    "BATCH_JOURNAL_RECORD_ADAPTER",
     "BatchFailurePolicy",
+    "BatchJournalConflict",
+    "BatchJournalCorruption",
+    "BatchJournalError",
+    "BatchJournalLimits",
+    "BatchJournalPatterns",
+    "BatchJournalRecord",
+    "BatchJournalRecordKind",
+    "BatchJournalScopeConflict",
+    "BatchJournalSnapshotConflict",
+    "BatchJournalWrite",
     "BatchOperation",
     "BatchPlan",
+    "BatchPlanBoundRecord",
+    "BatchPlanRecorder",
+    "BatchPlanRequest",
+    "BatchPlanStorePort",
     "BatchPlanner",
+    "BatchRecoveryView",
     "BatchSegment",
     "BatchSegmentMode",
     "BatchSegmentReason",
@@ -111,6 +155,7 @@ __all__ = (
     "ConcurrencyPolicyWideningRejected",
     "ConcurrencyRejectionReason",
     "ConcurrencyScope",
+    "DurableBatchPlan",
     "IdempotencyKind",
     "NarrowableEnum",
     "OperationBatch",
@@ -129,6 +174,7 @@ __all__ = (
     "PermitScope",
     "PermitScopeKey",
     "PermitWaitMode",
+    "PlannedOperation",
     "PolicySource",
     "ProviderSessionConstraint",
     "ResourceKeyDimension",
@@ -136,5 +182,7 @@ __all__ = (
     "ResourceKeyTemplate",
     "ResourceKeyTemplateRejected",
     "RunPermitManager",
+    "SequencedBatchJournalRecord",
     "SideEffectKind",
+    "validate_batch_journal_record",
 )

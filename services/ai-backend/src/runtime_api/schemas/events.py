@@ -24,6 +24,7 @@ from agent_runtime.execution.contracts import (
     StreamEventType,
 )
 from agent_runtime.api.constants import Keys, Messages, Values
+from agent_runtime.capabilities.concurrency.batch_journal import BatchJournalRecord
 from agent_runtime.capabilities.task_policy_journal import TaskPolicyJournalRecord
 from agent_runtime.execution.model_invocation.journal import ModelInvocationRecord
 from agent_runtime.prompts.observation import (
@@ -252,6 +253,12 @@ class ModelInvocationJournalPayload(RuntimeContract):
     record: ModelInvocationRecord = Field(discriminator="record_kind")
 
 
+class OperationBatchJournalPayload(RuntimeContract):
+    """Strict body-free F6 batch plan carried by the canonical run journal."""
+
+    record: BatchJournalRecord
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -408,6 +415,8 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.MODEL_INVOCATION_FAILED,
         }:
             return cls._model_invocation_payload(payload)
+        if event_type is RuntimeApiEventType.OPERATION_BATCH_JOURNAL:
+            return cls._operation_batch_journal_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -567,6 +576,7 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.MODEL_INVOCATION_RECOVERY,
             RuntimeApiEventType.MODEL_INVOCATION_COMPLETED,
             RuntimeApiEventType.MODEL_INVOCATION_FAILED,
+            RuntimeApiEventType.OPERATION_BATCH_JOURNAL,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -1875,6 +1885,19 @@ class RuntimeEventPresentationProjector:
         except ValidationError:
             logging.getLogger(__name__).warning(
                 "Rejected malformed model invocation journal payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _operation_batch_journal_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one strict body-free F6 batch record and reject extra data."""
+
+        try:
+            validated = OperationBatchJournalPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed operation_batch.journal.v1 payload"
             )
             return {}
         return validated.model_dump(mode="json")
