@@ -702,6 +702,31 @@ is.
       state. That was equally true before this lane; parity was preserved rather
       than silently simplified, so root can collapse it as a deliberate change.
 
+- [x] **RB.3 — Contract fixes from two independent adoptions.** (`2d0ed56e`;
+      +27 tests; conformance is now 16 cases × 3 instantiations = 48.) Fixes the
+      two findings both adopters hit. `RevisionUseContext.run_id` is optional,
+      and relaxing it did **not** relax the check — a new structural line binds
+      required dimensions on the context side too, generalises to
+      `catalog_generation`, fires before any authority call, and can only refuse
+      more. `RevisionAuthorityPort` gained an optional opaque resolution handle,
+      which is a **parameter of the call, not a field of any contract** — absent
+      from the binding, scope, and decision, i.e. from everything that is
+      minted, digested, persisted, replayed, or logged, so the no-raw-identity
+      property is preserved byte for byte.
+
+      **This is the outcome that justified the lane:** F8's scope-keyed registry
+      is deleted outright. It turned out to be a pure round trip — the authority
+      was writing the caller's own trusted revision into a fingerprint-keyed
+      dict and reading it back one frame later — and the `forget` path existed
+      only to bound that dict. Root then removed the inert `forget` method and
+      both call sites (`9fd1a3d9`). F3 never needed to build a registry at all.
+
+      Sharp call worth keeping: F3 does **not** pass its own held
+      `live_generation` as the handle, even though it was available. An
+      authority answering from the snapshot under test would validate that
+      snapshot against itself. The handle is a resolution *key*, never an
+      answer, and a test proves a handle cannot let a superseded ref pass.
+
 ### In progress — Step 8 policy-aware capability discovery
 
 Root owns architecture, integration, commits, and the normative ordered
@@ -781,11 +806,36 @@ widens authorization. Every inner operation re-enters the Operation Gateway.
       run/subject/catalog generation through the Step RB primitive. `describe`
       returns a bounded schema or a protected schema-artifact ref, never an
       unbounded inline schema.
-- [ ] **F3.5 — Invoke and gateway revalidation.** `invoke` re-resolves the
+- [x] **F3.5 — Invoke and gateway revalidation.** (`e706301d`; 46 focused
+      tests.) `invoke` re-resolves the
       current descriptor and auth revision, rejects superseded or out-of-scope
       refs with the RB outcomes, validates canonical arguments against the
       revalidated schema, and dispatches through a non-model
       `CapabilityExecutorPort` that enters the ordinary Operation Gateway.
+      The inner operation is not _equivalent_ to a directly-registered MCP call,
+      it **is** one: dispatch goes through the same `CallMcpTool`, proven three
+      ways — an AST test asserting the executor imports no gateway internals, an
+      isinstance check on the concrete dispatcher so a protocol cannot later
+      admit a substitute, and a behavioural test against the real gateway where
+      the inner operation id equals the same run-snapshot-derived allocation a
+      direct call would get. Budget non-duplication is proven with a **negative
+      control**: the same dispatcher called directly as a guarded model tool
+      charges 1, so the bridge's inner-call zero is a property of the design
+      rather than a fixture artifact. Three seams fail closed rather than
+      pretending: `idempotency_key` (no gateway seam), tool-card capabilities
+      (no non-model dispatcher), and per-call citation binding — all recorded in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md).
+- [x] **F3.M — Reference-minter unification** (integration lane; `274e867f`;
+      5 new tests, zero assertions weakened). One `HmacCapabilityReferenceMinter`
+      owns the only `hmac.new` call site and the only key-strength gate in F3;
+      the builder and expander now provably mint the same ref for the same
+      input. Zero behavior change is proven by transcribing the three
+      pre-refactor derivations and asserting the new code reproduces them byte
+      for byte. Also collapsed five inline `cat_` patterns, five `rev_`, three
+      length pairs, and the search ceiling stated in three places.
+      `CapabilityExpansionLimits` moved next to `activation.py` because it is a
+      resolver of untrusted operator configuration, not a data contract — same
+      narrowest-on-anything-malformed rule.
 - [ ] **F3.6 — Budget accounting.** The bridge call consumes exactly one
       model-visible F4 call; the real inner operation consumes its own
       operation/capability budget; the same cost is never counted twice in one
