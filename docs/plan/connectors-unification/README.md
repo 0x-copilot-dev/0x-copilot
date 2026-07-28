@@ -145,7 +145,7 @@ The behaviour behind the card, which now exists on `main`. PR #379 narrowed this
 That is an honest boundary, not an oversight — the run stream genuinely cannot observe an OAuth popup. But it means three of four states are currently unreachable, so a user who connects sees the card sit at "pending" and concludes nothing happened. Phase 4 is now exactly: **give those transitions an owner.**
 
 - Drive `connecting → connected | denied` from the host's existing auth port (`webMcpAuthPort` on web, the IPC bridge on desktop), which already knows the OAuth outcome. This is `P5b` in [web-convergence/PRD.md](../web-convergence/PRD.md); it should be scheduled with this program rather than separately, because the card that motivates it is now shipped.
-- **Connecting mid-run never restarts the run.** Restarting re-emits work the user is reading and re-spends tokens. The connector arms the next turn; the `connected` state converts to an explicit _"Retry that step with Linear"_ affordance so the user chooses.
+- **OAuth completion becomes the next user turn.** The connected card collapses to a compact, action-free receipt, the newly authenticated connector is enabled in the run-scoped Tools state, and the cockpit sends an idempotent `"<connector> is connected."` user turn using the originating run's model with that connector in `request_context.connector_scopes`. There is no second retry affordance and replay cannot duplicate the turn.
 - **Mute lands on the card** (`onDeny` → persist the existing per-user override), because that is where the intent forms. Settings gets the reversible list.
 - **`RUNTIME_CONNECTOR_SUGGESTIONS`**: `off` · `unblock_only` (default) · `always`, read by `list_suggestible_connectors`, surfaced in Settings → Tools.
 

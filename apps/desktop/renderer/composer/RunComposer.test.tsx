@@ -347,6 +347,30 @@ function fakeConnectorsPort(): ComposerConnectorsPort {
   };
 }
 
+function connectedLinearPort(): ComposerConnectorsPort {
+  return {
+    ...fakeConnectorsPort(),
+    listServers: () =>
+      Promise.resolve([
+        {
+          server_id: "linear",
+          name: "Linear",
+          display_name: "Linear",
+          url: "https://mcp.linear.app",
+          transport: "http",
+          auth_mode: "oauth2",
+          auth_state: "authenticated",
+          health: "healthy",
+          enabled: true,
+          oauth_client_configured: true,
+          scopes_summary: "Read issues, projects, and cycles.",
+          created_at: "2026-07-27T00:00:00Z",
+          updated_at: "2026-07-27T00:00:00Z",
+        },
+      ]),
+  };
+}
+
 describe("RunComposer Tools pill", () => {
   it("renders the portal-safe Tools pill when a connectorsPort is provided", async () => {
     const { container } = renderComposer({
@@ -440,6 +464,34 @@ describe("RunComposer Tools pill", () => {
     const request = dispatch.mock.calls[0][0] as RunStartRequest;
     // Not an explicit opt-out → stays true; buildRunCreateBody omits `true`.
     expect(request.webSearchEnabled).not.toBe(false);
+  });
+
+  it("enables a connector immediately after OAuth and scopes the next run to it", async () => {
+    const { container, dispatch } = renderComposer({
+      connectorsPort: connectedLinearPort(),
+      autoActivateConnectorId: "linear",
+    });
+    await waitFor(() => expect(textarea(container)).not.toBeNull());
+
+    fireEvent.click(
+      container.querySelector(
+        "[data-testid='first-run-tools-button']",
+      ) as HTMLButtonElement,
+    );
+    const linear = await waitFor(() => {
+      const row = document.querySelector(
+        "[data-testid='first-run-tools-connected-linear']",
+      );
+      expect(row).not.toBeNull();
+      return row as HTMLButtonElement;
+    });
+    expect(linear).toHaveAttribute("aria-checked", "true");
+
+    typeAndSend(container, "Show my open Linear issues");
+    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(1));
+    expect(
+      (dispatch.mock.calls[0][0] as RunStartRequest).connectorScopes,
+    ).toEqual({ linear: [] });
   });
 });
 

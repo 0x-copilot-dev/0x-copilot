@@ -254,7 +254,12 @@ export {
 // === end Phase 2-C ===
 
 // === Phase 2-D tc-chat ===
-export { TcChat, type TcChatProps, type TcChatApproval } from "./TcChat";
+export {
+  TcChat,
+  type TcChatProps,
+  type TcChatApproval,
+  type ConnectedConnectorReceipt,
+} from "./TcChat";
 export { ToolCallCard, type ToolCallCardProps } from "./ToolCallCard";
 export {
   SwimlaneScrubProvider,

@@ -58,21 +58,33 @@ describe("pythonPathValue", () => {
 });
 
 describe("resolveDesktopStudioRuntimeEnv", () => {
-  it("ships artifacts and review-first operations by default", () => {
+  it("ships artifacts without entering cohort-gated operation enforcement", () => {
     expect(
       resolveDesktopStudioRuntimeEnv({}, { workspaceBrokerEnabled: false }),
     ).toEqual({
       SURFACES_V2: "true",
       ARTIFACT_EFFECTS_V2: "true",
       ARTIFACT_DRAFTS_V2: "true",
-      OPERATION_GATEWAY_MODE: "enforce",
+      OPERATION_GATEWAY_MODE: "off",
       WORKSPACE_EFFECT_MODE: "off",
     });
   });
 
-  it("derives workspace enforcement from main-owned broker availability", () => {
+  it("keeps workspace enforcement off until operation enforcement is explicit", () => {
     expect(
       resolveDesktopStudioRuntimeEnv({}, { workspaceBrokerEnabled: true }),
+    ).toMatchObject({
+      OPERATION_GATEWAY_MODE: "off",
+      WORKSPACE_EFFECT_MODE: "off",
+    });
+  });
+
+  it("derives workspace enforcement after an operator explicitly enables the gateway", () => {
+    expect(
+      resolveDesktopStudioRuntimeEnv(
+        { OPERATION_GATEWAY_MODE: "enforce" },
+        { workspaceBrokerEnabled: true },
+      ),
     ).toMatchObject({
       OPERATION_GATEWAY_MODE: "enforce",
       WORKSPACE_EFFECT_MODE: "enforce",
@@ -236,18 +248,34 @@ describe("buildServiceEnv(ai-backend)", () => {
     expect(env.MCP_TOKEN_VAULT_SECRET).toBeUndefined();
     expect(env.BACKEND_ENVIRONMENT).toBeUndefined();
     // Studio is a desktop-owned release lane. The artifact/review lifecycle is
-    // available to this child by default, while host filesystem staging stays
-    // off until Electron main has started its private workspace broker.
+    // available to this child by default. Operation enforcement stays off
+    // until an operator also supplies the required E2 cohort policy; otherwise
+    // the worker would hide every backend MCP tool after successful OAuth.
     expect(env.SURFACES_V2).toBe("true");
     expect(env.ARTIFACT_EFFECTS_V2).toBe("true");
     expect(env.ARTIFACT_DRAFTS_V2).toBe("true");
-    expect(env.OPERATION_GATEWAY_MODE).toBe("enforce");
+    expect(env.OPERATION_GATEWAY_MODE).toBe("off");
     expect(env.WORKSPACE_EFFECT_MODE).toBe("off");
   });
 
-  it("enables workspace staging only when Electron main supplied its broker", () => {
+  it("does not infer operation enforcement from a workspace broker alone", () => {
     const env = buildServiceEnv("ai-backend", {
       ...inputs(),
+      workspaceBroker: {
+        enabled: true,
+        baseUrl: "http://127.0.0.1:54322",
+        token: "workspace-broker-secret",
+        audience: "desktop-capability-broker",
+      },
+    });
+
+    expect(env.WORKSPACE_EFFECT_MODE).toBe("off");
+    expect(env.OPERATION_GATEWAY_MODE).toBe("off");
+  });
+
+  it("enables workspace staging when the broker and gateway opt-in are both present", () => {
+    const env = buildServiceEnv("ai-backend", {
+      ...inputs({ OPERATION_GATEWAY_MODE: "enforce" }),
       workspaceBroker: {
         enabled: true,
         baseUrl: "http://127.0.0.1:54322",

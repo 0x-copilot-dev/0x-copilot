@@ -15,6 +15,7 @@ function run(overrides: Partial<RunListItem> = {}): RunListItem {
   return {
     runId: "run-a",
     goal: "Ship the renewal batch",
+    modelName: "claude-sonnet-4-5",
     status: "running",
     startedAt: "2026-05-17T10:00:00.000Z",
     ...overrides,
