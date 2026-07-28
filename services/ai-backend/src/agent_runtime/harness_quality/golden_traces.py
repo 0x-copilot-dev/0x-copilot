@@ -160,6 +160,23 @@ class GoldenTrace(RuntimeContract):
             "prompt_input_tokens",
             "prompt_cached_input_tokens",
             "prompt_cache_creation_input_tokens",
+            "invocation_record_kind",
+            "invocation_status",
+            "invocation_fallback_policy",
+            "invocation_credential_mode",
+            "invocation_decision",
+            "invocation_reason",
+            "invocation_attempt_state",
+            "invocation_failure_class",
+            "invocation_recovery_outcome",
+            "invocation_exclusion_reasons",
+            "invocation_provider_reported_usage",
+            "invocation_route_ordinal",
+            "invocation_attempt_ordinal",
+            "invocation_attempt_count",
+            "invocation_input_tokens",
+            "invocation_output_tokens",
+            "invocation_cost_microusd",
         }
         return {
             key: GoldenTrace._without_empty_task_policy_projection(item)

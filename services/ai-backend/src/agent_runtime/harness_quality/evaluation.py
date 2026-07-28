@@ -110,6 +110,20 @@ class TrajectoryProjector:
     """
 
     _CAPABILITY_KEYS = ("capability_id", "tool_name", "tool", "operation")
+    _INVOCATION_RECORD_KINDS = frozenset(
+        {
+            "invocation_planned",
+            "route_eligible",
+            "route_excluded",
+            "attempt_admission",
+            "attempt_state",
+            "attempt_usage",
+            "attempt_failed",
+            "invocation_recovery",
+            "invocation_completed",
+            "invocation_failed",
+        }
+    )
 
     def __init__(self, *, redaction_policy_revision: str) -> None:
         if not redaction_policy_revision.strip():
@@ -186,6 +200,62 @@ class TrajectoryProjector:
                 payload,
                 "cache_creation_input_tokens",
             ),
+            invocation_record_kind=cls._invocation_text(payload, "record_kind"),
+            invocation_status=cls._invocation_text(payload, "status"),
+            invocation_fallback_policy=cls._invocation_text(
+                payload,
+                "fallback_policy",
+            ),
+            invocation_credential_mode=cls._invocation_text(
+                payload,
+                "credential_mode",
+            ),
+            invocation_decision=cls._invocation_text(payload, "decision"),
+            invocation_reason=(
+                cls._invocation_text(payload, "reason")
+                or cls._invocation_text(payload, "decision_reason")
+            ),
+            invocation_attempt_state=cls._invocation_text(payload, "state"),
+            invocation_failure_class=cls._invocation_text(
+                payload,
+                "failure_class",
+            ),
+            invocation_recovery_outcome=cls._invocation_text(
+                payload,
+                "outcome",
+            ),
+            invocation_exclusion_reasons=cls._invocation_codes(
+                payload,
+                "reasons",
+            ),
+            invocation_provider_reported_usage=cls._invocation_bool(
+                payload,
+                "provider_reported",
+            ),
+            invocation_route_ordinal=cls._invocation_int(
+                payload,
+                "route_ordinal",
+            ),
+            invocation_attempt_ordinal=cls._invocation_int(
+                payload,
+                "attempt_ordinal",
+            ),
+            invocation_attempt_count=cls._invocation_int(
+                payload,
+                "attempt_count",
+            ),
+            invocation_input_tokens=(
+                cls._invocation_int(payload, "input_tokens")
+                or cls._invocation_int(payload, "total_input_tokens")
+            ),
+            invocation_output_tokens=(
+                cls._invocation_int(payload, "output_tokens")
+                or cls._invocation_int(payload, "total_output_tokens")
+            ),
+            invocation_cost_microusd=(
+                cls._invocation_int(payload, "cost_microusd")
+                or cls._invocation_int(payload, "total_cost_microusd")
+            ),
             payload_digest=canonical_json_sha256(payload),
         )
 
@@ -252,6 +322,72 @@ class TrajectoryProjector:
             return None
         value = record.get(key)
         return value if isinstance(value, bool) else None
+
+    @classmethod
+    def _invocation_record(
+        cls,
+        payload: Mapping[str, object],
+    ) -> Mapping[str, object] | None:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        if record.get("record_kind") not in cls._INVOCATION_RECORD_KINDS:
+            return None
+        return record
+
+    @classmethod
+    def _invocation_text(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> str | None:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return None
+        value = record.get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+    @classmethod
+    def _invocation_int(cls, payload: Mapping[str, object], key: str) -> int:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return 0
+        value = record.get(key)
+        return (
+            value
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            else 0
+        )
+
+    @classmethod
+    def _invocation_bool(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> bool | None:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return None
+        value = record.get(key)
+        return value if isinstance(value, bool) else None
+
+    @classmethod
+    def _invocation_codes(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> tuple[str, ...]:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return ()
+        value = record.get(key)
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return ()
+        return tuple(
+            item
+            for item in value
+            if isinstance(item, str) and item.strip() and len(item) <= 80
+        )
 
     @staticmethod
     def _validate_contiguous(events: Sequence[RuntimeEventEnvelope]) -> None:

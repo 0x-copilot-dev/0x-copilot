@@ -384,6 +384,149 @@ class PromptCacheTrajectoryScorer:
         )
 
 
+class ModelInvocationTrajectoryScorer:
+    """Score only closed, body-free F10 invocation lineage projections."""
+
+    scorer_id = "model_invocation_trajectory"
+
+    def score(
+        self,
+        *,
+        case: EvaluationCase,
+        trajectory: TrajectoryManifest,
+    ) -> ScorerResult:
+        assertion = _assertion(case, self.scorer_id)
+        if assertion is None:
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=1.0,
+                passed=True,
+                hard_gate=False,
+                reason_code="model_invocation_not_applicable",
+            )
+        expected = assertion.expected
+        if not isinstance(expected, Mapping):
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=0,
+                passed=False,
+                hard_gate=assertion.hard_gate,
+                reason_code="model_invocation_assertion_invalid",
+            )
+        steps = tuple(
+            step for step in trajectory.ordered_steps if step.invocation_record_kind
+        )
+        record_kinds = {step.invocation_record_kind for step in steps}
+        statuses = {step.invocation_status for step in steps}
+        decisions = {step.invocation_decision for step in steps}
+        reasons = {step.invocation_reason for step in steps}
+        states = {step.invocation_attempt_state for step in steps}
+        failures = {step.invocation_failure_class for step in steps}
+        recovery_outcomes = {step.invocation_recovery_outcome for step in steps}
+        credential_modes = {step.invocation_credential_mode for step in steps}
+        exclusion_reasons = {
+            reason for step in steps for reason in step.invocation_exclusion_reasons
+        }
+        usage_steps = tuple(
+            step for step in steps if step.invocation_record_kind == "attempt_usage"
+        )
+        route_ordinals = tuple(
+            step.invocation_route_ordinal
+            for step in steps
+            if step.invocation_record_kind == "route_eligible"
+        )
+        attempt_count = max(
+            (
+                max(step.invocation_attempt_ordinal, step.invocation_attempt_count)
+                for step in steps
+            ),
+            default=0,
+        )
+
+        checks = (
+            (
+                _string_set(expected.get("required_record_kinds", ())) - record_kinds,
+                "model_invocation_record_missing",
+            ),
+            (
+                _string_set(expected.get("required_statuses", ())) - statuses,
+                "model_invocation_status_missing",
+            ),
+            (
+                _string_set(expected.get("required_decisions", ())) - decisions,
+                "model_invocation_decision_missing",
+            ),
+            (
+                _string_set(expected.get("required_reasons", ())) - reasons,
+                "model_invocation_reason_missing",
+            ),
+            (
+                _string_set(expected.get("required_attempt_states", ())) - states,
+                "model_invocation_attempt_state_missing",
+            ),
+            (
+                _string_set(expected.get("required_failure_classes", ())) - failures,
+                "model_invocation_failure_class_missing",
+            ),
+            (
+                _string_set(expected.get("required_recovery_outcomes", ()))
+                - recovery_outcomes,
+                "model_invocation_recovery_missing",
+            ),
+            (
+                _string_set(expected.get("required_credential_modes", ()))
+                - credential_modes,
+                "model_invocation_credential_mode_missing",
+            ),
+            (
+                _string_set(expected.get("required_exclusion_reasons", ()))
+                - exclusion_reasons,
+                "model_invocation_exclusion_missing",
+            ),
+        )
+        reason = next(
+            (reason_code for missing, reason_code in checks if missing),
+            None,
+        )
+        require_reported = expected.get("require_provider_reported_usage", False)
+        if (
+            reason is None
+            and require_reported
+            and (
+                not usage_steps
+                or any(
+                    step.invocation_provider_reported_usage is not True
+                    for step in usage_steps
+                )
+            )
+        ):
+            reason = "model_invocation_usage_report_missing"
+        if (
+            reason is None
+            and expected.get("require_contiguous_route_ordinals", False)
+            and route_ordinals != tuple(range(1, len(route_ordinals) + 1))
+        ):
+            reason = "model_invocation_route_order_invalid"
+        minimum_attempts = _non_negative_int(expected.get("minimum_attempts", 0))
+        maximum_attempts = _non_negative_int(
+            expected.get("maximum_attempts", attempt_count)
+        )
+        if reason is None and attempt_count < minimum_attempts:
+            reason = "model_invocation_attempt_count_below_minimum"
+        if reason is None and attempt_count > maximum_attempts:
+            reason = "model_invocation_attempt_count_above_maximum"
+        if reason is None:
+            reason = "model_invocation_trajectory_passed"
+        passed = reason == "model_invocation_trajectory_passed"
+        return ScorerResult(
+            scorer_id=self.scorer_id,
+            score=1.0 if passed else 0.0,
+            passed=passed,
+            hard_gate=assertion.hard_gate,
+            reason_code=reason,
+        )
+
+
 class RedactedGradeRequest(RuntimeContract):
     """The complete, content-free payload available to an optional grader."""
 
@@ -521,6 +664,7 @@ DEFAULT_HARD_SCORERS = (
     HardConstraintScorer(),
     TaskPolicyTrajectoryScorer(),
     PromptCacheTrajectoryScorer(),
+    ModelInvocationTrajectoryScorer(),
 )
 
 
@@ -604,6 +748,7 @@ __all__ = [
     "HardConstraintScorer",
     "HardGroundednessScorer",
     "HardSafetyScorer",
+    "ModelInvocationTrajectoryScorer",
     "RedactedGradeRequest",
     "RedactedGraderPort",
     "PromptCacheTrajectoryScorer",

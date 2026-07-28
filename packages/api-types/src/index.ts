@@ -640,6 +640,16 @@ export type RuntimeApiEventType =
   | "tool_policy.journal.v1"
   | "prompt.assembled.v1"
   | "prompt.cache.observed.v1"
+  | "model.invocation.planned.v1"
+  | "model.invocation.route.v1"
+  | "model.invocation.exclusion.v1"
+  | "model.attempt.admission.v1"
+  | "model.attempt.state.v1"
+  | "model.attempt.usage.v1"
+  | "model.attempt.failed.v1"
+  | "model.invocation.recovery.v1"
+  | "model.invocation.completed.v1"
+  | "model.invocation.failed.v1"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -722,6 +732,16 @@ export const RUNTIME_API_EVENT_TYPES = [
   "tool_policy.journal.v1",
   "prompt.assembled.v1",
   "prompt.cache.observed.v1",
+  "model.invocation.planned.v1",
+  "model.invocation.route.v1",
+  "model.invocation.exclusion.v1",
+  "model.attempt.admission.v1",
+  "model.attempt.state.v1",
+  "model.attempt.usage.v1",
+  "model.attempt.failed.v1",
+  "model.invocation.recovery.v1",
+  "model.invocation.completed.v1",
+  "model.invocation.failed.v1",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2723,6 +2743,293 @@ export interface PromptCacheObservedPayload {
   record: PromptCacheObservedRecord;
 }
 
+export type ModelInvocationPurpose =
+  | "main"
+  | "tool_planning"
+  | "tool_interpretation"
+  | "subagent_work"
+  | "context_compression"
+  | "todo_extraction"
+  | "library_retrieval"
+  | "library_indexing"
+  | "palette_ranking"
+  | "memory_retrieval"
+  | "memory_indexing"
+  | "memory_extraction"
+  | "view_shaping"
+  | "shape_request";
+export type ModelFallbackPolicy =
+  | "none"
+  | "same_model"
+  | "qualified_equivalent";
+export type ModelCredentialMode = "deployment" | "byok" | "keyless";
+export type ModelRouteExclusionReason =
+  | "disabled"
+  | "health_unavailable"
+  | "open_circuit"
+  | "provider_mismatch"
+  | "model_mismatch"
+  | "fallback_not_permitted"
+  | "equivalence_not_qualified"
+  | "capability_mismatch"
+  | "context_too_small"
+  | "region_mismatch"
+  | "credential_unavailable"
+  | "byok_required"
+  | "byok_disallowed"
+  | "privacy_incompatible";
+export type ModelAttemptDecisionKind = "admit" | "deny";
+export type ModelAttemptDecisionReason =
+  | "first_attempt"
+  | "safe_same_deployment_retry"
+  | "safe_alternate_route"
+  | "whole_run_replay_forbidden"
+  | "external_effect_observed"
+  | "no_eligible_route"
+  | "attempt_limit_reached"
+  | "same_deployment_limit_reached"
+  | "route_set_exhausted"
+  | "deadline_expired"
+  | "projected_cost_unknown"
+  | "cost_budget_exceeded"
+  | "projected_token_usage_unknown"
+  | "input_token_budget_exceeded"
+  | "output_token_budget_exceeded"
+  | "visible_output_already_emitted"
+  | "ambiguous_provider_state"
+  | "failure_not_retryable"
+  | "context_replan_required"
+  | "prior_attempt_not_failed"
+  | "prior_route_mismatch";
+export type ModelDispatchState =
+  | "before_dispatch"
+  | "not_accepted"
+  | "accepted"
+  | "unknown";
+export type ModelStreamState =
+  | "not_started"
+  | "started_no_visible_output"
+  | "visible_output";
+export type ModelFailureClass =
+  | "pre_dispatch_transient"
+  | "provider_overloaded"
+  | "request_invalid"
+  | "auth_invalid"
+  | "region_unavailable"
+  | "policy_incompatible"
+  | "context_exceeded"
+  | "stream_interrupted_before_content"
+  | "stream_interrupted_after_content"
+  | "ambiguous_provider_state"
+  | "cancelled"
+  | "deadline_exceeded";
+export type ModelAttemptLifecycleState =
+  | "admitted"
+  | "dispatching"
+  | "accepted"
+  | "stream_started"
+  | "visible_output"
+  | "tool_call_content"
+  | "completed"
+  | "cancelled"
+  | "ambiguous";
+export type ModelRecoveryKind =
+  | "same_deployment_retry"
+  | "alternate_route"
+  | "crash_reconciliation";
+export type ModelRecoveryOutcome =
+  | "admitted"
+  | "denied"
+  | "reconciled_completed"
+  | "reconciled_failed"
+  | "ambiguous";
+export type ModelInvocationFailureReason =
+  | "no_eligible_route"
+  | "admission_denied"
+  | "attempt_failed"
+  | "ambiguous_recovery"
+  | "cancelled"
+  | "deadline_exceeded"
+  | "budget_exhausted";
+
+export interface ModelInvocationRecordBase {
+  schema_version: 1;
+  record_id: string;
+  run_id: string;
+  snapshot_id: string;
+  snapshot_digest: string;
+  model_call_id: string;
+  invocation_id: string;
+  created_at: string;
+  record_digest: string;
+}
+
+export interface ModelInvocationPlannedRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_planned";
+  execution_scope: string;
+  model_turn: number;
+  purpose: ModelInvocationPurpose;
+  request_digest: string;
+  requirements_digest: string;
+  requirements_revision: string;
+  descriptor_set_revision: string;
+  route_plan_id: string;
+  route_digest: string;
+  route_policy_revision: string;
+  fallback_policy: ModelFallbackPolicy;
+  max_attempts: number;
+  max_same_deployment_attempts: number;
+  max_cost_microusd: number | null;
+  max_input_tokens: number | null;
+  max_output_tokens: number | null;
+  deadline_at: string | null;
+  eligible_route_count: number;
+  exclusion_count: number;
+  status: "planned";
+}
+
+export interface ModelRouteEligibleRecord extends ModelInvocationRecordBase {
+  record_kind: "route_eligible";
+  route_plan_id: string;
+  route_digest: string;
+  route_ordinal: number;
+  deployment_id: string;
+  descriptor_revision: string;
+  endpoint_ref: string;
+  provider: string;
+  model_name: string;
+  region: string;
+  credential_mode: ModelCredentialMode;
+  price_revision: string;
+  max_input_tokens: number;
+  max_output_tokens: number;
+}
+
+export interface ModelRouteExcludedRecord extends ModelInvocationRecordBase {
+  record_kind: "route_excluded";
+  route_plan_id: string;
+  route_digest: string;
+  deployment_id: string;
+  reasons: readonly ModelRouteExclusionReason[];
+}
+
+export interface ModelAttemptAdmissionRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_admission";
+  admission_ordinal: number;
+  decision: ModelAttemptDecisionKind;
+  reason: ModelAttemptDecisionReason;
+  attempt_id: string | null;
+  attempt_ordinal: number | null;
+  deployment_id: string | null;
+  prior_attempt_count: number;
+  external_effect_observed: boolean;
+  projected_cost_microusd: number | null;
+  projected_input_tokens: number | null;
+  projected_output_tokens: number | null;
+}
+
+export interface ModelAttemptStateRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_state";
+  attempt_id: string;
+  attempt_ordinal: number;
+  deployment_id: string;
+  state: ModelAttemptLifecycleState;
+  dispatch_state: ModelDispatchState;
+  stream_state: ModelStreamState;
+  visible_text_emitted: boolean;
+  tool_call_content_emitted: boolean;
+  external_effect_observed: boolean;
+  provider_request_digest: string | null;
+  elapsed_ms: number;
+}
+
+export interface ModelAttemptUsageRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_usage";
+  attempt_id: string;
+  attempt_ordinal: number;
+  deployment_id: string;
+  usage_record_id: string | null;
+  provider_reported: boolean;
+  input_tokens: number;
+  output_tokens: number;
+  cached_input_tokens: number;
+  cache_creation_input_tokens: number;
+  reasoning_tokens: number;
+  audio_input_tokens: number;
+  audio_output_tokens: number;
+  cost_microusd: number;
+  duration_ms: number;
+  finalized: true;
+}
+
+export interface ModelAttemptFailedRecord extends ModelInvocationRecordBase {
+  record_kind: "attempt_failed";
+  attempt_id: string;
+  attempt_ordinal: number;
+  deployment_id: string;
+  failure_class: ModelFailureClass;
+  dispatch_state: ModelDispatchState;
+  stream_state: ModelStreamState;
+  provider_failure_observed: boolean;
+  visible_text_emitted: boolean;
+  tool_call_content_emitted: boolean;
+  external_effect_observed: boolean;
+  usage_may_be_incomplete: boolean;
+}
+
+export interface ModelInvocationRecoveryRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_recovery";
+  recovery_ordinal: number;
+  source_attempt_id: string;
+  kind: ModelRecoveryKind;
+  outcome: ModelRecoveryOutcome;
+  decision_reason: ModelAttemptDecisionReason | null;
+  target_attempt_id: string | null;
+  visible_text_emitted: boolean;
+  tool_call_content_emitted: boolean;
+  external_effect_observed: boolean;
+}
+
+export interface ModelInvocationCompletedRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_completed";
+  terminal_attempt_id: string;
+  attempt_count: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_microusd: number;
+  total_duration_ms: number;
+  status: "completed";
+}
+
+export interface ModelInvocationFailedRecord extends ModelInvocationRecordBase {
+  record_kind: "invocation_failed";
+  terminal_attempt_id: string | null;
+  attempt_count: number;
+  reason: ModelInvocationFailureReason;
+  failure_class: ModelFailureClass | null;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_cost_microusd: number;
+  total_duration_ms: number;
+  status: "failed";
+}
+
+export type ModelInvocationRecord =
+  | ModelInvocationPlannedRecord
+  | ModelRouteEligibleRecord
+  | ModelRouteExcludedRecord
+  | ModelAttemptAdmissionRecord
+  | ModelAttemptStateRecord
+  | ModelAttemptUsageRecord
+  | ModelAttemptFailedRecord
+  | ModelInvocationRecoveryRecord
+  | ModelInvocationCompletedRecord
+  | ModelInvocationFailedRecord;
+
+export interface ModelInvocationJournalPayload {
+  record: ModelInvocationRecord;
+}
+
 // Citations (PR 1.1). `citation_id` is short ("c<base36>" of the per-run
 // ordinal) and is the token the assistant text embeds inline as
 // `[c<id>]`. The frontend's markdown plugin resolves these tokens by
@@ -3108,6 +3415,16 @@ export interface RuntimeEventPayloadByType
   "tool_policy.journal.v1": TaskPolicyJournalPayload;
   "prompt.assembled.v1": PromptAssembledPayload;
   "prompt.cache.observed.v1": PromptCacheObservedPayload;
+  "model.invocation.planned.v1": ModelInvocationJournalPayload;
+  "model.invocation.route.v1": ModelInvocationJournalPayload;
+  "model.invocation.exclusion.v1": ModelInvocationJournalPayload;
+  "model.attempt.admission.v1": ModelInvocationJournalPayload;
+  "model.attempt.state.v1": ModelInvocationJournalPayload;
+  "model.attempt.usage.v1": ModelInvocationJournalPayload;
+  "model.attempt.failed.v1": ModelInvocationJournalPayload;
+  "model.invocation.recovery.v1": ModelInvocationJournalPayload;
+  "model.invocation.completed.v1": ModelInvocationJournalPayload;
+  "model.invocation.failed.v1": ModelInvocationJournalPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event

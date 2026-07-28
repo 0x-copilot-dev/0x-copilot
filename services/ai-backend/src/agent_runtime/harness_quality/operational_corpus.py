@@ -22,10 +22,22 @@ from agent_runtime.harness_quality.suite_execution import (
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 
-OPERATIONAL_CORPUS_REVISION = "operational-corpus-v3"
+OPERATIONAL_CORPUS_REVISION = "operational-corpus-v4"
 _TOOL_POLICY_EVENT = "tool_policy.journal.v1"
 _PROMPT_ASSEMBLED_EVENT = "prompt.assembled.v1"
 _PROMPT_CACHE_EVENT = "prompt.cache.observed.v1"
+_MODEL_INVOCATION_EVENTS = {
+    "invocation_planned": "model.invocation.planned.v1",
+    "route_eligible": "model.invocation.route.v1",
+    "route_excluded": "model.invocation.exclusion.v1",
+    "attempt_admission": "model.attempt.admission.v1",
+    "attempt_state": "model.attempt.state.v1",
+    "attempt_usage": "model.attempt.usage.v1",
+    "attempt_failed": "model.attempt.failed.v1",
+    "invocation_recovery": "model.invocation.recovery.v1",
+    "invocation_completed": "model.invocation.completed.v1",
+    "invocation_failed": "model.invocation.failed.v1",
+}
 _F4_TASK_FAMILIES = (
     "task_policy_one_call_lookup",
     "task_policy_plan_before_tool",
@@ -134,6 +146,7 @@ class OperationalFixture(RuntimeContract):
                 "suite": "suite-v1",
                 "task_policy": "f4-v1",
                 "prompt_cache": "f2-v1",
+                "model_invocation": "f10.3-v1",
             },
         )
 
@@ -147,7 +160,12 @@ def operational_corpus() -> tuple[OperationalFixture, ...]:
 def _fixture(family: str) -> OperationalFixture:
     f4 = _f4_scenario(family)
     f2 = _f2_scenario(family)
-    call_count = int(f4.get("call_count", f2.get("call_count", 1)))
+    f10 = _f10_scenario(family)
+    call_count = max(
+        int(f4.get("call_count", 1)),
+        int(f2.get("call_count", 1)),
+        int(f10.get("call_count", 1)),
+    )
     capability_id = f"fixture.{family}"
     calls = tuple(
         _call(
@@ -156,6 +174,7 @@ def _fixture(family: str) -> OperationalFixture:
             ordinal=ordinal,
             f4=f4,
             f2=f2,
+            f10=f10,
         )
         for ordinal in range(1, call_count + 1)
     )
@@ -201,6 +220,16 @@ def _fixture(family: str) -> OperationalFixture:
                 hard_gate=bool(f2.get("hard_gate", True)),
             ),
         )
+    invocation_assertion = f10.get("invocation_assertion")
+    if isinstance(invocation_assertion, Mapping):
+        assertions = (
+            *assertions,
+            EvaluationAssertion(
+                scorer_id="model_invocation_trajectory",
+                expected=dict(invocation_assertion),
+                hard_gate=bool(f10.get("hard_gate", True)),
+            ),
+        )
     case = EvaluationCase(
         case_id=f"case_{family}_v1",
         suite_id="suite_operational_v1",
@@ -221,7 +250,11 @@ def _fixture(family: str) -> OperationalFixture:
             cost_microusd=10 * call_count,
             model_turns=max(
                 1,
-                int(f4.get("model_turns", f2.get("model_turns", 1))),
+                max(
+                    int(f4.get("model_turns", 1)),
+                    int(f2.get("model_turns", 1)),
+                    int(f10.get("model_turns", 1)),
+                ),
             ),
             tool_calls=call_count,
             tokens=100 * call_count,
@@ -237,6 +270,7 @@ def _call(
     ordinal: int,
     f4: Mapping[str, object],
     f2: Mapping[str, object],
+    f10: Mapping[str, object],
 ) -> OperationalFixtureCall:
     arguments: dict[str, object] = {
         "scenario_id": family,
@@ -292,6 +326,12 @@ def _call(
                 stage="before",
                 f2=f2,
             ),
+            *_invocation_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="before",
+                f10=f10,
+            ),
         ),
         after_observations=(
             *_observations(
@@ -305,6 +345,12 @@ def _call(
                 ordinal=ordinal,
                 stage="after",
                 f2=f2,
+            ),
+            *_invocation_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="after",
+                f10=f10,
             ),
         ),
     )
@@ -639,6 +685,219 @@ def _f2_scenario(family: str) -> Mapping[str, object]:
     }
 
 
+def _invocation_observations(
+    *,
+    family: str,
+    ordinal: int,
+    stage: str,
+    f10: Mapping[str, object],
+) -> tuple[FixtureTrajectoryObservation, ...]:
+    raw = f10.get(f"{stage}_observations", ())
+    if not isinstance(raw, tuple):
+        return ()
+    observations: list[FixtureTrajectoryObservation] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        target_ordinal = item.get("ordinal")
+        if target_ordinal is not None and target_ordinal != ordinal:
+            continue
+        record_kind = str(item.get("record_kind", ""))
+        event_type = _MODEL_INVOCATION_EVENTS.get(record_kind)
+        if event_type is None:
+            continue
+        payload = {
+            "scenario_id": family,
+            "ordinal": ordinal,
+            "stage": stage,
+            **{
+                key: list(value) if isinstance(value, tuple) else value
+                for key, value in item.items()
+            },
+        }
+        observations.append(
+            FixtureTrajectoryObservation(
+                event_type=event_type,
+                invocation_record_kind=record_kind,
+                invocation_status=_optional_text(item.get("status")),
+                invocation_fallback_policy=_optional_text(item.get("fallback_policy")),
+                invocation_credential_mode=_optional_text(item.get("credential_mode")),
+                invocation_decision=_optional_text(item.get("decision")),
+                invocation_reason=(
+                    _optional_text(item.get("reason"))
+                    or _optional_text(item.get("decision_reason"))
+                ),
+                invocation_attempt_state=_optional_text(item.get("state")),
+                invocation_failure_class=_optional_text(item.get("failure_class")),
+                invocation_recovery_outcome=_optional_text(item.get("outcome")),
+                invocation_exclusion_reasons=_string_tuple(item.get("reasons")),
+                invocation_provider_reported_usage=_optional_bool(
+                    item.get("provider_reported")
+                ),
+                invocation_route_ordinal=_non_negative_int(item.get("route_ordinal")),
+                invocation_attempt_ordinal=_non_negative_int(
+                    item.get("attempt_ordinal")
+                ),
+                invocation_attempt_count=_non_negative_int(item.get("attempt_count")),
+                invocation_input_tokens=_non_negative_int(
+                    item.get("input_tokens", item.get("total_input_tokens"))
+                ),
+                invocation_output_tokens=_non_negative_int(
+                    item.get("output_tokens", item.get("total_output_tokens"))
+                ),
+                invocation_cost_microusd=_non_negative_int(
+                    item.get("cost_microusd", item.get("total_cost_microusd"))
+                ),
+                payload_digest=canonical_json_sha256(payload),
+            )
+        )
+    return tuple(observations)
+
+
+def _f10_scenario(family: str) -> Mapping[str, object]:
+    planned = {
+        "record_kind": "invocation_planned",
+        "status": "planned",
+        "fallback_policy": "none",
+    }
+    route = {
+        "record_kind": "route_eligible",
+        "route_ordinal": 1,
+        "credential_mode": "byok",
+    }
+    first_admission = {
+        "record_kind": "attempt_admission",
+        "decision": "admit",
+        "reason": "first_attempt",
+        "attempt_ordinal": 1,
+    }
+    scenarios: dict[str, Mapping[str, object]] = {
+        "provider_pre_content_failure": {
+            "before_observations": (
+                planned,
+                route,
+                {
+                    "record_kind": "route_excluded",
+                    "reasons": ("region_mismatch",),
+                },
+                first_admission,
+                {
+                    "record_kind": "attempt_state",
+                    "state": "dispatching",
+                    "attempt_ordinal": 1,
+                },
+            ),
+            "after_observations": (
+                {
+                    "record_kind": "attempt_failed",
+                    "failure_class": "pre_dispatch_transient",
+                    "attempt_ordinal": 1,
+                },
+                {
+                    "record_kind": "invocation_recovery",
+                    "outcome": "admitted",
+                    "decision_reason": "safe_same_deployment_retry",
+                },
+                {
+                    "record_kind": "attempt_admission",
+                    "decision": "admit",
+                    "reason": "safe_same_deployment_retry",
+                    "attempt_ordinal": 2,
+                },
+                {
+                    "record_kind": "attempt_usage",
+                    "provider_reported": True,
+                    "attempt_ordinal": 2,
+                    "input_tokens": 1000,
+                    "output_tokens": 100,
+                    "cost_microusd": 700,
+                },
+                {
+                    "record_kind": "attempt_state",
+                    "state": "completed",
+                    "attempt_ordinal": 2,
+                },
+                {
+                    "record_kind": "invocation_completed",
+                    "status": "completed",
+                    "attempt_count": 2,
+                    "total_input_tokens": 1000,
+                    "total_output_tokens": 100,
+                    "total_cost_microusd": 700,
+                },
+            ),
+            "invocation_assertion": {
+                "required_record_kinds": [
+                    "invocation_planned",
+                    "route_eligible",
+                    "route_excluded",
+                    "attempt_admission",
+                    "attempt_usage",
+                    "attempt_failed",
+                    "invocation_recovery",
+                    "invocation_completed",
+                ],
+                "required_statuses": ["planned", "completed"],
+                "required_decisions": ["admit"],
+                "required_reasons": ["safe_same_deployment_retry"],
+                "required_attempt_states": ["completed"],
+                "required_failure_classes": ["pre_dispatch_transient"],
+                "required_recovery_outcomes": ["admitted"],
+                "required_credential_modes": ["byok"],
+                "required_exclusion_reasons": ["region_mismatch"],
+                "require_provider_reported_usage": True,
+                "require_contiguous_route_ordinals": True,
+                "minimum_attempts": 2,
+                "maximum_attempts": 2,
+            },
+        },
+        "provider_ambiguous_failure": {
+            "before_observations": (
+                planned,
+                route,
+                first_admission,
+            ),
+            "after_observations": (
+                {
+                    "record_kind": "attempt_state",
+                    "state": "ambiguous",
+                    "attempt_ordinal": 1,
+                },
+                {
+                    "record_kind": "invocation_recovery",
+                    "outcome": "ambiguous",
+                },
+                {
+                    "record_kind": "invocation_failed",
+                    "status": "failed",
+                    "reason": "ambiguous_recovery",
+                    "failure_class": "ambiguous_provider_state",
+                    "attempt_count": 1,
+                },
+            ),
+            "invocation_assertion": {
+                "required_record_kinds": [
+                    "invocation_planned",
+                    "route_eligible",
+                    "attempt_admission",
+                    "attempt_state",
+                    "invocation_recovery",
+                    "invocation_failed",
+                ],
+                "required_statuses": ["planned", "failed"],
+                "required_attempt_states": ["ambiguous"],
+                "required_failure_classes": ["ambiguous_provider_state"],
+                "required_recovery_outcomes": ["ambiguous"],
+                "required_credential_modes": ["byok"],
+                "require_contiguous_route_ordinals": True,
+                "minimum_attempts": 1,
+                "maximum_attempts": 1,
+            },
+        },
+    }
+    return scenarios.get(family, {})
+
+
 def _optional_text(value: object) -> str | None:
     return value if isinstance(value, str) and value.strip() else None
 
@@ -651,6 +910,12 @@ def _non_negative_int(value: object) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
     return value
+
+
+def _string_tuple(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(item for item in value if isinstance(item, str) and item.strip())
 
 
 __all__ = [

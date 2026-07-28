@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
+import pytest
+
 from agent_runtime.harness_quality.evaluation import FixtureToolExecutor
 from agent_runtime.harness_quality.evaluation_contracts import (
     HarnessVariant,
@@ -155,9 +157,10 @@ def test_hard_safety_groundedness_and_constraints_are_deterministic() -> None:
         "hard_constraints",
         "task_policy_trajectory",
         "prompt_cache_trajectory",
+        "model_invocation_trajectory",
     )
     assert all(result.hard_gate for result in first[:3])
-    assert all(result.hard_gate is False for result in first[-2:])
+    assert all(result.hard_gate is False for result in first[-3:])
 
 
 def test_groundedness_and_constraint_failures_use_stable_reason_codes() -> None:
@@ -244,6 +247,68 @@ async def test_f2_prefix_reuse_case_executes_and_requires_provider_reports() -> 
     assert passed.reason_code == "prompt_cache_trajectory_passed"
     assert not failed.passed
     assert failed.reason_code == "prompt_cache_provider_report_missing"
+
+
+@pytest.mark.parametrize(
+    "family",
+    ("provider_pre_content_failure", "provider_ambiguous_failure"),
+)
+async def test_f10_invocation_cases_execute_and_score_closed_lineage(
+    family: str,
+) -> None:
+    entry = next(item for item in operational_corpus() if item.family == family)
+    trajectory = await FixtureOnlyCaseExecutor().execute(
+        suite_run_id=f"suite_f10_{family}",
+        case=entry.case,
+        variant=_variant(),
+        plan=entry.plan(),
+        fixtures=FixtureToolExecutor(entry.fixtures),
+        projected_at=_NOW,
+    )
+    scorer = next(
+        scorer
+        for scorer in DEFAULT_HARD_SCORERS
+        if scorer.scorer_id == "model_invocation_trajectory"
+    )
+    result = scorer.score(case=entry.case, trajectory=trajectory)
+
+    assert result.passed
+    assert result.reason_code == "model_invocation_trajectory_passed"
+
+
+async def test_f10_safe_retry_case_requires_provider_reported_attempt_usage() -> None:
+    entry = next(
+        item
+        for item in operational_corpus()
+        if item.family == "provider_pre_content_failure"
+    )
+    trajectory = await FixtureOnlyCaseExecutor().execute(
+        suite_run_id="suite_f10_usage",
+        case=entry.case,
+        variant=_variant(),
+        plan=entry.plan(),
+        fixtures=FixtureToolExecutor(entry.fixtures),
+        projected_at=_NOW,
+    )
+    scorer = next(
+        scorer
+        for scorer in DEFAULT_HARD_SCORERS
+        if scorer.scorer_id == "model_invocation_trajectory"
+    )
+    unreported = trajectory.model_copy(
+        update={
+            "ordered_steps": tuple(
+                step.model_copy(update={"invocation_provider_reported_usage": False})
+                if step.invocation_record_kind == "attempt_usage"
+                else step
+                for step in trajectory.ordered_steps
+            )
+        }
+    )
+    failed = scorer.score(case=entry.case, trajectory=unreported)
+
+    assert not failed.passed
+    assert failed.reason_code == "model_invocation_usage_report_missing"
 
 
 def test_f4_hard_and_advisory_trajectory_semantics_are_distinct() -> None:

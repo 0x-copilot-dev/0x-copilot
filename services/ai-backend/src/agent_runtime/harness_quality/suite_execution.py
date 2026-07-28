@@ -99,6 +99,23 @@ class FixtureTrajectoryObservation(RuntimeContract):
     prompt_input_tokens: int = Field(default=0, ge=0)
     prompt_cached_input_tokens: int = Field(default=0, ge=0)
     prompt_cache_creation_input_tokens: int = Field(default=0, ge=0)
+    invocation_record_kind: str | None = Field(default=None, max_length=80)
+    invocation_status: str | None = Field(default=None, max_length=80)
+    invocation_fallback_policy: str | None = Field(default=None, max_length=80)
+    invocation_credential_mode: str | None = Field(default=None, max_length=80)
+    invocation_decision: str | None = Field(default=None, max_length=80)
+    invocation_reason: str | None = Field(default=None, max_length=120)
+    invocation_attempt_state: str | None = Field(default=None, max_length=80)
+    invocation_failure_class: str | None = Field(default=None, max_length=120)
+    invocation_recovery_outcome: str | None = Field(default=None, max_length=80)
+    invocation_exclusion_reasons: tuple[str, ...] = Field(default=(), max_length=16)
+    invocation_provider_reported_usage: bool | None = None
+    invocation_route_ordinal: int = Field(default=0, ge=0)
+    invocation_attempt_ordinal: int = Field(default=0, ge=0)
+    invocation_attempt_count: int = Field(default=0, ge=0)
+    invocation_input_tokens: int = Field(default=0, ge=0)
+    invocation_output_tokens: int = Field(default=0, ge=0)
+    invocation_cost_microusd: int = Field(default=0, ge=0)
     payload_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -253,6 +270,25 @@ class FixtureOnlyCaseExecutor:
             prompt_cache_creation_input_tokens=(
                 observation.prompt_cache_creation_input_tokens
             ),
+            invocation_record_kind=observation.invocation_record_kind,
+            invocation_status=observation.invocation_status,
+            invocation_fallback_policy=observation.invocation_fallback_policy,
+            invocation_credential_mode=observation.invocation_credential_mode,
+            invocation_decision=observation.invocation_decision,
+            invocation_reason=observation.invocation_reason,
+            invocation_attempt_state=observation.invocation_attempt_state,
+            invocation_failure_class=observation.invocation_failure_class,
+            invocation_recovery_outcome=observation.invocation_recovery_outcome,
+            invocation_exclusion_reasons=observation.invocation_exclusion_reasons,
+            invocation_provider_reported_usage=(
+                observation.invocation_provider_reported_usage
+            ),
+            invocation_route_ordinal=observation.invocation_route_ordinal,
+            invocation_attempt_ordinal=observation.invocation_attempt_ordinal,
+            invocation_attempt_count=observation.invocation_attempt_count,
+            invocation_input_tokens=observation.invocation_input_tokens,
+            invocation_output_tokens=observation.invocation_output_tokens,
+            invocation_cost_microusd=observation.invocation_cost_microusd,
             payload_digest=observation.payload_digest,
         )
 

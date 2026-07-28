@@ -144,6 +144,23 @@ class TrajectoryStep(RuntimeContract):
     prompt_input_tokens: Annotated[int, Field(ge=0)] = 0
     prompt_cached_input_tokens: Annotated[int, Field(ge=0)] = 0
     prompt_cache_creation_input_tokens: Annotated[int, Field(ge=0)] = 0
+    invocation_record_kind: str | None = Field(default=None, max_length=80)
+    invocation_status: str | None = Field(default=None, max_length=80)
+    invocation_fallback_policy: str | None = Field(default=None, max_length=80)
+    invocation_credential_mode: str | None = Field(default=None, max_length=80)
+    invocation_decision: str | None = Field(default=None, max_length=80)
+    invocation_reason: str | None = Field(default=None, max_length=120)
+    invocation_attempt_state: str | None = Field(default=None, max_length=80)
+    invocation_failure_class: str | None = Field(default=None, max_length=120)
+    invocation_recovery_outcome: str | None = Field(default=None, max_length=80)
+    invocation_exclusion_reasons: tuple[str, ...] = Field(default=(), max_length=16)
+    invocation_provider_reported_usage: bool | None = None
+    invocation_route_ordinal: Annotated[int, Field(ge=0)] = 0
+    invocation_attempt_ordinal: Annotated[int, Field(ge=0)] = 0
+    invocation_attempt_count: Annotated[int, Field(ge=0)] = 0
+    invocation_input_tokens: Annotated[int, Field(ge=0)] = 0
+    invocation_output_tokens: Annotated[int, Field(ge=0)] = 0
+    invocation_cost_microusd: Annotated[int, Field(ge=0)] = 0
     payload_digest: Sha256
 
 
@@ -1021,6 +1038,23 @@ def _without_empty_task_policy_projection(value: object) -> object:
         "prompt_input_tokens",
         "prompt_cached_input_tokens",
         "prompt_cache_creation_input_tokens",
+        "invocation_record_kind",
+        "invocation_status",
+        "invocation_fallback_policy",
+        "invocation_credential_mode",
+        "invocation_decision",
+        "invocation_reason",
+        "invocation_attempt_state",
+        "invocation_failure_class",
+        "invocation_recovery_outcome",
+        "invocation_exclusion_reasons",
+        "invocation_provider_reported_usage",
+        "invocation_route_ordinal",
+        "invocation_attempt_ordinal",
+        "invocation_attempt_count",
+        "invocation_input_tokens",
+        "invocation_output_tokens",
+        "invocation_cost_microusd",
     }
     return {
         key: _without_empty_task_policy_projection(item)

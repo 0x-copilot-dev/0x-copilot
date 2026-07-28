@@ -164,6 +164,39 @@ def test_projector_retains_only_body_free_prompt_cache_vocabulary() -> None:
     assert "private provider response" not in manifest.model_dump_json()
 
 
+def test_projector_retains_only_closed_model_invocation_vocabulary() -> None:
+    payload = {
+        "record": {
+            "record_kind": "attempt_usage",
+            "attempt_ordinal": 2,
+            "provider_reported": True,
+            "input_tokens": 1000,
+            "output_tokens": 100,
+            "cost_microusd": 700,
+            "prompt": "private system prompt",
+            "api_key": "sk-private",
+            "exception_message": "customer-specific provider failure",
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(_event(1, payload),),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.invocation_record_kind == "attempt_usage"
+    assert step.invocation_attempt_ordinal == 2
+    assert step.invocation_provider_reported_usage is True
+    assert step.invocation_input_tokens == 1000
+    assert step.invocation_output_tokens == 100
+    assert step.invocation_cost_microusd == 700
+    serialized = manifest.model_dump_json()
+    assert "private system prompt" not in serialized
+    assert "sk-private" not in serialized
+    assert "customer-specific" not in serialized
+
+
 def test_projector_rejects_a_gap_in_the_canonical_event_timeline() -> None:
     with pytest.raises(ValueError, match=r"expected 2, got 3"):
         TrajectoryProjector(redaction_policy_revision="redaction_r1").project(

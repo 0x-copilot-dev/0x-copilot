@@ -323,6 +323,18 @@ class RuntimeApiEventType(StrEnum):
     # exclude prompt bodies and provider response content.
     PROMPT_ASSEMBLED = "prompt.assembled.v1"
     PROMPT_CACHE_OBSERVED = "prompt.cache.observed.v1"
+    # F10.3 model invocation lineage. Each event carries one strict,
+    # body/credential/exception-free discriminated record.
+    MODEL_INVOCATION_PLANNED = "model.invocation.planned.v1"
+    MODEL_INVOCATION_ROUTE = "model.invocation.route.v1"
+    MODEL_INVOCATION_EXCLUSION = "model.invocation.exclusion.v1"
+    MODEL_ATTEMPT_ADMISSION = "model.attempt.admission.v1"
+    MODEL_ATTEMPT_STATE = "model.attempt.state.v1"
+    MODEL_ATTEMPT_USAGE = "model.attempt.usage.v1"
+    MODEL_ATTEMPT_FAILED = "model.attempt.failed.v1"
+    MODEL_INVOCATION_RECOVERY = "model.invocation.recovery.v1"
+    MODEL_INVOCATION_COMPLETED = "model.invocation.completed.v1"
+    MODEL_INVOCATION_FAILED = "model.invocation.failed.v1"
 
     @classmethod
     def from_stream_event_type(

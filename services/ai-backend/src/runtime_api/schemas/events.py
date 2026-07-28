@@ -25,6 +25,7 @@ from agent_runtime.execution.contracts import (
 )
 from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.capabilities.task_policy_journal import TaskPolicyJournalRecord
+from agent_runtime.execution.model_invocation.journal import ModelInvocationRecord
 from agent_runtime.prompts.observation import (
     PromptAssembledRecord,
     PromptCacheObservedRecord,
@@ -233,6 +234,12 @@ class PromptCacheObservedPayload(RuntimeContract):
     record: PromptCacheObservedRecord
 
 
+class ModelInvocationJournalPayload(RuntimeContract):
+    """Strict F10.3 invocation lineage carried by the canonical run journal."""
+
+    record: ModelInvocationRecord = Field(discriminator="record_kind")
+
+
 class RuntimeEventPresentationProjector:
     """Project normalized runtime events into stable UI timeline semantics."""
 
@@ -376,6 +383,19 @@ class RuntimeEventPresentationProjector:
             return cls._prompt_assembled_payload(payload)
         if event_type is RuntimeApiEventType.PROMPT_CACHE_OBSERVED:
             return cls._prompt_cache_observed_payload(payload)
+        if event_type in {
+            RuntimeApiEventType.MODEL_INVOCATION_PLANNED,
+            RuntimeApiEventType.MODEL_INVOCATION_ROUTE,
+            RuntimeApiEventType.MODEL_INVOCATION_EXCLUSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_ADMISSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_STATE,
+            RuntimeApiEventType.MODEL_ATTEMPT_USAGE,
+            RuntimeApiEventType.MODEL_ATTEMPT_FAILED,
+            RuntimeApiEventType.MODEL_INVOCATION_RECOVERY,
+            RuntimeApiEventType.MODEL_INVOCATION_COMPLETED,
+            RuntimeApiEventType.MODEL_INVOCATION_FAILED,
+        }:
+            return cls._model_invocation_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_REQUESTED:
             return cls._operation_requested_payload(payload)
         if event_type is RuntimeApiEventType.OPERATION_CLASSIFIED:
@@ -525,6 +545,16 @@ class RuntimeEventPresentationProjector:
             RuntimeApiEventType.TOOL_POLICY_JOURNAL,
             RuntimeApiEventType.PROMPT_ASSEMBLED,
             RuntimeApiEventType.PROMPT_CACHE_OBSERVED,
+            RuntimeApiEventType.MODEL_INVOCATION_PLANNED,
+            RuntimeApiEventType.MODEL_INVOCATION_ROUTE,
+            RuntimeApiEventType.MODEL_INVOCATION_EXCLUSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_ADMISSION,
+            RuntimeApiEventType.MODEL_ATTEMPT_STATE,
+            RuntimeApiEventType.MODEL_ATTEMPT_USAGE,
+            RuntimeApiEventType.MODEL_ATTEMPT_FAILED,
+            RuntimeApiEventType.MODEL_INVOCATION_RECOVERY,
+            RuntimeApiEventType.MODEL_INVOCATION_COMPLETED,
+            RuntimeApiEventType.MODEL_INVOCATION_FAILED,
         }:
             # Generative Surfaces v2 (PRD-A3/B3/C2/D1/D2/E1) — ledger events the SurfaceStore
             # + client ledger fold consume as surface/gate-state merges, never
@@ -1820,6 +1850,19 @@ class RuntimeEventPresentationProjector:
         except ValidationError:
             logging.getLogger(__name__).warning(
                 "Rejected malformed prompt.cache.observed.v1 payload"
+            )
+            return {}
+        return validated.model_dump(mode="json")
+
+    @classmethod
+    def _model_invocation_payload(cls, payload: JsonObject) -> JsonObject:
+        """Validate one body/secret-free F10.3 invocation record."""
+
+        try:
+            validated = ModelInvocationJournalPayload.model_validate(payload)
+        except ValidationError:
+            logging.getLogger(__name__).warning(
+                "Rejected malformed model invocation journal payload"
             )
             return {}
         return validated.model_dump(mode="json")
