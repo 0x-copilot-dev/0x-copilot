@@ -130,7 +130,34 @@ class GoldenTrace(RuntimeContract):
 
     @staticmethod
     def digest_for(**values: object) -> str:
-        return canonical_json_sha256(to_jsonable_python(values))
+        return canonical_json_sha256(
+            GoldenTrace._without_empty_task_policy_projection(
+                to_jsonable_python(values)
+            )
+        )
+
+    @staticmethod
+    def _without_empty_task_policy_projection(value: object) -> object:
+        """Keep pre-F4 compact trace digests stable for absent fields."""
+
+        if isinstance(value, list):
+            return [
+                GoldenTrace._without_empty_task_policy_projection(item)
+                for item in value
+            ]
+        if not isinstance(value, dict):
+            return value
+        projection_keys = {
+            "policy_record_kind",
+            "policy_disposition",
+            "policy_reason_codes",
+            "policy_exhausted_dimensions",
+        }
+        return {
+            key: GoldenTrace._without_empty_task_policy_projection(item)
+            for key, item in value.items()
+            if key not in projection_keys or (item is not None and item != [])
+        }
 
     def as_manifest(
         self,
@@ -203,7 +230,11 @@ class GoldenTraceCatalog(RuntimeContract):
     def digest_for(**values: object) -> str:
         """Return the stable digest for all catalog content."""
 
-        return canonical_json_sha256(to_jsonable_python(values))
+        return canonical_json_sha256(
+            GoldenTrace._without_empty_task_policy_projection(
+                to_jsonable_python(values)
+            )
+        )
 
     def manifests(self) -> tuple[TrajectoryManifest, ...]:
         """Return immutable F1 manifests in catalog order."""

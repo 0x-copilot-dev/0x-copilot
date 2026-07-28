@@ -237,6 +237,100 @@ case result and cannot be hidden by an advisory score.
 A stored promotion report still has no activation effect. Manifest signing and
 approval remain external to this runtime.
 
+## F4 task-policy controller operations
+
+F4 extends the existing immutable run-control and F1 evaluation spines. It has
+no separate database, evaluator, worker, or environment flag. The release
+assignment's existing `feature_modes.f4` value is the only rollout control:
+
+| Mode      | Runtime behavior                                                                                                                                                                                       | Operator use                                                     |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `off`     | Does not create an F4 binding; existing policy, approval, and hard budget paths remain active.                                                                                                         | Immediate local backout for new runs after a controlled restart. |
+| `shadow`  | Replays/selects the controller and records body-free decisions without turning an F4 warning into a dispatch block.                                                                                    | Compare trajectories before enforcement.                         |
+| `enforce` | Requires durable F4 composition before model use; missing durable composition fails closed. Exact duplicates, unchanged non-retryable error loops, and exhausted hard limits can block a new dispatch. | Enable only after the F1 paired gate below passes.               |
+
+Do not introduce `F4_*` environment variables or edit a run to change mode.
+The feature mode, policy revision, task-policy selection reference, and budget
+envelope are bound in the immutable run-control snapshot. A mode change takes
+effect only for a new run after signed-manifest activation and controlled
+API/worker restart; a resumed run rehydrates its prior snapshot.
+
+### Canonical F4 evidence and local diagnostics
+
+F4 writes only `tool_policy.journal.v1` to the canonical run event journal.
+Events are `INTERNAL` and `REDACTED`; they carry typed, self-digested records
+rather than prompt text, plan bodies, raw arguments/results, paths,
+credentials, or evidence content. The closed record kinds are:
+
+- `profile_selected`, `plan_bound`, and `intent_recorded`;
+- `admission_recorded`, `outcome_recorded`, and `feedback_recorded`; and
+- `budget_recorded` and `progress_recorded`.
+
+Safe metrics derive from those records and the existing usage summary, not a
+new telemetry store: profile/plan selection, admitted versus blocked or
+shadow-admitted decisions, reason-code counts, model turns, tool calls,
+cost/active-tool-time/deadline exhaustion, evidence-count changes, plan
+progress, and approval-wait state. Use closed reason codes such as
+`exact_duplicate`, `same_error_without_changed_input`,
+`same_sources_no_new_evidence`, `retryable_error`, `budget_exhausted`, and
+`objective_satisfied`; never add user or connector text as a reason code.
+
+For local diagnosis, use the existing replay endpoint or persisted run-event
+reader for the verified user/profile scope. Inspect only event sequence,
+record kind, record ID/digest, snapshot ID, selection/profile revision,
+disposition, closed reason codes, counters, and protected refs. If the event
+sequence is missing, conflicting, out of scope, or cannot fold into durable
+controller state, stop the run and repair the canonical event-store/recovery
+path. Do not synthesize F4 events or edit journal/CAS files to make a
+controller appear recovered.
+
+The F1 `TrajectoryProjector` projects the same body-free F4 record vocabulary
+into fixture and terminal-run manifests. It retains only record kind,
+disposition, reason codes, and exhausted dimensions plus the event digest; it
+does not copy the typed record body. That is the supported source for offline
+trajectory comparison.
+
+### F1 gate, recovery, and backout
+
+Run the F4 corpus through the existing fixture-only suite and compare the same
+case/revision set under candidate and control variants. The corpus covers
+one-call lookup, plan-before-tool, changed pagination cursor, exact duplicate
+blocking, changed-input retry after a retryable error, unchanged non-retryable
+error stop, repeated-source advisory, objective completeness,
+cost/tool/turn/deadline exhaustion, restart replay, approval resume, and
+shadow-versus-enforce comparison.
+
+Hard gates require no live effect dispatch, declared evidence references,
+constraint retention, and mechanically controlled duplicate/error/budget
+outcomes. Same-source/no-new-evidence is advisory; it must be observed and
+compared but cannot independently stop a run. A candidate cannot promote if it
+regresses groundedness, safety, protected-family success, paired-case coverage,
+cost, or latency under the configured F1 thresholds. Fewer tool calls alone
+are not a promotion success.
+
+Before changing `f4` from `shadow` to `enforce`, run the focused corpus and
+paired report, confirm hard results pass, confirm restart/replay and approval
+resume preserve selection/plan/budget/operation identity without a second
+dispatch, then activate the signed manifest and controlled-restart API and
+worker. Start a new local canary and verify its F4 lineage.
+
+Desktop F4 uses the existing single-writer file runtime store and in-process
+worker. It works offline except for a provider/capability the user has chosen;
+there is no hosted control-plane dependency, background daemon, or second
+local database. For a crash, restart normally: the worker reloads the verified
+snapshot, folds the F4 journal, and uses stable operation/intent identity
+before considering another dispatch. Never retry a possibly applied effect
+through F4; effect authorization and approval remain with the owning gateway.
+
+To back out a bad F4 release, use authenticated local rollback to a verified
+predecessor whose `feature_modes.f4` is `off` (or known-safe `shadow`), then
+controlled-restart API and worker and verify a new canary. Existing active runs
+retain their immutable snapshot; cancel them through the normal run
+cancellation path if they must not continue. Retain only the redacted journal
+and F1 report under the source run's local retention/deletion rules. Do not
+export raw prompts, plans, arguments, results, credentials, or file paths just
+to diagnose F4.
+
 ## Signed release configuration
 
 Set one explicit deployment-owned file:
@@ -542,7 +636,11 @@ cd services/ai-backend
   tests/unit/runtime_worker/test_run_control_release.py \
   tests/unit/runtime_worker/test_run_control_release_bootstrap.py \
   tests/unit/runtime_worker/test_run_control_release_composition.py \
-  tests/unit/runtime_worker/test_run_control_release_configuration.py
+  tests/unit/runtime_worker/test_run_control_release_configuration.py \
+  tests/unit/agent_runtime/capabilities/test_task_policy.py \
+  tests/unit/agent_runtime/capabilities/test_task_policy_journal_store.py \
+  tests/unit/agent_runtime/harness_quality/test_operational_corpus_scoring.py \
+  tests/unit/agent_runtime/harness_quality/test_suite_execution.py
 
 .venv/bin/python -m pytest
 ```
@@ -557,4 +655,11 @@ Before enabling projection or changing a signed release, verify:
 - no-active-release startup selects safe controls;
 - non-loopback and missing-token control requests fail;
 - production cannot mount local release controls; and
-- install/rollback takes effect only after controlled restart for new runs.
+- install/rollback takes effect only after controlled restart for new runs;
+- F4 `off` preserves current tool behavior, `shadow` emits body-free controller
+  evidence without blocking, and `enforce` fails closed if durable controller
+  composition is absent;
+- F4 restart/replay and approval-resume retain one selection, plan, budget, and
+  operation identity without a duplicate dispatch; and
+- F4 F1 cases pass hard duplicate/error/budget gates while repeated-source
+  feedback remains advisory.

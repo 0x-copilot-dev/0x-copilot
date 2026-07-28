@@ -73,6 +73,25 @@ class FixtureCallPlan(RuntimeContract):
 
     capability_id: str = Field(min_length=1, max_length=160)
     arguments: dict[str, object]
+    before_observations: tuple["FixtureTrajectoryObservation", ...] = ()
+    after_observations: tuple["FixtureTrajectoryObservation", ...] = ()
+
+
+class FixtureTrajectoryObservation(RuntimeContract):
+    """A content-free control-plane fact placed around a fixture call.
+
+    Fixture suites need to evaluate controller decisions as well as successful
+    tool calls. These observations deliberately mirror only the public,
+    closed F4 journal vocabulary; they cannot carry request or result bodies.
+    """
+
+    event_type: str = Field(min_length=1, max_length=120)
+    source: str = Field(default="fixture", min_length=1, max_length=80)
+    policy_record_kind: str | None = Field(default=None, max_length=80)
+    policy_disposition: str | None = Field(default=None, max_length=80)
+    policy_reason_codes: tuple[str, ...] = Field(default=(), max_length=16)
+    policy_exhausted_dimensions: tuple[str, ...] = Field(default=(), max_length=8)
+    payload_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
 class FixtureCasePlan(RuntimeContract):
@@ -128,12 +147,22 @@ class FixtureOnlyCaseExecutor:
 
         steps: list[TrajectoryStep] = []
         evidence_refs: list[str] = []
-        for sequence_no, call in enumerate(plan.calls, start=1):
+        sequence_no = 0
+        for call in plan.calls:
+            for observation in call.before_observations:
+                sequence_no += 1
+                steps.append(
+                    self._observation_step(
+                        sequence_no=sequence_no,
+                        observation=observation,
+                    )
+                )
             response = await fixtures.execute(
                 capability_id=call.capability_id,
                 arguments=call.arguments,
             )
             evidence_refs.append(response.response_ref)
+            sequence_no += 1
             steps.append(
                 TrajectoryStep(
                     sequence_no=sequence_no,
@@ -147,6 +176,14 @@ class FixtureOnlyCaseExecutor:
                     payload_digest=response.response_digest,
                 )
             )
+            for observation in call.after_observations:
+                sequence_no += 1
+                steps.append(
+                    self._observation_step(
+                        sequence_no=sequence_no,
+                        observation=observation,
+                    )
+                )
 
         usage_summary: dict[str, int | float] = {
             "cost_microusd": plan.usage.cost_microusd,
@@ -182,6 +219,23 @@ class FixtureOnlyCaseExecutor:
             **values,
             manifest_digest=TrajectoryManifest.digest_for(**values),
             projected_at=projected_at,
+        )
+
+    @staticmethod
+    def _observation_step(
+        *,
+        sequence_no: int,
+        observation: FixtureTrajectoryObservation,
+    ) -> TrajectoryStep:
+        return TrajectoryStep(
+            sequence_no=sequence_no,
+            event_type=observation.event_type,
+            source=observation.source,
+            policy_record_kind=observation.policy_record_kind,
+            policy_disposition=observation.policy_disposition,
+            policy_reason_codes=observation.policy_reason_codes,
+            policy_exhausted_dimensions=observation.policy_exhausted_dimensions,
+            payload_digest=observation.payload_digest,
         )
 
 
@@ -655,6 +709,7 @@ __all__ = [
     "FixtureExecutionForbidden",
     "FixtureOnlyCaseExecutor",
     "FixtureOnlySuiteRunner",
+    "FixtureTrajectoryObservation",
     "FixtureUsage",
     "SuiteLimitExceeded",
 ]
