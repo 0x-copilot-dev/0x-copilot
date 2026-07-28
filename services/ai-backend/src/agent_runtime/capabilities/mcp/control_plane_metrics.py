@@ -46,6 +46,11 @@ class McpControlPlaneMeasure(StrEnum):
     PAGES = "pages"
     NOTICES = "notices"
     BYTES = "bytes"
+    LAG = "lag"
+    CONVERGENCE = "convergence"
+    BACKOFF = "backoff"
+    INVALIDATIONS = "invalidations"
+    CURSOR_ACKS = "cursor_acks"
 
 
 class McpControlPlaneMetricsPort(Protocol):
@@ -59,7 +64,13 @@ class McpControlPlaneMetricsPort(Protocol):
         measure: McpControlPlaneMeasure,
         value: int,
     ) -> None: ...
-    def latency(self, *, event: McpControlPlaneEvent, seconds: float) -> None: ...
+    def latency(
+        self,
+        *,
+        event: McpControlPlaneEvent,
+        measure: McpControlPlaneMeasure,
+        seconds: float,
+    ) -> None: ...
 
 
 class McpControlPlaneMetrics:
@@ -96,9 +107,17 @@ class McpControlPlaneMetrics:
         except Exception:
             return
 
-    def latency(self, *, event: McpControlPlaneEvent, seconds: float) -> None:
+    def latency(
+        self,
+        *,
+        event: McpControlPlaneEvent,
+        measure: McpControlPlaneMeasure,
+        seconds: float,
+    ) -> None:
         try:
-            self._latency.record(max(0.0, seconds), {"event": event.value})
+            self._latency.record(
+                max(0.0, seconds), {"event": event.value, "measure": measure.value}
+            )
         except Exception:
             return
 

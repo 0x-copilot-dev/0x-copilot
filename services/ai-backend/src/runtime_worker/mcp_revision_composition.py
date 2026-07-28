@@ -189,6 +189,7 @@ class McpRevisionControlPlaneBuilder:
             max_entries=env.positive_int(
                 "RUNTIME_MCP_REVISION_CACHE_MAX_ENTRIES", 1000, maximum=100_000
             ),
+            metrics=metrics,
         )
         subjects = ActiveMcpRevisionSubjectRegistry(
             max_subjects=env.positive_int(
@@ -197,6 +198,7 @@ class McpRevisionControlPlaneBuilder:
             inactivity_ttl_seconds=env.positive_float(
                 "RUNTIME_MCP_REVISION_SUBJECT_TTL_SECONDS", 300, maximum=86_400
             ),
+            metrics=metrics,
         )
         cache = RevisionAwareMcpDiscoveryCache(
             base,
@@ -206,6 +208,7 @@ class McpRevisionControlPlaneBuilder:
             revision_resolver=resolver,
             revision_checks_enabled=True,
             active_subjects=subjects,
+            metrics=metrics,
         )
         cursors = cls._cursor_store(settings)
         catalog = ProcessLocalMcpCatalogGenerationAuthority(
@@ -227,6 +230,7 @@ class McpRevisionControlPlaneBuilder:
             max_dedupe_notices=env.positive_int(
                 "RUNTIME_MCP_REVISION_MAX_DEDUPE_NOTICES", 4096, maximum=100_000
             ),
+            metrics=metrics,
         )
         backoff_base_seconds = env.positive_float(
             "RUNTIME_MCP_REVISION_BACKOFF_BASE_SECONDS", 1, maximum=3600

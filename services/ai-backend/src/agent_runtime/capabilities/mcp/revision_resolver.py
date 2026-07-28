@@ -17,6 +17,13 @@ from agent_runtime.capabilities.mcp.revision_wire import (
     BackendMcpRevisionNotice,
     BackendMcpRevisionUnavailable,
 )
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneEvent,
+    McpControlPlaneMetricsPort,
+    McpControlPlaneMeasure,
+    McpControlPlaneOutcome,
+    NoopMcpControlPlaneMetrics,
+)
 
 
 class RevisionResolveState(StrEnum):
@@ -82,6 +89,7 @@ class McpDescriptorRevisionResolver:
         ttl_seconds: float = 30,
         max_entries: int = 1000,
         clock: Callable[[], float] = time.monotonic,
+        metrics: McpControlPlaneMetricsPort | None = None,
     ) -> None:
         if ttl_seconds <= 0 or max_entries <= 0:
             raise ValueError("ttl_seconds and max_entries must be positive")
@@ -89,6 +97,7 @@ class McpDescriptorRevisionResolver:
         self._ttl = ttl_seconds
         self._max = max_entries
         self._clock = clock
+        self._metrics = metrics or NoopMcpControlPlaneMetrics()
         self._entries: OrderedDict[tuple[str, str, str], _Entry] = OrderedDict()
         # This bounded secondary index makes a subject flush proportional to
         # that subject's registered servers rather than every cached tenant.
@@ -222,6 +231,7 @@ class McpDescriptorRevisionResolver:
     async def resolve(
         self, *, org_id: str, user_id: str, server_name: str
     ) -> RevisionResolveResult:
+        started = time.monotonic()
         key = (org_id, user_id, server_name)
         async with self._guard:
             entry = self._entries.get(key)
@@ -238,7 +248,7 @@ class McpDescriptorRevisionResolver:
                         entry.checked is not None
                         and self._clock() - entry.checked < self._ttl
                     ):
-                        return RevisionResolveResult(
+                        result = RevisionResolveResult(
                             (
                                 RevisionResolveState.NOT_FOUND
                                 if entry.not_found
@@ -246,6 +256,18 @@ class McpDescriptorRevisionResolver:
                             ),
                             entry.revision,
                         )
+                        self._metrics.event(
+                            event=McpControlPlaneEvent.EXACT,
+                            outcome=McpControlPlaneOutcome.FRESH
+                            if result.state is RevisionResolveState.FRESH
+                            else McpControlPlaneOutcome.UNTRACKED,
+                        )
+                        self._metrics.latency(
+                            event=McpControlPlaneEvent.EXACT,
+                            measure=McpControlPlaneMeasure.CONVERGENCE,
+                            seconds=time.monotonic() - started,
+                        )
+                        return result
                     generation = entry.generation
                     server_id = entry.server_id
                 try:
@@ -274,6 +296,19 @@ class McpDescriptorRevisionResolver:
                         entry.revision = revision
                         entry.not_found = result.state is RevisionResolveState.NOT_FOUND
                         entry.checked = self._clock()
+                    self._metrics.event(
+                        event=McpControlPlaneEvent.EXACT,
+                        outcome={
+                            RevisionResolveState.FRESH: McpControlPlaneOutcome.FRESH,
+                            RevisionResolveState.NOT_FOUND: McpControlPlaneOutcome.UNTRACKED,
+                            RevisionResolveState.UNAVAILABLE: McpControlPlaneOutcome.FAILED,
+                        }[result.state],
+                    )
+                    self._metrics.latency(
+                        event=McpControlPlaneEvent.EXACT,
+                        measure=McpControlPlaneMeasure.CONVERGENCE,
+                        seconds=time.monotonic() - started,
+                    )
                     return result
         finally:
             async with self._guard:
