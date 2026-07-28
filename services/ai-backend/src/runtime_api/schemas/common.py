@@ -255,6 +255,14 @@ class RuntimeApiEventType(StrEnum):
     # the A1 ``LedgerEventType`` vocabulary so the transport enum cannot drift.
     GATE_OPENED = LedgerEventType.GATE_OPENED.value
     GATE_RESOLVED = LedgerEventType.GATE_RESOLVED.value
+    # The v2.1 gate pair, emitted by the capability gateway when an operation is
+    # blocked pending a grant (``workspace/effects.py::_blocked``). They were
+    # absent here while the emitters converted by value, so every emission raised
+    # ``ValueError`` inside the gateway rather than opening a gate — the drift the
+    # comment above says cannot happen. ``test_ledger_emit_parity`` now enforces
+    # it. The client's ``projectCanvasLifecycle`` consumes both to reach ``parked``.
+    GATE_OPENED_V2 = LedgerEventType.GATE_OPENED_V2.value
+    GATE_RESOLVED_V2 = LedgerEventType.GATE_RESOLVED_V2.value
     # Generative Surfaces v2 (PRD-D1, SDR §5). The single-artifact staged-write
     # ledger triad, emitted behind ``SURFACES_V2`` by the ``WriteStager``:
     # ``write.staged`` (a draft-send proposal becomes a staged surface),

@@ -983,6 +983,47 @@ async def test_missing_revoked_or_read_only_grant_parks_without_fallthrough(
     assert gate_events[0][1]["reason"] == expected_reason
 
 
+async def test_gate_denial_survives_a_failing_ledger_emitter() -> None:
+    """Evidence loss must never become a grant.
+
+    ``_blocked`` returns the decision and emits a ``gate.opened.v2`` describing
+    it. Until PRD-01 that emit raised on every call — ``gate.opened.v2`` was
+    absent from ``RuntimeApiEventType``, so the conversion in the emitter closure
+    threw — and the unguarded ``await`` propagated out of the gate, failing the
+    operation it was denying rather than denying it cleanly.
+
+    Making emission best-effort fixes that, but introduces the opposite hazard:
+    a swallowed error must not let the caller through. This pins the denial
+    itself against an emitter that always raises.
+    """
+
+    harness = _harness(grant=_grant(status="revoked"), expose_grant=True)
+    harness.emitter.fail_on_event_type = LedgerEventType.GATE_OPENED_V2
+    token = harness.bind()
+    try:
+        result = await harness.backend.awrite(
+            f"/workspace/{MOUNT}/blocked.txt", "must not stage"
+        )
+    finally:
+        OperationContext.unbind(token)  # type: ignore[arg-type]
+
+    # Denied, with the safe summary — not a raised RuntimeError, not a write.
+    assert result.error is not None
+    assert "no host change was made" in result.error
+    assert harness.base.mutation_calls == []
+    assert harness.proposals.calls == []
+    assert harness.ledger.append_calls == 0
+    # The gate emit was reached and raised, so its evidence is missing — while
+    # the surrounding operation rows still recorded normally.
+    assert not [
+        event
+        for event in harness.emitter.events
+        if event[0] is LedgerEventType.GATE_OPENED_V2
+    ]
+    # And the emitter's internal detail never reaches the caller.
+    assert "telemetry-secret-must-not-escape" not in result.error
+
+
 async def test_no_delete_grant_cannot_stage_delete_or_move() -> None:
     path = f"/workspace/{MOUNT}/existing.md"
     harness = _harness(

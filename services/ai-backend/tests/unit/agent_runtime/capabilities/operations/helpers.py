@@ -34,6 +34,11 @@ class RecordingEmitter:
         default_factory=list
     )
     fail_on_call: int | None = None
+    # Fail whenever a specific event type is emitted, regardless of position.
+    # Ordinal targeting is brittle for callers that only care about one emission
+    # in a longer sequence — a gate emit arrives after the operation rows, and
+    # its index shifts whenever the surrounding flow changes.
+    fail_on_event_type: LedgerEventType | None = None
     calls: int = 0
 
     async def emit(
@@ -43,7 +48,7 @@ class RecordingEmitter:
         summary: str | None = None,
     ) -> None:
         self.calls += 1
-        if self.fail_on_call == self.calls:
+        if self.fail_on_call == self.calls or self.fail_on_event_type is event_type:
             raise RuntimeError("telemetry-secret-must-not-escape")
         self.events.append((event_type, dict(payload), summary))
 
