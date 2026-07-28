@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+import logging
 from typing import Any, Final
 
 from langchain_core.tools import StructuredTool
@@ -113,6 +114,8 @@ from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_tas
 # heuristic that returned None whenever ≥2 subagents were unlinked
 # concurrently (parallel research fleets).
 install_atlas_task_tool()
+
+_LOGGER = logging.getLogger(__name__)
 
 AgentBuilder = Callable[[DeepAgentBuildRequest], object]
 
@@ -272,6 +275,8 @@ async def _assemble_harness(
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
+            capability_activation=runtime_dependencies.capability_activation,
+            capability_catalog=runtime_dependencies.capability_catalog,
             runtime_context=runtime_context,
         )
         # Display-schema decoration precedes policy wrapping so a rejected
@@ -464,6 +469,8 @@ def _model_visible_tools(
     sandbox_execute_tool: object | None = None,
     stage_rowset_write_tool: object | None = None,
     publish_artifact_tool: object | None = None,
+    capability_activation: object | None = None,
+    capability_catalog: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = [
@@ -552,6 +559,23 @@ def _model_visible_tools(
             SuggestMcpConnectorInput,
         )
     )
+    # F3 — bounded capability-discovery bridge tools. Which tools (if any) a run
+    # may expose is decided solely by ``CapabilityBridgeRegistrar``; the factory
+    # only wraps what it returns, so there is no second activation vocabulary
+    # and no second tool-composition path. Appended here, before the gated
+    # Wave-1 block, so bridge tools receive the SAME display, tool-policy,
+    # approval, and budget middleware as every other model-visible tool — they
+    # are not privileged. Empty in ``direct``/``server``/``shadow`` and for a
+    # catalog that cannot mint a revalidatable ref, which is the current
+    # production posture: the composed surface is then byte-identical to the
+    # pre-F3 disclosure path.
+    model_tools.extend(
+        _capability_bridge_tools(
+            activation=capability_activation,
+            catalog=capability_catalog,
+            runtime_context=runtime_context,
+        )
+    )
     # Gated Wave-1 capability tools. Each is a fully-built ``StructuredTool``
     # (constructed per run by the worker) or ``None`` when its flag+desktop gate
     # is off. Appended last so they receive the SAME tool-policy / approval /
@@ -582,6 +606,70 @@ def _model_visible_tools(
             _structured_tool(publish_artifact_tool, PublishArtifactInput)
         )
     return tuple(model_tools)
+
+
+def _capability_bridge_tools(
+    *,
+    activation: object | None,
+    catalog: object | None,
+    runtime_context: AgentRuntimeContext,
+) -> tuple[object, ...]:
+    """Return the F3 bridge tools this run may expose, or nothing at all.
+
+    Registration is a *narrowing* decision that this factory delegates whole:
+    :meth:`CapabilityBridgeRegistrar.registrations_for` owns the posture gate,
+    the unbindable-catalog gate, and the invoke-seam gate, and it yields plain
+    domain adapters plus their bounded schemas.  The factory only wraps them
+    with the same ``_structured_tool`` helper every other model tool uses, so
+    tool composition keeps exactly one owner and the discovery package keeps
+    importing no model-framework type.
+
+    Every unresolved input narrows to zero bridge tools and leaves the run on
+    the untouched pre-F3 disclosure path:
+
+    * an absent activation or catalog — the production default while F3 is
+      dark — registers nothing and does not even import the discovery package,
+      so the dark path's composed surface and import graph are unchanged;
+    * a value that is not the expected typed contract registers nothing rather
+      than guessing at a posture; and
+    * a registrar failure degrades to the same empty surface, because a dark
+      feature must never widen a tool surface *or* fail an otherwise healthy
+      run.  The failure is logged, never surfaced to the model.
+    """
+
+    if activation is None or catalog is None:
+        return ()
+    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+        CapabilityActivationDecision,
+        CapabilityBridgeRegistrar,
+        CapabilityCatalog,
+    )
+
+    if not isinstance(activation, CapabilityActivationDecision) or not isinstance(
+        catalog, CapabilityCatalog
+    ):
+        _LOGGER.warning(
+            "Capability discovery inputs are not the expected contracts; "
+            "keeping the pre-F3 disclosure path."
+        )
+        return ()
+    try:
+        registrations = CapabilityBridgeRegistrar.registrations_for(
+            activation=activation,
+            catalog=catalog,
+            runtime_context=runtime_context,
+        )
+    except Exception:
+        _LOGGER.warning(
+            "Capability bridge registration failed; "
+            "keeping the pre-F3 disclosure path.",
+            exc_info=True,
+        )
+        return ()
+    return tuple(
+        _structured_tool(registration.adapter, registration.args_schema)
+        for registration in registrations
+    )
 
 
 def _canonical_graph_tool(tool: object) -> object:

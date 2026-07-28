@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from deepagents.middleware.filesystem import FilesystemMiddleware
@@ -26,6 +27,36 @@ from tests.unit.architecture.model_visible_operation_inventory import (
 
 _SERVICE_ROOT = Path(__file__).resolve().parents[3]
 _SOURCE_ROOT = _SERVICE_ROOT / "src"
+
+# PRD-AR-F Step 0/2 topology proof — the pinned model-visible tool SEQUENCE
+# after final factory assembly, with every optional seam supplied.
+#
+# Order is asserted, not only membership (PRD §1.1 execution discipline rule 7):
+# the factory appends in a fixed order, later wrapper passes preserve it, and the
+# graph binds the tools to the model in this order. A step that adds, removes, or
+# reorders a model-visible tool updates this tuple deliberately; an ordering
+# change that no pinned proof asserts is a defect.
+#
+# F3 capability-discovery bridge tools are registered between
+# ``suggest_mcp_connector`` and the gated Wave-1 block. They are absent here
+# because this inventory composes the pre-F3 disclosure path (no activation
+# decision, no catalog), which is also the current production posture. Their
+# exact position is pinned by
+# ``tests/unit/agent_runtime/execution/test_factory_capability_bridge.py``.
+_PINNED_MODEL_VISIBLE_TOOL_ORDER = (
+    "web_search",
+    "load_mcp_server",
+    "call_mcp_tool",
+    "auth_mcp",
+    "load_skill",
+    "load_prior_tool_result",
+    "ask_a_question",
+    "suggest_mcp_connector",
+    "run_code_mode",
+    "run_in_sandbox",
+    "stage_rowset_write",
+    "publish_artifact",
+)
 
 
 class _FeatureTool:
@@ -82,6 +113,10 @@ def _fully_enabled_factory_tools(
     )
 
 
+def _tool_order(tools: Sequence[object]) -> tuple[str, ...]:
+    return tuple(str(getattr(tool, "name", "")) for tool in tools)
+
+
 def _framework_tools() -> tuple[object, ...]:
     task = build_atlas_task_tool(
         (
@@ -93,6 +128,16 @@ def _framework_tools() -> tuple[object, ...]:
         )
     )
     return (*TodoListMiddleware().tools, *FilesystemMiddleware().tools, task)
+
+
+def test_final_model_visible_tool_sequence_matches_the_pinned_topology(
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    """Pin the exact composed sequence, not only its membership."""
+
+    tools = _fully_enabled_factory_tools(runtime_context_admin)
+
+    assert _tool_order(tools) == _PINNED_MODEL_VISIBLE_TOOL_ORDER
 
 
 def test_every_assembled_model_tool_has_one_catalog_descriptor(
