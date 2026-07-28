@@ -637,6 +637,7 @@ export type RuntimeApiEventType =
   | RuntimeLedgerV21EventType
   | "quality.control_bound.v1"
   | "quality.decision.v1"
+  | "tool_policy.journal.v1"
   | "workspace_snapshot_captured";
 
 export const RUNTIME_EVENT_SOURCES = [
@@ -716,6 +717,7 @@ export const RUNTIME_API_EVENT_TYPES = [
   ...RUNTIME_LEDGER_V21_EVENT_TYPES,
   "quality.control_bound.v1",
   "quality.decision.v1",
+  "tool_policy.journal.v1",
   "workspace_snapshot_captured",
 ] as const satisfies readonly RuntimeApiEventType[];
 
@@ -2410,6 +2412,207 @@ export interface QualityDecisionPayload {
   created_at: string;
 }
 
+export type TaskPolicyJournalRecordKind =
+  | "profile_selected"
+  | "plan_bound"
+  | "intent_recorded"
+  | "admission_recorded"
+  | "outcome_recorded"
+  | "feedback_recorded"
+  | "budget_recorded"
+  | "progress_recorded";
+
+export type TaskPolicyTaskFamily =
+  | "public_research"
+  | "connected_record_lookup"
+  | "library_grounding"
+  | "workspace_analysis"
+  | "transformation"
+  | "artifact_drafting"
+  | "effect_proposal"
+  | "code_diagnosis"
+  | "delegated_analysis"
+  | "unknown";
+
+export type TaskPolicyReasonCode =
+  | "admitted"
+  | "shadow_admitted"
+  | "within_budget"
+  | "planning_required"
+  | "plan_missing"
+  | "exact_duplicate"
+  | "profile_tool_call_limit"
+  | "semantic_query_overlap"
+  | "same_sources_no_new_evidence"
+  | "same_error_without_changed_input"
+  | "retryable_error"
+  | "operation_failed_retryable"
+  | "budget_low"
+  | "budget_exhausted"
+  | "deadline_exhausted"
+  | "objective_satisfied"
+  | "policy_requires_user_input"
+  | "policy_blocked"
+  | "authorization_blocked"
+  | "new_evidence"
+  | "operation_succeeded"
+  | "operation_completed"
+  | "operation_failed"
+  | "operation_indeterminate"
+  | "operation_replayed"
+  | "unknown";
+
+export interface TaskPolicyJournalRecordBase {
+  schema_version: 1;
+  record_kind: TaskPolicyJournalRecordKind;
+  record_id: string;
+  record_digest: string;
+  run_id: string;
+  snapshot_id: string;
+  created_at: string;
+}
+
+export interface TaskPolicyProfileSelectedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "profile_selected";
+  selection_ref: string;
+  selection_digest: string;
+  profile_id: string;
+  profile_revision: string;
+  task_family: TaskPolicyTaskFamily;
+  planning_requirement: "none" | "optional" | "required";
+  selection_reason:
+    | "effect_intent"
+    | "delegation_intent"
+    | "server_selected_family"
+    | "capability_hint"
+    | "conservative_default";
+}
+
+export interface TaskPolicyPlanBoundRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "plan_bound";
+  selection_ref: string;
+  selection_digest: string;
+  plan_id: string;
+  plan_ref: string;
+  plan_digest: string;
+  created_by: "model" | "deterministic";
+  status: "pending" | "active" | "completed" | "blocked" | "cancelled";
+  step_count: number;
+  success_evidence_requirement_count: number;
+}
+
+export interface TaskPolicyIntentRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "intent_recorded";
+  selection_ref: string;
+  selection_digest: string;
+  tool_call_id: string;
+  operation_id: string;
+  capability_id: string;
+  request_fingerprint: string;
+  plan_id: string | null;
+  plan_digest: string | null;
+  plan_step_id: string | null;
+  expected_evidence_kind: string | null;
+}
+
+export interface TaskPolicyAdmissionRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "admission_recorded";
+  tool_call_id: string;
+  operation_id: string;
+  intent_record_id: string;
+  intent_digest: string;
+  disposition: "admitted" | "blocked" | "shadow_admitted";
+  reason_codes: readonly TaskPolicyReasonCode[];
+  duplicate_of_operation_id: string | null;
+  model_turn_ordinal: number;
+  tool_call_ordinal: number;
+}
+
+export interface TaskPolicyOutcomeRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "outcome_recorded";
+  tool_call_id: string;
+  operation_id: string;
+  intent_record_id: string;
+  intent_digest: string;
+  request_fingerprint: string;
+  status: "succeeded" | "failed" | "indeterminate";
+  result_fingerprint: string | null;
+  error_fingerprint: string | null;
+  failure_class: string | null;
+  retryable: boolean;
+  new_evidence_count: number;
+  observed_source_count: number;
+  latency_ms: number;
+}
+
+export interface TaskPolicyFeedbackRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "feedback_recorded";
+  tool_call_id: string;
+  operation_id: string;
+  admission_record_id: string;
+  outcome_record_id: string | null;
+  disposition: "continue" | "stop" | "replan" | "ask_user" | "blocked";
+  reason_codes: readonly TaskPolicyReasonCode[];
+  duplicate_of_operation_id: string | null;
+  new_evidence_count: number;
+  total_evidence_count: number;
+  budget_record_id: string | null;
+  budget_digest: string | null;
+}
+
+export type TaskPolicyBudgetDimension =
+  | "model_turns"
+  | "tool_calls"
+  | "cost"
+  | "active_tool_time"
+  | "deadline";
+
+export interface TaskPolicyBudgetRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "budget_recorded";
+  budget_envelope_ref: string;
+  effective_budget_digest: string;
+  model_turns_used: number;
+  tool_calls_used: number;
+  cost_microusd_used: number;
+  active_tool_time_ms_used: number;
+  model_turn_limit: number | null;
+  tool_call_limit: number | null;
+  cost_microusd_limit: number | null;
+  active_tool_time_ms_limit: number | null;
+  deadline_at: string | null;
+  exhausted_dimensions: readonly TaskPolicyBudgetDimension[];
+  hard_stop: boolean;
+}
+
+export interface TaskPolicyProgressRecordedRecord extends TaskPolicyJournalRecordBase {
+  record_kind: "progress_recorded";
+  plan_id: string;
+  plan_digest: string;
+  plan_status: "pending" | "active" | "completed" | "blocked" | "cancelled";
+  step_count: number;
+  completed_step_count: number;
+  blocked_step_count: number;
+  active_step_id: string | null;
+  evidence_count: number;
+  checkpoint_ordinal: number;
+  waiting_for_approval: boolean;
+}
+
+export type TaskPolicyJournalRecord =
+  | TaskPolicyProfileSelectedRecord
+  | TaskPolicyPlanBoundRecord
+  | TaskPolicyIntentRecordedRecord
+  | TaskPolicyAdmissionRecordedRecord
+  | TaskPolicyOutcomeRecordedRecord
+  | TaskPolicyFeedbackRecordedRecord
+  | TaskPolicyBudgetRecordedRecord
+  | TaskPolicyProgressRecordedRecord;
+
+/** Internal F4 journal payload. All detail is content-free and digest-bound. */
+export interface TaskPolicyJournalPayload {
+  record: TaskPolicyJournalRecord;
+}
+
 // Citations (PR 1.1). `citation_id` is short ("c<base36>" of the per-run
 // ordinal) and is the token the assistant text embeds inline as
 // `[c<id>]`. The frontend's markdown plugin resolves these tokens by
@@ -2792,6 +2995,7 @@ export interface RuntimeEventPayloadByType
   "receipt.emitted": ReceiptEmittedPayload;
   "quality.control_bound.v1": QualityControlBoundPayload;
   "quality.decision.v1": QualityDecisionPayload;
+  "tool_policy.journal.v1": TaskPolicyJournalPayload;
   /** AC5 slice 3b — host write-through pre-image snapshot. Emitted by the
    * workspace backend BEFORE an approved overwrite/edit mutates a granted
    * host file: the prior bytes are stored content-addressed and this event
