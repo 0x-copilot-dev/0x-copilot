@@ -50,7 +50,7 @@ await new Promise((r) => server.listen(0, r));
 const origin = `http://127.0.0.1:${server.address().port}`;
 const root = `${origin}${base}/`;
 
-const pages = ["", "token.html"];
+const pages = ["", "token.html", "install.html", "docs.html", "moodboard.html"];
 let failed = 0;
 let checked = 0;
 

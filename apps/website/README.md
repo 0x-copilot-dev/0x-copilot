@@ -3,13 +3,15 @@
 Marketing site for 0xCopilot. Astro, static output, deployed to GitHub Pages.
 
 ```
-src/pages/index.astro        home — pitch, real app shot, gap/wedge, six surfaces, token, FAQ
+src/pages/index.astro        home — pitch, end-to-end run journey, six surfaces, local/BYOK, token
 src/pages/token.astro        $CPILOT tokenomics — 45.56 / 29.19 / 25 / 0.25
-src/pages/docs.astro         install — copilot CLI (npm/bun), first-run, platforms
-src/components/Nav.astro      turbine mark + wordmark + 3 links + "Get the app" CTA
+src/pages/install.astro      install — copilot CLI (npm/bun), first-run, platforms
+src/pages/docs.astro         documentation index — live install guide + upcoming chapters
+src/pages/moodboard.astro    local visual lab — directions and run-card palette trials
+src/components/Nav.astro     shared desktop/mobile routes + "Get the app" CTA
 src/layouts/Base.astro       head, fonts, favicons
 src/styles/site.css          one dark design system, shared by both pages
-public/media/                app-run.png (real Run-cockpit shot) + og-cover.png (social)
+public/media/                retained product captures + social previews
 public/favicon.svg           turbine mark
 public/CNAME                 custom domain — 0xcopilot.tech (shipped into dist/)
 ```
@@ -46,40 +48,43 @@ apex and is copied into `dist/`, so every deploy re-asserts the custom domain on
 the force-pushed Pages branch. **Don't delete `public/CNAME`** — GitHub drops the
 custom domain (and its HTTPS cert) on the next force-push without it.
 
-## Design — dark / sky / turbine
+## Design — Operator Manual
 
-Adopted from the 0xCopilot brand kit. Dark ground, sky-blue signal, the turbine
-mark, and one deliberate change: the body face is **IBM Plex Sans** rather than
-the kit's Instrument Sans — so the type is a hybrid the way we wanted it.
+The marketing pages use the Operator Manual direction: warm paper, black
+registration rules, compressed grotesk display type, serif interruptions, and
+mono control labels. Cobalt, acid, coral, and pink behave like flat printed
+signal inks rather than software gradients. The turbine retains its original
+sky-blue gradient; it is a brand asset, not a theme accent.
 
-| Role    | Face           | Note                                  |
-| ------- | -------------- | ------------------------------------- |
-| display | Space Grotesk  | geometric, crypto-native headlines    |
-| body    | IBM Plex Sans  | the readable face carried from before |
-| mono    | JetBrains Mono | labels, code, addresses               |
+| Role         | Face                | Note                             |
+| ------------ | ------------------- | -------------------------------- |
+| display      | Bricolage Grotesque | compressed operational headlines |
+| interruption | Instrument Serif    | human/editorial emphasis         |
+| mono         | DM Mono             | labels, sequences, commands      |
 
-| Token | Value     |                        |
-| ----- | --------- | ---------------------- |
-| ink   | `#0b0a0e` | ground                 |
-| sky   | `#5fb2ec` | primary signal         |
-| jade  | `#57c785` | done / success         |
-| ember | `#f0764f` | energy accent, sparing |
-| amber | `#e8b45e` | waiting / steer        |
+| Token  | Value     | Use                        |
+| ------ | --------- | -------------------------- |
+| paper  | `#f2eddf` | primary ground             |
+| ink    | `#111111` | type, rails, dark sections |
+| cobalt | `#2447ff` | primary signal             |
+| acid   | `#d7ff3f` | approvals and annotations  |
+| coral  | `#ff5b36` | action and emphasis        |
+| pink   | `#f4b8ff` | supporting printed field   |
 
-## Product shot (real app, not a mockup)
+## Product capture plan
 
-The home page shows the **real app**: `public/media/app-run.png` is a screenshot
-of the running desktop app's Run cockpit (captured via the `tools/cli-testing`
-driver in **production** posture), framed in the `.shot` container right under
-the hero. Its visible left rail is the product's **six-surface** IA — Run ·
-Chats · Projects · Activity · Tools · Skills — which the "Six surfaces, not one
-text box" section lists in the same order.
+The stale empty-state Run screenshot is intentionally no longer rendered on the
+homepage. The next real capture set should show the complete user journey:
 
-The old bespoke "Time Machine" scrubbable demo (`TimeMachine.astro` +
-`public/hero-demo.js`) and the stale `welcome.png` were removed — a launched
-product's best demo is the product. To refresh the shot: re-run the driver, then
-`sips --resampleWidth 1600 <shot>.png --out public/media/app-run.png`. (A block
-of now-dead `.tm-*` rules remains in `site.css` — safe to prune.)
+1. **Before — Run / goal composer:** a concrete outcome, attached context, and
+   selected tools. This explains how work starts.
+2. **During — active Run + approval:** live tool events, work taking shape, and
+   a consequential action waiting at a gate. This is the product's proof point.
+3. **After — result + Activity:** the finished artifact beside its sources and
+   durable run receipt. This proves the work survives the chat.
+
+`public/media/app-run.png` is retained only as historical source material until
+the current three-image capture set replaces it.
 
 ## Post-launch — the numbers on the page
 
