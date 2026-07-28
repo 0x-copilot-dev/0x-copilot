@@ -20,6 +20,11 @@ from agent_runtime.capabilities.mcp.revision_feed import (
     ProcessLocalMcpCatalogGenerationAuthority,
     ProcessLocalMcpDescriptorCacheInvalidator,
 )
+from agent_runtime.capabilities.mcp.control_plane_metrics import (
+    McpControlPlaneEvent,
+    McpControlPlaneMeasure,
+    McpControlPlaneOutcome,
+)
 from agent_runtime.capabilities.mcp.revision_wire import (
     BackendMcpRevisionCursorExpired,
     BackendMcpRevisionFeed,
@@ -111,6 +116,47 @@ class _FailOnceCursorStore(InMemoryMcpRevisionCursorStore):
             self.fail = False
             raise RuntimeError("disk full")
         await super().save(subject, cursor)
+
+
+class _MetricsSpy:
+    def __init__(self) -> None:
+        self.calls: list[tuple[object, ...]] = []
+
+    def event(
+        self, *, event: McpControlPlaneEvent, outcome: McpControlPlaneOutcome
+    ) -> None:
+        assert isinstance(event, McpControlPlaneEvent) and isinstance(
+            outcome, McpControlPlaneOutcome
+        )
+        self.calls.append((event, outcome))
+
+    def count(
+        self,
+        *,
+        event: McpControlPlaneEvent,
+        measure: McpControlPlaneMeasure,
+        value: int,
+    ) -> None:
+        assert (
+            isinstance(event, McpControlPlaneEvent)
+            and isinstance(measure, McpControlPlaneMeasure)
+            and isinstance(value, int)
+        )
+        self.calls.append((event, measure, value))
+
+    def latency(
+        self,
+        *,
+        event: McpControlPlaneEvent,
+        measure: McpControlPlaneMeasure,
+        seconds: float,
+    ) -> None:
+        assert (
+            isinstance(event, McpControlPlaneEvent)
+            and isinstance(measure, McpControlPlaneMeasure)
+            and isinstance(seconds, float)
+        )
+        self.calls.append((event, measure, seconds))
 
 
 @pytest.mark.asyncio
@@ -354,12 +400,14 @@ async def test_filesystem_cursor_clear_rejects_symlink_without_touching_target(
 @pytest.mark.asyncio
 async def test_coordinator_orders_work_and_does_not_advance_cursor_on_failure() -> None:
     events: list[str] = []
+    metrics = _MetricsSpy()
     cursors = InMemoryMcpRevisionCursorStore()
     coordinator = McpRevisionFeedCoordinator(
         resolver=_Resolver(events),
         descriptors=_Descriptors(events),
         catalog=_Catalog(events),
         cursors=cursors,
+        metrics=metrics,
     )
     feed = BackendMcpRevisionFeed(notices=(_notice(),), next_cursor="page-cursor")
     await coordinator.apply_page(subject=_subject(), feed=feed)
@@ -369,16 +417,29 @@ async def test_coordinator_orders_work_and_does_not_advance_cursor_on_failure() 
         "catalog:server-a",
     ]
     assert await cursors.load(_subject()) == "page-cursor"
+    assert (
+        McpControlPlaneEvent.INVALIDATION,
+        McpControlPlaneOutcome.APPLIED,
+    ) in metrics.calls
+    assert (
+        McpControlPlaneEvent.CURSOR_ACK,
+        McpControlPlaneOutcome.APPLIED,
+    ) in metrics.calls
 
     failing = McpRevisionFeedCoordinator(
         resolver=_Resolver([]),
         descriptors=_Descriptors([], fail=True),
         catalog=_Catalog([]),
         cursors=cursors,
+        metrics=metrics,
     )
     with pytest.raises(RuntimeError):
         await failing.apply_page(subject=_subject("b"), feed=feed)
     assert await cursors.load(_subject("b")) is None
+    assert (
+        McpControlPlaneEvent.INVALIDATION,
+        McpControlPlaneOutcome.FAILED,
+    ) in metrics.calls
 
 
 @pytest.mark.asyncio
