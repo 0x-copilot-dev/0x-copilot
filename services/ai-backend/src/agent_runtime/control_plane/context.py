@@ -37,6 +37,9 @@ from agent_runtime.control_plane.feature_modes import (
 from agent_runtime.execution.contracts import RuntimeContract
 
 if TYPE_CHECKING:
+    from agent_runtime.execution.model_invocation.runtime import (
+        ModelInvocationRuntimeBinding,
+    )
     from agent_runtime.prompts.runtime_binding import PromptRuntimeBinding
 
 
@@ -188,9 +191,19 @@ class _PromptRuntimeSlot:
     binding: PromptRuntimeBinding | None = None
 
 
+@dataclass(slots=True)
+class _ModelInvocationRuntimeSlot:
+    """Run-lifetime F10 slot inherited by supervisor and local child tasks."""
+
+    binding: ModelInvocationRuntimeBinding | None = None
+
+
 _CURRENT_PROMPT_RUNTIME: ContextVar[_PromptRuntimeSlot | None] = ContextVar(
     "agent_runtime_prompt_runtime_slot",
     default=None,
+)
+_CURRENT_MODEL_INVOCATION_RUNTIME: ContextVar[_ModelInvocationRuntimeSlot | None] = (
+    ContextVar("agent_runtime_model_invocation_runtime_slot", default=None)
 )
 
 
@@ -333,6 +346,7 @@ class _RunControlContextToken:
     lifecycle_reducer: Token[RuntimeToolLifecycleReducer | None]
     task_policy: Token[TaskPolicyRuntimeBinding | None]
     prompt_runtime: Token[_PromptRuntimeSlot | None]
+    model_invocation_runtime: Token[_ModelInvocationRuntimeSlot | None]
 
 
 class RunControlContext:
@@ -354,6 +368,9 @@ class RunControlContext:
             ),
             task_policy=_CURRENT_TASK_POLICY.set(task_policy),
             prompt_runtime=_CURRENT_PROMPT_RUNTIME.set(_PromptRuntimeSlot()),
+            model_invocation_runtime=_CURRENT_MODEL_INVOCATION_RUNTIME.set(
+                _ModelInvocationRuntimeSlot()
+            ),
         )
 
     @staticmethod
@@ -415,9 +432,30 @@ class RunControlContext:
         return None if slot is None else slot.binding
 
     @staticmethod
+    def install_model_invocation_runtime(
+        binding: ModelInvocationRuntimeBinding,
+    ) -> None:
+        """Install one run-scoped F10 authority/journal binding."""
+
+        slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
+        if slot is None:
+            raise RuntimeError("run control is not bound")
+        if slot.binding is not None and slot.binding is not binding:
+            raise RuntimeError("model invocation runtime binding is already installed")
+        slot.binding = binding
+
+    @staticmethod
+    def model_invocation_runtime() -> ModelInvocationRuntimeBinding | None:
+        """Return the F10 binding inherited by supervisor and local children."""
+
+        slot = _CURRENT_MODEL_INVOCATION_RUNTIME.get()
+        return None if slot is None else slot.binding
+
+    @staticmethod
     def unbind(token: _RunControlContextToken) -> None:
         """Restore the binding that preceded ``token``."""
 
+        _CURRENT_MODEL_INVOCATION_RUNTIME.reset(token.model_invocation_runtime)
         _CURRENT_PROMPT_RUNTIME.reset(token.prompt_runtime)
         _CURRENT_TASK_POLICY.reset(token.task_policy)
         _CURRENT_LIFECYCLE_REDUCER.reset(token.lifecycle_reducer)

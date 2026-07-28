@@ -20,6 +20,7 @@ class ProviderLifecycleEvent(StrEnum):
     """Facts observable at the concrete provider/model boundary."""
 
     DISPATCH_STARTED = "dispatch_started"
+    DISPATCH_NOT_ACCEPTED = "dispatch_not_accepted"
     DISPATCH_ACKNOWLEDGED = "dispatch_acknowledged"
     STREAM_STARTED = "stream_started"
     VISIBLE_TEXT = "visible_text"
@@ -76,8 +77,11 @@ class ProviderAttemptLifecycle(RuntimeContract):
             and self.dispatch_state is not ModelDispatchState.ACCEPTED
         ):
             raise ValueError("stream start requires accepted dispatch")
-        if self.visible_output_observed and not self.stream_started:
-            raise ValueError("visible content requires stream start")
+        if (
+            self.visible_output_observed
+            and self.dispatch_state is not ModelDispatchState.ACCEPTED
+        ):
+            raise ValueError("visible content requires accepted dispatch")
         if (
             self.usage_observed
             and self.dispatch_state is not ModelDispatchState.ACCEPTED
@@ -132,6 +136,10 @@ class ProviderLifecycleReducer:
         elif event is ProviderLifecycleEvent.DISPATCH_ACKNOWLEDGED:
             self._require(state.dispatch_started, "dispatch acknowledgement")
             values["dispatch_state"] = ModelDispatchState.ACCEPTED
+        elif event is ProviderLifecycleEvent.DISPATCH_NOT_ACCEPTED:
+            self._require(state.dispatch_started, "dispatch rejection")
+            self._require(not state.stream_started, "dispatch rejection")
+            values["dispatch_state"] = ModelDispatchState.NOT_ACCEPTED
         elif event is ProviderLifecycleEvent.STREAM_STARTED:
             self._require(
                 state.dispatch_state is ModelDispatchState.ACCEPTED, "stream start"
@@ -141,7 +149,9 @@ class ProviderLifecycleReducer:
             ProviderLifecycleEvent.VISIBLE_TEXT,
             ProviderLifecycleEvent.TOOL_CALL_CONTENT,
         }:
-            self._require(state.stream_started, "visible content")
+            self._require(
+                state.dispatch_state is ModelDispatchState.ACCEPTED, "visible content"
+            )
             field = (
                 "visible_text_observed"
                 if event is ProviderLifecycleEvent.VISIBLE_TEXT

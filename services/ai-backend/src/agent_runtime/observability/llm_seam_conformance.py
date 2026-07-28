@@ -179,8 +179,8 @@ def canonical_agent_topology_present(source_root: Path) -> bool:
     )
     return (
         len(root_middleware) == len(root_middleware_keyword.elts)
-        and root_middleware == ("RuntimeControlMiddleware",)
-        and child_factories == ("RuntimeControlMiddleware",)
+        and root_middleware == ("RuntimeControlMiddleware", "ModelInvocationMiddleware")
+        and child_factories == ("RuntimeControlMiddleware", "ModelInvocationMiddleware")
     )
 
 

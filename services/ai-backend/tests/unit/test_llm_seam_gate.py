@@ -148,7 +148,7 @@ def test_agent_topology_requires_exact_root_and_child_controller(
     factory = tmp_path / "agent_runtime" / "execution" / "factory.py"
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    middleware=(RuntimeControlMiddleware(),),\n"
+        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware()),\n"
         "    universal_middleware_factories=(OtherMiddleware,),\n"
         ")\n",
         encoding="utf-8",
@@ -158,8 +158,9 @@ def test_agent_topology_requires_exact_root_and_child_controller(
 
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    middleware=(RuntimeControlMiddleware(),),\n"
-        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
+        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware()),\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware, "
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )
@@ -169,7 +170,8 @@ def test_agent_topology_requires_exact_root_and_child_controller(
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
         "    middleware=(OtherMiddleware(),),\n"
-        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware, "
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )
@@ -178,7 +180,8 @@ def test_agent_topology_requires_exact_root_and_child_controller(
 
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware, "
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )
@@ -187,8 +190,9 @@ def test_agent_topology_requires_exact_root_and_child_controller(
 
     factory.write_text(
         "request = DeepAgentBuildRequest(\n"
-        "    middleware=(RuntimeControlMiddleware(),),\n"
-        "    universal_middleware_factories=(RuntimeControlMiddleware,),\n"
+        "    middleware=(RuntimeControlMiddleware(), ModelInvocationMiddleware()),\n"
+        "    universal_middleware_factories=(RuntimeControlMiddleware, "
+        "ModelInvocationMiddleware),\n"
         ")\n",
         encoding="utf-8",
     )

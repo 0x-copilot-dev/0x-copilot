@@ -46,6 +46,7 @@ from agent_runtime.capabilities.operations.probes import (
     wrap_model_tool_for_shadow,
 )
 from agent_runtime.capabilities.middleware import (
+    ModelInvocationMiddleware,
     RuntimeControlMiddleware,
     wrap_tools_with_display,
 )
@@ -409,8 +410,14 @@ async def _assemble_harness(
                 permissions=(),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
-                middleware=(RuntimeControlMiddleware(),),
-                universal_middleware_factories=(RuntimeControlMiddleware,),
+                middleware=(
+                    RuntimeControlMiddleware(),
+                    ModelInvocationMiddleware(),
+                ),
+                universal_middleware_factories=(
+                    RuntimeControlMiddleware,
+                    ModelInvocationMiddleware,
+                ),
             )
         )
     except AgentRuntimeError:

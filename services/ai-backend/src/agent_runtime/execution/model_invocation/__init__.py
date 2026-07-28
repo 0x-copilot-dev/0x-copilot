@@ -84,9 +84,22 @@ from agent_runtime.execution.model_invocation.release_controls import (
     ModelReliabilityReleaseControls,
     ModelReliabilityReleaseDecision,
 )
+from agent_runtime.execution.model_invocation.runtime import (
+    AtomicModelInvocationAuthorityAdapterPort,
+    EphemeralRouteModelResolverPort,
+    ModelCacheFallbackPosture,
+    ModelInvocationMiddleware,
+    ModelInvocationPostResponsePersistenceError,
+    ModelInvocationReplayConflict,
+    ModelInvocationRuntimeBinding,
+    canonical_model_request_digest,
+)
 
 __all__ = (
     "ByokPolicy",
+    "AtomicModelInvocationAuthorityAdapterPort",
+    "EphemeralRouteModelResolverPort",
+    "ModelCacheFallbackPosture",
     "ModelAttemptAdmissionPolicy",
     "ModelAttemptAdmissionRecord",
     "ModelAttemptAdmissionRequest",
@@ -117,6 +130,10 @@ __all__ = (
     "ModelInvocationFailedRecord",
     "ModelInvocationFailureReason",
     "ModelInvocationPlannedRecord",
+    "ModelInvocationMiddleware",
+    "ModelInvocationPostResponsePersistenceError",
+    "ModelInvocationReplayConflict",
+    "ModelInvocationRuntimeBinding",
     "ModelInvocationRecord",
     "ModelInvocationRecoveryRecord",
     "ModelInvocationRequirements",
@@ -156,4 +173,5 @@ __all__ = (
     "ProviderTerminalState",
     "SequencedModelInvocationRecord",
     "route_records",
+    "canonical_model_request_digest",
 )
