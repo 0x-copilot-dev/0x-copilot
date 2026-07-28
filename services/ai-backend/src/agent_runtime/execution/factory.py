@@ -83,6 +83,7 @@ from agent_runtime.control_plane.context import (
 )
 from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
+    CAPABILITY_DISCOVERY_INSTRUCTIONS,
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
@@ -312,6 +313,14 @@ async def _assemble_harness(
             mcp_servers=mcp_servers,
             skill_cards=skill_cards,
             tool_schema_revision=_model_tool_schema_revision(model_tools),
+            # Read off the *final* composed surface, after display decoration
+            # and tool-policy enforcement, so the prompt can only ever describe
+            # tools the model was actually given.
+            capability_bridge_tools=_capability_bridge_tool_names(
+                model_tools,
+                activation=runtime_dependencies.capability_activation,
+                catalog=runtime_dependencies.capability_catalog,
+            ),
             workspace_active=bool(
                 workspace_backend is not None
                 and getattr(workspace_backend, "advertise_workspace", True)
@@ -637,7 +646,7 @@ def _capability_bridge_tools(
       run.  The failure is logged, never surfaced to the model.
     """
 
-    if activation is None or catalog is None:
+    if not _capability_discovery_is_supplied(activation=activation, catalog=catalog):
         return ()
     from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
         CapabilityActivationDecision,
@@ -672,6 +681,52 @@ def _capability_bridge_tools(
     )
 
 
+def _capability_discovery_is_supplied(
+    *,
+    activation: object | None,
+    catalog: object | None,
+) -> bool:
+    """Return whether F3 supplied both inputs a bridge registration needs.
+
+    This is the one precondition every F3 seam in this module shares, so it is
+    written once.  It is deliberately only a *precondition*: satisfying it means
+    a bridge registration is possible, never that one happened.
+    """
+
+    return activation is not None and catalog is not None
+
+
+def _capability_bridge_tool_names(
+    model_tools: Sequence[object],
+    *,
+    activation: object | None,
+    catalog: object | None,
+) -> frozenset[str]:
+    """Return the bridge tools actually present in the model-visible surface.
+
+    Deferred suppression reads this and nothing else.  Deriving it from the
+    *composed surface* rather than from the activation posture that produced it
+    is what makes the safety property structural: a run whose bridge did not
+    register — for any of W1's reasons, or any future one — has no bridge tool
+    in its surface, so there is nothing here that could authorize suppressing
+    the disclosure path it fell back to.  The unsuppressed pre-F3 prompt and the
+    empty bridge set are reached by the same branch.
+
+    The narrowing precondition is checked first purely so a dark run never
+    imports the discovery package to look for names that cannot be there; it can
+    only ever report *fewer* bridge tools, never more.
+    """
+
+    if not _capability_discovery_is_supplied(activation=activation, catalog=catalog):
+        return frozenset()
+    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+        CapabilityBridgeToolName,
+    )
+
+    composed = {str(getattr(tool, "name", "")) for tool in model_tools}
+    return frozenset(composed & CapabilityBridgeToolName.reserved_names())
+
+
 def _canonical_graph_tool(tool: object) -> object:
     """Remove the legacy budget adapter at the canonical graph boundary."""
 
@@ -687,6 +742,7 @@ def _prompt_assembly_plan(
     mcp_servers: Sequence[object],
     skill_cards: Sequence[object],
     tool_schema_revision: str,
+    capability_bridge_tools: frozenset[str] = frozenset(),
     workspace_active: bool,
     workspace_writable: bool,
     workspace_effect_staging: bool,
@@ -701,13 +757,27 @@ def _prompt_assembly_plan(
     adapter gives each block a typed revision, scope, and cache eligibility
     before rendering them in their historical order.  The plan itself is safe
     to project only through :meth:`PromptAssemblyPlan.diagnostic`.
+
+    ``capability_bridge_tools`` names the F3 bridge tools the model was actually
+    given.  When it is empty — every posture but a successfully registered
+    ``deferred`` — this builds the pre-F3 plan byte for byte.
     """
 
     application_block = _standalone_prompt_block(
         _instructions_with_application_context(instructions="")
     )
+    discovery_block = _standalone_prompt_block(
+        _instructions_with_capability_discovery(
+            instructions="",
+            capability_bridge_tools=capability_bridge_tools,
+        )
+    )
     mcp_block = _standalone_prompt_block(
-        _instructions_with_mcp_cards(instructions="", mcp_servers=mcp_servers)
+        _instructions_with_mcp_cards(
+            instructions="",
+            mcp_servers=mcp_servers,
+            capability_bridge_tools=capability_bridge_tools,
+        )
     )
     skill_block = _standalone_prompt_block(
         _instructions_with_skill_cards(instructions="", skill_cards=skill_cards)
@@ -779,6 +849,30 @@ def _prompt_assembly_plan(
                 if base_cacheable
                 else PromptCacheEligibility.NEVER
             ),
+        ),
+        # The static protocol block that replaces the card enumeration under a
+        # registered bridge. Unlike the cards it stands in for, it contains no
+        # subject data and does not vary by connector, so it is classified as
+        # installation-scoped immutable policy and — exactly like the
+        # application boundary above, and for the same contiguity reason — joins
+        # the cacheable stable prefix only when the base instructions do.
+        capability_discovery_protocol=(
+            PromptSourceMaterial(
+                source_owner="agent_runtime.capabilities.discovery",
+                source_revision="capability-discovery-protocol-v1",
+                source_scope=PromptFragmentScope.INSTALLATION,
+                scope=PromptFragmentScope.INSTALLATION,
+                sensitivity=PromptSensitivity.INTERNAL,
+                trust=PromptTrustLabel.IMMUTABLE_POLICY,
+                content=discovery_block,
+                cache_eligibility=(
+                    PromptCacheEligibility.STABLE_PREFIX
+                    if base_cacheable
+                    else PromptCacheEligibility.NEVER
+                ),
+            )
+            if discovery_block.strip()
+            else None
         ),
         mcp_cards=_prompt_source_material(
             owner="agent_runtime.capabilities.mcp",
@@ -1138,9 +1232,26 @@ def _tool_access_gate(
 
 
 def _instructions_with_mcp_cards(
-    *, instructions: str, mcp_servers: Sequence[object]
+    *,
+    instructions: str,
+    mcp_servers: Sequence[object],
+    capability_bridge_tools: frozenset[str] = frozenset(),
 ) -> str:
-    """Append the MCP server card block (or the no-servers block) to the base instructions."""
+    """Append the MCP server card block (or the no-servers block) to the base instructions.
+
+    The block is suppressed only when a bridge tool is genuinely present in the
+    composed model surface.  Suppression is the one thing in F3 that reduces
+    prompt size: this is an unbounded enumeration, one line per authorized
+    server, rendered on every turn and growing linearly with connector count,
+    and search-and-describe is a strictly constant-size replacement for it.
+
+    The default is deliberately the *unsuppressed* block, so a caller that has
+    not proven a bridge registered keeps the pre-F3 disclosure it is entitled
+    to rather than silently losing its only route to MCP.
+    """
+
+    if capability_bridge_tools:
+        return instructions
     if not mcp_servers:
         return "\n\n".join(
             (
@@ -1172,6 +1283,28 @@ def _instructions_with_application_context(*, instructions: str) -> str:
     """Append the invariant that quoted application context is untrusted data."""
 
     return "\n\n".join((instructions, _APPLICATION_CONTEXT_INSTRUCTIONS))
+
+
+def _instructions_with_capability_discovery(
+    *,
+    instructions: str,
+    capability_bridge_tools: frozenset[str],
+) -> str:
+    """Append the discovery protocol block when a bridge tool actually registered.
+
+    Gated on the same set that suppresses the card block, so the two are exactly
+    mutually exclusive: the model is never left without *some* account of how to
+    reach MCP, and never given both.
+
+    The block deliberately re-enumerates nothing.  It is one fixed paragraph
+    whose length does not depend on how many servers are authorized — which is
+    the whole point, since re-listing the servers under a different heading
+    would rebuild the block this lane exists to remove.
+    """
+
+    if not capability_bridge_tools:
+        return instructions
+    return "\n\n".join((instructions, CAPABILITY_DISCOVERY_INSTRUCTIONS))
 
 
 async def _skill_cards(

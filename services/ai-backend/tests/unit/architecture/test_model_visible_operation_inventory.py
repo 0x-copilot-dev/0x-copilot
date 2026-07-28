@@ -66,9 +66,8 @@ _SELECTION_REF = f"task-policy-selection://run_1/research/sha256/{'c' * 64}"
 # F3 capability-discovery bridge tools are registered between
 # ``suggest_mcp_connector`` and the gated Wave-1 block. They are absent from
 # *this* tuple because it pins the pre-F3 disclosure path (no activation
-# decision, no catalog), which is also the current production posture. Their
-# exact position is pinned by
-# ``tests/unit/agent_runtime/execution/test_factory_capability_bridge.py``.
+# decision, no catalog), which is also the current production posture. The
+# deferred posture gets its own pinned sequence immediately below.
 #
 # Descriptor coverage, however, is proven over BOTH postures below. Composing
 # only the dark path is what let BUG-07 sit undetected: three model-visible
@@ -83,6 +82,39 @@ _PINNED_MODEL_VISIBLE_TOOL_ORDER = (
     "load_prior_tool_result",
     "ask_a_question",
     "suggest_mcp_connector",
+    "run_code_mode",
+    "run_in_sandbox",
+    "stage_rowset_write",
+    "publish_artifact",
+)
+
+# The same proof for the posture F3 activation actually produces.
+#
+# This tuple is pinned here, and not only in the bridge lane's own tests,
+# because F3.9 made the deferred surface load-bearing beyond tool dispatch: the
+# factory decides whether to suppress the MCP card block by reading the bridge
+# tools out of *this* composed sequence. A tool silently added to or dropped
+# from it therefore moves the system prompt too, which is exactly the class of
+# change discipline rule 7 exists to make deliberate.
+#
+# Note what F3.9 did *not* remove. ``load_mcp_server``, ``call_mcp_tool``, and
+# ``auth_mcp`` all survive activation: search and describe replace the card
+# block's per-server *enumeration*, not the tools that load a descriptor, call
+# one, or authenticate a server. ``invoke_capability`` — the only registrable
+# tool that would supersede ``call_mcp_tool`` — is absent because the factory
+# threads neither an executor nor a revalidation, so removing the direct tools
+# would leave a deferred run able to search and describe but never act.
+_PINNED_DEFERRED_MODEL_VISIBLE_TOOL_ORDER = (
+    "web_search",
+    "load_mcp_server",
+    "call_mcp_tool",
+    "auth_mcp",
+    "load_skill",
+    "load_prior_tool_result",
+    "ask_a_question",
+    "suggest_mcp_connector",
+    CapabilityBridgeToolName.SEARCH_CAPABILITIES.value,
+    CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value,
     "run_code_mode",
     "run_in_sandbox",
     "stage_rowset_write",
@@ -272,6 +304,24 @@ def test_final_model_visible_tool_sequence_matches_the_pinned_topology(
     tools = _fully_enabled_factory_tools(runtime_context_admin)
 
     assert _tool_order(tools) == _PINNED_MODEL_VISIBLE_TOOL_ORDER
+
+
+def test_deferred_model_visible_tool_sequence_matches_the_pinned_topology(
+    runtime_context_admin: AgentRuntimeContext,
+) -> None:
+    """Pin the activated posture's sequence, which now also drives the prompt.
+
+    Set membership is not enough here for the same reason it was not enough for
+    the dark path, plus one F3.9-specific reason: the factory reads the bridge
+    tools out of this composed surface to decide whether the MCP card block is
+    suppressed. Losing a direct MCP tool from this tuple would be a silent
+    behavioural change in what the model can reach, not just in what it is
+    offered.
+    """
+
+    tools = _deferred_factory_tools(runtime_context_admin)
+
+    assert _tool_order(tools) == _PINNED_DEFERRED_MODEL_VISIBLE_TOOL_ORDER
 
 
 def test_every_assembled_model_tool_has_one_catalog_descriptor(
