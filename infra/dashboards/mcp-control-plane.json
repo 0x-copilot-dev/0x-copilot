@@ -33,12 +33,12 @@
     },
     {
       "id": 3,
-      "title": "Session pool size snapshots",
+      "title": "Session pool size average snapshot (5m)",
       "type": "timeseries",
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (state) (mcp_session_pool_size_sum)",
+          "expr": "sum by (state) (rate(mcp_session_pool_size_sum[5m])) / sum by (state) (rate(mcp_session_pool_size_count[5m]))",
           "legendFormat": "{{state}}"
         }
       ]

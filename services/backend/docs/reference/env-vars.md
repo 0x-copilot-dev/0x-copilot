@@ -47,7 +47,7 @@ All env vars read by `services/backend`. No defaults means the var is required i
 The backend publishes MCP descriptor revision changes as part of its registry
 workflow; it has no separate revision-feed environment knob. These strict values
 bound the shared session pool and its lifecycle. See the
-[MCP control-plane operations runbook](../../ai-backend/docs/runbooks/mcp-control-plane-operations.md)
+[MCP control-plane operations runbook](../../../ai-backend/docs/runbooks/mcp-control-plane-operations.md)
 for rollout, metrics, and independent backout.
 
 | Variable                                       | Default | Accepted bound / requirement                        | Notes                                                                                       |
