@@ -98,3 +98,54 @@ Worth keeping because they change how the remaining waves should be run.
 - **The most valuable lane output is where a shared contract did not fit.**
   RB.2's six adoption findings are worth more than its code, because they price
   the next three adoptions. Ask for that explicitly in lane briefs.
+
+## 5. Measured token economics
+
+Lane F3.9 measured the real numbers through the production factory with real
+`McpServerCard`s and `cl100k_base` counting. They are recorded here because the
+program had been reasoning from an integration-owner hand estimate that was
+wrong by roughly 2–3×.
+
+| Servers | Prompt, `direct` | Prompt, `deferred` | Prompt saved |
+| ------- | ---------------- | ------------------ | ------------ |
+| 0       | 752              | 853                | −101         |
+| 10      | 1,100            | 853                | 247          |
+| **20**  | **1,389**        | **853**            | **+536**     |
+| 30      | 1,715            | 853                | 862          |
+| 40      | 2,044            | 853                | 1,191        |
+
+The `deferred` prompt is **flat at 853 tokens for any connector count** — the
+replacement block is one fixed paragraph, proven byte-identical across 0, 1, 20,
+and 60 servers.
+
+**The estimate that scheduled lane F3.9 was wrong.** Root projected 1,000–1,500
+tokens saved at 20 connectors; the measured figure is **536**, about 29 tokens
+per server. The lane was still worth doing — the saving is real and it makes the
+prompt flat rather than linear — but the decision was made on a number roughly
+2.5× too optimistic, and that is worth remembering the next time a lane is
+prioritised on an unmeasured estimate.
+
+### PERF-01 — the largest token lever found, and it is not F3
+
+The three F3 bridge tool schemas cost **830 tokens** in the provider tool
+payload, which is why F3 remains **net-negative below roughly 28–30
+connectors** even after F3.9. Investigating that surfaced something larger.
+
+`wrap_tools_with_display` adds three properties — `_display_title`,
+`_display_summary`, and `tool_call_id` — to **every** model tool's
+`args_schema`. Measured directly by the integration owner: a bare probe tool
+costs 54 tokens; the same tool decorated costs **327**. That is **273 tokens of
+identical schema boilerplate per tool**, and it is repeated verbatim on all 14
+tools of the deferred surface — roughly **3,800 tokens on every turn**.
+
+For scale: that is **seven times** F3's entire prompt saving at 20 connectors,
+and larger than the whole MCP card block even at 40 connectors. It has nothing
+to do with F3 and would be paid identically with F3 removed.
+
+The properties are identical on every tool, so the fix direction is to state the
+convention once rather than fourteen times — either by shortening the field
+descriptions or by moving the prose into the system prompt and keeping the
+schema fields terse. This needs its own measurement and a check that the model
+still populates the fields correctly; it is not a change to make blind.
+
+**Recommendation: this outranks F3.6/F3.7 and probably outranks finishing F3.**

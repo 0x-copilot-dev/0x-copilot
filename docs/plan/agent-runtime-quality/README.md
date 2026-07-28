@@ -869,6 +869,40 @@ widens authorization. Every inner operation re-enters the Operation Gateway.
       model-visible inventory proof goes red the moment anything composes the
       deferred surface.
 
+- [x] **F3.9 — Deferred suppression** (integration lane; `60e3a577`; 28 focused
+      tests). `deferred` now suppresses the per-server MCP card block and
+      replaces it with one fixed paragraph in a new STABLE-tier prompt source,
+      `16_capability_discovery_protocol`. The deferred prompt is **flat at 853
+      tokens for any connector count** — proven byte-identical across 0, 1, 20,
+      and 60 servers — against a `direct` prompt that grows monotonically.
+      Registering it as its own source rather than reusing `20_mcp_cards` is
+      load-bearing: it carries no subject data, so it is installation-scoped
+      immutable policy and joins the **cacheable stable prefix**, which the
+      PROFILE-scoped card block never could.
+
+      **No direct tool was suppressed, and that is the correct answer.**
+      Search and describe replace the card block's *enumeration*, not any tool.
+      `load_mcp_server` stays because a described MCP-server entry exposes no
+      parameter names, so nothing callable comes out of describe.
+      `call_mcp_tool` stays because its superseder, `invoke_capability`,
+      registers only when an executor *and* a revalidation are supplied and the
+      factory threads neither. `auth_mcp` stays for the sharpest reason:
+      `CapabilityIndexEntry` has **no auth field at all**, so the bridge cannot
+      even report that a server needs authenticating — suppressing the cards
+      removes the model's only proactive `auth_state` signal, so the replacement
+      block names the reactive route explicitly.
+
+      Suppression is driven by intersecting the **final composed surface** —
+      after display decoration and tool-policy enforcement — with the reserved
+      bridge names. So "the cards are suppressed" and "a bridge tool is in the
+      model's hands" are the same fact rather than two facts that could drift.
+      Verified in both directions: disabling suppression fails 3 tests,
+      weakening the gate to posture-only fails 8.
+
+      Measured economics, including where the estimate was wrong and the much
+      larger non-F3 lever the lane surfaced, are in
+      [`EXECUTION-BACKLOG.md`](./EXECUTION-BACKLOG.md) §5.
+
 - [ ] **F3.8 — Cohort matrix and step gate.** Declare the named promotion cohort
       matrix Step 15 evaluates. Prove: unauthorized capability names cannot be
       searched, described, guessed, or invoked; revocation or schema change
