@@ -31,7 +31,8 @@ also available as `0xcopilot`.
 - Internet access for the first launch
 
 The first launch downloads a few hundred MB; allow additional disk space for the
-app and its data. Linux and Windows on ARM are not supported.
+app and its data. The optional browser-automation runtime is installed only when
+you pass `--browser`. Linux and Windows on ARM are not supported.
 
 ## Quick start
 
@@ -60,6 +61,8 @@ That's it — give Copilot a goal and it gets to work.
 Flags:
 
 - `--force`, `-f` — check and refresh the setup again before launch
+- `--browser` — include the optional Chromium browser-automation runtime
+- `--code-mode` — install and enable the optional Monty code interpreter
 - `--yes`, `-y` — skip the uninstall confirmation
 - `--session` — make `copilot repair` also clear saved sign-ins
 - `--help`, `-h` and `--version`, `-v` — show help or version information

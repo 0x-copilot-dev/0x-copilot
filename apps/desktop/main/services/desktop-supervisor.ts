@@ -116,6 +116,13 @@ export function createDesktopSupervisor(
     arch: config.arch,
   });
   const processEnv = config.processEnv ?? process.env;
+  const timingStartedAt = process.hrtime.bigint();
+  const logTiming = (event: string): void => {
+    if (processEnv.COPILOT_BOOT_TIMINGS !== "1") return;
+    const elapsedMs =
+      Number(process.hrtime.bigint() - timingStartedAt) / 1_000_000;
+    console.log(`[boot-detail] ${event} ${elapsedMs.toFixed(1)}ms`);
+  };
   const localServiceIdentities =
     config.localServiceIdentities ?? new LocalServiceIdentityRegistry();
   const workspaceChildConfinement = config.workspaceChildConfinement;
@@ -285,8 +292,11 @@ export function createDesktopSupervisor(
         // Postgres DB env). On a Postgres fallback we DO run them so the still-
         // authoritative relational store is schema-current for this boot.
         const backend = await resolveEffectiveBackend(ports, secrets);
-        if (backend === "file") return;
-        return runMigrations({
+        if (backend === "file") {
+          logTiming(`${service}.migrations`);
+          return;
+        }
+        await runMigrations({
           service,
           pythonBin: paths.pythonBin,
           serviceDir: paths.serviceDir(service),
@@ -296,16 +306,19 @@ export function createDesktopSupervisor(
           ),
           runner,
         });
+        logTiming(`${service}.migrations`);
+        return;
       }
       // The backend keeps its own Postgres migrations (identity/OAuth/vault) in
       // every mode.
-      return runMigrations({
+      await runMigrations({
         service,
         pythonBin: paths.pythonBin,
         serviceDir: paths.serviceDir(service),
         env: buildServiceEnv(service, envInputs(service, ports, secrets)),
         runner,
       });
+      logTiming(`${service}.migrations`);
     },
 
     createService: (name, { ports, secrets, onFatal }) => {
@@ -357,6 +370,7 @@ export function createDesktopSupervisor(
 
     waitForHealthy: async (name, baseUrl) => {
       await waitForHealthy({ service: name, baseUrl });
+      logTiming(`${name}.healthy`);
       workspaceChildConfinement?.noteHealthy(name);
     },
   });

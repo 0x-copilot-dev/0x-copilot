@@ -153,13 +153,15 @@ desktop-supervised:
 # Desktop app via the copilot CLI (tools/cli). `npm pack` runs prepack, which
 # builds @0x-copilot/desktop + @0x-copilot/frontend and assembles the payload,
 # so root node_modules must exist. First launch downloads pinned CPython and
-# PostgreSQL builds (~a few hundred MB).
+# PostgreSQL builds (~a few hundred MB). Browser automation is optional and is
+# staged only when the user runs `copilot install --browser` (or enables it via
+# RUNTIME_ENABLE_DESKTOP_BROWSER).
 # PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: the CLI depends on `playwright` because the
 # desktop app's browser runtime resolves it at runtime (esbuild marks it
 # external). It does NOT need the browsers npm fetches here — browser-runtime.mjs
-# points PLAYWRIGHT_BROWSERS_PATH at its own cache under the desktop-runtime dir
-# and runs `playwright install chromium` on demand. So the ~1 GB npm downloads
-# into ~/Library/Caches/ms-playwright is never read by anything.
+# points PLAYWRIGHT_BROWSERS_PATH at its own cache under the desktop-runtime dir.
+# So the ~1 GB npm downloads into ~/Library/Caches/ms-playwright are never read
+# by anything.
 #
 # `copilot install`, not `copilot`: staging is gated on the CLI VERSION string,
 # which never changes when installing from a checkout, so a plain start reports

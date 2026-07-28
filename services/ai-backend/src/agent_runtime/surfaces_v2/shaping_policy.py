@@ -18,11 +18,10 @@ instead of the bare env read. It resolves, in order:
    :class:`_ShapingDefaults`; an unknown provider or ``run_provider is None``
    (no BYOK key configured) → ``None`` — shaping off, generic/raw only.
 
-The model ids in :class:`_ShapingDefaults` are the cheapest **native** model of
-each direct provider in the shipped catalog
-(``agent_runtime.api.litellm_model_source._NativeModelCatalog.NATIVE``) — the
-``-mini`` / ``haiku`` / ``flash`` tier — never invented ids. B4's higher-effort
-budget hooks the same resolver.
+The model ids in :class:`_ShapingDefaults` are explicit product execution
+defaults, not a second picker inventory. The picker itself is discovered from
+LiteLLM; these values select the small/fast tier for a background shaping pass.
+B4's higher-effort budget hooks the same resolver.
 """
 
 from __future__ import annotations
@@ -40,14 +39,14 @@ class _EnvKeys:
 
 
 class _ShapingDefaults:
-    """Cheapest native shaping model per provider (catalog-verified, not invented).
+    """Cheapest native shaping model per provider.
 
     Keys are the ``RunRecord.model_provider`` values the runtime stamps. Each
-    value is the cheapest native model of that provider in the shipped catalog
-    (``litellm_model_source._NativeModelCatalog.NATIVE``): the small/fast tier a
-    background shaping pass should use. Providers with no cheap native tier here
-    (``openrouter`` / ``ollama`` / custom OpenAI-compatible) resolve to ``None``
-    — an honest "no default shaping model", not a guess.
+    value is an explicit execution default for the small/fast tier a background
+    shaping pass should use. It is intentionally separate from LiteLLM-driven
+    picker discovery. Providers with no cheap native tier here (``openrouter`` /
+    ``ollama`` / custom OpenAI-compatible) resolve to ``None`` — an honest "no
+    default shaping model", not a guess.
     """
 
     _BY_PROVIDER: ClassVar[Mapping[str, str]] = {

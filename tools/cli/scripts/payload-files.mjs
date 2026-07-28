@@ -6,4 +6,5 @@ export const DESKTOP_RUNTIME_FILES = [
   "browser-runtime.mjs",
   "macos-signing.cjs",
   "manifest.json",
+  "features/monty-requirements.txt",
 ];

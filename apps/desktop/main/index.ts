@@ -123,6 +123,17 @@ import { createMainWindow } from "./window";
 
 applyBrandIdentity(app, { platform: process.platform });
 
+const bootTimingStartedAt = process.hrtime.bigint();
+
+function logBootTiming(phase: string): void {
+  if (process.env.COPILOT_BOOT_TIMINGS !== "1") return;
+  const elapsedMs =
+    Number(process.hrtime.bigint() - bootTimingStartedAt) / 1_000_000;
+  console.log(`[boot-timing] ${phase} ${elapsedMs.toFixed(1)}ms`);
+}
+
+logBootTiming("main");
+
 // Test-harness isolation: an explicit userData SUBDIR keeps a driven run
 // (tools/cli-testing) fully hermetic — its own boot secrets, embedded-PG
 // data dir and sessions — so it never touches (or wipes) a real install's
@@ -790,7 +801,10 @@ if (hasSingleInstanceLock) {
         localServiceIdentities: supervisedServiceIdentities,
         workspaceChildConfinement: verifiedWorkspaceConfinement ?? undefined,
       });
-      supervisor.onStatus(sendBootStatus);
+      supervisor.onStatus((status) => {
+        logBootTiming(status.phase);
+        sendBootStatus(status);
+      });
       supervisor
         .start()
         .then(({ facadeUrl, hostToken }) => {

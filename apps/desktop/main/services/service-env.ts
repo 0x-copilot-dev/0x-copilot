@@ -38,6 +38,11 @@ export const ENV_PASSTHROUGH_ALLOWLIST: readonly string[] = [
   "OPENAI_API_KEY",
   "ANTHROPIC_API_KEY",
   "GOOGLE_API_KEY",
+  // Optional desktop Code Mode feature. The CLI injects these only after its
+  // pinned native wheel has been installed and verified in ai-backend.
+  "RUNTIME_ENABLE_MONTY",
+  "RUNTIME_INTERPRETER_PROVIDER",
+  "RUNTIME_MONTY_LIMIT_PROFILE",
 ];
 
 export const UVICORN_MODULES: Record<SupervisedServiceName, string> = {

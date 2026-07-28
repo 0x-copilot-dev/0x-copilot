@@ -1,39 +1,32 @@
-"""LiteLLM-library-sourced model catalog metadata (the picker's model set).
+"""Upstream-owned model discovery backed by LiteLLM's bundled catalog.
 
-Replaces the retired models.dev source. The *set* of models is a curated
-product registry; their *metadata* (context window, capability flags, per-Mtok
-cost) is read live from the installed ``litellm`` package's bundled
-``model_cost`` table — the same offline table slice 1 uses for pricing. This
-mirrors the pricing seam: LiteLLM is the source of truth for the values, and a
-small reviewed supplement backstops the models LiteLLM lacks (today
-``gemini-3-flash``), so a product model is never silently dropped.
+The picker does not carry a hand-maintained model inventory. It derives its
+records from the installed ``litellm`` package's offline ``model_cost`` table,
+using only generic product policy:
 
-**Why a curated registry, not ``litellm.models_by_provider`` enumeration.**
-``litellm.model_cost`` is a flat pricing table with a provider taxonomy built
-for billing, not for a picker: the same Gemini model appears under both
-``gemini`` and ``vertex_ai-language-models`` keys, hundreds of azure/bedrock/
-fireworks mirrors reuse the same ids, and image/embedding/TTS rows sit beside
-chat rows. Enumerating it would surface duplicates and non-chat noise. The
-product supports a focused model set, so that set is declared here and enriched
-from LiteLLM — exactly as the pre-models.dev catalog did, only now the numbers
-come from LiteLLM instead of being hardcoded.
+* the provider must have a run path in this product;
+* the row must be a chat model with tool calling (Deep Agents requires tools);
+* rows LiteLLM marks deprecated and fine-tuned placeholders are omitted.
 
-Display names are derived from the model id (:class:`ModelDisplayName`) because
-LiteLLM carries no display name; catalog ordering is provider-then-id because
-LiteLLM carries no ``release_date`` (only ``deprecation_date``).
+That leaves LiteLLM responsible for additions, capability metadata, context
+windows, and pricing while this module remains responsible only for what the
+product can execute. Provider mirrors such as Vertex and Bedrock are excluded
+by their LiteLLM provider slug, and provider prefixes are normalized away so a
+direct Gemini model is not duplicated under two key forms.
+
+Display names are derived from the normalized model id
+(:class:`ModelDisplayName`) because LiteLLM carries no display name. Catalog
+ordering is provider-then-id for deterministic output.
 """
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from decimal import Decimal
 from typing import Final, Protocol, runtime_checkable
 
 from agent_runtime.execution.contracts import RuntimeContract
 
-
-_LOGGER = logging.getLogger("agent_runtime.api.litellm_model_source")
 
 # LiteLLM returns cost as USD per single token; the picker shows USD per 1M
 # tokens. Convert with Decimal so 5e-6 * 1e6 lands on exactly 5.0 (no binary
@@ -133,59 +126,6 @@ class ModelDisplayName:
         return rendered
 
 
-class ProductModelRegistry:
-    """The curated set of product-supported models, grouped by runtime slug.
-
-    Runtime slugs only — every provider here passes the run path's
-    ``ModelConfigResolver.supports_provider`` allowlist, so nothing the registry
-    lists can be rejected the moment a run starts.
-    """
-
-    # Native direct-provider product models. Intra-provider order is the intended
-    # display order (most capable first); ``LitellmModelSource`` re-sorts to a
-    # deterministic provider-then-id order, so this is documentation, not a
-    # load-bearing sequence.
-    NATIVE: Mapping[str, tuple[str, ...]] = {
-        "anthropic": (
-            "claude-opus-4-8",
-            "claude-opus-4-7",
-            "claude-sonnet-5",
-            "claude-haiku-4-5",
-        ),
-        "openai": ("gpt-5.6", "gpt-5.4-mini", "gpt-5"),
-        "gemini": ("gemini-2.5-pro", "gemini-2.5-flash", "gemini-3-flash"),
-    }
-
-    # Curated OpenRouter discovery set: ``(vendor/model slug, display name)``.
-    # OpenRouter availability is per-user BYOK (invisible at this settings-only
-    # layer) so these are always selectable; the composer's custom-model field
-    # covers the long tail beyond this convenience list, so it stays short.
-    # Display names are explicit — deriving them from a ``vendor/model`` slug
-    # reads poorly, and OpenRouter mirrors already have canonical names.
-    OPENROUTER: tuple[tuple[str, str], ...] = (
-        ("openai/gpt-4o", "GPT-4o (OpenRouter)"),
-        ("anthropic/claude-sonnet-4.6", "Claude Sonnet 4.6 (OpenRouter)"),
-        ("google/gemini-2.5-pro", "Gemini 2.5 Pro (OpenRouter)"),
-        ("meta-llama/llama-3.3-70b-instruct", "Llama 3.3 70B (OpenRouter)"),
-        ("deepseek/deepseek-chat", "DeepSeek Chat (OpenRouter)"),
-        ("mistralai/mistral-large", "Mistral Large (OpenRouter)"),
-    )
-
-    OPENROUTER_PROVIDER: Final[str] = "openrouter"
-
-
-class _SupplementEntry(RuntimeContract):
-    """Reviewed static metadata for a product model LiteLLM does not carry."""
-
-    context_window: int | None = None
-    max_output_tokens: int | None = None
-    input_cost_per_mtok: float | None = None
-    output_cost_per_mtok: float | None = None
-    supports_reasoning: bool = False
-    supports_tools: bool = False
-    supports_attachments: bool = False
-
-
 @runtime_checkable
 class CatalogModelSource(Protocol):
     """The seam :class:`~agent_runtime.api.model_catalog.ModelCatalog` builds on.
@@ -199,13 +139,14 @@ class CatalogModelSource(Protocol):
 
 
 class LitellmModelSource:
-    """Assemble catalog records for the curated registry, enriched from LiteLLM."""
-
-    MODEL_MISSING_LOG_EVENT: Final[str] = "catalog.litellm_model_missing"
+    """Discover executable chat models from LiteLLM's upstream-owned table."""
 
     class _Fields:
         """Stable LiteLLM ``model_cost`` field names — pinned so a rename fails here."""
 
+        PROVIDER = "litellm_provider"
+        MODE = "mode"
+        DEPRECATION_DATE = "deprecation_date"
         INPUT_COST_PER_TOKEN = "input_cost_per_token"
         OUTPUT_COST_PER_TOKEN = "output_cost_per_token"
         MAX_INPUT_TOKENS = "max_input_tokens"
@@ -216,34 +157,18 @@ class LitellmModelSource:
         SUPPORTS_VISION = "supports_vision"
         SUPPORTS_PDF_INPUT = "supports_pdf_input"
 
-    # Canonical run-path slug -> LiteLLM key prefix, used to build the
-    # ``provider/model`` candidate key form (bare id is tried first). Mirrors
-    # ``LitellmRateSource._LITELLM_PREFIX`` so metadata and pricing resolve the
-    # same rows.
-    _LITELLM_PREFIX: Final[Mapping[str, str]] = {
+    # This is provider policy, not a model inventory. These are the remote
+    # providers that both have a product run path and an authoritative,
+    # globally-selectable LiteLLM catalog. Ollama is deliberately absent:
+    # its actual model set is local-machine-specific and must be discovered
+    # from that user's Ollama server rather than advertised from a global table.
+    _DISCOVERABLE_PROVIDERS: Final[Mapping[str, str]] = {
         "anthropic": "anthropic",
         "openai": "openai",
         "gemini": "gemini",
         "openrouter": "openrouter",
-        "ollama": "ollama",
     }
-
-    # Reviewed metadata backstop for product models LiteLLM lacks — the catalog
-    # analogue of ``config/pricing_overrides.yaml``. gemini-3-flash: absent from
-    # LiteLLM 1.93.0 ``model_cost``; mirror gemini-2.5-flash's published limits
-    # and prices ($0.30 in / $2.50 out per 1M, ~1M ctx) as the defensible proxy.
-    # Remove once LiteLLM ships the model.
-    _SUPPLEMENT: Mapping[tuple[str, str], _SupplementEntry] = {
-        ("gemini", "gemini-3-flash"): _SupplementEntry(
-            context_window=1_048_576,
-            max_output_tokens=65_535,
-            input_cost_per_mtok=0.30,
-            output_cost_per_mtok=2.50,
-            supports_reasoning=True,
-            supports_tools=True,
-            supports_attachments=True,
-        ),
-    }
+    _CHAT_MODE: Final[str] = "chat"
 
     def __init__(
         self,
@@ -255,72 +180,54 @@ class LitellmModelSource:
         self._model_cost = model_cost
 
     def records(self) -> tuple[CatalogModelRecord, ...]:
-        """Return the curated catalog, provider-then-id ordered, never raising."""
+        """Return eligible LiteLLM rows, normalized and deterministically deduped."""
 
-        records: list[CatalogModelRecord] = []
-        for provider, model_ids in ProductModelRegistry.NATIVE.items():
-            for model_id in model_ids:
-                records.append(
-                    self._record(
-                        provider=provider,
-                        model_id=model_id,
-                        display_name=ModelDisplayName.derive(model_id),
-                    )
-                )
-        for slug, display_name in ProductModelRegistry.OPENROUTER:
-            records.append(
-                self._record(
-                    provider=ProductModelRegistry.OPENROUTER_PROVIDER,
-                    model_id=slug,
-                    display_name=display_name,
-                )
-            )
-        return self._sorted(records)
+        records: dict[tuple[str, str], CatalogModelRecord] = {}
+        for raw_key, row in self._model_cost_table().items():
+            candidate = self._candidate(raw_key=raw_key, row=row)
+            if candidate is None:
+                continue
+            dedupe_key = (candidate.provider, candidate.model_id)
+            # Prefer the explicit ``provider/model`` row when LiteLLM also
+            # carries a bare alias (notably Gemini). Both describe the same
+            # normalized picker entry, but the provider-qualified row is the
+            # direct provider's canonical table record.
+            if dedupe_key not in records or raw_key.startswith(
+                f"{candidate.provider}/"
+            ):
+                records[dedupe_key] = candidate
+        return self._sorted(list(records.values()))
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _record(
-        self, *, provider: str, model_id: str, display_name: str
-    ) -> CatalogModelRecord:
-        """Enrich one registry entry from LiteLLM, else the supplement, else bare."""
-
-        row = self._litellm_row(provider=provider, model_id=model_id)
-        if row is not None:
-            return self._from_litellm(
-                provider=provider,
-                model_id=model_id,
-                display_name=display_name,
-                row=row,
-            )
-        supplement = self._SUPPLEMENT.get((provider, model_id))
-        if supplement is not None:
-            return self._from_supplement(
-                provider=provider,
-                model_id=model_id,
-                display_name=display_name,
-                supplement=supplement,
-            )
-        # Never drop a product model: emit a metadata-less record and log the
-        # miss so a new registry entry with no LiteLLM row is visible in logs
-        # rather than silently priced/sized as unknown.
-        _LOGGER.info(
-            self.MODEL_MISSING_LOG_EVENT,
-            extra={"metadata": {"provider": provider, "model_id": model_id}},
-        )
-        return CatalogModelRecord(
-            provider=provider, model_id=model_id, display_name=display_name
-        )
-
-    def _from_litellm(
+    def _candidate(
         self,
         *,
-        provider: str,
-        model_id: str,
-        display_name: str,
+        raw_key: str,
         row: Mapping[str, object],
-    ) -> CatalogModelRecord:
+    ) -> CatalogModelRecord | None:
+        """Map one eligible LiteLLM row into the product's provider namespace."""
+
+        provider_value = row.get(self._Fields.PROVIDER)
+        if not isinstance(provider_value, str):
+            return None
+        provider = provider_value.strip().lower()
+        prefix = self._DISCOVERABLE_PROVIDERS.get(provider)
+        if prefix is None:
+            return None
+        if row.get(self._Fields.MODE) != self._CHAT_MODE:
+            return None
+        if not self._bool_field(row, self._Fields.SUPPORTS_FUNCTION_CALLING):
+            return None
+        if row.get(self._Fields.DEPRECATION_DATE):
+            return None
+
+        model_id = self._normalize_model_id(raw_key=raw_key, prefix=prefix)
+        if model_id is None or model_id.startswith("ft:"):
+            return None
+        display_name = self._display_name(provider=provider, model_id=model_id)
         context_window = self._int_field(
             row, self._Fields.MAX_INPUT_TOKENS
         ) or self._int_field(row, self._Fields.MAX_TOKENS)
@@ -347,55 +254,31 @@ class LitellmModelSource:
         )
 
     @staticmethod
-    def _from_supplement(
-        *,
-        provider: str,
-        model_id: str,
-        display_name: str,
-        supplement: _SupplementEntry,
-    ) -> CatalogModelRecord:
-        return CatalogModelRecord(
-            provider=provider,
-            model_id=model_id,
-            display_name=display_name,
-            context_window=supplement.context_window,
-            max_output_tokens=supplement.max_output_tokens,
-            input_cost_per_mtok=supplement.input_cost_per_mtok,
-            output_cost_per_mtok=supplement.output_cost_per_mtok,
-            supports_reasoning=supplement.supports_reasoning,
-            supports_tools=supplement.supports_tools,
-            supports_attachments=supplement.supports_attachments,
-        )
+    def _normalize_model_id(*, raw_key: str, prefix: str) -> str | None:
+        """Strip a direct-provider prefix and reject other provider namespaces."""
 
-    def _litellm_row(
-        self, *, provider: str, model_id: str
-    ) -> Mapping[str, object] | None:
-        """First matching ``model_cost`` row across candidate key forms."""
+        key = raw_key.strip()
+        if not key:
+            return None
+        qualified_prefix = f"{prefix}/"
+        if key.startswith(qualified_prefix):
+            model_id = key[len(qualified_prefix) :]
+        elif "/" in key:
+            # A slash without this row's own provider prefix is a mirror or
+            # namespace alias, not a direct model id for the product run path.
+            return None
+        else:
+            model_id = key
+        return model_id or None
 
-        table = self._model_cost_table()
-        for key in self._candidate_keys(provider=provider, model_id=model_id):
-            row = table.get(key)
-            if isinstance(row, Mapping):
-                return row
-        return None
+    @staticmethod
+    def _display_name(*, provider: str, model_id: str) -> str:
+        """Derive a readable direct or OpenRouter label without a model list."""
 
-    @classmethod
-    def _candidate_keys(cls, *, provider: str, model_id: str) -> tuple[str, ...]:
-        """LiteLLM key forms to try: bare id first, then ``prefix/model_id``.
-
-        Bare ``model_id`` matches the direct-provider product models
-        (``claude-*``, ``gpt-*``, ``gemini-*``); the prefixed form covers the
-        OpenRouter discovery slugs, which LiteLLM keys as
-        ``openrouter/<vendor>/<model>``.
-        """
-
-        keys: list[str] = [model_id]
-        prefix = cls._LITELLM_PREFIX.get(provider)
-        if prefix is not None:
-            prefixed = f"{prefix}/{model_id}"
-            if prefixed not in keys:
-                keys.append(prefixed)
-        return tuple(keys)
+        if provider == "openrouter":
+            leaf = model_id.rsplit("/", maxsplit=1)[-1]
+            return f"{ModelDisplayName.derive(leaf)} (OpenRouter)"
+        return ModelDisplayName.derive(model_id)
 
     def _model_cost_table(self) -> Mapping[str, Mapping[str, object]]:
         if self._model_cost is None:
@@ -464,5 +347,4 @@ __all__ = [
     "CatalogModelSource",
     "LitellmModelSource",
     "ModelDisplayName",
-    "ProductModelRegistry",
 ]

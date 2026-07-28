@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 from agent_runtime.capabilities.citation_capturing_tool import (
     CitationCapturingRegistry,
@@ -49,8 +52,18 @@ BUILTIN_SKILLS_ROOT = Path(__file__).resolve().parent.parent.parent / "skills"
 class WebSearchToolRegistry:
     """Default local tools available to Deep Agents runtime runs."""
 
+    class WebSearchInput(BaseModel):
+        """Stable model-visible argument contract for the built-in search tool."""
+
+        query: str = Field(min_length=1, description="search query to look up")
+
     class Values:
         WEB_SEARCH_TOOL_NAME = "web_search"
+        MAX_RESULTS = 4
+        REGION = "wt-wt"
+        SAFE_SEARCH = "moderate"
+        TIME_LIMIT = "y"
+        BACKEND = "auto"
 
     class Messages:
         WEB_SEARCH_TOOL_DESCRIPTION = (
@@ -80,14 +93,16 @@ class WebSearchToolRegistry:
         failures; the ``RetryingTool`` wrapper absorbs those and only re-raises after
         sustained failure so a single hiccup does not terminate the subagent run.
         """
-        from langchain_community.tools import DuckDuckGoSearchResults
+        from langchain_core.tools import StructuredTool
 
         from agent_runtime.capabilities.retrying_tool import RetryingTool
 
-        inner = DuckDuckGoSearchResults(
+        inner = StructuredTool.from_function(
+            func=cls._search,
             name=cls.Values.WEB_SEARCH_TOOL_NAME,
             description=cls.Messages.WEB_SEARCH_TOOL_DESCRIPTION,
-            output_format="list",
+            args_schema=cls.WebSearchInput,
+            response_format="content_and_artifact",
         )
         return RetryingTool(
             name=inner.name,
@@ -98,6 +113,34 @@ class WebSearchToolRegistry:
             initial_backoff_seconds=1.0,
             max_backoff_seconds=8.0,
         )
+
+    @classmethod
+    def _search(cls, query: str) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """Query ``ddgs`` directly and preserve the former LangChain result shape."""
+
+        from ddgs import DDGS
+
+        with DDGS() as search:
+            raw_results = list(
+                search.text(
+                    query,
+                    region=cls.Values.REGION,
+                    safesearch=cls.Values.SAFE_SEARCH,
+                    timelimit=cls.Values.TIME_LIMIT,
+                    max_results=cls.Values.MAX_RESULTS,
+                    backend=cls.Values.BACKEND,
+                )
+                or ()
+            )
+        results = [
+            {
+                "snippet": result.get("body", ""),
+                "title": result.get("title", ""),
+                "link": result.get("href", ""),
+            }
+            for result in raw_results
+        ]
+        return results, raw_results
 
 
 class EmptyMcpRegistry:

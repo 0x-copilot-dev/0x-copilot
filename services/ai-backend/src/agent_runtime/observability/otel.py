@@ -17,23 +17,9 @@ from __future__ import annotations
 
 import os
 import re
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from opentelemetry import metrics, trace
-from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
-    OTLPMetricExporter,
-)
-from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
-    OTLPSpanExporter,
-)
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
-from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
-from opentelemetry.sdk.metrics import MeterProvider
-from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
-from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
 
 _SERVICE_NAME = "ai-backend"
@@ -63,17 +49,22 @@ _DENY_ATTR_PATTERN = re.compile(
 )
 
 
-class SafeAttributeSpanProcessor(SpanProcessor):
+class SafeAttributeSpanProcessor:
     """Strip span attributes whose keys hit the deny rules before export."""
 
     def on_start(
         self,
-        span: Span,
+        span: Any,
         parent_context: object | None = None,
     ) -> None:  # type: ignore[override]
         return None
 
-    def on_end(self, span: ReadableSpan) -> None:  # type: ignore[override]
+    def _on_ending(self, span: Any) -> None:
+        """Match the current SDK lifecycle without importing the SDK."""
+
+        return None
+
+    def on_end(self, span: Any) -> None:  # type: ignore[override]
         attributes = getattr(span, "_attributes", None)
         if attributes is None:
             return
@@ -126,6 +117,7 @@ class TelemetryBootstrap:
     """One-call OTEL setup for ai-backend processes (API + worker)."""
 
     _CONFIGURED: ClassVar[bool] = False
+    _DISABLED: ClassVar[bool] = False
 
     @classmethod
     def configure(
@@ -145,6 +137,7 @@ class TelemetryBootstrap:
             # at a dead endpoint; it also skips the production fail-closed
             # endpoint requirement below.
             cls._CONFIGURED = True
+            cls._DISABLED = True
             return
 
         env_value = (
@@ -160,6 +153,18 @@ class TelemetryBootstrap:
             )
 
         os.environ.setdefault("OTEL_INSTRUMENTATION_HTTP_CAPTURE_BODY", "false")
+
+        from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import (
+            OTLPMetricExporter,
+        )
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from opentelemetry.sdk.metrics import MeterProvider
+        from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
 
         resource = Resource.create(
             {
@@ -188,9 +193,14 @@ class TelemetryBootstrap:
         metrics.set_meter_provider(meter_provider)
 
         cls._CONFIGURED = True
+        cls._DISABLED = False
 
     @classmethod
     def instrument_fastapi(cls, app: object) -> None:
+        if cls._DISABLED:
+            return
+        from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
         FastAPIInstrumentor.instrument_app(  # type: ignore[arg-type]
             app,
             excluded_urls="/healthz,/readyz",
@@ -198,10 +208,18 @@ class TelemetryBootstrap:
 
     @classmethod
     def instrument_httpx_clients(cls) -> None:
+        if cls._DISABLED:
+            return
+        from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
+
         HTTPXClientInstrumentor().instrument()
 
     @classmethod
     def instrument_psycopg(cls) -> None:
+        if cls._DISABLED:
+            return
+        from opentelemetry.instrumentation.psycopg import PsycopgInstrumentor
+
         PsycopgInstrumentor().instrument()
 
     @classmethod
@@ -215,3 +233,4 @@ class TelemetryBootstrap:
     @classmethod
     def reset_for_tests(cls) -> None:
         cls._CONFIGURED = False
+        cls._DISABLED = False
