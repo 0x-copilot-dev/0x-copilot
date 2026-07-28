@@ -10,6 +10,7 @@ import os
 import threading
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
+from time import monotonic
 
 import yaml
 from typing import Any, Callable, Protocol
@@ -45,6 +46,8 @@ from backend_app.contracts import (
     McpAuthState,
     McpCatalogEntryResponse,
     McpCatalogResponse,
+    McpDescriptorRevision,
+    McpDescriptorRevisionFeed,
     McpOAuthClientConfig,
     McpOAuthClientRequest,
     McpServerHealth,
@@ -70,8 +73,9 @@ from backend_app.contracts import (
 )
 from backend_app.connectors.store import ConnectorAccessMode
 from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry, catalog_by_slug
+from backend_app.mcp_metrics import McpDiagnostics, McpDiagnosticsRecorder
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
-from backend_app.mcp_revisions import McpRevisionAuthority
+from backend_app.mcp_revisions import McpRevisionAuthority, RevisionCursorExpired
 from backend_app.mcp_session_pool import (
     McpSessionDispatchFence,
     McpSessionLease,
@@ -306,6 +310,7 @@ class McpRegistryService:
         revision_authority: McpRevisionAuthority | None = None,
         session_pool: McpSessionPool | None = None,
         transport_factory: McpHttpTransportFactory | None = None,
+        mcp_diagnostics: McpDiagnosticsRecorder | None = None,
         auth_session_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         self.store = store or self._default_store()
@@ -322,10 +327,18 @@ class McpRegistryService:
         self._transport_factory = transport_factory or McpHttpTransportFactory(
             token_vault=self.token_vault
         )
-        self.session_pool = session_pool or McpSessionPool(
-            factory=self._transport_factory,
-            config=self._session_pool_config_from_environment(),
-        )
+        self._mcp_diagnostics = mcp_diagnostics or McpDiagnostics.recorder()
+        if session_pool is None:
+            self.session_pool = McpSessionPool(
+                factory=self._transport_factory,
+                config=self._session_pool_config_from_environment(),
+                diagnostics=self._mcp_diagnostics,
+            )
+        else:
+            # A supplied test or composition pool still emits through this
+            # registry's recorder; do not leave two telemetry streams alive.
+            session_pool.set_diagnostics(self._mcp_diagnostics)
+            self.session_pool = session_pool
         self._session_scopes: OrderedDict[
             tuple[str, str, str], set[VerifiedMcpSessionScopeKey]
         ] = OrderedDict()
@@ -866,8 +879,10 @@ class McpRegistryService:
     def list_internal_cards(
         self, *, org_id: str, user_id: str
     ) -> InternalMcpServerListResponse:
+        started = monotonic()
         cards = []
-        for record in self.store.list_servers(org_id=org_id, user_id=user_id):
+        records = self.store.list_servers(org_id=org_id, user_id=user_id)
+        for record in records:
             if not record.enabled:
                 continue
             # PRD-06 D3(a) — visibility gate. An ``off`` connector is never
@@ -898,7 +913,74 @@ class McpRegistryService:
                     connector_slug=record.connector_slug,
                 )
             )
+        self._mcp_diagnostics.record_count(
+            measure="card_validation", value=len(records), outcome="evaluated"
+        )
+        self._mcp_diagnostics.record_count(
+            measure="card_validation", value=len(cards), outcome="admitted"
+        )
+        self._mcp_diagnostics.record_count(
+            measure="card_validation",
+            value=len(records) - len(cards),
+            outcome="rejected",
+        )
+        self._mcp_diagnostics.record_phase(
+            phase="card_validation",
+            outcome="completed",
+            duration_seconds=monotonic() - started,
+        )
         return InternalMcpServerListResponse(servers=tuple(cards))
+
+    def get_descriptor_revision(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> McpDescriptorRevision | None:
+        """Read a body-free current revision with bounded diagnostics."""
+
+        started = monotonic()
+        revision = self.revision_authority.get_current(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        self._mcp_diagnostics.record_phase(
+            phase="revision_exact_check",
+            outcome="found" if revision is not None else "not_found",
+            duration_seconds=monotonic() - started,
+        )
+        return revision
+
+    def feed_descriptor_revisions(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        after_cursor: str | None,
+        limit: int,
+    ) -> McpDescriptorRevisionFeed:
+        """Read a feed page without exposing cursor or notice identity to OTel."""
+
+        started = monotonic()
+        try:
+            feed = self.revision_authority.feed(
+                org_id=org_id,
+                user_id=user_id,
+                after_cursor=after_cursor,
+                limit=limit,
+            )
+        except RevisionCursorExpired:
+            self._mcp_diagnostics.record_phase(
+                phase="revision_feed",
+                outcome="cursor_expired",
+                duration_seconds=monotonic() - started,
+            )
+            raise
+        self._mcp_diagnostics.record_count(
+            measure="revision_feed_notices", value=len(feed.notices), outcome="returned"
+        )
+        self._mcp_diagnostics.record_phase(
+            phase="revision_feed",
+            outcome="page_returned",
+            duration_seconds=monotonic() - started,
+        )
+        return feed
 
     def _resolve_access_mode(
         self, record: McpServerRecord
@@ -1368,11 +1450,21 @@ class McpRegistryService:
         method = request_payload.get("method")
         if method not in {"tools/list", "resources/list"}:
             return
+        started = monotonic()
         collection = "tools" if method == "tools/list" else "resources"
+
+        def completed(outcome: str) -> None:
+            self._mcp_diagnostics.record_phase(
+                phase="descriptor_validation",
+                outcome=outcome,
+                duration_seconds=monotonic() - started,
+            )
+
         params = request_payload.get("params")
         cursor = params.get("cursor") if isinstance(params, dict) else None
         if cursor is not None and not isinstance(cursor, str):
             self._forget_lease_observation(lease_token)
+            completed("rejected")
             return
         if "error" in response:
             error = response.get("error")
@@ -1387,12 +1479,15 @@ class McpRegistryService:
                     owner=owner,
                     credential_subject=credential_subject,
                 )
+                completed("admitted")
             else:
                 self._forget_lease_observation(lease_token)
+                completed("rejected")
             return
         result = response.get("result")
         if not isinstance(result, dict) or not isinstance(result.get(collection), list):
             self._forget_lease_observation(lease_token)
+            completed("rejected")
             return
         with self._lease_owners_lock:
             if collection == "tools" and cursor is None:
@@ -1404,6 +1499,7 @@ class McpRegistryService:
                     collection == "resources" and not observation.tools.complete
                 ):
                     self._descriptor_observations.pop(lease_token, None)
+                    completed("rejected")
                     return
             self._descriptor_observations.move_to_end(lease_token)
             while len(self._descriptor_observations) > 512:
@@ -1426,15 +1522,19 @@ class McpRegistryService:
                 or cursor in cycle.requested_cursors
             ):
                 self._descriptor_observations.pop(lease_token, None)
+                completed("rejected")
                 return
             cycle.requested_cursors.add(cursor)
             cycle.page_count += 1
             if cycle.page_count > _MAX_DESCRIPTOR_PAGES:
                 self._descriptor_observations.pop(lease_token, None)
+                completed("rejected")
                 return
+            page_bytes = 0
             for descriptor in result[collection]:
                 if not isinstance(descriptor, dict):
                     self._descriptor_observations.pop(lease_token, None)
+                    completed("rejected")
                     return
                 safe = {
                     key: descriptor[key]
@@ -1454,11 +1554,13 @@ class McpRegistryService:
                 ).encode()
                 cycle.descriptor_count += 1
                 cycle.canonical_bytes += len(canonical)
+                page_bytes += len(canonical)
                 if (
                     cycle.descriptor_count > _MAX_DESCRIPTOR_COUNT
                     or cycle.canonical_bytes > _MAX_DESCRIPTOR_BYTES
                 ):
                     self._descriptor_observations.pop(lease_token, None)
+                    completed("rejected")
                     return
                 cycle.digest.update(canonical)
                 cycle.digest.update(b"\n")
@@ -1471,8 +1573,21 @@ class McpRegistryService:
                 cycle.expected_cursor = next_cursor
             else:
                 self._descriptor_observations.pop(lease_token, None)
+                completed("rejected")
                 return
+            self._mcp_diagnostics.record_count(
+                measure="descriptor_pages", value=1, outcome=collection
+            )
+            self._mcp_diagnostics.record_count(
+                measure="descriptor_items",
+                value=len(result[collection]),
+                outcome=collection,
+            )
+            self._mcp_diagnostics.record_count(
+                measure="descriptor_bytes", value=page_bytes, outcome=collection
+            )
             if not (observation.tools.complete and observation.resources.complete):
+                completed("admitted")
                 return
             digest = hashlib.sha256(
                 observation.tools.digest.digest()
@@ -1494,6 +1609,18 @@ class McpRegistryService:
                 idempotency_key=f"pooled:{owner.scope.fingerprint}:{digest}",
                 credential_subject=credential_subject,
             )
+            self._mcp_diagnostics.record_phase(
+                phase="revision_publication",
+                outcome="published",
+                duration_seconds=monotonic() - started,
+            )
+        else:
+            self._mcp_diagnostics.record_phase(
+                phase="coalescing",
+                outcome="unchanged",
+                duration_seconds=monotonic() - started,
+            )
+        completed("admitted")
 
     def _complete_empty_resources(
         self,

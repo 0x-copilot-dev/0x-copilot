@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
+from dataclasses import dataclass
 
 import pytest
-
 from backend_app.contracts import (
     InternalMcpRpcRequest,
     McpAuthMode,
@@ -17,7 +16,6 @@ from backend_app.contracts import (
     TokenEnvelope,
     UpdateMcpServerRequest,
 )
-
 from backend_app.mcp_session_pool import (
     McpSessionPool,
     McpSessionPoolConfig,
@@ -48,6 +46,28 @@ class _Factory:
         transport = _Transport()
         self.transports.append(transport)
         return transport
+
+
+@dataclass
+class _Recorder:
+    phases: list[tuple[str, str]]
+    counts: list[tuple[str, int, str]]
+
+    def __init__(self) -> None:
+        self.phases = []
+        self.counts = []
+
+    def record_phase(
+        self, *, phase: str, outcome: str, duration_seconds: float
+    ) -> None:
+        assert duration_seconds >= 0
+        self.phases.append((phase, outcome))
+
+    def record_count(self, *, measure: str, value: int, outcome: str) -> None:
+        self.counts.append((measure, value, outcome))
+
+    def record_pool_size(self, *, state: str, value: int) -> None:
+        return
 
 
 def _scope(user: str = "user") -> VerifiedMcpSessionScopeKey:
@@ -130,10 +150,17 @@ class _Remote:
         return _Response(response)
 
 
-def _service(*, health: McpServerHealth = McpServerHealth.HEALTHY, oauth: bool = False):
+def _service(
+    *,
+    health: McpServerHealth = McpServerHealth.HEALTHY,
+    oauth: bool = False,
+    diagnostics: _Recorder | None = None,
+):
     store = InMemoryMcpStore()
     vault = _Vault()
-    service = McpRegistryService(store=store, token_vault=vault)
+    service = McpRegistryService(
+        store=store, token_vault=vault, mcp_diagnostics=diagnostics
+    )
     record = McpServerRecord(
         org_id="org",
         user_id="user",
@@ -258,6 +285,55 @@ def test_complete_paginated_tools_and_resources_publishes_exactly_once(
         org_id="org", user_id="user", after_cursor=None, limit=10
     )
     assert len(feed.notices) == 1
+
+
+def test_descriptor_diagnostics_record_paging_bytes_and_rejected_admission(
+    monkeypatch,
+) -> None:
+    recorder = _Recorder()
+    service, _store, _vault, record = _service(diagnostics=recorder)
+    monkeypatch.setattr(
+        "backend_app.mcp_transport.urlopen",
+        _Remote(
+            [
+                {"result": {"tools": [{"name": "a"}], "nextCursor": "next"}},
+                {"result": {"tools": [{"name": "b"}]}},
+                {"result": {"resources": []}},
+            ]
+        ),
+    )
+    lease = service.create_internal_client_session(
+        org_id="org", user_id="user", server_id=record.server_id
+    ).lease
+    for payload in (
+        {"jsonrpc": "2.0", "method": "tools/list", "params": {}},
+        {"jsonrpc": "2.0", "method": "tools/list", "params": {"cursor": "next"}},
+        {"jsonrpc": "2.0", "method": "resources/list", "params": {}},
+    ):
+        _rpc(service, record, lease, payload)
+
+    assert recorder.counts.count(("descriptor_pages", 1, "tools")) == 2
+    assert ("descriptor_pages", 1, "resources") in recorder.counts
+    assert any(measure == "descriptor_bytes" for measure, _, _ in recorder.counts)
+    assert ("descriptor_validation", "admitted") in recorder.phases
+    assert ("revision_publication", "published") in recorder.phases
+
+    rejected = _Recorder()
+    bad_service, _store, _vault, bad_record = _service(diagnostics=rejected)
+    monkeypatch.setattr(
+        "backend_app.mcp_transport.urlopen",
+        _Remote([{"result": {"tools": "not-a-list"}}]),
+    )
+    bad_lease = bad_service.create_internal_client_session(
+        org_id="org", user_id="user", server_id=bad_record.server_id
+    ).lease
+    _rpc(
+        bad_service,
+        bad_record,
+        bad_lease,
+        {"jsonrpc": "2.0", "method": "tools/list", "params": {}},
+    )
+    assert ("descriptor_validation", "rejected") in rejected.phases
 
 
 @pytest.mark.parametrize(

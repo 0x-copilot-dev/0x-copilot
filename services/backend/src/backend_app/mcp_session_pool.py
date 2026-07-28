@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, TypeVar
 
+from backend_app.mcp_metrics import McpDiagnostics, McpDiagnosticsRecorder
+
 
 class McpSessionPoolOutcome(StrEnum):
     """Closed, low-cardinality pool outcomes safe for metrics and callers."""
@@ -52,7 +54,7 @@ class McpSessionTransport(Protocol):
 class McpSessionTransportFactory(Protocol):
     """Construct a connected transport for a previously verified scope."""
 
-    def connect(self, scope: "VerifiedMcpSessionScopeKey") -> McpSessionTransport: ...
+    def connect(self, scope: VerifiedMcpSessionScopeKey) -> McpSessionTransport: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,7 +105,7 @@ class VerifiedMcpSessionScopeKey:
         auth_epoch: str,
         transport_revision: str,
         session_scope: str,
-    ) -> "VerifiedMcpSessionScopeKey":
+    ) -> VerifiedMcpSessionScopeKey:
         """Construct a scope from a vault-owned reference without exposing it."""
 
         subject = hashlib.sha256(credential_reference.encode("utf-8")).hexdigest()
@@ -267,10 +269,12 @@ class McpSessionPool:
         factory: McpSessionTransportFactory,
         config: McpSessionPoolConfig = McpSessionPoolConfig(),
         clock: Callable[[], float] = time.monotonic,
+        diagnostics: McpDiagnosticsRecorder | None = None,
     ) -> None:
         self._factory = factory
         self._config = config
         self._clock = clock
+        self._diagnostics = diagnostics or McpDiagnostics.recorder()
         self._lock = threading.RLock()
         self._drained = threading.Condition(self._lock)
         self._sessions: dict[str, _SessionEntry] = {}
@@ -288,47 +292,99 @@ class McpSessionPool:
     def acquire(self, scope: VerifiedMcpSessionScopeKey) -> McpSessionAcquireResult:
         """Borrow a compatible idle session or establish one within capacity."""
 
+        started = time.monotonic()
         now = self._clock()
+        reconnecting = False
+        reused = False
+        saturated = False
         with self._lock:
             self._reap_locked(now)
             if self._draining:
-                return McpSessionAcquireResult(McpSessionPoolOutcome.SHUTTING_DOWN)
-            if not self._scope_is_current_locked(scope):
-                return McpSessionAcquireResult(McpSessionPoolOutcome.STALE)
-            reusable = self._idle_for_scope_locked(scope)
-            if reusable is not None:
+                result = McpSessionAcquireResult(McpSessionPoolOutcome.SHUTTING_DOWN)
+            elif not self._scope_is_current_locked(scope):
+                result = McpSessionAcquireResult(McpSessionPoolOutcome.STALE)
+            elif (reusable := self._idle_for_scope_locked(scope)) is not None:
                 self._reused_sessions += 1
-                return self._lease_locked(reusable)
-            if not self._reserve_open_locked(scope):
+                result = self._lease_locked(reusable)
+                reused = True
+            elif not self._reserve_open_locked(scope):
                 self._saturated_acquires += 1
-                return McpSessionAcquireResult(McpSessionPoolOutcome.SATURATED)
+                result = McpSessionAcquireResult(McpSessionPoolOutcome.SATURATED)
+                saturated = True
+            else:
+                result = None
+                reconnecting = True
+            snapshot = self._pool_size_snapshot_locked()
 
+        if not reconnecting:
+            self._record_acquire(
+                result,
+                started=started,
+                reused=reused,
+                saturated=saturated,
+                snapshot=snapshot,
+            )
+            assert result is not None
+            return result
+
+        initialization_started = time.monotonic()
         try:
             transport = self._factory.connect(scope)
         except Exception:
             with self._lock:
                 self._release_open_locked(scope)
-            return McpSessionAcquireResult(McpSessionPoolOutcome.UNAVAILABLE)
+                snapshot = self._pool_size_snapshot_locked()
+            self._diagnostics.record_phase(
+                phase="session_initialization",
+                outcome="unavailable",
+                duration_seconds=time.monotonic() - initialization_started,
+            )
+            result = McpSessionAcquireResult(McpSessionPoolOutcome.UNAVAILABLE)
+            self._record_acquire(result, started=started, snapshot=snapshot)
+            return result
 
         with self._lock:
             self._release_open_locked(scope)
             now = self._clock()
             if self._draining:
                 self._close_transport(transport)
-                return McpSessionAcquireResult(McpSessionPoolOutcome.SHUTTING_DOWN)
-            if not self._scope_is_current_locked(scope):
+                result = McpSessionAcquireResult(McpSessionPoolOutcome.SHUTTING_DOWN)
+            elif not self._scope_is_current_locked(scope):
                 self._close_transport(transport)
-                return McpSessionAcquireResult(McpSessionPoolOutcome.STALE)
-            entry = _SessionEntry(
-                session_id=secrets.token_urlsafe(18),
-                scope=scope,
-                transport=transport,
-                created_at=now,
-                last_released_at=now,
-            )
-            self._sessions[entry.session_id] = entry
-            self._opened_sessions += 1
-            return self._lease_locked(entry)
+                result = McpSessionAcquireResult(McpSessionPoolOutcome.STALE)
+            else:
+                entry = _SessionEntry(
+                    session_id=secrets.token_urlsafe(18),
+                    scope=scope,
+                    transport=transport,
+                    created_at=now,
+                    last_released_at=now,
+                )
+                self._sessions[entry.session_id] = entry
+                self._opened_sessions += 1
+                result = self._lease_locked(entry)
+            snapshot = self._pool_size_snapshot_locked()
+        self._diagnostics.record_phase(
+            phase="session_initialization",
+            outcome="initialized",
+            duration_seconds=time.monotonic() - initialization_started,
+        )
+        self._record_acquire(
+            result,
+            started=started,
+            snapshot=snapshot,
+        )
+        return result
+
+    def set_diagnostics(self, diagnostics: McpDiagnosticsRecorder) -> None:
+        """Attach the registry's single body-free diagnostics recorder.
+
+        Registry composition calls this for caller-supplied pools too, so pool
+        and registry emissions cannot diverge into separate metric streams.
+        """
+
+        with self._lock:
+            self._diagnostics = diagnostics
 
     def release(
         self,
@@ -341,24 +397,28 @@ class McpSessionPool:
         with self._lock:
             lease_entry = self._leases.get(lease._lease_id)
             if lease_entry is None:
-                return McpSessionPoolOutcome.STALE
-            if not self._lease_scope_matches(lease_entry, scope):
-                return McpSessionPoolOutcome.SCOPE_MISMATCH
-            self._leases.pop(lease._lease_id, None)
-            session = self._sessions.get(lease_entry.session_id)
-            if session is None:
+                outcome = McpSessionPoolOutcome.STALE
+            elif not self._lease_scope_matches(lease_entry, scope):
+                outcome = McpSessionPoolOutcome.SCOPE_MISMATCH
+            else:
+                self._leases.pop(lease._lease_id, None)
+                session = self._sessions.get(lease_entry.session_id)
+                if session is None:
+                    outcome = McpSessionPoolOutcome.STALE
+                else:
+                    session.active_lease_id = None
+                    session.last_released_at = self._clock()
+                    if (
+                        self._draining
+                        or session.invalidated
+                        or self._expired(session, self._clock())
+                    ):
+                        self._remove_session_locked(session.session_id)
+                    outcome = McpSessionPoolOutcome.RELEASED
                 self._drained.notify_all()
-                return McpSessionPoolOutcome.STALE
-            session.active_lease_id = None
-            session.last_released_at = self._clock()
-            if (
-                self._draining
-                or session.invalidated
-                or self._expired(session, self._clock())
-            ):
-                self._remove_session_locked(session.session_id)
-            self._drained.notify_all()
-            return McpSessionPoolOutcome.RELEASED
+            snapshot = self._pool_size_snapshot_locked()
+        self._record_pool_snapshot(snapshot)
+        return outcome
 
     def cancel(
         self,
@@ -371,13 +431,17 @@ class McpSessionPool:
         with self._lock:
             lease_entry = self._leases.get(lease._lease_id)
             if lease_entry is None:
-                return McpSessionPoolOutcome.STALE
-            if not self._lease_scope_matches(lease_entry, scope):
-                return McpSessionPoolOutcome.SCOPE_MISMATCH
-            self._leases.pop(lease._lease_id, None)
-            self._remove_session_locked(lease_entry.session_id)
-            self._drained.notify_all()
-            return McpSessionPoolOutcome.RELEASED
+                outcome = McpSessionPoolOutcome.STALE
+            elif not self._lease_scope_matches(lease_entry, scope):
+                outcome = McpSessionPoolOutcome.SCOPE_MISMATCH
+            else:
+                self._leases.pop(lease._lease_id, None)
+                self._remove_session_locked(lease_entry.session_id)
+                self._drained.notify_all()
+                outcome = McpSessionPoolOutcome.RELEASED
+            snapshot = self._pool_size_snapshot_locked()
+        self._record_pool_snapshot(snapshot)
+        return outcome
 
     def invoke(
         self,
@@ -403,11 +467,32 @@ class McpSessionPool:
                 return operation(session.transport, fence)
             except Exception:
                 if reconnects >= self._config.max_pre_dispatch_reconnects:
+                    self._diagnostics.record_phase(
+                        phase="reconnect",
+                        outcome="budget_exhausted",
+                        duration_seconds=0,
+                    )
                     raise
                 if self._lease_dispatched_or_stale(lease, scope):
+                    self._diagnostics.record_phase(
+                        phase="reconnect",
+                        outcome="ambiguous_or_stale",
+                        duration_seconds=0,
+                    )
                     raise
+                reconnect_started = time.monotonic()
                 if not self._reconnect_pre_dispatch(lease, scope):
+                    self._diagnostics.record_phase(
+                        phase="reconnect",
+                        outcome="unavailable",
+                        duration_seconds=time.monotonic() - reconnect_started,
+                    )
                     raise
+                self._diagnostics.record_phase(
+                    phase="reconnect",
+                    outcome="reconnected",
+                    duration_seconds=time.monotonic() - reconnect_started,
+                )
                 reconnects += 1
 
     def keepalive_idle(self, *, limit: int = 1) -> McpSessionPoolOutcome:
@@ -485,7 +570,12 @@ class McpSessionPool:
                 invalidated += 1
                 if session.active_lease_id is None and not session.maintenance_reserved:
                     self._remove_session_locked(session.session_id)
-            return invalidated
+            snapshot = self._pool_size_snapshot_locked()
+        self._diagnostics.record_phase(
+            phase="invalidation", outcome="scope", duration_seconds=0
+        )
+        self._record_pool_snapshot(snapshot)
+        return invalidated
 
     def invalidate_credential_subject(self, credential_subject: str) -> int:
         """Drop all sessions for a rotated/revoked credential subject digest."""
@@ -503,7 +593,12 @@ class McpSessionPool:
             for scope in self._opening_scopes.values():
                 if scope.credential_subject == credential_subject:
                     self._invalidate_scope_fingerprint_locked(scope.fingerprint)
-            return invalidated
+            snapshot = self._pool_size_snapshot_locked()
+        self._diagnostics.record_phase(
+            phase="invalidation", outcome="credential_subject", duration_seconds=0
+        )
+        self._record_pool_snapshot(snapshot)
+        return invalidated
 
     def export_lease_token(self, lease: McpSessionLease) -> str:
         """Return the only serialization-safe lease value for internal callers."""
@@ -524,6 +619,7 @@ class McpSessionPool:
     def shutdown(self, *, timeout_seconds: float | None = None) -> bool:
         """Stop new leases, close idle sessions, and optionally wait for drain."""
 
+        started = time.monotonic()
         with self._lock:
             self._draining = True
             for session in tuple(self._sessions.values()):
@@ -532,14 +628,20 @@ class McpSessionPool:
                 elif session.active_lease_id is None:
                     self._remove_session_locked(session.session_id)
             if timeout_seconds is None:
-                return not self._leases and not self._maintenance_count_locked()
-            deadline = self._clock() + timeout_seconds
-            while self._leases or self._maintenance_count_locked():
-                remaining = deadline - self._clock()
-                if remaining <= 0:
-                    return False
-                self._drained.wait(timeout=remaining)
-            return True
+                drained = not self._leases and not self._maintenance_count_locked()
+            else:
+                deadline = self._clock() + timeout_seconds
+                while self._leases or self._maintenance_count_locked():
+                    remaining = deadline - self._clock()
+                    if remaining <= 0:
+                        drained = False
+                        break
+                    self._drained.wait(timeout=remaining)
+                else:
+                    drained = True
+            snapshot = self._pool_size_snapshot_locked()
+        self._record_shutdown_outcome(drained, started, snapshot)
+        return drained
 
     def diagnostics(self) -> McpSessionPoolDiagnostics:
         """Return counts only; safe for metrics and operational logging."""
@@ -670,6 +772,63 @@ class McpSessionPool:
             scope_fingerprint=session.scope.fingerprint,
         )
         return McpSessionAcquireResult(McpSessionPoolOutcome.ACQUIRED, lease)
+
+    def _record_acquire(
+        self,
+        result: McpSessionAcquireResult | None,
+        *,
+        started: float,
+        reused: bool = False,
+        saturated: bool = False,
+        snapshot: tuple[tuple[str, int], ...],
+    ) -> None:
+        assert result is not None
+        if reused:
+            self._diagnostics.record_phase(
+                phase="lease_reuse",
+                outcome="reused",
+                duration_seconds=time.monotonic() - started,
+            )
+        if saturated:
+            self._diagnostics.record_phase(
+                phase="saturation",
+                outcome="rejected",
+                duration_seconds=time.monotonic() - started,
+            )
+        self._diagnostics.record_phase(
+            phase="lease_acquisition",
+            outcome=result.outcome.value,
+            duration_seconds=time.monotonic() - started,
+        )
+        self._record_pool_snapshot(snapshot)
+
+    def _pool_size_snapshot_locked(self) -> tuple[tuple[str, int], ...]:
+        total = len(self._sessions)
+        active = len(self._leases)
+        maintenance = self._maintenance_count_locked()
+        return (
+            ("total", total),
+            ("active", active),
+            ("idle", total - active - maintenance),
+            ("opening", sum(self._opening_by_scope.values())),
+        )
+
+    def _record_pool_snapshot(self, snapshot: tuple[tuple[str, int], ...]) -> None:
+        for state, value in snapshot:
+            self._diagnostics.record_pool_size(state=state, value=value)
+
+    def _record_shutdown_outcome(
+        self,
+        drained: bool,
+        started: float,
+        snapshot: tuple[tuple[str, int], ...],
+    ) -> None:
+        self._diagnostics.record_phase(
+            phase="shutdown_drain",
+            outcome="drained" if drained else "timed_out",
+            duration_seconds=time.monotonic() - started,
+        )
+        self._record_pool_snapshot(snapshot)
 
     def _session_for_lease(
         self,
@@ -887,10 +1046,10 @@ class McpSessionPool:
 
 
 __all__ = (
-    "McpSessionDispatchFence",
     "McpDiscoveryObservation",
     "McpDiscoveryPage",
     "McpSessionAcquireResult",
+    "McpSessionDispatchFence",
     "McpSessionLease",
     "McpSessionPool",
     "McpSessionPoolConfig",
