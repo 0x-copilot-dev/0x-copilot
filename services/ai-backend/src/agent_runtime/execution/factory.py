@@ -74,6 +74,8 @@ from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyEnforcer,
     ToolUsePolicyResolver,
 )
+from agent_runtime.control_plane.context import RunControlContext
+from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
@@ -87,8 +89,10 @@ from agent_runtime.prompts import (
     PromptFragment,
     PromptFragmentScope,
     PromptFragmentTier,
+    FactoryPromptFragmentProvider,
+    PromptRuntimeBinding,
+    ProviderCacheAdapterRegistry,
     ProviderCacheOwner,
-    ProviderPromptDecorator,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
@@ -125,6 +129,7 @@ class RuntimeHarness:
     skill_directories: tuple[str, ...]
     skill_cards: tuple[object, ...] = ()
     prompt_assembly_plan: PromptAssemblyPlan | None = None
+    prompt_runtime_binding: PromptRuntimeBinding | None = None
 
 
 async def acreate_agent_runtime(
@@ -300,16 +305,38 @@ async def _assemble_harness(
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
             is not None,
         )
-        prompt_decoration = ProviderPromptDecorator().decorate(
-            provider=runtime_context.model_profile.provider,
-            plan=prompt_assembly_plan,
-            # Deep Agents 0.6.12 appends and model-qualifies its own provider
-            # prompt-caching middleware after the caller prompt. Delegating
-            # ownership avoids stacking a caller breakpoint with the
-            # framework's final-system/tool breakpoints.
-            cache_owner=ProviderCacheOwner.FRAMEWORK,
+        # This remains the graph-construction input and temporary legacy/golden
+        # diagnostic. The effective request is rebuilt for every supervisor and
+        # local-child provider call by RuntimeControlMiddleware.
+        model_instructions = prompt_assembly_plan.rendered_prompt
+        control_binding = RunControlContext.current()
+        prompt_runtime_binding = (
+            PromptRuntimeBinding(
+                mode=control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY),
+                provider=runtime_context.model_profile.provider,
+                model_family=runtime_context.model_profile.model_name,
+                harness_revision=control_binding.snapshot.harness_variant_ref,
+                fragment_provider=FactoryPromptFragmentProvider(
+                    legacy_plan=prompt_assembly_plan,
+                    run_scope_fingerprint=canonical_json_sha256(
+                        {
+                            "run_id": control_binding.snapshot.run_id,
+                            "snapshot_id": control_binding.snapshot.snapshot_id,
+                        }
+                    ),
+                ),
+                cache_registry=ProviderCacheAdapterRegistry.default(),
+                # Deep Agents 0.6.12 installs its model-qualified cache
+                # middleware at the tail of every root/child graph. The
+                # product seam must delegate rather than stack controls.
+                cache_owner=ProviderCacheOwner.FRAMEWORK,
+                framework_cache_installed=True,
+            )
+            if control_binding is not None
+            else None
         )
-        model_instructions = prompt_decoration.system_prompt
+        if prompt_runtime_binding is not None:
+            RunControlContext.install_prompt_runtime(prompt_runtime_binding)
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
         # chat-model construction in the graph. Subagents inherit the
@@ -388,6 +415,7 @@ async def _assemble_harness(
         skill_directories=skill_directories,
         skill_cards=skill_cards,
         prompt_assembly_plan=prompt_assembly_plan,
+        prompt_runtime_binding=prompt_runtime_binding,
     )
 
 

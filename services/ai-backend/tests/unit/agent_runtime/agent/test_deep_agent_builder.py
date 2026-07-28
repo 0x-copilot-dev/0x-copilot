@@ -34,6 +34,7 @@ from agent_runtime.control_plane.contracts import (
     RunPolicyRevisions,
 )
 from agent_runtime.control_plane.feature_modes import FeatureModeSet
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.execution import deep_agent_builder as builder_module
 from agent_runtime.execution.fake_model import DeterministicFakeChatModel
 from agent_runtime.execution.contracts import (
@@ -47,6 +48,18 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.deep_agent_builder import (
     DeepAgentBuildRequest,
     build_deep_agent,
+)
+from agent_runtime.prompts import (
+    FactoryPromptFragmentProvider,
+    PromptAssembler,
+    PromptCacheEligibility,
+    PromptFragment,
+    PromptFragmentScope,
+    PromptFragmentTier,
+    PromptRuntimeBinding,
+    PromptRuntimeObservation,
+    ProviderCacheAdapterRegistry,
+    ProviderCacheOwner,
 )
 from tests.unit.agent_runtime.agent.helpers import FakeDeepAgentsModule
 
@@ -420,10 +433,47 @@ async def test_final_model_visible_tools_have_one_universal_controller(
         )
     )
 
-    for graph in captured_graphs:
-        await graph.ainvoke(  # type: ignore[attr-defined]
-            {"messages": [HumanMessage(content="Inspect tools.")]}
+    prompt_plan = PromptAssembler().assemble(
+        (
+            PromptFragment(
+                fragment_id="policy",
+                revision="v1",
+                tier=PromptFragmentTier.SYSTEM_POLICY,
+                scope=PromptFragmentScope.INSTALLATION,
+                content="Follow policy.",
+                cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
+            ),
         )
+    )
+    observations: list[PromptRuntimeObservation] = []
+
+    class _Observer:
+        def observe(self, observation: PromptRuntimeObservation) -> None:
+            observations.append(observation)
+
+    prompt_binding = PromptRuntimeBinding(
+        mode=FeatureMode.ENFORCE,
+        provider="openai",
+        model_family="fake-model",
+        harness_revision="harness-v1",
+        fragment_provider=FactoryPromptFragmentProvider(
+            legacy_plan=prompt_plan,
+            run_scope_fingerprint="a" * 64,
+        ),
+        cache_registry=ProviderCacheAdapterRegistry.default(),
+        cache_owner=ProviderCacheOwner.FRAMEWORK,
+        framework_cache_installed=True,
+        observer=_Observer(),
+    )
+    run_token = RunControlContext.bind_for_run(_run_control_binding())
+    try:
+        RunControlContext.install_prompt_runtime(prompt_binding)
+        for graph in captured_graphs:
+            await graph.ainvoke(  # type: ignore[attr-defined]
+                {"messages": [HumanMessage(content="Inspect tools.")]},
+            )
+    finally:
+        RunControlContext.unbind(run_token)
 
     expected_local_tools = frozenset(
         {
@@ -439,6 +489,13 @@ async def test_final_model_visible_tools_have_one_universal_controller(
     assert len(captured_graphs) == len(captured_stacks) == len(bound_tool_sets)
     assert bound_tool_sets.count(expected_local_tools) == 2
     assert bound_tool_sets.count(expected_supervisor_tools) == 1
+    # Each of the two independently compiled child graphs and the supervisor
+    # assembled at its own provider call. Direct child-graph canaries have no
+    # parent task metadata, so their isolated execution scope is supervisor;
+    # the middleware-level test covers task-linked subagent scope propagation.
+    assert len(observations) == 3
+    assert len({item.tool_schema_revision for item in observations}) == 2
+    assert all(item.sent_assembled_prompt for item in observations)
     assert all(
         sum(isinstance(middleware, RuntimeControlMiddleware) for middleware in stack)
         == 1
