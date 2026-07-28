@@ -532,6 +532,105 @@ environment-dependent skips. Full-service ruff and format checks, compile
 validation, API-types and desktop TypeScript checking, 42 desktop
 service-environment tests, commit hooks, and `git diff --check` also passed.
 
+### Active execution — Step 7 MCP freshness and session reuse
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. Backend remains the only MCP registry,
+credential, remote-transport, descriptor-revision, and live-session authority;
+ai-backend consumes authenticated metadata and retains the existing
+process-local descriptor cache. This step adds no Redis, second database,
+backend-to-ai callback, or desktop daemon.
+
+- [ ] **F8.1 — Canonical revision, cursor, and lease contracts.** Define
+      versioned body-free contracts for descriptor views, append-only notices,
+      paginated feed state, exact revision checks, cursor expiry, transport
+      sessions, lease outcomes, and sanitized failures. Bind each view to the
+      verified local profile/user/server, one-way credential-subject identity,
+      auth epoch, transport/config revision, and tool-filter revision. Cursors
+      are opaque and bounded; revisions are compared for equality, never
+      inferred from caller-shaped order. Add cross-service golden fixtures
+      instead of a deployable cross-service import.
+- [ ] **F8.2 — Durable backend revision authority.** Add one backend migration
+      and matching in-memory/Postgres store ports for current descriptor view
+      state plus an append-only revision feed. Commit a view update and its
+      feed notice in the same existing registry transaction, with stable
+      idempotency identity, monotonic store sequence, RLS/profile isolation,
+      bounded retention, deletion/account-merge behavior, and no raw schemas,
+      endpoints, tokens, or tool-result bodies. Preserve the registry as the
+      source of truth; the connectors table remains a projection.
+- [ ] **F8.3 — Transactional mutation and discovery publication.** Advance the
+      appropriate config/auth/transport generation on install, update,
+      enable/disable, delete, OAuth start/complete/failure, test-token upsert,
+      token refresh/rotation, and explicit refresh. Observe complete paginated
+      `tools/list`/`resources/list` cycles inside the backend proxy in
+      `O(total descriptor bytes)`, canonicalize safe descriptor metadata once,
+      debounce unchanged or bursty observations, and publish a new view only
+      after the complete cycle succeeds. Partial/failed discovery cannot
+      become a successful empty revision.
+- [ ] **F8.4 — Authenticated pull and exact-check API.** Expose internal
+      service-authenticated feed and exact-revision endpoints using the
+      existing trusted service-token plus profile/user header boundary.
+      Enforce a capped page size, opaque durable cursor, deterministic
+      at-least-once replay, explicit `cursor_expired` recovery state, optional
+      server-scoped exact checks, and constant-shape not-found/unauthorized
+      behavior. Apps and Electron continue to call only the facade; these
+      internal routes remain ai-backend-only.
+- [ ] **F8.5 — Backend-owned bounded remote session pool.** Replace the
+      stateless per-RPC remote transport path with a process-local pool keyed
+      by verified profile/user/server, one-way credential subject, auth epoch,
+      transport revision, and required session scope. Keep opaque leases,
+      connection/session identifiers, and transport handles inside backend;
+      enforce global/per-key capacity, idle and absolute TTL, active-lease
+      accounting, least-expensive protocol keepalive, bounded reconnect, and
+      deterministic saturation/unavailable outcomes. Never use
+      `tools/list` as routine keepalive or reuse across credentials.
+- [ ] **F8.6 — Pool lifecycle, invalidation, and proxy integration.** Acquire
+      or reuse a lease through `client-session`, bind every proxy RPC to that
+      opaque lease, reject stale/wrong-subject leases before token decryption,
+      and retire sessions on auth/config revision, credential rotation,
+      cancellation, server removal, backend shutdown, or desktop ordered
+      service stop. Reconnect only when remote acceptance/effect is proven
+      absent; ambiguous/effecting requests fail honestly and remain under the
+      existing F4 retry/Operation Gateway authority.
+- [ ] **F8.7 — Revision-aware ai-backend discovery composition.** Compose the
+      existing `RevisionAwareMcpDiscoveryCache` over the current TTL/LRU
+      single-flight cache in the real worker/root/subagent loader path. Fetch
+      trusted current revisions before stale-sensitive discovery, attach the
+      backend revision/lease to `BackendMcpClient`, and preserve permission
+      rechecks and defensive copies on every hit. A generation barrier must
+      prevent an in-flight pre-invalidation load from publishing or being
+      returned across a revocation boundary.
+- [ ] **F8.8 — Active-only pull consumer and desktop cursor recovery.** Add one
+      bounded poller owned by each active worker composition, not a free-running
+      daemon. Persist only its opaque high-water cursor through a small port:
+      in-memory for tests, atomic capped file state beneath the existing
+      desktop runtime root, and an optional hosted adapter later. Start after
+      worker readiness, stop/drain before HTTP/store shutdown, back off with
+      jitter while offline, flush subject-scoped generations on
+      `cursor_expired`, and resume without eager descriptor hydration.
+- [ ] **F8.9 — Atomic descriptor/F3 invalidation and safe stale handling.**
+      Route every feed or exact-check change through one invalidation
+      coordinator that evicts the descriptor entry and advances the matching
+      F3 catalog-generation authority before acknowledging the cursor.
+      Duplicate/out-of-order notices are idempotent. A stale discovery may
+      perform one coalesced exact check/reload; read execution may retry only
+      when the established operation classifier and effect tracker prove no
+      provider-side work, while effects and ambiguous calls are never replayed
+      by F8.
+- [ ] **F8.10 — Diagnostics, qualification, lifecycle, and step gate.** Emit
+      low-cardinality body-free phase timings and counts for card validation,
+      lease acquisition/reuse, initialization, descriptor paging/bytes,
+      validation/admission, feed lag/convergence, coalescing, stale rejects,
+      reconnect, saturation, and pool size. Add fault/concurrency tests for
+      scope isolation, cursor replay/expiry, notification loss, auth rotation,
+      cold-load races, paginated discovery, warm session reuse, restart,
+      offline/backoff, shutdown drain, and feature backout. Document desktop
+      resource limits and operations; run backend and ai-backend focused/full
+      suites, migration-manifest checks, ruff/format/compile, API and desktop
+      typechecks, lifecycle tests, commit hooks, `git diff --check`, and every
+      Step 7 exit criterion before checking the normative step.
+
 ## Complete PRD index
 
 ### Wave F — Harness quality and efficiency
