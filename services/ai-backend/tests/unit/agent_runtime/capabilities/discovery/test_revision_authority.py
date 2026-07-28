@@ -108,6 +108,22 @@ def _generation(
     )
 
 
+class CatalogSubjectHandle:
+    """The identity an F3 source needs and a fingerprint cannot give back.
+
+    A real source rebuilds — or asks a store to rebuild — the catalog for the
+    *original* subject, which ``subject_fingerprint`` deliberately destroys.
+    RB.3 lets the call site hand that identity to its own authority instead of
+    populating a scope-keyed registry when the catalog is minted.
+    """
+
+    __slots__ = ("org_id", "user_id")
+
+    def __init__(self, *, org_id: str, user_id: str) -> None:
+        self.org_id = org_id
+        self.user_id = user_id
+
+
 class InMemoryCatalogGenerationSource:
     """Test double for whatever would rebuild the catalog right now."""
 
@@ -119,6 +135,7 @@ class InMemoryCatalogGenerationSource:
         self._unavailable = False
         self._issued = 0
         self.calls = 0
+        self.handles: list[object | None] = []
 
     @staticmethod
     def _key(scope: RevisionBoundScope) -> tuple[str, str | None, str | None]:
@@ -162,8 +179,10 @@ class InMemoryCatalogGenerationSource:
         self,
         *,
         scope: RevisionBoundScope,
+        resolution_handle: object | None = None,
     ) -> LiveCapabilityCatalogGeneration:
         self.calls += 1
+        self.handles.append(resolution_handle)
         if self._unavailable:
             return LiveCapabilityCatalogGeneration.for_state(
                 RevisionAuthorityState.UNAVAILABLE
@@ -185,6 +204,10 @@ class CapabilityCatalogConformanceHarness:
     """Drive the shared suite against the real F3 authority adapter."""
 
     OPAQUE_REF: ClassVar[str] = f"cap_{'a' * 32}"
+    HANDLE: ClassVar[CatalogSubjectHandle] = CatalogSubjectHandle(
+        org_id="org_1",
+        user_id="user_1",
+    )
 
     def __init__(self) -> None:
         self.source = InMemoryCatalogGenerationSource()
@@ -218,6 +241,11 @@ class CapabilityCatalogConformanceHarness:
 
     async def set_authority_unavailable(self, *, unavailable: bool) -> None:
         self.source.set_unavailable(unavailable=unavailable)
+
+    def resolution_handle(self, ref) -> CatalogSubjectHandle:
+        """Drive every conformance case through the RB.3 handle path."""
+
+        return self.HANDLE
 
 
 class CapabilityCatalogHarnessMixin:
@@ -277,6 +305,7 @@ class TestCapabilityCatalogRevisionAuthority(RevisionBindingConformanceFixtures)
                 self,
                 *,
                 scope: RevisionBoundScope,
+                resolution_handle: object | None = None,
             ) -> LiveCapabilityCatalogGeneration:
                 honest = _generation(
                     selection_ref="task-policy-selection://live/1",
@@ -308,6 +337,7 @@ class TestCapabilityCatalogRevisionAuthority(RevisionBindingConformanceFixtures)
                 self,
                 *,
                 scope: RevisionBoundScope,
+                resolution_handle: object | None = None,
             ) -> LiveCapabilityCatalogGeneration:
                 return {"state": "active"}  # type: ignore[return-value]
 
@@ -324,6 +354,7 @@ class TestCapabilityCatalogRevisionAuthority(RevisionBindingConformanceFixtures)
                 self,
                 *,
                 scope: RevisionBoundScope,
+                resolution_handle: object | None = None,
             ) -> LiveCapabilityCatalogGeneration:
                 raise RuntimeError("postgres://secret-host/catalog_generations")
 
@@ -552,3 +583,132 @@ class TestBuiltCatalogRefsRevalidate:
         )
 
         assert isinstance(result, RevisionAuthorityResult)
+
+
+class TestResolutionHandleReachesTheSource(RevisionBindingConformanceFixtures):
+    """RB.3: F3 can hand its source the identity a fingerprint destroyed."""
+
+    HANDLE: ClassVar[CatalogSubjectHandle] = CatalogSubjectHandle(
+        org_id="org_1",
+        user_id="user_1",
+    )
+
+    def revalidation(
+        self,
+        source: InMemoryCatalogGenerationSource,
+        context: AgentRuntimeContext,
+        *,
+        resolution_handle: object | None = None,
+    ) -> CapabilityRefRevalidation:
+        return CapabilityRefRevalidation(
+            revalidator=RevisionBindingRevalidator(
+                CapabilityCatalogRevisionAuthority(source)
+            ),
+            subject_fingerprint=AuthorizedCatalogBuilder(
+                reference_key=_REFERENCE_KEY
+            ).subject_fingerprint(context),
+            resolution_handle=resolution_handle,
+        )
+
+    async def test_the_bound_handle_reaches_the_source_verbatim(self) -> None:
+        context = _context()
+        catalog = _catalog(context)
+        generation = catalog.generation
+        assert generation is not None
+        source = InMemoryCatalogGenerationSource()
+        source.publish(
+            CapabilityRefRevisionBinding.scope_for(generation, run_id=context.run_id),
+            generation,
+        )
+
+        decision = await self.revalidation(
+            source,
+            context,
+            resolution_handle=self.HANDLE,
+        ).decide(
+            binding=catalog.bind_ref(catalog.entries[0].capability_ref),
+            run_id=context.run_id,
+            live_generation=generation,
+        )
+
+        assert decision.outcome is RevalidationOutcome.CURRENT
+        assert source.handles == [self.HANDLE]
+
+    async def test_a_call_site_without_a_handle_still_resolves(self) -> None:
+        context = _context()
+        catalog = _catalog(context)
+        generation = catalog.generation
+        assert generation is not None
+        source = InMemoryCatalogGenerationSource()
+        source.publish(
+            CapabilityRefRevisionBinding.scope_for(generation, run_id=context.run_id),
+            generation,
+        )
+
+        decision = await self.revalidation(source, context).decide(
+            binding=catalog.bind_ref(catalog.entries[0].capability_ref),
+            run_id=context.run_id,
+            live_generation=generation,
+        )
+
+        assert decision.outcome is RevalidationOutcome.CURRENT
+        assert source.handles == [None]
+
+    async def test_the_handle_never_reaches_a_reference_or_a_decision(self) -> None:
+        context = _context()
+        catalog = _catalog(context)
+        generation = catalog.generation
+        assert generation is not None
+        source = InMemoryCatalogGenerationSource()
+        source.publish(
+            CapabilityRefRevisionBinding.scope_for(generation, run_id=context.run_id),
+            generation,
+        )
+        binding = catalog.bind_ref(catalog.entries[0].capability_ref)
+
+        decision = await self.revalidation(
+            source,
+            context,
+            resolution_handle=self.HANDLE,
+        ).decide(
+            binding=binding,
+            run_id=context.run_id,
+            live_generation=generation,
+        )
+
+        ref = CapabilityRefRevisionBinding.bound_ref(binding, run_id=context.run_id)
+        assert self.HANDLE.org_id not in ref.model_dump_json()
+        assert self.HANDLE.user_id not in ref.model_dump_json()
+        assert self.HANDLE.org_id not in decision.model_dump_json()
+        assert self.HANDLE.user_id not in decision.model_dump_json()
+
+    async def test_a_handle_does_not_let_a_stale_ref_pass(self) -> None:
+        # The handle is a resolution key, never an answer: the source still
+        # decides, and a superseded generation is still refused.
+        context = _context()
+        catalog = _catalog(context)
+        generation = catalog.generation
+        assert generation is not None
+        rebuilt = _catalog(
+            context,
+            selection_ref=f"task-policy-selection://run_1/research/sha256/{'d' * 64}",
+        )
+        assert rebuilt.generation is not None
+        source = InMemoryCatalogGenerationSource()
+        source.publish(
+            CapabilityRefRevisionBinding.scope_for(generation, run_id=context.run_id),
+            rebuilt.generation,
+        )
+
+        decision = await self.revalidation(
+            source,
+            context,
+            resolution_handle=self.HANDLE,
+        ).decide(
+            binding=catalog.bind_ref(catalog.entries[0].capability_ref),
+            run_id=context.run_id,
+            live_generation=generation,
+        )
+
+        assert decision.outcome is RevalidationOutcome.SUPERSEDED
+        assert decision.reason is RevalidationReason.REVISION_CHANGED
