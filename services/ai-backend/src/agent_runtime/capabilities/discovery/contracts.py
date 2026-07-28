@@ -1,13 +1,32 @@
-"""Strict contracts for a run-scoped, authorization-projected capability catalog."""
+"""Strict contracts for a run-scoped, authorization-projected capability catalog.
+
+This module is the one place F3 states a discovery *shape*: the opaque
+reference format and the single keyed derivation that mints it, the compact
+catalog, the bounded search answer, and the bounded second-tier expansion
+result.  Executable policy lives elsewhere — projection in ``builder``, ranking
+in ``ranker``, expansion in ``expansion``, configuration-resolved bounds in
+``activation`` — so every one of those modules states a contract once and
+reads it from here rather than restating it.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from datetime import datetime
 from enum import StrEnum
+import hashlib
+import hmac
 import json
 import re
-from typing import Annotated, Any, Literal, Protocol, Self, runtime_checkable
+from typing import (
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    Protocol,
+    Self,
+    runtime_checkable,
+)
 
 from pydantic import (
     Field,
@@ -23,8 +42,70 @@ from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 _SHA256_HEX_PATTERN = r"^[a-f0-9]{64}$"
 _ZERO_DIGEST = "0" * 64
 _MAX_DESCRIPTOR_REVISIONS = 4_096
-_CAPABILITY_REF_PATTERN = r"^cap_[0-9a-f]{32}$"
 _OPAQUE_TOKEN_PATTERN = r"^[!-~]+$"
+_REFERENCE_KEY_MIN_BYTES = 32
+
+
+class CapabilityReferenceFormat:
+    """The one wire shape every opaque F3 token is minted in and validated as.
+
+    :class:`HmacCapabilityReferenceMinter` emits exactly what these patterns
+    admit, so a reference can never be minted in a shape a contract would then
+    refuse, and the accepted width cannot drift away from the derived width.
+    """
+
+    CATALOG_PREFIX: ClassVar[str] = "cat"
+    CAPABILITY_PREFIX: ClassVar[str] = "cap"
+    REVISION_PREFIX: ClassVar[str] = "rev"
+    HEX_CHARS: ClassVar[int] = 32
+    PREFIX_CHARS: ClassVar[int] = 3
+    TOKEN_LENGTH: ClassVar[int] = PREFIX_CHARS + 1 + HEX_CHARS
+
+    @classmethod
+    def pattern(cls, prefix: str) -> str:
+        """Return the anchored pattern for one prefixed opaque token."""
+
+        return rf"^{prefix}_[0-9a-f]{{{cls.HEX_CHARS}}}$"
+
+
+_CATALOG_ID_PATTERN = CapabilityReferenceFormat.pattern(
+    CapabilityReferenceFormat.CATALOG_PREFIX
+)
+_CAPABILITY_REF_PATTERN = CapabilityReferenceFormat.pattern(
+    CapabilityReferenceFormat.CAPABILITY_PREFIX
+)
+_CATALOG_REVISION_PATTERN = CapabilityReferenceFormat.pattern(
+    CapabilityReferenceFormat.REVISION_PREFIX
+)
+
+
+class CapabilitySearchBounds:
+    """The one candidate ceiling a bounded search request and answer share.
+
+    The request limit and every contract that carries the resulting candidates
+    are the same bound seen from two sides; naming it once keeps a widened
+    request from producing an answer the result contract cannot hold.
+    """
+
+    MAX_CANDIDATES: ClassVar[int] = 10
+
+
+class CapabilityExpansionBounds:
+    """The absolute ceilings every bounded second-tier expansion is held to.
+
+    These are the hard structural limits, not the configured policy.  The
+    configuration-resolved policy in
+    :mod:`agent_runtime.capabilities.discovery.activation` may only choose a
+    value *within* them, and :class:`CapabilityExpansionResult` refuses to
+    represent a wider one — so a bound the policy can express is always a bound
+    the result can carry.
+    """
+
+    MAX_SERVERS: ClassVar[int] = 8
+    MAX_TOTAL_DEADLINE_SECONDS: ClassVar[float] = 120.0
+    MAX_CAPABILITIES_PER_SERVER: ClassVar[int] = 256
+    MAX_TRIGGER_CANDIDATES: ClassVar[int] = 10
+    MAX_EXPANDED_CAPABILITIES: ClassVar[int] = 2_048
 
 
 class CapabilitySource(StrEnum):
@@ -101,6 +182,115 @@ class CapabilityBridgeRecursionError(ValueError):
         RESERVED_TARGET_NAME = (
             "a bridge invocation can never dispatch to another bridge tool"
         )
+
+
+class CapabilityExpansionError(ValueError):
+    """Typed, model-safe failure of a bounded capability expansion."""
+
+
+@runtime_checkable
+class CapabilityReferenceMinter(Protocol):
+    """Mint the opaque reference for one capability identity."""
+
+    def mint(self, *, catalog_id: str, identity: str) -> str: ...
+
+
+class HmacCapabilityReferenceMinter:
+    """Derive every opaque F3 reference from one secret reference key.
+
+    Catalog identifiers, catalog-member refs, and second-tier expanded refs are
+    all the *same* derivation: a keyed HMAC-SHA256 over a namespaced identity,
+    truncated to :attr:`CapabilityReferenceFormat.HEX_CHARS` behind a typed
+    prefix.  Keeping it in one place is what makes an expanded capability
+    indistinguishable from a catalog member to the model, and what stops the
+    catalog builder and the second-tier expander from drifting into two
+    derivations that could mint the same ref for different inputs.
+
+    Identities are namespaced by their minting path and are never parsed back.
+    The catalog builder mints ``{source}:{source_id}:{name}``; the expander
+    mints ``mcp_server:tool:{owner_ref}:{tool_name}``.  Because an MCP server
+    name and an MCP tool name are both colon-free slugs, and ``owner_ref`` is
+    itself a key-derived token nobody can predict, no card an operator can
+    register reproduces an expanded identity.
+    """
+
+    MIN_KEY_BYTES: ClassVar[int] = _REFERENCE_KEY_MIN_BYTES
+
+    class Messages:
+        """Safe public messages for reference-minter construction."""
+
+        # A nested class body cannot see the enclosing class namespace, so the
+        # bound is stated once at module scope and read from there by both.
+        WEAK_KEY = (
+            f"reference_key must contain at least {_REFERENCE_KEY_MIN_BYTES} bytes"
+        )
+
+    def __init__(self, *, reference_key: bytes) -> None:
+        if len(reference_key) < self.MIN_KEY_BYTES:
+            raise CapabilityExpansionError(self.Messages.WEAK_KEY)
+        self._reference_key = bytes(reference_key)
+
+    def mint_catalog_id(self, *, scope_identity: str) -> str:
+        """Return the opaque ``cat_`` identifier for one catalog scope."""
+
+        return self._mint(CapabilityReferenceFormat.CATALOG_PREFIX, scope_identity)
+
+    def mint(self, *, catalog_id: str, identity: str) -> str:
+        """Return an opaque ``cap_`` reference for one capability identity.
+
+        The catalog identifier is folded in, so the same capability identity in
+        two catalogs is two references and neither is portable between them.
+        """
+
+        return self._mint(
+            CapabilityReferenceFormat.CAPABILITY_PREFIX,
+            f"{catalog_id}:{identity}",
+        )
+
+    def keyed_hexdigest(self, payload: bytes) -> str:
+        """Return the one keyed digest every F3 identity derivation goes through."""
+
+        return hmac.new(self._reference_key, payload, hashlib.sha256).hexdigest()
+
+    def _mint(self, prefix: str, identity: str) -> str:
+        digest = self.keyed_hexdigest(identity.encode("utf-8"))
+        return f"{prefix}_{digest[: CapabilityReferenceFormat.HEX_CHARS]}"
+
+
+class CapabilitySubjectFingerprint:
+    """Derive the protected subject identity a catalog generation is keyed to.
+
+    The shared revision-binding primitive constrains a bound scope's subject to
+    lowercase SHA-256 hexadecimal, so raw organization and user identifiers are
+    never carried into a generation, a ref, or an event.  Derivation is keyed
+    and domain-separated: the same subject reproduces the same fingerprint, and
+    a fingerprint minted for another purpose cannot be replayed here.
+
+    The fingerprint is derived from the *verified* runtime context rather than
+    accepted from a caller, so no call site can key a catalog to a subject it
+    did not authenticate.  It goes through
+    :class:`HmacCapabilityReferenceMinter`, so subject fingerprints and opaque
+    refs can never be produced from different key-strength bars.
+    """
+
+    PURPOSE: ClassVar[str] = "capability-catalog-subject-v1"
+
+    def __init__(self, *, reference_key: bytes) -> None:
+        self._minter = HmacCapabilityReferenceMinter(reference_key=reference_key)
+
+    def derive(self, context: AgentRuntimeContext) -> str:
+        """Return the domain-separated fingerprint of one verified subject."""
+
+        payload = json.dumps(
+            {
+                "purpose": self.PURPOSE,
+                "org_id": context.org_id,
+                "user_id": context.user_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return self._minter.keyed_hexdigest(payload)
 
 
 class CatalogDescriptorRevision(RuntimeContract):
@@ -318,8 +508,8 @@ class CapabilityIndexEntry(RuntimeContract):
 
     capability_ref: str = Field(
         pattern=_CAPABILITY_REF_PATTERN,
-        min_length=36,
-        max_length=36,
+        min_length=CapabilityReferenceFormat.TOKEN_LENGTH,
+        max_length=CapabilityReferenceFormat.TOKEN_LENGTH,
     )
     source: CapabilitySource
     stable_name: str = Field(min_length=1, max_length=256)
@@ -410,14 +600,14 @@ class CapabilityCatalogRevision(RuntimeContract):
     """
 
     catalog_id: str = Field(
-        pattern=r"^cat_[0-9a-f]{32}$",
-        min_length=36,
-        max_length=36,
+        pattern=_CATALOG_ID_PATTERN,
+        min_length=CapabilityReferenceFormat.TOKEN_LENGTH,
+        max_length=CapabilityReferenceFormat.TOKEN_LENGTH,
     )
     revision: str = Field(
-        pattern=r"^rev_[0-9a-f]{32}$",
-        min_length=36,
-        max_length=36,
+        pattern=_CATALOG_REVISION_PATTERN,
+        min_length=CapabilityReferenceFormat.TOKEN_LENGTH,
+        max_length=CapabilityReferenceFormat.TOKEN_LENGTH,
     )
     profile_id: str = Field(min_length=1, max_length=128)
     user_id: str = Field(min_length=1, max_length=128)
@@ -552,8 +742,8 @@ class CapabilityRefBinding(RuntimeContract):
 
     schema_version: Literal[1] = 1
     capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
-    catalog_id: str = Field(pattern=r"^cat_[0-9a-f]{32}$")
-    catalog_revision: str = Field(pattern=r"^rev_[0-9a-f]{32}$")
+    catalog_id: str = Field(pattern=_CATALOG_ID_PATTERN)
+    catalog_revision: str = Field(pattern=_CATALOG_REVISION_PATTERN)
     issued_generation: CapabilityCatalogGeneration
     binding_digest: str = Field(pattern=_SHA256_HEX_PATTERN)
 
@@ -638,7 +828,7 @@ class CapabilitySearchRequest(RuntimeContract):
     """Bounded lexical query against one already-authorized catalog."""
 
     query: str = Field(min_length=1, max_length=512)
-    limit: PositiveInt = Field(default=5, le=10)
+    limit: PositiveInt = Field(default=5, le=CapabilitySearchBounds.MAX_CANDIDATES)
     filters: CapabilitySearchFilters = Field(default_factory=CapabilitySearchFilters)
 
     @field_validator("query")
@@ -669,14 +859,158 @@ class CapabilityCandidate(RuntimeContract):
 class CapabilitySearchResult(RuntimeContract):
     """Content-minimized result suitable for shadow evaluation and bridge output."""
 
-    catalog_id: str = Field(pattern=r"^cat_[0-9a-f]{32}$")
-    catalog_revision: str = Field(pattern=r"^rev_[0-9a-f]{32}$")
+    catalog_id: str = Field(pattern=_CATALOG_ID_PATTERN)
+    catalog_revision: str = Field(pattern=_CATALOG_REVISION_PATTERN)
     query_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
     scanned_count: NonNegativeInt
     candidates: tuple[CapabilityCandidate, ...] = Field(
         default_factory=tuple,
-        max_length=10,
+        max_length=CapabilitySearchBounds.MAX_CANDIDATES,
     )
+
+
+class RankedCapabilitySelection(RuntimeContract):
+    """Bounded ranked candidates plus how many entries were actually scored.
+
+    This is the catalog-free half of a search result.  It exists so the second
+    discovery tier can rank newly expanded records with the same deterministic
+    scorer and merge them into one bounded answer without pretending the
+    expanded records are catalog members.
+    """
+
+    scanned_count: NonNegativeInt = 0
+    candidates: tuple[CapabilityCandidate, ...] = Field(
+        default_factory=tuple,
+        max_length=CapabilitySearchBounds.MAX_CANDIDATES,
+    )
+
+
+class CapabilityExpansionState(StrEnum):
+    """Closed per-server expansion outcomes; only one of them admits records."""
+
+    EXPANDED = "expanded"
+    UNAVAILABLE = "unavailable"
+    DEADLINE_EXCEEDED = "deadline_exceeded"
+
+
+class ExpandedCapability(RuntimeContract):
+    """One schema-free capability projected from a successfully loaded server.
+
+    ``owner_capability_ref`` is the catalog ref of the *server card* this
+    capability came from. It is what makes the narrowing invariant checkable:
+    a capability is admissible only while its owner is recorded as expanded.
+    """
+
+    owner_capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
+    server_name: str = Field(min_length=1, max_length=256)
+    tool_name: str = Field(min_length=1, max_length=256)
+    entry: CapabilityIndexEntry
+
+
+class CapabilityExpansionOutcome(RuntimeContract):
+    """Per-server disclosure of what expansion did, without leaking why."""
+
+    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
+    state: CapabilityExpansionState
+    admitted_count: NonNegativeInt = 0
+
+    class Messages:
+        """Safe public messages for outcome invariants."""
+
+        UNEXPANDED_ADMISSION = "only an expanded server may admit capabilities"
+
+    @model_validator(mode="after")
+    def _only_expanded_servers_admit(self) -> Self:
+        if self.admitted_count and self.state is not CapabilityExpansionState.EXPANDED:
+            raise CapabilityExpansionError(self.Messages.UNEXPANDED_ADMISSION)
+        return self
+
+
+class CapabilityExpansionResult(RuntimeContract):
+    """Bounded result of one expansion; widening is structurally unrepresentable.
+
+    The validators are the enforcement point for the lane's central property.
+    A result can never claim more admitted servers than the configured ``K``,
+    can never carry a capability whose owner did not reach
+    :attr:`CapabilityExpansionState.EXPANDED`, and can never carry more
+    capabilities than the expanded servers actually admitted.
+    """
+
+    max_servers: PositiveInt = Field(le=CapabilityExpansionBounds.MAX_SERVERS)
+    considered_count: NonNegativeInt = 0
+    admitted_count: NonNegativeInt = 0
+    deadline_exceeded: bool = False
+    outcomes: tuple[CapabilityExpansionOutcome, ...] = Field(
+        default_factory=tuple,
+        max_length=CapabilityExpansionBounds.MAX_SERVERS,
+    )
+    capabilities: tuple[ExpandedCapability, ...] = Field(
+        default_factory=tuple,
+        max_length=CapabilityExpansionBounds.MAX_EXPANDED_CAPABILITIES,
+    )
+
+    class Messages:
+        """Safe public messages for expansion-result invariants."""
+
+        OVER_BUDGET = "expansion admitted more servers than the configured bound"
+        OVER_CONSIDERED = "expansion admitted more servers than it considered"
+        OUTCOME_COUNT = "expansion must record one outcome per admitted server"
+        DUPLICATE_OUTCOME = "expansion cannot record two outcomes for one server"
+        UNOWNED_CAPABILITY = (
+            "an expanded capability must belong to a server that expanded"
+        )
+        ADMISSION_MISMATCH = (
+            "expanded capability count must equal the admitted server totals"
+        )
+
+    @model_validator(mode="after")
+    def _partial_failure_only_narrows(self) -> Self:
+        if self.admitted_count > self.max_servers:
+            raise CapabilityExpansionError(self.Messages.OVER_BUDGET)
+        if self.admitted_count > self.considered_count:
+            raise CapabilityExpansionError(self.Messages.OVER_CONSIDERED)
+        if len(self.outcomes) != self.admitted_count:
+            raise CapabilityExpansionError(self.Messages.OUTCOME_COUNT)
+        refs = [outcome.capability_ref for outcome in self.outcomes]
+        if len(refs) != len(set(refs)):
+            raise CapabilityExpansionError(self.Messages.DUPLICATE_OUTCOME)
+        expanded_refs = {
+            outcome.capability_ref
+            for outcome in self.outcomes
+            if outcome.state is CapabilityExpansionState.EXPANDED
+        }
+        if any(
+            capability.owner_capability_ref not in expanded_refs
+            for capability in self.capabilities
+        ):
+            raise CapabilityExpansionError(self.Messages.UNOWNED_CAPABILITY)
+        admitted_total = sum(outcome.admitted_count for outcome in self.outcomes)
+        if admitted_total != len(self.capabilities):
+            raise CapabilityExpansionError(self.Messages.ADMISSION_MISMATCH)
+        return self
+
+    @property
+    def expanded_count(self) -> int:
+        """Return how many admitted servers actually produced capabilities."""
+
+        return sum(
+            1
+            for outcome in self.outcomes
+            if outcome.state is CapabilityExpansionState.EXPANDED
+        )
+
+    @classmethod
+    def empty(cls, *, max_servers: int) -> Self:
+        """Return the result of an expansion that admitted nothing."""
+
+        return cls(max_servers=max_servers)
+
+
+class TwoTierCapabilitySearchResult(RuntimeContract):
+    """A bounded search answer plus the audit of what tier two actually did."""
+
+    search: CapabilitySearchResult
+    expansion: CapabilityExpansionResult
 
 
 class CapabilityDiscoveryErrorCode(StrEnum):
@@ -777,8 +1111,8 @@ class CapabilityDescription(RuntimeContract):
 class CapabilityDescribeResult(RuntimeContract):
     """Description plus the revision that made the opaque ref meaningful."""
 
-    catalog_id: str = Field(pattern=r"^cat_[0-9a-f]{32}$")
-    catalog_revision: str = Field(pattern=r"^rev_[0-9a-f]{32}$")
+    catalog_id: str = Field(pattern=_CATALOG_ID_PATTERN)
+    catalog_revision: str = Field(pattern=_CATALOG_REVISION_PATTERN)
     capability: CapabilityDescription
 
 
@@ -973,8 +1307,8 @@ class CapabilityInvocationReceipt(RuntimeContract):
 class CapabilityInvokeResult(RuntimeContract):
     """Receipt plus the catalog revision that made the opaque ref meaningful."""
 
-    catalog_id: str = Field(pattern=r"^cat_[0-9a-f]{32}$")
-    catalog_revision: str = Field(pattern=r"^rev_[0-9a-f]{32}$")
+    catalog_id: str = Field(pattern=_CATALOG_ID_PATTERN)
+    catalog_revision: str = Field(pattern=_CATALOG_REVISION_PATTERN)
     receipt: CapabilityInvocationReceipt
 
 

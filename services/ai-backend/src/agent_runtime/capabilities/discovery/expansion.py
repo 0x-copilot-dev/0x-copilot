@@ -33,37 +33,44 @@ name/description/parameter-name metadata only: no input schema is copied into
 the index, so expansion never duplicates full schemas into the prompt. Nothing
 a server asserts about itself may *lower* its disclosed effect or approval
 posture; server-supplied risk signals are honored only when they escalate.
+
+This module owns only the *executable* second tier. The shapes it produces live
+in :mod:`agent_runtime.capabilities.discovery.contracts`, and the bounds it is
+held to are resolved from configuration in
+:mod:`agent_runtime.capabilities.discovery.activation`; both are re-exported
+here so existing call sites keep resolving to the one definition.
 """
 
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import hmac
 import logging
-import os
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
-from enum import StrEnum
-from typing import ClassVar, Protocol, Self, runtime_checkable
+from typing import ClassVar
 
-from pydantic import Field, NonNegativeInt, PositiveFloat, PositiveInt, model_validator
-
+from agent_runtime.capabilities.discovery.activation import CapabilityExpansionLimits
 from agent_runtime.capabilities.discovery.contracts import (
     ApprovalCue,
     CapabilityCatalog,
+    CapabilityExpansionError,
+    CapabilityExpansionOutcome,
+    CapabilityExpansionResult,
+    CapabilityExpansionState,
     CapabilityIndexEntry,
+    CapabilityReferenceMinter,
     CapabilitySearchFilters,
     CapabilitySearchRequest,
     CapabilitySearchResult,
     CapabilitySource,
     CatalogEffectClass,
-)
-from agent_runtime.capabilities.discovery.ranker import (
-    DeterministicLexicalRanker,
+    ExpandedCapability,
+    HmacCapabilityReferenceMinter,
     RankedCapabilitySelection,
+    TwoTierCapabilitySearchResult,
 )
+from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRanker
 from agent_runtime.capabilities.mcp.cards import (
     JsonSchema,
     McpLoadRequest,
@@ -72,288 +79,9 @@ from agent_runtime.capabilities.mcp.cards import (
     McpToolDescriptor,
 )
 from agent_runtime.capabilities.mcp.loader import McpLoader
-from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
-
-_CAPABILITY_REF_PATTERN = r"^cap_[0-9a-f]{32}$"
-_MAX_SERVER_CEILING = 8
-_MAX_EXPANDED_CAPABILITIES = 2_048
+from agent_runtime.execution.contracts import AgentRuntimeContext
 
 _LOGGER = logging.getLogger(__name__)
-
-
-class CapabilityExpansionError(ValueError):
-    """Typed, model-safe failure of a bounded capability expansion."""
-
-
-class CapabilityExpansionState(StrEnum):
-    """Closed per-server expansion outcomes; only one of them admits records."""
-
-    EXPANDED = "expanded"
-    UNAVAILABLE = "unavailable"
-    DEADLINE_EXCEEDED = "deadline_exceeded"
-
-
-class CapabilityExpansionLimits(RuntimeContract):
-    """Configuration-driven bounds for one bounded discovery expansion.
-
-    Every bound is conservative by default and clamps by construction.
-    ``max_servers`` is the ``K`` of the ``O(NQ + R log K)`` budget and of the
-    "cold discovery opens at most K servers" exit criterion; the first release
-    ceiling from the F3 PRD is ``K <= 3``.
-    """
-
-    max_servers: PositiveInt = Field(default=3, le=_MAX_SERVER_CEILING)
-    total_deadline_seconds: PositiveFloat = Field(default=8.0, le=120.0)
-    max_capabilities_per_server: PositiveInt = Field(default=64, le=256)
-    expansion_trigger_candidates: PositiveInt = Field(default=3, le=10)
-
-    class Env:
-        """Environment keys that may narrow or widen the bounded defaults."""
-
-        MAX_SERVERS: ClassVar[str] = "F3_DISCOVERY_MAX_EXPANDED_SERVERS"
-        TOTAL_DEADLINE_SECONDS: ClassVar[str] = "F3_DISCOVERY_TOTAL_DEADLINE_SECONDS"
-        MAX_CAPABILITIES_PER_SERVER: ClassVar[str] = (
-            "F3_DISCOVERY_MAX_CAPABILITIES_PER_SERVER"
-        )
-        EXPANSION_TRIGGER_CANDIDATES: ClassVar[str] = (
-            "F3_DISCOVERY_EXPANSION_TRIGGER_CANDIDATES"
-        )
-
-    @classmethod
-    def from_environment(
-        cls,
-        environ: Mapping[str, str] | None = None,
-    ) -> Self:
-        """Read the bounds from configuration, defaulting on anything invalid.
-
-        A missing, blank, non-numeric, or out-of-range value resolves to the
-        conservative default rather than to the ceiling, so a typo can never
-        raise the fan-out or the deadline. ``environ`` is injectable so tests
-        assert both branches without mutating process state.
-        """
-
-        source = environ if environ is not None else os.environ
-        defaults = cls()
-        return cls(
-            max_servers=cls._read_int(
-                source,
-                cls.Env.MAX_SERVERS,
-                default=defaults.max_servers,
-                minimum=1,
-                maximum=_MAX_SERVER_CEILING,
-            ),
-            total_deadline_seconds=cls._read_float(
-                source,
-                cls.Env.TOTAL_DEADLINE_SECONDS,
-                default=defaults.total_deadline_seconds,
-                maximum=120.0,
-            ),
-            max_capabilities_per_server=cls._read_int(
-                source,
-                cls.Env.MAX_CAPABILITIES_PER_SERVER,
-                default=defaults.max_capabilities_per_server,
-                minimum=1,
-                maximum=256,
-            ),
-            expansion_trigger_candidates=cls._read_int(
-                source,
-                cls.Env.EXPANSION_TRIGGER_CANDIDATES,
-                default=defaults.expansion_trigger_candidates,
-                minimum=1,
-                maximum=10,
-            ),
-        )
-
-    @staticmethod
-    def _read_int(
-        source: Mapping[str, str],
-        key: str,
-        *,
-        default: int,
-        minimum: int,
-        maximum: int,
-    ) -> int:
-        raw = source.get(key, "").strip()
-        if not raw:
-            return default
-        try:
-            value = int(raw)
-        except ValueError:
-            return default
-        if value < minimum or value > maximum:
-            return default
-        return value
-
-    @staticmethod
-    def _read_float(
-        source: Mapping[str, str],
-        key: str,
-        *,
-        default: float,
-        maximum: float,
-    ) -> float:
-        raw = source.get(key, "").strip()
-        if not raw:
-            return default
-        try:
-            value = float(raw)
-        except ValueError:
-            return default
-        if value <= 0 or value > maximum:
-            return default
-        return value
-
-
-@runtime_checkable
-class CapabilityReferenceMinter(Protocol):
-    """Mint the opaque reference for one expanded capability identity."""
-
-    def mint(self, *, catalog_id: str, identity: str) -> str: ...
-
-
-class HmacCapabilityReferenceMinter:
-    """Derive unguessable, run-stable refs from a secret reference key.
-
-    The derivation intentionally mirrors the catalog builder's so an expanded
-    capability is indistinguishable from a catalog member to the model. Supply
-    the same ``reference_key`` the builder was constructed with; identities are
-    namespaced so an expanded capability can never collide with a server card.
-    """
-
-    _MIN_KEY_BYTES: ClassVar[int] = 32
-
-    class Messages:
-        """Safe public messages for reference-minter construction."""
-
-        WEAK_KEY = "reference_key must contain at least 32 bytes"
-
-    def __init__(self, *, reference_key: bytes) -> None:
-        if len(reference_key) < self._MIN_KEY_BYTES:
-            raise CapabilityExpansionError(self.Messages.WEAK_KEY)
-        self._reference_key = bytes(reference_key)
-
-    def mint(self, *, catalog_id: str, identity: str) -> str:
-        """Return an opaque ``cap_`` reference for one capability identity."""
-
-        digest = hmac.new(
-            self._reference_key,
-            f"{catalog_id}:{identity}".encode(),
-            hashlib.sha256,
-        ).hexdigest()[:32]
-        return f"cap_{digest}"
-
-
-class ExpandedCapability(RuntimeContract):
-    """One schema-free capability projected from a successfully loaded server.
-
-    ``owner_capability_ref`` is the catalog ref of the *server card* this
-    capability came from. It is what makes the narrowing invariant checkable:
-    a capability is admissible only while its owner is recorded as expanded.
-    """
-
-    owner_capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
-    server_name: str = Field(min_length=1, max_length=256)
-    tool_name: str = Field(min_length=1, max_length=256)
-    entry: CapabilityIndexEntry
-
-
-class CapabilityExpansionOutcome(RuntimeContract):
-    """Per-server disclosure of what expansion did, without leaking why."""
-
-    capability_ref: str = Field(pattern=_CAPABILITY_REF_PATTERN)
-    state: CapabilityExpansionState
-    admitted_count: NonNegativeInt = 0
-
-    class Messages:
-        """Safe public messages for outcome invariants."""
-
-        UNEXPANDED_ADMISSION = "only an expanded server may admit capabilities"
-
-    @model_validator(mode="after")
-    def _only_expanded_servers_admit(self) -> Self:
-        if self.admitted_count and self.state is not CapabilityExpansionState.EXPANDED:
-            raise CapabilityExpansionError(self.Messages.UNEXPANDED_ADMISSION)
-        return self
-
-
-class CapabilityExpansionResult(RuntimeContract):
-    """Bounded result of one expansion; widening is structurally unrepresentable.
-
-    The validators are the enforcement point for the lane's central property.
-    A result can never claim more admitted servers than the configured ``K``,
-    can never carry a capability whose owner did not reach
-    :attr:`CapabilityExpansionState.EXPANDED`, and can never carry more
-    capabilities than the expanded servers actually admitted.
-    """
-
-    max_servers: PositiveInt = Field(le=_MAX_SERVER_CEILING)
-    considered_count: NonNegativeInt = 0
-    admitted_count: NonNegativeInt = 0
-    deadline_exceeded: bool = False
-    outcomes: tuple[CapabilityExpansionOutcome, ...] = Field(
-        default_factory=tuple,
-        max_length=_MAX_SERVER_CEILING,
-    )
-    capabilities: tuple[ExpandedCapability, ...] = Field(
-        default_factory=tuple,
-        max_length=_MAX_EXPANDED_CAPABILITIES,
-    )
-
-    class Messages:
-        """Safe public messages for expansion-result invariants."""
-
-        OVER_BUDGET = "expansion admitted more servers than the configured bound"
-        OVER_CONSIDERED = "expansion admitted more servers than it considered"
-        OUTCOME_COUNT = "expansion must record one outcome per admitted server"
-        DUPLICATE_OUTCOME = "expansion cannot record two outcomes for one server"
-        UNOWNED_CAPABILITY = (
-            "an expanded capability must belong to a server that expanded"
-        )
-        ADMISSION_MISMATCH = (
-            "expanded capability count must equal the admitted server totals"
-        )
-
-    @model_validator(mode="after")
-    def _partial_failure_only_narrows(self) -> Self:
-        if self.admitted_count > self.max_servers:
-            raise CapabilityExpansionError(self.Messages.OVER_BUDGET)
-        if self.admitted_count > self.considered_count:
-            raise CapabilityExpansionError(self.Messages.OVER_CONSIDERED)
-        if len(self.outcomes) != self.admitted_count:
-            raise CapabilityExpansionError(self.Messages.OUTCOME_COUNT)
-        refs = [outcome.capability_ref for outcome in self.outcomes]
-        if len(refs) != len(set(refs)):
-            raise CapabilityExpansionError(self.Messages.DUPLICATE_OUTCOME)
-        expanded_refs = {
-            outcome.capability_ref
-            for outcome in self.outcomes
-            if outcome.state is CapabilityExpansionState.EXPANDED
-        }
-        if any(
-            capability.owner_capability_ref not in expanded_refs
-            for capability in self.capabilities
-        ):
-            raise CapabilityExpansionError(self.Messages.UNOWNED_CAPABILITY)
-        admitted_total = sum(outcome.admitted_count for outcome in self.outcomes)
-        if admitted_total != len(self.capabilities):
-            raise CapabilityExpansionError(self.Messages.ADMISSION_MISMATCH)
-        return self
-
-    @property
-    def expanded_count(self) -> int:
-        """Return how many admitted servers actually produced capabilities."""
-
-        return sum(
-            1
-            for outcome in self.outcomes
-            if outcome.state is CapabilityExpansionState.EXPANDED
-        )
-
-    @classmethod
-    def empty(cls, *, max_servers: int) -> Self:
-        """Return the result of an expansion that admitted nothing."""
-
-        return cls(max_servers=max_servers)
 
 
 class ExpandedCapabilityProjector:
@@ -766,13 +494,6 @@ class BoundedCapabilityExpander:
         )
 
 
-class TwoTierCapabilitySearchResult(RuntimeContract):
-    """A bounded search answer plus the audit of what tier two actually did."""
-
-    search: CapabilitySearchResult
-    expansion: CapabilityExpansionResult
-
-
 class TwoTierCapabilitySearch:
     """Compose compact-card search with bounded server expansion.
 
@@ -859,7 +580,13 @@ class TwoTierCapabilitySearch:
 
 
 __all__ = (
+    # Owned here: the executable second tier.
     "BoundedCapabilityExpander",
+    "ExpandedCapabilityProjector",
+    "TwoTierCapabilitySearch",
+    # Re-exported so existing ``from ...expansion import X`` call sites keep
+    # resolving after the contracts moved to ``contracts`` and the
+    # configuration-resolved bounds moved to ``activation``.
     "CapabilityExpansionError",
     "CapabilityExpansionLimits",
     "CapabilityExpansionOutcome",
@@ -867,8 +594,6 @@ __all__ = (
     "CapabilityExpansionState",
     "CapabilityReferenceMinter",
     "ExpandedCapability",
-    "ExpandedCapabilityProjector",
     "HmacCapabilityReferenceMinter",
-    "TwoTierCapabilitySearch",
     "TwoTierCapabilitySearchResult",
 )

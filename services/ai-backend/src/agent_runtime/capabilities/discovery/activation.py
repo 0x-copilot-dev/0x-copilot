@@ -1,4 +1,11 @@
-"""Closed F3 activation policy resolved through the shared feature-mode seam.
+"""F3 policy resolved from untrusted configuration, conservative by default.
+
+This module owns every F3 knob an operator can turn: the closed activation
+ladder and the bounds one second-tier expansion is held to.  They are grouped
+because they share the one rule that makes untrusted configuration safe here —
+an absent, unknown, malformed, or out-of-range value always resolves to the
+*narrowest* posture, never to the ceiling.  A typo can only remove the new
+discovery path or shrink the fan-out; it can never widen either.
 
 Activation is a *narrowing dial inside* the existing
 :class:`~agent_runtime.control_plane.feature_modes.FeatureMode` vocabulary, not
@@ -21,11 +28,14 @@ operation still enters the Operation Gateway.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from enum import StrEnum
-from typing import Self
+import os
+from typing import ClassVar, Self
 
-from pydantic import model_validator
+from pydantic import Field, PositiveFloat, PositiveInt, model_validator
 
+from agent_runtime.capabilities.discovery.contracts import CapabilityExpansionBounds
 from agent_runtime.control_plane.feature_modes import (
     AgentQualityFeature,
     FeatureMode,
@@ -359,10 +369,140 @@ class CapabilityActivationResolver:
         return CapabilityActivationReason.CONFIGURED
 
 
+class CapabilityExpansionLimits(RuntimeContract):
+    """Configuration-driven bounds for one bounded discovery expansion.
+
+    Every bound is conservative by default and clamps by construction against
+    :class:`~agent_runtime.capabilities.discovery.contracts.CapabilityExpansionBounds`,
+    the structural ceiling the result contract can represent — so this policy
+    can only ever choose a value the result is able to carry.  ``max_servers``
+    is the ``K`` of the ``O(NQ + R log K)`` budget and of the "cold discovery
+    opens at most K servers" exit criterion; the first release ceiling from the
+    F3 PRD is ``K <= 3``.
+    """
+
+    max_servers: PositiveInt = Field(
+        default=3,
+        le=CapabilityExpansionBounds.MAX_SERVERS,
+    )
+    total_deadline_seconds: PositiveFloat = Field(
+        default=8.0,
+        le=CapabilityExpansionBounds.MAX_TOTAL_DEADLINE_SECONDS,
+    )
+    max_capabilities_per_server: PositiveInt = Field(
+        default=64,
+        le=CapabilityExpansionBounds.MAX_CAPABILITIES_PER_SERVER,
+    )
+    expansion_trigger_candidates: PositiveInt = Field(
+        default=3,
+        le=CapabilityExpansionBounds.MAX_TRIGGER_CANDIDATES,
+    )
+
+    class Env:
+        """Environment keys that may narrow or widen the bounded defaults."""
+
+        MAX_SERVERS: ClassVar[str] = "F3_DISCOVERY_MAX_EXPANDED_SERVERS"
+        TOTAL_DEADLINE_SECONDS: ClassVar[str] = "F3_DISCOVERY_TOTAL_DEADLINE_SECONDS"
+        MAX_CAPABILITIES_PER_SERVER: ClassVar[str] = (
+            "F3_DISCOVERY_MAX_CAPABILITIES_PER_SERVER"
+        )
+        EXPANSION_TRIGGER_CANDIDATES: ClassVar[str] = (
+            "F3_DISCOVERY_EXPANSION_TRIGGER_CANDIDATES"
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        environ: Mapping[str, str] | None = None,
+    ) -> Self:
+        """Read the bounds from configuration, defaulting on anything invalid.
+
+        A missing, blank, non-numeric, or out-of-range value resolves to the
+        conservative default rather than to the ceiling, so a typo can never
+        raise the fan-out or the deadline. ``environ`` is injectable so tests
+        assert both branches without mutating process state.
+
+        Each ceiling is read from the same
+        :class:`~agent_runtime.capabilities.discovery.contracts.CapabilityExpansionBounds`
+        the field declares, so the parsed range and the validated range cannot
+        drift apart.
+        """
+
+        source = environ if environ is not None else os.environ
+        defaults = cls()
+        return cls(
+            max_servers=cls._read_int(
+                source,
+                cls.Env.MAX_SERVERS,
+                default=defaults.max_servers,
+                maximum=CapabilityExpansionBounds.MAX_SERVERS,
+            ),
+            total_deadline_seconds=cls._read_float(
+                source,
+                cls.Env.TOTAL_DEADLINE_SECONDS,
+                default=defaults.total_deadline_seconds,
+                maximum=CapabilityExpansionBounds.MAX_TOTAL_DEADLINE_SECONDS,
+            ),
+            max_capabilities_per_server=cls._read_int(
+                source,
+                cls.Env.MAX_CAPABILITIES_PER_SERVER,
+                default=defaults.max_capabilities_per_server,
+                maximum=CapabilityExpansionBounds.MAX_CAPABILITIES_PER_SERVER,
+            ),
+            expansion_trigger_candidates=cls._read_int(
+                source,
+                cls.Env.EXPANSION_TRIGGER_CANDIDATES,
+                default=defaults.expansion_trigger_candidates,
+                maximum=CapabilityExpansionBounds.MAX_TRIGGER_CANDIDATES,
+            ),
+        )
+
+    @staticmethod
+    def _read_int(
+        source: Mapping[str, str],
+        key: str,
+        *,
+        default: int,
+        maximum: int,
+    ) -> int:
+        # Every bound is a ``PositiveInt``, so one is the floor for all of them
+        # and no call site restates it.
+        raw = source.get(key, "").strip()
+        if not raw:
+            return default
+        try:
+            value = int(raw)
+        except ValueError:
+            return default
+        if value < 1 or value > maximum:
+            return default
+        return value
+
+    @staticmethod
+    def _read_float(
+        source: Mapping[str, str],
+        key: str,
+        *,
+        default: float,
+        maximum: float,
+    ) -> float:
+        raw = source.get(key, "").strip()
+        if not raw:
+            return default
+        try:
+            value = float(raw)
+        except ValueError:
+            return default
+        if value <= 0 or value > maximum:
+            return default
+        return value
+
+
 __all__ = (
     "CapabilityActivationDecision",
     "CapabilityActivationError",
     "CapabilityActivationMode",
     "CapabilityActivationReason",
     "CapabilityActivationResolver",
+    "CapabilityExpansionLimits",
 )
