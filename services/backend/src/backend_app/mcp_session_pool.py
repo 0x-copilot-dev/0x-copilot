@@ -168,6 +168,11 @@ class McpSessionPoolDiagnostics:
     opening_sessions: int
     invalidated_sessions: int
     draining: bool
+    opened_sessions: int
+    reused_sessions: int
+    saturated_acquires: int
+    pre_dispatch_reconnects: int
+    keepalive_attempts: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -274,6 +279,11 @@ class McpSessionPool:
         self._opening_scopes: dict[str, VerifiedMcpSessionScopeKey] = {}
         self._invalidated_scope_expirations: dict[str, float] = {}
         self._draining = False
+        self._opened_sessions = 0
+        self._reused_sessions = 0
+        self._saturated_acquires = 0
+        self._pre_dispatch_reconnects = 0
+        self._keepalive_attempts = 0
 
     def acquire(self, scope: VerifiedMcpSessionScopeKey) -> McpSessionAcquireResult:
         """Borrow a compatible idle session or establish one within capacity."""
@@ -287,8 +297,10 @@ class McpSessionPool:
                 return McpSessionAcquireResult(McpSessionPoolOutcome.STALE)
             reusable = self._idle_for_scope_locked(scope)
             if reusable is not None:
+                self._reused_sessions += 1
                 return self._lease_locked(reusable)
             if not self._reserve_open_locked(scope):
+                self._saturated_acquires += 1
                 return McpSessionAcquireResult(McpSessionPoolOutcome.SATURATED)
 
         try:
@@ -315,6 +327,7 @@ class McpSessionPool:
                 last_released_at=now,
             )
             self._sessions[entry.session_id] = entry
+            self._opened_sessions += 1
             return self._lease_locked(entry)
 
     def release(
@@ -428,6 +441,8 @@ class McpSessionPool:
             if transport is None:
                 continue
             try:
+                with self._lock:
+                    self._keepalive_attempts += 1
                 transport.keepalive()
             except Exception:
                 with self._lock:
@@ -544,6 +559,11 @@ class McpSessionPool:
                     item.invalidated for item in self._sessions.values()
                 ),
                 draining=self._draining,
+                opened_sessions=self._opened_sessions,
+                reused_sessions=self._reused_sessions,
+                saturated_acquires=self._saturated_acquires,
+                pre_dispatch_reconnects=self._pre_dispatch_reconnects,
+                keepalive_attempts=self._keepalive_attempts,
             )
 
     def observe_paginated_discovery(
@@ -750,6 +770,7 @@ class McpSessionPool:
             self._sessions[replacement.session_id] = replacement
             lease_entry.session_id = replacement.session_id
             lease_entry.dispatch_committed = False
+            self._pre_dispatch_reconnects += 1
             return True
 
     def _scope_is_current_locked(self, scope: VerifiedMcpSessionScopeKey) -> bool:

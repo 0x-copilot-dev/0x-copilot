@@ -153,7 +153,7 @@ def test_internal_mcp_rpc_proxies_with_backend_held_token(monkeypatch) -> None:
         def __exit__(self, *_args):
             return None
 
-        def read(self) -> bytes:
+        def read(self, *_args: object) -> bytes:
             return b'{"jsonrpc":"2.0","id":1,"result":{"tools":[]}}'
 
     def fake_urlopen(request, timeout):
@@ -232,7 +232,7 @@ def test_internal_mcp_rpc_proxies_tools_call(monkeypatch) -> None:
         def __exit__(self, *_args):
             return None
 
-        def read(self) -> bytes:
+        def read(self, *_args: object) -> bytes:
             return b'{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"task list"}]}}'
 
     def fake_urlopen(request, timeout):

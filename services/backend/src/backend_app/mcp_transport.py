@@ -21,6 +21,8 @@ from backend_app.mcp_session_pool import (
 )
 from backend_app.token_vault import TokenVault
 
+_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+
 
 @runtime_checkable
 class McpRemoteSessionTransport(McpSessionTransport, Protocol):
@@ -147,7 +149,10 @@ class McpHttpTransport:
                         response.headers.get("mcp-protocol-version")
                         or self._protocol_version
                     )
-                    raw = response.read().decode("utf-8")
+                    raw_bytes = response.read(_MAX_RESPONSE_BYTES + 1)
+                    if len(raw_bytes) > _MAX_RESPONSE_BYTES:
+                        raise ValueError("MCP server response exceeds the safe limit")
+                    raw = raw_bytes.decode("utf-8")
                     content_type = response.headers.get("content-type", "")
             except HTTPError as exc:
                 if exc.code in {401, 403}:

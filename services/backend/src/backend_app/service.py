@@ -880,7 +880,10 @@ class McpRegistryService:
             return None
 
     def _require_live_server(self, record: McpServerRecord) -> None:
-        if not record.enabled or record.health is not McpServerHealth.HEALTHY:
+        if not record.enabled or record.health in {
+            McpServerHealth.DISABLED,
+            McpServerHealth.UNAVAILABLE,
+        }:
             raise ValueError("MCP server is unavailable")
         if (
             record.auth_mode != McpAuthMode.NONE
@@ -1243,6 +1246,11 @@ class McpRegistryService:
             "opening_sessions": diagnostics.opening_sessions,
             "invalidated_sessions": diagnostics.invalidated_sessions,
             "draining": diagnostics.draining,
+            "opened_sessions": diagnostics.opened_sessions,
+            "reused_sessions": diagnostics.reused_sessions,
+            "saturated_acquires": diagnostics.saturated_acquires,
+            "pre_dispatch_reconnects": diagnostics.pre_dispatch_reconnects,
+            "keepalive_attempts": diagnostics.keepalive_attempts,
             **dict(self._pool_metrics),
         }
 
@@ -1399,121 +1407,6 @@ class McpRegistryService:
     def _forget_lease_observation(self, lease_token: str) -> None:
         with self._lease_owners_lock:
             self._descriptor_observations.pop(lease_token, None)
-
-    def observe_complete_descriptor_view(
-        self,
-        *,
-        org_id: str,
-        user_id: str,
-        server_id: str,
-        lease_token: str,
-        max_pages: int = 100,
-    ) -> None:
-        """Publish only a fully paginated, body-free tools/resources view.
-
-        Descriptor bodies are streamed into a SHA-256 digest one item at a
-        time.  An exception, malformed page, cursor cycle, or stale lease
-        exits before publication, so it cannot overwrite a prior good view.
-        """
-
-        raise RuntimeError(
-            "Descriptor observation is driven by the proxied pagination stream"
-        )
-
-        if not 1 <= max_pages <= 1_000:
-            raise ValueError("MCP descriptor max_pages must be between 1 and 1000")
-        record = self._require_server_for_user(
-            org_id=org_id, user_id=user_id, server_id=server_id
-        )
-        token = (
-            self._require_valid_token(record)
-            if record.auth_mode != McpAuthMode.NONE
-            else None
-        )
-        scope = self._bind_session_scope(record, token)
-        lease = self.session_pool.import_lease_token(lease_token)
-        digest = hashlib.sha256()
-        totals = {"tools": 0, "resources": 0}
-        for method, collection in (
-            ("tools/list", "tools"),
-            ("resources/list", "resources"),
-        ):
-            cursor: str | None = None
-            seen: set[str] = set()
-            for _ in range(max_pages):
-                payload: dict[str, object] = {
-                    "jsonrpc": "2.0",
-                    "id": f"descriptor-{collection}",
-                    "method": method,
-                    "params": {} if cursor is None else {"cursor": cursor},
-                }
-                response = self.session_pool.invoke(
-                    lease,
-                    scope=scope,
-                    operation=lambda transport, fence: self._remote_rpc(
-                        transport, payload, fence
-                    ),
-                )
-                result = response.get("result")
-                if not isinstance(result, dict):
-                    raise ValueError("MCP descriptor page is malformed")
-                descriptors = result.get(collection)
-                if not isinstance(descriptors, list):
-                    raise ValueError("MCP descriptor page is malformed")
-                for descriptor in descriptors:
-                    if not isinstance(descriptor, dict):
-                        raise ValueError("MCP descriptor is malformed")
-                    # Keep only deterministic, non-secret descriptor metadata.
-                    safe = {
-                        key: descriptor[key]
-                        for key in (
-                            "name",
-                            "title",
-                            "description",
-                            "uri",
-                            "mimeType",
-                            "inputSchema",
-                            "annotations",
-                        )
-                        if key in descriptor
-                    }
-                    digest.update(
-                        json.dumps(
-                            safe, sort_keys=True, separators=(",", ":"), default=str
-                        ).encode()
-                    )
-                    digest.update(b"\n")
-                    totals[collection] += 1
-                next_cursor = result.get("nextCursor")
-                if next_cursor is None:
-                    break
-                if (
-                    not isinstance(next_cursor, str)
-                    or not next_cursor
-                    or next_cursor in seen
-                ):
-                    raise ValueError("MCP descriptor pagination is incomplete")
-                seen.add(next_cursor)
-                cursor = next_cursor
-            else:
-                raise ValueError("MCP descriptor pagination exceeded its bound")
-        descriptor_digest = digest.hexdigest()
-        existing = self.revision_authority.get_current(
-            org_id=org_id, user_id=user_id, server_id=server_id
-        )
-        if existing is not None and existing.descriptor_digest == descriptor_digest:
-            return
-        self.revision_authority.publish_complete_descriptor_view(
-            org_id=org_id,
-            user_id=user_id,
-            server_id=server_id,
-            descriptor_digest=descriptor_digest,
-            tool_count=totals["tools"],
-            resource_count=totals["resources"],
-            source="pooled_mcp_pagination",
-            idempotency_key=f"pooled:{scope.fingerprint}:{descriptor_digest}",
-            credential_subject=(token.connection_id if token is not None else None),
-        )
 
     def upsert_token_for_test(
         self,

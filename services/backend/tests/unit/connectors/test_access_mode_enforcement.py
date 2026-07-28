@@ -81,7 +81,7 @@ class FakeRemote:
             def __exit__(self, *_args):
                 return None
 
-            def read(self) -> bytes:
+            def read(self, *_args: object) -> bytes:
                 return json.dumps(body).encode()
 
         return Response()
