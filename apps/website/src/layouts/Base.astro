@@ -4,10 +4,19 @@ import "../styles/site.css";
 interface Props {
   title: string;
   description: string;
+  bodyClass?: string;
+  themeColor?: string;
+  fontHref?: string;
 }
-const { title, description } = Astro.props;
+const {
+  title,
+  description,
+  bodyClass,
+  themeColor = "#0b0a0e",
+  fontHref = "https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap",
+} = Astro.props;
 const canonical = new URL(Astro.url.pathname, Astro.site).href;
-const ogImage = new URL("./media/og-cover.png", Astro.site).href;
+const ogImage = new URL("./media/og.png", Astro.site).href;
 ---
 
 <!doctype html>
@@ -17,7 +26,7 @@ const ogImage = new URL("./media/og-cover.png", Astro.site).href;
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{title}</title>
     <meta name="description" content={description} />
-    <meta name="theme-color" content="#0b0a0e" />
+    <meta name="theme-color" content={themeColor} />
     <meta
       name="virtual-protocol-site-verification"
       content="5d071dc71ea32ea2ed360eb0458d9562"
@@ -40,11 +49,11 @@ const ogImage = new URL("./media/og-cover.png", Astro.site).href;
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap"
+      href={fontHref}
       rel="stylesheet"
     />
   </head>
-  <body>
+  <body class={bodyClass}>
     <slot />
   </body>
 </html>

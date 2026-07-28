@@ -148,6 +148,16 @@ nav {
 .nlinks a:hover {
   color: #fff;
 }
+.nav-soon {
+  position: relative;
+  top: -0.45em;
+  margin-left: 3px;
+  color: var(--ember);
+  font-family: var(--mono);
+  font-size: 7px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+}
 .ncta {
   border: 1px solid var(--line2);
   border-radius: 9px;
@@ -159,6 +169,64 @@ nav {
 .ncta:hover {
   border-color: var(--sky);
   background: rgba(95, 178, 236, 0.08);
+}
+.nav-mobile {
+  position: relative;
+  display: none;
+}
+.nav-mobile summary {
+  display: flex;
+  min-width: 98px;
+  align-items: center;
+  justify-content: space-between;
+  border: 1px solid var(--line2);
+  padding: 9px 12px;
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  list-style: none;
+  text-transform: uppercase;
+}
+.nav-mobile summary::-webkit-details-marker {
+  display: none;
+}
+.nav-mobile[open] summary span {
+  transform: rotate(45deg);
+}
+.nav-mobile-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  display: grid;
+  width: min(310px, calc(100vw - 32px));
+  border: 1px solid var(--line2);
+  background: var(--ink);
+  box-shadow: 8px 8px 0 rgba(0, 0, 0, 0.38);
+}
+.nav-mobile-panel a {
+  display: grid;
+  grid-template-columns: 32px 1fr;
+  border-bottom: 1px solid var(--line2);
+  padding: 14px 15px;
+  color: var(--tx);
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+.nav-mobile-panel a:last-child {
+  border-bottom: 0;
+}
+.nav-mobile-panel a span {
+  color: var(--mut2);
+  font-size: 9px;
+}
+.nav-mobile-panel .nav-mobile-cta {
+  background: var(--sky);
+  color: var(--ink);
+}
+.nav-mobile-panel .nav-mobile-cta span {
+  color: rgba(11, 10, 14, 0.58);
 }
 .pill {
   display: inline-flex;
@@ -1605,8 +1673,11 @@ footer {
   .sec h2 {
     font-size: 34px;
   }
-  .nlinks a:not(.ncta) {
+  .nlinks {
     display: none;
+  }
+  .nav-mobile {
+    display: block;
   }
   .compare,
   .cards,

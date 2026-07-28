@@ -1,0 +1,412 @@
+---
+import "../styles/moodboard.css";
+
+const directions = [
+  {
+    id: "operator",
+    key: "01",
+    name: "Operator Manual",
+    note: "Industrial, legible, visibly in control.",
+  },
+  {
+    id: "gazette",
+    key: "02",
+    name: "Electric Gazette",
+    note: "Editorial authority with an unruly edge.",
+  },
+  {
+    id: "signal",
+    key: "03",
+    name: "Signal System",
+    note: "A kinetic operating system, almost no decoration.",
+  },
+];
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>0xCopilot — local visual directions</title>
+    <meta
+      name="description"
+      content="A local-only visual mood board for 0xCopilot."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&family=Unbounded:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <header class="lab-bar">
+      <a href="./" class="lab-brand" aria-label="Back to the homepage">
+        <span class="lab-mark">0x</span>
+        <strong>Copilot</strong>
+        <i>VISUAL LAB</i>
+      </a>
+      <div class="lab-controls">
+        <span>LOCAL MOOD BOARD / JUL 2026</span>
+        <button class="clean-toggle" type="button" aria-pressed="false">
+          <span class="clean-label">Clean view</span>
+          <i aria-hidden="true">↗</i>
+        </button>
+      </div>
+    </header>
+
+    <section class="lab-intro">
+      <div>
+        <p>THREE DIRECTIONS. NO GENERIC AI GRADIENTS.</p>
+        <h1>
+          A website should have
+          <em>a point of view.</em>
+        </h1>
+      </div>
+      <p class="lab-intro-copy">
+        These are deliberately different systems—not theme variations. Each one
+        has its own type, palette, rhythm, geometry, and way of making the
+        product feel alive.
+      </p>
+    </section>
+
+    <nav class="direction-tabs" aria-label="Visual directions">
+      {
+        directions.map((direction, index) => (
+          <button
+            type="button"
+            class:list={["direction-tab", { active: index === 0 }]}
+            data-direction={direction.id}
+            aria-selected={index === 0 ? "true" : "false"}
+            role="tab"
+          >
+            <span>{direction.key}</span>
+            <strong>{direction.name}</strong>
+            <i>{direction.note}</i>
+          </button>
+        ))
+      }
+    </nav>
+
+    <main class="direction-stage">
+      <article
+        class="direction direction-operator active"
+        data-panel="operator"
+        role="tabpanel"
+      >
+        <aside class="direction-brief">
+          <div>
+            <span class="brief-index">DIRECTION / 01</span>
+            <h2>Operator<br />Manual</h2>
+            <p>
+              A printed field manual for autonomous work. Serious about control,
+              but never sterile.
+            </p>
+          </div>
+          <dl>
+            <div><dt>Display</dt><dd>Bricolage + Instrument Serif</dd></div>
+            <div><dt>Signal</dt><dd>Cobalt, acid, coral; warm run card</dd></div>
+            <div><dt>Energy</dt><dd>Precise / tactile / alert</dd></div>
+          </dl>
+          <div class="swatch-row" aria-label="Operator Manual colors">
+            <i style="--swatch:#f2eddf"></i>
+            <i style="--swatch:#111111"></i>
+            <i style="--swatch:#2447ff"></i>
+            <i style="--swatch:#d7ff3f"></i>
+            <i style="--swatch:#ff5b36"></i>
+          </div>
+          <div class="palette-trials" aria-label="Run card color trials">
+            <span>RUN CARD / COLOR TRIALS</span>
+            <button
+              type="button"
+              data-palette-choice="clay"
+              aria-pressed="true"
+            >
+              <i><b style="--chip:#a94835"></b><b style="--chip:#efb75e"></b></i>
+              <strong>Fired clay</strong>
+            </button>
+            <button
+              type="button"
+              data-palette-choice="aubergine"
+              aria-pressed="false"
+            >
+              <i><b style="--chip:#6e3f64"></b><b style="--chip:#efa18e"></b></i>
+              <strong>Aubergine</strong>
+            </button>
+            <button
+              type="button"
+              data-palette-choice="petrol"
+              aria-pressed="false"
+            >
+              <i><b style="--chip:#18737a"></b><b style="--chip:#f0aa5e"></b></i>
+              <strong>Petrol</strong>
+            </button>
+          </div>
+        </aside>
+
+        <section
+          class="concept-canvas operator-canvas"
+          data-board-palette="clay"
+        >
+          <div class="operator-grid" aria-hidden="true"></div>
+          <div class="operator-top">
+            <span>0xCOPILOT / LOCAL AGENT</span>
+            <span class="operator-live"><i></i> SYSTEM READY</span>
+          </div>
+          <div class="operator-copy">
+            <span class="operator-kicker">WORK, NOT ANSWERS</span>
+            <h3>
+              Chat was<br />
+              the <s>demo.</s><br />
+              <em>The job is<br />the product.</em>
+            </h3>
+            <p>
+              A local agent that works across your files and tools—and waits at
+              the gate when the work gets real.
+            </p>
+          </div>
+          <div class="operator-board">
+            <div class="board-title">
+              <span>RUN / 0X-284</span>
+              <strong>Treasury reporting</strong>
+              <i>WORKING</i>
+            </div>
+            <div class="board-goal">
+              <span>GOAL</span>
+              <p>Reconcile. Stage transfers. Draft the update.</p>
+            </div>
+            <div class="board-event">
+              <span>12:04:03</span><strong>sheet.read</strong><i>DONE</i>
+            </div>
+            <div class="board-event active">
+              <span>12:04:09</span><strong>x.thread.draft</strong><i>LIVE</i>
+            </div>
+            <div class="board-slip">
+              <span>PERMISSION GATE</span>
+              <strong>Send 3,100 USDC?</strong>
+              <i>APPROVE</i>
+            </div>
+          </div>
+          <div class="operator-orbit" aria-hidden="true"></div>
+          <div class="operator-footer">
+            <span>LOCAL-FIRST / BYOK / OPEN SOURCE</span>
+            <strong>GET THE APP ↘</strong>
+          </div>
+        </section>
+      </article>
+
+      <article
+        class="direction direction-gazette"
+        data-panel="gazette"
+        role="tabpanel"
+        hidden
+      >
+        <aside class="direction-brief">
+          <div>
+            <span class="brief-index">DIRECTION / 02</span>
+            <h2>Electric<br />Gazette</h2>
+            <p>
+              A research journal collided with a culture magazine. More
+              provocative, more human, less software-company.
+            </p>
+          </div>
+          <dl>
+            <div><dt>Display</dt><dd>Instrument Serif + Archivo Black</dd></div>
+            <div><dt>Signal</dt><dd>Wine, peach, mint, royal blue</dd></div>
+            <div><dt>Energy</dt><dd>Editorial / cultured / unexpected</dd></div>
+          </dl>
+          <div class="swatch-row" aria-label="Electric Gazette colors">
+            <i style="--swatch:#54172f"></i>
+            <i style="--swatch:#f4ab91"></i>
+            <i style="--swatch:#caff82"></i>
+            <i style="--swatch:#2457ff"></i>
+            <i style="--swatch:#fff8ee"></i>
+          </div>
+        </aside>
+
+        <section class="concept-canvas gazette-canvas">
+          <div class="gazette-mast">
+            <span>ISSUE N°01 / THE AUTONOMOUS DESK</span>
+            <strong>0xCopilot</strong>
+            <span>LOCAL SOFTWARE FOR PEOPLE WITH REAL WORK</span>
+          </div>
+          <div class="gazette-main">
+            <div class="gazette-number">01</div>
+            <div class="gazette-copy">
+              <span class="gazette-kicker">THE WORK BETWEEN THE TABS</span>
+              <h3>
+                Your AI should leave
+                <em>fingerprints</em>
+                on the work.
+              </h3>
+              <div class="gazette-columns">
+                <p>
+                  Not another box waiting for a perfect prompt. A local agent
+                  that opens the sheet, drafts the thread, and stages the work.
+                </p>
+                <p>
+                  You see every move. You can rewind the run. Anything
+                  consequential waits for your say.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div class="gazette-ticket">
+            <span>NOW PROCESSING</span>
+            <strong>03 / 06</strong>
+            <p>COMMUNITY UPDATE</p>
+          </div>
+          <div class="gazette-band">
+            <span>WATCH IT</span><i>✦</i><span>REWIND IT</span><i>✦</i
+            ><span>STEER IT</span><i>✦</i><span>WATCH IT</span><i>✦</i
+            ><span>REWIND IT</span><i>✦</i><span>STEER IT</span>
+          </div>
+        </section>
+      </article>
+
+      <article
+        class="direction direction-signal"
+        data-panel="signal"
+        role="tabpanel"
+        hidden
+      >
+        <aside class="direction-brief">
+          <div>
+            <span class="brief-index">DIRECTION / 03</span>
+            <h2>Signal<br />System</h2>
+            <p>
+              The product as a living machine. Minimal copy, enormous type,
+              movement carried by rails and status signals.
+            </p>
+          </div>
+          <dl>
+            <div><dt>Display</dt><dd>Unbounded + DM Mono</dd></div>
+            <div><dt>Signal</dt><dd>Black, safety orange, volt green</dd></div>
+            <div><dt>Energy</dt><dd>Machine / kinetic / uncompromising</dd></div>
+          </dl>
+          <div class="swatch-row" aria-label="Signal System colors">
+            <i style="--swatch:#080b09"></i>
+            <i style="--swatch:#f5f3e8"></i>
+            <i style="--swatch:#baff00"></i>
+            <i style="--swatch:#ff4c00"></i>
+            <i style="--swatch:#18a66a"></i>
+          </div>
+        </aside>
+
+        <section class="concept-canvas signal-canvas">
+          <div class="signal-top">
+            <strong>0xC</strong>
+            <span>LOCAL / AGENTIC / VISIBLE</span>
+            <i>BUILD 026</i>
+          </div>
+          <div class="signal-word">
+            <span>YOUR</span>
+            <span>WORK.</span>
+            <strong>IN MOTION.</strong>
+          </div>
+          <div class="signal-rails" aria-hidden="true">
+            <i style="--rail:78%;--delay:0s"></i>
+            <i style="--rail:56%;--delay:.12s"></i>
+            <i style="--rail:88%;--delay:.24s"></i>
+            <i style="--rail:39%;--delay:.36s"></i>
+          </div>
+          <div class="signal-event">
+            <span>EVENT / 0128</span>
+            <strong>RUN.WAITING_FOR_PERMISSION</strong>
+            <i>HOLD</i>
+          </div>
+          <div class="signal-manifest">
+            <p>
+              THE AGENT ACTS.<br />
+              THE LOG REMEMBERS.<br />
+              YOU STAY IN CONTROL.
+            </p>
+            <a href="./install.html">START A RUN ↗</a>
+          </div>
+          <div class="signal-ticker">
+            <span>WATCH</span><i>→</i><span>REWIND</span><i>→</i
+            ><span>STEER</span><i>→</i><span>WATCH</span><i>→</i
+            ><span>REWIND</span><i>→</i><span>STEER</span>
+          </div>
+        </section>
+      </article>
+    </main>
+
+    <footer class="lab-footer">
+      <p>
+        Press <kbd>1</kbd>, <kbd>2</kbd>, or <kbd>3</kbd> to switch directions.
+        Press <kbd>F</kbd> for clean view.
+      </p>
+      <a href="./">Current homepage ↗</a>
+    </footer>
+
+    <script>
+      const tabs = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("[data-direction]"),
+      );
+      const panels = Array.from(
+        document.querySelectorAll<HTMLElement>("[data-panel]"),
+      );
+      const cleanButton =
+        document.querySelector<HTMLButtonElement>(".clean-toggle");
+      const cleanLabel = document.querySelector<HTMLElement>(".clean-label");
+      const operatorCanvas =
+        document.querySelector<HTMLElement>(".operator-canvas");
+      const paletteButtons = Array.from(
+        document.querySelectorAll<HTMLButtonElement>("[data-palette-choice]"),
+      );
+
+      function showDirection(id: string) {
+        tabs.forEach((tab) => {
+          const active = tab.dataset.direction === id;
+          tab.classList.toggle("active", active);
+          tab.setAttribute("aria-selected", String(active));
+        });
+        panels.forEach((panel) => {
+          const active = panel.dataset.panel === id;
+          panel.classList.toggle("active", active);
+          panel.hidden = !active;
+        });
+      }
+
+      function toggleCleanView() {
+        const active = document.body.classList.toggle("clean-view");
+        cleanButton?.setAttribute("aria-pressed", String(active));
+        if (cleanLabel) cleanLabel.textContent = active ? "Show notes" : "Clean view";
+      }
+
+      tabs.forEach((tab) => {
+        tab.addEventListener("click", () => showDirection(tab.dataset.direction ?? "operator"));
+      });
+
+      cleanButton?.addEventListener("click", toggleCleanView);
+
+      paletteButtons.forEach((button) => {
+        button.addEventListener("click", () => {
+          const palette = button.dataset.paletteChoice ?? "clay";
+          if (operatorCanvas) operatorCanvas.dataset.boardPalette = palette;
+          paletteButtons.forEach((candidate) => {
+            candidate.setAttribute(
+              "aria-pressed",
+              String(candidate === button),
+            );
+          });
+        });
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.key === "f" || event.key === "F") {
+          toggleCleanView();
+          return;
+        }
+        const index = Number(event.key) - 1;
+        if (index >= 0 && index < tabs.length) {
+          showDirection(tabs[index].dataset.direction ?? "operator");
+          tabs[index].focus();
+        }
+      });
+    </script>
+  </body>
+</html>
