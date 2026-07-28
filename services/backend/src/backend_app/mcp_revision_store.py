@@ -71,7 +71,7 @@ class InMemoryMcpRevisionStore:
         self._notices: deque[tuple[str, str, McpDescriptorRevisionNotice]] = deque()
         self._idempotency: dict[
             tuple[str, str, str, str],
-            tuple[tuple[str, int, int, str], McpDescriptorRevision],
+            tuple[tuple[str, int, int, str, str], McpDescriptorRevision],
         ] = {}
         self._idempotency_order: deque[tuple[str, str, str, str]] = deque()
         self._sequence = 0
@@ -170,6 +170,12 @@ class InMemoryMcpRevisionStore:
             raise ValueError("idempotency_key is required")
         key = self._key(org_id, user_id, server_id)
         idem_key = (*key, idempotency_key)
+        requested_scope = _scope_hash(
+            org_id=org_id,
+            user_id=user_id,
+            server_id=server_id,
+            credential_subject=credential_subject,
+        )
         existing = self._idempotency.get(idem_key)
         if existing is not None:
             request_fingerprint = (
@@ -177,6 +183,7 @@ class InMemoryMcpRevisionStore:
                 tool_count,
                 resource_count,
                 source,
+                requested_scope,
             )
             if existing[0] != request_fingerprint:
                 raise ValueError(
@@ -196,12 +203,7 @@ class InMemoryMcpRevisionStore:
             else (0, 0, 0, 0),
         )
         now = datetime.now(timezone.utc)
-        subject_scope_hash = _scope_hash(
-            org_id=org_id,
-            user_id=user_id,
-            server_id=server_id,
-            credential_subject=credential_subject,
-        )
+        subject_scope_hash = requested_scope
         view = McpDescriptorRevision(
             server_id=server_id,
             profile_id=user_id,
@@ -223,7 +225,7 @@ class InMemoryMcpRevisionStore:
         )
         self._views[key] = view
         self._idempotency[idem_key] = (
-            (descriptor_digest, tool_count, resource_count, source),
+            (descriptor_digest, tool_count, resource_count, source, requested_scope),
             view,
         )
         self._idempotency_order.append(idem_key)
@@ -442,6 +444,12 @@ class _PostgresMcpRevisionPersistence:
             kwargs["user_id"],
             kwargs["server_id"],
         )
+        requested_scope = _scope_hash(
+            org_id=org_id,
+            user_id=user_id,
+            server_id=server_id,
+            credential_subject=kwargs.get("credential_subject"),
+        )
         with (
             self._pg_connection(conn=kwargs.get("conn"), org_id=org_id) as connection,
             connection.cursor() as cur,
@@ -462,6 +470,7 @@ class _PostgresMcpRevisionPersistence:
                     or int(existing["tool_count"]) != int(kwargs["tool_count"])
                     or int(existing["resource_count"]) != int(kwargs["resource_count"])
                     or str(existing["source"]) != str(kwargs["source"])
+                    or str(existing["subject_scope_hash"]) != requested_scope
                 ):
                     raise ValueError(
                         "idempotency_key conflicts with a previous descriptor publication"
@@ -488,12 +497,7 @@ class _PostgresMcpRevisionPersistence:
             params = {
                 **kwargs,
                 "profile_id": user_id,
-                "scope": _scope_hash(
-                    org_id=org_id,
-                    user_id=user_id,
-                    server_id=server_id,
-                    credential_subject=kwargs.get("credential_subject"),
-                ),
+                "scope": requested_scope,
                 "config": gens[0],
                 "auth": gens[1],
                 "transport": gens[2],

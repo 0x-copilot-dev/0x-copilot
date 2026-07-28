@@ -73,6 +73,33 @@ def test_revision_digest_is_bound_to_the_credential_subject_scope() -> None:
     assert first.revision != second.revision
 
 
+def test_idempotency_key_reuse_after_credential_rotation_conflicts() -> None:
+    authority = McpRevisionAuthority()
+    _ = authority.publish_complete_descriptor_view(
+        org_id="org_123",
+        user_id="user_123",
+        server_id="server_123",
+        descriptor_digest="a" * 64,
+        tool_count=2,
+        resource_count=1,
+        source="complete_paginated_observer",
+        idempotency_key="stable-retry",
+        credential_subject="connection-before-rotation",
+    )
+    with pytest.raises(ValueError, match="idempotency_key conflicts"):
+        authority.publish_complete_descriptor_view(
+            org_id="org_123",
+            user_id="user_123",
+            server_id="server_123",
+            descriptor_digest="a" * 64,
+            tool_count=2,
+            resource_count=1,
+            source="complete_paginated_observer",
+            idempotency_key="stable-retry",
+            credential_subject="connection-after-rotation",
+        )
+
+
 def test_in_memory_idempotency_records_are_bounded() -> None:
     store = InMemoryMcpRevisionStore(retain_max=2)
     authority = McpRevisionAuthority(store)
