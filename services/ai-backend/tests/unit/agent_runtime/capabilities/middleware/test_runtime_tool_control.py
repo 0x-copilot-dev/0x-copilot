@@ -62,9 +62,6 @@ class _RecordingGuard:
     def admit_task_policy(self, **_kwargs: object) -> None:
         return None
 
-    async def aadmit_task_policy(self, **_kwargs: object) -> None:
-        return None
-
     def observe_upstream_policy_block(
         self,
         *,
@@ -157,6 +154,30 @@ class _RecordingGuard:
     ) -> str:
         self.admissions.append(result)
         return f"bounded:{result}"
+
+
+class _SyncOnlyAdmissionGuard(_RecordingGuard):
+    """Legacy adapter shape: canonical async seam must use its sync admission."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.task_policy_admissions = 0
+
+    def admit_task_policy(self, **_kwargs: object) -> None:
+        self.task_policy_admissions += 1
+
+
+class _AsyncDurableAdmissionGuard(_RecordingGuard):
+    """Durable adapter shape: completion proves admission precedes dispatch."""
+
+    def __init__(self, observations: list[str]) -> None:
+        super().__init__()
+        self._observations = observations
+        self.task_policy_admissions = 0
+
+    async def aadmit_task_policy(self, **_kwargs: object) -> None:
+        self.task_policy_admissions += 1
+        self._observations.append("admission_persisted")
 
 
 class _FanoutModel(BaseChatModel):
@@ -288,6 +309,45 @@ async def test_injected_tool_result_crosses_one_budget_and_result_boundary() -> 
     assert len(guard.started) == len(guard.settled) == 1
     assert guard.policy_outcomes == [True]
     assert guard.admissions == ["raw framework result"]
+
+
+async def test_async_tool_seam_admits_a_legacy_sync_guard_once() -> None:
+    middleware = RuntimeToolControlMiddleware()
+    guard = _SyncOnlyAdmissionGuard()
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        return ToolMessage(content="raw", tool_call_id=request.tool_call["id"])
+
+    token = ToolBudgetGuard.bind_for_run(cast(ToolBudgetGuard, guard))
+    try:
+        result = await middleware.awrap_tool_call(_request(), handler)
+    finally:
+        ToolBudgetGuard.unbind(token)
+
+    assert result.content == "bounded:raw"
+    assert guard.task_policy_admissions == 1
+    assert len(guard.started) == len(guard.settled) == 1
+
+
+async def test_async_tool_seam_awaits_durable_admission_once_before_dispatch() -> None:
+    middleware = RuntimeToolControlMiddleware()
+    observations: list[str] = []
+    guard = _AsyncDurableAdmissionGuard(observations)
+
+    async def handler(request: ToolCallRequest) -> ToolMessage:
+        assert observations == ["admission_persisted"]
+        observations.append("tool_dispatched")
+        return ToolMessage(content="raw", tool_call_id=request.tool_call["id"])
+
+    token = ToolBudgetGuard.bind_for_run(cast(ToolBudgetGuard, guard))
+    try:
+        result = await middleware.awrap_tool_call(_request(), handler)
+    finally:
+        ToolBudgetGuard.unbind(token)
+
+    assert result.content == "bounded:raw"
+    assert guard.task_policy_admissions == 1
+    assert observations == ["admission_persisted", "tool_dispatched"]
 
 
 async def test_command_tool_messages_are_bounded_before_model_admission() -> None:
