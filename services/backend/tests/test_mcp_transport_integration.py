@@ -106,6 +106,20 @@ def test_pool_metrics_distinguish_open_reuse_saturation_and_keepalive() -> None:
     assert diagnostics.keepalive_attempts == 1
 
 
+def test_session_pool_reuse_backout_is_resolved_strictly_at_composition(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MCP_SESSION_POOL_REUSE_ENABLED", "off")
+    assert (
+        McpRegistryService._session_pool_config_from_environment().reuse_enabled
+        is False
+    )
+
+    monkeypatch.setenv("MCP_SESSION_POOL_REUSE_ENABLED", "invalid")
+    with pytest.raises(ValueError, match="MCP_SESSION_POOL_REUSE_ENABLED"):
+        McpRegistryService._session_pool_config_from_environment()
+
+
 class _Vault:
     def __init__(self) -> None:
         self.decrypt_calls = 0

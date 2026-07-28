@@ -112,6 +112,24 @@ def test_pool_records_acquire_reuse_saturation_and_drain_without_scope_values() 
     assert scope.fingerprint not in flattened
 
 
+def test_pool_records_closed_reuse_disabled_backout_without_scope_values() -> None:
+    recorder = _Recorder()
+    pool = McpSessionPool(
+        factory=_Factory(),
+        config=McpSessionPoolConfig(reuse_enabled=False),
+        diagnostics=recorder,
+    )
+    acquired = pool.acquire(_scope())
+    assert acquired.lease is not None
+
+    assert (
+        pool.release(acquired.lease, scope=_scope()) is McpSessionPoolOutcome.RELEASED
+    )
+
+    assert ("lease_reuse", "disabled_closed") in recorder.phases
+    assert "credential-reference" not in repr(recorder.phases)
+
+
 def test_pool_records_connect_failure_and_scope_invalidation() -> None:
     recorder = _Recorder()
     failed = McpSessionPool(factory=_FailingFactory(), diagnostics=recorder)

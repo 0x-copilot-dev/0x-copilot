@@ -412,6 +412,9 @@ class McpRegistryService:
             max_pre_dispatch_reconnects=nonnegative(
                 "MCP_SESSION_POOL_MAX_PRE_DISPATCH_RECONNECTS", 1, 3
             ),
+            reuse_enabled=McpSessionPoolConfig.reuse_enabled_from_environment(
+                os.environ
+            ),
         )
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
@@ -1432,6 +1435,7 @@ class McpRegistryService:
             "draining": diagnostics.draining,
             "opened_sessions": diagnostics.opened_sessions,
             "reused_sessions": diagnostics.reused_sessions,
+            "reuse_disabled_releases": diagnostics.reuse_disabled_releases,
             "saturated_acquires": diagnostics.saturated_acquires,
             "pre_dispatch_reconnects": diagnostics.pre_dispatch_reconnects,
             "keepalive_attempts": diagnostics.keepalive_attempts,

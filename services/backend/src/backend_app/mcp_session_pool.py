@@ -14,7 +14,7 @@ import hashlib
 import secrets
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Protocol, TypeVar
@@ -172,6 +172,7 @@ class McpSessionPoolDiagnostics:
     draining: bool
     opened_sessions: int
     reused_sessions: int
+    reuse_disabled_releases: int
     saturated_acquires: int
     pre_dispatch_reconnects: int
     keepalive_attempts: int
@@ -207,6 +208,18 @@ class McpSessionPoolConfig:
     absolute_ttl_seconds: float = 900.0
     invalidation_ttl_seconds: float = 900.0
     max_pre_dispatch_reconnects: int = 1
+    reuse_enabled: bool = True
+
+    @staticmethod
+    def reuse_enabled_from_environment(environ: Mapping[str, str]) -> bool:
+        """Resolve the F8 reuse backout once at backend composition time."""
+
+        raw = environ.get("MCP_SESSION_POOL_REUSE_ENABLED", "true").strip().lower()
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        raise ValueError("MCP_SESSION_POOL_REUSE_ENABLED must be a boolean")
 
     def __post_init__(self) -> None:
         if self.max_total_sessions < 1 or self.max_sessions_per_key < 1:
@@ -219,6 +232,8 @@ class McpSessionPoolConfig:
             raise ValueError("MCP session-pool TTLs must be positive")
         if self.max_pre_dispatch_reconnects < 0:
             raise ValueError("MCP reconnect budget must be non-negative")
+        if type(self.reuse_enabled) is not bool:
+            raise ValueError("MCP session-pool reuse_enabled must be a boolean")
 
 
 @dataclass(slots=True)
@@ -285,6 +300,7 @@ class McpSessionPool:
         self._draining = False
         self._opened_sessions = 0
         self._reused_sessions = 0
+        self._reuse_disabled_releases = 0
         self._saturated_acquires = 0
         self._pre_dispatch_reconnects = 0
         self._keepalive_attempts = 0
@@ -303,7 +319,10 @@ class McpSessionPool:
                 result = McpSessionAcquireResult(McpSessionPoolOutcome.SHUTTING_DOWN)
             elif not self._scope_is_current_locked(scope):
                 result = McpSessionAcquireResult(McpSessionPoolOutcome.STALE)
-            elif (reusable := self._idle_for_scope_locked(scope)) is not None:
+            elif (
+                self._config.reuse_enabled
+                and (reusable := self._idle_for_scope_locked(scope)) is not None
+            ):
                 self._reused_sessions += 1
                 result = self._lease_locked(reusable)
                 reused = True
@@ -412,12 +431,19 @@ class McpSessionPool:
                         self._draining
                         or session.invalidated
                         or self._expired(session, self._clock())
+                        or not self._config.reuse_enabled
                     ):
+                        if not self._config.reuse_enabled:
+                            self._reuse_disabled_releases += 1
                         self._remove_session_locked(session.session_id)
                     outcome = McpSessionPoolOutcome.RELEASED
                 self._drained.notify_all()
             snapshot = self._pool_size_snapshot_locked()
         self._record_pool_snapshot(snapshot)
+        if outcome is McpSessionPoolOutcome.RELEASED and not self._config.reuse_enabled:
+            self._diagnostics.record_phase(
+                phase="lease_reuse", outcome="disabled_closed", duration_seconds=0
+            )
         return outcome
 
     def cancel(
@@ -663,6 +689,7 @@ class McpSessionPool:
                 draining=self._draining,
                 opened_sessions=self._opened_sessions,
                 reused_sessions=self._reused_sessions,
+                reuse_disabled_releases=self._reuse_disabled_releases,
                 saturated_acquires=self._saturated_acquires,
                 pre_dispatch_reconnects=self._pre_dispatch_reconnects,
                 keepalive_attempts=self._keepalive_attempts,

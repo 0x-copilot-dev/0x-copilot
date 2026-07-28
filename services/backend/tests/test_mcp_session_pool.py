@@ -169,6 +169,79 @@ def test_reuses_only_the_exact_verified_scope_and_hides_transport_handle() -> No
     )
 
 
+def test_reuse_disabled_closes_each_released_transport_and_never_keepalives_idle() -> (
+    None
+):
+    factory = _Factory()
+    pool = McpSessionPool(
+        factory=factory,
+        config=McpSessionPoolConfig(reuse_enabled=False),
+    )
+    scope = _scope()
+    first = _acquire(pool, scope)
+
+    assert pool.release(first, scope=scope) is McpSessionPoolOutcome.RELEASED
+    assert factory.transports[0].closed == 1
+    assert pool.diagnostics().total_sessions == 0
+    assert pool.keepalive_idle() is McpSessionPoolOutcome.RELEASED
+    assert factory.transports[0].keepalives == 0
+
+    second = _acquire(pool, scope)
+    assert len(factory.transports) == 2
+    assert pool.release(second, scope=scope) is McpSessionPoolOutcome.RELEASED
+    other_scope = _scope(auth_epoch="auth-2")
+    other = _acquire(pool, other_scope)
+    assert len(factory.transports) == 3
+    assert pool.release(other, scope=other_scope) is McpSessionPoolOutcome.RELEASED
+    diagnostics = pool.diagnostics()
+    assert diagnostics.reused_sessions == 0
+    assert diagnostics.reuse_disabled_releases == 3
+
+
+def test_reuse_backout_environment_and_programmatic_config_are_strict() -> None:
+    assert McpSessionPoolConfig.reuse_enabled_from_environment({}) is True
+    assert (
+        McpSessionPoolConfig.reuse_enabled_from_environment(
+            {"MCP_SESSION_POOL_REUSE_ENABLED": "false"}
+        )
+        is False
+    )
+    with pytest.raises(ValueError, match="MCP_SESSION_POOL_REUSE_ENABLED"):
+        McpSessionPoolConfig.reuse_enabled_from_environment(
+            {"MCP_SESSION_POOL_REUSE_ENABLED": "sometimes"}
+        )
+    for invalid in (0, 1, "false"):
+        with pytest.raises(ValueError, match="reuse_enabled"):
+            McpSessionPoolConfig(reuse_enabled=invalid)  # type: ignore[arg-type]
+
+
+def test_reuse_disabled_preserves_cancel_invalidation_and_shutdown_drain() -> None:
+    factory = _Factory()
+    pool = McpSessionPool(
+        factory=factory,
+        config=McpSessionPoolConfig(reuse_enabled=False),
+    )
+    scope = _scope()
+    active = _acquire(pool, scope)
+    assert pool.cancel(active, scope=scope) is McpSessionPoolOutcome.RELEASED
+    assert factory.transports[0].closed == 1
+
+    invalidated = _acquire(pool, scope)
+    assert pool.invalidate_scope(scope) == 1
+    assert pool.release(invalidated, scope=scope) is McpSessionPoolOutcome.RELEASED
+    assert factory.transports[1].closed == 1
+
+    shutdown_lease = _acquire(pool, _scope(server="server-2"))
+    assert pool.shutdown(timeout_seconds=0) is False
+    assert pool.release(shutdown_lease, scope=_scope(server="server-2")) is (
+        McpSessionPoolOutcome.RELEASED
+    )
+    assert pool.shutdown(timeout_seconds=0) is True
+    assert factory.transports[2].closed == 1
+    assert pool.diagnostics().total_sessions == 0
+    assert [transport.closed for transport in factory.transports] == [1, 1, 1]
+
+
 def test_lease_serializes_as_an_opaque_token_without_scope_fingerprint() -> None:
     factory = _Factory()
     pool = McpSessionPool(factory=factory)
