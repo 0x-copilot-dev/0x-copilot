@@ -563,6 +563,30 @@ def create_app(
             identity=identity,
         )
 
+    @app.get("/v1/agent/conversations/{conversation_id}/canvas")
+    async def get_conversation_canvas(
+        request: Request,
+        conversation_id: str,
+        limit: int = Query(50, ge=1, le=100),
+    ) -> dict[str, object]:
+        """Canvas subjects for the conversation (PRD-02).
+
+        The facade proxies explicitly, route by route — there is no wildcard —
+        so a new ai-backend endpoint is invisible to both apps until it is
+        listed here. Scope is enforced by the runtime, which 404s a conversation
+        outside the caller's identity; this only forwards the verified identity.
+        """
+
+        identity = FacadeAuthenticator.authenticate_request(request)
+        return await forward_json(
+            app,
+            "GET",
+            f"/v1/agent/conversations/{conversation_id}/canvas",
+            target="ai_backend",
+            params=identity.scoped_params({"limit": limit}),
+            identity=identity,
+        )
+
     @app.get("/v1/agent/conversations/{conversation_id}/context")
     async def get_conversation_context(
         request: Request,

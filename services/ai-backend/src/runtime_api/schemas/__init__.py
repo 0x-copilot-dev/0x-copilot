@@ -43,6 +43,10 @@ from runtime_api.schemas.common import (
     RuntimeEventRedactionState,
     RuntimeEventVisibility,
 )
+from runtime_api.schemas.conversation_canvas import (
+    ConversationCanvasResponse,
+    ConversationCanvasSubject,
+)
 from runtime_api.schemas.conversations import (
     ContextBreakdown,
     ConnectorScopeValidator,
@@ -231,6 +235,8 @@ __all__ = [
     "ContextCurrentSlice",
     "ContextSubagentRow",
     "ContextWindowSummary",
+    "ConversationCanvasResponse",
+    "ConversationCanvasSubject",
     "ConversationContextResponse",
     "CreateRunRequest",
     "RunRecord",

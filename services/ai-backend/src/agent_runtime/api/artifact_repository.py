@@ -23,6 +23,7 @@ from agent_runtime.artifacts import (
     ArtifactService,
     ArtifactSourceDescriptor,
 )
+from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.artifacts.contracts import validate_artifact_source_ref
 
 INDEXED_ARTIFACT_SOURCE_SCHEMES = frozenset({"message", "operation", "payload"})
@@ -300,6 +301,8 @@ class RuntimeArtifactRunScopeResolver:
             conversation_id=run.conversation_id,
             run_id=run.run_id,
             trace_id=run.trace_id,
+            run_is_terminal=run.status
+            in ConversationQueryService.TERMINAL_RUN_STATUSES,
         )
 
 

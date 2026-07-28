@@ -279,6 +279,20 @@ class InMemoryArtifactMetadataStore:
         with self._lock:
             return self._revisions.get((org_id, artifact_id, revision))
 
+    @staticmethod
+    def _in_scope(record: ArtifactStoredRecord, query: ArtifactListQuery) -> bool:
+        """Match the one subject scope the query declared.
+
+        ``ArtifactListQuery`` guarantees exactly one of ``run_id`` /
+        ``conversation_id`` is set, so this never degrades to an unscoped match:
+        an unset ``run_id`` means the caller asked by conversation, not that any
+        run will do.
+        """
+
+        if query.run_id is not None:
+            return record.artifact.run_id == query.run_id
+        return record.artifact.conversation_id == query.conversation_id
+
     async def list_artifacts(self, query: ArtifactListQuery) -> ArtifactListPage:
         with self._lock:
             records = [
@@ -286,7 +300,7 @@ class InMemoryArtifactMetadataStore:
                 for (org_id, _), record in self._records.items()
                 if org_id == query.org_id
                 and record.artifact.user_id == query.user_id
-                and record.artifact.run_id == query.run_id
+                and self._in_scope(record, query)
                 and (query.kind is None or record.artifact.kind == query.kind)
                 and (query.include_deleted or record.artifact.deleted_at is None)
             ]

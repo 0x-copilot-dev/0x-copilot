@@ -15,6 +15,7 @@ from agent_runtime.api.approval_coordinator import ApprovalCoordinator
 from agent_runtime.api.connector_policy_client import (
     build_connector_write_policy_client,
 )
+from agent_runtime.api.conversation_canvas_service import ConversationCanvasService
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.conversation_query_service import ConversationQueryService
 from agent_runtime.api.events import RuntimeEventProducer
@@ -294,6 +295,20 @@ class RuntimeApiAppFactory:
         app.state.approval_coordinator = _approval
         app.state.conversation_coordinator = _conv
         app.state.conversation_query_service = _cqs
+        # PRD-02 — canvas identity is conversation-scoped while operation state
+        # stays run-scoped. Composed here (not in the artifact block below) because
+        # it is a read-only projection over stores that always exist; when the
+        # artifact metadata store is absent it simply returns no subjects rather
+        # than making the route conditional.
+        app.state.conversation_canvas_service = (
+            ConversationCanvasService(
+                artifacts=_ports.artifact_metadata_store,
+                events=_ports.event_store,
+                conversation_scope=_cqs.require_conversation_scope,
+            )
+            if getattr(_ports, "artifact_metadata_store", None) is not None
+            else None
+        )
         app.state.workspace_coordinator = _ws
         app.state.deployment = resolved_deployment
         # A2 — explicit composition seam for the canonical Artifact Repository.

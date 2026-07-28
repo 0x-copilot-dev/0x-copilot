@@ -133,6 +133,11 @@ export const ArtifactRevisionParamsSchema = z
       .regex(/^[0-9a-f]{64}$/)
       .optional(),
     etag: z.string().min(1).max(256).optional(),
+    // The run the user is acting in (PRD-02 Flow B). The schema is `.strict()`,
+    // so this must be declared here or the desktop IPC path rejects the whole
+    // request rather than silently dropping the field — which is the right
+    // failure, but only helps if the field is actually declared.
+    actingRunId: z.string().min(1).max(256).optional(),
     content: z.instanceof(Uint8Array),
     contentType: z.string().min(1).max(256),
     filename: z.string().min(1).max(512),
