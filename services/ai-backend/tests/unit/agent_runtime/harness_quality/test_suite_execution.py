@@ -27,11 +27,9 @@ from agent_runtime.harness_quality.scoring import (
     RedactedGradeRequest,
 )
 from agent_runtime.harness_quality.suite_execution import (
-    FixtureCallPlan,
     FixtureCasePlan,
     FixtureExecutionForbidden,
     FixtureOnlySuiteRunner,
-    FixtureUsage,
 )
 from runtime_adapters.in_memory.evaluation_repository import (
     InMemoryEvaluationRepository,
@@ -157,7 +155,7 @@ def _fixture_catalog(entries) -> FixtureCatalog:
         "revision": "fixture-v1",
         "fixtures": tuple(
             sorted(
-                (entry.fixture for entry in entries),
+                (fixture for entry in entries for fixture in entry.fixtures),
                 key=lambda item: (item.capability_id, item.request_digest),
             )
         ),
@@ -212,26 +210,7 @@ def _suite(
     )
     by_family = {entry.family: entry for entry in entries}
     plans = {
-        case.case_id: FixtureCasePlan(
-            case_id=case.case_id,
-            case_revision=case.revision,
-            calls=(
-                FixtureCallPlan(
-                    capability_id=by_family[case.task_family].capability_id,
-                    arguments=by_family[case.task_family].arguments,
-                ),
-            ),
-            usage=FixtureUsage(
-                cost_microusd=10,
-                model_turns=1,
-                tool_calls=1,
-                tokens=100,
-                elapsed_ms=10,
-            ),
-            redaction_policy_revision="redaction-v1",
-            harness_revisions={"suite": "suite-v1"},
-        )
-        for case in selected_cases
+        case.case_id: by_family[case.task_family].plan() for case in selected_cases
     }
     repository = _Repository(
         cases={(case.case_id, case.revision): case for case in selected_cases},

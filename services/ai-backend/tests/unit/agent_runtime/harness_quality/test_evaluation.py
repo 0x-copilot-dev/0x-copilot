@@ -105,6 +105,32 @@ def test_projector_retains_only_observable_identifiers_and_digest() -> None:
     assert "must-not-project" not in manifest.model_dump_json()
 
 
+def test_projector_retains_only_closed_task_policy_journal_vocabulary() -> None:
+    payload = {
+        "record": {
+            "record_kind": "admission_recorded",
+            "disposition": "blocked",
+            "reason_codes": ["exact_duplicate"],
+            "exhausted_dimensions": ["tool_calls"],
+            "plan_body": "private task plan must never be projected",
+            "arguments": {"query": "private customer query"},
+        }
+    }
+    manifest = TrajectoryProjector(redaction_policy_revision="redaction_r1").project(
+        run_id="run_1",
+        variant_id="control",
+        events=(_event(1, payload),),
+    )
+
+    step = manifest.ordered_steps[0]
+    assert step.policy_record_kind == "admission_recorded"
+    assert step.policy_disposition == "blocked"
+    assert step.policy_reason_codes == ("exact_duplicate",)
+    assert step.policy_exhausted_dimensions == ("tool_calls",)
+    assert "private task plan" not in manifest.model_dump_json()
+    assert "private customer query" not in manifest.model_dump_json()
+
+
 def test_projector_rejects_a_gap_in_the_canonical_event_timeline() -> None:
     with pytest.raises(ValueError, match=r"expected 2, got 3"):
         TrajectoryProjector(redaction_policy_revision="redaction_r1").project(

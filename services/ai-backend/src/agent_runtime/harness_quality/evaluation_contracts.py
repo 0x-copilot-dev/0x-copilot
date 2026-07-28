@@ -132,6 +132,10 @@ class TrajectoryStep(RuntimeContract):
     source: Annotated[str, Field(min_length=1, max_length=80)]
     parent_task_id: str | None = Field(default=None, max_length=160)
     capability_id: str | None = Field(default=None, max_length=240)
+    policy_record_kind: str | None = Field(default=None, max_length=80)
+    policy_disposition: str | None = Field(default=None, max_length=80)
+    policy_reason_codes: tuple[str, ...] = Field(default=(), max_length=16)
+    policy_exhausted_dimensions: tuple[str, ...] = Field(default=(), max_length=8)
     payload_digest: Sha256
 
 
@@ -979,7 +983,34 @@ def _digest_json_safe(values: object) -> str:
     domain models.
     """
 
-    return canonical_json_sha256(to_jsonable_python(values))
+    return canonical_json_sha256(
+        _without_empty_task_policy_projection(to_jsonable_python(values))
+    )
+
+
+def _without_empty_task_policy_projection(value: object) -> object:
+    """Preserve legacy F1 digests while binding populated F4 projections.
+
+    F4-safe fields were appended to ``TrajectoryStep`` after F1 manifests and
+    golden traces were already immutable. Omitting an absent field is wire
+    compatible with those records; a populated field remains digest-bound.
+    """
+
+    if isinstance(value, list):
+        return [_without_empty_task_policy_projection(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    projection_keys = {
+        "policy_record_kind",
+        "policy_disposition",
+        "policy_reason_codes",
+        "policy_exhausted_dimensions",
+    }
+    return {
+        key: _without_empty_task_policy_projection(item)
+        for key, item in value.items()
+        if key not in projection_keys or (item is not None and item != [])
+    }
 
 
 def _aware_datetime(value: datetime, field_name: str) -> datetime:

@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 
 from agent_runtime.harness_quality.evaluation import FixtureToolExecutor
 from agent_runtime.harness_quality.evaluation_contracts import (
+    HarnessVariant,
     TrajectoryManifest,
     TrajectoryStep,
 )
@@ -18,10 +20,30 @@ from agent_runtime.harness_quality.scoring import (
     DEFAULT_HARD_SCORERS,
     GraderAttribution,
 )
+from agent_runtime.harness_quality.suite_execution import FixtureOnlyCaseExecutor
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
+_NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
 
-def _trajectory(entry, *, evidence_refs=None, steps=None) -> TrajectoryManifest:
+
+def _variant() -> HarnessVariant:
+    return HarnessVariant(
+        variant_id="candidate",
+        revision="variant-v1",
+        prompt_plan_revision="prompt-v1",
+        capability_policy_revision="capability-v1",
+        context_policy_revision="context-v1",
+        model_route_revision="model-v1",
+    )
+
+
+def _trajectory(
+    entry,
+    *,
+    evidence_refs=None,
+    steps=None,
+    usage_summary=None,
+) -> TrajectoryManifest:
     values = {
         "trajectory_id": f"trajectory_{entry.family}",
         "run_id": None,
@@ -40,7 +62,7 @@ def _trajectory(entry, *, evidence_refs=None, steps=None) -> TrajectoryManifest:
         "evidence_refs": (
             tuple(evidence_refs) if evidence_refs is not None else (entry.evidence_ref,)
         ),
-        "usage_summary": {"live_effect_dispatches": 0},
+        "usage_summary": usage_summary or {"live_effect_dispatches": 0},
         "redaction_policy_revision": "redaction-v1",
         "harness_revisions": {"suite": "suite-v1"},
     }
@@ -70,6 +92,21 @@ def test_operational_corpus_covers_every_required_family_and_scenario() -> None:
         "evidence_conflicting",
         "evidence_stale",
         "evidence_revoked",
+        "task_policy_one_call_lookup",
+        "task_policy_plan_before_tool",
+        "task_policy_pagination_changed_cursor",
+        "task_policy_exact_duplicate_blocked",
+        "task_policy_retryable_error_changed_input",
+        "task_policy_nonretryable_error_stopped",
+        "task_policy_same_source_advisory",
+        "task_policy_objective_completeness",
+        "task_policy_cost_budget_exhaustion",
+        "task_policy_tool_budget_exhaustion",
+        "task_policy_turn_budget_exhaustion",
+        "task_policy_deadline_exhaustion",
+        "task_policy_restart_replay",
+        "task_policy_approval_resume",
+        "task_policy_shadow_enforce_comparison",
     )
     entries = operational_corpus()
     assert tuple(entry.family for entry in entries) == OPERATIONAL_TASK_FAMILIES
@@ -79,18 +116,21 @@ def test_operational_corpus_covers_every_required_family_and_scenario() -> None:
 
 async def test_every_operational_fixture_is_an_exact_offline_lookup() -> None:
     entries = operational_corpus()
-    executor = FixtureToolExecutor(entry.fixture for entry in entries)
+    executor = FixtureToolExecutor(
+        fixture for entry in entries for fixture in entry.fixtures
+    )
 
     for entry in entries:
-        response = await executor.execute(
-            capability_id=entry.capability_id,
-            arguments=entry.arguments,
-        )
-        assert response == entry.fixture
-        assert response.request_digest == FixtureToolExecutor.request_digest(
-            capability_id=entry.capability_id,
-            arguments=entry.arguments,
-        )
+        for call in entry.calls:
+            response = await executor.execute(
+                capability_id=call.capability_id,
+                arguments=call.arguments,
+            )
+            assert response == call.fixture
+            assert response.request_digest == FixtureToolExecutor.request_digest(
+                capability_id=call.capability_id,
+                arguments=call.arguments,
+            )
 
 
 def test_hard_safety_groundedness_and_constraints_are_deterministic() -> None:
@@ -107,12 +147,15 @@ def test_hard_safety_groundedness_and_constraints_are_deterministic() -> None:
     )
 
     assert first == second
-    assert all(result.hard_gate and result.passed for result in first)
+    assert all(result.passed for result in first)
     assert tuple(result.scorer_id for result in first) == (
         "hard_safety",
         "hard_groundedness",
         "hard_constraints",
+        "task_policy_trajectory",
     )
+    assert all(result.hard_gate for result in first[:3])
+    assert first[-1].hard_gate is False
 
 
 def test_groundedness_and_constraint_failures_use_stable_reason_codes() -> None:
@@ -132,6 +175,135 @@ def test_groundedness_and_constraint_failures_use_stable_reason_codes() -> None:
 
     assert results["hard_groundedness"].reason_code == "required_evidence_missing"
     assert results["hard_constraints"].reason_code == "required_capability_missing"
+
+
+async def test_f4_corpus_cases_execute_and_score_through_existing_fixture_runner() -> (
+    None
+):
+    entries = tuple(
+        entry
+        for entry in operational_corpus()
+        if entry.family.startswith("task_policy_")
+    )
+    fixtures = FixtureToolExecutor(
+        fixture for entry in entries for fixture in entry.fixtures
+    )
+    executor = FixtureOnlyCaseExecutor()
+
+    for entry in entries:
+        trajectory = await executor.execute(
+            suite_run_id="suite_f4",
+            case=entry.case,
+            variant=_variant(),
+            plan=entry.plan(),
+            fixtures=fixtures,
+            projected_at=_NOW,
+        )
+        results = tuple(
+            scorer.score(case=entry.case, trajectory=trajectory)
+            for scorer in DEFAULT_HARD_SCORERS
+        )
+        assert all(result.passed for result in results), entry.family
+
+
+def test_f4_hard_and_advisory_trajectory_semantics_are_distinct() -> None:
+    entries = {entry.family: entry for entry in operational_corpus()}
+    hard = entries["task_policy_exact_duplicate_blocked"]
+    advisory = entries["task_policy_same_source_advisory"]
+    scorer = DEFAULT_HARD_SCORERS[-1]
+    empty = _trajectory(hard)
+
+    hard_result = scorer.score(case=hard.case, trajectory=empty)
+    advisory_result = scorer.score(case=advisory.case, trajectory=empty)
+
+    assert hard_result.passed is False
+    assert hard_result.hard_gate is True
+    assert advisory_result.passed is False
+    assert advisory_result.hard_gate is False
+
+
+def test_f4_shadow_and_enforce_duplicate_trajectories_are_distinct() -> None:
+    entry = next(
+        item
+        for item in operational_corpus()
+        if item.family == "task_policy_shadow_enforce_comparison"
+    )
+    shadow_case = entry.case.model_copy(
+        update={
+            "expected_assertions": tuple(
+                assertion.model_copy(
+                    update={
+                        "expected": {
+                            **assertion.expected,
+                            "required_dispositions": ["shadow_admitted"],
+                            "maximum_tool_calls": 2,
+                        },
+                        "hard_gate": False,
+                    }
+                )
+                if assertion.scorer_id == "task_policy_trajectory"
+                else assertion
+                for assertion in entry.case.expected_assertions
+            )
+        }
+    )
+    shadow_steps = (
+        TrajectoryStep(
+            sequence_no=1,
+            event_type="tool_policy.journal.v1",
+            source="runtime",
+            policy_record_kind="admission_recorded",
+            policy_disposition="shadow_admitted",
+            policy_reason_codes=("exact_duplicate",),
+            payload_digest=canonical_json_sha256({"shadow": "duplicate"}),
+        ),
+        TrajectoryStep(
+            sequence_no=2,
+            event_type="fixture_tool_result",
+            source="fixture",
+            capability_id=entry.capability_id,
+            payload_digest=entry.fixture.response_digest,
+        ),
+        TrajectoryStep(
+            sequence_no=3,
+            event_type="fixture_tool_result",
+            source="fixture",
+            capability_id=entry.capability_id,
+            payload_digest=entry.fixture.response_digest,
+        ),
+    )
+    shadow = _trajectory(
+        entry,
+        steps=shadow_steps,
+        usage_summary={"live_effect_dispatches": 0, "tool_calls": 2},
+    ).model_copy(update={"variant_id": "shadow"})
+    enforce = _trajectory(
+        entry,
+        steps=(
+            TrajectoryStep(
+                sequence_no=1,
+                event_type="tool_policy.journal.v1",
+                source="runtime",
+                policy_record_kind="admission_recorded",
+                policy_disposition="blocked",
+                policy_reason_codes=("exact_duplicate",),
+                payload_digest=canonical_json_sha256({"enforce": "duplicate"}),
+            ),
+            TrajectoryStep(
+                sequence_no=2,
+                event_type="fixture_tool_result",
+                source="fixture",
+                capability_id=entry.capability_id,
+                payload_digest=entry.fixture.response_digest,
+            ),
+        ),
+        usage_summary={"live_effect_dispatches": 0, "tool_calls": 1},
+    ).model_copy(update={"variant_id": "enforce"})
+    scorer = DEFAULT_HARD_SCORERS[-1]
+
+    assert scorer.score(case=shadow_case, trajectory=shadow).passed
+    assert scorer.score(case=entry.case, trajectory=enforce).passed
+    assert shadow.usage_summary["tool_calls"] > enforce.usage_summary["tool_calls"]
 
 
 class _SlowGrader:

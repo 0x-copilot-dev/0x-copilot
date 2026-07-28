@@ -162,7 +162,47 @@ class TrajectoryProjector:
             source=event.source.value,
             parent_task_id=event.parent_task_id,
             capability_id=capability_id,
+            policy_record_kind=cls._policy_text(payload, "record_kind"),
+            policy_disposition=cls._policy_text(payload, "disposition"),
+            policy_reason_codes=cls._policy_codes(payload, "reason_codes"),
+            policy_exhausted_dimensions=cls._policy_codes(
+                payload,
+                "exhausted_dimensions",
+            ),
             payload_digest=canonical_json_sha256(payload),
+        )
+
+    @staticmethod
+    def _policy_text(payload: Mapping[str, object], key: str) -> str | None:
+        """Project an F4-safe field from the record envelope, if present.
+
+        The canonical runtime event stores the typed record below ``record``.
+        F1 retains only the closed vocabulary needed for trajectory scoring;
+        it never copies plan text, arguments, results, or protected refs.
+        """
+
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        value = record.get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+    @classmethod
+    def _policy_codes(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> tuple[str, ...]:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return ()
+        value = record.get(key)
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return ()
+        return tuple(
+            item
+            for item in value
+            if isinstance(item, str) and item.strip() and len(item) <= 80
         )
 
     @staticmethod
