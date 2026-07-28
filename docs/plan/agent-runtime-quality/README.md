@@ -601,7 +601,7 @@ backend-to-ai callback, or desktop daemon.
       rechecks and defensive copies on every hit. A generation barrier must
       prevent an in-flight pre-invalidation load from publishing or being
       returned across a revocation boundary.
-- [ ] **F8.8 — Active-only pull consumer and desktop cursor recovery.** Add one
+- [x] **F8.8 — Active-only pull consumer and desktop cursor recovery.** Add one
       bounded poller owned by each active worker composition, not a free-running
       daemon. Persist only its opaque high-water cursor through a small port:
       in-memory for tests, atomic capped file state beneath the existing
