@@ -11,6 +11,12 @@ this defect is unobservable.
 **Scope:** `services/ai-backend`, `packages/api-types`, `packages/chat-surface`,
 both hosts' binders. Facade passthrough only.
 
+> **Scope grew after risk analysis.** Tracing the flows below surfaced a
+> verified defect (Flow B): artifact revisions scope their ledger event to the
+> artifact's _original_ run, so a persisted tab is writable but can never
+> refresh. Fixing that — attributing a revision to the run the user is acting in
+> — is a required part of this PRD, not a follow-up. Estimate moves ~3 → ~5 days.
+
 ## The defect
 
 `RunDestination` folds `projectCanvasLifecycle(session.events)`, and
@@ -119,6 +125,162 @@ the table stays open, and the run's narrative is reported honestly beside it.
 | "hydration failure recovers in place"   | Fetch failure keeps live subjects and shows a retry affordance on the strip. Never drop an open tab because an archive read failed                        |
 | "Focus exposes safe Open/Download/Save" | Focus renders the merged subjects as compact rows with the existing `artifactDownloadPort`. No new authority — same transport-mediated download as Studio |
 
+## User flows and repercussions
+
+**The risk profile changes shape, not just size.** Today a persisted surface is
+impossible, so the worst outcome is _losing UI state_ — annoying, data safe.
+Once a tab outlives its run, the worst outcome becomes _acting on state from the
+wrong run_. That is a different class of bug, and it is why this PRD is larger
+than "keep the tab open".
+
+Four flows, traced. Flow B is the one that changes the design.
+
+### Flow A — the fix working (the whole point)
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant C as Canvas (chat-surface)
+    participant S as useConversationCanvas
+    participant API as ai-backend
+
+    U->>API: turn 1 "make me a CSV"
+    API-->>C: artifact.created + presentation_decided (run 1, pre-seal)
+    C->>C: live subject artifact:art_1
+    Note over C: table renders
+
+    U->>API: turn 2 "what does row 2 mean?"
+    Note over C: activeRunId changes → session.events cleared
+    C->>S: conversationId unchanged → subjects retained
+    API-->>C: run 2 = chat only (lifecycle chat_only)
+    Note over C: lifecycle chat_only AND subjects non-empty<br/>⇒ table stays open, narrative beside it
+```
+
+### Flow B — the cross-run revision dead-end ⚠️ **verified, changes the design**
+
+`ArtifactService.append_revision` derives its scope from
+`current.artifact.run_id` — the artifact's **original** run, not the run the user
+is in. Combined with PR #413's seal, a persisted tab becomes writable but
+un-refreshable:
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant C as Canvas (tab from run 1)
+    participant AS as ArtifactService
+    participant L as Run 1 ledger (SEALED)
+    participant Q as Outbox / queue bridge
+
+    Note over U,C: user is in run 3; tab shows artifact from run 1 at r1
+    U->>C: edit cell → "Save patched revision"
+    C->>AS: append_revision(artifact_id, parent_revision=1)
+    AS->>AS: CAS ok → r2 committed durably ✅
+    AS->>L: artifact.revised → scope = run 1
+    L--xAS: LedgerSealViolation (run 1 sealed)
+    AS->>AS: _publish_ledger_events swallows (best-effort)
+    Q->>L: later republishes as late_causal_recovery amendment
+    Note over C: run 3's stream never carries artifact.revised<br/>tab still shows r1 — stale forever
+
+    U->>C: edit again from the stale r1 base
+    C->>AS: append_revision(parent_revision=1)
+    AS--xC: CAS conflict (current is 2)
+    Note over U: dead end: the tab cannot refresh,<br/>and every further edit fails
+```
+
+**Data integrity holds** — the CAS on `parent_revision` prevents a lost update,
+and the seal prevents a false ledger. But the _user_ is stuck: a surface they can
+write to once and never see updated, then a conflict they cannot clear without
+reloading the whole conversation.
+
+**Required design change.** An artifact revision caused by a user editing in run
+N is _causal in run N_. It must be attributed there, with the artifact's original
+run kept as provenance:
+
+| Field                         | Meaning                                                    |
+| ----------------------------- | ---------------------------------------------------------- |
+| `artifact.run_id`             | **provenance** — the run that first created it (unchanged) |
+| revision event's ledger scope | **the acting run** — where the user made the edit          |
+
+So `ArtifactRevisionRequest` gains a required `acting_run_id`, and
+`append_revision` scopes its ledger event to that rather than to
+`current.artifact.run_id`. The seal then holds naturally: the event is causal in
+an open run, lands inside its prefix, and reaches the live stream — so the tab
+updates in place.
+
+This is not optional. Without it, PRD-02 ships a surface that is editable and
+permanently stale, which is worse than one that disappears.
+
+### Flow C — tenant isolation on a new cross-run read path
+
+```mermaid
+sequenceDiagram
+    actor B as User B (attacker)
+    participant API as /conversations/{id}/canvas
+    participant Auth as Identity (verified session)
+    participant Store as Artifact + event store
+
+    B->>API: GET /conversations/{A's conversation_id}/canvas
+    API->>Auth: org_id, user_id from session (never from body/path)
+    API->>Store: list scoped by (org, user, conversation)
+    Store-->>API: no rows — conversation not owned by B
+    API-->>B: 404 (not 403 — do not confirm existence)
+```
+
+Two failure modes to test explicitly, because both are easy to write by accident:
+
+1. scoping the query by `conversation_id` alone, trusting the path parameter;
+2. returning 403, which confirms the conversation exists.
+
+Third, subtler: a subject's `run_id` is returned as provenance. A later call must
+never accept that `run_id` back as a _scope widener_ — it is display data, not
+capability.
+
+### Flow D — a stale gate or stage on a persisted tab
+
+Effect stages and gates are run-scoped operation state. A persisted canvas must
+not offer a decision on one:
+
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant C as Canvas (stage tab from run 1)
+    participant API as Approval handler
+    participant L as Run 1 ledger (SEALED)
+
+    U->>C: "Approve" on a stage surfaced from run 1
+    C->>API: decision(stage_id, approve)
+    API->>L: decision.recorded → run 1
+    L--xAPI: LedgerSealViolation
+    API-->>C: error
+    Note over U: confusing failure on a button<br/>that should not have been offered
+```
+
+**Mitigation:** the merged subject set is **read-only for operation state**.
+Effect and gate subjects are conversation-scoped for _viewing history_, and their
+decision affordances render only when `subject.run_id === session.runId`.
+Anything else is a receipt, not a control. This keeps the split honest: identity
+is conversation-scoped, authority stays run-scoped.
+
+### Flow E — the scrubber
+
+`displayedCanvasLifecycle` filters events to `sequence_no <= scrubbedSeq` so the
+user can replay a run. Merged conversation subjects have no position in _this_
+run's sequence, so "scrub to seq 5" has no defined answer for them.
+
+**Decision:** scrubbing narrows only run-scoped state. Conversation subjects stay
+mounted, visibly marked as belonging to another run, and their decision
+affordances are suppressed by Flow D's rule anyway. The alternative — hiding
+prior-run subjects while scrubbing — makes tabs appear and disappear as the
+scrubber moves, which is worse.
+
+### What this buys, restated
+
+| Without the Flow B fix                               | With it                                             |
+| ---------------------------------------------------- | --------------------------------------------------- |
+| Tab persists but never updates                       | Tab updates in place in the acting run              |
+| Second edit hits an unclearable CAS conflict         | Normal edit → new revision → live refresh           |
+| Revision events pile up as amendments on sealed runs | Revision events are causal and inside a live prefix |
+
 ## Edge cases
 
 | Case                                        | Behavior                                                                                                                                              |
@@ -135,10 +297,18 @@ the table stays open, and the run's narrative is reported honestly beside it.
 
 - **Tenant isolation is the main risk.** This is the first cross-run canvas read.
   Every query derives org/user from the verified session; `conversation_id` is
-  caller-supplied and therefore untrusted until ownership is proved.
+  caller-supplied and therefore untrusted until ownership is proved (Flow C).
 - Required test: user B requesting user A's `conversation_id` receives 404
   (not 403 — do not confirm existence), and a run id from another conversation
   cannot widen the result.
+- **`run_id` in the response is display provenance, never a capability.** A
+  later request must not accept a caller-supplied `run_id` as a scope widener.
+- **Authority stays run-scoped** (Flow D). Conversation scope grants _visibility_
+  of a subject, never the right to decide on it. Approve/reject/commit render only
+  when `subject.run_id === session.runId`.
+- `acting_run_id` on a revision is authorization-relevant, not just bookkeeping:
+  the server must verify the caller owns that run and that it is non-terminal,
+  rather than trusting the client's claim about where it is acting.
 - No new content authority. Subjects are metadata; bytes still flow through the
   existing artifact download path with its own checks.
 - Retention/legal hold must be honored by the listing, not filtered client-side —
@@ -180,3 +350,13 @@ the table stays open, and the run's narrative is reported honestly beside it.
 7. The two-turn journey is observed failing pre-fix and passing post-fix, in the
    Desktop app — separate backend and client verification would miss a seam
    defect, which is exactly how PR #413's second bug survived.
+8. **Flow B:** editing an artifact surfaced from an earlier run produces a new
+   revision whose ledger event lands in the **acting** run's sealed prefix, and
+   the open tab updates to that revision live. A second consecutive edit succeeds
+   (no CAS dead end).
+9. **Flow B, server-side:** `acting_run_id` is verified as owned by the caller and
+   non-terminal; a forged or terminal value is refused, never trusted.
+10. **Flow D:** a stage or gate subject from another run renders read-only — no
+    approve/reject affordance — and no decision request can be issued for it.
+11. **Flow E:** scrubbing narrows run-scoped state only; conversation subjects
+    stay mounted and do not flicker as the scrubber moves.
