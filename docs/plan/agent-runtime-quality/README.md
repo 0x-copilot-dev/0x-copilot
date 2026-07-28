@@ -609,7 +609,7 @@ backend-to-ai callback, or desktop daemon.
       worker readiness, stop/drain before HTTP/store shutdown, back off with
       jitter while offline, flush subject-scoped generations on
       `cursor_expired`, and resume without eager descriptor hydration.
-- [ ] **F8.9 — Atomic descriptor/F3 invalidation and safe stale handling.**
+- [x] **F8.9 — Atomic descriptor/F3 invalidation and safe stale handling.**
       Route every feed or exact-check change through one invalidation
       coordinator that evicts the descriptor entry and advances the matching
       F3 catalog-generation authority before acknowledging the cursor.
