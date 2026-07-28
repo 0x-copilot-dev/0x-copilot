@@ -19,6 +19,7 @@ from agent_runtime.capabilities.browser.desktop_browser_provider import (
 )
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
+from agent_runtime.execution.factory import _model_visible_tools
 from agent_runtime.rollout import RolloutCapability
 from agent_runtime.rollout_admission import (
     E2RolloutAdmission,
@@ -234,6 +235,51 @@ class TestBrowserProviderGating:
 
 class TestBackendMcpProviderRolloutGating:
     """Generic MCP card discovery is an exposure boundary, not just invocation."""
+
+    def test_compatibility_mode_keeps_backend_mcp_tools_available_without_a_cohort(
+        self, runtime_context_admin
+    ) -> None:
+        """Desktop's default must not authenticate a connector it cannot call."""
+
+        factory = DefaultRuntimeDependenciesFactory(
+            RuntimeSettings.load(
+                environ={
+                    "MCP_BACKEND_REGISTRY_URL": "http://backend.example.test",
+                    "SURFACES_V2": "true",
+                    "ARTIFACT_EFFECTS_V2": "true",
+                    "ARTIFACT_DRAFTS_V2": "true",
+                    "OPERATION_GATEWAY_MODE": "off",
+                }
+            )
+        )
+        admission = _admission(factory)
+
+        registry = factory._mcp_registry(
+            runtime_context_admin,
+            rollout_admission=admission,
+            rollout_facts=_facts(),
+        )
+
+        assert isinstance(registry, DynamicMcpRegistry)
+        assert [type(provider) for provider in registry.providers] == [
+            BackendMcpProvider
+        ]
+        tool_names = {
+            str(getattr(tool, "name", ""))
+            for tool in _model_visible_tools(
+                tools=(),
+                mcp_registry=registry,
+                skill_registry=None,
+                prior_tool_result_loader=None,
+                mcp_discovery_cache=None,
+                runtime_context=runtime_context_admin,
+            )
+        }
+        assert {
+            "load_mcp_server",
+            "call_mcp_tool",
+            "auth_mcp",
+        }.issubset(tool_names)
 
     def test_generic_factory_cannot_expose_cards_without_verified_cohort_facts(
         self, runtime_context_admin

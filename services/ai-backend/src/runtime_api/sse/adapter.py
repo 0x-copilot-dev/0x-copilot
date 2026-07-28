@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.api.constants import Keys, Messages, Values
 from agent_runtime.api.conversation_query_service import ConversationQueryService
+from agent_runtime.api.ledger_seal import LedgerSeal
 from runtime_api.schemas import (
     RuntimeApiEventType,
     RuntimeEventEnvelope,
@@ -38,6 +39,7 @@ class RuntimeSseAdapter:
         """Yield replayed events, waking on push notifications from the event bus."""
 
         latest_sequence = after_sequence
+        terminal_polls_without_events = 0
         while True:
             replay = await service.replay_events(
                 org_id=org_id,
@@ -45,13 +47,36 @@ class RuntimeSseAdapter:
                 run_id=run_id,
                 after_sequence=latest_sequence,
             )
+            sealed = False
             for event in replay.events:
                 latest_sequence = max(latest_sequence, event.sequence_no)
                 yield cls.format_event(event)
-            if replay.run_status in cls.TERMINAL_RUN_STATUSES:
+                sealed = sealed or event.event_type in LedgerSeal.SEALING_EVENT_TYPES
+            # Close on the seal, not on the run's status. The status flips to
+            # terminal *before* the receipt and terminal events are appended, so
+            # closing on status could drop them from the live stream — the run
+            # row and the ledger disagree for that window, and the ledger is the
+            # one the client is reading. Delivering the seal event is the only
+            # signal that means "you have the whole causal prefix".
+            if sealed:
                 if event_bus is not None:
                     event_bus.unsubscribe(run_id)
                 return
+            if replay.run_status in cls.TERMINAL_RUN_STATUSES:
+                # Terminal status with nothing left to send means either the
+                # seal was consumed before this connection resumed, or it never
+                # landed (``_emit_run_terminal`` logs and swallows that). Give
+                # the termination window one grace poll so a client that
+                # connected mid-seal still receives it, then stop rather than
+                # follow a finished run forever.
+                if replay.events:
+                    terminal_polls_without_events = 0
+                else:
+                    terminal_polls_without_events += 1
+                    if terminal_polls_without_events > 1:
+                        if event_bus is not None:
+                            event_bus.unsubscribe(run_id)
+                        return
             if not follow:
                 if not replay.events:
                     yield await cls.heartbeat_event(

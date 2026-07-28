@@ -65,7 +65,7 @@ export function RunEmptyComposer({
     providerKeysPort,
     toolsTrigger,
     buildRunStartRequest,
-  } = useWebRunComposerTools(identity);
+  } = useWebRunComposerTools(identity, ctx.autoActivateConnectorId ?? null);
 
   // The CSV starter chip resolves to the bundled `airdrop-claims.csv` fixture.
   const resolveAttachment = useCallback(

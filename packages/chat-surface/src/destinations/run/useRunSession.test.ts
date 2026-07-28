@@ -434,6 +434,7 @@ describe("useRunSession — multi-run selection (FR-3.26)", () => {
       ]),
     );
     expect(result.current.runs[0].status).toBe("running");
+    expect(result.current.runs[0].modelName).toBe("gpt-5.4");
   });
 
   it("rebinds the stream to the selected run and resets accumulated events", async () => {

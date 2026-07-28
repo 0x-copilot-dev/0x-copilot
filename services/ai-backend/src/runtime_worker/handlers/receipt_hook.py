@@ -7,11 +7,13 @@ enum, exactly as ``_build_work_ledger_emitter`` does) so the pure
 ``surfaces_v2.receipt`` stays free of any ``runtime_api`` import, then delegates
 to the best-effort :class:`ReceiptEmitter`.
 
-Ordering rationale (SDR §7 S6): ``RuntimeSseAdapter.stream`` stops on terminal
-run status, so the two receipt events MUST be appended before the terminal
-lifecycle event — i.e. this runs immediately BEFORE
-``RunTerminationCoordinator.terminate``. Emission is gated on ``SURFACES_V2``;
-flag-off it is a no-op (byte-identical to today).
+Ordering rationale (SDR §7 S6): the receipt is a *causal* fact, so it belongs
+inside the run's sealed prefix — it runs immediately BEFORE
+``RunTerminationCoordinator.terminate``, which appends the terminal event and
+seals. That rule is no longer this module's to remember: it is enforced at the
+append funnel by :mod:`agent_runtime.api.ledger_seal`, and appending here after
+the seal would raise rather than produce an event no live client can reach.
+Emission is gated on ``SURFACES_V2``; flag-off it is a no-op.
 """
 
 from __future__ import annotations

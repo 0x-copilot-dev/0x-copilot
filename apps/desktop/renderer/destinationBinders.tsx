@@ -1207,6 +1207,7 @@ export function RunBinder({
       // WC-P3 — cockpit-owned run state + cancel; the composer swaps send↔Stop.
       readonly running: boolean;
       readonly onCancel: () => void;
+      readonly autoActivateConnectorId?: string | null;
     }) => (
       <RunComposer
         dispatch={ctx.dispatch}
@@ -1221,6 +1222,7 @@ export function RunBinder({
         connectorsPort={connectorsPort}
         providerKeysPort={providerKeysPort}
         catalogRefreshKey={providerKeysRevision}
+        autoActivateConnectorId={ctx.autoActivateConnectorId}
       />
     ),
     [

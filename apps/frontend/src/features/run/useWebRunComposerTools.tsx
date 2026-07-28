@@ -16,7 +16,13 @@
 // connectors port + provider-keys port). No `@0x-copilot/chat-surface` internals,
 // no `apps/desktop` import, no raw fetch.
 
-import { useCallback, useMemo, useState, type ReactElement } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactElement,
+} from "react";
 
 import {
   type ComposerConnectorsPort,
@@ -63,6 +69,7 @@ export interface WebRunComposerTools {
 
 export function useWebRunComposerTools(
   identity: RequestIdentity,
+  autoActivateConnectorId: string | null = null,
 ): WebRunComposerTools {
   // Live `/v1/agent/models` catalog (never a hardcoded list); no local download
   // in the run cockpit, so `localModelPct`/`modelName` stay null (BYOK/cloud).
@@ -76,7 +83,16 @@ export function useWebRunComposerTools(
   const [webSearchEnabled, setWebSearchEnabled] = useState(true);
   const [activeConnectorIds, setActiveConnectorIds] = useState<
     readonly string[]
-  >([]);
+  >(() => (autoActivateConnectorId === null ? [] : [autoActivateConnectorId]));
+
+  useEffect(() => {
+    if (autoActivateConnectorId === null) return;
+    setActiveConnectorIds((prev) =>
+      prev.includes(autoActivateConnectorId)
+        ? prev
+        : [...prev, autoActivateConnectorId],
+    );
+  }, [autoActivateConnectorId]);
 
   const connectorsPort = useMemo<ComposerConnectorsPort>(
     () => createComposerConnectorsPort(identity),

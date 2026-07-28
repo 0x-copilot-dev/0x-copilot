@@ -1689,7 +1689,10 @@ export {
   type RunApprovalKind,
   type ApprovalProjection,
 } from "./destinations/run";
-export { type TcChatApproval } from "./thread-canvas";
+export {
+  type TcChatApproval,
+  type ConnectedConnectorReceipt,
+} from "./thread-canvas";
 // === end Phase 3 (PR-3.10) ===
 
 // === WC-P5a (MCP-OAuth chat-surface half) ===

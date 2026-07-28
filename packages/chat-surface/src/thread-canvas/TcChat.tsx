@@ -128,6 +128,13 @@ export interface TcChatApproval {
   readonly createdAtMs: number | null;
 }
 
+/** OAuth-success receipt retained while the cockpit rebinds to the next run. */
+export interface ConnectedConnectorReceipt {
+  readonly approvalId: string;
+  readonly serverId: string;
+  readonly displayName: string;
+}
+
 // WC-P5a (AD-7): the `mcp_discovery:` prefix on an approval id marks a catalog
 // suggestion — a UI hint from `McpDiscoveryService` that is NEVER persisted as an
 // ApprovalRequest row, so a `/decision` POST 404s. Both the blocking `mcp_auth`
@@ -316,6 +323,13 @@ export interface TcChatProps {
     Record<string, ConnectorConsentState>
   >;
   /**
+   * Compact OAuth-success receipt. Run events are scoped to the bound run, so
+   * the cockpit retains this while the automatic user turn rebinds the stream;
+   * when the originating approval is still projected, that card wins and this
+   * fallback stays hidden.
+   */
+  readonly connectedConnectorReceipt?: ConnectedConnectorReceipt | null;
+  /**
    * Return a connector to `pending` — the card's Cancel while connecting. The
    * Run cockpit supplies `useConnectorConsentStates().markPending`; absent, the
    * Cancel button renders inert like every other unwired affordance here.
@@ -329,11 +343,6 @@ export interface TcChatProps {
    * where that intent forms rather than only in Settings.
    */
   readonly onConnectorMute?: (catalogSlug: string) => void;
-  /**
-   * Retry the blocked step as a NEW turn after a mid-run connect. Never a run
-   * restart: that re-emits work the user is reading and re-spends its tokens.
-   */
-  readonly onConnectorRetry?: (serverId: string, displayName: string) => void;
   /**
    * Composer slot override. When supplied, the cockpit renders the host's
    * composer in place of the bare base `<Composer>` — the seam the desktop
@@ -399,9 +408,9 @@ export function TcChat(props: TcChatProps): ReactElement {
     onAnswer,
     mcpAuthPort,
     connectorConsentStates,
+    connectedConnectorReceipt = null,
     onConnectorConsentCancel,
     onConnectorMute,
-    onConnectorRetry,
     renderComposer,
   } = props;
   const transport = useTransport();
@@ -441,6 +450,19 @@ export function TcChat(props: TcChatProps): ReactElement {
   // guarding on the scrub cursor here keeps standalone usage correct too.
   const scrubbedOffNow = scrub.scrubbedTo !== "now";
   const visibleApprovals = scrubbedOffNow ? EMPTY_APPROVALS : approvals;
+  const projectedConnectedReceipt =
+    connectedConnectorReceipt !== null &&
+    visibleApprovals.some(
+      (approval) =>
+        isMcpAuthApproval(approval) &&
+        approval.serverId === connectedConnectorReceipt.serverId,
+    );
+  const connectedReceipt =
+    !scrubbedOffNow &&
+    connectedConnectorReceipt !== null &&
+    !projectedConnectedReceipt
+      ? renderConnectedConnectorReceipt(connectedConnectorReceipt)
+      : null;
 
   const ghost = scrub.scrubbedTo !== "now";
   const ghostLabel =
@@ -519,7 +541,7 @@ export function TcChat(props: TcChatProps): ReactElement {
         {transcript}
         {/* Focus surfaces a pending approval as a `.conf-card` (resolved → its
             receipt), between the transcript and the composer. */}
-        {visibleApprovals.length > 0 ? (
+        {visibleApprovals.length > 0 || connectedReceipt !== null ? (
           <div data-testid="tc-chat-conf-cards" style={confCardsWrapStyle}>
             {visibleApprovals.map((approval) =>
               approval.question !== null
@@ -533,10 +555,10 @@ export function TcChat(props: TcChatProps): ReactElement {
                         connectorConsentStates,
                         onConnectorConsentCancel,
                         onConnectorMute,
-                        onConnectorRetry,
                       )
                     : renderConfCard(approval, onApprove, onReject),
             )}
+            {connectedReceipt}
           </div>
         ) : null}
         {composer}
@@ -558,7 +580,7 @@ export function TcChat(props: TcChatProps): ReactElement {
           the composer: pending ones render the 4-zone ApprovalCard, resolved
           ones their receipt. Outside the ghost-dimmed message list so they stay
           interactive. */}
-      {visibleApprovals.length > 0 ? (
+      {visibleApprovals.length > 0 || connectedReceipt !== null ? (
         <div data-testid="tc-chat-approvals" style={approvalsWrapStyle}>
           {visibleApprovals.map((approval) =>
             approval.question !== null
@@ -572,10 +594,10 @@ export function TcChat(props: TcChatProps): ReactElement {
                       connectorConsentStates,
                       onConnectorConsentCancel,
                       onConnectorMute,
-                      onConnectorRetry,
                     )
                   : renderStudioApprovalCard(approval, onApprove, onReject),
           )}
+          {connectedReceipt}
         </div>
       ) : null}
       {composer}
@@ -632,7 +654,6 @@ function renderMcpAuthConnectCard(
   consentStates?: Readonly<Record<string, ConnectorConsentState>>,
   onConsentCancel?: (serverId: string) => void,
   onMute?: (catalogSlug: string) => void,
-  onRetry?: (serverId: string, displayName: string) => void,
 ): ReactNode {
   const serverId = approval.serverId;
   // A gate names its connector with `connector_slug`; an uninstalled suggestion
@@ -694,14 +715,31 @@ function renderMcpAuthConnectCard(
         onCancel={() =>
           serverId !== null ? onConsentCancel?.(serverId) : undefined
         }
-        onRetry={
-          onRetry !== undefined && serverId !== null
-            ? () => onRetry(serverId, approval.title)
-            : undefined
-        }
         connectTestId={`tc-chat-mcp-connect-${approval.approvalId}`}
         denyTestId={`tc-chat-mcp-skip-${approval.approvalId}`}
         testId={`tc-chat-connector-${approval.approvalId}`}
+      />
+    </div>
+  );
+}
+
+function renderConnectedConnectorReceipt(
+  receipt: ConnectedConnectorReceipt,
+): ReactNode {
+  return (
+    <div
+      key={`mcp-connected-${receipt.approvalId}`}
+      data-testid={`tc-chat-mcp-auth-${receipt.approvalId}`}
+      data-approval-id={receipt.approvalId}
+      data-server-id={receipt.serverId}
+    >
+      <ConnectorConsentCard
+        displayName={receipt.displayName}
+        purpose={null}
+        state="connected"
+        trust={EMPTY_CONNECTOR_TRUST}
+        brandKey={receipt.serverId}
+        testId={`tc-chat-connector-${receipt.approvalId}`}
       />
     </div>
   );

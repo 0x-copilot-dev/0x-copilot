@@ -1,19 +1,24 @@
-"""Single chokepoint for safely ending a run.
+"""Single chokepoint for safely ending a run — and the ledger's seal authority.
 
 Every termination path flows through :meth:`RunTerminationCoordinator.terminate`,
 which drains the :class:`LifecycleLedger` (synthesising a ``*_COMPLETED`` event
-for every open subagent/tool/model call) and then emits the run's own terminal
-event. Reconciliation is best-effort: a failure on a single synthesised event is
-logged and skipped so one stuck entry cannot block its siblings or the run-level
-terminal event.
+for every open subagent/tool/model call), then drains every registered
+:class:`RunProjectionDrainPort`, and only then emits the run's own terminal
+event. That terminal event seals the run's causal prefix: see
+:mod:`agent_runtime.api.ledger_seal` for what the seal promises and why the
+promise is only keepable from here.
+
+Draining is best-effort: a failure on a single synthesised event or projection
+source is logged and skipped so one stuck entry cannot block its siblings or the
+run-level terminal event.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.execution.contracts import StreamEventSource
@@ -62,11 +67,56 @@ _RUN_EVENT_TYPES: dict[AgentRunStatus, RuntimeApiEventType] = {
 }
 
 
-class RunTerminationCoordinator:
-    """Coordinator that closes a run cleanly by draining the lifecycle ledger before the terminal event."""
+@runtime_checkable
+class RunProjectionDrainPort(Protocol):
+    """A source of run-scoped facts that must land before the seal.
 
-    def __init__(self, *, event_producer: RuntimeEventProducer) -> None:
+    Registering here is how a producer of *causal* events states that its work
+    belongs inside the run's sealed prefix. The alternative — emitting whenever
+    the producer happens to be scheduled — is what put ``artifact.created``
+    after ``run_completed``, where no live client could ever see it.
+    """
+
+    async def drain_for_run(self, *, run: RunRecord) -> None:
+        """Flush anything still pending for this run. Must be idempotent."""
+
+
+class RunTerminationCoordinator:
+    """Coordinator that closes a run cleanly by draining every pending projection before the terminal event.
+
+    The seal authority. ``terminate`` is the only way a run reaches a terminal
+    state, which makes it the only place that can honestly promise "everything
+    this run caused is already in the ledger". It keeps that promise by
+    draining, in order:
+
+    1. the :class:`LifecycleLedger` — synthesising a terminal event for every
+       leaked subagent/tool/model call;
+    2. every registered :class:`RunProjectionDrainPort` — the artifact outbox
+       today, whatever comes next tomorrow.
+
+    Only then is the terminal event appended, sealing the causal prefix. The
+    ordering rule used to live as prose in each producer; producers that never
+    read the prose (or reached the ledger through a queue, where they could not
+    obey it) broke it silently. Registration replaces the prose.
+    """
+
+    def __init__(
+        self,
+        *,
+        event_producer: RuntimeEventProducer,
+        projection_drains: Sequence[RunProjectionDrainPort] = (),
+    ) -> None:
         self._event_producer = event_producer
+        self._projection_drains = tuple(projection_drains)
+
+    def register_projection_drain(self, drain: RunProjectionDrainPort) -> None:
+        """Add a pending-projection source to flush before sealing.
+
+        Late registration exists because worker composition builds this
+        coordinator before the stores whose pending work it must drain.
+        """
+
+        self._projection_drains = (*self._projection_drains, drain)
 
     async def terminate(
         self,
@@ -90,6 +140,7 @@ class RunTerminationCoordinator:
         await self._reconcile_open_lifecycles(
             run=run, terminal_status=terminal_status, reason=reason
         )
+        await self._drain_projections(run=run)
         await self._emit_run_terminal(
             run=run,
             terminal_status=terminal_status,
@@ -99,6 +150,32 @@ class RunTerminationCoordinator:
             extra_payload=extra_payload,
             extra_metadata=extra_metadata,
         )
+
+    async def _drain_projections(self, *, run: RunRecord) -> None:
+        """Flush every registered projection source before the seal.
+
+        Best-effort per drain, matching lifecycle reconciliation: one stuck
+        source must not block the terminal event, because a run stuck open is
+        worse for the user than a run missing one projection. A failure here is
+        still recoverable — the outbox row survives and the queue bridge
+        republishes it as a ``LATE_CAUSAL_RECOVERY`` amendment — so the loud
+        log is the signal, not the lost data.
+        """
+
+        for drain in self._projection_drains:
+            try:
+                await drain.drain_for_run(run=run)
+            except Exception:  # noqa: BLE001 — best-effort, mirrors lifecycle drain
+                _LOGGER.warning(
+                    "run_termination.projection_drain_failed",
+                    extra={
+                        "metadata": {
+                            "run_id": run.run_id,
+                            "drain": type(drain).__name__,
+                        }
+                    },
+                    exc_info=True,
+                )
 
     async def _reconcile_open_lifecycles(
         self,

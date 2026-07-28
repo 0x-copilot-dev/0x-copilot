@@ -61,6 +61,8 @@ export type RunSessionStatus =
 export interface RunListItem {
   readonly runId: string;
   readonly goal: string | null;
+  /** Exact model used by this run; reused by synthetic user turns. */
+  readonly modelName: string | null;
   readonly status: AgentRunStatus | null;
   readonly startedAt: string | null;
 }
@@ -160,6 +162,7 @@ function parseRuns(payload: RunListPayload): readonly RunListItem[] {
       // The summary carries no goal text; use the model name as a lightweight
       // label when present (the selector falls back to a generic run label).
       goal: typeof entry.model_name === "string" ? entry.model_name : null,
+      modelName: typeof entry.model_name === "string" ? entry.model_name : null,
       status: asRunStatus(entry.status),
       startedAt:
         (typeof entry.started_at === "string" ? entry.started_at : null) ??

@@ -129,6 +129,7 @@ import {
   type RowsetActionContext,
   type RowsetDecisionContext,
   type StagedMessagePresentation,
+  type ConnectedConnectorReceipt,
   type LedgerViewTier,
   type LedgerShapeRequestState,
 } from "../../thread-canvas";
@@ -897,6 +898,12 @@ const MAX_EXPLICIT_ARTIFACT_TABS = 4;
  */
 export interface RunStartRequest {
   readonly goal: string;
+  /**
+   * Stable key for product-generated user turns. Ordinary composer sends omit
+   * it; OAuth completion supplies one so remount/replay cannot duplicate the
+   * connection message or enqueue the model twice.
+   */
+  readonly idempotencyKey?: string;
   /** Resolved model selection (model pill). Omitted → runtime default. */
   readonly model?: ModelSelectionRequest | null;
   /** Composer attachments already mapped to the run-create wire shape. */
@@ -933,6 +940,12 @@ export interface RunEmptyComposerCtx {
   readonly modelReady: boolean;
   /** Open Settings → Provider keys (setup / configuration_error CTA). */
   readonly onOpenModelSettings?: () => void;
+  /**
+   * Connector whose OAuth flow just completed. Hosts seed this into their
+   * run-scoped Tools state so the newly connected connector is immediately on,
+   * while still allowing the user to turn it off afterward.
+   */
+  readonly autoActivateConnectorId?: string | null;
 }
 
 export interface RunDestinationProps {
@@ -1033,6 +1046,11 @@ export interface RunDestinationProps {
      * reconciliation, so the composer only has to wire this to its Stop control.
      */
     readonly onCancel: () => void;
+    /**
+     * Connector whose OAuth flow just completed. The injected composer seeds
+     * it into its run-scoped Tools state as enabled.
+     */
+    readonly autoActivateConnectorId?: string | null;
   }) => ReactElement | null;
   /**
    * WC-P5a (AD-6/AD-7): host launcher for the mid-run `mcp_auth` Connect card.
@@ -1185,6 +1203,8 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   const [pendingUserMessage, setPendingUserMessage] = useState<string | null>(
     null,
   );
+  const [connectedConnectorReceipt, setConnectedConnectorReceipt] =
+    useState<ConnectedConnectorReceipt | null>(null);
 
   // Monotonic token identifying the current start attempt. Bumped whenever the
   // conversation resets (below), so an in-flight start's async continuation can
@@ -1208,6 +1228,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     setCancellingRunId(null);
     // WC-P4: never echo a prior conversation's user turn into a new one.
     setPendingUserMessage(null);
+    setConnectedConnectorReceipt(null);
     // PRD-04: a new conversation starts from a clean surface strip.
     setPinnedUri(null);
     setClosedUris(EMPTY_CLOSED_URIS);
@@ -3109,19 +3130,78 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     [transport],
   );
 
-  // A mid-run connect arms the NEXT turn; it never restarts the run. Restarting
-  // would re-emit work the user is reading and re-spend the tokens that made
-  // it, so the choice is theirs and it costs exactly one turn.
-  const handleConnectorRetry = useCallback(
-    (_serverId: string, displayName: string): void => {
-      // Through the ONE start path, so the retry turn gets the same readiness
-      // gate, optimistic echo, and error surfacing as anything the user types.
-      void handleStartRun({
-        goal: `Retry that step, using ${displayName}.`,
-      }).catch(() => undefined);
-    },
-    [handleStartRun],
+  // OAuth completion is itself the next user turn. The persisted run-create
+  // path fixes its message role to `user`; the model therefore sees the same
+  // durable conversation fact the person sees in the compact connected card,
+  // without a second Retry button. Reuse the originating run's exact model:
+  // the log-confirmed failure here was a model-less synthetic turn falling back
+  // to an unconfigured deployment default and receiving HTTP 400.
+  const notifiedConnectorApprovalsRef = useRef<Set<string>>(new Set());
+  const connectedConnectorApproval = useMemo(
+    () =>
+      connectedConnectorServerId === null
+        ? null
+        : (chatApprovals.find(
+            (approval) =>
+              approval.serverId === connectedConnectorServerId &&
+              approval.approvalKind === "mcp_auth",
+          ) ?? null),
+    [chatApprovals, connectedConnectorServerId],
   );
+  useEffect(() => {
+    const approval = connectedConnectorApproval;
+    if (
+      approval === null ||
+      connectedConnectorServerId === null ||
+      connectorConsent.states[connectedConnectorServerId] !== "connected" ||
+      !modelReady ||
+      isStartingRun
+    ) {
+      return;
+    }
+    const notificationKey = `mcp-connected:${approval.approvalId}`;
+    if (notifiedConnectorApprovalsRef.current.has(notificationKey)) {
+      return;
+    }
+    const originatingRunId = approval.runId ?? session.runId;
+    const modelName =
+      session.runs.find((run) => run.runId === originatingRunId)?.modelName ??
+      null;
+    // The conversation run list is the authoritative model source. Wait for it
+    // instead of retrying with an absent model and silently reproducing the 400.
+    if (modelName === null) {
+      return;
+    }
+    setConnectedConnectorReceipt({
+      approvalId: approval.approvalId,
+      serverId: connectedConnectorServerId,
+      displayName: approval.title,
+    });
+    notifiedConnectorApprovalsRef.current.add(notificationKey);
+    void handleStartRun({
+      goal: `${approval.title} is connected.`,
+      idempotencyKey: notificationKey,
+      model: { model_name: modelName },
+      // Authentication and per-run activation are separate contracts. The
+      // completion turn must opt the connector into the run immediately;
+      // otherwise the model receives "Linear is connected" while Linear is
+      // still absent from request_context and cannot be called.
+      connectorScopes: { [connectedConnectorServerId]: [] },
+    }).catch(() => {
+      // Keep failures observable through handleStartRun's normal error path and
+      // allow a later host remount/replayed completion to retry idempotently.
+      notifiedConnectorApprovalsRef.current.delete(notificationKey);
+    });
+  }, [
+    connectedConnectorApproval,
+    connectedConnectorServerId,
+    connectorConsent.states,
+    handleStartRun,
+    isStartingRun,
+    modelReady,
+    session.runId,
+    session.runs,
+  ]);
   const handleGatePolicyChange = useCallback(
     (gateId: string, serverId: string, policy: LedgerGateWritePolicy): void => {
       setGatePolicies((prev) => {
@@ -3619,8 +3699,15 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
               dispatch: handleStartRun,
               running,
               onCancel: handleCancel,
+              autoActivateConnectorId: connectedConnectorServerId,
             }),
-    [renderComposer, handleStartRun, running, handleCancel],
+    [
+      renderComposer,
+      handleStartRun,
+      running,
+      handleCancel,
+      connectedConnectorServerId,
+    ],
   );
 
   const chatSlot = (
@@ -3662,9 +3749,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         // → the card renders inert (host wires the launcher in P5b).
         mcpAuthPort={consentPort}
         connectorConsentStates={connectorConsent.states}
+        connectedConnectorReceipt={connectedConnectorReceipt}
         onConnectorConsentCancel={connectorConsent.markPending}
         onConnectorMute={handleConnectorMute}
-        onConnectorRetry={handleConnectorRetry}
         // Host composer seam: desktop mounts the full AssistantComposer here. The
         // dispatch-injecting wrapper (§D3) makes its send bind the live session.
         renderComposer={renderComposerWithDispatch}
@@ -3935,6 +4022,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
                   dismissError: clearStartError,
                   modelReady,
                   onOpenModelSettings,
+                  autoActivateConnectorId: connectedConnectorServerId,
                 })}
               </div>
             </div>
@@ -4078,6 +4166,9 @@ export function buildRunCreateBody(
     conversation_id: conversationId,
     user_input: request.goal,
   };
+  if (request.idempotencyKey !== undefined) {
+    body.idempotency_key = request.idempotencyKey;
+  }
   if (request.model !== null && request.model !== undefined) {
     body.model = request.model;
   }

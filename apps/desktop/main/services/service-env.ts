@@ -172,7 +172,14 @@ export function resolveDesktopStudioRuntimeEnv(
   // `ARTIFACT_EFFECTS_V2=false` is the single explicit rollback switch.
   const artifactDrafts =
     artifactEffects && readBoolean("ARTIFACT_DRAFTS_V2", true);
-  const operationGateway = readMode("OPERATION_GATEWAY_MODE", "enforce");
+  // E2 `enforce` is cohort-gated. Desktop cannot safely invent an org/user
+  // cohort before the signed-in principal exists, so defaulting to enforce made
+  // the worker deny the backend MCP registry while the backend still completed
+  // OAuth. The model then saw connector suggestions but no `call_mcp_tool`.
+  // Compatibility mode still uses the canonical gateway when its durable
+  // dependencies are present; an operator may opt into enforce together with a
+  // real E2 cohort policy.
+  const operationGateway = readMode("OPERATION_GATEWAY_MODE", "off");
   const workspaceEffect = readMode(
     "WORKSPACE_EFFECT_MODE",
     opts.workspaceBrokerEnabled && operationGateway === "enforce"
