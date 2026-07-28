@@ -77,6 +77,22 @@ Worth keeping because they change how the remaining waves should be run.
   Every lane prompt must pin its base commit explicitly, or lanes silently build
   on stale code. Round 1 survived this only because it depended on nothing
   unmerged.
+- **A new event family is inherently cross-package, so a lane adding one needs
+  `packages/api-types` and `runtime_api/schemas/` in its write list.** PRD §14
+  requires the Python enum, payload validation, persistence, projection, and the
+  TypeScript discriminated union to move together, and
+  `test_typescript_runtime_event_constants_match_backend_enums` asserts
+  set-equality between them — so a write-list that omits them makes the
+  requirement unsatisfiable. Lane F6.2 exceeded its stated list for exactly this
+  reason, disclosed it prominently, kept every edit append-only (173 insertions,
+  0 deletions), and ran the TypeScript typecheck. The fault was in the brief,
+  not the lane.
+- **A lane briefly wrote to the main checkout instead of its worktree**, caught
+  it, reverted with an exact reverse edit, and verified byte-identity. The
+  integration owner confirmed the main checkout was clean independently rather
+  than taking the report at face value. Keep verifying this claim specifically —
+  a stray commit on the main checkout is the one subagent failure mode that is
+  expensive to undo.
 - **The most valuable lane output is where a shared contract did not fit.**
   RB.2's six adoption findings are worth more than its code, because they price
   the next three adoptions. Ask for that explicitly in lane briefs.

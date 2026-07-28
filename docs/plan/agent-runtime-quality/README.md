@@ -902,10 +902,38 @@ Scheduling convenience is never treated as safety metadata.
       fall to _no key_ rather than an invented merge; `capability_ref` is
       pattern-locked so raw connector or tool names cannot structurally enter a
       resolution record.
-- [ ] **F6.2 — Persisted batches.** Construct and persist an ordered
+- [x] **F6.2 — Persisted batches.** (`f920f511`; 51 focused tests, each
+      parameterised over both the in-memory and file adapters so desktop parity
+      holds by construction rather than by a separate assertion.) Construct and
+      persist an ordered
       `OperationBatch` and `BatchPlan` in `aafter_model` before any child is
       dispatched, through the canonical run event journal with stable
       idempotency identity, replay validation, and desktop file-store parity.
+      One new event family, `operation_batch.journal.v1`.
+
+      **Replay determinism is a validator, not a convention.** The record stores
+      its body-free inputs alongside its output and re-runs the planner on every
+      construction *and every parse*, refusing unless the result equals the
+      stored segments and plan digest. Six forgery tests **reseal** the record
+      first, isolating the reproducibility rule from the tamper seal; two more
+      skip the reseal to prove the digest covers segmentation too. Observation
+      time is excluded from the digest, so concurrent writers converge.
+
+      Idempotency is proven at both layers, including a `_RaceBlindEventStore`
+      that hides the F6 prefix from the writer's *first* read — modelling a
+      writer whose read beat the winner's append, so the duplicate is detectable
+      only at the store's stable event id. Identical decisions converge to one
+      plan; divergent ones raise and the journal still holds exactly one.
+      Mutation-verified: deleting the digest comparison in the conflict branch
+      turns the divergent-writer test red on both adapters.
+
+      Body-free evidence is demonstrated rather than asserted: a live-store test
+      seeds a run whose `user_input` is a secret and proves it, the connector
+      name, raw arguments, raw results, credentials, URLs, and host paths are
+      all absent from the serialized events. `ConcurrencyKillSwitchDecision`'s
+      narrowing validator turned out to be directly reusable as the record's own
+      no-broadening proof — the F6.R consolidation paying off immediately.
+
 - [ ] **F6.3 — Batch execution coordinator.** Implement the run-scoped
       `BatchExecutionCoordinator` so framework-started coroutines wait on
       persisted segment gates instead of racing. Preserve input-order results
