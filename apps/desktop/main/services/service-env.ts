@@ -416,6 +416,11 @@ export function buildServiceEnv(
         // supplies the explicit Postgres override below.
         env.RUNTIME_STORE_BACKEND = "file";
         env.RUNTIME_FILE_STORE_ROOT = aiFileStoreV1Root(inputs.userDataDir);
+        // Optional, bounded process-local persistence for provider circuit
+        // health. This is intentionally desktop/file-store only: it restores
+        // opaque endpoint/credential fingerprints after a local restart, never
+        // secrets, and does not introduce a shared database/daemon contract.
+        env.RUNTIME_PROVIDER_CIRCUIT_SNAPSHOT_ENABLED = "true";
       } else {
         // Explicit rollback or one-boot migration fallback: preserve the
         // legacy Postgres AI store rather than starting an empty file store.

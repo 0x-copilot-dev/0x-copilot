@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
+import hashlib
+import json
 from typing import Self
 
 from pydantic import (
@@ -21,7 +23,13 @@ from pydantic import (
 )
 
 from agent_runtime.execution.contracts import ModelConfig, RuntimeContract
+from agent_runtime.execution.call_identity import RuntimeModelCallIdentity
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.validation import ValueNormalizer
+
+_SHA256_REF_PATTERN = r"^sha256:[0-9a-f]{64}$"
+_SHA256_PATTERN = r"^[0-9a-f]{64}$"
+_MAX_DEPLOYMENTS = 512
 
 
 class ModelCapability(StrEnum):
@@ -165,6 +173,7 @@ class ModelAttemptDecisionReason(StrEnum):
     FIRST_ATTEMPT = "first_attempt"
     SAFE_SAME_DEPLOYMENT_RETRY = "safe_same_deployment_retry"
     SAFE_ALTERNATE_ROUTE = "safe_alternate_route"
+    SAFE_CACHE_UNDECORATED_RETRY = "safe_cache_undecorated_retry"
     WHOLE_RUN_REPLAY_FORBIDDEN = "whole_run_replay_forbidden"
     EXTERNAL_EFFECT_OBSERVED = "external_effect_observed"
     NO_ELIGIBLE_ROUTE = "no_eligible_route"
@@ -203,19 +212,45 @@ class ModelDeploymentDescriptor(RuntimeContract):
     """Versioned, non-secret facts about one callable model deployment."""
 
     deployment_id: str = Field(min_length=1, max_length=255)
+    deployment_revision: str = Field(
+        default="model-deployment.v1",
+        min_length=1,
+        max_length=255,
+    )
+    endpoint_ref: str = Field(pattern=r"^endpoint_[0-9a-f]{32}$")
+    endpoint_revision: str = Field(
+        default="model-endpoint.v1",
+        min_length=1,
+        max_length=255,
+    )
     provider: str = Field(min_length=1, max_length=64)
     model_name: str = Field(min_length=1, max_length=200)
     capabilities: frozenset[ModelCapability] = Field(default_factory=frozenset)
     max_input_tokens: PositiveInt = Field(le=2_000_000)
-    regions: frozenset[str] = Field(default_factory=frozenset)
+    max_output_tokens: PositiveInt = Field(le=2_000_000)
+    region: str = Field(min_length=1, max_length=64)
     credential_modes: frozenset[ModelCredentialMode] = Field(min_length=1)
     privacy_features: frozenset[ModelPrivacyFeature] = Field(default_factory=frozenset)
     qualified_task_families: frozenset[str] = Field(default_factory=frozenset)
     health: ModelDeploymentHealth = ModelDeploymentHealth.AVAILABLE
     enabled: bool = True
+    price_revision: str = Field(min_length=1, max_length=255)
+    qualification_revision: str = Field(
+        default="model-qualification.none.v1",
+        min_length=1,
+        max_length=255,
+    )
     descriptor_revision: str = Field(min_length=1, max_length=255)
 
-    @field_validator("deployment_id", "model_name", "descriptor_revision")
+    @field_validator(
+        "deployment_id",
+        "deployment_revision",
+        "endpoint_revision",
+        "model_name",
+        "price_revision",
+        "qualification_revision",
+        "descriptor_revision",
+    )
     @classmethod
     def _normalize_identifier(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
         return _nonempty(value, info.field_name)
@@ -225,10 +260,65 @@ class ModelDeploymentDescriptor(RuntimeContract):
     def _normalize_provider(cls, value: str) -> str:
         return _slug(value, "provider")
 
-    @field_validator("regions", "qualified_task_families", mode="before")
+    @field_validator("qualified_task_families", mode="before")
     @classmethod
     def _normalize_slug_sets(cls, value: object, info) -> frozenset[str]:  # type: ignore[no-untyped-def]
         return ValueNormalizer.normalize_slug_set(value, info.field_name)
+
+    @field_validator("region")
+    @classmethod
+    def _normalize_region(cls, value: str) -> str:
+        return _slug(value, "region")
+
+
+class ModelDeploymentCatalog(RuntimeContract):
+    """Replay-stable, bounded descriptor set consumed by the route policy."""
+
+    catalog_revision: str = Field(min_length=1, max_length=255)
+    descriptors: tuple[ModelDeploymentDescriptor, ...] = Field(
+        max_length=_MAX_DEPLOYMENTS
+    )
+    descriptor_set_digest: str = Field(pattern=_SHA256_REF_PATTERN)
+
+    @classmethod
+    def create(
+        cls,
+        descriptors: tuple[ModelDeploymentDescriptor, ...],
+        *,
+        schema_revision: str = "model-deployment-catalog.v1",
+    ) -> "ModelDeploymentCatalog":
+        ordered = tuple(sorted(descriptors, key=lambda item: item.deployment_id))
+        digest = cls._digest(ordered)
+        return cls(
+            catalog_revision=f"{schema_revision}:{digest}",
+            descriptors=ordered,
+            descriptor_set_digest=digest,
+        )
+
+    @model_validator(mode="after")
+    def _catalog_is_canonical(self) -> Self:
+        deployment_ids = tuple(item.deployment_id for item in self.descriptors)
+        if deployment_ids != tuple(sorted(deployment_ids)):
+            raise ValueError("deployment catalog must be ordered by deployment_id")
+        if len(deployment_ids) != len(set(deployment_ids)):
+            raise ValueError("deployment catalog contains duplicate deployment_id")
+        expected = self._digest(self.descriptors)
+        if self.descriptor_set_digest != expected:
+            raise ValueError("descriptor_set_digest does not match descriptors")
+        if not self.catalog_revision.endswith(expected):
+            raise ValueError("catalog_revision does not bind descriptor_set_digest")
+        return self
+
+    @staticmethod
+    def _digest(descriptors: tuple[ModelDeploymentDescriptor, ...]) -> str:
+        return "sha256:" + canonical_json_sha256(
+            {
+                "schema_revision": "model-deployment-descriptor.v1",
+                "descriptors": [
+                    descriptor.model_dump(mode="json") for descriptor in descriptors
+                ],
+            }
+        )
 
 
 class ModelInvocationBudget(RuntimeContract):
@@ -257,7 +347,7 @@ class ModelCredentialAvailability(RuntimeContract):
     """Credential modes currently usable for one canonical provider."""
 
     provider: str = Field(min_length=1, max_length=64)
-    modes: frozenset[ModelCredentialMode] = Field(min_length=1)
+    modes: frozenset[ModelCredentialMode] = Field(default_factory=frozenset)
 
     @field_validator("provider")
     @classmethod
@@ -282,9 +372,7 @@ class ModelInvocationRequirements(RuntimeContract):
     required_capabilities: frozenset[ModelCapability] = Field(default_factory=frozenset)
     minimum_context_tokens: PositiveInt = Field(le=2_000_000)
     region: str | None = Field(default=None, min_length=1, max_length=64)
-    credential_availability: tuple[ModelCredentialAvailability, ...] = Field(
-        min_length=1
-    )
+    credential_availability: tuple[ModelCredentialAvailability, ...] = ()
     byok_policy: ByokPolicy = ByokPolicy.ALLOWED
     training_opt_out_required: bool = False
     fallback_policy: ModelFallbackPolicy = ModelFallbackPolicy.NONE
@@ -372,6 +460,54 @@ class ModelInvocationRequirements(RuntimeContract):
         )
 
 
+class ModelInvocationRequirementsSnapshot(RuntimeContract):
+    """Immutable requirements with an explicit schema revision and digest."""
+
+    requirements_revision: str = Field(min_length=1, max_length=255)
+    requirements: ModelInvocationRequirements
+    requirements_digest: str = Field(pattern=_SHA256_REF_PATTERN)
+
+    @classmethod
+    def create(
+        cls,
+        requirements: ModelInvocationRequirements,
+        *,
+        requirements_revision: str = "model-invocation-requirements.v1",
+    ) -> "ModelInvocationRequirementsSnapshot":
+        digest = cls._digest(
+            requirements_revision=requirements_revision,
+            requirements=requirements,
+        )
+        return cls(
+            requirements_revision=requirements_revision,
+            requirements=requirements,
+            requirements_digest=digest,
+        )
+
+    @model_validator(mode="after")
+    def _digest_matches(self) -> Self:
+        expected = self._digest(
+            requirements_revision=self.requirements_revision,
+            requirements=self.requirements,
+        )
+        if self.requirements_digest != expected:
+            raise ValueError("requirements_digest does not match requirements")
+        return self
+
+    @staticmethod
+    def _digest(
+        *,
+        requirements_revision: str,
+        requirements: ModelInvocationRequirements,
+    ) -> str:
+        return "sha256:" + canonical_json_sha256(
+            {
+                "requirements_revision": requirements_revision,
+                "requirements": requirements.model_dump(mode="json"),
+            }
+        )
+
+
 class ModelRouteExclusion(RuntimeContract):
     """Why one descriptor could not be used."""
 
@@ -379,14 +515,122 @@ class ModelRouteExclusion(RuntimeContract):
     reasons: tuple[ModelRouteExclusionReason, ...] = Field(min_length=1)
 
 
-class ModelRoutePlan(RuntimeContract):
-    """Ordered eligible deployment identifiers and every rejected descriptor."""
+class ModelRouteEntry(RuntimeContract):
+    """One fully bound, non-secret provider attempt route."""
 
-    policy_revision: str = Field(default="model-route-policy.v1", min_length=1)
-    deployment_ids: tuple[str, ...]
+    deployment_id: str = Field(min_length=1, max_length=255)
+    deployment_revision: str = Field(
+        default="model-deployment.v1",
+        min_length=1,
+        max_length=255,
+    )
+    descriptor_revision: str = Field(min_length=1, max_length=255)
+    endpoint_ref: str = Field(pattern=r"^endpoint_[0-9a-f]{32}$")
+    endpoint_revision: str = Field(
+        default="model-endpoint.v1",
+        min_length=1,
+        max_length=255,
+    )
+    provider: str = Field(min_length=1, max_length=64)
+    model_name: str = Field(min_length=1, max_length=200)
+    region: str = Field(min_length=1, max_length=64)
+    credential_mode: ModelCredentialMode
+    price_revision: str = Field(min_length=1, max_length=255)
+    qualification_revision: str = Field(
+        default="model-qualification.none.v1",
+        min_length=1,
+        max_length=255,
+    )
+    max_input_tokens: PositiveInt = Field(le=2_000_000)
+    max_output_tokens: PositiveInt = Field(le=2_000_000)
+
+    @field_validator(
+        "deployment_id",
+        "deployment_revision",
+        "descriptor_revision",
+        "endpoint_revision",
+        "model_name",
+        "price_revision",
+        "qualification_revision",
+    )
+    @classmethod
+    def _normalize_identifiers(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
+        return _nonempty(value, info.field_name)
+
+    @field_validator("provider", "region")
+    @classmethod
+    def _normalize_slugs(cls, value: str, info) -> str:  # type: ignore[no-untyped-def]
+        return _slug(value, info.field_name)
+
+    @classmethod
+    def from_descriptor(
+        cls,
+        descriptor: ModelDeploymentDescriptor,
+        *,
+        credential_mode: ModelCredentialMode,
+    ) -> "ModelRouteEntry":
+        """Project a trusted descriptor and selected credential class."""
+
+        if credential_mode not in descriptor.credential_modes:
+            raise ValueError("selected credential mode is not supported by deployment")
+        return cls(
+            deployment_id=descriptor.deployment_id,
+            deployment_revision=descriptor.deployment_revision,
+            descriptor_revision=descriptor.descriptor_revision,
+            endpoint_ref=descriptor.endpoint_ref,
+            endpoint_revision=descriptor.endpoint_revision,
+            provider=descriptor.provider,
+            model_name=descriptor.model_name,
+            region=descriptor.region,
+            credential_mode=credential_mode,
+            price_revision=descriptor.price_revision,
+            qualification_revision=descriptor.qualification_revision,
+            max_input_tokens=descriptor.max_input_tokens,
+            max_output_tokens=descriptor.max_output_tokens,
+        )
+
+
+class ModelRoutePlan(RuntimeContract):
+    """Ordered, fully bound routes and every rejected descriptor."""
+
+    policy_revision: str = Field(default="model-route-policy.v2", min_length=1)
+    routes: tuple[ModelRouteEntry, ...]
     exclusions: tuple[ModelRouteExclusion, ...] = ()
     fallback_policy: ModelFallbackPolicy
     budget: ModelInvocationBudget
+    route_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+
+    @property
+    def deployment_ids(self) -> tuple[str, ...]:
+        """Compatibility projection used by attempt admission."""
+
+        return tuple(route.deployment_id for route in self.routes)
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        routes: tuple[ModelRouteEntry, ...],
+        exclusions: tuple[ModelRouteExclusion, ...],
+        fallback_policy: ModelFallbackPolicy,
+        budget: ModelInvocationBudget,
+        policy_revision: str = "model-route-policy.v2",
+    ) -> "ModelRoutePlan":
+        digest = cls._digest(
+            policy_revision=policy_revision,
+            routes=routes,
+            exclusions=exclusions,
+            fallback_policy=fallback_policy,
+            budget=budget,
+        )
+        return cls(
+            policy_revision=policy_revision,
+            routes=routes,
+            exclusions=exclusions,
+            fallback_policy=fallback_policy,
+            budget=budget,
+            route_digest=digest,
+        )
 
     @model_validator(mode="after")
     def _descriptor_sets_are_well_formed(self) -> Self:
@@ -397,7 +641,125 @@ class ModelRoutePlan(RuntimeContract):
             raise ValueError("route exclusion deployment_ids must be unique")
         if set(self.deployment_ids).intersection(excluded_ids):
             raise ValueError("eligible and excluded deployment_ids must be disjoint")
+        expected_digest = self._digest(
+            policy_revision=self.policy_revision,
+            routes=self.routes,
+            exclusions=self.exclusions,
+            fallback_policy=self.fallback_policy,
+            budget=self.budget,
+        )
+        if self.route_digest != expected_digest:
+            raise ValueError("route_digest does not match the bound route plan")
         return self
+
+    @staticmethod
+    def _digest(
+        *,
+        policy_revision: str,
+        routes: tuple[ModelRouteEntry, ...],
+        exclusions: tuple[ModelRouteExclusion, ...],
+        fallback_policy: ModelFallbackPolicy,
+        budget: ModelInvocationBudget,
+    ) -> str:
+        canonical = json.dumps(
+            {
+                "policy_revision": policy_revision,
+                "routes": [route.model_dump(mode="json") for route in routes],
+                "exclusions": [
+                    exclusion.model_dump(mode="json") for exclusion in exclusions
+                ],
+                "fallback_policy": fallback_policy.value,
+                "budget": budget.model_dump(mode="json"),
+            },
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        return f"sha256:{hashlib.sha256(canonical).hexdigest()}"
+
+
+class ModelInvocationAuthority(RuntimeContract):
+    """Replay-stable authority binding for one checkpoint-derived model call."""
+
+    invocation_id: str = Field(min_length=1, max_length=160)
+    call_identity: RuntimeModelCallIdentity
+    purpose: str = Field(min_length=1, max_length=80)
+    request_digest: str = Field(pattern=_SHA256_REF_PATTERN)
+    run_control_snapshot_digest: str = Field(pattern=_SHA256_PATTERN)
+    requirements_revision: str = Field(min_length=1, max_length=255)
+    requirements_digest: str = Field(pattern=_SHA256_REF_PATTERN)
+    descriptor_set_revision: str = Field(min_length=1, max_length=255)
+    descriptor_set_digest: str = Field(pattern=_SHA256_REF_PATTERN)
+    route_policy_revision: str = Field(min_length=1, max_length=255)
+    route_plan_digest: str = Field(pattern=_SHA256_REF_PATTERN)
+    authority_digest: str = Field(pattern=_SHA256_REF_PATTERN)
+
+    @field_validator("purpose")
+    @classmethod
+    def _normalize_purpose(cls, value: str) -> str:
+        return _slug(value, "purpose")
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        call_identity: RuntimeModelCallIdentity,
+        purpose: str,
+        request_digest: str,
+        run_control_snapshot_digest: str,
+        requirements: ModelInvocationRequirementsSnapshot,
+        catalog: ModelDeploymentCatalog,
+        route_plan: ModelRoutePlan,
+    ) -> "ModelInvocationAuthority":
+        payload = {
+            "call_identity": call_identity,
+            "purpose": purpose,
+            "request_digest": request_digest,
+            "run_control_snapshot_digest": run_control_snapshot_digest,
+            "requirements_revision": requirements.requirements_revision,
+            "requirements_digest": requirements.requirements_digest,
+            "descriptor_set_revision": catalog.catalog_revision,
+            "descriptor_set_digest": catalog.descriptor_set_digest,
+            "route_policy_revision": route_plan.policy_revision,
+            "route_plan_digest": route_plan.route_digest,
+        }
+        authority_digest = cls._digest(payload)
+        return cls(
+            invocation_id=f"model-invocation:{authority_digest.removeprefix('sha256:')}",
+            **payload,
+            authority_digest=authority_digest,
+        )
+
+    @model_validator(mode="after")
+    def _authority_matches(self) -> Self:
+        expected = self._digest(
+            self.model_dump(
+                mode="json",
+                exclude={"invocation_id", "authority_digest"},
+            )
+        )
+        if self.authority_digest != expected:
+            raise ValueError("authority_digest does not match invocation authority")
+        expected_id = f"model-invocation:{expected.removeprefix('sha256:')}"
+        if self.invocation_id != expected_id:
+            raise ValueError("invocation_id does not match invocation authority")
+        return self
+
+    @staticmethod
+    def _digest(payload: object) -> str:
+        if isinstance(payload, dict):
+            normalized = {
+                key: (
+                    value.model_dump(mode="json")
+                    if isinstance(value, RuntimeContract)
+                    else value
+                )
+                for key, value in payload.items()
+            }
+        else:
+            normalized = payload
+        return "sha256:" + canonical_json_sha256(normalized)
 
 
 class ProviderFailureObservation(RuntimeContract):
@@ -486,6 +848,7 @@ __all__ = (
     "ModelCapability",
     "ModelCredentialAvailability",
     "ModelCredentialMode",
+    "ModelDeploymentCatalog",
     "ModelDeploymentDescriptor",
     "ModelDeploymentHealth",
     "ModelDispatchState",
@@ -493,11 +856,14 @@ __all__ = (
     "ModelFailureSignal",
     "ModelFallbackPolicy",
     "ModelInvocationBudget",
+    "ModelInvocationAuthority",
     "ModelInvocationRequirements",
+    "ModelInvocationRequirementsSnapshot",
     "ModelPrivacyFeature",
     "ModelRecoveryScope",
     "ModelRouteExclusion",
     "ModelRouteExclusionReason",
+    "ModelRouteEntry",
     "ModelRoutePlan",
     "ModelStreamState",
     "ProviderFailureObservation",

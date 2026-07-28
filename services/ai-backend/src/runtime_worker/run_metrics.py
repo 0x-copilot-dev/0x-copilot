@@ -242,6 +242,10 @@ class AssistantRunMetrics:
         self.chunk_count = 0
         self.usage: NormalizedTokenUsage = NormalizedTokenUsage()
         self.per_call = PerCallTokenAccumulator()
+        # F10 journal reconciliation supplies independent (usually failed or
+        # non-streamed) attempts. Keep its cost separate from the streaming
+        # accumulator so a terminal streamed row can be explicitly deduped.
+        self._model_invocation_cost_micro_usd = 0
 
     @classmethod
     def from_run(cls, run: RunRecord) -> "AssistantRunMetrics":
@@ -318,6 +322,62 @@ class AssistantRunMetrics:
                 started_at=datetime.now(timezone.utc),
             )
 
+    @property
+    def model_invocation_cost_micro_usd(self) -> int:
+        """Canonical provider-reported spend reconciled from F10 attempts."""
+
+        return self._model_invocation_cost_micro_usd
+
+    def record_model_invocation_usage(
+        self,
+        usage: NormalizedTokenUsage,
+        *,
+        cost_micro_usd: int,
+    ) -> None:
+        """Add a non-streamed, independently finalized F10 attempt.
+
+        This deliberately adds rather than uses ``NormalizedTokenUsage.merge``:
+        attempts are separate provider requests, while ``merge`` is reserved for
+        cumulative chunks from one stream.
+        """
+
+        self.usage = NormalizedTokenUsage(
+            input_tokens=self.usage.input_tokens + usage.input_tokens,
+            output_tokens=self.usage.output_tokens + usage.output_tokens,
+            cached_input_tokens=(
+                self.usage.cached_input_tokens + usage.cached_input_tokens
+            ),
+            cache_creation_input_tokens=(
+                self.usage.cache_creation_input_tokens
+                + usage.cache_creation_input_tokens
+            ),
+            reasoning_tokens=self.usage.reasoning_tokens + usage.reasoning_tokens,
+            audio_input_tokens=(
+                self.usage.audio_input_tokens + usage.audio_input_tokens
+            ),
+            audio_output_tokens=(
+                self.usage.audio_output_tokens + usage.audio_output_tokens
+            ),
+            provider_cache_metadata_observed=(
+                self.usage.provider_cache_metadata_observed
+                or usage.provider_cache_metadata_observed
+            ),
+        )
+        self._model_invocation_cost_micro_usd += cost_micro_usd
+
+    def set_model_invocation_cost_micro_usd(self, cost_micro_usd: int) -> None:
+        """Set the complete journal-derived provider cost at terminal replay.
+
+        The journal includes a streamed terminal's final cost even when its
+        tokens were excluded from the delta to avoid duplicating the streaming
+        row. The complete total therefore replaces any provisional
+        non-streamed delta cost before the run usage row is persisted.
+        """
+
+        if cost_micro_usd < 0:
+            raise ValueError("model invocation cost must be non-negative")
+        self._model_invocation_cost_micro_usd = cost_micro_usd
+
     def model_call_usage_records(
         self,
         run: RunRecord,
@@ -371,6 +431,11 @@ class AssistantRunMetrics:
                 )
             )
         return tuple(records)
+
+    def finalized_model_call_ids(self) -> frozenset[str]:
+        """Stable streamed usage IDs available as F10 journal dedupe witnesses."""
+
+        return frozenset(slot.message_id for slot in self.per_call.finalized_calls())
 
     def to_payload(self, *, completed_at: datetime | None = None) -> JsonObject:
         """Return the public JSON metrics payload."""
@@ -455,6 +520,11 @@ class AssistantRunMetrics:
             completed_at=completed_at,
             status=status,
             created_at=completed_at,
+            cost_micro_usd=(
+                self._model_invocation_cost_micro_usd
+                if self._model_invocation_cost_micro_usd > 0
+                else None
+            ),
         )
 
     def chunk_has_usage(self, value: object) -> bool:

@@ -29,6 +29,7 @@ from runtime_api.schemas import (
     AgentRunStatus,
     RunRecord,
     RuntimeApiEventType,
+    RuntimeEventEnvelope,
 )
 
 
@@ -313,3 +314,97 @@ class TestResilientToPerEntryFailure:
             "task_ok_1",
             "task_ok_2",
         }
+
+
+class _RecordingTerminalObserver:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[tuple[str, AgentRunStatus, TerminationReason]] = []
+        self._fail = fail
+
+    async def observe_terminal_run(
+        self,
+        *,
+        run: RunRecord,
+        terminal_status: AgentRunStatus,
+        reason: TerminationReason,
+        terminal_event: RuntimeEventEnvelope,
+    ) -> None:
+        assert terminal_event.run_id == run.run_id
+        self.calls.append((run.run_id, terminal_status, reason))
+        if self._fail:
+            raise RuntimeError("projection enqueue unavailable")
+
+
+class TestTerminalObserver:
+    async def test_observer_runs_only_after_terminal_event_is_durable(self) -> None:
+        producer, run, store = await _seeded_producer_and_run()
+        observer = _RecordingTerminalObserver()
+        coordinator = RunTerminationCoordinator(
+            event_producer=producer,
+            terminal_observer=observer,
+        )
+
+        await coordinator.terminate(
+            run=run,
+            terminal_status=AgentRunStatus.COMPLETED,
+            reason=TerminationReason.NORMAL_COMPLETION,
+        )
+
+        assert (
+            len(_events_of_type(store, run.run_id, RuntimeApiEventType.RUN_COMPLETED))
+            == 1
+        )
+        assert observer.calls == [
+            (
+                run.run_id,
+                AgentRunStatus.COMPLETED,
+                TerminationReason.NORMAL_COMPLETION,
+            )
+        ]
+
+    async def test_observer_failure_cannot_change_terminal_outcome(self) -> None:
+        producer, run, store = await _seeded_producer_and_run()
+        observer = _RecordingTerminalObserver(fail=True)
+        coordinator = RunTerminationCoordinator(
+            event_producer=producer,
+            terminal_observer=observer,
+        )
+
+        await coordinator.terminate(
+            run=run,
+            terminal_status=AgentRunStatus.FAILED,
+            reason=TerminationReason.EXECUTION_ERROR,
+        )
+
+        assert (
+            len(_events_of_type(store, run.run_id, RuntimeApiEventType.RUN_FAILED)) == 1
+        )
+        assert observer.calls == [
+            (run.run_id, AgentRunStatus.FAILED, TerminationReason.EXECUTION_ERROR)
+        ]
+
+    async def test_observer_is_not_called_when_terminal_event_write_fails(
+        self,
+    ) -> None:
+        producer, run, _ = await _seeded_producer_and_run()
+        observer = _RecordingTerminalObserver()
+        original = producer.append_api_event
+
+        async def fail_terminal(**kwargs):  # type: ignore[no-untyped-def]
+            if kwargs.get("event_type") is RuntimeApiEventType.RUN_COMPLETED:
+                raise RuntimeError("terminal write failed")
+            return await original(**kwargs)
+
+        producer.append_api_event = fail_terminal  # type: ignore[assignment]
+        coordinator = RunTerminationCoordinator(
+            event_producer=producer,
+            terminal_observer=observer,
+        )
+
+        await coordinator.terminate(
+            run=run,
+            terminal_status=AgentRunStatus.COMPLETED,
+            reason=TerminationReason.NORMAL_COMPLETION,
+        )
+
+        assert observer.calls == []

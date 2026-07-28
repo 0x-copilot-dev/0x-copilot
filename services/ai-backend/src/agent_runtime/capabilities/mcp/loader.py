@@ -32,12 +32,16 @@ from agent_runtime.capabilities.mcp.client import (
     McpClient,
     McpClientError,
     McpConnectionError,
+    McpResourceDiscoveryPage,
     McpTimeoutError,
+    McpToolDiscoveryPage,
+    PaginatedMcpClient,
     RawMcpConnectionMetadata,
+    aclose_mcp_client_safely,
 )
 from agent_runtime.capabilities.mcp.constants import Defaults, Keys, Messages
 from agent_runtime.capabilities.mcp.discovery_cache import (
-    McpDiscoveryCache,
+    McpDiscoveryCachePort,
     McpDiscoveryCacheKey,
 )
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
@@ -50,6 +54,14 @@ _T = TypeVar("_T")
 SUPPORTED_TRANSPORTS = frozenset(
     {McpTransport.STDIO, McpTransport.SSE, McpTransport.HTTP}
 )
+
+
+class _McpDiscoveryPaginationError(ValueError):
+    """Content-free pagination failure mapped to a stable load error."""
+
+    def __init__(self, code: McpLoadErrorCode) -> None:
+        super().__init__(code.value)
+        self.code = code
 
 
 @dataclass(frozen=True)
@@ -68,7 +80,8 @@ class McpLoader:
     timeout_seconds: float = Defaults.TIMEOUT_SECONDS
     max_tool_descriptors: int = Defaults.MAX_TOOL_DESCRIPTORS
     max_resource_descriptors: int = Defaults.MAX_RESOURCE_DESCRIPTORS
-    cache: McpDiscoveryCache | None = None
+    max_discovery_pages: int = 100
+    cache: McpDiscoveryCachePort | None = None
 
     async def load_server(self, request: McpLoadRequest) -> McpLoadResult:
         """Load a selected MCP server while rechecking permissions and validation.
@@ -129,12 +142,27 @@ class McpLoader:
             captured_result["value"] = result
             return result.loaded_server if result.succeeded else None
 
-        cached_record = await self.cache.get_or_load(cache_key, _load)
+        cached_record = await self.cache.get_or_load_cache_entry(
+            cache_key,
+            source_id=card.server_id,
+            load=_load,
+        )
         if "value" in captured_result:
-            # Network path ran — return whatever the live load produced
-            # (success or typed failure) so failure semantics are
-            # preserved end-to-end.
-            return captured_result["value"]
+            live_result = captured_result["value"]
+            if live_result.succeeded and cached_record is None:
+                # The cache's invalidation generation changed while the live
+                # discovery I/O was running. Do not surface descriptors that
+                # crossed a re-auth, pause, uninstall, or revocation boundary.
+                return McpLoadResult.fail(
+                    McpLoadErrorCode.CONNECTION_FAILED,
+                    Messages.Loader.LOAD_FAILED,
+                    retryable=True,
+                    server_name=card.name,
+                    correlation_id=runtime_context.trace_id,
+                )
+            # Network path ran without an invalidation race, or produced a
+            # typed failure that was intentionally not cached.
+            return live_result
         if cached_record is not None:
             return McpLoadResult.ok(cached_record)
         # Defensive: ``get_or_load`` should never return ``None`` without
@@ -164,11 +192,17 @@ class McpLoader:
         runtime_context = request.runtime_context
         card = resolution.card
 
+        client: McpClient | None = None
+        cancel_client = True
         try:
             client = resolution.provider.create_client(card)
             metadata = await self._connect(client, resolution)
-            raw_tools = await self._call_client(client.list_tools)
-            raw_resources = await self._call_client(client.list_resources)
+            if isinstance(client, PaginatedMcpClient):
+                raw_tools = await self._list_all_tool_pages(client)
+                raw_resources = await self._list_all_resource_pages(client)
+            else:
+                raw_tools = await self._call_client(client.list_tools)
+                raw_resources = await self._call_client(client.list_resources)
         except (McpTimeoutError, TimeoutError, asyncio.TimeoutError):
             return McpLoadResult.fail(
                 McpLoadErrorCode.TIMEOUT,
@@ -201,6 +235,14 @@ class McpLoader:
                 server_name=card.name,
                 correlation_id=runtime_context.trace_id,
             )
+        except _McpDiscoveryPaginationError as exc:
+            return McpLoadResult.fail(
+                exc.code,
+                McpLoaderHelpers.safe_descriptor_message(exc.code),
+                retryable=False,
+                server_name=card.name,
+                correlation_id=runtime_context.trace_id,
+            )
         except (AgentRuntimeError, McpClientError, TimeoutError, ConnectionError):
             return McpLoadResult.fail(
                 McpLoadErrorCode.CONNECTION_FAILED,
@@ -222,6 +264,11 @@ class McpLoader:
                 server_name=card.name,
                 correlation_id=runtime_context.trace_id,
             )
+        else:
+            cancel_client = False
+        finally:
+            if client is not None:
+                await aclose_mcp_client_safely(client, cancel=cancel_client)
 
         raw_tools = McpLoaderHelpers.coerce_raw_sequence(raw_tools)
         raw_resources = McpLoaderHelpers.coerce_raw_sequence(raw_resources)
@@ -350,6 +397,71 @@ class McpLoader:
                 server_name=McpLoaderHelpers.safe_server_name(server_name),
             )
         return await self.load_server(request)
+
+    async def _list_all_tool_pages(
+        self,
+        client: PaginatedMcpClient,
+    ) -> tuple[object, ...]:
+        items: list[object] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for _ in range(self.max_discovery_pages):
+            page = await self._call_client(
+                lambda: client.list_tools_page(cursor=cursor)
+            )
+            if not isinstance(page, McpToolDiscoveryPage):
+                raise _McpDiscoveryPaginationError(
+                    McpLoadErrorCode.MALFORMED_DESCRIPTOR
+                )
+            items.extend(page.items)
+            if len(items) > self.max_tool_descriptors:
+                return tuple(items)
+            cursor = self._next_discovery_cursor(
+                page.next_cursor,
+                seen_cursors=seen_cursors,
+            )
+            if cursor is None:
+                return tuple(items)
+        raise _McpDiscoveryPaginationError(McpLoadErrorCode.LOAD_BUDGET_EXCEEDED)
+
+    async def _list_all_resource_pages(
+        self,
+        client: PaginatedMcpClient,
+    ) -> tuple[object, ...]:
+        items: list[object] = []
+        cursor: str | None = None
+        seen_cursors: set[str] = set()
+        for _ in range(self.max_discovery_pages):
+            page = await self._call_client(
+                lambda: client.list_resources_page(cursor=cursor)
+            )
+            if not isinstance(page, McpResourceDiscoveryPage):
+                raise _McpDiscoveryPaginationError(
+                    McpLoadErrorCode.MALFORMED_DESCRIPTOR
+                )
+            items.extend(page.items)
+            if len(items) > self.max_resource_descriptors:
+                return tuple(items)
+            cursor = self._next_discovery_cursor(
+                page.next_cursor,
+                seen_cursors=seen_cursors,
+            )
+            if cursor is None:
+                return tuple(items)
+        raise _McpDiscoveryPaginationError(McpLoadErrorCode.LOAD_BUDGET_EXCEEDED)
+
+    @staticmethod
+    def _next_discovery_cursor(
+        next_cursor: str | None,
+        *,
+        seen_cursors: set[str],
+    ) -> str | None:
+        if next_cursor is None:
+            return None
+        if next_cursor in seen_cursors:
+            raise _McpDiscoveryPaginationError(McpLoadErrorCode.MALFORMED_DESCRIPTOR)
+        seen_cursors.add(next_cursor)
+        return next_cursor
 
     async def _connect(
         self,

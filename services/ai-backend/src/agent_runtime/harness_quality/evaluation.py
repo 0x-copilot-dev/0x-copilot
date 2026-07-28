@@ -10,23 +10,30 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import datetime, timezone
+from math import ceil, sqrt
+from statistics import NormalDist, mean, stdev
 from typing import Protocol
 from uuid import uuid4
 
 from agent_runtime.harness_quality.evaluation_contracts import (
     EvaluationCase,
     EvaluationMode,
+    EvaluationRevisionSet,
     EvaluationResult,
+    EvaluationScope,
     EvaluationStatus,
     FixtureResponse,
     HarnessVariant,
+    PromotionAssessment,
     PromotionDecision,
     PromotionStatus,
+    PromotionThresholds,
     ProjectionPolicy,
     ScorerResult,
     TrajectoryManifest,
     TrajectoryStep,
 )
+from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
 from agent_runtime.api.ports import EventStorePort
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from runtime_api.schemas import RuntimeEventEnvelope
@@ -103,6 +110,20 @@ class TrajectoryProjector:
     """
 
     _CAPABILITY_KEYS = ("capability_id", "tool_name", "tool", "operation")
+    _INVOCATION_RECORD_KINDS = frozenset(
+        {
+            "invocation_planned",
+            "route_eligible",
+            "route_excluded",
+            "attempt_admission",
+            "attempt_state",
+            "attempt_usage",
+            "attempt_failed",
+            "invocation_recovery",
+            "invocation_completed",
+            "invocation_failed",
+        }
+    )
 
     def __init__(self, *, redaction_policy_revision: str) -> None:
         if not redaction_policy_revision.strip():
@@ -155,18 +176,229 @@ class TrajectoryProjector:
             source=event.source.value,
             parent_task_id=event.parent_task_id,
             capability_id=capability_id,
+            policy_record_kind=cls._policy_text(payload, "record_kind"),
+            policy_disposition=cls._policy_text(payload, "disposition"),
+            policy_reason_codes=cls._policy_codes(payload, "reason_codes"),
+            policy_exhausted_dimensions=cls._policy_codes(
+                payload,
+                "exhausted_dimensions",
+            ),
+            prompt_record_kind=cls._prompt_text(payload, "record_kind"),
+            prompt_cache_outcome=cls._prompt_text(payload, "outcome"),
+            prompt_cache_owner=cls._prompt_text(payload, "cache_owner"),
+            prompt_reason_code=cls._prompt_text(payload, "reason_code"),
+            prompt_provider_reported=cls._prompt_bool(
+                payload,
+                "provider_reported",
+            ),
+            prompt_input_tokens=cls._prompt_int(payload, "input_tokens"),
+            prompt_cached_input_tokens=cls._prompt_int(
+                payload,
+                "cached_input_tokens",
+            ),
+            prompt_cache_creation_input_tokens=cls._prompt_int(
+                payload,
+                "cache_creation_input_tokens",
+            ),
+            invocation_record_kind=cls._invocation_text(payload, "record_kind"),
+            invocation_status=cls._invocation_text(payload, "status"),
+            invocation_fallback_policy=cls._invocation_text(
+                payload,
+                "fallback_policy",
+            ),
+            invocation_credential_mode=cls._invocation_text(
+                payload,
+                "credential_mode",
+            ),
+            invocation_decision=cls._invocation_text(payload, "decision"),
+            invocation_reason=(
+                cls._invocation_text(payload, "reason")
+                or cls._invocation_text(payload, "decision_reason")
+            ),
+            invocation_attempt_state=cls._invocation_text(payload, "state"),
+            invocation_failure_class=cls._invocation_text(
+                payload,
+                "failure_class",
+            ),
+            invocation_recovery_outcome=cls._invocation_text(
+                payload,
+                "outcome",
+            ),
+            invocation_exclusion_reasons=cls._invocation_codes(
+                payload,
+                "reasons",
+            ),
+            invocation_provider_reported_usage=cls._invocation_bool(
+                payload,
+                "provider_reported",
+            ),
+            invocation_route_ordinal=cls._invocation_int(
+                payload,
+                "route_ordinal",
+            ),
+            invocation_attempt_ordinal=cls._invocation_int(
+                payload,
+                "attempt_ordinal",
+            ),
+            invocation_attempt_count=cls._invocation_int(
+                payload,
+                "attempt_count",
+            ),
+            invocation_input_tokens=(
+                cls._invocation_int(payload, "input_tokens")
+                or cls._invocation_int(payload, "total_input_tokens")
+            ),
+            invocation_output_tokens=(
+                cls._invocation_int(payload, "output_tokens")
+                or cls._invocation_int(payload, "total_output_tokens")
+            ),
+            invocation_cost_microusd=(
+                cls._invocation_int(payload, "cost_microusd")
+                or cls._invocation_int(payload, "total_cost_microusd")
+            ),
             payload_digest=canonical_json_sha256(payload),
         )
 
     @staticmethod
+    def _policy_text(payload: Mapping[str, object], key: str) -> str | None:
+        """Project an F4-safe field from the record envelope, if present.
+
+        The canonical runtime event stores the typed record below ``record``.
+        F1 retains only the closed vocabulary needed for trajectory scoring;
+        it never copies plan text, arguments, results, or protected refs.
+        """
+
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        value = record.get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+    @classmethod
+    def _policy_codes(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> tuple[str, ...]:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return ()
+        value = record.get(key)
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return ()
+        return tuple(
+            item
+            for item in value
+            if isinstance(item, str) and item.strip() and len(item) <= 80
+        )
+
+    @staticmethod
+    def _prompt_text(payload: Mapping[str, object], key: str) -> str | None:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        record_kind = record.get("record_kind")
+        if record_kind not in {"assembled", "cache_observed"}:
+            return None
+        value = record.get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _prompt_int(payload: Mapping[str, object], key: str) -> int:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return 0
+        if record.get("record_kind") != "cache_observed":
+            return 0
+        value = record.get(key)
+        return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+    @staticmethod
+    def _prompt_bool(payload: Mapping[str, object], key: str) -> bool | None:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        if record.get("record_kind") != "cache_observed":
+            return None
+        value = record.get(key)
+        return value if isinstance(value, bool) else None
+
+    @classmethod
+    def _invocation_record(
+        cls,
+        payload: Mapping[str, object],
+    ) -> Mapping[str, object] | None:
+        record = payload.get("record")
+        if not isinstance(record, Mapping):
+            return None
+        if record.get("record_kind") not in cls._INVOCATION_RECORD_KINDS:
+            return None
+        return record
+
+    @classmethod
+    def _invocation_text(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> str | None:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return None
+        value = record.get(key)
+        return value if isinstance(value, str) and value.strip() else None
+
+    @classmethod
+    def _invocation_int(cls, payload: Mapping[str, object], key: str) -> int:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return 0
+        value = record.get(key)
+        return (
+            value
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            else 0
+        )
+
+    @classmethod
+    def _invocation_bool(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> bool | None:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return None
+        value = record.get(key)
+        return value if isinstance(value, bool) else None
+
+    @classmethod
+    def _invocation_codes(
+        cls,
+        payload: Mapping[str, object],
+        key: str,
+    ) -> tuple[str, ...]:
+        record = cls._invocation_record(payload)
+        if record is None:
+            return ()
+        value = record.get(key)
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return ()
+        return tuple(
+            item
+            for item in value
+            if isinstance(item, str) and item.strip() and len(item) <= 80
+        )
+
+    @staticmethod
     def _validate_contiguous(events: Sequence[RuntimeEventEnvelope]) -> None:
-        previous = 0
+        expected = 1
         for event in events:
-            if event.sequence_no <= previous:
+            if event.sequence_no != expected:
                 raise ValueError(
-                    "events must have strictly increasing sequence numbers"
+                    "events must contain the complete contiguous sequence "
+                    f"starting at 1; expected {expected}, got {event.sequence_no}"
                 )
-            previous = event.sequence_no
+            expected += 1
 
 
 class RuntimeTrajectoryProjector:
@@ -216,54 +448,24 @@ class RuntimeTrajectoryProjector:
         )
 
 
-class InMemoryEvaluationRepository:
-    """Strict immutable repository used by hermetic runners and unit tests."""
-
-    def __init__(self) -> None:
-        self._cases: dict[tuple[str, str], EvaluationCase] = {}
-        self._results: dict[str, EvaluationResult] = {}
-        self._decisions: dict[str, PromotionDecision] = {}
-
-    def put_case(self, case: EvaluationCase) -> bool:
-        key = (case.case_id, case.revision)
-        existing = self._cases.get(key)
-        if existing is not None and existing != case:
-            raise ValueError("case revision is immutable")
-        self._cases[key] = case
-        return existing is None
-
-    def get_case(self, *, case_id: str, revision: str) -> EvaluationCase | None:
-        return self._cases.get((case_id, revision))
-
-    def put_result(self, result: EvaluationResult) -> bool:
-        existing = self._results.get(result.evaluation_run_id)
-        if existing is not None and existing != result:
-            raise ValueError("evaluation result idempotency conflict")
-        self._results[result.evaluation_run_id] = result
-        return existing is None
-
-    def put_decision(self, decision: PromotionDecision) -> bool:
-        existing = self._decisions.get(decision.decision_id)
-        if existing is not None and existing != decision:
-            raise ValueError("promotion decision idempotency conflict")
-        self._decisions[decision.decision_id] = decision
-        return existing is None
-
-
 class DeterministicEvaluationRunner:
     """Runs fixture-only evaluations and persists immutable result records."""
 
     def __init__(
         self,
         *,
-        repository: InMemoryEvaluationRepository,
+        repository: EvaluationRepositoryPort,
+        scope: EvaluationScope,
         executor: TrajectoryExecutor,
         scorers: Sequence[EvaluationScorer],
+        revisions: EvaluationRevisionSet,
         clock: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._repository = repository
+        self._scope = scope
         self._executor = executor
         self._scorers = tuple(scorers)
+        self._revisions = revisions
         self._clock = clock
 
     async def run(
@@ -305,8 +507,13 @@ class DeterministicEvaluationRunner:
         duration_ms = max(0, int((ended - started).total_seconds() * 1_000))
         values: dict[str, object] = {
             "evaluation_run_id": run_id,
+            "suite_run_id": None,
             "case_id": case.case_id,
+            "case_revision": case.revision,
             "variant_id": variant.variant_id,
+            "variant_revision": variant.revision,
+            "scorer_set_id": case.scorer_set_id,
+            "revisions": self._revisions,
             "status": status,
             "scorer_results": scorer_results,
             "hard_gate_failures": hard_failures,
@@ -322,12 +529,166 @@ class DeterministicEvaluationRunner:
             **values,
             result_digest=EvaluationResult.digest_for(**values),
         )
-        self._repository.put_result(result)
+        await self._repository.put_evaluation_result(self._scope, result)
         return result
 
 
 class PromotionGate:
-    """Fail-closed promotion evaluator for immutable evaluation results."""
+    """Fail-closed paired promotion evaluator for immutable results."""
+
+    _INCOMPLETE_STATUSES = frozenset(
+        {
+            EvaluationStatus.PENDING,
+            EvaluationStatus.RUNNING,
+            EvaluationStatus.INCONCLUSIVE,
+        }
+    )
+
+    def evaluate(
+        self,
+        *,
+        candidate_variant_id: str,
+        control_variant_id: str,
+        candidate_results: Sequence[EvaluationResult],
+        control_results: Sequence[EvaluationResult],
+        case_task_families: Mapping[str, str],
+        thresholds: PromotionThresholds,
+    ) -> PromotionAssessment:
+        """Compare exact paired cases under a versioned threshold policy."""
+
+        reasons: set[str] = set()
+        candidate_by_case = self._index_results(
+            candidate_results,
+            expected_variant_id=candidate_variant_id,
+            role="candidate",
+            reasons=reasons,
+        )
+        control_by_case = self._index_results(
+            control_results,
+            expected_variant_id=control_variant_id,
+            role="control",
+            reasons=reasons,
+        )
+        if not candidate_results:
+            reasons.add("candidate_results_empty")
+        if not control_results:
+            reasons.add("control_results_empty")
+        if candidate_by_case.keys() != control_by_case.keys():
+            reasons.add("unpaired_case_set")
+        paired_case_ids = tuple(
+            sorted(candidate_by_case.keys() & control_by_case.keys())
+        )
+        if len(paired_case_ids) < thresholds.minimum_paired_cases:
+            reasons.add("minimum_paired_cases_not_met")
+
+        candidate_successes: list[int] = []
+        control_successes: list[int] = []
+        for case_id in paired_case_ids:
+            candidate = candidate_by_case[case_id]
+            control = control_by_case[case_id]
+            if candidate.case_revision != control.case_revision:
+                reasons.add("case_revision_mismatch")
+            if candidate.status in self._INCOMPLETE_STATUSES:
+                reasons.add("candidate_incomplete_status")
+            if control.status in self._INCOMPLETE_STATUSES:
+                reasons.add("control_incomplete_status")
+            if candidate.hard_gate_failures:
+                reasons.add("candidate_hard_gate_failure")
+            candidate_successes.append(int(self._succeeded(candidate)))
+            control_successes.append(int(self._succeeded(control)))
+
+        candidate_rate = self._rate(candidate_successes)
+        control_rate = self._rate(control_successes)
+        differences = tuple(
+            candidate - control
+            for candidate, control in zip(
+                candidate_successes, control_successes, strict=True
+            )
+        )
+        success_delta = candidate_rate - control_rate
+        success_lower_bound = self._mean_lower_bound(
+            differences,
+            confidence_level=thresholds.confidence_level,
+        )
+        if success_lower_bound < -thresholds.maximum_success_rate_regression:
+            reasons.add("success_regression")
+
+        protected_bounds: dict[str, float] = {}
+        for family in sorted(thresholds.protected_task_families):
+            family_differences = tuple(
+                candidate_successes[index] - control_successes[index]
+                for index, case_id in enumerate(paired_case_ids)
+                if case_task_families.get(case_id) == family
+            )
+            if not family_differences:
+                reasons.add("protected_family_missing")
+                continue
+            lower_bound = self._mean_lower_bound(
+                family_differences,
+                confidence_level=thresholds.confidence_level,
+            )
+            protected_bounds[family] = lower_bound
+            if lower_bound < -thresholds.maximum_protected_family_regression:
+                reasons.add("protected_family_regression")
+
+        if any(case_id not in case_task_families for case_id in paired_case_ids):
+            reasons.add("task_family_mapping_missing")
+
+        mean_cost_ratio = self._ratio(
+            candidate_values=tuple(
+                candidate_by_case[case_id].total_cost for case_id in paired_case_ids
+            ),
+            control_values=tuple(
+                control_by_case[case_id].total_cost for case_id in paired_case_ids
+            ),
+            zero_regression_reason="cost_regression_from_zero",
+            reasons=reasons,
+        )
+        if (
+            mean_cost_ratio is not None
+            and mean_cost_ratio > thresholds.maximum_mean_cost_ratio
+        ):
+            reasons.add("mean_cost_ratio_exceeded")
+
+        p95_latency_ratio = self._ratio(
+            candidate_values=tuple(
+                float(candidate_by_case[case_id].end_to_end_ms)
+                for case_id in paired_case_ids
+            ),
+            control_values=tuple(
+                float(control_by_case[case_id].end_to_end_ms)
+                for case_id in paired_case_ids
+            ),
+            zero_regression_reason="latency_regression_from_zero",
+            reasons=reasons,
+            aggregate=self._p95,
+        )
+        if (
+            p95_latency_ratio is not None
+            and p95_latency_ratio > thresholds.maximum_p95_latency_ratio
+        ):
+            reasons.add("p95_latency_ratio_exceeded")
+
+        reason_codes = tuple(sorted(reasons))
+        values: dict[str, object] = {
+            "candidate_variant_id": candidate_variant_id,
+            "control_variant_id": control_variant_id,
+            "thresholds_revision": thresholds.revision,
+            "paired_case_count": len(paired_case_ids),
+            "candidate_success_rate": candidate_rate,
+            "control_success_rate": control_rate,
+            "success_rate_delta": success_delta,
+            "success_rate_delta_lower_bound": success_lower_bound,
+            "mean_cost_ratio": mean_cost_ratio,
+            "p95_latency_ratio": p95_latency_ratio,
+            "protected_family_lower_bounds": protected_bounds,
+            "reason_codes": reason_codes,
+            "passed": not reason_codes,
+        }
+        return PromotionAssessment(
+            **values,
+            assessment_digest=PromotionAssessment.digest_for(**values),
+        )
 
     def decide(
         self,
@@ -340,19 +701,15 @@ class PromotionGate:
         report_ref: str,
         actor: str,
         rationale: str,
-        candidate_results: Sequence[EvaluationResult],
+        assessment: PromotionAssessment,
         now: datetime | None = None,
     ) -> PromotionDecision:
-        status = (
-            PromotionStatus.REJECTED
-            if not candidate_results
-            or any(
-                result.status is not EvaluationStatus.SUCCEEDED
-                or result.hard_gate_failures
-                for result in candidate_results
-            )
-            else PromotionStatus.APPROVED
-        )
+        if assessment.candidate_variant_id != candidate_variant_id:
+            raise ValueError("assessment candidate variant does not match decision")
+        if assessment.control_variant_id != control_variant_id:
+            raise ValueError("assessment control variant does not match decision")
+        if assessment.thresholds_revision != thresholds_revision:
+            raise ValueError("assessment thresholds revision does not match decision")
         return PromotionDecision(
             decision_id=decision_id,
             candidate_variant_id=candidate_variant_id,
@@ -360,8 +717,86 @@ class PromotionGate:
             suite_revisions=tuple(suite_revisions),
             thresholds_revision=thresholds_revision,
             report_ref=report_ref,
-            status=status,
+            assessment_digest=assessment.assessment_digest,
+            status=(
+                PromotionStatus.APPROVED
+                if assessment.passed
+                else PromotionStatus.REJECTED
+            ),
             actor=actor,
             decided_at=now or datetime.now(timezone.utc),
             rationale=rationale,
         )
+
+    @classmethod
+    def _index_results(
+        cls,
+        results: Sequence[EvaluationResult],
+        *,
+        expected_variant_id: str,
+        role: str,
+        reasons: set[str],
+    ) -> dict[str, EvaluationResult]:
+        indexed: dict[str, EvaluationResult] = {}
+        for result in results:
+            if result.variant_id != expected_variant_id:
+                reasons.add(f"{role}_variant_mismatch")
+            if result.case_id in indexed:
+                reasons.add(f"{role}_duplicate_case")
+                continue
+            indexed[result.case_id] = result
+        return indexed
+
+    @staticmethod
+    def _succeeded(result: EvaluationResult) -> bool:
+        return (
+            result.status is EvaluationStatus.SUCCEEDED
+            and not result.hard_gate_failures
+        )
+
+    @staticmethod
+    def _rate(values: Sequence[int]) -> float:
+        return float(mean(values)) if values else 0.0
+
+    @staticmethod
+    def _mean_lower_bound(
+        differences: Sequence[int],
+        *,
+        confidence_level: float,
+    ) -> float:
+        if not differences:
+            return -1.0
+        average = float(mean(differences))
+        if len(differences) == 1:
+            return average
+        standard_error = stdev(differences) / sqrt(len(differences))
+        z_score = NormalDist().inv_cdf(0.5 + (confidence_level / 2))
+        return max(-1.0, min(1.0, average - (z_score * standard_error)))
+
+    @staticmethod
+    def _p95(values: Sequence[float]) -> float:
+        if not values:
+            return 0.0
+        ordered = sorted(values)
+        return float(ordered[max(0, ceil(len(ordered) * 0.95) - 1)])
+
+    @staticmethod
+    def _ratio(
+        *,
+        candidate_values: Sequence[float],
+        control_values: Sequence[float],
+        zero_regression_reason: str,
+        reasons: set[str],
+        aggregate: Callable[[Sequence[float]], float] | None = None,
+    ) -> float | None:
+        if not candidate_values or not control_values:
+            return None
+        aggregator = aggregate or (lambda values: float(mean(values)))
+        candidate_value = aggregator(candidate_values)
+        control_value = aggregator(control_values)
+        if control_value == 0:
+            if candidate_value > 0:
+                reasons.add(zero_regression_reason)
+                return None
+            return 1.0
+        return candidate_value / control_value

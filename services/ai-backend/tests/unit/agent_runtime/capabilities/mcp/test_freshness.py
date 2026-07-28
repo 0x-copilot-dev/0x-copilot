@@ -154,6 +154,7 @@ def test_subject_invalidation_cannot_widen_to_other_subject_or_server() -> None:
 
         assert removed.cached_records_removed == 1
         assert removed.revision_records_removed == 1
+        assert removed.generation_barriers_advanced == 1
         assert (await cache.get(alice_drive)).record is None
         assert (await cache.get(alice_slack)).record is not None
         assert (await cache.get(bob_drive)).record is not None
@@ -244,5 +245,42 @@ def test_get_or_load_coalesces_same_subject_and_revision() -> None:
         assert first.loaded is True
         assert second.loaded is False
         assert second.decision.state is McpDescriptorFreshnessState.FRESH
+
+    asyncio.run(run())
+
+
+def test_subject_invalidation_blocks_in_flight_revision_publication() -> None:
+    async def run() -> None:
+        base = McpDiscoveryCache()
+        cache = RevisionAwareMcpDiscoveryCache(
+            base,
+            max_staleness_seconds=60,
+        )
+        request = _request()
+        load_started = asyncio.Event()
+        release_load = asyncio.Event()
+
+        async def load() -> LoadedMcpServer:
+            load_started.set()
+            await release_load.wait()
+            return _loaded(server_name="drive", tool_name="stale_search")
+
+        pending = asyncio.create_task(cache.get_or_load(request, load))
+        await load_started.wait()
+
+        invalidated = await cache.invalidate_subject(
+            request.subject,
+            server_name=request.server_name,
+        )
+        release_load.set()
+        result = await pending
+
+        assert invalidated.cached_records_removed == 0
+        assert invalidated.revision_records_removed == 0
+        assert invalidated.generation_barriers_advanced == 1
+        assert result.record is None
+        assert result.decision.state is McpDescriptorFreshnessState.INVALIDATION_RACED
+        assert await base.get(request.cache_key()) is None
+        assert (await cache.get(request)).record is None
 
     asyncio.run(run())

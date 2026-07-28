@@ -16,10 +16,18 @@ import json
 from pydantic import Field, PositiveInt, ValidationInfo, field_validator
 
 from agent_runtime.delegation.subagents.contracts import (
+    SubagentDefinition,
     SubagentOutputContract,
+    SubagentTask,
     SubagentValueNormalizer,
 )
-from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.delegation.subagents.authority import (
+    SubagentAuthorityPolicy,
+    SubagentCapabilityGrant,
+)
+from agent_runtime.delegation.subagents.definitions import SubagentPermissionPolicy
+from agent_runtime.delegation.subagents.handoff import SubagentHandoffBuilder
+from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeContract
 
 _MAX_DIRECT_CHILDREN = 8
 _MAX_EVIDENCE_REFS = 64
@@ -49,6 +57,15 @@ class DelegationAdmissionCode(StrEnum):
     SELF_DEPENDENCY = "self_dependency"
     DEPENDENCY_CYCLE = "dependency_cycle"
     PACKET_TOO_LARGE = "packet_too_large"
+    DUPLICATE_SUBAGENT_DEFINITION = "duplicate_subagent_definition"
+    SUBAGENT_UNAVAILABLE = "subagent_unavailable"
+    AUTHORITY_DENIED = "authority_denied"
+
+
+class DelegationDispatchMode(StrEnum):
+    """Execution authority represented by the foundation plan."""
+
+    SERIAL_DEFAULT = "serial_default"
 
 
 _ADMISSION_MESSAGES: dict[DelegationAdmissionCode, str] = {
@@ -78,6 +95,15 @@ _ADMISSION_MESSAGES: dict[DelegationAdmissionCode, str] = {
     DelegationAdmissionCode.PACKET_TOO_LARGE: (
         "Delegation context packet exceeds the configured size limit."
     ),
+    DelegationAdmissionCode.DUPLICATE_SUBAGENT_DEFINITION: (
+        "Trusted subagent definitions must have unique names."
+    ),
+    DelegationAdmissionCode.SUBAGENT_UNAVAILABLE: (
+        "Requested subagent is unavailable to this run."
+    ),
+    DelegationAdmissionCode.AUTHORITY_DENIED: (
+        "Parent authority does not permit subagent dispatch."
+    ),
 }
 
 
@@ -96,7 +122,7 @@ class DelegationAdmissionError(ValueError):
 
 
 class DelegationBudget(RuntimeContract):
-    """A child reservation; wall time is a ceiling, other fields are additive."""
+    """A child reservation whose consumable and serial wall budgets are additive."""
 
     max_model_turns: PositiveInt
     max_tool_calls: int = Field(ge=0)
@@ -109,8 +135,9 @@ class DelegationBudget(RuntimeContract):
     def aggregate(cls, budgets: Sequence["DelegationBudget"]) -> "DelegationBudget":
         """Return the aggregate reservation for a batch.
 
-        Consumable fields add across children.  Wall time is the largest child
-        reservation because independent children may execute concurrently.
+        Every field adds across children. Model-declared dependencies prove
+        ordering only; until F6 issues an independent concurrency admission,
+        delegation is conservatively serial.
         """
 
         if not budgets:
@@ -121,7 +148,7 @@ class DelegationBudget(RuntimeContract):
             max_input_tokens=sum(item.max_input_tokens for item in budgets),
             max_output_tokens=sum(item.max_output_tokens for item in budgets),
             max_cost_microusd=sum(item.max_cost_microusd for item in budgets),
-            max_wall_ms=max(item.max_wall_ms for item in budgets),
+            max_wall_ms=sum(item.max_wall_ms for item in budgets),
         )
 
     def fits_within(self, limit: "DelegationBudget") -> bool:
@@ -139,6 +166,7 @@ class DelegationRequest(RuntimeContract):
     delegation_id: str
     subagent_name: str
     objective: str = Field(min_length=1, max_length=4_000)
+    relevant_summary: str = Field(min_length=1, max_length=4_000)
     evidence_refs: tuple[str, ...] = Field(
         default_factory=tuple,
         max_length=_MAX_EVIDENCE_REFS,
@@ -151,6 +179,8 @@ class DelegationRequest(RuntimeContract):
         default_factory=tuple,
         max_length=_MAX_DEPENDENCIES,
     )
+    requested_tools: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
+    requested_skills: tuple[str, ...] = Field(default_factory=tuple, max_length=64)
     output_contract: SubagentOutputContract = Field(
         default_factory=SubagentOutputContract
     )
@@ -167,10 +197,28 @@ class DelegationRequest(RuntimeContract):
     def _normalize_subagent_name(cls, value: object) -> str:
         return SubagentValueNormalizer.normalize_slug(value, "subagent_name")
 
-    @field_validator("objective")
+    @field_validator("objective", "relevant_summary")
     @classmethod
-    def _normalize_objective(cls, value: object) -> str:
-        return SubagentValueNormalizer.normalize_nonempty_string(value, "objective")
+    def _normalize_task_text(cls, value: object, info: ValidationInfo) -> str:
+        return SubagentValueNormalizer.normalize_nonempty_string(
+            value,
+            info.field_name,
+        )
+
+    @field_validator("requested_tools", "requested_skills", mode="before")
+    @classmethod
+    def _normalize_requested_capabilities(
+        cls,
+        value: object,
+        info: ValidationInfo,
+    ) -> tuple[str, ...]:
+        normalized = tuple(
+            SubagentValueNormalizer.normalize_slug(item, info.field_name)
+            for item in SubagentValueNormalizer.coerce_iterable(value, info.field_name)
+        )
+        if len(normalized) != len(set(normalized)):
+            raise ValueError(f"{info.field_name} must not contain duplicates")
+        return tuple(sorted(normalized))
 
     @field_validator("evidence_refs", "dependency_refs", mode="before")
     @classmethod
@@ -251,21 +299,45 @@ class DelegationPlanEntry(RuntimeContract):
     child_depth: PositiveInt
     request: DelegationRequest
     context_packet: DelegationContextPacket
+    handoff: SubagentTask
 
 
 class DelegationPlan(RuntimeContract):
-    """Stable topological child plan produced without execution side effects."""
+    """Stable serial child plan produced without execution side effects.
+
+    ``dependency_stages`` records model-requested ordering only. It is not a
+    parallelism grant; ``dispatch_mode`` has no parallel value. A later F6
+    admission may derive safe cohorts without changing this source plan.
+    """
 
     entries: tuple[DelegationPlanEntry, ...]
-    execution_waves: tuple[tuple[str, ...], ...]
+    dependency_stages: tuple[tuple[str, ...], ...]
+    dispatch_order: tuple[str, ...]
+    dispatch_mode: DelegationDispatchMode = DelegationDispatchMode.SERIAL_DEFAULT
     reserved_budget: DelegationBudget
 
 
 class DelegationCoordinator:
-    """Admit and topologically order compact delegation requests."""
+    """Compose trusted authority and admit a serial-by-default child plan."""
 
-    def __init__(self, policy: DelegationAdmissionPolicy | None = None) -> None:
+    def __init__(
+        self,
+        policy: DelegationAdmissionPolicy | None = None,
+        *,
+        context: AgentRuntimeContext,
+        definitions: Sequence[SubagentDefinition],
+        parent_grant: SubagentCapabilityGrant,
+        handoff_builder: SubagentHandoffBuilder | None = None,
+    ) -> None:
         self._policy = policy or DelegationAdmissionPolicy()
+        self._context = context
+        self._parent_grant = parent_grant
+        self._handoff_builder = handoff_builder or SubagentHandoffBuilder()
+        self._definitions = {definition.name: definition for definition in definitions}
+        if len(self._definitions) != len(definitions):
+            raise DelegationAdmissionError(
+                DelegationAdmissionCode.DUPLICATE_SUBAGENT_DEFINITION
+            )
 
     def build_plan(
         self,
@@ -305,6 +377,7 @@ class DelegationCoordinator:
             )
 
         packets: dict[str, DelegationContextPacket] = {}
+        handoffs: dict[str, SubagentTask] = {}
         for request in request_tuple:
             self._validate_deadline(
                 request=request,
@@ -313,10 +386,17 @@ class DelegationCoordinator:
             )
             self._validate_dependencies(request=request, known_ids=frozenset(by_id))
             packets[request.delegation_id] = self._build_packet(request)
+            handoffs[request.delegation_id] = self._build_handoff(request)
 
-        execution_waves = self._topological_waves(by_id)
+        dependency_stages = self._topological_stages(by_id)
         stable_ids = tuple(
-            delegation_id for wave in execution_waves for delegation_id in wave
+            delegation_id for stage in dependency_stages for delegation_id in stage
+        )
+        self._validate_serial_schedule(
+            stable_ids=stable_ids,
+            by_id=by_id,
+            parent_state=parent_state,
+            now=now,
         )
         return DelegationPlan(
             entries=tuple(
@@ -325,12 +405,45 @@ class DelegationCoordinator:
                     child_depth=child_depth,
                     request=by_id[delegation_id],
                     context_packet=packets[delegation_id],
+                    handoff=handoffs[delegation_id],
                 )
                 for order, delegation_id in enumerate(stable_ids)
             ),
-            execution_waves=execution_waves,
+            dependency_stages=dependency_stages,
+            dispatch_order=stable_ids,
             reserved_budget=reserved_budget,
         )
+
+    def _build_handoff(self, request: DelegationRequest) -> SubagentTask:
+        definition = self._definitions.get(request.subagent_name)
+        if definition is None or not SubagentPermissionPolicy.is_definition_visible(
+            self._context,
+            definition,
+        ):
+            raise DelegationAdmissionError(
+                DelegationAdmissionCode.SUBAGENT_UNAVAILABLE,
+                delegation_id=request.delegation_id,
+            )
+        handoff = self._handoff_builder.build_task(
+            context=self._context,
+            definition=definition,
+            objective=request.objective,
+            relevant_summary=request.relevant_summary,
+            constraints=request.constraints,
+            requested_tools=request.requested_tools,
+            requested_skills=request.requested_skills,
+            output_contract=request.output_contract,
+            parent_grant=self._parent_grant,
+        )
+        if (
+            SubagentAuthorityPolicy.DISPATCH_CAPABILITY
+            not in handoff.authority.capabilities
+        ):
+            raise DelegationAdmissionError(
+                DelegationAdmissionCode.AUTHORITY_DENIED,
+                delegation_id=request.delegation_id,
+            )
+        return handoff
 
     def _build_packet(
         self,
@@ -383,6 +496,30 @@ class DelegationCoordinator:
             )
 
     @staticmethod
+    def _validate_serial_schedule(
+        *,
+        stable_ids: tuple[str, ...],
+        by_id: dict[str, DelegationRequest],
+        parent_state: DelegationParentState,
+        now: datetime,
+    ) -> None:
+        elapsed_ms = 0
+        for delegation_id in stable_ids:
+            request = by_id[delegation_id]
+            elapsed_ms += request.budget.max_wall_ms
+            request_available_ms = int(
+                (request.deadline_at - now).total_seconds() * 1_000
+            )
+            parent_available_ms = int(
+                (parent_state.deadline_at - now).total_seconds() * 1_000
+            )
+            if elapsed_ms > request_available_ms or elapsed_ms > parent_available_ms:
+                raise DelegationAdmissionError(
+                    DelegationAdmissionCode.DEADLINE_EXCEEDED,
+                    delegation_id=delegation_id,
+                )
+
+    @staticmethod
     def _validate_dependencies(
         *,
         request: DelegationRequest,
@@ -401,7 +538,7 @@ class DelegationCoordinator:
                 )
 
     @staticmethod
-    def _topological_waves(
+    def _topological_stages(
         by_id: dict[str, DelegationRequest],
     ) -> tuple[tuple[str, ...], ...]:
         indegree = {
@@ -418,14 +555,14 @@ class DelegationCoordinator:
         ready = sorted(
             delegation_id for delegation_id, degree in indegree.items() if degree == 0
         )
-        waves: list[tuple[str, ...]] = []
+        stages: list[tuple[str, ...]] = []
         visited = 0
         while ready:
-            wave = tuple(ready)
-            waves.append(wave)
-            visited += len(wave)
+            stage = tuple(ready)
+            stages.append(stage)
+            visited += len(stage)
             next_ready: list[str] = []
-            for delegation_id in wave:
+            for delegation_id in stage:
                 for dependent_id in dependents[delegation_id]:
                     indegree[dependent_id] -= 1
                     if indegree[dependent_id] == 0:
@@ -434,4 +571,4 @@ class DelegationCoordinator:
 
         if visited != len(by_id):
             raise DelegationAdmissionError(DelegationAdmissionCode.DEPENDENCY_CYCLE)
-        return tuple(waves)
+        return tuple(stages)

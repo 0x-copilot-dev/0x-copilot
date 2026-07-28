@@ -41,6 +41,7 @@ from agent_runtime.capabilities.operations.observability import (
 )
 from agent_runtime.capabilities.tools.permissions import ToolUsePolicySnapshot
 from agent_runtime.execution.contracts import RuntimeContract
+from agent_runtime.execution.call_identity import RuntimeCallContext
 from agent_runtime.surfaces_v2.canonical_json import (
     canonical_json_bytes,
     sha256_hex,
@@ -335,7 +336,11 @@ class OperationRequestFactory:
         normalized_op = OperationDescriptorRegistry.normalize(op)
         canonical_bytes = canonical_json_bytes(_json_compatible_arguments(arguments))
         digest = sha256_hex(canonical_bytes)
-        identifier = operation_id or OperationIdCodec.format(uuid4())
+        identifier = (
+            operation_id
+            or RuntimeCallContext.next_operation_id()
+            or OperationIdCodec.format(uuid4())
+        )
         ref = OperationArgsRefCodec.format(identifier)
         context.arguments.put(
             ref=ref,

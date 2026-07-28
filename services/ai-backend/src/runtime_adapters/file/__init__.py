@@ -36,6 +36,7 @@ from runtime_adapters.file.conversation_tool_ordinal_store import (
 )
 from runtime_adapters.file.draft_store import FileDraftStore
 from runtime_adapters.file.effect_claim_store import FileEffectClaimStore
+from runtime_adapters.file.evaluation_repository import FileEvaluationRepository
 from runtime_adapters.file.export_import import (
     ArchiveIntegrityError,
     ConversationArchiver,
@@ -46,6 +47,10 @@ from runtime_adapters.file.export_import import (
     ImportOutcome,
 )
 from runtime_adapters.file.large_tool_result_backend import FileLargeToolResultBackend
+from runtime_adapters.file.mcp_revision_cursor import (
+    DesktopFilesystemMcpRevisionCursorStore,
+    McpRevisionCursorStoreUnsupported,
+)
 from runtime_adapters.file.migration import (
     ConversationOutcome,
     MigrationError,
@@ -78,10 +83,13 @@ __all__ = [
     "ObjectRef",
     "FileOffloadWriter",
     "FileLargeToolResultBackend",
+    "DesktopFilesystemMcpRevisionCursorStore",
+    "McpRevisionCursorStoreUnsupported",
     "FileSubagentTraceBackend",
     "FileCitationStore",
     "FileDraftStore",
     "FileEffectClaimStore",
+    "FileEvaluationRepository",
     "FileShareStore",
     "FileConversationToolOrdinalStore",
     "FileAgentStateWiring",

@@ -12,11 +12,19 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from agent_runtime.api.conversation_coordinator import ConversationCoordinator
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_coordinator import RunCoordinator
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.models import ModelConfigResolver
+from agent_runtime.harness_quality.evaluation_contracts import (
+    EvaluationProjectionJob,
+    EvaluationScope,
+    ProjectionJobStatus,
+)
+from agent_runtime.harness_quality.ports import EvaluationObjectDeletionPolicy
 from agent_runtime.persistence.records.retention import RetentionKind
 from agent_runtime.settings import RuntimeSettings
 from runtime_adapters.file._deletion import (
@@ -25,6 +33,7 @@ from runtime_adapters.file._deletion import (
     SessionEraser,
 )
 from runtime_adapters.file.offload import FileOffloadWriter
+from runtime_adapters.file.evaluation_repository import FileEvaluationRepository
 from runtime_adapters.file.runtime_api_store import (
     FileRuntimeApiStore,
     _DeletionFields,
@@ -38,6 +47,28 @@ from runtime_api.schemas import (
 
 _ORG = "org_del"
 _USER = "user_del"
+
+
+class _UnavailableExternalReferences:
+    def protected_object_digests(self) -> frozenset[str]:
+        raise RuntimeError("reference index unavailable")
+
+
+class _SourceDeletionRecorder:
+    def __init__(self, *, error: Exception | None = None) -> None:
+        self.error = error
+        self.calls: list[tuple[str, frozenset[str]]] = []
+
+    async def delete_source_runs(
+        self,
+        *,
+        source_org_id: str,
+        source_run_ids: frozenset[str],
+    ) -> object:
+        self.calls.append((source_org_id, source_run_ids))
+        if self.error is not None:
+            raise self.error
+        return object()
 
 
 def _settings() -> RuntimeSettings:
@@ -206,6 +237,156 @@ class TestPhysicalDeleteUserHistory(_SeedMixin):
         assert store.object_store.exists(sha)
         keep_dir = store.layout.conversation_dir(_ORG, conv_keep.conversation_id)
         assert keep_dir.exists()
+        await store.close()
+
+    async def test_evaluation_owned_object_survives_conversation_purge(
+        self, tmp_path
+    ) -> None:
+        store = await self._store(tmp_path)
+        content = "EVALUATION FIXTURE\n" * 4_000
+        conversation, _run, sha = await self._seed_conversation(
+            store,
+            object_content=content,
+        )
+        repository = FileEvaluationRepository(
+            store.layout,
+            object_store=store.object_store,
+        )
+        store.configure_external_object_references(repository)
+        artifact = await repository.put_protected_artifact(
+            EvaluationScope(profile_id="desktop-local", project_id="project-1"),
+            data=content.encode("utf-8"),
+            media_type="text/plain; charset=utf-8",
+        )
+        assert artifact.sha256 == sha
+
+        await store.delete_user_history(
+            org_id=_ORG,
+            user_id=_USER,
+            reason="erase conversation data",
+        )
+
+        assert conversation.conversation_id not in store.conversations
+        assert store.object_store.exists(sha)
+        await store.close()
+
+    async def test_external_reference_failure_skips_object_gc(self, tmp_path) -> None:
+        store = await self._store(tmp_path)
+        conversation, _run, sha = await self._seed_conversation(
+            store,
+            object_content="FAIL CLOSED GC\n" * 4_000,
+        )
+        store.configure_external_object_references(_UnavailableExternalReferences())
+
+        await store.delete_user_history(
+            org_id=_ORG,
+            user_id=_USER,
+            reason="erase conversation data",
+        )
+
+        assert conversation.conversation_id not in store.conversations
+        assert store.object_store.exists(sha)
+        await store.close()
+
+    async def test_source_run_cascade_precedes_conversation_erasure(
+        self, tmp_path
+    ) -> None:
+        store = await self._store(tmp_path)
+        conversation, run, _sha = await self._seed_conversation(
+            store,
+            object_content="CASCADE SOURCE RUN\n" * 4_000,
+        )
+        observer = _SourceDeletionRecorder()
+        store.configure_source_run_deletion_observer(observer)
+
+        await store.delete_user_history(
+            org_id=_ORG,
+            user_id=_USER,
+            reason="erase conversation data",
+        )
+
+        assert observer.calls == [(_ORG, frozenset({run.run_id}))]
+        assert conversation.conversation_id not in store.conversations
+        await store.close()
+
+    async def test_composed_evaluation_cascade_deletes_and_tombstones_source_job(
+        self, tmp_path
+    ) -> None:
+        store = await self._store(tmp_path)
+        conversation, run, _sha = await self._seed_conversation(
+            store,
+            object_content="PROJECTED SOURCE RUN\n" * 4_000,
+        )
+        repository = FileEvaluationRepository(
+            store.layout,
+            object_store=store.object_store,
+            object_deletion_policy=(
+                EvaluationObjectDeletionPolicy.SHARED_STORE_METADATA_ONLY
+            ),
+        )
+        store.configure_external_object_references(repository)
+        store.configure_source_run_deletion_observer(repository)
+        scope = EvaluationScope(
+            profile_id="desktop-local",
+            project_id="project-1",
+        )
+        now = datetime.now(timezone.utc)
+        values: dict[str, object] = {
+            "job_id": "projection-source-delete",
+            "source_org_id": _ORG,
+            "source_run_id": run.run_id,
+            "variant_id": "variant-source-delete",
+            "policy_revision": "projection-policy-v1",
+            "terminal_sequence_no": 2,
+            "status": ProjectionJobStatus.PENDING,
+            "next_sequence_no": 1,
+            "attempt_count": 0,
+            "lease_owner_digest": None,
+            "lease_expires_at": None,
+            "trajectory_id": None,
+            "failure_reason_code": None,
+            "version": 0,
+            "created_at": now,
+            "updated_at": now,
+        }
+        job = EvaluationProjectionJob(
+            **values,
+            job_digest=EvaluationProjectionJob.digest_for(**values),
+        )
+        assert await repository.put_projection_job(scope, job)
+
+        await store.delete_user_history(
+            org_id=_ORG,
+            user_id=_USER,
+            reason="erase conversation data",
+        )
+
+        assert conversation.conversation_id not in store.conversations
+        assert await repository.get_projection_job(scope, job_id=job.job_id) is None
+        assert not await repository.put_projection_job(scope, job)
+        await store.close()
+
+    async def test_source_run_cascade_failure_aborts_before_source_erasure(
+        self, tmp_path
+    ) -> None:
+        store = await self._store(tmp_path)
+        conversation, run, sha = await self._seed_conversation(
+            store,
+            object_content="CASCADE FAILURE\n" * 4_000,
+        )
+        observer = _SourceDeletionRecorder(error=RuntimeError("cascade unavailable"))
+        store.configure_source_run_deletion_observer(observer)
+
+        with pytest.raises(RuntimeError, match="cascade unavailable"):
+            await store.delete_user_history(
+                org_id=_ORG,
+                user_id=_USER,
+                reason="erase conversation data",
+            )
+
+        assert observer.calls == [(_ORG, frozenset({run.run_id}))]
+        assert conversation.conversation_id in store.conversations
+        assert store.object_store.exists(sha)
         await store.close()
 
 

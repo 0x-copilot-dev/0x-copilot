@@ -7,6 +7,8 @@ See also:
 
 - [architecture/04-security-invariants.md](../architecture/04-security-invariants.md) — redaction boundary
 - [features/usage-metrics.md](usage-metrics.md) — usage recording (separate from observability)
+- [runbooks/model-invocation-reliability-operations.md](../runbooks/model-invocation-reliability-operations.md) — F10 journal-derived metrics, incidents, and desktop recovery
+- [runbooks/mcp-control-plane-operations.md](../runbooks/mcp-control-plane-operations.md) — F8 revision-feed, cache, cursor, and MCP session-pool operations
 
 ---
 
@@ -25,16 +27,17 @@ Three distinct concerns:
 
 ## Key modules
 
-| File                                              | Role                                                                |
-| ------------------------------------------------- | ------------------------------------------------------------------- |
-| `agent_runtime/observability/redactor.py`         | `ObservabilityRedactor` — strips sensitive fields from log payloads |
-| `agent_runtime/observability/tracing.py`          | `RuntimeTracer` — OTEL span lifecycle for runs                      |
-| `agent_runtime/observability/otel.py`             | OTEL SDK setup, exporter config                                     |
-| `agent_runtime/observability/logging.py`          | Structured JSON log formatter                                       |
-| `agent_runtime/observability/http_logging.py`     | HTTP request/response log middleware                                |
-| `agent_runtime/observability/lifecycle_ledger.py` | `LifecycleLedger` — tracks run open/close for orphan detection      |
-| `agent_runtime/observability/attribution.py`      | `UsageAttributionContext` — ties usage to connector/purpose         |
-| `agent_runtime/observability/usage_recorder.py`   | `PostgresUsageRecorder` — persists per-call token rows              |
+| File                                                      | Role                                                                |
+| --------------------------------------------------------- | ------------------------------------------------------------------- |
+| `agent_runtime/observability/redactor.py`                 | `ObservabilityRedactor` — strips sensitive fields from log payloads |
+| `agent_runtime/observability/tracing.py`                  | `RuntimeTracer` — OTEL span lifecycle for runs                      |
+| `agent_runtime/observability/otel.py`                     | OTEL SDK setup, exporter config                                     |
+| `agent_runtime/observability/logging.py`                  | Structured JSON log formatter                                       |
+| `agent_runtime/observability/http_logging.py`             | HTTP request/response log middleware                                |
+| `agent_runtime/observability/lifecycle_ledger.py`         | `LifecycleLedger` — tracks run open/close for orphan detection      |
+| `agent_runtime/observability/attribution.py`              | `UsageAttributionContext` — ties usage to connector/purpose         |
+| `agent_runtime/observability/usage_recorder.py`           | `PostgresUsageRecorder` — persists per-call token rows              |
+| `agent_runtime/observability/model_invocation_metrics.py` | F10 low-cardinality OTel facade and exact-once journal projector    |
 
 ---
 

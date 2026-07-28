@@ -1,0 +1,670 @@
+{
+  "schema_version": "1.0.0",
+  "map_id": "agent-runtime-quality.f1-f12.contract-authority-map",
+  "description": "Desktop-first B2C authority assignments for every F1-F12 domain record and declared event, plus the shared production-integration control records and closed run-event families.",
+  "authority_semantics": {
+    "primary": "The only authority that may define and durably originate the canonical record or event.",
+    "supporting": "An authority that supplies trusted inputs or execution support without becoming a second canonical writer.",
+    "consumer": "An authority that may read, project, or present the contract but may not rewrite canonical truth."
+  },
+  "authorities": {
+    "ai-backend": {
+      "root_path": "services/ai-backend",
+      "description": "Owns runtime, run-scoped domain records, the monotonic run event journal, model/tool orchestration, workspace overlay state, and local evaluation artifacts."
+    },
+    "backend": {
+      "root_path": "services/backend",
+      "description": "Owns product identity and policy state, MCP registration, OAuth and credential custody, descriptor revisions, and remote MCP transport/session lifecycle."
+    },
+    "desktop": {
+      "root_path": "apps/desktop",
+      "description": "Owns the shipped local process lifecycle and the C2 host-workspace prepare, commit, drift, reconcile, and undo authority; renderer code is never an authority source."
+    }
+  },
+  "source_documents": {
+    "integration": {
+      "path": "docs/plan/agent-runtime-quality/IMPLEMENTATION-PRD-F1-F12-PRODUCTION-INTEGRATION.md",
+      "sha256": "fc56f1fa1379ddf23f95acaebf1e89918d593eada0bb7ef27a5c2b7427916bdd",
+      "digest_scope": "document_without_execution_checklist"
+    },
+    "F1": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F1-harness-observability-evaluation-promotion.md",
+      "sha256": "6888daa15f85adfc0761089d6e7b9ea099c0fa3d4e9544c49b225c049756cbbb",
+      "digest_scope": "full_document"
+    },
+    "F2": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F2-cache-aware-prompt-assembly.md",
+      "sha256": "4910139aa9c861ccc02a2b30feb8d4ff0bf4b7e168437500d68eb4cdab21769c",
+      "digest_scope": "full_document"
+    },
+    "F3": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F3-policy-aware-capability-discovery.md",
+      "sha256": "9291aa94a843378bdbf6ce0547e6af0a0300270ca9bb03c7b50ba96e09d54ce6",
+      "digest_scope": "full_document"
+    },
+    "F4": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F4-task-aware-tool-use-controller.md",
+      "sha256": "bf61c90099c43c44fd8ecd59354c5d9ed3d49badc4dc95a52122d8f97b41355a",
+      "digest_scope": "full_document"
+    },
+    "F5": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F5-context-budgeting-compression-evidence-recall.md",
+      "sha256": "4c3390375671f9aff873799250b2fd3f0d63c783c4c4dc7f2acd67806c3fdbed",
+      "digest_scope": "full_document"
+    },
+    "F6": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F6-capability-concurrency-safe-batching.md",
+      "sha256": "e31e8c98b79d4ef28c9a1b219b168455a6b6cde15c1cb9d46257b83008785622",
+      "digest_scope": "full_document"
+    },
+    "F7": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F7-governed-dataflow-programmatic-tool-calling.md",
+      "sha256": "5ede26778d607e3ebcc0594d92d630734de3b1e1a28fcbf56aae208ec8cafa34",
+      "digest_scope": "full_document"
+    },
+    "F8": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F8-mcp-control-plane-freshness-session-reuse.md",
+      "sha256": "036f719048e5e144b82b3de79028733713330e12533db403c0add30caf37835d",
+      "digest_scope": "full_document"
+    },
+    "F9": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F9-parallel-delegation-quality-controller.md",
+      "sha256": "9afcbc5ec6ccd80d7ab816edaf10f22b3a4f5387006486580a91d1ca64492095",
+      "digest_scope": "full_document"
+    },
+    "F10": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F10-model-invocation-reliability-routing.md",
+      "sha256": "a7f1f8b9530b0c73972f1106b6e27a652af491ff9b44125f741e11e4aa3b22f8",
+      "digest_scope": "full_document"
+    },
+    "F11": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F11-workspace-edit-planning-patch-validation.md",
+      "sha256": "83ca3124cd4b083ec1dc2d00d97919159026b63483b89666affe49afd5a27ea6",
+      "digest_scope": "full_document"
+    },
+    "F12": {
+      "path": "docs/plan/agent-runtime-quality/prds/PRD-AR-F12-evidence-aware-answer-synthesis-verification.md",
+      "sha256": "661cd311b1b25e9299c590b7e00b25a9ea1fa2a45a3e3c8c80e44a600a0af577",
+      "digest_scope": "full_document"
+    }
+  },
+  "authority_constraints": [
+    {
+      "concern": "run_message_event_usage_state",
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["desktop"],
+      "source": {
+        "document": "integration",
+        "section": "### 6.4 Existing authorities remain authoritative"
+      }
+    },
+    {
+      "concern": "mcp_registration_oauth_credentials_remote_transport",
+      "primary_authority": "backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["ai-backend", "desktop"],
+      "source": {
+        "document": "integration",
+        "section": "### 9.2 Backend-only F8 contracts"
+      }
+    },
+    {
+      "concern": "host_workspace_mutation",
+      "primary_authority": "desktop",
+      "supporting_authorities": [],
+      "consumer_authorities": ["ai-backend"],
+      "source": {
+        "document": "F11",
+        "section": "## Ownership and service boundaries"
+      }
+    }
+  ],
+  "contract_groups": [
+    {
+      "group_id": "f1.record.ai-backend",
+      "scope": "F1",
+      "kind": "record",
+      "names": [
+        "EvaluationCase",
+        "EvaluationResult",
+        "HarnessVariant",
+        "PromotionDecision",
+        "TrajectoryManifest"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F1",
+          "section": "### Domain contracts"
+        }
+      ]
+    },
+    {
+      "group_id": "f1.event.ai-backend",
+      "scope": "F1",
+      "kind": "event",
+      "names": [
+        "harness.evaluation.completed.v1",
+        "harness.evaluation.started.v1",
+        "harness.promotion.decided.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F1",
+          "section": "### Internal APIs and events"
+        }
+      ]
+    },
+    {
+      "group_id": "f2.record.ai-backend",
+      "scope": "F2",
+      "kind": "record",
+      "names": [
+        "PromptAssemblyPlan",
+        "PromptFragment",
+        "ProviderCacheStrategy"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F2",
+          "section": "## Interfaces exposed"
+        }
+      ]
+    },
+    {
+      "group_id": "f2.event.ai-backend",
+      "scope": "F2",
+      "kind": "event",
+      "names": ["prompt.assembled.v1", "prompt.cache_observed.v1"],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F2",
+          "section": "Events:"
+        }
+      ]
+    },
+    {
+      "group_id": "f3.record.ai-backend",
+      "scope": "F3",
+      "kind": "record",
+      "names": [
+        "CapabilityCandidate",
+        "CapabilityCatalogRevision",
+        "CapabilityIndexEntry",
+        "CapabilityInvocation"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": ["backend"],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F3",
+          "section": "### Catalog contracts"
+        }
+      ]
+    },
+    {
+      "group_id": "f3.event.ai-backend",
+      "scope": "F3",
+      "kind": "event",
+      "names": [
+        "capability.discovery.described.v1",
+        "capability.discovery.searched.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": ["backend"],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F3",
+          "section": "### Ports and events"
+        }
+      ]
+    },
+    {
+      "group_id": "f4.record.ai-backend",
+      "scope": "F4",
+      "kind": "record",
+      "names": [
+        "RunToolPlan",
+        "TaskPolicyProfile",
+        "ToolUseFeedback",
+        "ToolUseIntent"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F4",
+          "section": "## Interfaces exposed"
+        }
+      ]
+    },
+    {
+      "group_id": "f4.event.ai-backend",
+      "scope": "F4",
+      "kind": "event",
+      "names": [
+        "tool_policy.budget_exhausted.v1",
+        "tool_policy.feedback.v1",
+        "tool_policy.intent_recorded.v1",
+        "tool_policy.profile_selected.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["desktop"],
+      "sources": [
+        {
+          "document": "F4",
+          "section": "Events:"
+        }
+      ]
+    },
+    {
+      "group_id": "f5.record.ai-backend",
+      "scope": "F5",
+      "kind": "record",
+      "names": [
+        "ContextCandidate",
+        "ContextPlan",
+        "ContextRepresentation",
+        "EvidenceSpanRequest"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F5",
+          "section": "## Interfaces exposed"
+        }
+      ]
+    },
+    {
+      "group_id": "f5.event.ai-backend",
+      "scope": "F5",
+      "kind": "event",
+      "names": [
+        "context.content.compressed.v1",
+        "context.evidence.read.v1",
+        "context.item.omitted.v1",
+        "context.plan.created.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F5",
+          "section": "Events:"
+        }
+      ]
+    },
+    {
+      "group_id": "f6.record.ai-backend",
+      "scope": "F6",
+      "kind": "record",
+      "names": [
+        "BatchResult",
+        "BatchSegment",
+        "ConcurrencyPolicy",
+        "OperationBatch"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F6",
+          "section": "## Interfaces exposed"
+        }
+      ]
+    },
+    {
+      "group_id": "f6.event.ai-backend",
+      "scope": "F6",
+      "kind": "event",
+      "names": [
+        "operation.batch.completed.v1",
+        "operation.batch.planned.v1",
+        "operation.batch.started.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["desktop"],
+      "sources": [
+        {
+          "document": "F6",
+          "section": "Events:"
+        }
+      ]
+    },
+    {
+      "group_id": "f7.record.ai-backend",
+      "scope": "F7",
+      "kind": "record",
+      "names": [
+        "DataflowLimits",
+        "DataflowNode",
+        "DataflowPlan",
+        "DataflowResult",
+        "EffectBatchManifest"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F7",
+          "section": "### Plan contract"
+        },
+        {
+          "document": "F7",
+          "section": "### Mutation extension contract"
+        }
+      ]
+    },
+    {
+      "group_id": "f7.event.ai-backend",
+      "scope": "F7",
+      "kind": "event",
+      "names": [
+        "dataflow.effect_manifest.proposed.v1",
+        "dataflow.execution.completed.v1",
+        "dataflow.execution.started.v1",
+        "dataflow.plan.validated.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["desktop"],
+      "sources": [
+        {
+          "document": "F7",
+          "section": "### Events"
+        }
+      ]
+    },
+    {
+      "group_id": "f8.record.backend.revisions",
+      "scope": "F8",
+      "kind": "record",
+      "names": [
+        "McpDescriptorRevision",
+        "McpRevisionFeedItem",
+        "McpRevisionPage"
+      ],
+      "primary_authority": "backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["ai-backend"],
+      "sources": [
+        {
+          "document": "F8",
+          "section": "## Interfaces exposed"
+        },
+        {
+          "document": "integration",
+          "section": "### 9.2 Backend-only F8 contracts"
+        }
+      ]
+    },
+    {
+      "group_id": "f8.record.backend.sessions",
+      "scope": "F8",
+      "kind": "record",
+      "names": ["McpClientLease", "McpSessionLease"],
+      "primary_authority": "backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F8",
+          "section": "## Interfaces exposed"
+        },
+        {
+          "document": "integration",
+          "section": "### 9.2 Backend-only F8 contracts"
+        }
+      ]
+    },
+    {
+      "group_id": "f9.record.ai-backend",
+      "scope": "F9",
+      "kind": "record",
+      "names": [
+        "DelegationBudget",
+        "DelegationContextPacket",
+        "DelegationRequest",
+        "DelegationResult",
+        "DelegationVerification"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F9",
+          "section": "## Interfaces exposed"
+        }
+      ]
+    },
+    {
+      "group_id": "f9.event.ai-backend",
+      "scope": "F9",
+      "kind": "event",
+      "names": [
+        "subagent.delegation.admitted.v1",
+        "subagent.delegation.rejected.v1",
+        "subagent.result.verified.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["desktop"],
+      "sources": [
+        {
+          "document": "F9",
+          "section": "Events:"
+        }
+      ]
+    },
+    {
+      "group_id": "f10.record.ai-backend",
+      "scope": "F10",
+      "kind": "record",
+      "names": [
+        "ModelAttempt",
+        "ModelDeploymentDescriptor",
+        "ModelInvocation",
+        "ModelInvocationRequirements",
+        "ModelRoutePlan"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": ["backend"],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F10",
+          "section": "## Interfaces exposed"
+        }
+      ]
+    },
+    {
+      "group_id": "f10.event.ai-backend",
+      "scope": "F10",
+      "kind": "event",
+      "names": [
+        "model.attempt.failed.v1",
+        "model.attempt.started.v1",
+        "model.invocation.completed.v1",
+        "model.invocation.planned.v1",
+        "model.invocation.rerouted.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": ["backend"],
+      "consumer_authorities": ["desktop"],
+      "sources": [
+        {
+          "document": "F10",
+          "section": "Events:"
+        }
+      ]
+    },
+    {
+      "group_id": "f11.record.ai-backend",
+      "scope": "F11",
+      "kind": "record",
+      "names": [
+        "ValidationProfile",
+        "ValidationReport",
+        "WorkspaceEditAttempt",
+        "WorkspaceEditPlan",
+        "WorkspacePatchHunk",
+        "WorkspacePatchOperation",
+        "WorkspacePatchSet",
+        "WorkspaceTarget"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F11",
+          "section": "## Core contracts and state model"
+        }
+      ]
+    },
+    {
+      "group_id": "f11.event.ai-backend",
+      "scope": "F11",
+      "kind": "event",
+      "names": [
+        "workspace.edit_blocked.v1",
+        "workspace.edit_plan.created.v1",
+        "workspace.edit_ready_for_review.v1",
+        "workspace.patch_set.applied.v1",
+        "workspace.patch_set.validated.v1",
+        "workspace.repair.requested.v1",
+        "workspace.validation.completed.v1",
+        "workspace.validation.started.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": ["desktop"],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F11",
+          "section": "### Events"
+        }
+      ]
+    },
+    {
+      "group_id": "f12.record.ai-backend",
+      "scope": "F12",
+      "kind": "record",
+      "names": [
+        "AnswerClaim",
+        "AnswerEnvelope",
+        "AnswerEvidenceBinding",
+        "AnswerRepairAttempt",
+        "AnswerRequirement",
+        "AnswerRequirementLedger",
+        "AnswerRequirementResult",
+        "AnswerVerificationFailure",
+        "AnswerVerificationReport",
+        "EvidenceConflictResolution"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "F12",
+          "section": "### Model contract"
+        },
+        {
+          "document": "F12",
+          "section": "## Core contracts and state model"
+        }
+      ]
+    },
+    {
+      "group_id": "f12.event.ai-backend",
+      "scope": "F12",
+      "kind": "event",
+      "names": [
+        "answer.degraded.v1",
+        "answer.finalized.v1",
+        "answer.repair.completed.v1",
+        "answer.repair.requested.v1",
+        "answer.requirements.compiled.v1",
+        "answer.verification.completed.v1",
+        "answer.verification.started.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["desktop"],
+      "sources": [
+        {
+          "document": "F12",
+          "section": "### Events"
+        }
+      ]
+    },
+    {
+      "group_id": "integration.record.ai-backend",
+      "scope": "integration",
+      "kind": "record",
+      "names": ["RunControlDecision", "RunControlSnapshot"],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": ["backend", "desktop"],
+      "consumer_authorities": [],
+      "sources": [
+        {
+          "document": "integration",
+          "section": "### 6.1 One immutable run control snapshot"
+        },
+        {
+          "document": "integration",
+          "section": "### 6.2 Append-only decisions, not one mutable control blob"
+        }
+      ]
+    },
+    {
+      "group_id": "integration.event.ai-backend",
+      "scope": "integration",
+      "kind": "event",
+      "names": [
+        "answer.finalization.v1",
+        "model.attempt.v1",
+        "quality.control_bound.v1",
+        "quality.decision.v1"
+      ],
+      "primary_authority": "ai-backend",
+      "supporting_authorities": [],
+      "consumer_authorities": ["desktop"],
+      "sources": [
+        {
+          "document": "integration",
+          "section": "### 9.3 Event rules"
+        }
+      ]
+    }
+  ],
+  "integrity": {
+    "algorithm": "sha256",
+    "canonicalization": "UTF-8 JSON with sorted keys and compact separators; omit integrity.digest",
+    "digest": "e047051a980827c7d0386d4ea746f8ce29b8184c909f219f7bbbc34df8382a9c"
+  }
+}

@@ -13,7 +13,7 @@ from agent_runtime.execution.contracts import AgentRuntimeContext, RuntimeDepend
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.factory import RuntimeHarness
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
-from runtime_api.schemas import RuntimeCancelCommand
+from runtime_api.schemas import RuntimeApiEventType, RuntimeCancelCommand
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
 from runtime_worker.handlers.run import RuntimeRunHandler
 
@@ -74,3 +74,82 @@ async def test_cancel_handler_noops_when_requesting_user_not_run_owner() -> None
     await handler.handle(bad)
 
     assert store.runs[run_id].status == prior_status
+
+
+async def test_queued_cancel_derives_scope_without_creating_run_control_snapshot() -> (
+    None
+):
+    """A run cancelled before execution must not gain an F10 control snapshot."""
+
+    store = InMemoryRuntimeApiStore()
+    settings = _TestSettings.create()
+    run_id = await _TestHelpers.create_queued_run(store, settings)
+
+    class _ScopeOnlyBuilder:
+        def subject_fingerprint_for(self, _run: object) -> str:
+            return "a" * 64
+
+        async def ensure_snapshot(self, **_kwargs: object) -> object:
+            raise AssertionError("queued cancel must not create a snapshot")
+
+    handler = RuntimeCancelHandler(
+        persistence=store,
+        event_store=store,
+        run_control_builder=_ScopeOnlyBuilder(),  # type: ignore[arg-type]
+    )
+    await handler.handle(
+        RuntimeCancelCommand(
+            run_id=run_id,
+            org_id="org_123",
+            requested_by_user_id="user_123",
+            reason="user_cancel",
+        )
+    )
+
+    assert store.runs[run_id].status == "cancelled"
+
+
+async def test_cancel_retries_only_terminal_projection_after_cancel_is_durable() -> (
+    None
+):
+    """A retry must not append a second cancellation terminal event."""
+
+    store = InMemoryRuntimeApiStore()
+    settings = _TestSettings.create()
+    run_id = await _TestHelpers.create_queued_run(store, settings)
+
+    class _FlakyTerminal:
+        attempts = 0
+        run_usage_writes = 0
+
+        async def finalize(self, **_kwargs: object) -> None:
+            self.attempts += 1
+            if self.attempts == 1:
+                raise RuntimeError("projector temporary failure")
+
+        async def record_run_usage(self, **_kwargs: object) -> int:
+            self.run_usage_writes += 1
+            return 0
+
+    terminal = _FlakyTerminal()
+    handler = RuntimeCancelHandler(
+        persistence=store,
+        event_store=store,
+        model_invocation_terminal=terminal,  # type: ignore[arg-type]
+    )
+    command = RuntimeCancelCommand(
+        run_id=run_id,
+        org_id="org_123",
+        requested_by_user_id="user_123",
+        reason="user_cancel",
+    )
+
+    with pytest.raises(RuntimeError, match="temporary"):
+        await handler.handle(command)
+    await handler.handle(command)
+
+    assert store.runs[run_id].status == "cancelled"
+    event_types = [event.event_type for event in store.events_by_run[run_id]]
+    assert event_types.count(RuntimeApiEventType.RUN_CANCELLED) == 1
+    assert terminal.attempts == 2
+    assert terminal.run_usage_writes == 1

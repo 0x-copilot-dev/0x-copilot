@@ -39,6 +39,7 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetMiddleware,
     WorkspaceToolBudgetOverride,
 )
+from agent_runtime.control_plane.context import TaskPolicyRuntimeBinding
 from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from agent_runtime.execution.contracts import (
@@ -53,7 +54,12 @@ from agent_runtime.api.ports import EventStorePort, PersistencePort
 from agent_runtime.api.events import RuntimeEventProducer
 from agent_runtime.api.run_termination import (
     RunTerminationCoordinator,
+    TerminalRunObserverPort,
     TerminationReason,
+)
+from agent_runtime.prompts.observation import (
+    PromptAssemblyObserver,
+    PromptObservationStorePort,
 )
 from agent_runtime.api.presentation import (
     ToolDisplayLookup,
@@ -63,6 +69,7 @@ from agent_runtime.api.user_policies_resolver import (
     ProviderKeysHydrator,
     UserPoliciesResolver,
 )
+from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
 from agent_runtime.capabilities.mcp.annotations import (
     McpToolAnnotations,
     McpToolAnnotationsRegistry,
@@ -159,6 +166,15 @@ from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
+from runtime_worker.run_control import (
+    RunControlContext,
+    RunControlPlaneBuilder,
+)
+from runtime_worker.model_invocation_composition import (
+    ModelInvocationEffectTracker,
+    ModelInvocationWorkerComposer,
+)
+from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
 from runtime_worker.stream_events import StreamOrchestrator
 from runtime_worker.stream_messages import StreamTextHelper
 from runtime_worker.streaming_executor import StreamingExecutor
@@ -251,6 +267,12 @@ class RuntimeRunHandler:
         sandbox_patch_collector: object | None = None,
         sandbox_provider_overrides: Mapping[object, object] | None = None,
         capability_env: Mapping[str, str] | None = None,
+        run_control_builder: RunControlPlaneBuilder | None = None,
+        prompt_observation_store: PromptObservationStorePort | None = None,
+        model_invocation_store: ModelInvocationStorePort | None = None,
+        model_invocation_composer: ModelInvocationWorkerComposer | None = None,
+        model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
+        terminal_run_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -276,7 +298,18 @@ class RuntimeRunHandler:
         self._sandbox_patch_collector = sandbox_patch_collector
         self._sandbox_provider_overrides = sandbox_provider_overrides
         self._capability_env = capability_env
+        self._run_control_builder = run_control_builder
+        self._prompt_observation_store = prompt_observation_store
         self.settings = settings or RuntimeSettings.load()
+        self._model_invocation_composer = (
+            model_invocation_composer
+            or ModelInvocationWorkerComposer(
+                settings=self.settings,
+                persistence=self.persistence,
+                event_store=self.event_store,
+                journal=model_invocation_store,
+            )
+        )
         # The sole runtime gate for explicitly enabled E2 lanes. It is
         # deliberately run-scoped: every capability receives persisted
         # server-owned identity facts before it can appear in dependencies.
@@ -322,6 +355,7 @@ class RuntimeRunHandler:
         )
         self.run_termination = RunTerminationCoordinator(
             event_producer=self.event_producer,
+            terminal_observer=terminal_run_observer,
         )
         self.stream_event_mapper = StreamOrchestrator(
             self.event_producer,
@@ -346,6 +380,14 @@ class RuntimeRunHandler:
         self.usage_recorder: UsageRecorder = usage_recorder or PostgresUsageRecorder(
             persistence=self.persistence,
             pricing_catalog=self.pricing_catalog,
+        )
+        self._model_invocation_terminal = (
+            model_invocation_terminal
+            or ModelInvocationTerminalIntegration(
+                journal=model_invocation_store,
+                usage_recorder=self.usage_recorder,
+                persistence=self.persistence,
+            )
         )
 
     async def handle(self, command: RuntimeRunCommand) -> None:
@@ -393,6 +435,27 @@ class RuntimeRunHandler:
             await self._reject_run_for_budget(run, budget_decision)
             return
 
+        run_control_snapshot = (
+            await self._run_control_builder.ensure_snapshot(
+                run=run,
+                trace_id=command.trace_id,
+            )
+            if self._run_control_builder is not None
+            else None
+        )
+        prepared_run_control = (
+            await self._run_control_builder.prepare_binding(
+                run=run,
+                snapshot=run_control_snapshot,
+            )
+            if self._run_control_builder is not None
+            and run_control_snapshot is not None
+            else None
+        )
+        # Queue payload serialization excludes BYOK keys.  Hydrate exactly once
+        # before F10 authority composition and before graph construction; the
+        # same in-memory copy is then used by both seams.
+        hydrated_context = await self._hydrated_runtime_context(command.runtime_context)
         run = await with_optimistic_retry(
             lambda: self.persistence.update_run_status(
                 run_id=command.run_id, status=AgentRunStatus.RUNNING
@@ -457,6 +520,7 @@ class RuntimeRunHandler:
         operation_context_token: object | None = None
         shadow_comparison_token: object | None = None
         mcp_operation_gateway_token: object | None = None
+        model_invocation_effect_tracker: ModelInvocationEffectTracker | None = None
         logging.getLogger(__name__).info(
             "[citations] run.bind run=%s conv=%s allocator_seed=%d "
             "ledger=%s allocator=%s resolver=%s",
@@ -469,7 +533,14 @@ class RuntimeRunHandler:
         )
         # Per-tool budget guard. Loaded per-run; ``None`` when the org has no budgets,
         # in which case the guard is unbound and tool calls are a passthrough.
-        budget_guard = await self._build_tool_budget_guard(run)
+        budget_guard = await self._build_tool_budget_guard(
+            run,
+            task_policy_binding=(
+                prepared_run_control.task_policy
+                if prepared_run_control is not None
+                else None
+            ),
+        )
         budget_token = (
             ToolBudgetGuard.bind_for_run(budget_guard)
             if budget_guard is not None
@@ -494,7 +565,27 @@ class RuntimeRunHandler:
         # release its pinned broker grant snapshot (``/v1/runs/end``) on every
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
+        run_control_token: object | None = None
         try:
+            if prepared_run_control is not None:
+                run_control_token = RunControlContext.bind_for_run(
+                    prepared_run_control.control,
+                    task_policy=prepared_run_control.task_policy,
+                )
+                composed_model_invocation = (
+                    await self._model_invocation_composer.compose(
+                        run=run,
+                        context=hydrated_context,
+                        control=prepared_run_control.control,
+                    )
+                )
+                if composed_model_invocation is not None:
+                    RunControlContext.install_model_invocation_runtime(
+                        composed_model_invocation.binding
+                    )
+                    model_invocation_effect_tracker = (
+                        composed_model_invocation.effect_tracker
+                    )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
                     resolution=self.settings.execution.rollout
@@ -511,7 +602,10 @@ class RuntimeRunHandler:
                     policy_snapshot=ToolUsePolicyResolver.resolve(
                         command.runtime_context
                     ),
-                    ledger_emitter=self._build_operation_ledger_emitter(run),
+                    ledger_emitter=self._build_operation_ledger_emitter(
+                        run,
+                        external_effect_tracker=model_invocation_effect_tracker,
+                    ),
                     artifact_service=(
                         self.artifact_service
                         if self._artifact_publication_enabled(run)
@@ -554,7 +648,7 @@ class RuntimeRunHandler:
             )
             discovery_token = McpDiscoveryService.bind_for_run(discovery_service)
             harness_or_coro = self.agent_factory(
-                context=await self._hydrated_runtime_context(command.runtime_context),
+                context=hydrated_context,
                 dependencies=dependencies,
             )
             harness = (
@@ -684,6 +778,11 @@ class RuntimeRunHandler:
                 completed_at=failed.completed_at or datetime.now(timezone.utc),
                 status=AgentRunStatus.TIMED_OUT.value,
                 budget_reservations=budget_reservations,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
             )
             await self._observe_e2_shadow_projections(failed)
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
@@ -729,12 +828,19 @@ class RuntimeRunHandler:
                 completed_at=failed.completed_at or datetime.now(timezone.utc),
                 status=AgentRunStatus.FAILED.value,
                 budget_reservations=budget_reservations,
+                subject_fingerprint=(
+                    prepared_run_control.control.snapshot.subject_fingerprint
+                    if prepared_run_control is not None
+                    else None
+                ),
             )
             await self._observe_e2_shadow_projections(failed)
             self.stream_event_mapper.message_processor.discard_ledger(run.run_id)
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if run_control_token is not None:
+                RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
                 ShadowComparisonContext.unbind(shadow_comparison_token)  # type: ignore[arg-type]
             if mcp_operation_gateway_token is not None:
@@ -791,6 +897,11 @@ class RuntimeRunHandler:
             completed_at=completed_at,
             status=AgentRunStatus.COMPLETED.value,
             budget_reservations=budget_reservations,
+            subject_fingerprint=(
+                prepared_run_control.control.snapshot.subject_fingerprint
+                if prepared_run_control is not None
+                else None
+            ),
         )
         await self._observe_e2_shadow_projections(completed)
 
@@ -1082,6 +1193,7 @@ class RuntimeRunHandler:
         completed_at: datetime,
         status: str,
         budget_reservations: Sequence[BudgetReservationRecord] = (),
+        subject_fingerprint: str | None = None,
     ) -> None:
         """Persist the per-run and per-LLM-call usage records, then charge budgets.
 
@@ -1090,11 +1202,20 @@ class RuntimeRunHandler:
         failures are absorbed rather than propagated to the run lifecycle.
         """
 
+        await self._model_invocation_terminal.finalize(
+            run=run,
+            metrics=metrics,
+            subject_fingerprint=subject_fingerprint,
+            completed_at=completed_at,
+        )
         usage_record = metrics.to_usage_record(
             run, completed_at=completed_at, status=status
         )
-        run_result = await self.usage_recorder.record_run(
-            usage_record, pricing_at=completed_at
+        run_cost_micro_usd = await self._model_invocation_terminal.record_run_usage(
+            run=run,
+            metrics=metrics,
+            completed_at=completed_at,
+            status=status,
         )
         for call_record in metrics.model_call_usage_records(run, trace_id=run.trace_id):
             await self.usage_recorder.record_call(call_record, pricing_at=completed_at)
@@ -1102,7 +1223,7 @@ class RuntimeRunHandler:
         # reservations are consumed in the same call so the budget reaper skips them.
         await self._charge_budgets(
             run,
-            observed_micro_usd=run_result.cost_micro_usd,
+            observed_micro_usd=run_cost_micro_usd,
             observed_tokens=usage_record.total_tokens,
             reservations=budget_reservations,
         )
@@ -1403,6 +1524,15 @@ class RuntimeRunHandler:
         update: dict[str, object] = {
             "subagent_artifacts_backend": self._subagent_artifacts_backend(command),
         }
+        control_binding = RunControlContext.current()
+        if self._prompt_observation_store is not None and control_binding is not None:
+            update["prompt_assembly_observer"] = PromptAssemblyObserver(
+                store=self._prompt_observation_store,
+                binding=control_binding,
+                org_id=run.org_id if run is not None else command.org_id,
+                subject_fingerprint=control_binding.snapshot.subject_fingerprint,
+                trace_id=command.trace_id,
+            )
         # Route `/workspace/<mount>/<path>` reads to the user-granted host
         # folders exposed by the desktop capability broker. Desktop only —
         # `None` (unrouted) on every other backend and when no folders are
@@ -2219,7 +2349,12 @@ class RuntimeRunHandler:
                     exc_info=True,
                 )
 
-    async def _build_tool_budget_guard(self, run: RunRecord) -> ToolBudgetGuard | None:
+    async def _build_tool_budget_guard(
+        self,
+        run: RunRecord,
+        *,
+        task_policy_binding: TaskPolicyRuntimeBinding | None = None,
+    ) -> ToolBudgetGuard | None:
         """Load the org's per-tool budgets and build a per-run guard.
 
         Returns ``None`` when the persistence port doesn't expose the
@@ -2252,7 +2387,7 @@ class RuntimeRunHandler:
                     budgets,
                     max_calls_per_run=await self._workspace_tool_call_cap(run),
                 )
-        if not budgets and admission is None:
+        if not budgets and admission is None and task_policy_binding is None:
             return None
         ledger = self.stream_event_mapper.message_processor.ledger_for_run(run.run_id)
         return ToolBudgetGuard(
@@ -2260,6 +2395,7 @@ class RuntimeRunHandler:
             ledger=ledger,
             run=run,
             event_producer=self.event_producer,
+            task_policy_binding=task_policy_binding,
             tool_result_admission=admission,
         )
 
@@ -2420,7 +2556,10 @@ class RuntimeRunHandler:
         return WorkLedgerEmitter(emit=_emit)
 
     def _build_operation_ledger_emitter(
-        self, run: RunRecord
+        self,
+        run: RunRecord,
+        *,
+        external_effect_tracker: ModelInvocationEffectTracker | None = None,
     ) -> OperationEventEmitterAdapter:
         """Bind v2.1 operation rows to the existing append-only run transport."""
 
@@ -2429,13 +2568,16 @@ class RuntimeRunHandler:
             payload: Mapping[str, object],
             summary: str | None,
         ) -> None:
+            event_type = RuntimeApiEventType(event_type_value)
             await self.event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.SYSTEM,
-                event_type=RuntimeApiEventType(event_type_value),
+                event_type=event_type,
                 summary=summary,
                 payload=dict(payload),
             )
+            if external_effect_tracker is not None:
+                external_effect_tracker.mark_event(event_type)
 
         return OperationEventEmitterAdapter(emit_fn=_emit)
 

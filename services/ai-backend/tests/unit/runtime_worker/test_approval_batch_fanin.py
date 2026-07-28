@@ -27,6 +27,7 @@ import os
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-batch-fanin")
 
 from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.api.run_control_store import EventJournalRunControlStore
 from agent_runtime.persistence.records import (
     ApprovalBatchItemRecord,
     ApprovalBatchRecord,
@@ -37,11 +38,18 @@ from runtime_api.schemas import (
     AgentRunStatus,
     ApprovalDecision,
     ApprovalRequestRecord,
+    ConversationRecord,
     MessageRole,
     RunRecord,
     RuntimeApprovalResolvedCommand,
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
+from runtime_worker.run_control import (
+    RunControlContext,
+    RunControlPlaneBuilder,
+    StableUserProfileHmac,
+)
+from runtime_api.schemas import RuntimeApiEventType
 
 
 _ORG_ID = "org_fanin"
@@ -174,6 +182,92 @@ async def _decide(
 
 
 class TestApprovalBatchFanin:
+    async def test_terminal_projection_failure_keeps_completed_resume_terminal(
+        self,
+    ) -> None:
+        """Post-terminal F10 loss cannot rewrite a completed approval resume."""
+
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await _seed_batch_and_items(store, size=1)
+
+        class _FailingTerminal:
+            async def finalize(self, **_kwargs: object) -> None:
+                raise RuntimeError("projection unavailable")
+
+        handler = RuntimeApprovalHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=lambda **_: _FakeHarness(),
+            runtime_resumer=_resume_capturing_resumer([]),
+            model_invocation_terminal=_FailingTerminal(),  # type: ignore[arg-type]
+        )
+
+        await _decide(handler, item_index=0, decision=ApprovalDecision.APPROVED)
+
+        assert store.runs[_RUN_ID].status is AgentRunStatus.COMPLETED
+        event_types = [event.event_type for event in store.events_by_run[_RUN_ID]]
+        assert event_types.count(RuntimeApiEventType.RUN_COMPLETED) == 1
+        assert event_types.count(RuntimeApiEventType.FINAL_RESPONSE) == 0
+
+    async def test_resume_rehydrates_same_snapshot_and_binds_context(self) -> None:
+        store = InMemoryRuntimeApiStore()
+        await _seed_run(store)
+        await store.insert_forked_conversation(
+            ConversationRecord(
+                conversation_id=_CONVERSATION_ID,
+                org_id=_ORG_ID,
+                user_id=_USER_ID,
+                assistant_id="assistant_fanin",
+            )
+        )
+        await _seed_batch_and_items(store, size=1)
+        builder = RunControlPlaneBuilder(
+            store=EventJournalRunControlStore(store),
+            deployment_profile="single_user_desktop",
+            subject_hmac=StableUserProfileHmac(b"a" * 32),
+        )
+        run = store.runs[_RUN_ID]
+        original = await builder.ensure_snapshot(run=run, trace_id=run.trace_id)
+        observed_snapshot_ids: list[str] = []
+
+        def _agent_factory(**_):
+            observed_snapshot_ids.append(
+                RunControlContext.require_current().snapshot.snapshot_id
+            )
+            return _FakeHarness()
+
+        async def _resumer(_harness: object, _resume: object):
+            observed_snapshot_ids.append(
+                RunControlContext.require_current().snapshot.snapshot_id
+            )
+            if False:
+                yield {}
+
+        restarted_builder = RunControlPlaneBuilder(
+            store=EventJournalRunControlStore(store),
+            deployment_profile="single_user_desktop",
+            subject_hmac=StableUserProfileHmac(b"a" * 32),
+        )
+        handler = RuntimeApprovalHandler(
+            persistence=store,
+            event_store=store,
+            agent_factory=_agent_factory,
+            runtime_resumer=_resumer,
+            run_control_builder=restarted_builder,
+        )
+
+        await _decide(
+            handler,
+            item_index=0,
+            decision=ApprovalDecision.APPROVED,
+        )
+
+        assert observed_snapshot_ids == [original.snapshot_id, original.snapshot_id]
+        event_types = [event.event_type for event in store.events_by_run[_RUN_ID]]
+        assert event_types.count(RuntimeApiEventType.QUALITY_CONTROL_BOUND) == 1
+        assert RunControlContext.current() is None
+
     async def test_n1_resumes_with_one_decision(self) -> None:
         store = InMemoryRuntimeApiStore()
         await _seed_run(store)

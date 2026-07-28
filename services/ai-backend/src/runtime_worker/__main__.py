@@ -24,8 +24,11 @@ from runtime_adapters.artifact_cleanup_schedule import (
     build_artifact_cleanup_schedule_store,
 )
 from agent_runtime.api.artifact_repository import ArtifactServiceComposition
-from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.mcp_revision_composition import McpRevisionControlPlaneBuilder
 from runtime_worker.loop import RuntimeWorker
+from runtime_worker.run_control_release_composition import (
+    build_run_control_plane_builder,
+)
 from agent_runtime.observability.db_statement_metrics import (
     DbStatementMetricsCollector,
     DbStatementMetricsCollectorEnv,
@@ -105,14 +108,11 @@ class RuntimeWorkerEntrypoint:
         )
         statement_collector: DbStatementMetricsCollector | None = None
         try:
-            # One MCP discovery cache per worker process — shared by every
-            # run/approval handler this worker spins up. API and worker run
-            # as separate processes in production; each builds its own
-            # cache (per-process warm-up trade-off documented in the cache
-            # docstring).
-            mcp_discovery_cache = (
-                DefaultRuntimeDependenciesFactory.build_default_discovery_cache()
-            )
+            # One worker-owned MCP revision assembly per process. It contains
+            # the single base cache/resolver/feed/catalog/cursor graph; API-only
+            # processes never construct it. The poller itself begins only from
+            # ``RuntimeWorker.run_forever`` after all worker dependencies exist.
+            mcp_control_plane = McpRevisionControlPlaneBuilder.build(settings)
             # BYOK: run/approval handlers re-fetch per-user provider keys at
             # claim time (queue payloads never carry them). Null when the
             # backend lane env is not configured — runs then use env keys.
@@ -134,6 +134,12 @@ class RuntimeWorkerEntrypoint:
                 )
                 else None
             )
+            run_control_builder = await build_run_control_plane_builder(
+                settings=settings,
+                repository=async_ports.evaluation_repository,
+                store=async_ports.run_control_snapshot_store,
+                event_store=async_ports.event_store,
+            )
             worker = RuntimeWorker(
                 persistence=async_ports.persistence,
                 event_store=async_ports.event_store,
@@ -145,11 +151,17 @@ class RuntimeWorkerEntrypoint:
                     async_ports.conversation_tool_ordinal_store
                 ),
                 citation_store=async_ports.citation_store,
-                mcp_discovery_cache=mcp_discovery_cache,
+                mcp_discovery_cache=mcp_control_plane.discovery_cache,
+                mcp_revision_poller=mcp_control_plane.poller,
                 user_policies_resolver=user_policies_resolver,
                 artifact_service=ArtifactServiceComposition.build(async_ports),
                 artifact_blob_store=async_ports.artifact_blob_store,
                 artifact_reference_store=async_ports.artifact_reference_provider,
+                evaluation_repository=async_ports.evaluation_repository,
+                run_control_builder=run_control_builder,
+                run_control_snapshot_store=async_ports.run_control_snapshot_store,
+                prompt_observation_store=async_ports.prompt_observation_store,
+                model_invocation_store=async_ports.model_invocation_store,
                 effect_claim_store=effect_claim_store,
                 workspace_attestation_registry=(
                     DesktopWorkspaceAttestationRegistry.from_environment()

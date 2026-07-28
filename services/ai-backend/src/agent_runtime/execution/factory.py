@@ -45,6 +45,12 @@ from agent_runtime.capabilities.operations.probes import (
     OperationShadowProbe,
     wrap_model_tool_for_shadow,
 )
+from agent_runtime.capabilities.middleware import (
+    ModelInvocationMiddleware,
+    RuntimeControlMiddleware,
+    wrap_tools_with_display,
+)
+from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedTool
 from agent_runtime.capabilities.skills.middleware import LoadSkillInput, LoadSkillTool
 from agent_runtime.capabilities.skills.sources import SkillSourceRegistry
 from agent_runtime.capabilities.tools.builtin.ask_a_question import (
@@ -69,24 +75,36 @@ from agent_runtime.capabilities.tools.tool_use_enforcement import (
     ToolUsePolicyEnforcer,
     ToolUsePolicyResolver,
 )
+from agent_runtime.control_plane.context import (
+    RunControlBinding,
+    RunControlContext,
+    TaskPolicyRuntimeBinding,
+)
+from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.prompts.runtime import (
     DEFAULT_INSTRUCTIONS,
     MCP_SERVER_CARDS_INSTRUCTIONS,
     NO_MCP_SERVER_CARDS_INSTRUCTIONS,
     SKILL_CARDS_INSTRUCTIONS,
 )
+from agent_runtime.prompts.observation import PromptAssemblyObserver
 from agent_runtime.prompts import (
-    PromptAssembler,
+    DEFAULT_PROMPT_FRAGMENT_PROVIDERS,
+    PromptAssemblyContext,
+    PromptAssemblyInputs,
     PromptAssemblyPlan,
     PromptCacheEligibility,
-    PromptFragment,
     PromptFragmentScope,
-    PromptFragmentTier,
-    ProviderPromptDecorator,
+    FactoryPromptFragmentProvider,
+    LockedTaskProfile,
+    PromptRuntimeBinding,
+    ProviderCacheComposition,
+    PromptSensitivity,
+    PromptSourceMaterial,
+    PromptTrustLabel,
 )
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 from agent_runtime.delegation.subagents.atlas_task_tool import install_atlas_task_tool
-from agent_runtime.capabilities.tool_budget_guard import guard_model_tools
 
 # Replace deepagents' built-in `task` tool builder with ours so each
 # subagent's RunnableConfig metadata carries `supervisor_task_call_id`.
@@ -120,6 +138,7 @@ class RuntimeHarness:
     skill_directories: tuple[str, ...]
     skill_cards: tuple[object, ...] = ()
     prompt_assembly_plan: PromptAssemblyPlan | None = None
+    prompt_runtime_binding: PromptRuntimeBinding | None = None
 
 
 async def acreate_agent_runtime(
@@ -244,7 +263,7 @@ async def _assemble_harness(
 
     try:
         model_tools = _model_visible_tools(
-            tools=tools,
+            tools=tuple(_canonical_graph_tool(tool) for tool in tools),
             mcp_registry=runtime_dependencies.mcp_registry,
             skill_registry=runtime_dependencies.skill_registry,
             prior_tool_result_loader=runtime_dependencies.prior_tool_result_loader,
@@ -255,12 +274,11 @@ async def _assemble_harness(
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             runtime_context=runtime_context,
         )
-        # Registry decoration alone cannot cover tools injected below the
-        # registry boundary (MCP, skills, prior results, and desktop tools).
-        # Apply the idempotent wrapper to the complete surface before policy
-        # decoration: a policy-blocked call must not consume budget, while every
-        # policy-admitted BaseTool still crosses the same hard gate.
-        model_tools = guard_model_tools(list(model_tools))
+        # Display-schema decoration precedes policy wrapping so a rejected
+        # tool remains the outer ``PolicyBlockedTool`` at graph dispatch. The
+        # builder repeats this idempotently for direct callers; preserving the
+        # blocked wrapper lets RuntimeControlMiddleware reject before budget.
+        model_tools = tuple(wrap_tools_with_display(model_tools))
         # Enforce the per-(org, user) tool-use policy on the model tool surface.
         # ``call_mcp_tool`` (and any future gated umbrella tool) is routed to
         # the SAME human-approval interrupt for ask/require, blocked with a safe
@@ -281,11 +299,14 @@ async def _assemble_harness(
             ),
         )
         model_tools = enforced_tools.tools
+        control_binding = RunControlContext.current()
+        task_policy_binding = RunControlContext.task_policy()
         prompt_assembly_plan = _prompt_assembly_plan(
             instructions=instructions,
             runtime_context=runtime_context,
             mcp_servers=mcp_servers,
             skill_cards=skill_cards,
+            tool_schema_revision=_model_tool_schema_revision(model_tools),
             workspace_active=bool(
                 workspace_backend is not None
                 and getattr(workspace_backend, "advertise_workspace", True)
@@ -295,12 +316,55 @@ async def _assemble_harness(
             code_mode_active=runtime_dependencies.code_mode_tool is not None,
             sandbox_execute_active=runtime_dependencies.sandbox_execute_tool
             is not None,
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
         )
-        prompt_decoration = ProviderPromptDecorator().decorate(
-            provider=runtime_context.model_profile.provider,
-            plan=prompt_assembly_plan,
+        # This remains the graph-construction input and temporary legacy/golden
+        # diagnostic. The effective request is rebuilt for every supervisor and
+        # local-child provider call by RuntimeControlMiddleware.
+        model_instructions = prompt_assembly_plan.rendered_prompt
+        prompt_observer = runtime_dependencies.prompt_assembly_observer
+        if prompt_observer is not None and not isinstance(
+            prompt_observer, PromptAssemblyObserver
+        ):
+            raise RuntimeError(
+                "prompt_assembly_observer must be a PromptAssemblyObserver"
+            )
+        prompt_cache_composition = (
+            ProviderCacheComposition.from_signed_mode(
+                control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY)
+            )
+            if control_binding is not None
+            else None
         )
-        model_instructions = prompt_decoration.system_prompt
+        prompt_runtime_binding = (
+            PromptRuntimeBinding(
+                mode=control_binding.mode_for(AgentQualityFeature.F2_PROMPT_ASSEMBLY),
+                provider=runtime_context.model_profile.provider,
+                model_family=runtime_context.model_profile.model_name,
+                harness_revision=prompt_assembly_plan.harness_revision,
+                fragment_provider=FactoryPromptFragmentProvider(
+                    legacy_plan=prompt_assembly_plan,
+                    run_scope_fingerprint=_prompt_scope_fingerprint(
+                        runtime_context=runtime_context,
+                        scope=PromptFragmentScope.RUN,
+                    ),
+                ),
+                cache_registry=prompt_cache_composition.cache_registry,
+                cache_owner=prompt_cache_composition.cache_owner,
+                framework_cache_installed=(
+                    prompt_cache_composition.framework_prompt_cache_enabled
+                ),
+                observation_publisher=prompt_observer,
+                cache_rejection_adapters=(
+                    prompt_cache_composition.cache_rejection_adapters
+                ),
+            )
+            if control_binding is not None
+            else None
+        )
+        if prompt_runtime_binding is not None:
+            RunControlContext.install_prompt_runtime(prompt_runtime_binding)
         # Compute workspace-policy kwargs (e.g. training opt-out provider
         # headers) once per build and thread them through every
         # chat-model construction in the graph. Subagents inherit the
@@ -354,6 +418,14 @@ async def _assemble_harness(
                 permissions=(),
                 checkpointer=runtime_checkpointer(),
                 extra_model_kwargs=extra_model_kwargs or None,
+                middleware=(
+                    RuntimeControlMiddleware(),
+                    ModelInvocationMiddleware(),
+                ),
+                universal_middleware_factories=(
+                    RuntimeControlMiddleware,
+                    ModelInvocationMiddleware,
+                ),
             )
         )
     except AgentRuntimeError:
@@ -377,6 +449,7 @@ async def _assemble_harness(
         skill_directories=skill_directories,
         skill_cards=skill_cards,
         prompt_assembly_plan=prompt_assembly_plan,
+        prompt_runtime_binding=prompt_runtime_binding,
     )
 
 
@@ -405,16 +478,13 @@ def _model_visible_tools(
         and callable(getattr(skill_registry, "load_skill_by_name", None)),
         include_mcp_discovery=True,
     )
-    # The cache is constructed at lifespan startup (API) or worker dependency
-    # wiring (worker) and threaded through via ``RuntimeDependencies``. We
-    # accept ``object | None`` here so test fakes can pass ``None`` without
-    # importing the cache type, but the loader and auth tool require the
-    # concrete ``McpDiscoveryCache`` to opt in.
-    from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+    # The loader consumes the explicit cache port, allowing the revision-aware
+    # decorator to compose here without a concrete-cache ``isinstance`` gate.
+    from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCachePort
 
-    typed_discovery_cache: McpDiscoveryCache | None = (
+    typed_discovery_cache: McpDiscoveryCachePort | None = (
         mcp_discovery_cache
-        if isinstance(mcp_discovery_cache, McpDiscoveryCache)
+        if isinstance(mcp_discovery_cache, McpDiscoveryCachePort)
         else None
     )
     if callable(getattr(mcp_registry, "resolve_server", None)):
@@ -514,17 +584,28 @@ def _model_visible_tools(
     return tuple(model_tools)
 
 
+def _canonical_graph_tool(tool: object) -> object:
+    """Remove the legacy budget adapter at the canonical graph boundary."""
+
+    while isinstance(tool, ToolBudgetGuardedTool):
+        tool = tool.inner
+    return tool
+
+
 def _prompt_assembly_plan(
     *,
     instructions: str,
     runtime_context: AgentRuntimeContext,
     mcp_servers: Sequence[object],
     skill_cards: Sequence[object],
+    tool_schema_revision: str,
     workspace_active: bool,
     workspace_writable: bool,
     workspace_effect_staging: bool,
     code_mode_active: bool,
     sandbox_execute_active: bool,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
 ) -> PromptAssemblyPlan:
     """Build the F2 prompt plan without changing established rendered order.
 
@@ -534,155 +615,330 @@ def _prompt_assembly_plan(
     to project only through :meth:`PromptAssemblyPlan.diagnostic`.
     """
 
+    application_block = _standalone_prompt_block(
+        _instructions_with_application_context(instructions="")
+    )
+    mcp_block = _standalone_prompt_block(
+        _instructions_with_mcp_cards(instructions="", mcp_servers=mcp_servers)
+    )
+    skill_block = _standalone_prompt_block(
+        _instructions_with_skill_cards(instructions="", skill_cards=skill_cards)
+    )
+    suggested_block = _standalone_prompt_block(
+        _instructions_with_suggested_connectors(
+            instructions="", suggestions=runtime_context.suggested_connectors
+        )
+    )
+    workspace_block = _standalone_prompt_block(
+        _instructions_with_workspace(
+            instructions="",
+            workspace_active=workspace_active,
+            workspace_writable=workspace_writable,
+            workspace_effect_staging=workspace_effect_staging,
+        )
+    )
+    capability_block = _standalone_prompt_block(
+        _instructions_with_capability_tools(
+            instructions="",
+            code_mode_active=code_mode_active,
+            sandbox_execute_active=sandbox_execute_active,
+        )
+    )
+    profile_fingerprint = _prompt_scope_fingerprint(
+        runtime_context=runtime_context,
+        scope=PromptFragmentScope.PROFILE,
+    )
+    run_fingerprint = _prompt_scope_fingerprint(
+        runtime_context=runtime_context,
+        scope=PromptFragmentScope.RUN,
+    )
     base_cacheable = instructions == DEFAULT_INSTRUCTIONS
-    application_block = _instructions_with_application_context(instructions="")
-    mcp_block = _instructions_with_mcp_cards(instructions="", mcp_servers=mcp_servers)
-    skill_block = _instructions_with_skill_cards(
-        instructions="", skill_cards=skill_cards
+    base_scope = (
+        PromptFragmentScope.INSTALLATION if base_cacheable else PromptFragmentScope.RUN
     )
-    suggested_block = _instructions_with_suggested_connectors(
-        instructions="", suggestions=runtime_context.suggested_connectors
-    )
-    workspace_block = _instructions_with_workspace(
-        instructions="",
-        workspace_active=workspace_active,
-        workspace_writable=workspace_writable,
-        workspace_effect_staging=workspace_effect_staging,
-    )
-    capability_block = _instructions_with_capability_tools(
-        instructions="",
-        code_mode_active=code_mode_active,
-        sandbox_execute_active=sandbox_execute_active,
-    )
-    fragments = [
-        PromptFragment(
-            fragment_id="00_base_runtime",
-            revision="runtime-base-v1",
-            tier=PromptFragmentTier.SYSTEM_POLICY,
-            scope=PromptFragmentScope.INSTALLATION,
+    inputs = PromptAssemblyInputs(
+        context=_prompt_assembly_context(
+            runtime_context=runtime_context,
+            tool_schema_revision=tool_schema_revision,
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
+        ),
+        base_runtime_safety=PromptSourceMaterial(
+            source_owner="agent_runtime.prompts.runtime",
+            source_revision="runtime-base-v1",
+            source_scope=base_scope,
+            scope=base_scope,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.IMMUTABLE_POLICY,
             content=instructions,
             cache_eligibility=(
                 PromptCacheEligibility.STABLE_PREFIX
                 if base_cacheable
                 else PromptCacheEligibility.NEVER
             ),
+            scope_fingerprint=None if base_cacheable else run_fingerprint,
         ),
-        PromptFragment(
-            fragment_id="10_application_context_boundary",
-            revision="application-context-v1",
-            tier=PromptFragmentTier.STABLE,
+        application_boundary=PromptSourceMaterial(
+            source_owner="agent_runtime.execution.factory",
+            source_revision="application-context-v1",
+            source_scope=PromptFragmentScope.INSTALLATION,
             scope=PromptFragmentScope.INSTALLATION,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.IMMUTABLE_POLICY,
             content=application_block,
-            cache_eligibility=PromptCacheEligibility.STABLE_PREFIX,
+            cache_eligibility=(
+                PromptCacheEligibility.STABLE_PREFIX
+                if base_cacheable
+                else PromptCacheEligibility.NEVER
+            ),
         ),
-    ]
-    fragments.extend(
-        fragment
-        for fragment in (
-            _contextual_prompt_fragment(
-                fragment_id="20_mcp_cards",
-                revision="mcp-cards-v1",
-                content=mcp_block,
-                runtime_context=runtime_context,
-            ),
-            _contextual_prompt_fragment(
-                fragment_id="30_skill_cards",
-                revision="skill-cards-v1",
-                content=skill_block,
-                runtime_context=runtime_context,
-            ),
-            _contextual_prompt_fragment(
-                fragment_id="40_suggested_connectors",
-                revision="suggested-connectors-v1",
-                content=suggested_block,
-                runtime_context=runtime_context,
-            ),
-            _run_prompt_fragment(
-                fragment_id="50_workspace_guidance",
-                revision="workspace-guidance-v1",
-                content=workspace_block,
-                runtime_context=runtime_context,
-            ),
-            _run_prompt_fragment(
-                fragment_id="60_capability_guidance",
-                revision="capability-guidance-v1",
-                content=capability_block,
-                runtime_context=runtime_context,
-            ),
-        )
-        if fragment is not None
-    )
-    return PromptAssembler().assemble(fragments)
-
-
-def _contextual_prompt_fragment(
-    *,
-    fragment_id: str,
-    revision: str,
-    content: str,
-    runtime_context: AgentRuntimeContext,
-) -> PromptFragment | None:
-    if not content.strip():
-        return None
-    return PromptFragment(
-        fragment_id=fragment_id,
-        revision=revision,
-        tier=PromptFragmentTier.CONTEXTUAL,
-        scope=PromptFragmentScope.PROFILE,
-        content=content,
-        scope_fingerprint=_prompt_scope_fingerprint(
-            runtime_context=runtime_context,
-            content=content,
+        mcp_cards=_prompt_source_material(
+            owner="agent_runtime.capabilities.mcp",
+            revision="mcp-cards-v1",
+            content=mcp_block,
             scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        skill_cards=_prompt_source_material(
+            owner="agent_runtime.capabilities.skills",
+            revision="skill-cards-v1",
+            content=skill_block,
+            scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        suggested_connectors=_prompt_source_material(
+            owner="agent_runtime.capabilities.mcp.catalog",
+            revision="suggested-connectors-v1",
+            content=suggested_block,
+            scope=PromptFragmentScope.PROFILE,
+            scope_fingerprint=profile_fingerprint,
+            sensitivity=PromptSensitivity.PERSONAL,
+            trust=PromptTrustLabel.UNTRUSTED_RETRIEVED,
+        ),
+        workspace_guidance=_prompt_source_material(
+            owner="agent_runtime.capabilities.desktop",
+            revision="workspace-guidance-v1",
+            content=workspace_block,
+            scope=PromptFragmentScope.RUN,
+            scope_fingerprint=run_fingerprint,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.TRUSTED_RUNTIME,
+        ),
+        capability_guidance=_prompt_source_material(
+            owner="agent_runtime.capabilities",
+            revision="capability-guidance-v1",
+            content=capability_block,
+            scope=PromptFragmentScope.RUN,
+            scope_fingerprint=run_fingerprint,
+            sensitivity=PromptSensitivity.INTERNAL,
+            trust=PromptTrustLabel.TRUSTED_RUNTIME,
+        ),
+    )
+    return DEFAULT_PROMPT_FRAGMENT_PROVIDERS.assemble(inputs)
+
+
+def _prompt_assembly_context(
+    *,
+    runtime_context: AgentRuntimeContext,
+    tool_schema_revision: str,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
+) -> PromptAssemblyContext:
+    """Bind prompt authority only from verified run-owned typed records.
+
+    The worker binds ``RunControlBinding`` after verifying the persisted run
+    and immutable snapshot. The optional F4 binding was replayed from the same
+    run journal. Model/user text and request metadata are intentionally absent.
+    A missing control binding is the legacy/direct-factory path; its metadata
+    remains available for diagnostics, while F2 cannot be installed or
+    enforced without the verified binding.
+    """
+
+    snapshot = control_binding.snapshot if control_binding is not None else None
+    return PromptAssemblyContext(
+        provider=runtime_context.model_profile.provider,
+        model_family=runtime_context.model_profile.model_name,
+        harness_revision=(
+            snapshot.harness_variant_ref
+            if snapshot is not None
+            else "deep-agents-runtime-v1"
+        ),
+        capability_bridge_revision=(
+            snapshot.policy_revisions.capability
+            if snapshot is not None
+            else "runtime-capability-bridge-v1"
+        ),
+        tool_schema_revision=tool_schema_revision,
+        policy_revision=(
+            snapshot.policy_revisions.prompt
+            if snapshot is not None
+            else _prompt_policy_revision(runtime_context)
+        ),
+        authorization_revision=_prompt_authorization_revision(
+            runtime_context,
+            subject_fingerprint=(
+                snapshot.subject_fingerprint if snapshot is not None else None
+            ),
+        ),
+        locked_task_profile=_locked_task_profile(
+            control_binding=control_binding,
+            task_policy_binding=task_policy_binding,
         ),
     )
 
 
-def _run_prompt_fragment(
+def _locked_task_profile(
     *,
-    fragment_id: str,
+    control_binding: RunControlBinding | None,
+    task_policy_binding: TaskPolicyRuntimeBinding | None,
+) -> LockedTaskProfile | None:
+    """Project the verified, immutable F4 selection into F2 cache authority."""
+
+    if task_policy_binding is None:
+        return None
+    if control_binding is None:
+        raise RuntimeError("F4 task policy cannot be bound without run control")
+
+    snapshot = control_binding.snapshot
+    selection = task_policy_binding.selection
+    profile = task_policy_binding.profile
+    if selection.run_id != snapshot.run_id:
+        raise RuntimeError("F4 task profile does not match the prompt run")
+    if selection.profile_id != profile.profile_id:
+        raise RuntimeError("F4 task profile identity does not match its selection")
+    if selection.profile_revision != profile.revision:
+        raise RuntimeError("F4 task profile revision does not match its selection")
+    if selection.task_family != profile.task_family:
+        raise RuntimeError("F4 task family does not match its selected profile")
+    if selection.profile_revision != snapshot.policy_revisions.tool_controller:
+        raise RuntimeError("F4 task profile revision does not match run control")
+
+    return LockedTaskProfile(
+        task_family=selection.task_family.value,
+        profile_revision=selection.profile_revision,
+        lock_revision=selection.selection_digest,
+    )
+
+
+def _standalone_prompt_block(rendered: str) -> str:
+    """Remove only the separator introduced by a legacy empty-base helper."""
+
+    return rendered.removeprefix("\n\n")
+
+
+def _prompt_source_material(
+    *,
+    owner: str,
     revision: str,
     content: str,
-    runtime_context: AgentRuntimeContext,
-) -> PromptFragment | None:
+    scope: PromptFragmentScope,
+    scope_fingerprint: str,
+    sensitivity: PromptSensitivity,
+    trust: PromptTrustLabel,
+) -> PromptSourceMaterial | None:
     if not content.strip():
         return None
-    return PromptFragment(
-        fragment_id=fragment_id,
-        revision=revision,
-        tier=PromptFragmentTier.VOLATILE,
-        scope=PromptFragmentScope.RUN,
+    return PromptSourceMaterial(
+        source_owner=owner,
+        source_revision=revision,
+        source_scope=scope,
+        scope=scope,
+        sensitivity=sensitivity,
+        trust=trust,
+        cache_eligibility=PromptCacheEligibility.NEVER,
+        scope_fingerprint=scope_fingerprint,
         content=content,
-        scope_fingerprint=_prompt_scope_fingerprint(
-            runtime_context=runtime_context,
-            content=content,
-            scope=PromptFragmentScope.RUN,
-        ),
     )
 
 
 def _prompt_scope_fingerprint(
     *,
     runtime_context: AgentRuntimeContext,
-    content: str,
     scope: PromptFragmentScope,
 ) -> str:
     """Hash all scope-changing inputs without retaining their raw values."""
 
+    identity_fields = {
+        "org_id",
+        "user_id",
+        "roles",
+        "permission_scopes",
+        "connector_scopes",
+        "paused_connectors",
+        "connector_access_modes",
+    }
+    if scope is PromptFragmentScope.RUN:
+        identity_fields.update({"request_id", "run_id", "trace_id"})
     return canonical_json_sha256(
         {
             "scope": scope.value,
-            "content": content,
             "subject": runtime_context.model_dump(
+                mode="json",
+                include=identity_fields,
+            ),
+        }
+    )
+
+
+def _prompt_authorization_revision(
+    runtime_context: AgentRuntimeContext,
+    *,
+    subject_fingerprint: str | None = None,
+) -> str:
+    return canonical_json_sha256(
+        {
+            "subject_fingerprint": subject_fingerprint,
+            "authorization": runtime_context.model_dump(
                 mode="json",
                 include={
                     "org_id",
                     "user_id",
+                    "roles",
                     "permission_scopes",
                     "connector_scopes",
-                    "trace_id",
+                    "paused_connectors",
+                    "connector_access_modes",
                 },
             ),
+        }
+    )
+
+
+def _prompt_policy_revision(runtime_context: AgentRuntimeContext) -> str:
+    return canonical_json_sha256(
+        {
+            "prompt_policy": "legacy-runtime-prompt-policy-v1",
+            "user_policy": runtime_context.user_policies_json,
+            "workspace_behavior": runtime_context.workspace_behavior_overrides,
+        }
+    )
+
+
+def _model_tool_schema_revision(model_tools: Sequence[object]) -> str:
+    """Digest exactly the body-free tool schema fields visible to the model."""
+
+    schemas: list[dict[str, object]] = []
+    for tool in model_tools:
+        args_schema = getattr(tool, "args_schema", None)
+        schema: object = None
+        model_json_schema = getattr(args_schema, "model_json_schema", None)
+        if callable(model_json_schema):
+            schema = model_json_schema()
+        schemas.append(
+            {
+                "name": str(getattr(tool, "name", "")),
+                "description": str(getattr(tool, "description", "")),
+                "args_schema": schema,
+            }
+        )
+    return canonical_json_sha256(
+        {
+            "schema_revision": "model-visible-tools-v1",
+            "tools": sorted(schemas, key=lambda item: str(item["name"])),
         }
     )
 

@@ -2921,6 +2921,13 @@ class InMemoryRuntimeApiStore:
         run = await self.get_run(org_id=org_id, run_id=run_id)
         if run is None:
             return ()
+        conversation = self.conversations.get(run.conversation_id)
+        if conversation is not None and conversation.deleted_at is not None:
+            # Public replay follows the conversation tombstone. The separate
+            # lifecycle window intentionally retains canonical events so
+            # retention, legal-hold, and restore authorities can still see
+            # them.
+            return ()
         return tuple(
             event
             for event in self.events_by_run.get(run_id, ())

@@ -2,18 +2,29 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import pytest
 
 from agent_runtime.capabilities.task_policy import (
+    ErrorFingerprint,
+    EvidenceFingerprint,
+    ModelTurnRecord,
     PlanningRequirement,
     RequestFingerprint,
+    ResultFingerprint,
     RunToolPlan,
+    RunToolPlanFactory,
     SuccessEvidenceRequirement,
     TaskFamily,
+    TaskPolicyBudgetRecord,
+    TaskPolicyBundle,
     TaskPolicyProfile,
+    TaskPolicyReducer,
     TaskPolicyRequest,
     TaskPolicyResolver,
     TaskPolicySelectionReason,
+    ToolPlanProgressRecord,
     ToolPlanCreator,
     ToolPlanStatus,
     ToolPlanStep,
@@ -21,6 +32,8 @@ from agent_runtime.capabilities.task_policy import (
     ToolOperationOutcome,
     ToolUseController,
     ToolUseDisposition,
+    ToolUseFeedback,
+    ToolUseFeedbackRecord,
     ToolUseIntent,
 )
 
@@ -282,7 +295,7 @@ class TestToolUseController:
 
         assert feedback.disposition is ToolUseDisposition.STOP
 
-    def test_failure_returns_replan_and_same_request_is_not_dispatched_again(
+    def test_retryable_failure_may_retry_but_nonretryable_repeat_stops(
         self,
     ) -> None:
         controller = ToolUseController(profile=_profile())
@@ -307,8 +320,23 @@ class TestToolUseController:
 
         feedback = controller.before_operation(second)
 
-        assert feedback.disposition is ToolUseDisposition.REPLAN
-        assert feedback.reason_code == "exact_duplicate"
+        assert feedback.disposition is ToolUseDisposition.CONTINUE
+        repeated_error = controller.after_operation(
+            ToolOperationOutcome(
+                operation_id="op-2",
+                capability_id="web.search",
+                succeeded=False,
+                error_class="timeout",
+                retryable=False,
+            )
+        )
+        assert repeated_error.disposition is ToolUseDisposition.STOP
+        assert repeated_error.reason_code == "same_error_without_changed_input"
+        stopped = controller.before_operation(
+            _intent(operation_id="op-3", fingerprint="a" * 64)
+        )
+        assert stopped.disposition is ToolUseDisposition.STOP
+        assert stopped.reason_code == "same_error_without_changed_input"
 
     def test_operation_id_replay_is_idempotent_but_changed_intent_conflicts(
         self,
@@ -325,3 +353,366 @@ class TestToolUseController:
             controller.before_operation(
                 _intent(operation_id="op-1", fingerprint="b" * 64)
             )
+
+
+class TestTaskPolicyBundle:
+    def test_bundle_and_selection_refs_authenticate_canonical_bodies(self) -> None:
+        bundle = TaskPolicyBundle.with_conservative_unknown(
+            bundle_id="desktop-default",
+            revision="v1",
+            profiles=(_profile(family=TaskFamily.CODE_DIAGNOSIS),),
+        )
+        resolver = TaskPolicyResolver(bundle=bundle)
+
+        selection = resolver.resolve_selection(
+            _request(server_selected_family=TaskFamily.CODE_DIAGNOSIS)
+        )
+
+        assert bundle.bundle_digest in bundle.bundle_ref
+        assert selection.bundle_ref == bundle.bundle_ref
+        assert selection.selection_digest in selection.selection_ref
+        with pytest.raises(ValueError, match="digest"):
+            TaskPolicyBundle.model_validate(
+                {
+                    **bundle.model_dump(mode="json"),
+                    "bundle_digest": "0" * 64,
+                }
+            )
+        with pytest.raises(TypeError, match="immutable"):
+            bundle.profiles[0].tool_call_limits["unexpected"] = 99
+
+    def test_effect_and_delegation_signals_only_tighten_family_selection(
+        self,
+    ) -> None:
+        resolver = TaskPolicyResolver(
+            [
+                _profile(family=TaskFamily.PUBLIC_RESEARCH),
+                _profile(family=TaskFamily.EFFECT_PROPOSAL),
+                _profile(family=TaskFamily.DELEGATED_ANALYSIS),
+            ]
+        )
+
+        effect = resolver.resolve_selection(
+            _request(
+                server_selected_family=TaskFamily.PUBLIC_RESEARCH,
+                has_effect_intent=True,
+                has_subagent_intent=True,
+            )
+        )
+        delegated = resolver.resolve_selection(
+            _request(
+                server_selected_family=TaskFamily.PUBLIC_RESEARCH,
+                has_subagent_intent=True,
+            )
+        )
+
+        assert effect.task_family is TaskFamily.EFFECT_PROPOSAL
+        assert delegated.task_family is TaskFamily.DELEGATED_ANALYSIS
+
+
+class TestDeterministicPlanFactory:
+    def test_plan_identity_and_template_are_restart_stable(self) -> None:
+        selection = TaskPolicyResolver(
+            [_profile(family=TaskFamily.CODE_DIAGNOSIS)]
+        ).resolve_selection(_request(server_selected_family=TaskFamily.CODE_DIAGNOSIS))
+
+        first = RunToolPlanFactory.create_for_selection(selection)
+        second = RunToolPlanFactory.create_for_selection(selection)
+
+        assert first == second
+        assert first is not None
+        assert first.created_by is ToolPlanCreator.DETERMINISTIC
+        assert tuple(step.step_id for step in first.steps) == (
+            "reproduce",
+            "inspect",
+            "verify",
+        )
+
+    def test_no_plan_is_created_when_selected_profile_skips_planning(self) -> None:
+        profile = _profile(family=TaskFamily.TRANSFORMATION).model_copy(
+            update={"planning_requirement": PlanningRequirement.NONE}
+        )
+        selection = TaskPolicyResolver([profile]).resolve_selection(
+            _request(server_selected_family=TaskFamily.TRANSFORMATION)
+        )
+
+        assert RunToolPlanFactory.create_for_selection(selection) is None
+
+
+class TestCanonicalFingerprints:
+    def test_request_result_evidence_and_error_domains_are_distinct(self) -> None:
+        key = b"k" * 32
+        request = RequestFingerprint(key=key).for_request(
+            capability_id="records.list",
+            arguments={"fields": ["name", "id"], "idempotency_key": "secret"},
+        )
+        reordered = RequestFingerprint(key=key).for_request(
+            capability_id="records.list",
+            arguments={"fields": ["id", "name"], "idempotency_key": "different"},
+        )
+        result = ResultFingerprint(key=key).for_result(
+            capability_id="records.list",
+            result_metadata={"count": 2},
+        )
+        evidence = EvidenceFingerprint(key=key).for_evidence(
+            source_kind="record",
+            source_identity={"record_id": "r-1"},
+        )
+        error = ErrorFingerprint(key=key).for_error(
+            capability_id="records.list",
+            request_fingerprint=request,
+            error_class="TIMEOUT",
+            retryable=False,
+        )
+
+        assert request == reordered
+        assert len({request, result, evidence, error}) == 4
+
+
+class TestRestartSafeReducer:
+    def test_rebuild_preserves_duplicate_budget_cost_and_progress_state(self) -> None:
+        profile = _profile(
+            limits={"web.search": 3},
+            enforce_duplicates=True,
+        ).model_copy(
+            update={
+                "model_turn_limit": 4,
+                "total_tool_call_limit": 3,
+                "cost_limit_microusd": 100,
+                "objective_evidence_threshold": 1,
+            }
+        )
+        intent = _intent(operation_id="op-1", fingerprint="a" * 64)
+        outcome = ToolOperationOutcome(
+            operation_id="op-1",
+            capability_id="web.search",
+            succeeded=True,
+            source_fingerprints=("b" * 64,),
+            evidence_fingerprint="c" * 64,
+            result_fingerprint="d" * 64,
+            cost_microusd=25,
+        )
+        records = (
+            TaskPolicyBudgetRecord(
+                budget_id="effective-1",
+                model_turn_limit=3,
+                total_tool_call_limit=2,
+                cost_limit_microusd=80,
+                deadline_at=datetime(2026, 7, 29, tzinfo=timezone.utc),
+            ),
+            ModelTurnRecord(turn_id="turn-1", cost_microusd=10),
+            intent,
+            outcome,
+            ToolUseFeedbackRecord(
+                decision_id="decision-1",
+                operation_id="op-1",
+                feedback=ToolUseFeedback(
+                    disposition=ToolUseDisposition.CONTINUE,
+                    reason_code="objective_satisfied",
+                    new_evidence_count=1,
+                ),
+            ),
+            ToolPlanProgressRecord(
+                progress_id="progress-1",
+                plan_id="plan-1",
+                completed_step_ids=("discover",),
+                evidence_count=1,
+                objective_satisfied=True,
+            ),
+        )
+
+        rebuilt = ToolUseController.rebuild(profile=profile, records=records)
+        reduced = TaskPolicyReducer.reduce(profile=profile, records=records)
+
+        assert rebuilt.state == reduced
+        assert rebuilt.state.model_turns == 1
+        assert rebuilt.state.tool_calls == 1
+        assert rebuilt.state.cost_microusd == 35
+        assert rebuilt.state.deadline_at == datetime(2026, 7, 29, tzinfo=timezone.utc)
+        assert rebuilt.state.objective_satisfied is True
+        duplicate = rebuilt.before_operation(
+            _intent(operation_id="op-2", fingerprint="a" * 64)
+        )
+        assert duplicate.disposition is ToolUseDisposition.STOP
+
+    def test_replay_detects_idempotency_conflicts(self) -> None:
+        intent = _intent(operation_id="op-1", fingerprint="a" * 64)
+        with pytest.raises(ValueError, match="operation_id"):
+            ToolUseController.rebuild(
+                profile=_profile(),
+                records=(
+                    intent,
+                    _intent(operation_id="op-1", fingerprint="b" * 64),
+                ),
+            )
+
+        controller = ToolUseController(profile=_profile())
+        assert (
+            controller.record_model_turn(ModelTurnRecord(turn_id="turn-1")).disposition
+            is ToolUseDisposition.CONTINUE
+        )
+        with pytest.raises(ValueError, match="turn_id"):
+            controller.record_model_turn(
+                ModelTurnRecord(turn_id="turn-1", cost_microusd=1)
+            )
+
+    def test_source_and_semantic_histories_are_bounded(self) -> None:
+        profile = _profile().model_copy(
+            update={
+                "max_source_history": 500,
+                "semantic_history_limit": 20,
+                "total_tool_call_limit": 1_000,
+            }
+        )
+        records: list[ToolUseIntent | ToolOperationOutcome] = []
+        for index in range(25):
+            fingerprint = f"{index:064x}"
+            records.append(
+                ToolUseIntent(
+                    operation_id=f"op-{index}",
+                    capability_id="web.search",
+                    canonical_request_fingerprint=fingerprint,
+                    semantic_fingerprint=fingerprint,
+                )
+            )
+            records.append(
+                ToolOperationOutcome(
+                    operation_id=f"op-{index}",
+                    capability_id="web.search",
+                    succeeded=True,
+                    source_fingerprints=tuple(
+                        f"{index * 25 + source:064x}" for source in range(25)
+                    ),
+                )
+            )
+
+        state = ToolUseController.rebuild(profile=profile, records=records).state
+
+        assert state.source_fingerprint_count == 500
+        assert state.semantic_history_count == 20
+
+
+class TestControllerHardAndAdvisoryRules:
+    def test_model_turn_cost_tool_and_deadline_limits_survive_rebuild(self) -> None:
+        now = datetime(2026, 7, 28, tzinfo=timezone.utc)
+        profile = _profile(limits={"web.search": 2}).model_copy(
+            update={
+                "model_turn_limit": 1,
+                "total_tool_call_limit": 1,
+                "cost_limit_microusd": 10,
+                "wall_time_limit_seconds": 60,
+            }
+        )
+        controller = ToolUseController(
+            profile=profile,
+            started_at=now,
+            clock=lambda: now,
+        )
+        assert (
+            controller.record_model_turn(
+                ModelTurnRecord(turn_id="turn-1", cost_microusd=10)
+            ).disposition
+            is ToolUseDisposition.CONTINUE
+        )
+        assert (
+            controller.record_model_turn(ModelTurnRecord(turn_id="turn-2")).reason_code
+            == "profile_model_turn_limit"
+        )
+        assert (
+            controller.before_operation(
+                _intent(operation_id="op-1", fingerprint="a" * 64)
+            ).disposition
+            is ToolUseDisposition.CONTINUE
+        )
+        assert (
+            controller.before_operation(
+                _intent(operation_id="op-2", fingerprint="b" * 64)
+            ).reason_code
+            == "profile_total_tool_call_limit"
+        )
+        expired = ToolUseController(
+            profile=profile,
+            started_at=now,
+            clock=lambda: now + timedelta(seconds=60),
+        )
+        assert (
+            expired.before_operation(
+                _intent(operation_id="late", fingerprint="c" * 64)
+            ).reason_code
+            == "profile_deadline_exhausted"
+        )
+
+    def test_semantic_low_yield_and_objective_rules_remain_advisory(self) -> None:
+        profile = _profile().model_copy(
+            update={
+                "low_yield_streak_threshold": 1,
+                "objective_evidence_threshold": 1,
+            }
+        )
+        controller = ToolUseController(profile=profile)
+        first = _intent(operation_id="op-1", fingerprint="a" * 64).model_copy(
+            update={"semantic_fingerprint": "1" * 64}
+        )
+        assert controller.before_operation(first).reason_code == "admitted"
+        objective = controller.after_operation(
+            ToolOperationOutcome(
+                operation_id="op-1",
+                capability_id="web.search",
+                succeeded=True,
+                source_fingerprints=("2" * 64,),
+            )
+        )
+        assert objective.disposition is ToolUseDisposition.CONTINUE
+        assert objective.reason_code == "objective_satisfied"
+
+        overlapping = _intent(operation_id="op-2", fingerprint="b" * 64).model_copy(
+            update={"semantic_fingerprint": "1" * 64}
+        )
+        semantic = controller.before_operation(overlapping)
+        assert semantic.disposition is ToolUseDisposition.CONTINUE
+        assert semantic.reason_code == "semantic_query_overlap"
+        low_yield = controller.after_operation(
+            ToolOperationOutcome(
+                operation_id="op-2",
+                capability_id="web.search",
+                succeeded=True,
+                source_fingerprints=("2" * 64,),
+            )
+        )
+        assert low_yield.disposition is ToolUseDisposition.CONTINUE
+        assert low_yield.reason_code == "objective_satisfied"
+
+        low_yield_controller = ToolUseController(
+            profile=_profile().model_copy(update={"low_yield_streak_threshold": 1})
+        )
+        assert (
+            low_yield_controller.before_operation(
+                _intent(operation_id="low-1", fingerprint="d" * 64)
+            ).disposition
+            is ToolUseDisposition.CONTINUE
+        )
+        first_sources = low_yield_controller.after_operation(
+            ToolOperationOutcome(
+                operation_id="low-1",
+                capability_id="web.search",
+                succeeded=True,
+                source_fingerprints=("3" * 64,),
+            )
+        )
+        assert first_sources.reason_code == "new_evidence"
+        assert (
+            low_yield_controller.before_operation(
+                _intent(operation_id="low-2", fingerprint="e" * 64)
+            ).disposition
+            is ToolUseDisposition.CONTINUE
+        )
+        repeated_sources = low_yield_controller.after_operation(
+            ToolOperationOutcome(
+                operation_id="low-2",
+                capability_id="web.search",
+                succeeded=True,
+                source_fingerprints=("3" * 64,),
+            )
+        )
+        assert repeated_sources.disposition is ToolUseDisposition.CONTINUE
+        assert repeated_sources.reason_code == "same_sources_no_new_evidence"

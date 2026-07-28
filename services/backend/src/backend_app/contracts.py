@@ -196,6 +196,59 @@ class McpServerHealth(StrEnum):
     DISABLED = "disabled"
 
 
+class McpRevisionReason(StrEnum):
+    """Why an MCP descriptor view changed or became unusable.
+
+    Values are deliberately operational only: they never disclose endpoint,
+    token, OAuth, or descriptor-body material to the runtime feed.
+    """
+
+    CONFIG_CHANGED = "config_changed"
+    AUTH_CHANGED = "auth_changed"
+    TRANSPORT_CHANGED = "transport_changed"
+    TOOL_FILTER_CHANGED = "tool_filter_changed"
+    SERVER_DELETED = "server_deleted"
+    DESCRIPTOR_OBSERVED = "descriptor_observed"
+
+
+class McpDescriptorRevision(BackendContract):
+    """Body-free, complete descriptor view owned by the MCP registry."""
+
+    server_id: str
+    profile_id: str
+    subject_scope_hash: str
+    revision: str
+    config_generation: int = Field(ge=0)
+    auth_generation: int = Field(ge=0)
+    transport_generation: int = Field(ge=0)
+    tool_filter_generation: int = Field(ge=0)
+    tool_count: int = Field(ge=0)
+    resource_count: int = Field(ge=0)
+    descriptor_digest: str
+    observed_at: datetime
+    source: str
+
+
+class McpDescriptorRevisionNotice(BackendContract):
+    """Append-only invalidation/feed record; intentionally descriptor-body free."""
+
+    cursor: str
+    notice_id: str
+    sequence_no: int = Field(ge=1)
+    server_id: str
+    profile_id: str
+    subject_scope_hash: str
+    old_revision: str | None = None
+    new_revision: str | None = None
+    reason: McpRevisionReason
+    occurred_at: datetime
+
+
+class McpDescriptorRevisionFeed(BackendContract):
+    notices: tuple[McpDescriptorRevisionNotice, ...] = ()
+    next_cursor: str | None = None
+
+
 class SkillScope(StrEnum):
     USER = "user"
     ORG = "org"
@@ -816,16 +869,15 @@ class InternalMcpAuthRequest(BackendContract):
 
 
 class InternalMcpClientSession(BackendContract):
-    server_id: str
-    url: str
-    transport: McpTransport
-    auth_state: McpAuthState
-    credential_ref: str | None = None
+    """Opaque backend lease; no transport, endpoint, or credential facts."""
+
+    lease: str = Field(min_length=16, max_length=512)
 
 
 class InternalMcpRpcRequest(BackendContract):
     org_id: str
     user_id: str
+    lease: str = Field(min_length=16, max_length=512)
     payload: dict[str, Any]
 
     @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
@@ -839,6 +891,44 @@ class InternalMcpRpcRequest(BackendContract):
         if not value:
             raise ValueError("payload must not be empty")
         return value
+
+
+class InternalMcpSessionReleaseRequest(BackendContract):
+    org_id: str
+    user_id: str
+    lease: str = Field(min_length=16, max_length=512)
+    cancel: bool = False
+
+    @field_validator(_Fields.ORG_ID, _Fields.USER_ID)
+    @classmethod
+    def _normalize_id(cls, value: object) -> str:
+        return Validators.normalize_id(value)
+
+
+class InternalMcpSessionReleaseResponse(BackendContract):
+    outcome: str
+
+
+class InternalMcpLeaseFailureCode(StrEnum):
+    LEASE_STALE_PRE_DISPATCH = "lease_stale_pre_dispatch"
+    LEASE_WRONG_OWNER = "lease_wrong_owner"
+    LEASE_INVALID = "lease_invalid"
+    POOL_SATURATED = "pool_saturated"
+    SERVER_UNAVAILABLE = "server_unavailable"
+    AUTH_REQUIRED = "auth_required"
+    AMBIGUOUS_TRANSPORT_FAILURE = "ambiguous_transport_failure"
+
+
+class InternalMcpLeaseFailure(BackendContract):
+    code: InternalMcpLeaseFailureCode
+    redispatch_safe: bool
+
+    @model_validator(mode="after")
+    def _bound_redispatch_safety(self) -> InternalMcpLeaseFailure:
+        expected = self.code is InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+        if self.redispatch_safe is not expected:
+            raise ValueError("only a pre-dispatch stale lease is safe to redispatch")
+        return self
 
 
 class InternalMcpRpcResponse(BackendContract):

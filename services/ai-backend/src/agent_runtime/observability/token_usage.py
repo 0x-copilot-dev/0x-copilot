@@ -55,6 +55,9 @@ class NormalizedTokenUsage(BaseModel):
     reasoning_tokens: NonNegativeInt = 0
     audio_input_tokens: NonNegativeInt = 0
     audio_output_tokens: NonNegativeInt = 0
+    # True only when a recognized cache field was present in provider usage
+    # metadata. Zero cache tokens without this bit must never be called a miss.
+    provider_cache_metadata_observed: bool = False
 
     @computed_field  # type: ignore[misc]
     @property
@@ -89,6 +92,10 @@ class NormalizedTokenUsage(BaseModel):
             audio_input_tokens=max(self.audio_input_tokens, other.audio_input_tokens),
             audio_output_tokens=max(
                 self.audio_output_tokens, other.audio_output_tokens
+            ),
+            provider_cache_metadata_observed=(
+                self.provider_cache_metadata_observed
+                or other.provider_cache_metadata_observed
             ),
         )
 
@@ -279,6 +286,11 @@ class _LcdFallbackExtractor:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cached_input_tokens=cached,
+            provider_cache_metadata_observed=_cache_detail_field_observed(
+                block,
+                (cls._F.PROMPT_DETAILS, cls._F.INPUT_DETAILS),
+                ("cached_tokens", "cache_read"),
+            ),
         )
 
 
@@ -361,6 +373,11 @@ class OpenAIProviderTokenUsageExtractor:
             reasoning_tokens=reasoning,
             audio_input_tokens=audio_input,
             audio_output_tokens=audio_output,
+            provider_cache_metadata_observed=_cache_detail_field_observed(
+                block,
+                cls._INPUT_DETAIL_KEYS,
+                (cls._F.CACHED_TOKENS, cls._F.CACHE_READ),
+            ),
         )
 
 
@@ -431,6 +448,22 @@ class AnthropicProviderTokenUsageExtractor:
             cached_input_tokens=cache_read,
             cache_creation_input_tokens=cache_creation,
             reasoning_tokens=reasoning,
+            provider_cache_metadata_observed=(
+                _cache_top_level_field_observed(
+                    block,
+                    (
+                        cls._F.CACHE_CREATION,
+                        cls._F.CACHE_CREATION_SHORT,
+                        cls._F.CACHE_READ_INPUT,
+                        cls._F.CACHE_READ_SHORT,
+                    ),
+                )
+                or _cache_detail_field_observed(
+                    block,
+                    (cls._F.INPUT_DETAILS,),
+                    (cls._F.CACHE_READ_SHORT,),
+                )
+            ),
         )
 
 
@@ -558,3 +591,44 @@ def _detail_int(
         if value > 0:
             return value
     return 0
+
+
+def _cache_top_level_field_observed(
+    block: Mapping[str, object],
+    field_names: tuple[str, ...],
+) -> bool:
+    """Return whether a provider supplied a valid cache counter, including 0."""
+
+    return any(
+        field in block and _is_non_negative_number(block[field])
+        for field in field_names
+    )
+
+
+def _cache_detail_field_observed(
+    block: Mapping[str, object],
+    detail_keys: tuple[str, ...],
+    field_names: tuple[str, ...],
+) -> bool:
+    """Return whether a recognized details block supplied a cache counter."""
+
+    for detail_key in detail_keys:
+        details = block.get(detail_key)
+        if not isinstance(details, Mapping):
+            continue
+        normalized = {str(key): value for key, value in details.items()}
+        if any(
+            field in normalized and _is_non_negative_number(normalized[field])
+            for field in field_names
+        ):
+            return True
+    return False
+
+
+def _is_non_negative_number(value: object) -> bool:
+    if isinstance(value, bool):
+        return False
+    return bool(
+        (isinstance(value, int) and value >= 0)
+        or (isinstance(value, float) and value >= 0 and value.is_integer())
+    )

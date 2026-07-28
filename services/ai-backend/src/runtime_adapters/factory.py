@@ -15,6 +15,11 @@ from agent_runtime.api.artifact_repository import (
     ArtifactSourceLookupPort,
     RuntimeArtifactSourceLookup,
 )
+from agent_runtime.api.run_control_store import EventJournalRunControlStore
+from agent_runtime.api.model_invocation_store import EventJournalModelInvocationStore
+from agent_runtime.api.prompt_observation_store import (
+    EventJournalPromptObservationStore,
+)
 from agent_runtime.api.ports import (
     EventStorePort,
     PersistencePort,
@@ -28,6 +33,16 @@ from agent_runtime.artifacts.ports import (
 )
 from agent_runtime.execution.contracts import RuntimeErrorCode
 from agent_runtime.execution.errors import AgentRuntimeError
+from agent_runtime.harness_quality.ports import (
+    EvaluationObjectDeletionPolicy,
+    EvaluationRepositoryPort,
+)
+from agent_runtime.control_plane.ports import (
+    RunControlDecisionStorePort,
+    RunControlSnapshotStorePort,
+)
+from agent_runtime.prompts.observation import PromptObservationStorePort
+from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
 from agent_runtime.persistence.ports import (
     CitationStorePort,
     ConversationToolOrdinalStorePort,
@@ -62,6 +77,9 @@ from runtime_adapters.in_memory.conversation_tool_ordinal_store import (
     InMemoryConversationToolOrdinalStore,
 )
 from runtime_adapters.in_memory.draft_store import InMemoryDraftStore
+from runtime_adapters.in_memory.evaluation_repository import (
+    InMemoryEvaluationRepository,
+)
 from runtime_adapters.in_memory.share_store import InMemoryShareStore
 from runtime_adapters.in_memory.source_store import InMemorySourceStore
 from runtime_adapters.in_memory.subagent_store import InMemorySubagentStore
@@ -142,6 +160,16 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         compaction_enabled=compaction_enabled,
     )
     layout = file_store.layout
+    from runtime_adapters.file.evaluation_repository import FileEvaluationRepository
+
+    evaluation_repository = FileEvaluationRepository(
+        layout,
+        object_store=file_store.object_store,
+        object_deletion_policy=EvaluationObjectDeletionPolicy.SHARED_STORE_METADATA_ONLY,
+    )
+    file_store.configure_external_object_references(evaluation_repository)
+    file_store.configure_source_run_deletion_observer(evaluation_repository)
+    run_control_store = EventJournalRunControlStore(file_store)
     citation_store = FileCitationStore(layout)
     bundle = None
     queue: RuntimeQueuePort = file_store
@@ -185,9 +213,20 @@ def _build_file_ports(settings: RuntimeSettings) -> "RuntimePorts":
         draft_store=FileDraftStore(layout),
         share_store=FileShareStore(layout),
         conversation_tool_ordinal_store=FileConversationToolOrdinalStore(layout),
+        run_control_snapshot_store=run_control_store,
+        run_control_decision_store=run_control_store,
+        prompt_observation_store=EventJournalPromptObservationStore(
+            events=file_store,
+            snapshots=run_control_store,
+        ),
+        model_invocation_store=EventJournalModelInvocationStore(
+            events=file_store,
+            snapshots=run_control_store,
+        ),
         # Pure projectors over the file store's file-backed materialized view.
         subagent_store=InMemorySubagentStore(file_store),
         source_store=InMemorySourceStore(citation_store),
+        evaluation_repository=evaluation_repository,
         # The DURABLE FileCitationStore — the SAME instance source_store reads —
         # is now the write-side port too, so run citations persist to disk
         # instead of an ephemeral in-memory sibling.
@@ -234,8 +273,16 @@ class RuntimePorts:
     draft_store: DraftStorePort
     share_store: ShareStorePort
     conversation_tool_ordinal_store: ConversationToolOrdinalStorePort
+    run_control_snapshot_store: RunControlSnapshotStorePort
+    run_control_decision_store: RunControlDecisionStorePort
+    prompt_observation_store: PromptObservationStorePort
+    model_invocation_store: ModelInvocationStorePort
     subagent_store: SubagentStorePort
     source_store: SourceStorePort
+    # F1 local evaluation/release spine. In-memory is test/dev only; desktop
+    # and explicitly configured shared deployments use the bounded file/CAS
+    # adapter.
+    evaluation_repository: EvaluationRepositoryPort | None = None
     # Postgres-only escape hatch. Populated only when ``backend == "postgres"``
     # so the opt-in ``DbStatementMetricsCollector`` can reach the pool via
     # ``_role_connection``. Every other consumer should use the typed ports
@@ -358,6 +405,7 @@ class RuntimeAdapterFactory:
         constructed so they share no state with other test instances.
         """
         in_memory_citation = InMemoryCitationStore()
+        run_control_store = EventJournalRunControlStore(store)
         bundle = cls._in_memory_artifact_bundle() if artifact_effects_v2 else None
         queue: RuntimeQueuePort = store
         if bundle is not None:
@@ -372,10 +420,21 @@ class RuntimeAdapterFactory:
             draft_store=InMemoryDraftStore(),
             share_store=InMemoryShareStore(),
             conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
+            run_control_snapshot_store=run_control_store,
+            run_control_decision_store=run_control_store,
+            prompt_observation_store=EventJournalPromptObservationStore(
+                events=store,
+                snapshots=run_control_store,
+            ),
+            model_invocation_store=EventJournalModelInvocationStore(
+                events=store,
+                snapshots=run_control_store,
+            ),
             subagent_store=InMemorySubagentStore(store),
             # One citation store shared by the read-side projector and the
             # write-side port, so a run's citations are visible to Sources.
             source_store=InMemorySourceStore(in_memory_citation),
+            evaluation_repository=InMemoryEvaluationRepository(),
             citation_store=in_memory_citation,
             artifact_source_lookup=RuntimeArtifactSourceLookup(store),
             artifact_effects_v2=artifact_effects_v2,
@@ -411,6 +470,7 @@ class RuntimeAdapterFactory:
         # route to the async-native InMemoryRuntimeApiStore.
         if backend in {"in_memory_async", "in_memory"}:
             in_memory_store = InMemoryRuntimeApiStore()
+            run_control_store = EventJournalRunControlStore(in_memory_store)
             in_memory_citation = InMemoryCitationStore()
             bundle = (
                 cls._in_memory_artifact_bundle()
@@ -432,9 +492,20 @@ class RuntimeAdapterFactory:
                 draft_store=InMemoryDraftStore(),
                 share_store=InMemoryShareStore(),
                 conversation_tool_ordinal_store=InMemoryConversationToolOrdinalStore(),
+                run_control_snapshot_store=run_control_store,
+                run_control_decision_store=run_control_store,
+                prompt_observation_store=EventJournalPromptObservationStore(
+                    events=in_memory_store,
+                    snapshots=run_control_store,
+                ),
+                model_invocation_store=EventJournalModelInvocationStore(
+                    events=in_memory_store,
+                    snapshots=run_control_store,
+                ),
                 subagent_store=InMemorySubagentStore(in_memory_store),
                 # Shared instance: read-side projector and write-side port agree.
                 source_store=InMemorySourceStore(in_memory_citation),
+                evaluation_repository=InMemoryEvaluationRepository(),
                 citation_store=in_memory_citation,
                 artifact_source_lookup=RuntimeArtifactSourceLookup(in_memory_store),
                 artifact_effects_v2=settings.execution.artifact_effects_v2,
@@ -480,6 +551,7 @@ class RuntimeAdapterFactory:
                 role=role,
                 notify_after_append=notify_after_append,
             )
+            run_control_store = EventJournalRunControlStore(postgres_store)
             bundle = (
                 cls._postgres_artifact_bundle(postgres_store, artifact_blob_root or "")
                 if settings.execution.artifact_effects_v2
@@ -498,8 +570,19 @@ class RuntimeAdapterFactory:
                 conversation_tool_ordinal_store=PostgresConversationToolOrdinalStore(
                     postgres_store
                 ),
+                run_control_snapshot_store=run_control_store,
+                run_control_decision_store=run_control_store,
+                prompt_observation_store=EventJournalPromptObservationStore(
+                    events=postgres_store,
+                    snapshots=run_control_store,
+                ),
+                model_invocation_store=EventJournalModelInvocationStore(
+                    events=postgres_store,
+                    snapshots=run_control_store,
+                ),
                 subagent_store=PostgresSubagentStore(postgres_store),
                 source_store=PostgresSourceStore(postgres_store),
+                evaluation_repository=cls._shared_evaluation_repository(settings),
                 postgres_store=postgres_store,
                 # The Postgres store IS a CitationStorePort — same instance the
                 # worker resolved historically, so write behavior is unchanged.
@@ -530,6 +613,46 @@ class RuntimeAdapterFactory:
             "Use 'in_memory_async', 'postgres', or 'file'.",
             retryable=False,
         )
+
+    @staticmethod
+    def _shared_evaluation_repository(
+        settings: RuntimeSettings,
+    ) -> EvaluationRepositoryPort | None:
+        """Compose a multi-process-safe file/CAS repository only on an explicit root."""
+
+        root = settings.store.evaluation_store_root
+        if root is None:
+            if settings.evaluation.projection_enabled:
+                raise AgentRuntimeError(
+                    RuntimeErrorCode.CONFIGURATION_ERROR,
+                    "RUNTIME_EVALUATION_STORE_ROOT is required when evaluation "
+                    "projection is enabled with the Postgres runtime store.",
+                    retryable=False,
+                )
+            return None
+        path = Path(root)
+        if not path.is_absolute() or path == Path("/"):
+            raise AgentRuntimeError(
+                RuntimeErrorCode.CONFIGURATION_ERROR,
+                "RUNTIME_EVALUATION_STORE_ROOT must be an explicit absolute root.",
+                retryable=False,
+            )
+        from runtime_adapters.file._paths import FileStoreLayout
+        from runtime_adapters.file._capacity import QuotaGuard
+        from runtime_adapters.file.evaluation_repository import (
+            FileEvaluationRepository,
+        )
+        from runtime_adapters.file.object_store import FileObjectStore
+
+        layout = FileStoreLayout(path)
+        object_store = FileObjectStore(
+            layout,
+            quota=QuotaGuard(
+                layout,
+                max_bytes=settings.store.evaluation_store_max_bytes,
+            ),
+        )
+        return FileEvaluationRepository(layout, object_store=object_store)
 
     @staticmethod
     def _postgres_artifact_bundle(parent, root: str) -> ArtifactRepositoryBundle:

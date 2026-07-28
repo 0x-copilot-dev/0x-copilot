@@ -9,14 +9,13 @@ from agent_runtime.capabilities.citation_capturing_tool import (
     CitationCapturingRegistry,
 )
 from agent_runtime.capabilities.mcp.backend_provider import BackendMcpProvider
-from agent_runtime.capabilities.mcp.discovery_cache import McpDiscoveryCache
+from agent_runtime.capabilities.mcp.freshness import RevisionAwareMcpDiscoveryCache
 from agent_runtime.capabilities.mcp.registry import DynamicMcpRegistry
 from agent_runtime.capabilities.skills.sources import SkillSource, SkillSourceConfig
 from agent_runtime.capabilities.skills.virtual import (
     BackendSkillProvider,
     VirtualSkillRegistry,
 )
-from agent_runtime.capabilities.tool_budget_guard import ToolBudgetGuardedRegistry
 from agent_runtime.capabilities.tool_error_policy_tool import (
     ToolErrorPolicyRegistry,
 )
@@ -136,7 +135,7 @@ class DefaultRuntimeDependenciesFactory:
         self,
         settings: RuntimeSettings | None = None,
         *,
-        mcp_discovery_cache: McpDiscoveryCache | None = None,
+        mcp_discovery_cache: object | None = None,
     ) -> None:
         """Load runtime settings; falls back to ``RuntimeSettings.load()`` when ``settings`` is ``None``."""
         self.settings = settings or RuntimeSettings.load()
@@ -182,9 +181,9 @@ class DefaultRuntimeDependenciesFactory:
     ) -> RuntimeDependencies:
         """Build and return the full ``RuntimeDependencies`` graph for a worker run.
 
-        Tool registries are composed outermost-to-innermost:
-        ``ToolErrorPolicyRegistry`` → ``ToolBudgetGuardedRegistry`` →
-        ``CitationCapturingRegistry`` → ``WebSearchToolRegistry``.
+        Tool registries retain tool-specific citation and error adapters. The
+        graph-wide runtime middleware owns budget/task/result controls because
+        Deep Agents injects additional tools after registry assembly.
         """
         self._validate_capability_mode(context)
         mcp_registry = self._mcp_registry(
@@ -193,9 +192,7 @@ class DefaultRuntimeDependenciesFactory:
             rollout_facts=rollout_facts,
         )
         tool_registry = ToolErrorPolicyRegistry(
-            inner=ToolBudgetGuardedRegistry(
-                inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
-            )
+            inner=CitationCapturingRegistry(inner=WebSearchToolRegistry())
         )
         # Single gate read per run: on the desktop file store this returns the
         # wiring that persists memory / skills / subagent defs as files; on the
@@ -235,42 +232,22 @@ class DefaultRuntimeDependenciesFactory:
         return wiring if wiring.active else None
 
     @classmethod
-    def build_default_discovery_cache(cls) -> McpDiscoveryCache:
-        """Build a :class:`McpDiscoveryCache` configured from env vars.
+    def build_default_discovery_cache(
+        cls,
+        settings: RuntimeSettings | None = None,
+    ) -> RevisionAwareMcpDiscoveryCache:
+        """Compatibility facade returning the worker assembly's only cache.
 
-        Reads ``RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS`` (default 900) and
-        ``RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES`` (default 1000). Used by
-        the worker process entrypoint so each worker gets its own cache.
+        New composition roots use :class:`McpRevisionControlPlaneBuilder` so
+        the cache, resolver, feed, and lifecycle remain one ownership graph.
+        This legacy test seam intentionally retains the old return type.
         """
 
-        import os
-
-        def _positive_float(env_name: str, default: float) -> float:
-            raw = os.environ.get(env_name, "").strip()
-            if not raw:
-                return default
-            try:
-                parsed = float(raw)
-            except ValueError:
-                return default
-            return parsed if parsed > 0 else default
-
-        def _positive_int(env_name: str, default: int) -> int:
-            raw = os.environ.get(env_name, "").strip()
-            if not raw:
-                return default
-            try:
-                parsed = int(raw)
-            except ValueError:
-                return default
-            return parsed if parsed > 0 else default
-
-        return McpDiscoveryCache(
-            ttl_seconds=_positive_float(
-                "RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS", 900.0
-            ),
-            max_entries=_positive_int("RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES", 1000),
+        from runtime_worker.mcp_revision_composition import (  # noqa: PLC0415
+            McpRevisionControlPlaneBuilder,
         )
+
+        return McpRevisionControlPlaneBuilder.build(settings).discovery_cache
 
     def _skill_source_config(
         self, file_agent_wiring: object | None = None

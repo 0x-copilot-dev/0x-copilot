@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
@@ -23,16 +24,24 @@ from agent_runtime.capabilities.tool_budget_middleware import (
     ToolBudgetWarn,
 )
 from agent_runtime.capabilities.task_policy import (
-    RequestFingerprint,
+    ToolUseController,
     ToolOperationOutcome,
     ToolPolicyRejected,
-    ToolUseController,
     ToolUseDisposition,
+    ToolUseFeedback,
     ToolUseIntent,
 )
+from agent_runtime.control_plane.context import (
+    TaskPolicyControllerPort,
+    TaskPolicyFingerprintPort,
+    TaskPolicyProgressProjection,
+    TaskPolicyRuntimeBinding,
+)
+from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.capabilities.tool_result_notes import ToolResultNote
 from agent_runtime.context.tool_result_admission import ToolResultAdmissionAdapter
 from agent_runtime.execution.contracts import StreamEventSource
+from agent_runtime.execution.call_identity import RuntimeCallContext
 from agent_runtime.execution.tool_errors import BudgetExceeded, ToolBudgetRejected
 from runtime_api.schemas import RuntimeApiEventType, RunRecord
 
@@ -67,6 +76,40 @@ class _Limits:
     """
 
 
+class _BudgetLedgerView:
+    """Overlay durable pre-resume spend on the live invocation ledger."""
+
+    def __init__(
+        self,
+        *,
+        ledger: "ToolCallLedger",
+        prior_progress: TaskPolicyProgressProjection | None,
+    ) -> None:
+        self._ledger = ledger
+        self._prior_calls = {
+            item.capability_id: int(item.tool_calls_used)
+            for item in (
+                prior_progress.capabilities if prior_progress is not None else ()
+            )
+        }
+        self._prior_input_tokens = {
+            item.capability_id: int(item.input_tokens_used)
+            for item in (
+                prior_progress.capabilities if prior_progress is not None else ()
+            )
+        }
+
+    def charged_calls(self, tool_name: str) -> int:
+        return self._prior_calls.get(tool_name, 0) + self._ledger.charged_calls(
+            tool_name
+        )
+
+    def total_input_tokens(self, tool_name: str) -> int:
+        return self._prior_input_tokens.get(
+            tool_name, 0
+        ) + self._ledger.total_input_tokens(tool_name)
+
+
 class ToolBudgetGuard:
     """Per-run holder for the budget middleware, the call ledger, and the optional event producer."""
 
@@ -78,8 +121,11 @@ class ToolBudgetGuard:
         run: RunRecord | None = None,
         event_producer: object | None = None,
         max_surfaced_rejections: int | None = None,
-        task_policy_controller: ToolUseController | None = None,
-        task_request_fingerprint: RequestFingerprint | None = None,
+        task_policy_controller: TaskPolicyControllerPort | None = None,
+        task_request_fingerprint: TaskPolicyFingerprintPort | None = None,
+        task_policy_binding: TaskPolicyRuntimeBinding | None = None,
+        task_policy_mode: FeatureMode = FeatureMode.ENFORCE,
+        prior_task_policy_progress: TaskPolicyProgressProjection | None = None,
         tool_result_admission: ToolResultAdmissionAdapter | None = None,
     ) -> None:
         """Initialise the guard with a middleware, ledger, and optional event emitter."""
@@ -96,12 +142,31 @@ class ToolBudgetGuard:
             else max_surfaced_rejections
         )
         self._surfaced_rejections = 0
+        if task_policy_binding is not None and (
+            task_policy_controller is not None or task_request_fingerprint is not None
+        ):
+            raise ValueError(
+                "task_policy_binding cannot be combined with legacy controller inputs"
+            )
+        if task_policy_binding is not None:
+            task_policy_controller = task_policy_binding.controller
+            task_request_fingerprint = task_policy_binding.fingerprinter
+            task_policy_mode = task_policy_binding.mode
+            prior_task_policy_progress = task_policy_binding.progress()
         if (task_policy_controller is None) != (task_request_fingerprint is None):
             raise ValueError(
                 "task_policy_controller and task_request_fingerprint must be provided together"
             )
+        if task_policy_mode is FeatureMode.OFF and task_policy_controller is not None:
+            raise ValueError("off task-policy mode cannot bind a controller")
         self._task_policy_controller = task_policy_controller
         self._task_request_fingerprint = task_request_fingerprint
+        self._task_policy_mode = task_policy_mode
+        self._prior_task_policy_progress = prior_task_policy_progress
+        self._budget_ledger = _BudgetLedgerView(
+            ledger=ledger,
+            prior_progress=prior_task_policy_progress,
+        )
         self._tool_result_admission = tool_result_admission
 
     @classmethod
@@ -128,7 +193,7 @@ class ToolBudgetGuard:
         """Resolve the per-tool budget against the live ledger."""
 
         return self._middleware.check_admit(
-            ledger=self._ledger,
+            ledger=self._budget_ledger,  # type: ignore[arg-type]
             tool_name=tool_name,
             estimated_input_tokens=estimated_input_tokens,
         )
@@ -176,7 +241,8 @@ class ToolBudgetGuard:
     def record_started(self, *, tool_name: str, estimated_input_tokens: int) -> str:
         """Open a ledger entry for an admitted call. Returns the call id."""
 
-        call_id = uuid4().hex
+        identity = RuntimeCallContext.current()
+        call_id = identity.control_call_id if identity is not None else uuid4().hex
         self._ledger.started(
             call_id,
             tool_name=tool_name,
@@ -209,7 +275,10 @@ class ToolBudgetGuard:
         in sight, and a note on every result is context spent for nothing.
         """
 
-        usage = self._middleware.usage(ledger=self._ledger, tool_name=tool_name)
+        usage = self._middleware.usage(
+            ledger=self._budget_ledger,  # type: ignore[arg-type]
+            tool_name=tool_name,
+        )
         if usage is None or not usage.should_notify:
             return None
         return usage.render_note()
@@ -232,6 +301,28 @@ class ToolBudgetGuard:
             projection_key=self._run.run_id if self._run is not None else None,
         ).model_content
 
+    def admit_model_visible_result(
+        self,
+        result: object,
+        *,
+        tool_name: str,
+        call_id: str,
+    ) -> object:
+        """Annotate and bound one exact result before model-context admission."""
+
+        note = self.usage_note(tool_name=tool_name)
+        annotated = result
+        if note is not None:
+            try:
+                annotated = ToolResultNote.append(
+                    result,
+                    note=note,
+                    dict_key=_TOOL_BUDGET_NOTE_KEY,
+                )
+            except Exception:  # noqa: BLE001 - optional annotation fails soft.
+                _LOGGER.warning("tool_budget_note_failed", exc_info=True)
+        return self.admit_tool_result(annotated, call_id=call_id)
+
     def admit_task_policy(
         self,
         *,
@@ -252,22 +343,299 @@ class ToolBudgetGuard:
         if controller is None or fingerprinter is None:
             return None
         try:
-            fingerprint = fingerprinter.for_request(
-                capability_id=tool_name,
-                arguments={"args": list(args), "kwargs": kwargs},
-            )
-            intent = ToolUseIntent(
-                operation_id=f"tool-policy-{uuid4().hex}",
-                capability_id=tool_name,
-                canonical_request_fingerprint=fingerprint,
+            intent = self._task_policy_intent(
+                tool_name=tool_name,
+                args=args,
+                kwargs=kwargs,
             )
             feedback = controller.before_operation(intent)
+            if inspect.isawaitable(feedback):
+                self._close_awaitable(feedback)
+                raise RuntimeError(
+                    "async task-policy controller used from synchronous tool seam"
+                )
         except Exception:  # noqa: BLE001 - optional controller fails open.
             _LOGGER.warning("task_policy_before_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
             return None
-        if feedback.disposition is not ToolUseDisposition.CONTINUE:
-            raise ToolPolicyRejected(self._task_policy_message(feedback.disposition))
+        self._enforce_task_policy_feedback(feedback)
+        if (
+            self._task_policy_mode is FeatureMode.SHADOW
+            and feedback.disposition is not ToolUseDisposition.CONTINUE
+            and isinstance(controller, ToolUseController)
+        ):
+            controller.observe_dispatched(intent)
         return intent
+
+    @staticmethod
+    async def aadmit_task_policy_for_async_dispatch(
+        guard: object,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> ToolUseIntent | None:
+        """Bridge the canonical async seam to legacy sync-only guards.
+
+        ``ToolBudgetGuard.aadmit_task_policy`` is the production path.  Its
+        await is what makes a durable F4 controller persist its admission
+        before the graph dispatches the inner tool.  Some compatibility
+        adapters and focused test guards predate that asynchronous boundary
+        and intentionally expose only ``admit_task_policy``.  Calling that
+        one synchronous method is still one canonical admission; the guarded
+        tool wrapper observes the already-bound :class:`RuntimeCallContext`
+        and remains dormant, so it cannot charge or admit a second time.
+
+        This is deliberately a narrow structural adapter rather than a broad
+        exception fallback.  If a guard advertises the async contract, it
+        must return an awaitable; otherwise the composition is invalid.
+        """
+
+        async_admit = getattr(guard, "aadmit_task_policy", None)
+        if callable(async_admit):
+            admission = async_admit(
+                tool_name=tool_name,
+                args=args,
+                kwargs=kwargs,
+            )
+            if not inspect.isawaitable(admission):
+                raise TypeError(
+                    "aadmit_task_policy must return an awaitable from the "
+                    "canonical async tool-dispatch seam"
+                )
+            return cast(ToolUseIntent | None, await admission)
+
+        sync_admit = getattr(guard, "admit_task_policy", None)
+        if not callable(sync_admit):
+            raise TypeError(
+                "active tool budget guard must implement "
+                "aadmit_task_policy or admit_task_policy"
+            )
+        return cast(
+            ToolUseIntent | None,
+            sync_admit(
+                tool_name=tool_name,
+                args=args,
+                kwargs=kwargs,
+            ),
+        )
+
+    async def aadmit_task_policy(
+        self,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> ToolUseIntent | None:
+        """Async production admission with durable-controller support."""
+
+        controller = self._task_policy_controller
+        if controller is None or self._task_request_fingerprint is None:
+            return None
+        try:
+            intent = self._task_policy_intent(
+                tool_name=tool_name,
+                args=args,
+                kwargs=kwargs,
+            )
+            feedback = controller.before_operation(intent)
+            if inspect.isawaitable(feedback):
+                feedback = await feedback
+        except Exception:  # noqa: BLE001 - existing hard gates remain active.
+            _LOGGER.warning("task_policy_before_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
+            return None
+        self._enforce_task_policy_feedback(feedback)
+        if (
+            self._task_policy_mode is FeatureMode.SHADOW
+            and feedback.disposition is not ToolUseDisposition.CONTINUE
+            and isinstance(controller, ToolUseController)
+        ):
+            controller.observe_dispatched(intent)
+        return intent
+
+    @staticmethod
+    async def arecord_task_policy_outcome_for_async_dispatch(
+        guard: object,
+        *,
+        intent: ToolUseIntent | None,
+        succeeded: bool,
+        error_class: str | None = None,
+        result: object | None = None,
+        retryable: bool = False,
+    ) -> None:
+        """Bridge async completion recording to a legacy sync-only guard.
+
+        This mirrors :meth:`aadmit_task_policy_for_async_dispatch` for the
+        other half of the same lifecycle.  A real ``ToolBudgetGuard`` always
+        uses its async method so durable outcome state is written before the
+        canonical middleware returns.  A legacy guard can remain sync-only
+        without changing admission cardinality or call identity.
+        """
+
+        arguments = {
+            "intent": intent,
+            "succeeded": succeeded,
+            "error_class": error_class,
+            "result": result,
+            "retryable": retryable,
+        }
+        async_record = getattr(guard, "arecord_task_policy_outcome", None)
+        if callable(async_record):
+            completion = async_record(**arguments)
+            if not inspect.isawaitable(completion):
+                raise TypeError(
+                    "arecord_task_policy_outcome must return an awaitable "
+                    "from the canonical async tool-dispatch seam"
+                )
+            await completion
+            return
+
+        sync_record = getattr(guard, "record_task_policy_outcome", None)
+        if not callable(sync_record):
+            raise TypeError(
+                "active tool budget guard must implement "
+                "arecord_task_policy_outcome or record_task_policy_outcome"
+            )
+        sync_record(**arguments)
+
+    def observe_upstream_policy_block(
+        self,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
+        """Record one F4 decision after user policy blocks, without charging budget."""
+
+        observer, intent = self._upstream_policy_observation(
+            tool_name=tool_name,
+            args=args,
+            kwargs=kwargs,
+        )
+        if observer is None or intent is None:
+            return
+        try:
+            feedback = observer(intent)
+            if inspect.isawaitable(feedback):
+                self._close_awaitable(feedback)
+                raise RuntimeError(
+                    "async task-policy controller used from synchronous tool seam"
+                )
+        except Exception:  # noqa: BLE001 - existing user-policy block remains final.
+            _LOGGER.warning(
+                "task_policy_upstream_block_observation_failed", exc_info=True
+            )
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
+
+    async def aobserve_upstream_policy_block(
+        self,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> None:
+        """Async upstream-block observation; it never admits or charges work."""
+
+        observer, intent = self._upstream_policy_observation(
+            tool_name=tool_name,
+            args=args,
+            kwargs=kwargs,
+        )
+        if observer is None or intent is None:
+            return
+        try:
+            feedback = observer(intent)
+            if inspect.isawaitable(feedback):
+                await feedback
+        except Exception:  # noqa: BLE001 - user policy remains authoritative.
+            _LOGGER.warning(
+                "task_policy_upstream_block_observation_failed", exc_info=True
+            )
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
+
+    def admit_model_turn(
+        self,
+        *,
+        model_turn: int,
+        execution_scope: str,
+    ) -> None:
+        """Admit one idempotent graph model turn through the durable F4 controller."""
+
+        controller = self._task_policy_controller
+        if controller is None:
+            return
+        admit = getattr(controller, "before_model_turn", None)
+        if not callable(admit):
+            return
+        try:
+            feedback = admit(
+                model_turn=model_turn,
+                execution_scope=execution_scope,
+            )
+            if inspect.isawaitable(feedback):
+                self._close_awaitable(feedback)
+                raise RuntimeError(
+                    "async task-policy controller used from synchronous model seam"
+                )
+        except Exception:  # noqa: BLE001 - existing provider limits remain active.
+            _LOGGER.warning("task_policy_model_turn_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
+            return
+        disposition = getattr(feedback, "disposition", ToolUseDisposition.CONTINUE)
+        reason_code = str(getattr(feedback, "reason_code", "model_turn_admitted"))
+        if (
+            disposition is not ToolUseDisposition.CONTINUE
+            and self._task_policy_mode is FeatureMode.ENFORCE
+            and self._task_policy_feedback_is_enforceable(reason_code)
+        ):
+            raise BudgetExceeded(
+                "The active task policy has exhausted its model-turn, cost, "
+                "or deadline budget."
+            )
+
+    async def aadmit_model_turn(
+        self,
+        *,
+        model_turn: int,
+        execution_scope: str,
+    ) -> None:
+        """Async model-turn admission for durable F4 controller implementations."""
+
+        controller = self._task_policy_controller
+        if controller is None:
+            return
+        admit = getattr(controller, "before_model_turn", None)
+        if not callable(admit):
+            return
+        try:
+            feedback = admit(
+                model_turn=model_turn,
+                execution_scope=execution_scope,
+            )
+            if inspect.isawaitable(feedback):
+                feedback = await feedback
+        except Exception:  # noqa: BLE001 - provider/platform limits remain active.
+            _LOGGER.warning("task_policy_model_turn_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
+            return
+        disposition = getattr(feedback, "disposition", ToolUseDisposition.CONTINUE)
+        reason_code = str(getattr(feedback, "reason_code", "model_turn_admitted"))
+        if (
+            disposition is not ToolUseDisposition.CONTINUE
+            and self._task_policy_mode is FeatureMode.ENFORCE
+            and self._task_policy_feedback_is_enforceable(reason_code)
+        ):
+            raise BudgetExceeded(
+                "The active task policy has exhausted its model-turn, cost, "
+                "or deadline budget."
+            )
 
     def record_task_policy_outcome(
         self,
@@ -275,6 +643,8 @@ class ToolBudgetGuard:
         intent: ToolUseIntent | None,
         succeeded: bool,
         error_class: str | None = None,
+        result: object | None = None,
+        retryable: bool = False,
     ) -> None:
         """Best-effort fold of observable completion facts into F4 state."""
 
@@ -282,16 +652,175 @@ class ToolBudgetGuard:
         if controller is None or intent is None:
             return
         try:
-            controller.after_operation(
+            result_fingerprint = (
+                self._task_request_fingerprint.for_result(
+                    capability_id=intent.capability_id,
+                    result_metadata={
+                        "result_type": type(result).__name__,
+                        "value": str(result),
+                    },
+                )
+                if succeeded and self._task_request_fingerprint is not None
+                else None
+            )
+            error_fingerprint = (
+                self._task_request_fingerprint.for_error(
+                    capability_id=intent.capability_id,
+                    request_fingerprint=intent.canonical_request_fingerprint,
+                    error_class=error_class or "unknown",
+                    retryable=retryable,
+                )
+                if not succeeded and self._task_request_fingerprint is not None
+                else None
+            )
+            feedback = controller.after_operation(
                 ToolOperationOutcome(
                     operation_id=intent.operation_id,
                     capability_id=intent.capability_id,
                     succeeded=succeeded,
                     error_class=error_class,
+                    retryable=retryable,
+                    result_fingerprint=result_fingerprint,
+                    # Until tools expose a common typed evidence envelope, the
+                    # protected full-result digest is only an advisory yield
+                    # marker. It is not an exact source identity.
+                    evidence_fingerprint=result_fingerprint,
+                    error_fingerprint=error_fingerprint,
                 )
             )
+            if inspect.isawaitable(feedback):
+                self._close_awaitable(feedback)
+                raise RuntimeError(
+                    "async task-policy controller used from synchronous outcome seam"
+                )
         except Exception:  # noqa: BLE001 - must not alter a tool outcome.
             _LOGGER.warning("task_policy_after_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
+
+    async def arecord_task_policy_outcome(
+        self,
+        *,
+        intent: ToolUseIntent | None,
+        succeeded: bool,
+        error_class: str | None = None,
+        result: object | None = None,
+        retryable: bool = False,
+    ) -> None:
+        """Async durable fold of a terminal observable tool outcome."""
+
+        controller = self._task_policy_controller
+        if controller is None or intent is None:
+            return
+        try:
+            result_fingerprint = (
+                self._task_request_fingerprint.for_result(
+                    capability_id=intent.capability_id,
+                    result_metadata={
+                        "result_type": type(result).__name__,
+                        "value": str(result),
+                    },
+                )
+                if succeeded and self._task_request_fingerprint is not None
+                else None
+            )
+            error_fingerprint = (
+                self._task_request_fingerprint.for_error(
+                    capability_id=intent.capability_id,
+                    request_fingerprint=intent.canonical_request_fingerprint,
+                    error_class=error_class or "unknown",
+                    retryable=retryable,
+                )
+                if not succeeded and self._task_request_fingerprint is not None
+                else None
+            )
+            feedback = controller.after_operation(
+                ToolOperationOutcome(
+                    operation_id=intent.operation_id,
+                    capability_id=intent.capability_id,
+                    succeeded=succeeded,
+                    error_class=error_class,
+                    retryable=retryable,
+                    result_fingerprint=result_fingerprint,
+                    # See the synchronous seam: this is bounded controller
+                    # advice, never a claim about a canonical source.
+                    evidence_fingerprint=result_fingerprint,
+                    error_fingerprint=error_fingerprint,
+                )
+            )
+            if inspect.isawaitable(feedback):
+                await feedback
+        except Exception:  # noqa: BLE001 - must not alter the tool outcome.
+            _LOGGER.warning("task_policy_after_operation_failed", exc_info=True)
+            if self._task_policy_mode is not FeatureMode.OFF:
+                raise
+
+    def _task_policy_intent(
+        self,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> ToolUseIntent:
+        fingerprinter = self._task_request_fingerprint
+        if fingerprinter is None:
+            raise RuntimeError("task-policy fingerprinting is not configured")
+        fingerprint = fingerprinter.for_request(
+            capability_id=tool_name,
+            arguments={"args": list(args), "kwargs": kwargs},
+        )
+        identity = RuntimeCallContext.current()
+        return ToolUseIntent(
+            operation_id=(
+                identity.operation_id
+                if identity is not None
+                else f"tool-policy-{uuid4().hex}"
+            ),
+            capability_id=tool_name,
+            canonical_request_fingerprint=fingerprint,
+        )
+
+    def _upstream_policy_observation(
+        self,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> tuple[Callable[[ToolUseIntent], object] | None, ToolUseIntent | None]:
+        controller = self._task_policy_controller
+        if controller is None or self._task_request_fingerprint is None:
+            return (None, None)
+        observer = getattr(controller, "observe_upstream_policy_block", None)
+        if not callable(observer):
+            return (None, None)
+        try:
+            return (
+                observer,
+                self._task_policy_intent(
+                    tool_name=tool_name,
+                    args=args,
+                    kwargs=kwargs,
+                ),
+            )
+        except Exception:  # noqa: BLE001 - user policy remains authoritative.
+            _LOGGER.warning(
+                "task_policy_upstream_block_observation_failed", exc_info=True
+            )
+            return (None, None)
+
+    def _enforce_task_policy_feedback(self, feedback: ToolUseFeedback) -> None:
+        if (
+            feedback.disposition is not ToolUseDisposition.CONTINUE
+            and self._task_policy_mode is FeatureMode.ENFORCE
+            and self._task_policy_feedback_is_enforceable(feedback.reason_code)
+        ):
+            raise ToolPolicyRejected(self._task_policy_message(feedback.disposition))
+
+    @staticmethod
+    def _close_awaitable(value: object) -> None:
+        close = getattr(value, "close", None)
+        if callable(close):
+            close()
 
     @staticmethod
     def _task_policy_message(disposition: ToolUseDisposition) -> str:
@@ -305,6 +834,17 @@ class ToolBudgetGuard:
             "This tool call duplicates prior work. Revise the plan or change the "
             "request before calling a tool again."
         )
+
+    @staticmethod
+    def _task_policy_feedback_is_enforceable(reason_code: str) -> bool:
+        """Keep semantic/low-yield judgments advisory until F1 promotion."""
+
+        return reason_code not in {
+            "semantic_query_overlap",
+            "same_sources_no_new_evidence",
+            "objective_satisfied",
+            "low_yield",
+        }
 
     async def emit_warning(self, *, decision: ToolBudgetWarn) -> None:
         """Best-effort BUDGET_WARNING emission."""
@@ -382,6 +922,12 @@ class _Estimator:
         return str(value)
 
 
+def estimate_tool_input_tokens(arguments: dict[str, Any]) -> int:
+    """Return the canonical pre-dispatch estimate used by every tool boundary."""
+
+    return _Estimator.estimate((), arguments)
+
+
 class ToolBudgetGuardedTool(DelegatingTool):
     """LangChain ``BaseTool`` wrapper that gates calls through the active guard.
 
@@ -399,7 +945,10 @@ class ToolBudgetGuardedTool(DelegatingTool):
     ) -> Any:
         """Sync gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
-        if guard is None:
+        if guard is None or RuntimeCallContext.current() is not None:
+            # The graph-wide middleware is authoritative when its call context
+            # is present. This wrapper remains a shadow-compatibility adapter
+            # and must not charge or admit the same model-visible call twice.
             return self.delegate(*args, config=config, **kwargs)
         policy_intent = guard.admit_task_policy(
             tool_name=self.name, args=args, kwargs=kwargs
@@ -429,7 +978,11 @@ class ToolBudgetGuardedTool(DelegatingTool):
             )
             raise
         else:
-            guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
+            guard.record_task_policy_outcome(
+                intent=policy_intent,
+                succeeded=True,
+                result=result,
+            )
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         return self._model_visible_result(result, guard=guard, call_id=call_id)
@@ -439,9 +992,11 @@ class ToolBudgetGuardedTool(DelegatingTool):
     ) -> Any:
         """Async gate: check budget, record the call, delegate to the inner tool."""
         guard = ToolBudgetGuard.active()
-        if guard is None:
+        if guard is None or RuntimeCallContext.current() is not None:
+            # See the synchronous path: wrapper enforcement is dormant behind
+            # the canonical middleware seam during shadow compatibility.
             return await self.adelegate(*args, config=config, **kwargs)
-        policy_intent = guard.admit_task_policy(
+        policy_intent = await guard.aadmit_task_policy(
             tool_name=self.name, args=args, kwargs=kwargs
         )
         estimated = _Estimator.estimate(args, kwargs)
@@ -462,14 +1017,18 @@ class ToolBudgetGuardedTool(DelegatingTool):
         try:
             result = await self.adelegate(*args, config=config, **kwargs)
         except BaseException as exc:
-            guard.record_task_policy_outcome(
+            await guard.arecord_task_policy_outcome(
                 intent=policy_intent,
                 succeeded=False,
                 error_class=type(exc).__name__,
             )
             raise
         else:
-            guard.record_task_policy_outcome(intent=policy_intent, succeeded=True)
+            await guard.arecord_task_policy_outcome(
+                intent=policy_intent,
+                succeeded=True,
+                result=result,
+            )
         finally:
             guard.record_settled(call_id=call_id, observed_input_tokens=estimated)
         # Settled first, so the count the model reads includes this call.
@@ -505,26 +1064,11 @@ class ToolBudgetGuardedTool(DelegatingTool):
     ) -> object:
         """Annotate, then bound, the exact value returned to LangChain."""
 
-        annotated = self._with_usage_note(result, guard=guard)
-        return guard.admit_tool_result(annotated, call_id=call_id)
-
-    def _with_usage_note(self, result: object, *, guard: ToolBudgetGuard) -> object:
-        """Append the remaining-calls note to ``result`` when one is due.
-
-        Best-effort: annotating a result must never fail the tool call that
-        already succeeded, so any failure here returns the result untouched.
-        """
-
-        try:
-            note = guard.usage_note(tool_name=self.name)
-            if note is None:
-                return result
-            return ToolResultNote.append(
-                result, note=note, dict_key=_TOOL_BUDGET_NOTE_KEY
-            )
-        except Exception:  # noqa: BLE001 — an annotation is never worth a failure
-            _LOGGER.warning("tool_budget_note_failed", exc_info=True)
-            return result
+        return guard.admit_model_visible_result(
+            result,
+            tool_name=self.name,
+            call_id=call_id,
+        )
 
     @staticmethod
     def _schedule_warning(*, guard: ToolBudgetGuard, decision: ToolBudgetWarn) -> None:
@@ -620,5 +1164,6 @@ __all__ = (
     "ToolBudgetGuard",
     "ToolBudgetGuardedRegistry",
     "ToolBudgetGuardedTool",
+    "estimate_tool_input_tokens",
     "guard_model_tools",
 )

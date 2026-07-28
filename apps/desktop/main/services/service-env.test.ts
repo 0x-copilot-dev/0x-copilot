@@ -210,6 +210,7 @@ describe("buildServiceEnv(ai-backend)", () => {
     expect(env.RUNTIME_FILE_STORE_ROOT).toBe(
       join(USER_DATA_DIR, "agent-data", "v1"),
     );
+    expect(env.RUNTIME_PROVIDER_CIRCUIT_SNAPSHOT_ENABLED).toBe("true");
     // No Postgres AI-DB env when file is active.
     expect(env.DATABASE_URL).toBeUndefined();
     expect(env.RUNTIME_DATABASE_URL).toBeUndefined();
