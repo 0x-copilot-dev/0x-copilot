@@ -1,6 +1,7 @@
 ---
 import Base from "../layouts/Base.astro";
 import Nav from "../components/Nav.astro";
+import "../styles/operator-pages.css";
 
 const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
 const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
@@ -11,8 +12,11 @@ const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
 <Base
   title="Tokenomics — $CPILOT · 0xCopilot"
   description="$CPILOT is live on Virtuals (Robinhood Chain): 45.56% liquidity pool, 25% automated capital formation, 29.19% team & contributors, 0.25% veVIRTUAL airdrop. Fixed 1B supply, every allocation on-chain."
+  bodyClass="operator-page token-site"
+  themeColor="#f2eddf"
+  fontHref="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap"
 >
-  <Nav />
+  <Nav variant="nav-operator" />
 
   <header class="hero">
     <div class="hero-bg"></div>
@@ -37,7 +41,7 @@ const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
     </div>
   </header>
 
-  <section class="sec" style="border-top:none;padding-top:8px">
+  <section class="sec allocation-section">
     <div class="wrap">
       <!-- 45.56% liquidity pool -->
       <div class="tk-bucket">
@@ -128,17 +132,18 @@ const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
       <div class="legal">
         <p>The $CPILOT token is not equity, and carries no dividend, revenue entitlement, or claim on company assets. Nothing on this page is an offer of securities or investment advice.</p>
         <p>Protocol mechanics — locks, vesting and ACF thresholds — follow the Virtuals Protocol framework and are enforced on-chain. Allocation figures are the launch parameters as published on the Virtuals listing.</p>
-        <p><b style="color:var(--sky)">Verify the contract before you transact.</b> $CPILOT is live on Robinhood Chain; the canonical listing is the <a href={VIRTUALS} rel="noopener">official Virtuals page</a>, also announced on <a href={X} rel="noopener">@Copilot0x</a>. Confirm the token address there — any address you see anywhere else is not authoritative.</p>
+        <p><b class="verify-label">Verify the contract before you transact.</b> $CPILOT is live on Robinhood Chain; the canonical listing is the <a href={VIRTUALS} rel="noopener">official Virtuals page</a>, also announced on <a href={X} rel="noopener">@Copilot0x</a>. Confirm the token address there — any address you see anywhere else is not authoritative.</p>
       </div>
     </div>
   </section>
 
-  <footer>
+  <footer class="operator-footer">
     <div class="wrap">
       <div class="frow">
         <span class="wm" style="font-size:22px">0x<b>Copilot</b></span>
         <div class="flinks">
           <a href="./">Home</a>
+          <a href="./docs.html">Docs</a>
           <a href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
           <a href={REPO} rel="noopener">GitHub ↗</a>
           <a href={DISCORD} rel="noopener">Discord ↗</a>

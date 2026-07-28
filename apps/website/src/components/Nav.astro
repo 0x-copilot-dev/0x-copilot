@@ -1,11 +1,14 @@
 ---
-// Site nav — kept deliberately lean: three links + one primary CTA. The
-// turbine mark carries its own gradient def so it renders standalone.
-// Discord / Buy $CPILOT / social live in the footer, not the top bar.
+// Shared site navigation. Product, source, and install destinations stay
+// reachable in both the wide navigation and the compact mobile menu.
 const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
+interface Props {
+  variant?: string;
+}
+const { variant = "" } = Astro.props;
 ---
 
-<nav>
+<nav class={variant}>
   <div class="nav wrap">
     <a class="brand" href="./" aria-label="0xCopilot home">
       <svg class="mk" viewBox="0 0 400 400" aria-hidden="true">
@@ -29,10 +32,23 @@ const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
       <span class="wm">0x<b>Copilot</b></span>
     </a>
     <div class="nlinks">
-      <a href="./#work">How it works</a>
       <a href="./token.html">Token</a>
-      <a href={REPO} rel="noopener">GitHub ↗</a>
-      <a class="ncta" href="./docs.html">Get the app</a>
+      <a href="./docs.html">Docs <sup class="nav-soon">NEW</sup></a>
+      <a href={REPO} target="_blank" rel="noopener noreferrer">GitHub ↗</a>
+      <a class="ncta" href="./install.html">Get the app</a>
     </div>
+    <details class="nav-mobile">
+      <summary>Menu <span>＋</span></summary>
+      <div class="nav-mobile-panel">
+        <a href="./token.html"><span>01</span>Token details</a>
+        <a href="./docs.html"><span>02</span>Documentation</a>
+        <a href={REPO} target="_blank" rel="noopener noreferrer"
+          ><span>03</span>GitHub ↗</a
+        >
+        <a class="nav-mobile-cta" href="./install.html"
+          ><span>04</span>Get the app ↘</a
+        >
+      </div>
+    </details>
   </div>
 </nav>

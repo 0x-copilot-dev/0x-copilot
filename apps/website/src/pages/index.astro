@@ -1,360 +1,358 @@
 ---
 import Base from "../layouts/Base.astro";
 import Nav from "../components/Nav.astro";
+import "../styles/home.css";
 
 const REPO = "https://github.com/0x-copilot-dev/0x-copilot";
 const DISCORD = "https://discord.com/invite/NhCv7zDkmX";
 const X = "https://x.com/Copilot0x";
 const VIRTUALS = "https://app.virtuals.io/virtuals/113720";
 
-// The six real destinations on the single-user desktop rail, in order.
-// Descriptions mirror the app's own destination copy.
+const JOURNEY = [
+  {
+    no: "01",
+    stage: "BEFORE THE RUN",
+    title: "Name the outcome.",
+    body: "Start in the Run workspace with the job, the relevant files, and the tools you want available. The agent turns that intent into a plan.",
+    screen: "RUN / GOAL COMPOSER",
+  },
+  {
+    no: "02",
+    stage: "DURING THE RUN",
+    title: "See the work. Stop the risk.",
+    body: "The active run is the product’s proof point: live tool events, work taking shape, and a real approval waiting before anything consequential happens.",
+    screen: "ACTIVE RUN / APPROVAL",
+  },
+  {
+    no: "03",
+    stage: "AFTER THE RUN",
+    title: "Keep the result and the receipt.",
+    body: "Return to the finished artifact, its sources, and the activity trail. The useful output survives the conversation—and so does the evidence.",
+    screen: "RESULT / ACTIVITY",
+  },
+];
+
 const SURFACES = [
-  ["Run", "Give it a goal — it plans, works, and pauses for approval"],
-  ["Chats", "Conversations and streamed runs"],
-  ["Projects", "Group related work under one shared context"],
-  ["Activity", "Run history, grouped so you see everything it did"],
-  ["Tools", "The apps the agent can read from and act in"],
-  ["Skills", "Saved multi-step workflows you can rerun"],
+  ["01", "Run", "Start with an outcome"],
+  ["02", "Chats", "Keep the conversation"],
+  ["03", "Projects", "Carry shared context"],
+  ["04", "Activity", "Audit every move"],
+  ["05", "Tools", "Connect real systems"],
+  ["06", "Skills", "Repeat what works"],
 ];
 ---
 
 <Base
-  title="0xCopilot — put your day on autopilot"
-  description="Copilot lives on your machine, moves through your files and tools, and quietly takes care of the work — check in, change direction, or leave it running. Local, BYOK, open source. Desktop app for macOS & Windows; $CPILOT live on Virtuals."
+  title="0xCopilot — the job is the product"
+  description="A local, open-source desktop agent that works across your files and tools, streams every step, and pauses for approval before it acts."
+  bodyClass="home-site"
+  themeColor="#f2eddf"
+  fontHref="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wdth,wght@12..96,75..100,300..800&family=DM+Mono:wght@300;400;500&family=Instrument+Serif:ital@0;1&display=swap"
 >
-  <Nav />
+  <Nav variant="nav-home" />
 
-  <!-- ============================ HERO ============================ -->
-  <header class="hero">
-    <div class="hero-bg"></div>
-    <div class="hero-grid"></div>
-    <div class="wrap">
-      <span class="pill"><span class="dot pulse"></span> Now live · desktop app + $CPILOT on Virtuals</span>
-      <h1>Put your day <em>on autopilot.</em></h1>
-      <p class="sub">
-        <b>Copilot lives on your machine</b>, moves through your files and
-        tools, and quietly takes care of the work. You can check in, change
-        direction, or leave it running while you focus on what matters.{" "}
-        <b>Consider your day handled.</b>
-      </p>
-      <div class="cta-row">
-        <a class="btn pri" href="./docs.html">Get the desktop app</a>
-        <a class="btn ghost" href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
-        <a class="btn ghost" href="#work">See how it runs</a>
-      </div>
-      <div class="trust">
-        <b>OpenAI · Anthropic · Google — your key</b>
-        <span class="s"></span>
-        <b>Open source</b>
-        <span class="s"></span>
-        <span>$CPILOT live on Virtuals · Robinhood Chain</span>
-      </div>
-    </div>
-  </header>
+  <main>
+    <header class="home-hero">
+      <div class="hero-shape hero-shape-one" aria-hidden="true"></div>
+      <div class="hero-shape hero-shape-two" aria-hidden="true"></div>
+      <div class="home-wrap">
+        <div class="hero-meta">
+          <span>LOCAL AGENT SYSTEM</span>
+          <span>MACOS + WINDOWS</span>
+          <span class="hero-meta-live"><i></i> DESKTOP BUILD LIVE</span>
+        </div>
 
-  <!-- ============================ THE APP ============================ -->
-  <section class="band" id="app">
-    <div class="wrap">
-      <div class="shot" style="height:auto">
-        <img
-          src="./media/app-run.png"
-          alt="The 0xCopilot desktop app — the Run cockpit with a goal composer and the six-surface rail: Run, Chats, Projects, Activity, Tools, Skills."
-          style="position:static;height:auto"
-          width="1600"
-          height="1066"
-        />
-      </div>
-      <p class="cap"><b>The real app, today — not a mockup. Give it a goal; it plans, works across your files and the apps you connect, and pauses for your approval. Local, on your machine.</b></p>
-    </div>
-  </section>
+        <div class="hero-layout">
+          <div class="hero-copy">
+            <p class="home-kicker">0xCopilot / Work, not answers</p>
+            <h1>
+              Chat was<br />
+              the <span class="strike-word">demo.</span><br />
+              <em>The job is<br />the product.</em>
+            </h1>
+            <p class="hero-dek">
+              Give 0xCopilot an outcome. It plans the work, moves through your
+              files and connected tools, and stops for your approval before the
+              important parts leave the building.
+            </p>
+            <div class="home-actions">
+              <a class="home-btn home-btn-solid" href="./install.html">
+                Get the desktop app <span>↘</span>
+              </a>
+              <a class="home-btn home-btn-line" href="#proof">
+                See a run <span>↓</span>
+              </a>
+            </div>
+          </div>
 
-  <!-- ============================ THE GAP ============================ -->
-  <section class="sec" id="what">
-    <div class="wrap">
-      <p class="kick">The gap</p>
-      <h2 class="head-wide">Agentic AI got built for engineers.</h2>
-      <p class="lede">
-        The breakthroughs of the last two years are extraordinary — and nearly
-        every one is pointed at a repo. The people who run <b>treasury,
-        community, governance and growth</b> got a chat box and a copy button.
-        0xCopilot is the agent for that work: it opens your sheets, your
-        multisig, your threads and your Discord, and does the whole multi-step
-        job end to end.
-      </p>
-      <div class="compare">
-        <div class="cc">
-          <p class="lab">Built for the repo</p>
-          <div class="chips">
-            <span class="chip">Cursor</span>
-            <span class="chip">Codex</span>
-            <span class="chip">Claude Code</span>
-            <span class="chip">Rovo</span>
-            <span class="chip">Cowork</span>
-          </div>
-          <p>Real agents, real multi-step work — pointed almost entirely at source code.</p>
-        </div>
-        <div class="cc open">
-          <p class="lab">Built for the rest of the org</p>
-          <div class="chips">
-            <span class="role">Treasury</span>
-            <span class="role">Community</span>
-            <span class="role">Governance</span>
-            <span class="role">Growth</span>
-            <span class="role">Ops</span>
-            <span class="role">Comms</span>
-          </div>
-          <div class="win">0x<span class="sky">Copilot</span></div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================ THE WEDGE ============================ -->
-  <section class="sec" id="work">
-    <div class="wrap">
-      <p class="kick">The wedge</p>
-      <h2 class="head-wide">Handled doesn't mean hidden.</h2>
-      <p class="lede">
-        0xCopilot makes every run a <b>durable, ordered log of typed events</b> —
-        not a black box that emits a summary. Watch it happen live, rewind to any
-        point, and step in the moment it matters.
-      </p>
-      <div class="cards">
-        <div class="card">
-          <h3><span class="g sky"></span>Watch</h3>
-          <p>Every step is a typed event, streamed live — plans, tool calls, results — not a summary at the end.</p>
-          <span class="api">GET /v1/agent/runs/:id/stream</span>
-          <div class="mock">
-            <div class="ev"><span class="t">12:04:01</span><span class="n">run.started</span></div>
-            <div class="ev ok"><span class="t">12:04:03</span><span class="n">sheet.read</span><span class="arg">tokenomics.xlsx</span></div>
-            <div class="ev ok"><span class="t">12:04:06</span><span class="n">safe.tx.staged</span><span class="arg">3,100 → nova.eth</span></div>
-            <div class="ev"><span class="t">12:04:09</span><span class="n">x.thread.draft</span><span class="arg">64%</span><span class="cur"></span></div>
-          </div>
-        </div>
-        <div class="card">
-          <h3><span class="g jade"></span>Rewind</h3>
-          <p>Events persist with a monotonic sequence number per run. Replay from any point, or reconnect and resume where you dropped.</p>
-          <span class="api">?after_sequence=N</span>
-          <div class="mock">
-            <div class="tlm"><div class="fill"></div><div class="bead" style="left:14%"></div><div class="bead" style="left:38%"></div><div class="bead" style="left:62%"></div><div class="head"></div></div>
-            <div class="seqline"><span>seq 0</span><span>seq 128 · now</span></div>
-          </div>
-        </div>
-        <div class="card">
-          <h3><span class="g amber"></span>Steer</h3>
-          <p>Anything that touches the real world pauses and waits for your go-ahead. Approve it, redirect it, or stop the run mid-flight.</p>
-          <span class="api">run.waiting_for_permission</span>
-          <div class="mock">
-            <div class="approve">
-              <div class="q">Send <span class="hl">3,100 USDC</span> to nova.eth?</div>
-              <div class="abtns"><span class="ab go">Approve</span><span class="ab">Redirect</span><span class="ab stop">Stop</span></div>
+          <div class="hero-console" aria-label="Example 0xCopilot run">
+            <div class="console-head">
+              <div>
+                <span class="console-label">RUN / 0X-284</span>
+                <strong>Treasury reporting</strong>
+              </div>
+              <span class="console-state"><i></i> WORKING</span>
+            </div>
+            <div class="console-goal">
+              <span>GOAL</span>
+              <p>
+                Reconcile the contributor sheet, stage this week’s transfers,
+                and draft the community update.
+              </p>
+            </div>
+            <ol class="event-list">
+              <li class="event-done">
+                <span class="event-time">12:04:03</span>
+                <span class="event-name">sheet.read</span>
+                <span class="event-arg">contributors.xlsx</span>
+                <b>DONE</b>
+              </li>
+              <li class="event-done">
+                <span class="event-time">12:04:06</span>
+                <span class="event-name">safe.tx.staged</span>
+                <span class="event-arg">3,100 USDC</span>
+                <b>DONE</b>
+              </li>
+              <li class="event-live">
+                <span class="event-time">12:04:09</span>
+                <span class="event-name">x.thread.draft</span>
+                <span class="event-arg">64% complete</span>
+                <b>LIVE</b>
+              </li>
+            </ol>
+            <div class="approval-slip">
+              <div>
+                <span>PERMISSION GATE</span>
+                <strong>Send 3,100 USDC to nova.eth?</strong>
+              </div>
+              <div class="approval-actions" aria-hidden="true">
+                <span>APPROVE</span>
+                <span>REDIRECT</span>
+                <span>STOP</span>
+              </div>
+            </div>
+            <div class="console-sequence">
+              <span>SEQ 000</span>
+              <div><i></i></div>
+              <span>SEQ 128 / NOW</span>
             </div>
           </div>
         </div>
-      </div>
-    </div>
-  </section>
 
-  <!-- ============================ SURFACES ============================ -->
-  <section class="sec">
-    <div class="wrap">
-      <p class="kick">Not a chatbot</p>
-      <h2 class="head-wide">Six surfaces, not one text box.</h2>
-      <p class="lede">
-        Chat is one surface, not the whole product. The work lands on real places
-        you can open, filter and act on — and the agent works the same surfaces
-        you do. It's a workspace, not a prompt box.
-      </p>
-      <div class="surf">
-        {
-          SURFACES.map(([name, what]) => (
-            <div class="tile">
-              <div class="nm">{name}</div>
-              <div class="ds">{what}</div>
-            </div>
-          ))
-        }
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================ YOURS ============================ -->
-  <section class="sec" id="local">
-    <div class="wrap">
-      <p class="kick">Yours</p>
-      <div class="two">
-        <div>
-          <h2>Your machine. Your key. Your model.</h2>
-          <p class="lede">
-            0xCopilot runs locally. Bring your own API key — it talks to OpenAI,
-            Anthropic or Google, and you pay your provider directly. No seat
-            license, no subscription tier, no middleman between you and the model
-            you chose.
+        <div class="hero-note">
+          <span class="hero-note-index">※</span>
+          <p>
+            Runs on your machine. Bring your own model key. Read every action in
+            the open-source event log.
           </p>
-          <div class="providers">
-            <span class="prov">OpenAI</span>
-            <span class="prov">Anthropic</span>
-            <span class="prov">Google</span>
-            <span class="prov">Local model</span>
+        </div>
+      </div>
+    </header>
+
+    <aside class="signal-strip" aria-label="Product qualities">
+      <div class="signal-track">
+        <span>LOCAL-FIRST</span><i>✦</i><span>OPEN SOURCE</span><i>✦</i>
+        <span>BYOK</span><i>✦</i><span>APPROVAL GATES</span><i>✦</i>
+        <span>REPLAYABLE RUNS</span><i>✦</i><span>LOCAL-FIRST</span><i>✦</i>
+        <span>OPEN SOURCE</span><i>✦</i><span>BYOK</span><i>✦</i>
+        <span>APPROVAL GATES</span><i>✦</i><span>REPLAYABLE RUNS</span><i>✦</i>
+      </div>
+    </aside>
+
+    <section class="manifesto" id="proof">
+      <div class="home-wrap">
+        <div class="section-index">
+          <span>(A)</span>
+          <span>THE MISSING WORKSTATION</span>
+        </div>
+        <div class="manifesto-grid">
+          <h2>
+            AI for people whose work
+            <span>doesn’t live in a repo.</span>
+          </h2>
+          <div class="manifesto-copy">
+            <p>
+              Treasury. Community. Governance. Growth. Operations. The work
+              crosses a sheet, a thread, a wallet, and three browser tabs before
+              lunch.
+            </p>
+            <p>
+              0xCopilot gives that work an agentic home: one place to start it,
+              see it, interrupt it, and find it again.
+            </p>
           </div>
         </div>
-        <div class="callouts">
-          <div class="callout">
-            <div class="ct">Keys never touch a request body</div>
-            <div class="cp">Provider keys live in your own environment — enforced in the codebase, not promised here.</div>
+
+      </div>
+    </section>
+
+    <section class="journey-section" id="work">
+      <div class="home-wrap">
+        <div class="section-index section-index-light">
+          <span>(B)</span>
+          <span>ONE RUN / END TO END</span>
+        </div>
+        <div class="journey-heading">
+          <h2>The job has<br /><em>a visible path.</em></h2>
+          <p>
+            One outcome becomes a visible sequence: define the work, watch it
+            happen, then keep both the result and the receipt.
+          </p>
+        </div>
+        <div class="journey-grid">
+          {
+            JOURNEY.map((moment) => (
+              <article class="journey-card">
+                <div class="journey-card-top">
+                  <span>{moment.no}</span>
+                  <span>{moment.stage}</span>
+                </div>
+                <h3>{moment.title}</h3>
+                <p>{moment.body}</p>
+                <div class="journey-screen">
+                  <span>PRODUCT MOMENT</span>
+                  <strong>{moment.screen}</strong>
+                </div>
+              </article>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="surfaces-section">
+      <div class="home-wrap">
+        <div class="section-index">
+          <span>(C)</span>
+          <span>THE WORK LANDS SOMEWHERE</span>
+        </div>
+        <div class="surfaces-heading">
+          <h2>One agent.<br />Six places to land.</h2>
+          <p>
+            Chat is one surface, not the whole product. Every kind of work gets
+            a proper destination you can reopen, filter, and act on.
+          </p>
+        </div>
+        <div class="surface-stack">
+          {
+            SURFACES.map(([no, name, desc]) => (
+              <div class="surface-row">
+                <span>{no}</span>
+                <strong>{name}</strong>
+                <p>{desc}</p>
+                <i aria-hidden="true">↗</i>
+              </div>
+            ))
+          }
+        </div>
+      </div>
+    </section>
+
+    <section class="local-section" id="local">
+      <div class="local-orbit" aria-hidden="true">
+        <span>YOUR MODEL</span>
+        <i></i>
+        <b>YOUR MACHINE</b>
+      </div>
+      <div class="home-wrap">
+        <div class="section-index section-index-light">
+          <span>(D)</span>
+          <span>SOVEREIGN BY DEFAULT</span>
+        </div>
+        <div class="local-grid">
+          <h2>
+            Powerful enough<br />
+            to act. <em>Local enough</em><br />
+            to unplug.
+          </h2>
+          <div class="local-copy">
+            <p>
+              Bring your own API key. Choose OpenAI, Anthropic, Google, or point
+              the runtime at a local model. No seat license and no mystery model
+              between you and your work.
+            </p>
+            <ul>
+              <li><span>01</span> Keys stay out of run request bodies</li>
+              <li><span>02</span> Connector tokens live in your vault</li>
+              <li><span>03</span> The runtime and event log stay local</li>
+            </ul>
           </div>
-          <div class="callout">
-            <div class="ct">Connectors use real OAuth</div>
-            <div class="cp">Tokens sit in a <code>vault</code> you run.</div>
+        </div>
+        <div class="provider-wall" aria-label="Supported model providers">
+          <span>OPENAI</span><span>ANTHROPIC</span><span>GOOGLE</span
+          ><span>LOCAL</span>
+        </div>
+      </div>
+    </section>
+
+    <section class="install-section">
+      <div class="home-wrap">
+        <div class="section-index">
+          <span>(E)</span>
+          <span>GET THE APP</span>
+        </div>
+        <div class="install-grid">
+          <div>
+            <h2>One command.<br /><em>Zero ceremony.</em></h2>
+            <p>
+              macOS and Windows. The first run stages a self-contained local
+              runtime and opens the desktop app.
+            </p>
           </div>
-          <div class="callout">
-            <div class="ct">Point it at a local model</div>
-            <div class="cp">Then nothing leaves your machine at all.</div>
+          <div class="command-block">
+            <div class="command-top">
+              <span>TERMINAL / 0XCOPILOT</span>
+              <span>NODE 20+</span>
+            </div>
+            <code><i>$</i> npm install -g @0x-copilot/cli</code>
+            <code><i>$</i> copilot<span class="command-cursor"></span></code>
+            <a href="./install.html">INSTALL NOTES ↗</a>
           </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- ============================ GET IT ============================ -->
-  <section class="sec">
-    <div class="wrap">
-      <p class="kick">Get it</p>
-      <h2>One command, and it's yours.</h2>
-      <p class="lede">
-        0xCopilot ships as a desktop app for <b>macOS and Windows</b>. Install
-        the <b>copilot</b> CLI with npm or Bun; the first run stages a
-        self-contained local runtime and opens the app. The runtime, the stores
-        and the event log all stay on your machine.
-      </p>
-      <div class="codewrap">
-        <div class="codebar"><span class="tl-dot r"></span><span class="tl-dot y"></span><span class="tl-dot g"></span><span class="fn">~/0xcopilot</span></div>
-        <pre><code><span class="c"># Node 20+ or Bun</span>
-<span class="p">$</span> npm install -g @0x-copilot/cli
-
-<span class="c"># …then launch the app</span>
-<span class="p">$</span> copilot</code></pre>
-      </div>
-      <p class="note">
-        Full install notes — first-run staging, commands, platforms — are on the{" "}
-        <a href="./docs.html">Install page</a>. Prefer to self-host the web stack
-        instead? It still runs anywhere Docker does — <a href={REPO} rel="noopener">read the source</a>.
-      </p>
-    </div>
-  </section>
-
-  <!-- ============================ TOKEN ============================ -->
-  <section class="sec tok">
-    <div class="wrap">
-      <p class="kick">The token</p>
-      <h2>The app is the product.</h2>
-      <p class="lede">
-        0xCopilot has launched <b>$CPILOT</b> on Virtuals Protocol, on Robinhood
-        Chain. Nearly half the fixed supply seeded the liquidity pool at launch,
-        just under a third funds the team and contributors, and a quarter is
-        protocol-run capital formation — released only as the market verifies
-        progress.
-      </p>
-      <div class="bar" role="img" aria-label="45.56% liquidity pool, 29.19% team and contributors, 25% automated capital formation, 0.25% veVIRTUAL airdrop">
-        <div class="seg mkt">45.56%&nbsp; Liquidity</div>
-        <div class="seg bld">29.19%&nbsp; Team</div>
-        <div class="seg pro">25%&nbsp; ACF</div>
-      </div>
-      <p class="cap" style="text-align:left;margin-top:14px">
-        + 0.25% veVIRTUAL airdrop · fixed 1,000,000,000 $CPILOT supply
-      </p>
-      <div class="tlegend">
-        <div class="tl-item">
-          <div class="lt"><span class="sw mkt"></span>Liquidity pool</div>
-          <p>45.56% of a fixed 1B supply, in the pool at launch — the tradable float everyone buys from.</p>
+    <section class="token-section">
+      <div class="home-wrap token-grid">
+        <div>
+          <span class="token-label">$CPILOT / ROBINHOOD CHAIN</span>
+          <h2>The app is the product.<br />The token funds the road.</h2>
         </div>
-        <div class="tl-item">
-          <div class="lt"><span class="sw bld"></span>Team &amp; contributors</div>
-          <p>29.19% for the people who ship it — mostly locked and vesting, including a disclosed 2% launch buy.</p>
+        <div class="token-stats">
+          <div><strong>45.56%</strong><span>Liquidity</span></div>
+          <div><strong>29.19%</strong><span>Team + contributors</span></div>
+          <div><strong>25%</strong><span>Capital formation</span></div>
         </div>
-        <div class="tl-item">
-          <div class="lt"><span class="sw pro"></span>Capital formation</div>
-          <p>25%, protocol-run and tied to valuation. No discretionary insider selling.</p>
+        <div class="token-actions">
+          <a href="./token.html">Read the tokenomics ↗</a>
+          <a href={VIRTUALS} rel="noopener">View on Virtuals ↗</a>
         </div>
       </div>
-      <div class="cta-row">
-        <a class="btn pri" href="./token.html">See the full tokenomics</a>
-        <a class="btn ghost" href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- ============================ FAQ ============================ -->
-  <section class="sec">
-    <div class="wrap">
-      <p class="kick">Answers</p>
-      <h2>The questions that decide trust.</h2>
-      <div class="faq">
-        <div class="qa">
-          <div class="q">Can it do things without asking me?</div>
-          <div class="a">That's your call, per run. Steps that touch the real world can pause for explicit approval before they execute — the run parks in <b>waiting_for_permission</b> until you answer, and you can stop it at any point. Permission policy is configuration; read the source and set it before you point this at anything that matters.</div>
-        </div>
-        <div class="qa">
-          <div class="q">Where do my API keys live?</div>
-          <div class="a">In your own environment file, on your machine. Provider keys are never accepted in a run request body — <b>enforced in code</b>. OAuth tokens for connectors go into a token vault running in your stack.</div>
-        </div>
-        <div class="qa">
-          <div class="q">Is any of this cloud-dependent?</div>
-          <div class="a">The stack runs on your hardware. The one thing that leaves is what you'd expect: your prompts and context go to whichever provider's key you supplied. Point it at a local model and nothing leaves at all.</div>
-        </div>
-        <div class="qa">
-          <div class="q">What actually works today?</div>
-          <div class="a">The desktop app for macOS and Windows, installed with one command — and under it the local runtime, streaming with replay and resume, approvals, MCP connectors with OAuth, skills, memory, the library index, and the surfaces above. <b>Native Linux packaging is the one piece still in progress</b> — build from source in the meantime.</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================ CONTACT ============================ -->
-  <section class="sec" id="contact">
-    <div class="wrap">
-      <p class="kick">Contact</p>
-      <h2>Come say hi.</h2>
-      <p class="lede">
-        Questions, ideas, or want to follow along? Find us here.
-      </p>
-      <div class="contact">
-        <a class="contact-card" href={DISCORD} rel="noopener">
-          <span class="cc-go" aria-hidden="true">↗</span>
-          <div class="cc-name">Discord</div>
-          <div class="cc-sub">Join the community</div>
-        </a>
-        <a class="contact-card" href={X} rel="noopener">
-          <span class="cc-go" aria-hidden="true">↗</span>
-          <div class="cc-name">X · @Copilot0x</div>
-          <div class="cc-sub">Follow for updates</div>
-        </a>
-        <a class="contact-card" href={VIRTUALS} rel="noopener">
-          <span class="cc-go" aria-hidden="true">↗</span>
-          <div class="cc-name">$CPILOT on Virtuals</div>
-          <div class="cc-sub">Trade the token</div>
-        </a>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============================ FOOTER ============================ -->
-  <footer>
-    <div class="wrap">
-      <div class="frow">
-        <span class="wm" style="font-size:22px">0x<b>Copilot</b></span>
-        <div class="flinks">
-          <a href="./token.html">Tokenomics</a>
-          <a href={VIRTUALS} rel="noopener">Buy $CPILOT ↗</a>
+    <section class="last-call" id="contact">
+      <div class="home-wrap">
+        <p>THE NEXT RUN IS YOURS.</p>
+        <h2>Give it a goal.<br /><em>Keep your hands on the wheel.</em></h2>
+        <div class="last-actions">
+          <a class="home-btn home-btn-solid" href="./install.html">
+            Get 0xCopilot <span>↘</span>
+          </a>
           <a href={REPO} rel="noopener">GitHub ↗</a>
           <a href={DISCORD} rel="noopener">Discord ↗</a>
-          <a href={X} rel="noopener">@Copilot0x ↗</a>
+          <a href={X} rel="noopener">X / @Copilot0x ↗</a>
         </div>
       </div>
-      <div class="foot-b">
-        <span>© 2026 0xCopilot · Ask · Steer · Ship</span>
-        <span class="ass">Nothing on this site is financial advice or an offer of securities.</span>
+    </section>
+  </main>
+
+  <footer class="home-footer">
+    <div class="home-wrap">
+      <div class="home-footer-mark">0x<span>Copilot</span></div>
+      <div class="home-footer-meta">
+        <span>© 2026 0xCopilot</span>
+        <span>OPEN SOURCE / LOCAL-FIRST / BYOK</span>
+        <span>Nothing here is financial advice.</span>
       </div>
     </div>
   </footer>
