@@ -585,7 +585,7 @@ backend-to-ai callback, or desktop daemon.
       accounting, least-expensive protocol keepalive, bounded reconnect, and
       deterministic saturation/unavailable outcomes. Never use
       `tools/list` as routine keepalive or reuse across credentials.
-- [ ] **F8.6 — Pool lifecycle, invalidation, and proxy integration.** Acquire
+- [x] **F8.6 — Pool lifecycle, invalidation, and proxy integration.** Acquire
       or reuse a lease through `client-session`, bind every proxy RPC to that
       opaque lease, reject stale/wrong-subject leases before token decryption,
       and retire sessions on auth/config revision, credential rotation,
