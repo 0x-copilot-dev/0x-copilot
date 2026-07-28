@@ -1,6 +1,6 @@
 # PRD-AR-F2 — Cache-aware prompt assembly
 
-**Status:** proposed\
+**Status:** implemented\
 **Priority:** P1\
 **Owners:** AI Runtime, Model Platform, Security\
 **Depends on:** [D2 built-ins/subagents](../../generative-surfaces-v2-1/prds/PRD-D2-builtins-subagents.md),

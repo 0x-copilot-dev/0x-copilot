@@ -305,7 +305,7 @@ Deep Agents graph, one Operation Gateway, one run event journal, desktop
 file-native runtime state, backend-owned MCP credentials/sessions, and
 desktop-owned host mutation authority.
 
-### Active execution — Step 4 task-aware tool controller
+### Completed — Step 4 task-aware tool controller
 
 Root owns architecture, integration, commits, and the normative ordered
 checklist. Implementation lanes use isolated worktrees and return reviewed
@@ -361,7 +361,7 @@ ruff, compile validation, formatting/commit hooks, and `git diff --check`.
 The final service gate passed 5,777 tests with 127 environment-dependent skips
 and one explicitly deselected live evaluation.
 
-### Active execution — Step 5 per-call prompt assembly and cache observation
+### Completed — Step 5 per-call prompt assembly and cache observation
 
 Root owns architecture, integration, commits, and the normative ordered
 checklist. Implementation lanes use isolated worktrees and return reviewed
@@ -426,7 +426,7 @@ and one explicitly deselected live evaluation. Full-service ruff and format
 checks, compile validation, API-types TypeScript checking, commit hooks, and
 `git diff --check` also passed.
 
-### Active execution — Step 6 model invocation routing and reliability
+### Completed — Step 6 model invocation routing and reliability
 
 Root owns architecture, integration, commits, and the normative ordered
 checklist. Implementation lanes use isolated worktrees and return reviewed
@@ -532,7 +532,7 @@ environment-dependent skips. Full-service ruff and format checks, compile
 validation, API-types and desktop TypeScript checking, 42 desktop
 service-environment tests, commit hooks, and `git diff --check` also passed.
 
-### Active execution — Step 7 MCP freshness and session reuse
+### Completed — Step 7 MCP freshness and session reuse
 
 Root owns architecture, integration, commits, and the normative ordered
 checklist. Implementation lanes use isolated worktrees and return reviewed
@@ -637,16 +637,16 @@ backend-to-ai callback, or desktop daemon.
 
 | Done | PRD                                                                                                                         | Priority | Owners                       | Depends on                       | Outcome                                                                                          |
 | :--: | --------------------------------------------------------------------------------------------------------------------------- | :------: | ---------------------------- | -------------------------------- | ------------------------------------------------------------------------------------------------ |
-| [ ]  | [F1 — Harness observability, evaluation, and promotion](prds/PRD-AR-F1-harness-observability-evaluation-promotion.md)       |    P0    | ai-backend, backend          | A1, A2, D2, E1                   | Runtime changes are measured against fixed quality, safety, latency, and cost gates.             |
-| [ ]  | [F2 — Cache-aware prompt assembly](prds/PRD-AR-F2-cache-aware-prompt-assembly.md)                                           |    P1    | ai-backend                   | D2, E1, F1                       | Stable/contextual/volatile prompt fragments and provider cache controls.                         |
+| [x]  | [F1 — Harness observability, evaluation, and promotion](prds/PRD-AR-F1-harness-observability-evaluation-promotion.md)       |    P0    | ai-backend, backend          | A1, A2, D2, E1                   | Runtime changes are measured against fixed quality, safety, latency, and cost gates.             |
+| [x]  | [F2 — Cache-aware prompt assembly](prds/PRD-AR-F2-cache-aware-prompt-assembly.md)                                           |    P1    | ai-backend                   | D2, E1, F1                       | Stable/contextual/volatile prompt fragments and provider cache controls.                         |
 | [ ]  | [F3 — Policy-aware capability discovery](prds/PRD-AR-F3-policy-aware-capability-discovery.md)                               |    P1    | ai-backend, backend          | A3, D1, D2, F1; integrates F8    | Authorized two-tier search/describe/invoke without eager MCP connection.                         |
-| [ ]  | [F4 — Task-aware tool-use controller](prds/PRD-AR-F4-task-aware-tool-use-controller.md)                                     |    P1    | ai-backend                   | A3, D2, F1; F3 optional          | Task-family plans, budgets, duplicate detection, and stop/escalate policy.                       |
+| [x]  | [F4 — Task-aware tool-use controller](prds/PRD-AR-F4-task-aware-tool-use-controller.md)                                     |    P1    | ai-backend                   | A3, D2, F1; F3 optional          | Task-family plans, budgets, duplicate detection, and stop/escalate policy.                       |
 | [ ]  | [F5 — Context budgeting, compression, and evidence recall](prds/PRD-AR-F5-context-budgeting-compression-evidence-recall.md) |    P1    | ai-backend                   | A2, B1, E1, F1                   | Loss-aware allocation and the sole model-facing evidence hydration tool.                         |
 | [ ]  | [F6 — Capability concurrency and safe batching](prds/PRD-AR-F6-capability-concurrency-safe-batching.md)                     |    P2    | ai-backend                   | A3, A5, D1, D2                   | Parallelize only declared independent, rate-safe operations.                                     |
 | [ ]  | [F7 — Governed dataflow and programmatic tool calling](prds/PRD-AR-F7-governed-dataflow-programmatic-tool-calling.md)       |    P2    | ai-backend                   | A3–A5, D2, F6                    | Collapse mechanical loops without arbitrary code or approval compression.                        |
 | [x]  | [F8 — MCP control-plane freshness and session reuse](prds/PRD-AR-F8-mcp-control-plane-freshness-session-reuse.md)           |    P2    | backend, ai-backend          | D1; integrates F3                | Descriptor revisions, pull invalidation feed, connection reuse, measured cache policy.           |
 | [ ]  | [F9 — Parallel delegation quality controller](prds/PRD-AR-F9-parallel-delegation-quality-controller.md)                     |    P2    | ai-backend                   | D2, F1, F6                       | Evidence-complete decomposition, budgets, verification, bounded fan-out.                         |
-| [ ]  | [F10 — Model invocation reliability and routing](prds/PRD-AR-F10-model-invocation-reliability-routing.md)                   |    P2    | ai-backend, backend settings | E1, F1                           | BYOK/region/capability-aware retry, fallback, limits, and circuit breaking.                      |
+| [x]  | [F10 — Model invocation reliability and routing](prds/PRD-AR-F10-model-invocation-reliability-routing.md)                   |    P2    | ai-backend, backend settings | E1, F1                           | BYOK/region/capability-aware retry, fallback, limits, and circuit breaking.                      |
 | [ ]  | [F11 — Workspace edit planning, patch sets, and validation](prds/PRD-AR-F11-workspace-edit-planning-patch-validation.md)    |    P1    | ai-backend, desktop          | C1–C3, D3, F1, F4, F6            | One preimage-bound multi-file overlay patch, bounded validation/repair, and exact staged review. |
 | [ ]  | [F12 — Evidence-aware answer synthesis and verification](prds/PRD-AR-F12-evidence-aware-answer-synthesis-verification.md)   |    P1    | ai-backend                   | F1, F4, F5, E1; integrates G1–G3 | Fast-path requirement/evidence/freshness checks with targeted repair only on failure.            |
 
@@ -994,15 +994,15 @@ tail latency, serialization, and retries must be measured.
 
 ### P0
 
-- [ ] F1 evaluation and promotion plane.
+- [x] F1 evaluation and promotion plane.
 - [ ] H5 durable post-run candidate pipeline.
 - [ ] H6 production memory store/review/index.
 
 ### P1
 
-- [ ] F2 prompt assembly/cache.
+- [x] F2 prompt assembly/cache.
 - [ ] F3 capability discovery.
-- [ ] F4 tool-use controller.
+- [x] F4 tool-use controller.
 - [ ] F5 context budgeting.
 - [ ] F11 workspace edit planning/patch validation.
 - [ ] F12 evidence-aware answer verification.
@@ -1021,7 +1021,7 @@ tail latency, serialization, and retries must be measured.
 - [ ] F7 governed dataflow.
 - [x] F8 MCP freshness/session reuse.
 - [ ] F9 delegation quality.
-- [ ] F10 model reliability/routing.
+- [x] F10 model reliability/routing.
 - [ ] H4 skill curation.
 - [ ] H8 skill distillation/backfill.
 - [ ] H9 governed historical memory/routine backfill.
