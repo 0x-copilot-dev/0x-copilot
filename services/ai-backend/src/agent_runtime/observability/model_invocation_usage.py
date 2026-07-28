@@ -128,13 +128,21 @@ class ModelInvocationUsageReconciler:
             if not record.provider_reported:
                 continue
             cost_micro_usd += record.cost_microusd
-            if record.usage_record_id is not None and (
-                record.usage_record_id in streamed_usage_ids
-                or record.usage_record_id in already_materialized_usage_ids
+            # Only the current worker's live streaming accumulator has already
+            # contributed these tokens to ``AssistantRunMetrics``. Durable call
+            # rows from an earlier process suppress re-insertion below, never
+            # the journal aggregate needed to reconstruct a missing run row.
+            if (
+                record.usage_record_id is not None
+                and record.usage_record_id in streamed_usage_ids
             ):
                 streamed.add(record.attempt_id)
                 continue
-            if record.attempt_id in already_materialized_ids:
+            total = _sum_usage(total, usage)
+            if record.attempt_id in already_materialized_ids or (
+                record.usage_record_id is not None
+                and record.usage_record_id in already_materialized_usage_ids
+            ):
                 continue
             if record.attempt_id in emitted:
                 continue
@@ -171,7 +179,6 @@ class ModelInvocationUsageReconciler:
                 pricing_version=route.price_revision,
                 created_at=pricing_at,
             )
-            total = _sum_usage(total, usage)
 
         return ModelInvocationUsageReconciliation(
             records=tuple(emitted.values()),

@@ -37,12 +37,37 @@ from agent_runtime.observability.model_invocation_usage import (
     ModelInvocationUsageReconciler,
 )
 from agent_runtime.observability.token_usage import NormalizedTokenUsage
-from agent_runtime.observability.usage_recorder import InMemoryUsageRecorder
+from agent_runtime.observability.usage_recorder import (
+    InMemoryUsageRecorder,
+    UsageRecordingResult,
+)
+from runtime_adapters.in_memory import InMemoryRuntimeApiStore
 from runtime_api.schemas import RunRecord
 from runtime_worker.model_invocation_terminal import ModelInvocationTerminalIntegration
 from runtime_worker.run_metrics import AssistantRunMetrics
 
 _NOW = datetime(2026, 7, 28, tzinfo=timezone.utc)
+
+
+class _PersistentRecorder:
+    """Minimal durable recorder double with normal run-row idempotency."""
+
+    def __init__(self, store: InMemoryRuntimeApiStore) -> None:
+        self.store = store
+        self.calls: list[object] = []
+        self.runs: list[object] = []
+
+    async def record_call(self, record, *, pricing_at):  # type: ignore[no-untyped-def]
+        del pricing_at
+        self.calls.append(record)
+        await self.store.record_model_call_usage(record)
+        return UsageRecordingResult(cost_micro_usd=record.cost_micro_usd)
+
+    async def record_run(self, record, *, pricing_at):  # type: ignore[no-untyped-def]
+        del pricing_at
+        self.runs.append(record)
+        await self.store.record_run_usage(record)
+        return UsageRecordingResult(cost_micro_usd=record.cost_micro_usd)
 
 
 def _run() -> RunRecord:
@@ -261,6 +286,33 @@ def test_reconciles_success_and_retried_failed_attempts_exactly_once() -> None:
         ),
     )
     assert restarted.records == ()
+    assert restarted.usage.total_tokens == 16
+    assert restarted.cost_micro_usd == 16
+
+
+def test_prior_stream_row_suppresses_reinsertion_not_restart_aggregate() -> None:
+    """A prior process's stream row is not a live metrics contribution."""
+
+    invocation = _invocation()
+    streamed = _usage(
+        invocation,
+        ordinal=1,
+        stream_id="message-from-prior-worker",
+        input_tokens=10,
+        output_tokens=4,
+        cost=23,
+    )
+
+    restarted = ModelInvocationUsageReconciler().reconcile(
+        run=_run(),
+        records=_journal_rows(invocation, streamed),
+        pricing_at=_NOW,
+        already_materialized_usage_ids=frozenset({"message-from-prior-worker"}),
+    )
+
+    assert restarted.records == ()
+    assert restarted.usage.total_tokens == 14
+    assert restarted.cost_micro_usd == 23
 
 
 def test_streamed_terminal_usage_is_a_dedupe_witness_not_a_second_charge() -> None:
@@ -459,6 +511,157 @@ async def test_terminal_integration_merges_stream_dedupe_and_billed_retry_before
     assert recorder.runs[0].total_tokens == 24
     assert recorder.runs[0].cost_micro_usd == 42
     assert cost == 42
+
+
+async def test_restart_rebuilds_missing_run_row_without_reemitting_attempt_row() -> (
+    None
+):
+    """A durable F10 call row cannot erase the journal aggregate on restart."""
+
+    invocation = _invocation()
+    attempt = _usage(invocation, ordinal=1, input_tokens=7, output_tokens=3, cost=19)
+    rows = _journal_rows(invocation, attempt)
+
+    class _Journal:
+        async def list_for_run(
+            self, **kwargs: object
+        ) -> tuple[SequencedModelInvocationRecord, ...]:
+            after = kwargs.get("after_sequence", 0)
+            return tuple(row for row in rows if row.sequence_no > after)
+
+    store = InMemoryRuntimeApiStore()
+    existing = (
+        ModelInvocationUsageReconciler()
+        .reconcile(run=_run(), records=rows, pricing_at=_NOW)
+        .records[0]
+    )
+    await store.record_model_call_usage(existing)
+    recorder = _PersistentRecorder(store)
+    metrics = AssistantRunMetrics(started_at=_NOW, provider="openai")
+    integration = ModelInvocationTerminalIntegration(
+        journal=_Journal(),  # type: ignore[arg-type]
+        usage_recorder=recorder,  # type: ignore[arg-type]
+        persistence=store,
+    )
+
+    await integration.finalize(
+        run=_run(),
+        metrics=metrics,
+        subject_fingerprint="a" * 64,
+        completed_at=_NOW,
+    )
+    await integration.record_run_usage(
+        run=_run(), metrics=metrics, completed_at=_NOW, status="completed"
+    )
+
+    assert recorder.calls == []
+    assert metrics.usage.total_tokens == 10
+    assert metrics.model_invocation_cost_micro_usd == 19
+    assert store.run_usage[_run().run_id].total_tokens == 10
+    assert store.run_usage[_run().run_id].cost_micro_usd == 19
+
+
+async def test_restart_rebuilds_missing_run_row_from_prior_stream_row() -> None:
+    """A persisted stream message ID suppresses only duplicate call insertion."""
+
+    invocation = _invocation()
+    streamed = _usage(
+        invocation,
+        ordinal=1,
+        stream_id="message-prior-stream",
+        input_tokens=10,
+        output_tokens=4,
+        cost=23,
+    )
+    rows = _journal_rows(invocation, streamed)
+
+    class _Journal:
+        async def list_for_run(
+            self, **kwargs: object
+        ) -> tuple[SequencedModelInvocationRecord, ...]:
+            after = kwargs.get("after_sequence", 0)
+            return tuple(row for row in rows if row.sequence_no > after)
+
+    store = InMemoryRuntimeApiStore()
+    prior = (
+        ModelInvocationUsageReconciler()
+        .reconcile(run=_run(), records=rows, pricing_at=_NOW)
+        .records[0]
+        .model_copy(update={"id": "message-prior-stream"})
+    )
+    await store.record_model_call_usage(prior)
+    recorder = _PersistentRecorder(store)
+    metrics = AssistantRunMetrics(started_at=_NOW, provider="openai")
+    integration = ModelInvocationTerminalIntegration(
+        journal=_Journal(),  # type: ignore[arg-type]
+        usage_recorder=recorder,  # type: ignore[arg-type]
+        persistence=store,
+    )
+
+    await integration.finalize(
+        run=_run(),
+        metrics=metrics,
+        subject_fingerprint="a" * 64,
+        completed_at=_NOW,
+    )
+    await integration.record_run_usage(
+        run=_run(), metrics=metrics, completed_at=_NOW, status="completed"
+    )
+
+    assert recorder.calls == []
+    assert metrics.usage.total_tokens == 14
+    assert store.run_usage[_run().run_id].total_tokens == 14
+
+
+async def test_existing_run_row_stays_idempotent_after_restart_reconciliation() -> None:
+    """Replaying the journal cannot replace a durable aggregate or emit calls."""
+
+    invocation = _invocation()
+    attempt = _usage(invocation, ordinal=1, input_tokens=7, output_tokens=3, cost=19)
+    rows = _journal_rows(invocation, attempt)
+
+    class _Journal:
+        async def list_for_run(
+            self, **kwargs: object
+        ) -> tuple[SequencedModelInvocationRecord, ...]:
+            return rows
+
+    store = InMemoryRuntimeApiStore()
+    call = (
+        ModelInvocationUsageReconciler()
+        .reconcile(run=_run(), records=rows, pricing_at=_NOW)
+        .records[0]
+    )
+    await store.record_model_call_usage(call)
+    original_metrics = AssistantRunMetrics(started_at=_NOW, provider="openai")
+    original_metrics.record_model_invocation_usage(
+        NormalizedTokenUsage(input_tokens=7, output_tokens=3), cost_micro_usd=0
+    )
+    original_metrics.set_model_invocation_cost_micro_usd(19)
+    await store.record_run_usage(
+        original_metrics.to_usage_record(_run(), completed_at=_NOW, status="completed")
+    )
+    recorder = _PersistentRecorder(store)
+    metrics = AssistantRunMetrics(started_at=_NOW, provider="openai")
+    integration = ModelInvocationTerminalIntegration(
+        journal=_Journal(),  # type: ignore[arg-type]
+        usage_recorder=recorder,  # type: ignore[arg-type]
+        persistence=store,
+    )
+
+    await integration.finalize(
+        run=_run(),
+        metrics=metrics,
+        subject_fingerprint="a" * 64,
+        completed_at=_NOW,
+    )
+    await integration.record_run_usage(
+        run=_run(), metrics=metrics, completed_at=_NOW, status="completed"
+    )
+
+    assert recorder.calls == []
+    assert len(store.run_usage) == 1
+    assert store.run_usage[_run().run_id].total_tokens == 10
 
 
 async def test_terminal_integration_without_f10_journal_preserves_legacy_metrics() -> (
