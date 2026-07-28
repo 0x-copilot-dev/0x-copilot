@@ -8,6 +8,7 @@ See also:
 - [architecture/02-contracts.md](../architecture/02-contracts.md) — `McpServerRecord`, `TokenEnvelope`
 - [guides/add-mcp-catalog-entry.md](../guides/add-mcp-catalog-entry.md) — adding a curated catalog entry
 - [reference/internal-api.md](../reference/internal-api.md) — internal routes for ai-backend
+- [ai-backend MCP control-plane operations](../../../ai-backend/docs/runbooks/mcp-control-plane-operations.md) — revision-feed, session-pool, and rollback operations
 
 ---
 

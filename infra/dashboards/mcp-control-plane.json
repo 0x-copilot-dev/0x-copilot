@@ -1,0 +1,199 @@
+{
+  "title": "MCP Control Plane (F8)",
+  "description": "Body-free, low-cardinality MCP revision-feed and session-pool health. Queries intentionally use only implementation-owned lifecycle labels.",
+  "schemaVersion": 39,
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Backend MCP phase rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (phase, outcome) (rate(mcp_phase_total[5m]))",
+          "legendFormat": "{{phase}} / {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Backend MCP phase latency p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, phase, outcome) (rate(mcp_phase_duration_seconds_bucket[5m])))",
+          "legendFormat": "{{phase}} / {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Session pool size snapshots",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (state) (mcp_session_pool_size_sum)",
+          "legendFormat": "{{state}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Pool saturation, reconnect, and drain failures",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(mcp_phase_total{phase=\"lease_acquisition\",outcome=\"saturated\"}[5m]))",
+          "legendFormat": "lease saturated"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(mcp_phase_total{phase=\"saturation\",outcome=\"rejected\"}[5m]))",
+          "legendFormat": "saturation rejected"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(mcp_phase_total{phase=\"reconnect\",outcome=~\"budget_exhausted|ambiguous_or_stale\"}[5m]))",
+          "legendFormat": "reconnect {{outcome}}"
+        },
+        {
+          "refId": "D",
+          "expr": "sum(rate(mcp_phase_total{phase=\"shutdown_drain\",outcome=\"timed_out\"}[5m]))",
+          "legendFormat": "drain timed out"
+        },
+        {
+          "refId": "E",
+          "expr": "sum(rate(mcp_phase_total{phase=\"lease_acquisition\",outcome=\"saturated\"}[5m])) + sum(rate(mcp_phase_total{phase=\"saturation\",outcome=\"rejected\"}[5m])) + sum(rate(mcp_phase_total{phase=\"reconnect\",outcome=~\"budget_exhausted|ambiguous_or_stale\"}[5m])) + sum(rate(mcp_phase_total{phase=\"shutdown_drain\",outcome=\"timed_out\"}[5m]))",
+          "legendFormat": "alert signal total"
+        }
+      ],
+      "alert": {
+        "name": "MCP pool saturation or reconnect exhaustion",
+        "for": "5m",
+        "frequency": "1m",
+        "noDataState": "OK",
+        "executionErrorState": "Alerting",
+        "conditions": [
+          {
+            "type": "query",
+            "query": {
+              "params": ["E", "5m", "now"]
+            },
+            "reducer": {
+              "type": "sum",
+              "params": []
+            },
+            "evaluator": {
+              "type": "gt",
+              "params": [0]
+            },
+            "operator": {
+              "type": "and"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 5,
+      "title": "AI revision feed lifecycle",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (event, outcome) (rate(mcp_control_plane_events_total{event=~\"feed|poller|cursor_ack|invalidation\"}[5m]))",
+          "legendFormat": "{{event}} / {{outcome}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(mcp_control_plane_events_total{event=~\"feed|poller\",outcome=~\"offline|cursor_expired|stalled|timed_out\"}[5m]))",
+          "legendFormat": "alert signal total"
+        }
+      ],
+      "alert": {
+        "name": "MCP revision feed offline, expired, or stalled",
+        "for": "10m",
+        "frequency": "1m",
+        "noDataState": "OK",
+        "executionErrorState": "Alerting",
+        "conditions": [
+          {
+            "type": "query",
+            "query": {
+              "params": ["B", "10m", "now"]
+            },
+            "reducer": {
+              "type": "sum",
+              "params": []
+            },
+            "evaluator": {
+              "type": "gt",
+              "params": [0]
+            },
+            "operator": {
+              "type": "and"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "id": 6,
+      "title": "Revision feed lag, convergence, and backoff p95",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, event, measure) (rate(mcp_control_plane_latency_seconds_bucket{event=~\"feed|exact\",measure=~\"lag|convergence|backoff\"}[5m])))",
+          "legendFormat": "{{event}} / {{measure}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(mcp_control_plane_events_total{event=\"feed\",outcome=~\"offline|cursor_expired|stalled\"}[5m]))",
+          "legendFormat": "feed {{outcome}}"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "title": "Descriptor cache freshness, races, and coalescing",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (event, outcome) (rate(mcp_control_plane_events_total{event=~\"cache|exact|subject\"}[5m]))",
+          "legendFormat": "{{event}} / {{outcome}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(mcp_phase_total{phase=\"coalescing\",outcome=\"unchanged\"}[5m]))",
+          "legendFormat": "backend coalescing / unchanged"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Active-only feed work and bounded payload counts",
+      "type": "timeseries",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (event, measure) (rate(mcp_control_plane_count_total{event=\"feed\",measure=~\"active_subjects|http_calls|pages|notices|bytes\"}[5m]))",
+          "legendFormat": "{{event}} / {{measure}}"
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (measure, outcome) (rate(mcp_diagnostic_count_total{measure=~\"revision_feed_notices|descriptor_bytes|descriptor_items\"}[5m]))",
+          "legendFormat": "backend {{measure}} / {{outcome}}"
+        }
+      ]
+    }
+  ]
+}

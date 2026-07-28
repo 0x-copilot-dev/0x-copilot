@@ -59,6 +59,43 @@ Variables marked **required in production** will cause startup to fail if unset 
 
 ---
 
+## MCP descriptor revision control plane (F8)
+
+All F8 values are parsed strictly at worker composition. Invalid, zero, negative,
+or over-bound values fail startup rather than being silently clamped. The control
+plane is disabled by default; with it disabled, the bounded discovery-cache values
+still apply. See the [operations runbook](../runbooks/mcp-control-plane-operations.md)
+for enablement, desktop storage, and backout.
+
+| Variable                                       | Default | Accepted bound / requirement                        | Description                                                                             |
+| ---------------------------------------------- | ------: | --------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `RUNTIME_ENABLE_F8_MCP_CONTROL_PLANE`          | `false` | Strict boolean: `1/true/yes/on` or `0/false/no/off` | Enables worker-local revision checks, active-subject feed polling, and cursor handling. |
+| `MCP_BACKEND_REGISTRY_URL`                     |       — | Required when F8 is enabled                         | Backend internal MCP revision endpoint base URL.                                        |
+| `RUNTIME_MCP_DISCOVERY_CACHE_TTL_SECONDS`      |   `900` | `> 0` and `<= 86400`                                | Base MCP discovery-cache TTL.                                                           |
+| `RUNTIME_MCP_DISCOVERY_CACHE_MAX_ENTRIES`      |  `1000` | integer `1..100000`                                 | Base MCP discovery-cache entry cap.                                                     |
+| `RUNTIME_MCP_DESCRIPTOR_MAX_STALENESS_SECONDS` |   `300` | `> 0` and `<= 86400`                                | Maximum permitted descriptor staleness before freshness validation.                     |
+| `RUNTIME_MCP_REVISION_CACHE_TTL_SECONDS`       |    `30` | `> 0` and `<= 86400`                                | Exact-revision resolver cache TTL.                                                      |
+| `RUNTIME_MCP_REVISION_CACHE_MAX_ENTRIES`       |  `1000` | integer `1..100000`                                 | Exact-revision resolver entry cap.                                                      |
+| `RUNTIME_MCP_REVISION_SUBJECT_MAX`             |   `256` | integer `1..10000`                                  | Active feed-subject cap (`A` in the `A × P` request bound).                             |
+| `RUNTIME_MCP_REVISION_SUBJECT_TTL_SECONDS`     |   `300` | `> 0` and `<= 86400`                                | Inactivity TTL before an active subject is retired.                                     |
+| `RUNTIME_MCP_REVISION_MAX_DEDUPE_NOTICES`      |  `4096` | integer `1..100000`                                 | Per-process duplicate-notice memory cap.                                                |
+| `RUNTIME_MCP_REVISION_CATALOG_MAX_ENTRIES`     |  `1000` | integer `1..100000`                                 | Catalog generation-authority entry cap.                                                 |
+| `RUNTIME_MCP_REVISION_MAX_PAGES`               |     `4` | integer `1..100`                                    | Maximum feed pages per active subject per poll pass (`P`).                              |
+| `RUNTIME_MCP_REVISION_MAX_NOTICES`             |   `200` | integer `1..10000`                                  | Notice cap processed per subject/pass.                                                  |
+| `RUNTIME_MCP_REVISION_MAX_BYTES`               | `65536` | integer `1..10485760`                               | Response-byte cap per subject/pass.                                                     |
+| `RUNTIME_MCP_REVISION_PAGE_LIMIT`              |   `100` | integer `1..100`                                    | Requested page size for revision-feed calls.                                            |
+| `RUNTIME_MCP_REVISION_BACKOFF_BASE_SECONDS`    |     `1` | `> 0` and `<= 3600`                                 | Bounded exponential-backoff base after feed failure.                                    |
+| `RUNTIME_MCP_REVISION_BACKOFF_MAX_SECONDS`     |    `60` | `> 0` and `<= 86400`; must be `>=` base             | Maximum backoff delay.                                                                  |
+| `RUNTIME_MCP_REVISION_POLL_INTERVAL_SECONDS`   |    `15` | `> 0` and `<= 3600`                                 | Normal interval between poll passes.                                                    |
+| `RUNTIME_MCP_REVISION_STOP_GRACE_SECONDS`      |     `5` | `> 0` and `<= 60`                                   | Cancellation/drain grace for the owned poller task.                                     |
+
+For `RUNTIME_STORE_BACKEND=file`, `RUNTIME_FILE_STORE_ROOT` is also required and
+the cursor adapter stores private, hashed filenames under
+`mcp-revision-cursors/`. Cursor values are limited to 1,024 encoded bytes by the
+adapter; this is a fixed implementation cap, not an environment setting.
+
+---
+
 ## SSE and event bus
 
 | Variable                                 | Default          | Description                                                                         |

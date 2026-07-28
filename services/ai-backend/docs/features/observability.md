@@ -8,6 +8,7 @@ See also:
 - [architecture/04-security-invariants.md](../architecture/04-security-invariants.md) — redaction boundary
 - [features/usage-metrics.md](usage-metrics.md) — usage recording (separate from observability)
 - [runbooks/model-invocation-reliability-operations.md](../runbooks/model-invocation-reliability-operations.md) — F10 journal-derived metrics, incidents, and desktop recovery
+- [runbooks/mcp-control-plane-operations.md](../runbooks/mcp-control-plane-operations.md) — F8 revision-feed, cache, cursor, and MCP session-pool operations
 
 ---
 
