@@ -868,6 +868,28 @@ class ConversationQueryService:
     # Private helpers
     # ------------------------------------------------------------------
 
+    async def require_conversation_scope(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        conversation_id: str,
+    ):
+        """Public alias of the scope gate, for sibling conversation services.
+
+        ``ConversationCanvasService`` reads across a conversation's runs and must
+        prove ownership with exactly the same check every other conversation
+        route uses — a second implementation is how a 404-vs-403 divergence, or a
+        missed tenant clause, gets introduced. Exposed rather than reached for
+        privately so that reuse is a contract instead of an accident.
+        """
+
+        return await self._conversation_for_scope(
+            org_id=org_id,
+            user_id=user_id,
+            conversation_id=conversation_id,
+        )
+
     async def _conversation_for_scope(
         self,
         *,
