@@ -438,7 +438,7 @@ def test_backend_mcp_client_does_not_replay_non_safe_lease_failure(
         FakeHttpResponse({"payload": {"result": {}}}),
         FakeHttpResponse({"payload": {}}),
         FakeHttpResponse(
-            {"detail": {"code": "ambiguous_transport_failure"}}, status_code=409
+            {"detail": {"code": "ambiguous_transport_failure"}}, status_code=503
         ),
     ]
     client = _backend_client(runtime_context_admin, responses, calls)
@@ -518,13 +518,25 @@ def test_backend_mcp_client_recovers_stale_initialize_and_initialized_notificati
 
 def test_backend_mcp_client_parses_bounded_lease_failures_across_statuses() -> None:
     auth = BackendMcpClient._lease_error_from_response(
-        FakeHttpResponse({"detail": {"code": "auth_required"}}, status_code=403)
+        FakeHttpResponse({"detail": {"code": "auth_required"}}, status_code=401)
     )
     saturated = BackendMcpClient._lease_error_from_response(
         FakeHttpResponse({"detail": {"code": "pool_saturated"}}, status_code=429)
     )
     unavailable = BackendMcpClient._lease_error_from_response(
         FakeHttpResponse({"detail": {"code": "server_unavailable"}}, status_code=503)
+    )
+    invalid = BackendMcpClient._lease_error_from_response(
+        FakeHttpResponse({"detail": {"code": "lease_invalid"}}, status_code=400)
+    )
+    wrong_owner = BackendMcpClient._lease_error_from_response(
+        FakeHttpResponse({"detail": {"code": "lease_wrong_owner"}}, status_code=403)
+    )
+    mismatch = BackendMcpClient._lease_error_from_response(
+        FakeHttpResponse(
+            {"detail": {"code": "lease_stale_pre_dispatch", "redispatch_safe": True}},
+            status_code=503,
+        )
     )
 
     assert isinstance(auth, McpAuthError)
@@ -533,6 +545,13 @@ def test_backend_mcp_client_parses_bounded_lease_failures_across_statuses() -> N
     assert saturated.redispatch_safe is False
     assert isinstance(unavailable, McpLeaseError)
     assert unavailable.code == "server_unavailable"
+    assert isinstance(invalid, McpLeaseError)
+    assert invalid.code == "lease_invalid"
+    assert isinstance(wrong_owner, McpLeaseError)
+    assert wrong_owner.code == "lease_wrong_owner"
+    assert isinstance(mismatch, McpLeaseError)
+    assert mismatch.code == "lease_protocol_error"
+    assert mismatch.redispatch_safe is False
 
 
 def _backend_client(

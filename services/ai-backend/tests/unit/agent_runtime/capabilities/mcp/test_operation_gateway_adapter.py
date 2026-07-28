@@ -21,8 +21,8 @@ from agent_runtime.capabilities.mcp.annotations import (
     McpToolAnnotationsRegistry,
 )
 from agent_runtime.capabilities.mcp.effect_material import McpEffectMaterial
-from agent_runtime.capabilities.mcp.cards import McpAuthState
-from agent_runtime.capabilities.mcp.client import McpAuthError
+from agent_runtime.capabilities.mcp.cards import McpAuthState, McpLoadError
+from agent_runtime.capabilities.mcp.client import McpAuthError, McpLeaseError
 from agent_runtime.capabilities.mcp.middleware.auth_mcp import McpAuthSession
 from agent_runtime.capabilities.mcp.gateway_context import (
     McpOperationGatewayContext,
@@ -31,6 +31,7 @@ from agent_runtime.capabilities.mcp.gateway_context import (
 from agent_runtime.capabilities.mcp.execution_services import McpOperationStoredResult
 from agent_runtime.capabilities.mcp.operation_adapter import (
     McpOperationArgumentMaterialResolver,
+    McpOperationAdapter,
 )
 from agent_runtime.capabilities.operations.classifier import OperationClassifier
 from agent_runtime.capabilities.operations.context import (
@@ -43,6 +44,7 @@ from agent_runtime.capabilities.operations.descriptors import (
     OperationDescriptorRegistry,
 )
 from agent_runtime.capabilities.operations.gateway import OperationGateway
+from agent_runtime.capabilities.operations.errors import OperationGatewayError
 from agent_runtime.capabilities.operations.presentation import (
     SurfaceLedgerOperationOutcomePresenter,
 )
@@ -349,6 +351,63 @@ def test_gateway_presents_the_neutral_outcome_after_mcp_result_persistence() -> 
     assert outcome.capability == _SERVER
     assert outcome.op == "list_issues"
     assert outcome.output == {"items": [{"id": "L-1"}]}
+
+
+@pytest.mark.parametrize(
+    ("code", "acquisition_safe", "expected_retryable"),
+    (
+        ("ambiguous_transport_failure", False, False),
+        ("lease_invalid", False, False),
+        ("lease_wrong_owner", False, False),
+        ("lease_stale_pre_dispatch", False, False),
+        ("pool_saturated", True, True),
+        ("server_unavailable", True, True),
+    ),
+)
+def test_lease_failure_retryability_never_authorizes_effect_replay(
+    code: str,
+    acquisition_safe: bool,
+    expected_retryable: bool,
+) -> None:
+    fixture = _Fixture()
+    client = fixture.FakeMcpClient(tools=(), resources=())
+    dispatches = 0
+
+    async def call_tool(*, tool_name: str, arguments: Mapping[str, object]) -> object:
+        nonlocal dispatches
+        del tool_name, arguments
+        dispatches += 1
+        raise McpLeaseError(code, acquisition_safe=acquisition_safe)
+
+    client.call_tool = call_tool  # type: ignore[method-assign]
+    card = fixture.make_card(name=_SERVER).model_copy(
+        update={"auth_state": McpAuthState.AUTHENTICATED, "server_id": "srv_linear"}
+    )
+    provider = fixture.FakeMcpProvider(cards=(card,), clients={_SERVER: client})
+    registry = DynamicMcpRegistry(providers=(provider,))
+
+    async def dispatch() -> OperationGatewayError:
+        resolution = await registry.resolve_server(_SERVER)
+        assert not isinstance(resolution, McpLoadError)
+        adapter = McpOperationAdapter(
+            registry=registry,
+            runtime_context=_runtime_context(),
+            timeout_seconds=1,
+            server_name=_SERVER,
+            tool_name="list_issues",
+            arguments={},
+            gate=None,
+            execution=None,  # type: ignore[arg-type]
+            tool_call_id="call_lease",
+        )
+        with pytest.raises(OperationGatewayError) as exc_info:
+            await adapter._dispatch(resolution)
+        return exc_info.value
+
+    error = asyncio.run(dispatch())
+
+    assert error.retryable is expected_retryable
+    assert dispatches == 1
 
 
 def test_unbound_gateway_holds_before_client_construction() -> None:

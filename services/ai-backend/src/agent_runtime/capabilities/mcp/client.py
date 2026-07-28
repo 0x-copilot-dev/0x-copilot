@@ -86,10 +86,17 @@ class McpUnsupportedMethodError(McpClientError):
 class McpLeaseError(McpConnectionError):
     """The backend rejected an opaque MCP session lease."""
 
-    def __init__(self, code: str, *, redispatch_safe: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        *,
+        redispatch_safe: bool = False,
+        acquisition_safe: bool = False,
+    ) -> None:
         super().__init__("MCP session lease was rejected.")
         self.code = code
         self.redispatch_safe = redispatch_safe
+        self.acquisition_safe = acquisition_safe
 
 
 @runtime_checkable

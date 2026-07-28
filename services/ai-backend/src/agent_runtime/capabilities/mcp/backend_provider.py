@@ -175,6 +175,15 @@ class BackendMcpClient:
             "server_unavailable",
         }
     )
+    _LEASE_FAILURE_STATUSES: ClassVar[dict[str, int]] = {
+        "lease_stale_pre_dispatch": 409,
+        "lease_wrong_owner": 403,
+        "lease_invalid": 400,
+        "pool_saturated": 429,
+        "server_unavailable": 503,
+        "ambiguous_transport_failure": 503,
+        "auth_required": 401,
+    }
     http_client: httpx.AsyncClient = field(
         default_factory=BackendHttpPool.get,
         repr=False,
@@ -377,6 +386,12 @@ class BackendMcpClient:
             raise McpConnectionError("MCP JSON-RPC request failed.") from exc
         lease_error = self._lease_error_from_response(response)
         if lease_error is not None:
+            if isinstance(lease_error, McpLeaseError):
+                raise McpLeaseError(
+                    lease_error.code,
+                    redispatch_safe=lease_error.redispatch_safe,
+                    acquisition_safe=True,
+                )
             raise lease_error
         if response.status_code in {401, 403}:
             raise McpAuthError("MCP server is not authenticated.")
@@ -556,6 +571,8 @@ class BackendMcpClient:
             or code not in BackendMcpClient._LEASE_FAILURE_CODES
         ):
             return None
+        if response.status_code != BackendMcpClient._LEASE_FAILURE_STATUSES[code]:
+            return McpLeaseError("lease_protocol_error")
         if code == "auth_required":
             return McpAuthError("MCP server is not authenticated.")
         redispatch_safe = (

@@ -32,6 +32,7 @@ from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
     McpClientError,
     McpConnectionError,
+    McpLeaseError,
     McpTimeoutError,
     aclose_mcp_client_safely,
 )
@@ -95,6 +96,7 @@ _CONNECTOR_TIMEOUT = "The connector timed out; no external change was made."
 _CONNECTOR_PROTOCOL_ERROR = (
     "The connector reported an error; no external change was made."
 )
+_RETRYABLE_ACQUISITION_LEASE_CODES = frozenset({"pool_saturated", "server_unavailable"})
 
 
 class McpOperationGateResolver:
@@ -435,6 +437,15 @@ class McpOperationAdapter(OperationAdapter):
                 _CONNECTOR_TIMEOUT,
                 retryable=True,
             ) from exc
+        except McpLeaseError as exc:
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                _CONNECTOR_UNAVAILABLE,
+                retryable=(
+                    exc.acquisition_safe
+                    and exc.code in _RETRYABLE_ACQUISITION_LEASE_CODES
+                ),
+            ) from exc
         except McpAuthError as exc:
             # A connector can revoke credentials between the pre-dispatch gate
             # and this read.  Re-enter the same auth gate; a rejected resume
@@ -449,7 +460,7 @@ class McpOperationAdapter(OperationAdapter):
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,
                 _CONNECTOR_UNAVAILABLE,
-                retryable=True,
+                retryable=False,
             ) from exc
         except (PermissionError, McpConnectionError, ConnectionError) as exc:
             raise OperationGatewayError(
