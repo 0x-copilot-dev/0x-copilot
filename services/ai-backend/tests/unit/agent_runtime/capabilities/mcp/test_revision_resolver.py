@@ -272,6 +272,39 @@ async def test_notice_isolated_to_verified_feed_subject() -> None:
 
 
 @pytest.mark.asyncio
+async def test_subject_flush_is_bounded_and_tenant_isolated() -> None:
+    client = _Client()
+    client.gate.set()
+    resolver = McpDescriptorRevisionResolver(client, ttl_seconds=10, max_entries=3)
+    await resolver.register(
+        org_id="org-a", user_id="user-a", server_name="one", server_id="server-a"
+    )
+    await resolver.register(
+        org_id="org-a", user_id="user-a", server_name="two", server_id="server-b"
+    )
+    await resolver.register(
+        org_id="org-b", user_id="user-b", server_name="one", server_id="server-a"
+    )
+    await resolver.resolve(org_id="org-a", user_id="user-a", server_name="one")
+    await resolver.resolve(org_id="org-a", user_id="user-a", server_name="two")
+    await resolver.resolve(org_id="org-b", user_id="user-b", server_name="one")
+
+    await resolver.invalidate_subject(org_id="org-a", user_id="user-a")
+
+    assert (
+        await resolver.resolve(org_id="org-a", user_id="user-a", server_name="one")
+    ).state is RevisionResolveState.FRESH
+    assert (
+        await resolver.resolve(org_id="org-a", user_id="user-a", server_name="two")
+    ).state is RevisionResolveState.FRESH
+    assert (
+        await resolver.resolve(org_id="org-b", user_id="user-b", server_name="one")
+    ).state is RevisionResolveState.FRESH
+    assert client.calls == ["server-a", "server-b", "server-a", "server-a", "server-b"]
+    assert len(resolver._subject_keys) == 2
+
+
+@pytest.mark.asyncio
 async def test_not_found_is_cached_for_the_ttl() -> None:
     client = _NotFoundClient()
     resolver = McpDescriptorRevisionResolver(client, ttl_seconds=10)
