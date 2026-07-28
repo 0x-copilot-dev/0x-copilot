@@ -8,10 +8,17 @@ from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from enum import StrEnum
 from threading import Lock
-from typing import AsyncIterator, Iterator
+from typing import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Protocol
 
-from pydantic import Field
+from pydantic import Field, NonNegativeInt, PositiveInt
 
+from agent_runtime.capabilities.task_policy import (
+    TaskPolicyProfile,
+    TaskPolicySelection,
+    ToolOperationOutcome,
+    ToolUseFeedback,
+    ToolUseIntent,
+)
 from agent_runtime.control_plane.contracts import RunControlSnapshot
 from agent_runtime.control_plane.feature_modes import (
     AgentQualityFeature,
@@ -35,6 +42,97 @@ class RunControlBinding(RuntimeContract):
         return self.effective_modes.mode_for(feature)
 
 
+class TaskPolicyControllerPort(Protocol):
+    """Narrow domain-controller seam shared by supervisor and local children."""
+
+    def before_operation(
+        self,
+        intent: ToolUseIntent,
+    ) -> ToolUseFeedback | Awaitable[ToolUseFeedback]: ...
+
+    def after_operation(
+        self,
+        outcome: ToolOperationOutcome,
+    ) -> ToolUseFeedback | Awaitable[ToolUseFeedback]: ...
+
+
+class TaskPolicyRuntimeControllerPort(TaskPolicyControllerPort, Protocol):
+    """Full graph-seam contract supplied by the durable F4 domain lane."""
+
+    def before_model_turn(
+        self,
+        *,
+        model_turn: int,
+        execution_scope: str,
+    ) -> ToolUseFeedback | Awaitable[ToolUseFeedback]: ...
+
+    def observe_upstream_policy_block(
+        self,
+        intent: ToolUseIntent,
+    ) -> ToolUseFeedback | Awaitable[ToolUseFeedback]: ...
+
+
+class TaskPolicyFingerprintPort(Protocol):
+    """Keyed canonical request fingerprinting without exposing arguments."""
+
+    def for_request(
+        self,
+        *,
+        capability_id: str,
+        arguments: Mapping[str, object],
+    ) -> str: ...
+
+
+class TaskPolicyCapabilityProgress(RuntimeContract):
+    """Content-free durable usage for one registered capability."""
+
+    capability_id: str = Field(min_length=1, max_length=240)
+    tool_calls_used: NonNegativeInt = 0
+    input_tokens_used: NonNegativeInt = 0
+    tool_call_limit: PositiveInt | None = None
+
+
+class TaskPolicyProgressProjection(RuntimeContract):
+    """Bounded F4 handoff consumed by later prompt assembly, never prompt text."""
+
+    profile_id: str = Field(min_length=1, max_length=160)
+    profile_revision: str = Field(min_length=1, max_length=160)
+    task_family: str = Field(min_length=1, max_length=80)
+    model_turns_used: NonNegativeInt = 0
+    model_turn_limit: PositiveInt | None = None
+    tool_calls_used: NonNegativeInt = 0
+    tool_call_limit: PositiveInt | None = None
+    cost_microusd_used: NonNegativeInt = 0
+    cost_microusd_limit: NonNegativeInt | None = None
+    deadline_epoch_ms: NonNegativeInt | None = None
+    completed_steps: NonNegativeInt = 0
+    total_steps: NonNegativeInt = 0
+    capabilities: tuple[TaskPolicyCapabilityProgress, ...] = Field(
+        default=(),
+        max_length=256,
+    )
+
+
+TaskPolicyProgressProjector = Callable[[], TaskPolicyProgressProjection]
+
+
+@dataclass(frozen=True, slots=True)
+class TaskPolicyRuntimeBinding:
+    """One replayed F4 selection/controller shared by the complete run graph."""
+
+    selection: TaskPolicySelection
+    profile: TaskPolicyProfile
+    controller: TaskPolicyRuntimeControllerPort
+    fingerprinter: TaskPolicyFingerprintPort
+    mode: FeatureMode
+    progress_projector: TaskPolicyProgressProjector
+
+    def progress(self) -> TaskPolicyProgressProjection:
+        """Return the latest typed, bounded prompt/progress projection."""
+
+        return TaskPolicyProgressProjection.model_validate(self.progress_projector())
+
+
 _CURRENT_BINDING: ContextVar[RunControlBinding | None] = ContextVar(
     "agent_runtime_run_control_binding",
     default=None,
@@ -48,6 +146,10 @@ _CURRENT_LIFECYCLE_REDUCER: ContextVar["RuntimeToolLifecycleReducer | None"] = (
         "agent_runtime_tool_lifecycle_reducer",
         default=None,
     )
+)
+_CURRENT_TASK_POLICY: ContextVar[TaskPolicyRuntimeBinding | None] = ContextVar(
+    "agent_runtime_task_policy_binding",
+    default=None,
 )
 
 
@@ -188,13 +290,18 @@ class _RunControlContextToken:
     binding: Token[RunControlBinding | None]
     serial_admission: Token[RunSerialAdmission | None]
     lifecycle_reducer: Token[RuntimeToolLifecycleReducer | None]
+    task_policy: Token[TaskPolicyRuntimeBinding | None]
 
 
 class RunControlContext:
     """Read-only run-local access to the verified immutable binding."""
 
     @staticmethod
-    def bind_for_run(binding: RunControlBinding) -> _RunControlContextToken:
+    def bind_for_run(
+        binding: RunControlBinding,
+        *,
+        task_policy: TaskPolicyRuntimeBinding | None = None,
+    ) -> _RunControlContextToken:
         """Bind ``binding`` for one worker execution or approval continuation."""
 
         return _RunControlContextToken(
@@ -203,6 +310,7 @@ class RunControlContext:
             lifecycle_reducer=_CURRENT_LIFECYCLE_REDUCER.set(
                 RuntimeToolLifecycleReducer()
             ),
+            task_policy=_CURRENT_TASK_POLICY.set(task_policy),
         )
 
     @staticmethod
@@ -233,9 +341,23 @@ class RunControlContext:
         return _CURRENT_LIFECYCLE_REDUCER.get()
 
     @staticmethod
+    def task_policy() -> TaskPolicyRuntimeBinding | None:
+        """Return the replayed F4 binding inherited by all local subagents."""
+
+        return _CURRENT_TASK_POLICY.get()
+
+    @staticmethod
+    def task_policy_progress() -> TaskPolicyProgressProjection | None:
+        """Return the sole typed Step 5 progress/budget handoff."""
+
+        binding = _CURRENT_TASK_POLICY.get()
+        return None if binding is None else binding.progress()
+
+    @staticmethod
     def unbind(token: _RunControlContextToken) -> None:
         """Restore the binding that preceded ``token``."""
 
+        _CURRENT_TASK_POLICY.reset(token.task_policy)
         _CURRENT_LIFECYCLE_REDUCER.reset(token.lifecycle_reducer)
         _CURRENT_SERIAL_ADMISSION.reset(token.serial_admission)
         _CURRENT_BINDING.reset(token.binding)
@@ -245,6 +367,12 @@ __all__ = [
     "RunControlBinding",
     "RunControlContext",
     "RunSerialAdmission",
+    "TaskPolicyCapabilityProgress",
+    "TaskPolicyControllerPort",
+    "TaskPolicyFingerprintPort",
+    "TaskPolicyProgressProjection",
+    "TaskPolicyRuntimeControllerPort",
+    "TaskPolicyRuntimeBinding",
     "RuntimeToolControlOutcome",
     "RuntimeToolControlTerminalRecord",
     "RuntimeToolLifecycleReducer",
