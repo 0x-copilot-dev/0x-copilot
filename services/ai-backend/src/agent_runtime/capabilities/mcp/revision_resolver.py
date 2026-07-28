@@ -46,6 +46,8 @@ class McpDescriptorRevisionResolverPort(Protocol):
         self, *, org_id: str, user_id: str, server_name: str
     ) -> None: ...
 
+    async def invalidate_subject(self, *, org_id: str, user_id: str) -> None: ...
+
     async def apply_notice(
         self,
         *,
@@ -88,7 +90,22 @@ class McpDescriptorRevisionResolver:
         self._max = max_entries
         self._clock = clock
         self._entries: OrderedDict[tuple[str, str, str], _Entry] = OrderedDict()
+        # This bounded secondary index makes a subject flush proportional to
+        # that subject's registered servers rather than every cached tenant.
+        # It contains no descriptor material and cannot outgrow ``_entries``.
+        self._subject_keys: dict[
+            tuple[str, str], OrderedDict[tuple[str, str, str], None]
+        ] = {}
         self._guard = asyncio.Lock()
+
+    def _drop_key_locked(self, key: tuple[str, str, str]) -> None:
+        self._entries.pop(key, None)
+        subject_keys = self._subject_keys.get(key[:2])
+        if subject_keys is None:
+            return
+        subject_keys.pop(key, None)
+        if not subject_keys:
+            self._subject_keys.pop(key[:2], None)
 
     @staticmethod
     def _invalidate_entry(entry: _Entry) -> None:
@@ -105,7 +122,7 @@ class McpDescriptorRevisionResolver:
             )
             if key is None:
                 return
-            self._entries.pop(key)
+            self._drop_key_locked(key)
 
     def _evict_for_insert_locked(self) -> bool:
         """Make room for one idle entry without evicting an active cohort."""
@@ -117,7 +134,7 @@ class McpDescriptorRevisionResolver:
             )
             if key is None:
                 return False
-            self._entries.pop(key)
+            self._drop_key_locked(key)
         return True
 
     async def register(
@@ -132,6 +149,7 @@ class McpDescriptorRevisionResolver:
                     # create a second single-flight cohort for the same key.
                     return
                 self._entries[key] = _Entry(server_id=server_id)
+                self._subject_keys.setdefault(key[:2], OrderedDict())[key] = None
             elif entry.server_id != server_id:
                 entry.server_id = server_id
                 self._invalidate_entry(entry)
@@ -143,6 +161,16 @@ class McpDescriptorRevisionResolver:
             if entry := self._entries.get(key):
                 self._invalidate_entry(entry)
                 self._entries.move_to_end(key)
+
+    async def invalidate_subject(self, *, org_id: str, user_id: str) -> None:
+        """Fence every registered server for precisely one feed subject."""
+
+        subject = (org_id, user_id)
+        async with self._guard:
+            for key in tuple(self._subject_keys.get(subject, ())):
+                if entry := self._entries.get(key):
+                    self._invalidate_entry(entry)
+                    self._entries.move_to_end(key)
 
     async def apply_notice(
         self,
