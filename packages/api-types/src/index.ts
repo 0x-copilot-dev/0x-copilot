@@ -301,10 +301,7 @@ export type McpAuthState =
   | "auth_failed"
   | "auth_unsupported";
 export type McpServerHealth =
-  | "healthy"
-  | "degraded"
-  | "unavailable"
-  | "disabled";
+  "healthy" | "degraded" | "unavailable" | "disabled";
 
 export interface McpServer {
   server_id: string;
@@ -552,24 +549,21 @@ export type RuntimeEventSource =
 // canonical ledger mirror instead of redeclaring v2.1 wire literals here.
 // A5 appends the universal-effect lifecycle rows after A2/A3's artifact
 // slice; they remain reference-only and use the same SSE/replay envelope.
-const RUNTIME_LEDGER_V21_EVENT_TYPES = [
-  WORK_LEDGER_EVENT_TYPES[15],
-  WORK_LEDGER_EVENT_TYPES[16],
-  WORK_LEDGER_EVENT_TYPES[17],
-  WORK_LEDGER_EVENT_TYPES[18],
-  WORK_LEDGER_EVENT_TYPES[19],
-  WORK_LEDGER_EVENT_TYPES[20],
-  WORK_LEDGER_EVENT_TYPES[21],
-  WORK_LEDGER_EVENT_TYPES[23],
-  WORK_LEDGER_EVENT_TYPES[24],
-  WORK_LEDGER_EVENT_TYPES[25],
-  WORK_LEDGER_EVENT_TYPES[26],
-  WORK_LEDGER_EVENT_TYPES[27],
-  WORK_LEDGER_EVENT_TYPES[28],
-  WORK_LEDGER_EVENT_TYPES[29],
-  WORK_LEDGER_EVENT_TYPES[30],
-  WORK_LEDGER_EVENT_TYPES[33],
-] as const;
+// Every ledger event the backend can persist to a run must be parseable by the
+// client: `parseEnvelope` runs `isRuntimeEventEnvelope`, which rejects any
+// `event_type` absent from this tuple — and a rejected envelope is dropped
+// silently, with no error anywhere.
+//
+// This used to hand-pick positional indices into the ledger vocabulary, and it
+// skipped three: index 22 (`artifact.presentation_decided`) and 31/32 (the v2
+// gate pair). The client therefore received `artifact.created` but never the
+// decision event that promotes an artifact onto the Studio canvas, so the fold
+// found no canvas subject and Studio reported "no artifact was created" about
+// an artifact that existed. Index-based selection cannot survive an insertion
+// into the source tuple; taking the vocabulary whole is what makes the
+// guarantee hold. Overlap with the literals below is harmless — this is a
+// membership test, not a set.
+const RUNTIME_LEDGER_V21_EVENT_TYPES = WORK_LEDGER_EVENT_TYPES;
 type RuntimeLedgerV21EventType =
   (typeof RUNTIME_LEDGER_V21_EVENT_TYPES)[number];
 
@@ -754,17 +748,9 @@ export const RUNTIME_ACTIVITY_KINDS = [
 // action, not the resulting state). Additive — existing approve/reject
 // consumers are unaffected.
 export type ApprovalDecision =
-  | "approved"
-  | "rejected"
-  | "forwarded"
-  | "suggest_edit"
-  | "approve_with_edits";
+  "approved" | "rejected" | "forwarded" | "suggest_edit" | "approve_with_edits";
 export type ApprovalStatus =
-  | "pending"
-  | "approved"
-  | "rejected"
-  | "forwarded"
-  | "suggest_edit";
+  "pending" | "approved" | "rejected" | "forwarded" | "suggest_edit";
 
 export interface ApprovalForwardTarget {
   kind: "workspace_user";
@@ -1121,19 +1107,11 @@ export interface WorkspaceBehaviorOverrides {
 
 /** PR 4.3 — kind of retention TTL (mirrors `RetentionKind` server-side). */
 export type RetentionKind =
-  | "messages"
-  | "events"
-  | "context_payloads"
-  | "checkpoints"
-  | "memory_items";
+  "messages" | "events" | "context_payloads" | "checkpoints" | "memory_items";
 
 /** PR 4.3 — provenance scope for an effective TTL. `null` ⇒ deployment default. */
 export type RetentionSourceScope =
-  | "org"
-  | "user"
-  | "conversation"
-  | "assistant"
-  | null;
+  "org" | "user" | "conversation" | "assistant" | null;
 
 /** PR 4.3 — one row in the effective-TTL response. */
 export interface RetentionEffectivePolicyEntry {
@@ -1153,11 +1131,7 @@ export type LegalHoldScope = "org" | "user" | "conversation";
 
 /** D11 — closed, non-sensitive reasons; arbitrary legal text is never sent. */
 export type LegalHoldReasonCode =
-  | "legal_request"
-  | "investigation"
-  | "compliance"
-  | "security"
-  | "legacy";
+  "legal_request" | "investigation" | "compliance" | "security" | "legacy";
 
 /** D11 — create input; target is typed by scope, never a generic resource ref. */
 export interface LegalHoldCreateRequest {
@@ -2149,16 +2123,9 @@ export interface RuntimeEventEnvelope {
 }
 
 export type RuntimeEventPresentationKind =
-  | "progress"
-  | "result"
-  | "approval"
-  | "auth"
-  | "error";
+  "progress" | "result" | "approval" | "auth" | "error";
 export type RuntimeEventPresentationStatus =
-  | "Running"
-  | "Waiting for permission"
-  | "Done"
-  | "Failed";
+  "Running" | "Waiting for permission" | "Done" | "Failed";
 
 export interface RuntimeEventPresentationPreviewRow {
   title: string;
@@ -2464,11 +2431,7 @@ export interface ToolCallDeltaPayload extends ToolExecutionPresentation {
 }
 
 export type ToolResultStatus =
-  | "completed"
-  | "failed"
-  | "timed_out"
-  | "abandoned"
-  | "cancelled";
+  "completed" | "failed" | "timed_out" | "abandoned" | "cancelled";
 
 export interface ToolResultPayload extends ToolExecutionPresentation {
   tool_name: string;
@@ -2793,10 +2756,7 @@ export interface SubagentResumedPayload {
  *  is permitted to emit. Mirrors `LayoutTemplate` in
  *  `services/ai-backend/.../render_adapter_generator/models.py`. */
 export type AdapterLayoutTemplate =
-  | "form"
-  | "table"
-  | "kanban"
-  | "definition-list";
+  "form" | "table" | "kanban" | "definition-list";
 
 /** Phase 6B — payload of the `adapter_generated` run event. Carries the
  *  complete TypeScript source for one tier-2 `SaaSRendererAdapter` that
@@ -2859,12 +2819,7 @@ export const SURFACE_ARCHETYPES = [
 
 /** Purely visual presentation hint the renderer applies to a value. */
 export type SurfaceFieldFormat =
-  | "text"
-  | "number"
-  | "currency"
-  | "datetime"
-  | "badge"
-  | "user";
+  "text" | "number" | "currency" | "datetime" | "badge" | "user";
 
 /** Horizontal alignment for a table/board column. */
 export type SurfaceColumnAlign = "start" | "end";
@@ -2981,10 +2936,7 @@ export interface SurfaceSpecGeneratedPayload {
 // services/ai-backend/src/runtime_api/schemas/drafts.py (DraftStatus
 // enum + Draft / DraftSection / list / patch / send / discard requests).
 export type DraftStatus =
-  | "draft"
-  | "send_pending_approval"
-  | "sent"
-  | "discarded";
+  "draft" | "send_pending_approval" | "sent" | "discarded";
 
 export interface DraftSection {
   heading: string;
@@ -3852,12 +3804,7 @@ export interface MfaRecoveryConsumeRequest {
 // Login attempts (A8) -------------------------------------------------------
 
 export type LoginAttemptKind =
-  | "local"
-  | "oidc"
-  | "saml"
-  | "mfa"
-  | "scim_token"
-  | "api_key";
+  "local" | "oidc" | "saml" | "mfa" | "scim_token" | "api_key";
 export type LoginAttemptOutcome =
   | "success"
   | "bad_password"
@@ -4169,10 +4116,7 @@ export interface ShortcutsPreferences {
 }
 
 export type NotificationEvent =
-  | "mention"
-  | "approval_needed"
-  | "run_finished"
-  | "weekly_digest";
+  "mention" | "approval_needed" | "run_finished" | "weekly_digest";
 
 export type NotificationChannel = "email" | "slack" | "desktop";
 
@@ -4360,8 +4304,7 @@ export interface MagicLinkStartResponse {
 }
 
 export type MagicLinkCallbackOutcome =
-  | "session_minted"
-  | "workspace_pick_required";
+  "session_minted" | "workspace_pick_required";
 
 export interface WorkspaceCandidate {
   org_id: string;
@@ -4649,17 +4592,10 @@ export interface AuditEventListResponse {
 // =====================================================================
 
 export type AdapterRegistryLayout =
-  | "form"
-  | "table"
-  | "kanban"
-  | "definition-list";
+  "form" | "table" | "kanban" | "definition-list";
 
 export type AdapterCandidateStatus =
-  | "submitted"
-  | "in-review"
-  | "changes-requested"
-  | "approved"
-  | "rejected";
+  "submitted" | "in-review" | "changes-requested" | "approved" | "rejected";
 
 export type AdapterReviewAction = "approve" | "reject" | "request-changes";
 
@@ -4805,9 +4741,7 @@ export type {
 //   id: 42
 //   data: { "event_id": "...", "sequence_no": 42, ... }
 export type HomeActivityEventType =
-  | "activity_added"
-  | "activity_updated"
-  | "heartbeat";
+  "activity_added" | "activity_updated" | "heartbeat";
 
 import type { HomeActivityRow as _HomeActivityRow } from "./home";
 export interface HomeActivityEvent {
