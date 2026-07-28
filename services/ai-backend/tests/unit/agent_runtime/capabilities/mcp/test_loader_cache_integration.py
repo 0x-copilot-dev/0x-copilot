@@ -25,6 +25,13 @@ from agent_runtime.capabilities.mcp import (
     McpToolDiscoveryPage,
     RevisionAwareMcpDiscoveryCache,
 )
+from agent_runtime.capabilities.mcp.revision_feed import (
+    ActiveMcpRevisionSubjectRegistry,
+)
+from agent_runtime.capabilities.mcp.revision_resolver import (
+    RevisionResolveResult,
+    RevisionResolveState,
+)
 
 from tests.unit.agent_runtime.mcp.helpers import DynamicMcpLoadingMixin
 
@@ -105,7 +112,108 @@ class _DelayedMcpClient(DynamicMcpLoadingMixin.FakeMcpClient):
         return await super().list_tools()
 
 
+class _UnavailableRevisionResolver:
+    """Exact-check spy: live fallback is expected for every load."""
+
+    def __init__(self) -> None:
+        self.registered: list[tuple[str, str, str, str]] = []
+        self.resolved: list[tuple[str, str, str]] = []
+
+    async def register(self, **kwargs: str) -> None:
+        self.registered.append(
+            (
+                kwargs["org_id"],
+                kwargs["user_id"],
+                kwargs["server_name"],
+                kwargs["server_id"],
+            )
+        )
+
+    async def resolve(self, **kwargs: str) -> RevisionResolveResult:
+        self.resolved.append(
+            (kwargs["org_id"], kwargs["user_id"], kwargs["server_name"])
+        )
+        return RevisionResolveResult(RevisionResolveState.UNAVAILABLE)
+
+    async def invalidate(self, **_kwargs: str) -> None:
+        return None
+
+    async def invalidate_subject(self, **_kwargs: str) -> None:
+        return None
+
+    async def apply_notice(self, **_kwargs: object) -> None:
+        return None
+
+
 class TestLoaderCacheIntegration(LoaderCacheMixin):
+    def test_authorized_loader_touch_precedes_feed_only_and_capacity_is_advisory(
+        self,
+    ) -> None:
+        async def run() -> None:
+            resolver = _UnavailableRevisionResolver()
+            subjects = ActiveMcpRevisionSubjectRegistry(max_subjects=1)
+            cache = RevisionAwareMcpDiscoveryCache(
+                McpDiscoveryCache(),
+                max_staleness_seconds=60,
+                revision_resolver=resolver,  # type: ignore[arg-type]
+                revision_checks_enabled=True,
+                active_subjects=subjects,
+            )
+            loader, provider = self.build_loader(cache=cache)  # type: ignore[arg-type]
+            model = ModelConfig(
+                provider="fake",
+                model_name="fake",
+                max_input_tokens=128_000,
+                timeout_seconds=30,
+                temperature=0,
+            )
+            authorized = self.build_context(model)
+            denied = authorized.model_copy(
+                update={"user_id": "denied", "permission_scopes": set()}
+            )
+            second_authorized = authorized.model_copy(update={"user_id": "second"})
+
+            assert (
+                await loader.load_server(
+                    McpLoadRequest(
+                        server_name=self.TestValues.Names.DRIVE_MCP,
+                        runtime_context=authorized,
+                    )
+                )
+            ).succeeded
+            denied_result = await loader.load_server(
+                McpLoadRequest(
+                    server_name=self.TestValues.Names.DRIVE_MCP,
+                    runtime_context=denied,
+                )
+            )
+            assert denied_result.error is not None
+            assert denied_result.error.code is McpLoadErrorCode.PERMISSION_DENIED
+            # Registry capacity declines only background polling; exact
+            # resolution and live descriptor checks still run for this user.
+            assert (
+                await loader.load_server(
+                    McpLoadRequest(
+                        server_name=self.TestValues.Names.DRIVE_MCP,
+                        runtime_context=second_authorized,
+                    )
+                )
+            ).succeeded
+
+            assert [
+                subject.user_id for subject in await subjects.active_subjects()
+            ] == [authorized.user_id]
+            assert [row[1] for row in resolver.resolved] == [
+                authorized.user_id,
+                second_authorized.user_id,
+            ]
+            assert cache.subject_registration_diagnostics() == {
+                "subject_registration_declined": 1
+            }
+            assert len(provider.created_clients) == 2
+
+        asyncio.run(run())
+
     def test_cache_none_preserves_pre_cache_behaviour(self) -> None:
         """``McpLoader(cache=None)`` hits the live path on every call."""
 

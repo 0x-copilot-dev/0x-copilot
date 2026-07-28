@@ -201,6 +201,24 @@ class McpDescriptorRevisionResolver:
                     self._invalidate_entry(entry)
                 self._entries.move_to_end(key)
 
+    async def registered_server_names(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> tuple[str, ...]:
+        """Return registered descriptor names for one verified subject/server.
+
+        Feed payloads identify a backend ``server_id``.  Descriptor cache
+        invalidation remains keyed by the runtime's subject-scoped server name,
+        so this body-free, bounded index is the only translation boundary.
+        """
+
+        async with self._guard:
+            return tuple(
+                key[2]
+                for key in self._subject_keys.get((org_id, user_id), ())
+                if (entry := self._entries.get(key)) is not None
+                and entry.server_id == server_id
+            )
+
     async def resolve(
         self, *, org_id: str, user_id: str, server_name: str
     ) -> RevisionResolveResult:
