@@ -27,10 +27,30 @@ from agent_runtime.execution.model_invocation.contracts import (
     ModelStreamState,
     ProviderFailureObservation,
 )
+from agent_runtime.execution.model_invocation.circuit_health import (
+    ProcessLocalProviderCircuitHealth,
+    ProviderCircuitAdmission,
+    ProviderCircuitConfig,
+    ProviderCircuitEntry,
+    ProviderCircuitKey,
+    ProviderCircuitSample,
+    ProviderCircuitSnapshot,
+)
+from agent_runtime.execution.model_invocation.lifecycle import (
+    ProviderAttemptLifecycle,
+    ProviderLifecycleEvent,
+    ProviderLifecycleReducer,
+    ProviderLifecycleTransitionError,
+    ProviderTerminalState,
+)
 from agent_runtime.execution.model_invocation.policy import (
     ModelAttemptAdmissionPolicy,
     ModelRoutePolicy,
     ProviderFailureClassifier,
+)
+from agent_runtime.execution.model_invocation.release_controls import (
+    ModelReliabilityReleaseControls,
+    ModelReliabilityReleaseDecision,
 )
 
 __all__ = (
@@ -54,12 +74,26 @@ __all__ = (
     "ModelInvocationRequirements",
     "ModelPrivacyFeature",
     "ModelRecoveryScope",
+    "ModelReliabilityReleaseControls",
+    "ModelReliabilityReleaseDecision",
     "ModelRouteExclusion",
     "ModelRouteExclusionReason",
     "ModelRouteEntry",
     "ModelRoutePlan",
     "ModelRoutePolicy",
     "ModelStreamState",
+    "ProcessLocalProviderCircuitHealth",
+    "ProviderAttemptLifecycle",
+    "ProviderCircuitAdmission",
+    "ProviderCircuitConfig",
+    "ProviderCircuitEntry",
+    "ProviderCircuitKey",
+    "ProviderCircuitSample",
+    "ProviderCircuitSnapshot",
     "ProviderFailureClassifier",
     "ProviderFailureObservation",
+    "ProviderLifecycleEvent",
+    "ProviderLifecycleReducer",
+    "ProviderLifecycleTransitionError",
+    "ProviderTerminalState",
 )
