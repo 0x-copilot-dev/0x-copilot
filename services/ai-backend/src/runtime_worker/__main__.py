@@ -26,6 +26,9 @@ from runtime_adapters.artifact_cleanup_schedule import (
 from agent_runtime.api.artifact_repository import ArtifactServiceComposition
 from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
 from runtime_worker.loop import RuntimeWorker
+from runtime_worker.run_control_release_composition import (
+    build_run_control_plane_builder,
+)
 from agent_runtime.observability.db_statement_metrics import (
     DbStatementMetricsCollector,
     DbStatementMetricsCollectorEnv,
@@ -134,6 +137,12 @@ class RuntimeWorkerEntrypoint:
                 )
                 else None
             )
+            run_control_builder = await build_run_control_plane_builder(
+                settings=settings,
+                repository=async_ports.evaluation_repository,
+                store=async_ports.run_control_snapshot_store,
+                event_store=async_ports.event_store,
+            )
             worker = RuntimeWorker(
                 persistence=async_ports.persistence,
                 event_store=async_ports.event_store,
@@ -150,6 +159,11 @@ class RuntimeWorkerEntrypoint:
                 artifact_service=ArtifactServiceComposition.build(async_ports),
                 artifact_blob_store=async_ports.artifact_blob_store,
                 artifact_reference_store=async_ports.artifact_reference_provider,
+                evaluation_repository=async_ports.evaluation_repository,
+                run_control_builder=run_control_builder,
+                run_control_snapshot_store=async_ports.run_control_snapshot_store,
+                prompt_observation_store=async_ports.prompt_observation_store,
+                model_invocation_store=async_ports.model_invocation_store,
                 effect_claim_store=effect_claim_store,
                 workspace_attestation_registry=(
                     DesktopWorkspaceAttestationRegistry.from_environment()

@@ -121,7 +121,6 @@ class DataflowExpression(RuntimeContract):
     op: DataflowExpressionKind
     literal: JsonValue = None
     field_path: tuple[str, ...] = Field(default_factory=tuple, max_length=8)
-    field_type: DataflowValueType | None = None
     args: tuple["DataflowExpression", ...] = Field(default_factory=tuple, max_length=8)
 
     @field_validator("field_path", mode="before")
@@ -136,27 +135,19 @@ class DataflowExpression(RuntimeContract):
     @model_validator(mode="after")
     def _closed_shape_and_types(self) -> Self:
         if self.op is DataflowExpressionKind.LITERAL:
-            if self.field_path or self.field_type is not None or self.args:
+            if self.field_path or self.args:
                 raise ValueError("literal expressions accept only literal")
             _literal_type(self.literal)
             return self
 
         if self.op is DataflowExpressionKind.FIELD:
-            if (
-                not self.field_path
-                or self.field_type is None
-                or self.args
-                or self.literal is not None
-            ):
-                raise ValueError(
-                    "field expressions require field_path and field_type only"
-                )
+            if not self.field_path or self.args or self.literal is not None:
+                raise ValueError("field expressions require field_path only")
             return self
 
-        if self.field_path or self.field_type is not None or self.literal is not None:
+        if self.field_path or self.literal is not None:
             raise ValueError("operator expressions accept only args")
 
-        argument_types = tuple(argument.inferred_type() for argument in self.args)
         unary = {
             DataflowExpressionKind.NOT,
             DataflowExpressionKind.LOWER,
@@ -171,124 +162,79 @@ class DataflowExpression(RuntimeContract):
         expected_count = 1 if self.op in unary else 2 if self.op in binary else 0
         if len(self.args) != expected_count:
             raise ValueError(f"{self.op.value} requires {expected_count} arguments")
-
-        boolean_ops = {DataflowExpressionKind.AND, DataflowExpressionKind.OR}
-        if self.op in boolean_ops and any(
-            value_type is not DataflowValueType.BOOLEAN for value_type in argument_types
-        ):
-            raise ValueError("boolean operators require boolean arguments")
-        if self.op is DataflowExpressionKind.NOT and argument_types != (
-            DataflowValueType.BOOLEAN,
-        ):
-            raise ValueError("not requires one boolean argument")
-
-        numeric_ops = {
-            DataflowExpressionKind.ADD,
-            DataflowExpressionKind.SUBTRACT,
-            DataflowExpressionKind.MULTIPLY,
-            DataflowExpressionKind.DIVIDE,
-        }
-        numeric_types = {DataflowValueType.INTEGER, DataflowValueType.NUMBER}
-        if self.op in numeric_ops and any(
-            value_type not in numeric_types for value_type in argument_types
-        ):
-            raise ValueError("arithmetic operators require numeric arguments")
-
-        ordered_ops = {
-            DataflowExpressionKind.LESS_THAN,
-            DataflowExpressionKind.LESS_THAN_OR_EQUAL,
-            DataflowExpressionKind.GREATER_THAN,
-            DataflowExpressionKind.GREATER_THAN_OR_EQUAL,
-        }
-        if self.op in ordered_ops:
-            both_numeric = all(
-                value_type in numeric_types for value_type in argument_types
-            )
-            if not both_numeric and argument_types != (
-                DataflowValueType.STRING,
-                DataflowValueType.STRING,
-            ):
-                raise ValueError(
-                    "ordered comparisons require numeric values or two strings"
-                )
-
-        equality_ops = {
-            DataflowExpressionKind.EQUAL,
-            DataflowExpressionKind.NOT_EQUAL,
-        }
-        if (
-            self.op in equality_ops
-            and argument_types[0] != argument_types[1]
-            and not all(value_type in numeric_types for value_type in argument_types)
-        ):
-            raise ValueError("equality operands must have compatible types")
-
-        string_binary = {
-            DataflowExpressionKind.CONTAINS,
-            DataflowExpressionKind.STARTS_WITH,
-            DataflowExpressionKind.ENDS_WITH,
-        }
-        if self.op in string_binary and argument_types != (
-            DataflowValueType.STRING,
-            DataflowValueType.STRING,
-        ):
-            raise ValueError("string predicates require two strings")
-        if self.op in {
-            DataflowExpressionKind.LOWER,
-            DataflowExpressionKind.UPPER,
-        } and argument_types != (DataflowValueType.STRING,):
-            raise ValueError("string transforms require one string")
-        if self.op is DataflowExpressionKind.LENGTH and argument_types[0] not in {
-            DataflowValueType.STRING,
-            DataflowValueType.ARRAY,
-            DataflowValueType.OBJECT,
-        }:
-            raise ValueError("length requires a string, array, or object")
         return self
 
-    def inferred_type(self) -> DataflowValueType:
-        """Return the statically proven result type."""
+    def literal_type(self) -> DataflowValueType:
+        """Return a literal's type.
 
-        if self.op is DataflowExpressionKind.LITERAL:
-            return _literal_type(self.literal)
-        if self.op is DataflowExpressionKind.FIELD:
-            assert self.field_type is not None
-            return self.field_type
-        if self.op in {
-            DataflowExpressionKind.EQUAL,
-            DataflowExpressionKind.NOT_EQUAL,
-            DataflowExpressionKind.LESS_THAN,
-            DataflowExpressionKind.LESS_THAN_OR_EQUAL,
-            DataflowExpressionKind.GREATER_THAN,
-            DataflowExpressionKind.GREATER_THAN_OR_EQUAL,
-            DataflowExpressionKind.AND,
-            DataflowExpressionKind.OR,
-            DataflowExpressionKind.NOT,
-            DataflowExpressionKind.CONTAINS,
-            DataflowExpressionKind.STARTS_WITH,
-            DataflowExpressionKind.ENDS_WITH,
-        }:
-            return DataflowValueType.BOOLEAN
-        if self.op in {DataflowExpressionKind.LOWER, DataflowExpressionKind.UPPER}:
-            return DataflowValueType.STRING
-        if self.op is DataflowExpressionKind.LENGTH:
-            return DataflowValueType.INTEGER
-        if self.op is DataflowExpressionKind.DIVIDE:
-            return DataflowValueType.NUMBER
-        argument_types = tuple(argument.inferred_type() for argument in self.args)
-        if DataflowValueType.NUMBER in argument_types:
-            return DataflowValueType.NUMBER
-        return DataflowValueType.INTEGER
+        Field and operator types require trusted input schemas, so they are
+        deliberately inferred only by :class:`DataflowPlanValidator`.
+        """
+
+        if self.op is not DataflowExpressionKind.LITERAL:
+            raise ValueError("only literal expressions have a context-free type")
+        return _literal_type(self.literal)
 
 
 class DataflowInputBinding(RuntimeContract):
-    """Trusted shape and cardinality for one run-scoped input binding."""
+    """Model-visible reference to one runtime-supplied input.
+
+    Shape, cardinality, source identity, and revisions are deliberately absent.
+    Those facts live only in :class:`ResolvedDataflowInput`.
+    """
 
     name: str
-    value_type: DataflowValueType
-    max_items: int = Field(ge=1, le=1_000)
 
     _normalize_name = field_validator("name")(_require_identifier)
+
+
+class DataflowFieldDescriptor(RuntimeContract):
+    """One trusted, statically addressable field in an input schema."""
+
+    path: tuple[str, ...] = Field(min_length=1, max_length=8)
+    value_type: DataflowValueType
+
+    @field_validator("path", mode="before")
+    @classmethod
+    def _normalize_path(cls, value: object) -> tuple[str, ...]:
+        if isinstance(value, (str, bytes)):
+            raise ValueError("path must be an array of identifiers")
+        return tuple(_require_identifier(item) for item in value)  # type: ignore[arg-type]
+
+
+class ResolvedDataflowInput(RuntimeContract):
+    """Trusted identity, schema, and bound for one run-scoped input."""
+
+    binding_id: str
+    input_ref: str = Field(pattern=r"^input_[0-9a-f]{32}$")
+    source_revision: str = Field(min_length=1, max_length=256)
+    schema_revision: str = Field(min_length=1, max_length=256)
+    value_type: DataflowValueType
+    max_items: int = Field(ge=1, le=1_000)
+    fields: tuple[DataflowFieldDescriptor, ...] = Field(
+        default_factory=tuple,
+        max_length=256,
+    )
+
+    _normalize_binding_id = field_validator("binding_id")(_require_identifier)
+
+    @model_validator(mode="after")
+    def _unique_field_paths(self) -> Self:
+        paths = tuple(field.path for field in self.fields)
+        if len(paths) != len(set(paths)):
+            raise ValueError("resolved input field paths must be unique")
+        if self.value_type is not DataflowValueType.OBJECT and self.fields:
+            raise ValueError("only object inputs may declare nested fields")
+        return self
+
+
+class DataflowEvaluatorSemantics(RuntimeContract):
+    """Trusted evaluator and canonicalization semantics for plan identity."""
+
+    language_version: Literal["dataflow.v1"] = "dataflow.v1"
+    evaluator_revision: str = Field(min_length=1, max_length=256)
+    expression_semantics_revision: str = Field(min_length=1, max_length=256)
+    canonicalization_revision: str = Field(min_length=1, max_length=256)
 
 
 class DataflowNode(RuntimeContract):
@@ -328,32 +274,8 @@ class DataflowNode(RuntimeContract):
         if self.op in invocation_ops:
             if self.capability_binding is None:
                 raise ValueError("invocation nodes require a capability binding")
-            if self.expression.inferred_type() is not DataflowValueType.OBJECT:
-                raise ValueError("invocation arguments must resolve to an object")
         elif self.capability_binding is not None:
             raise ValueError("only invocation nodes may use capability bindings")
-
-        expression_type = self.expression.inferred_type()
-        if self.op in {DataflowNodeKind.FILTER, DataflowNodeKind.BRANCH}:
-            if expression_type is not DataflowValueType.BOOLEAN:
-                raise ValueError("filter and branch expressions must be boolean")
-        if self.op is DataflowNodeKind.LIMIT:
-            if expression_type is not DataflowValueType.INTEGER:
-                raise ValueError("limit expressions must be integers")
-            if self.expression.op is DataflowExpressionKind.LITERAL and (
-                not isinstance(self.expression.literal, int)
-                or isinstance(self.expression.literal, bool)
-                or self.expression.literal < 0
-            ):
-                raise ValueError("literal limits must be non-negative integers")
-        if self.op in {DataflowNodeKind.SORT, DataflowNodeKind.GROUP}:
-            if expression_type not in {
-                DataflowValueType.BOOLEAN,
-                DataflowValueType.INTEGER,
-                DataflowValueType.NUMBER,
-                DataflowValueType.STRING,
-            }:
-                raise ValueError("sort and group keys must be scalar")
         return self
 
 
@@ -424,7 +346,10 @@ class ResolvedDataflowCapability(RuntimeContract):
     binding_id: str
     capability_ref: str = Field(pattern=r"^cap_[0-9a-f]{32}$")
     descriptor_revision: str = Field(min_length=1, max_length=256)
+    input_schema_revision: str = Field(min_length=1, max_length=256)
+    output_schema_revision: str = Field(min_length=1, max_length=256)
     effect_class: EffectClass
+    input_type: Literal[DataflowValueType.OBJECT] = DataflowValueType.OBJECT
     output_type: DataflowValueType
     max_calls: int = Field(ge=0, le=50)
     concurrency_policy: ConcurrencyPolicy = Field(default_factory=ConcurrencyPolicy)
@@ -469,8 +394,10 @@ class ValidatedDataflowPlan(RuntimeContract):
 
 __all__ = (
     "DataflowErrorPolicy",
+    "DataflowEvaluatorSemantics",
     "DataflowExpression",
     "DataflowExpressionKind",
+    "DataflowFieldDescriptor",
     "DataflowInputBinding",
     "DataflowLimits",
     "DataflowNode",
@@ -479,5 +406,6 @@ __all__ = (
     "DataflowValidationPolicy",
     "DataflowValueType",
     "ResolvedDataflowCapability",
+    "ResolvedDataflowInput",
     "ValidatedDataflowPlan",
 )

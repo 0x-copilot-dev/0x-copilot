@@ -155,6 +155,15 @@ class PostgresUsageRecorder:
         *,
         pricing_at: datetime,
     ) -> UsageRecordingResult:
+        # F10 journal finalization may carry a provider-reported amount. That
+        # fact is canonical for a retried/failed provider attempt and must not
+        # be replaced by a later catalog lookup (whose revision can differ).
+        if record.cost_micro_usd is not None:
+            return UsageRecordingResult(
+                cost_micro_usd=record.cost_micro_usd,
+                pricing_id=record.pricing_id,
+                pricing_version=record.pricing_version,
+            )
         try:
             pricing = await self._pricing_catalog.lookup(
                 provider=record.model_provider,
@@ -195,6 +204,16 @@ class PostgresUsageRecorder:
         *,
         pricing_at: datetime,
     ) -> UsageRecordingResult:
+        # The run record can be an aggregate of heterogeneous fallback routes.
+        # A single primary-model catalog lookup cannot safely overwrite that
+        # journal-derived aggregate; preserving it also keeps budget charging
+        # aligned with independently finalized attempt rows.
+        if record.cost_micro_usd is not None:
+            return UsageRecordingResult(
+                cost_micro_usd=record.cost_micro_usd,
+                pricing_id=record.pricing_id,
+                pricing_version=record.pricing_version,
+            )
         try:
             pricing = await self._pricing_catalog.lookup(
                 provider=record.model_provider,

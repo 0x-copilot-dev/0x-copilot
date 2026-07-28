@@ -231,9 +231,9 @@ class InMemoryMcpStore:
     _chain: _AuditChain = field(default_factory=_AuditChain, init=False, repr=False)
 
     @contextmanager
-    def transaction(self) -> Iterator[None]:
+    def transaction(self, *, org_id: str | None = None) -> Iterator[None]:
         """No-op transaction so the service layer can compose uniformly."""
-
+        del org_id
         yield None
 
     def create_server(

@@ -319,6 +319,30 @@ class RuntimeApiEventType(StrEnum):
     EFFECT_INDETERMINATE = LedgerEventType.EFFECT_INDETERMINATE.value
     EFFECT_RECONCILED = LedgerEventType.EFFECT_RECONCILED.value
     EFFECT_ROW_DECISIONS_RECORDED = LedgerEventType.EFFECT_ROW_DECISIONS_RECORDED.value
+    # Agent-runtime quality control plane. These are content-free INTERNAL
+    # journal rows: the immutable snapshot and append-only decision lineage
+    # contain only refs, revisions, modes, digests, limits, and timestamps.
+    QUALITY_CONTROL_BOUND = "quality.control_bound.v1"
+    QUALITY_DECISION = "quality.decision.v1"
+    # F4 task-aware controller. One strict discriminated, body-free record per
+    # event; the canonical run stream remains the sole mutable journal.
+    TOOL_POLICY_JOURNAL = "tool_policy.journal.v1"
+    # F2 prompt observability. Both rows are INTERNAL/REDACTED and strictly
+    # exclude prompt bodies and provider response content.
+    PROMPT_ASSEMBLED = "prompt.assembled.v1"
+    PROMPT_CACHE_OBSERVED = "prompt.cache.observed.v1"
+    # F10.3 model invocation lineage. Each event carries one strict,
+    # body/credential/exception-free discriminated record.
+    MODEL_INVOCATION_PLANNED = "model.invocation.planned.v1"
+    MODEL_INVOCATION_ROUTE = "model.invocation.route.v1"
+    MODEL_INVOCATION_EXCLUSION = "model.invocation.exclusion.v1"
+    MODEL_ATTEMPT_ADMISSION = "model.attempt.admission.v1"
+    MODEL_ATTEMPT_STATE = "model.attempt.state.v1"
+    MODEL_ATTEMPT_USAGE = "model.attempt.usage.v1"
+    MODEL_ATTEMPT_FAILED = "model.attempt.failed.v1"
+    MODEL_INVOCATION_RECOVERY = "model.invocation.recovery.v1"
+    MODEL_INVOCATION_COMPLETED = "model.invocation.completed.v1"
+    MODEL_INVOCATION_FAILED = "model.invocation.failed.v1"
 
     @classmethod
     def from_stream_event_type(

@@ -36,6 +36,7 @@ from runtime_adapters.file.conversation_tool_ordinal_store import (
 )
 from runtime_adapters.file.draft_store import FileDraftStore
 from runtime_adapters.file.effect_claim_store import FileEffectClaimStore
+from runtime_adapters.file.evaluation_repository import FileEvaluationRepository
 from runtime_adapters.file.export_import import (
     ArchiveIntegrityError,
     ConversationArchiver,
@@ -82,6 +83,7 @@ __all__ = [
     "FileCitationStore",
     "FileDraftStore",
     "FileEffectClaimStore",
+    "FileEvaluationRepository",
     "FileShareStore",
     "FileConversationToolOrdinalStore",
     "FileAgentStateWiring",

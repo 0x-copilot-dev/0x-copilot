@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import hashlib
 import json
+import logging
 import os
+import threading
+from collections import Counter, OrderedDict
+from dataclasses import dataclass, field
 
 import yaml
 from typing import Any, Callable, Protocol
-from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
 
 from backend_app.identity._pkce import compute_challenge, generate_verifier
 
@@ -24,8 +27,11 @@ from backend_app.contracts import (
     InstallMcpServerRequest,
     InternalMcpAuthRequest,
     InternalMcpClientSession,
+    InternalMcpLeaseFailure,
+    InternalMcpLeaseFailureCode,
     InternalMcpRpcRequest,
     InternalMcpRpcResponse,
+    InternalMcpSessionReleaseResponse,
     InternalMcpServerCard,
     InternalMcpServerListResponse,
     InternalSkillBundle,
@@ -44,6 +50,7 @@ from backend_app.contracts import (
     McpServerHealth,
     McpServerListResponse,
     McpServerRecord,
+    McpRevisionReason,
     McpServerResponse,
     OAuthTokenRequest,
     SkillAuditEventRecord,
@@ -64,6 +71,22 @@ from backend_app.contracts import (
 from backend_app.connectors.store import ConnectorAccessMode
 from backend_app.mcp_catalog import DEFAULT_CATALOG, CatalogEntry, catalog_by_slug
 from backend_app.mcp_oauth import RemoteMcpOAuthClient
+from backend_app.mcp_revisions import McpRevisionAuthority
+from backend_app.mcp_session_pool import (
+    McpSessionDispatchFence,
+    McpSessionLease,
+    McpSessionPool,
+    McpSessionPoolConfig,
+    McpSessionPoolOutcome,
+    McpSessionPoolRejected,
+    VerifiedMcpSessionScopeKey,
+)
+from backend_app.mcp_transport import (
+    McpHttpTransportFactory,
+    McpRemoteAuthError,
+    McpRemoteSessionTransport,
+    McpRemoteTransportError,
+)
 from backend_app.prompts.preloaded_skills import PRELOADED_SKILL_MARKDOWNS
 from backend_app.store import (
     InMemoryDeployAuditStore,
@@ -81,6 +104,40 @@ from backend_app.token_vault import TokenVault, TokenVaultFactory
 # asserts both sides agree.
 _SUGGESTIONS_OFF = "off"
 _SUGGESTIONS_ALWAYS = "always"
+_BACKEND_COMPATIBILITY_PARTITION = "backend-registry-compat-v1"
+_logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class _LeaseOwner:
+    org_id: str
+    user_id: str
+    server_id: str
+    scope: VerifiedMcpSessionScopeKey
+    operation_lock: threading.RLock = field(default_factory=threading.RLock)
+
+
+@dataclass(slots=True)
+class _DescriptorCycle:
+    expected_cursor: str | None = None
+    complete: bool = False
+    count: int = 0
+    page_count: int = 0
+    descriptor_count: int = 0
+    canonical_bytes: int = 0
+    requested_cursors: set[str | None] = field(default_factory=set)
+    digest: object = field(default_factory=hashlib.sha256)
+
+
+@dataclass(slots=True)
+class _DescriptorObservation:
+    tools: _DescriptorCycle = field(default_factory=_DescriptorCycle)
+    resources: _DescriptorCycle = field(default_factory=_DescriptorCycle)
+
+
+_MAX_DESCRIPTOR_PAGES = 100
+_MAX_DESCRIPTOR_COUNT = 10_000
+_MAX_DESCRIPTOR_BYTES = 4 * 1024 * 1024
 
 
 def _is_unique_violation(ex: Exception) -> bool:
@@ -124,37 +181,6 @@ def _catalog_entry_response(entry: CatalogEntry) -> McpCatalogEntryResponse:
 
 def _catalog_by_slug() -> dict[str, CatalogEntry]:
     return catalog_by_slug()
-
-
-class Keys:
-    """Stable keys and wire values used by backend MCP service calls."""
-
-    class ContentType:
-        EVENT_STREAM = "text/event-stream"
-        JSON = "application/json"
-        JSON_OR_EVENT_STREAM = "application/json, text/event-stream"
-
-    class Encoding:
-        UTF_8 = "utf-8"
-
-    class Header:
-        ACCEPT = "accept"
-        AUTHORIZATION = "authorization"
-        CONTENT_TYPE = "content-type"
-
-    class HttpMethod:
-        POST = "POST"
-
-    class Sse:
-        DATA_PREFIX = "data:"
-        DONE = "[DONE]"
-
-
-class Values:
-    """Stable values used by backend MCP service calls."""
-
-    class Auth:
-        BEARER = "Bearer"
 
 
 class OAuthTokenExchanger(Protocol):
@@ -244,6 +270,29 @@ class ConnectorAccessDenied(Exception):
         self.reason = reason
 
 
+class InternalMcpLeaseFailureError(ValueError):
+    """Typed, non-secret failure raised by internal pooled-MCP operations."""
+
+    def __init__(self, code: InternalMcpLeaseFailureCode) -> None:
+        status_by_code = {
+            InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH: 409,
+            InternalMcpLeaseFailureCode.LEASE_WRONG_OWNER: 403,
+            InternalMcpLeaseFailureCode.LEASE_INVALID: 400,
+            InternalMcpLeaseFailureCode.POOL_SATURATED: 429,
+            InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE: 503,
+            InternalMcpLeaseFailureCode.AUTH_REQUIRED: 401,
+            InternalMcpLeaseFailureCode.AMBIGUOUS_TRANSPORT_FAILURE: 503,
+        }
+        self.failure = InternalMcpLeaseFailure(
+            code=code,
+            redispatch_safe=(
+                code is InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            ),
+        )
+        self.status_code = status_by_code[code]
+        super().__init__(code.value)
+
+
 class McpRegistryService:
     """Owns MCP registration, auth state, and backend-only credentials."""
 
@@ -254,6 +303,9 @@ class McpRegistryService:
         token_vault: TokenVault | None = None,
         token_exchanger: OAuthTokenExchanger | None = None,
         oauth_client: OAuthDiscoveryClient | None = None,
+        revision_authority: McpRevisionAuthority | None = None,
+        session_pool: McpSessionPool | None = None,
+        transport_factory: McpHttpTransportFactory | None = None,
         auth_session_ttl: timedelta = timedelta(minutes=15),
     ) -> None:
         self.store = store or self._default_store()
@@ -261,6 +313,29 @@ class McpRegistryService:
         self.oauth_client = oauth_client or HttpOAuthTokenExchanger()
         self.token_exchanger = token_exchanger or self.oauth_client
         self.auth_session_ttl = auth_session_ttl
+        # F8: registry mutations and their feed notices share the same store
+        # transaction. Discovery remains outside this service and can only
+        # publish complete descriptor observations through this authority.
+        self.revision_authority = (
+            revision_authority or McpRevisionAuthority.for_mcp_store(self.store)
+        )
+        self._transport_factory = transport_factory or McpHttpTransportFactory(
+            token_vault=self.token_vault
+        )
+        self.session_pool = session_pool or McpSessionPool(
+            factory=self._transport_factory,
+            config=self._session_pool_config_from_environment(),
+        )
+        self._session_scopes: OrderedDict[
+            tuple[str, str, str], set[VerifiedMcpSessionScopeKey]
+        ] = OrderedDict()
+        self._session_scopes_lock = threading.RLock()
+        self._lease_owners: OrderedDict[str, _LeaseOwner] = OrderedDict()
+        self._lease_owners_lock = threading.RLock()
+        self._descriptor_observations: OrderedDict[str, _DescriptorObservation] = (
+            OrderedDict()
+        )
+        self._pool_metrics: Counter[str] = Counter()
         # Post-commit observer invoked with the updated record after
         # ``complete_auth`` lands. Wired at app composition time to the
         # connectors destination's write-through (PR-E.3 Decision D1) so
@@ -276,6 +351,55 @@ class McpRegistryService:
         # leaves every server ungated (the correct default when no connectors
         # store is present, e.g. isolated MCP-registry tests).
         self.connector_access_resolver: ConnectorAccessResolver | None = None
+
+    @staticmethod
+    def _session_pool_config_from_environment() -> McpSessionPoolConfig:
+        """Read bounded operational limits without accepting unbounded input."""
+
+        def integer(name: str, default: int, maximum: int) -> int:
+            raw = os.environ.get(name, str(default)).strip()
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be an integer") from exc
+            if not 1 <= value <= maximum:
+                raise ValueError(f"{name} must be between 1 and {maximum}")
+            return value
+
+        def nonnegative(name: str, default: int, maximum: int) -> int:
+            raw = os.environ.get(name, str(default)).strip()
+            try:
+                value = int(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be an integer") from exc
+            if not 0 <= value <= maximum:
+                raise ValueError(f"{name} must be between 0 and {maximum}")
+            return value
+
+        def seconds(name: str, default: float, maximum: float) -> float:
+            raw = os.environ.get(name, str(default)).strip()
+            try:
+                value = float(raw)
+            except ValueError as exc:
+                raise ValueError(f"{name} must be numeric") from exc
+            if not 0 < value <= maximum:
+                raise ValueError(f"{name} must be between 0 and {maximum}")
+            return value
+
+        return McpSessionPoolConfig(
+            max_total_sessions=integer("MCP_SESSION_POOL_MAX_TOTAL", 64, 512),
+            max_sessions_per_key=integer("MCP_SESSION_POOL_MAX_PER_KEY", 4, 32),
+            idle_ttl_seconds=seconds("MCP_SESSION_POOL_IDLE_TTL_SECONDS", 60, 3600),
+            absolute_ttl_seconds=seconds(
+                "MCP_SESSION_POOL_ABSOLUTE_TTL_SECONDS", 900, 86_400
+            ),
+            invalidation_ttl_seconds=seconds(
+                "MCP_SESSION_POOL_INVALIDATION_TTL_SECONDS", 900, 86_400
+            ),
+            max_pre_dispatch_reconnects=nonnegative(
+                "MCP_SESSION_POOL_MAX_PRE_DISPATCH_RECONNECTS", 1, 3
+            ),
+        )
 
     def create_server(self, request: CreateMcpServerRequest) -> McpServerResponse:
         display_name = request.display_name or self._display_name_from_url(request.url)
@@ -308,9 +432,19 @@ class McpRegistryService:
             health=McpServerHealth.HEALTHY,
             oauth_client=self._oauth_client_config(request.oauth_client),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.create_server(record, conn=conn)
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.CONFIG_CHANGED,
+                conn=conn,
+            )
             self._audit(record, "mcp_server_created", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         return McpServerResponse.from_record(record)
 
     def _server_by_url(
@@ -469,9 +603,19 @@ class McpRegistryService:
             default_scopes=entry.default_scopes,
             oauth_client=self._oauth_client_config(request.oauth_client),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.create_server(record, conn=conn)
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.CONFIG_CHANGED,
+                conn=conn,
+            )
             self._audit(record, "mcp_server_installed", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         return McpServerResponse.from_record(record)
 
     def delete_server(self, *, org_id: str, user_id: str, server_id: str) -> bool:
@@ -480,12 +624,23 @@ class McpRegistryService:
         )
         if record is None:
             return False
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=org_id) as conn:
             deleted = self.store.delete_server(
                 org_id=org_id, server_id=server_id, conn=conn
             )
             if deleted:
+                self.revision_authority.invalidate(
+                    org_id=org_id,
+                    user_id=user_id,
+                    server_id=server_id,
+                    reason=McpRevisionReason.SERVER_DELETED,
+                    conn=conn,
+                )
                 self._audit(record, "mcp_server_deleted", conn=conn)
+        if deleted:
+            self.invalidate_server_sessions(
+                org_id=org_id, user_id=user_id, server_id=server_id
+            )
         return deleted
 
     def update_server(
@@ -515,9 +670,19 @@ class McpRegistryService:
         if not changes:
             return McpServerResponse.from_record(record)
 
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=org_id) as conn:
             updated = self._update_record(record, conn=conn, **changes)
+            self.revision_authority.invalidate(
+                org_id=org_id,
+                user_id=user_id,
+                server_id=server_id,
+                reason=McpRevisionReason.CONFIG_CHANGED,
+                conn=conn,
+            )
             self._audit(updated, "mcp_server_updated", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         return McpServerResponse.from_record(updated)
 
     def skip_auth(
@@ -526,11 +691,21 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=org_id) as conn:
             updated = self._update_record(
                 record, conn=conn, auth_state=McpAuthState.AUTH_SKIPPED
             )
+            self.revision_authority.invalidate(
+                org_id=org_id,
+                user_id=user_id,
+                server_id=server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                conn=conn,
+            )
             self._audit(updated, "mcp_auth_skipped", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=org_id, user_id=user_id, server_id=server_id
+        )
         return McpServerResponse.from_record(updated)
 
     def start_auth(
@@ -545,11 +720,18 @@ class McpRegistryService:
             server_id=server_id,
         )
         if record.auth_mode != McpAuthMode.OAUTH2:
-            with self.store.transaction() as conn:
+            with self.store.transaction(org_id=request.org_id) as conn:
                 updated = self._update_record(
                     record,
                     conn=conn,
                     auth_state=McpAuthState.AUTH_UNSUPPORTED,
+                )
+                self.revision_authority.invalidate(
+                    org_id=request.org_id,
+                    user_id=request.user_id,
+                    server_id=server_id,
+                    reason=McpRevisionReason.AUTH_CHANGED,
+                    conn=conn,
                 )
                 self._audit(updated, "mcp_auth_unsupported", conn=conn)
             raise ValueError("MCP server does not support OAuth authentication")
@@ -579,7 +761,7 @@ class McpRegistryService:
             if self._has_usable_token(record)
             else McpAuthState.AUTH_PENDING
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=request.org_id) as conn:
             updated = self._update_record(
                 record,
                 conn=conn,
@@ -587,7 +769,17 @@ class McpRegistryService:
                 last_discovery=authorization.discovery,
                 required_scopes=authorization.required_scopes,
             )
+            self.revision_authority.invalidate(
+                org_id=request.org_id,
+                user_id=request.user_id,
+                server_id=server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                conn=conn,
+            )
             self._audit(updated, "mcp_auth_started", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=request.org_id, user_id=request.user_id, server_id=server_id
+        )
         return McpAuthStartResponse(
             server_id=record.server_id,
             auth_url=authorization.auth_url,
@@ -604,11 +796,23 @@ class McpRegistryService:
             server_id=session.server_id,
         )
         if request.error is not None:
-            with self.store.transaction() as conn:
+            with self.store.transaction(org_id=session.org_id) as conn:
                 updated = self._update_record(
                     record, conn=conn, auth_state=McpAuthState.AUTH_FAILED
                 )
+                self.revision_authority.invalidate(
+                    org_id=session.org_id,
+                    user_id=session.user_id,
+                    server_id=session.server_id,
+                    reason=McpRevisionReason.AUTH_CHANGED,
+                    conn=conn,
+                )
                 self._audit(updated, "mcp_auth_failed", conn=conn)
+            self.invalidate_server_sessions(
+                org_id=session.org_id,
+                user_id=session.user_id,
+                server_id=session.server_id,
+            )
             detail = request.error_description or request.error
             raise ValueError(f"MCP auth failed: {detail}")
         if request.code is None:
@@ -635,12 +839,23 @@ class McpRegistryService:
             expires_at=tokens.expires_at,
             kms_key_id=self.token_vault.key_id_for(encrypted_access),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.put_token(token_envelope, conn=conn)
             updated = self._update_record(
                 record, conn=conn, auth_state=McpAuthState.AUTHENTICATED
             )
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                credential_subject=token_envelope.connection_id,
+                conn=conn,
+            )
             self._audit(updated, "mcp_auth_completed", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         # Post-commit: notify the connectors write-through (if wired) so
         # the denormalized ``/v1/connectors`` row flips to ``connected``
         # for both the web callback and the desktop coordinator path.
@@ -704,6 +919,22 @@ class McpRegistryService:
         except Exception:  # pragma: no cover - defensive; never fail closed here
             return None
 
+    def _require_live_server(self, record: McpServerRecord) -> None:
+        if not record.enabled or record.health in {
+            McpServerHealth.DISABLED,
+            McpServerHealth.UNAVAILABLE,
+        }:
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE
+            )
+        if (
+            record.auth_mode != McpAuthMode.NONE
+            and self._effective_auth_state(record) != McpAuthState.AUTHENTICATED
+        ):
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            )
+
     def create_internal_client_session(
         self,
         *,
@@ -714,15 +945,32 @@ class McpRegistryService:
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
-        token = self.store.get_token(server_id=server_id)
-        credential_ref = token.connection_id if token is not None else None
-        return InternalMcpClientSession(
-            server_id=record.server_id,
-            url=record.url,
-            transport=record.transport,
-            auth_state=self._effective_auth_state(record),
-            credential_ref=credential_ref,
+        if self._resolve_access_mode(record) == ConnectorAccessMode.OFF:
+            raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
+        self._require_live_server(record)
+        token = (
+            self._require_valid_token(record)
+            if record.auth_mode != McpAuthMode.NONE
+            else None
         )
+        scope = self._bind_session_scope(record, token)
+        acquired = self.session_pool.acquire(scope)
+        if (
+            acquired.outcome is not McpSessionPoolOutcome.ACQUIRED
+            or acquired.lease is None
+        ):
+            self._pool_metrics[acquired.outcome.value] += 1
+            failure_code = (
+                InternalMcpLeaseFailureCode.POOL_SATURATED
+                if acquired.outcome is McpSessionPoolOutcome.SATURATED
+                else InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE
+            )
+            raise InternalMcpLeaseFailureError(failure_code)
+        self._remember_session_scope(record, scope)
+        lease_token = self.session_pool.export_lease_token(acquired.lease)
+        self._remember_lease(lease_token, record, scope)
+        self._pool_metrics["acquired"] += 1
+        return InternalMcpClientSession(lease=lease_token)
 
     def proxy_internal_rpc(
         self,
@@ -732,6 +980,9 @@ class McpRegistryService:
         server_id: str,
         request: InternalMcpRpcRequest,
     ) -> InternalMcpRpcResponse:
+        self._reject_wrong_lease_owner(
+            request.lease, org_id=org_id, user_id=user_id, server_id=server_id
+        )
         record = self._require_server_for_user(
             org_id=org_id, user_id=user_id, server_id=server_id
         )
@@ -742,18 +993,110 @@ class McpRegistryService:
         method = request.payload.get("method")
         if access_mode == ConnectorAccessMode.OFF:
             raise ConnectorAccessDenied(ConnectorAccessDenied.OFF)
-        token = self._require_valid_token(record)
-        access_token = self.token_vault.decrypt(token.encrypted_access_token)
+        self._require_live_server(record)
+        owner = self._require_lease_owner(
+            request.lease, org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        current_token = self.store.get_token(server_id=server_id)
+        if self._scope_for(record, current_token) != owner.scope:
+            self._retire_lease(request.lease, owner, cancel=True)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            )
+        token = (
+            self._require_valid_token(record)
+            if record.auth_mode != McpAuthMode.NONE
+            else None
+        )
+        scope = self._bind_session_scope(record, token)
+        if scope != owner.scope:
+            self._retire_lease(request.lease, owner, cancel=True)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            )
+        try:
+            lease = self.session_pool.import_lease_token(request.lease)
+        except ValueError as exc:
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_INVALID
+            ) from exc
         # ``read`` gates side-effecting calls: a ``tools/call`` on a tool that
         # is not read-only is denied. ``tools/list`` (and every other method)
         # is always allowed under ``read``; ``read_act`` and the unjoined
         # (``None``) case allow everything.
-        if access_mode == ConnectorAccessMode.READ and method == "tools/call":
-            tool_name = self._rpc_tool_name(request.payload)
-            if not self._tool_is_read_only(record, access_token, tool_name):
-                raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
-        payload = self._post_remote_mcp_rpc(record.url, request.payload, access_token)
+        try:
+            if access_mode == ConnectorAccessMode.READ and method == "tools/call":
+                tool_name = self._rpc_tool_name(request.payload)
+                if not self._tool_is_read_only(record, scope, lease, tool_name):
+                    raise ConnectorAccessDenied(ConnectorAccessDenied.READ_ONLY)
+            with owner.operation_lock:
+                payload = self.session_pool.invoke(
+                    lease,
+                    scope=scope,
+                    operation=lambda transport, fence: self._remote_rpc(
+                        transport, request.payload, fence
+                    ),
+                )
+                self._observe_proxied_descriptor_page(
+                    lease_token=request.lease,
+                    owner=owner,
+                    request_payload=request.payload,
+                    response=payload,
+                    credential_subject=(
+                        token.connection_id if token is not None else None
+                    ),
+                )
+        except McpSessionPoolRejected as exc:
+            self._forget_lease(request.lease)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_STALE_PRE_DISPATCH
+            ) from exc
+        except McpRemoteAuthError as exc:
+            self._forget_lease_observation(request.lease)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            ) from exc
+        except McpRemoteTransportError as exc:
+            self._forget_lease_observation(request.lease)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AMBIGUOUS_TRANSPORT_FAILURE
+            ) from exc
+        except ConnectionError as exc:
+            self._forget_lease_observation(request.lease)
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.SERVER_UNAVAILABLE
+            ) from exc
+        except Exception:
+            self._forget_lease_observation(request.lease)
+            raise
         return InternalMcpRpcResponse(payload=payload)
+
+    def release_internal_client_session(
+        self,
+        *,
+        org_id: str,
+        user_id: str,
+        server_id: str,
+        lease_token: str,
+        cancel: bool,
+    ) -> InternalMcpSessionReleaseResponse:
+        owner = self._require_lease_owner(
+            lease_token, org_id=org_id, user_id=user_id, server_id=server_id
+        )
+        try:
+            lease = self.session_pool.import_lease_token(lease_token)
+        except ValueError as exc:
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.LEASE_INVALID
+            ) from exc
+        with owner.operation_lock:
+            outcome = (
+                self.session_pool.cancel(lease, scope=owner.scope)
+                if cancel
+                else self.session_pool.release(lease, scope=owner.scope)
+            )
+        self._forget_lease(lease_token)
+        return InternalMcpSessionReleaseResponse(outcome=outcome.value)
 
     @staticmethod
     def _rpc_tool_name(payload: dict[str, object]) -> str | None:
@@ -769,7 +1112,8 @@ class McpRegistryService:
     def _tool_is_read_only(
         self,
         record: McpServerRecord,
-        access_token: str,
+        scope: VerifiedMcpSessionScopeKey,
+        lease: McpSessionLease,
         tool_name: str | None,
     ) -> bool:
         """Whether ``tool_name`` advertises ``annotations.readOnlyHint: true``.
@@ -790,7 +1134,16 @@ class McpRegistryService:
             "method": "tools/list",
             "params": {},
         }
-        listing = self._post_remote_mcp_rpc(record.url, list_payload, access_token)
+        try:
+            listing = self.session_pool.invoke(
+                lease,
+                scope=scope,
+                operation=lambda transport, fence: self._remote_rpc(
+                    transport, list_payload, fence
+                ),
+            )
+        except McpSessionPoolRejected:
+            return False
         result = listing.get("result") if isinstance(listing, dict) else None
         tools = result.get("tools") if isinstance(result, dict) else None
         if not isinstance(tools, list):
@@ -803,6 +1156,386 @@ class McpRegistryService:
                 return False
             return annotations.get("readOnlyHint") is True
         return False
+
+    @staticmethod
+    def _remote_rpc(
+        transport: object,
+        payload: dict[str, object],
+        fence: McpSessionDispatchFence,
+    ) -> dict[str, object]:
+        if not isinstance(transport, McpRemoteSessionTransport):
+            raise ConnectionError("MCP pool transport cannot issue RPC")
+        return transport.rpc(payload, fence)
+
+    def _bind_session_scope(
+        self, record: McpServerRecord, token: TokenEnvelope | None
+    ) -> VerifiedMcpSessionScopeKey:
+        """Bind a verified registry row to an opaque pool compatibility key."""
+
+        scope = self._scope_for(record, token)
+        self._transport_factory.bind(
+            scope=scope,
+            endpoint=record.url,
+            encrypted_access_token=(
+                token.encrypted_access_token if token is not None else None
+            ),
+        )
+        return scope
+
+    @staticmethod
+    def _scope_for(
+        record: McpServerRecord, token: TokenEnvelope | None
+    ) -> VerifiedMcpSessionScopeKey:
+
+        credential_reference = (
+            token.connection_id
+            if token is not None
+            else f"unauthenticated:{record.server_id}"
+        )
+        auth_epoch = (
+            token.updated_at.isoformat()
+            if token is not None
+            else record.updated_at.isoformat()
+        )
+        transport_revision = hashlib.sha256(
+            f"{record.transport.value}\x1f{record.url}\x1f{record.updated_at.isoformat()}".encode()
+        ).hexdigest()
+        return VerifiedMcpSessionScopeKey.from_verified_credential_reference(
+            org_id=record.org_id,
+            # This service has no user-selectable MCP profile. The explicit
+            # compatibility partition prevents accidental reuse if one is
+            # introduced later without exposing a deployment identifier.
+            profile_partition=_BACKEND_COMPATIBILITY_PARTITION,
+            user_id=record.user_id,
+            server_id=record.server_id,
+            credential_reference=credential_reference,
+            auth_epoch=auth_epoch,
+            transport_revision=transport_revision,
+            session_scope="internal-rpc",
+        )
+
+    def _remember_lease(
+        self,
+        lease_token: str,
+        record: McpServerRecord,
+        scope: VerifiedMcpSessionScopeKey,
+    ) -> None:
+        with self._lease_owners_lock:
+            self._lease_owners[lease_token] = _LeaseOwner(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                scope=scope,
+            )
+            self._lease_owners.move_to_end(lease_token)
+            while len(self._lease_owners) > 512:
+                stale_token, stale_owner = self._lease_owners.popitem(last=False)
+                self._retire_lease(stale_token, stale_owner, cancel=True)
+
+    def _require_lease_owner(
+        self, lease_token: str, *, org_id: str, user_id: str, server_id: str
+    ) -> _LeaseOwner:
+        with self._lease_owners_lock:
+            owner = self._lease_owners.get(lease_token)
+            if owner is None:
+                raise InternalMcpLeaseFailureError(
+                    InternalMcpLeaseFailureCode.LEASE_INVALID
+                )
+            if (owner.org_id, owner.user_id, owner.server_id) != (
+                org_id,
+                user_id,
+                server_id,
+            ):
+                raise InternalMcpLeaseFailureError(
+                    InternalMcpLeaseFailureCode.LEASE_WRONG_OWNER
+                )
+            self._lease_owners.move_to_end(lease_token)
+            return owner
+
+    def _reject_wrong_lease_owner(
+        self, lease_token: str, *, org_id: str, user_id: str, server_id: str
+    ) -> None:
+        with self._lease_owners_lock:
+            owner = self._lease_owners.get(lease_token)
+            if owner is not None and (
+                owner.org_id,
+                owner.user_id,
+                owner.server_id,
+            ) != (org_id, user_id, server_id):
+                raise InternalMcpLeaseFailureError(
+                    InternalMcpLeaseFailureCode.LEASE_WRONG_OWNER
+                )
+
+    def _forget_lease(self, lease_token: str) -> None:
+        with self._lease_owners_lock:
+            self._lease_owners.pop(lease_token, None)
+            self._descriptor_observations.pop(lease_token, None)
+
+    def _retire_lease(
+        self, lease_token: str, owner: _LeaseOwner, *, cancel: bool
+    ) -> None:
+        try:
+            lease = self.session_pool.import_lease_token(lease_token)
+            if cancel:
+                self.session_pool.cancel(lease, scope=owner.scope)
+            else:
+                self.session_pool.release(lease, scope=owner.scope)
+        finally:
+            self._forget_lease(lease_token)
+
+    def _remember_session_scope(
+        self, record: McpServerRecord, scope: VerifiedMcpSessionScopeKey
+    ) -> None:
+        key = (record.org_id, record.user_id, record.server_id)
+        with self._session_scopes_lock:
+            self._session_scopes.setdefault(key, set()).add(scope)
+            while len(self._session_scopes) > 128:
+                stale_key, stale_scopes = self._session_scopes.popitem(last=False)
+                for stale_scope in stale_scopes:
+                    self.session_pool.invalidate_scope(stale_scope)
+                    self._transport_factory.unbind(stale_scope)
+
+    def invalidate_server_sessions(
+        self, *, org_id: str, user_id: str, server_id: str
+    ) -> int:
+        """Retire all remembered leases for a registry mutation atomically enough."""
+
+        with self._lease_owners_lock:
+            owners = [
+                (lease_token, owner)
+                for lease_token, owner in self._lease_owners.items()
+                if (owner.org_id, owner.user_id, owner.server_id)
+                == (org_id, user_id, server_id)
+            ]
+        for lease_token, owner in owners:
+            self._retire_lease(lease_token, owner, cancel=True)
+        with self._session_scopes_lock:
+            scopes = self._session_scopes.pop((org_id, user_id, server_id), set())
+        invalidated = 0
+        for scope in scopes:
+            invalidated += self.session_pool.invalidate_scope(scope)
+            self._transport_factory.unbind(scope)
+        return invalidated
+
+    def maintain_session_pool(self) -> None:
+        """One lifecycle-owned maintenance tick; never starts its own thread."""
+
+        try:
+            outcome = self.session_pool.keepalive_idle(limit=1)
+            self._pool_metrics[f"keepalive_{outcome.value}"] += 1
+            self._pool_metrics["reaped"] += self.session_pool.reap_expired()
+        except Exception:
+            self._pool_metrics["maintenance_failed"] += 1
+            _logger.warning("mcp_session_pool_maintenance_failed", exc_info=True)
+
+    def shutdown_session_pool(self, *, timeout_seconds: float = 5) -> bool:
+        drained = self.session_pool.shutdown(timeout_seconds=timeout_seconds)
+        if not drained:
+            with self._lease_owners_lock:
+                owners = tuple(self._lease_owners.items())
+            for lease_token, owner in owners:
+                self._retire_lease(lease_token, owner, cancel=True)
+            self.session_pool.shutdown(timeout_seconds=0)
+        return drained
+
+    def session_pool_diagnostics(self) -> dict[str, int | bool]:
+        diagnostics = self.session_pool.diagnostics()
+        return {
+            "total_sessions": diagnostics.total_sessions,
+            "active_leases": diagnostics.active_leases,
+            "idle_sessions": diagnostics.idle_sessions,
+            "maintenance_sessions": diagnostics.maintenance_sessions,
+            "opening_sessions": diagnostics.opening_sessions,
+            "invalidated_sessions": diagnostics.invalidated_sessions,
+            "draining": diagnostics.draining,
+            "opened_sessions": diagnostics.opened_sessions,
+            "reused_sessions": diagnostics.reused_sessions,
+            "saturated_acquires": diagnostics.saturated_acquires,
+            "pre_dispatch_reconnects": diagnostics.pre_dispatch_reconnects,
+            "keepalive_attempts": diagnostics.keepalive_attempts,
+            **dict(self._pool_metrics),
+        }
+
+    def _observe_proxied_descriptor_page(
+        self,
+        *,
+        lease_token: str,
+        owner: _LeaseOwner,
+        request_payload: dict[str, object],
+        response: dict[str, object],
+        credential_subject: str | None,
+    ) -> None:
+        method = request_payload.get("method")
+        if method not in {"tools/list", "resources/list"}:
+            return
+        collection = "tools" if method == "tools/list" else "resources"
+        params = request_payload.get("params")
+        cursor = params.get("cursor") if isinstance(params, dict) else None
+        if cursor is not None and not isinstance(cursor, str):
+            self._forget_lease_observation(lease_token)
+            return
+        if "error" in response:
+            error = response.get("error")
+            if (
+                collection == "resources"
+                and isinstance(error, dict)
+                and error.get("code") == -32601
+                and cursor is None
+            ):
+                self._complete_empty_resources(
+                    lease_token,
+                    owner=owner,
+                    credential_subject=credential_subject,
+                )
+            else:
+                self._forget_lease_observation(lease_token)
+            return
+        result = response.get("result")
+        if not isinstance(result, dict) or not isinstance(result.get(collection), list):
+            self._forget_lease_observation(lease_token)
+            return
+        with self._lease_owners_lock:
+            if collection == "tools" and cursor is None:
+                observation = _DescriptorObservation()
+                self._descriptor_observations[lease_token] = observation
+            else:
+                observation = self._descriptor_observations.get(lease_token)
+                if observation is None or (
+                    collection == "resources" and not observation.tools.complete
+                ):
+                    self._descriptor_observations.pop(lease_token, None)
+                    return
+            self._descriptor_observations.move_to_end(lease_token)
+            while len(self._descriptor_observations) > 512:
+                self._descriptor_observations.popitem(last=False)
+            cycle = (
+                observation.tools if collection == "tools" else observation.resources
+            )
+            if cursor is None:
+                cycle.expected_cursor = None
+                cycle.complete = False
+                cycle.count = 0
+                cycle.page_count = 0
+                cycle.descriptor_count = 0
+                cycle.canonical_bytes = 0
+                cycle.requested_cursors.clear()
+                cycle.digest = hashlib.sha256()
+            elif (
+                cycle.complete
+                or cycle.expected_cursor != cursor
+                or cursor in cycle.requested_cursors
+            ):
+                self._descriptor_observations.pop(lease_token, None)
+                return
+            cycle.requested_cursors.add(cursor)
+            cycle.page_count += 1
+            if cycle.page_count > _MAX_DESCRIPTOR_PAGES:
+                self._descriptor_observations.pop(lease_token, None)
+                return
+            for descriptor in result[collection]:
+                if not isinstance(descriptor, dict):
+                    self._descriptor_observations.pop(lease_token, None)
+                    return
+                safe = {
+                    key: descriptor[key]
+                    for key in (
+                        "name",
+                        "title",
+                        "description",
+                        "uri",
+                        "mimeType",
+                        "inputSchema",
+                        "annotations",
+                    )
+                    if key in descriptor
+                }
+                canonical = json.dumps(
+                    safe, sort_keys=True, separators=(",", ":"), default=str
+                ).encode()
+                cycle.descriptor_count += 1
+                cycle.canonical_bytes += len(canonical)
+                if (
+                    cycle.descriptor_count > _MAX_DESCRIPTOR_COUNT
+                    or cycle.canonical_bytes > _MAX_DESCRIPTOR_BYTES
+                ):
+                    self._descriptor_observations.pop(lease_token, None)
+                    return
+                cycle.digest.update(canonical)
+                cycle.digest.update(b"\n")
+                cycle.count += 1
+            next_cursor = result.get("nextCursor")
+            if next_cursor is None:
+                cycle.complete = True
+                cycle.expected_cursor = None
+            elif isinstance(next_cursor, str) and next_cursor:
+                cycle.expected_cursor = next_cursor
+            else:
+                self._descriptor_observations.pop(lease_token, None)
+                return
+            if not (observation.tools.complete and observation.resources.complete):
+                return
+            digest = hashlib.sha256(
+                observation.tools.digest.digest()
+                + observation.resources.digest.digest()
+            ).hexdigest()
+            self._descriptor_observations.pop(lease_token, None)
+        existing = self.revision_authority.get_current(
+            org_id=owner.org_id, user_id=owner.user_id, server_id=owner.server_id
+        )
+        if existing is None or existing.descriptor_digest != digest:
+            self.revision_authority.publish_complete_descriptor_view(
+                org_id=owner.org_id,
+                user_id=owner.user_id,
+                server_id=owner.server_id,
+                descriptor_digest=digest,
+                tool_count=observation.tools.count,
+                resource_count=observation.resources.count,
+                source="pooled_mcp_pagination",
+                idempotency_key=f"pooled:{owner.scope.fingerprint}:{digest}",
+                credential_subject=credential_subject,
+            )
+
+    def _complete_empty_resources(
+        self,
+        lease_token: str,
+        *,
+        owner: _LeaseOwner,
+        credential_subject: str | None,
+    ) -> None:
+        with self._lease_owners_lock:
+            observation = self._descriptor_observations.setdefault(
+                lease_token, _DescriptorObservation()
+            )
+            observation.resources.complete = True
+            observation.resources.count = 0
+            observation.resources.digest = hashlib.sha256()
+            if not observation.tools.complete:
+                return
+            digest = hashlib.sha256(
+                observation.tools.digest.digest()
+                + observation.resources.digest.digest()
+            ).hexdigest()
+            tool_count = observation.tools.count
+            self._descriptor_observations.pop(lease_token, None)
+        existing = self.revision_authority.get_current(
+            org_id=owner.org_id, user_id=owner.user_id, server_id=owner.server_id
+        )
+        if existing is None or existing.descriptor_digest != digest:
+            self.revision_authority.publish_complete_descriptor_view(
+                org_id=owner.org_id,
+                user_id=owner.user_id,
+                server_id=owner.server_id,
+                descriptor_digest=digest,
+                tool_count=tool_count,
+                resource_count=0,
+                source="pooled_mcp_pagination",
+                idempotency_key=f"pooled:{owner.scope.fingerprint}:{digest}",
+                credential_subject=credential_subject,
+            )
+
+    def _forget_lease_observation(self, lease_token: str) -> None:
+        with self._lease_owners_lock:
+            self._descriptor_observations.pop(lease_token, None)
 
     def upsert_token_for_test(
         self,
@@ -831,12 +1564,23 @@ class McpRegistryService:
             expires_at=request.expires_at,
             kms_key_id=self.token_vault.key_id_for(encrypted_access),
         )
-        with self.store.transaction() as conn:
+        with self.store.transaction(org_id=record.org_id) as conn:
             self.store.put_token(token_envelope, conn=conn)
             updated = self._update_record(
                 record, conn=conn, auth_state=McpAuthState.AUTHENTICATED
             )
+            self.revision_authority.invalidate(
+                org_id=record.org_id,
+                user_id=record.user_id,
+                server_id=record.server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                credential_subject=token_envelope.connection_id,
+                conn=conn,
+            )
             self._audit(updated, "mcp_token_upserted", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
+        )
         return McpServerResponse.from_record(updated)
 
     def _update_record(
@@ -901,89 +1645,67 @@ class McpRegistryService:
     def _require_valid_token(self, record: McpServerRecord) -> TokenEnvelope:
         token = self.store.get_token(server_id=record.server_id)
         if token is None:
-            raise ValueError("MCP server is not authenticated")
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            )
         if token.expires_at is None or token.expires_at > datetime.now(
             timezone.utc
         ) + timedelta(seconds=60):
             return token
         if token.encrypted_refresh_token is None:
-            raise ValueError(
-                "MCP access token expired and no refresh token is available"
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
             )
-        refresh_token = self.token_vault.decrypt(token.encrypted_refresh_token)
         refresher = getattr(self.token_exchanger, "refresh_token", None)
         if not callable(refresher):
-            raise ValueError("MCP access token refresh is not supported")
-        refreshed = refresher(
-            record=record,
-            refresh_token=refresh_token,
-            token_vault=self.token_vault,
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            )
+        try:
+            refresh_token = self.token_vault.decrypt(token.encrypted_refresh_token)
+            refreshed = refresher(
+                record=record,
+                refresh_token=refresh_token,
+                token_vault=self.token_vault,
+            )
+            encrypted_access = self.token_vault.encrypt(refreshed.access_token)
+            encrypted_refresh = (
+                self.token_vault.encrypt(refreshed.refresh_token)
+                if refreshed.refresh_token is not None
+                else token.encrypted_refresh_token
+            )
+        except Exception as exc:
+            raise InternalMcpLeaseFailureError(
+                InternalMcpLeaseFailureCode.AUTH_REQUIRED
+            ) from exc
+        envelope = TokenEnvelope(
+            connection_id=token.connection_id,
+            server_id=record.server_id,
+            org_id=record.org_id,
+            user_id=record.user_id,
+            encrypted_access_token=encrypted_access,
+            encrypted_refresh_token=encrypted_refresh,
+            token_type=refreshed.token_type,
+            expires_at=refreshed.expires_at,
+            created_at=token.created_at,
+            updated_at=datetime.now(timezone.utc),
+            kms_key_id=self.token_vault.key_id_for(encrypted_access),
         )
-        encrypted_access = self.token_vault.encrypt(refreshed.access_token)
-        encrypted_refresh = (
-            self.token_vault.encrypt(refreshed.refresh_token)
-            if refreshed.refresh_token is not None
-            else token.encrypted_refresh_token
-        )
-        updated = self.store.put_token(
-            TokenEnvelope(
-                connection_id=token.connection_id,
-                server_id=record.server_id,
+        with self.store.transaction(org_id=record.org_id) as conn:
+            updated = self.store.put_token(envelope, conn=conn)
+            self.revision_authority.invalidate(
                 org_id=record.org_id,
                 user_id=record.user_id,
-                encrypted_access_token=encrypted_access,
-                encrypted_refresh_token=encrypted_refresh,
-                token_type=refreshed.token_type,
-                expires_at=refreshed.expires_at,
-                created_at=token.created_at,
-                updated_at=datetime.now(timezone.utc),
-                kms_key_id=self.token_vault.key_id_for(encrypted_access),
+                server_id=record.server_id,
+                reason=McpRevisionReason.AUTH_CHANGED,
+                credential_subject=envelope.connection_id,
+                conn=conn,
             )
+            self._audit(record, "mcp_token_refreshed", conn=conn)
+        self.invalidate_server_sessions(
+            org_id=record.org_id, user_id=record.user_id, server_id=record.server_id
         )
         return updated
-
-    @staticmethod
-    def _post_remote_mcp_rpc(
-        server_url: str, payload: dict[str, object], access_token: str
-    ) -> dict[str, object]:
-        request = Request(
-            server_url,
-            data=json.dumps(payload).encode(Keys.Encoding.UTF_8),
-            headers={
-                Keys.Header.ACCEPT: Keys.ContentType.JSON_OR_EVENT_STREAM,
-                Keys.Header.AUTHORIZATION: f"{Values.Auth.BEARER} {access_token}",
-                Keys.Header.CONTENT_TYPE: Keys.ContentType.JSON,
-            },
-            method=Keys.HttpMethod.POST,
-        )
-        try:
-            with urlopen(request, timeout=30) as response:
-                decoded = McpRegistryService._decode_remote_mcp_response(
-                    response.read().decode(Keys.Encoding.UTF_8),
-                    response.headers.get(Keys.Header.CONTENT_TYPE, ""),
-                )
-        except HTTPError as exc:
-            if exc.code in {401, 403}:
-                raise ValueError("MCP server rejected the stored OAuth token") from exc
-            raise ValueError("MCP server request failed") from exc
-        except (URLError, TimeoutError) as exc:
-            raise ValueError("MCP server is unavailable") from exc
-        if not isinstance(decoded, dict):
-            raise ValueError("MCP server returned an invalid JSON-RPC response")
-        return decoded
-
-    @staticmethod
-    def _decode_remote_mcp_response(raw: str, content_type: str) -> object:
-        if content_type.lower().startswith(Keys.ContentType.EVENT_STREAM):
-            for line in raw.splitlines():
-                if not line.startswith(Keys.Sse.DATA_PREFIX):
-                    continue
-                data = line.removeprefix(Keys.Sse.DATA_PREFIX).strip()
-                if not data or data == Keys.Sse.DONE:
-                    continue
-                return json.loads(data)
-            return {}
-        return json.loads(raw or "{}")
 
     @classmethod
     def _default_store(cls) -> InMemoryMcpStore | PostgresMcpStore:

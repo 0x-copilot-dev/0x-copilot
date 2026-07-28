@@ -6676,9 +6676,21 @@ class PostgresRuntimeApiStore:
         async with self._tenant_connection(org_id=org_id) as conn:
             cur = await conn.execute(
                 """
-                SELECT * FROM runtime_events
-                WHERE org_id = %s AND run_id = %s AND sequence_no > %s
-                ORDER BY sequence_no ASC
+                SELECT e.*
+                  FROM runtime_events e
+                  JOIN agent_runs r
+                    ON r.id = e.run_id AND r.org_id = e.org_id
+                 WHERE e.org_id = %s
+                   AND e.run_id = %s
+                   AND e.sequence_no > %s
+                   AND NOT EXISTS (
+                       SELECT 1
+                         FROM agent_conversations c
+                        WHERE c.id = r.conversation_id
+                          AND c.org_id = r.org_id
+                          AND c.deleted_at IS NOT NULL
+                   )
+                 ORDER BY e.sequence_no ASC
                 """,
                 (org_id, run_id, after_sequence),
             )

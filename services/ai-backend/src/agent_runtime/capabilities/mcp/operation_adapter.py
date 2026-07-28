@@ -30,9 +30,12 @@ from agent_runtime.capabilities.mcp.cards import McpLoadError, McpServerCard
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
 from agent_runtime.capabilities.mcp.client import (
     McpAuthError,
+    McpAmbiguousDispatchError,
     McpClientError,
     McpConnectionError,
+    McpLeaseError,
     McpTimeoutError,
+    aclose_mcp_client_safely,
 )
 from agent_runtime.capabilities.mcp.middleware.cite_mcp import (
     CitationProjectingMcpMiddleware,
@@ -94,6 +97,7 @@ _CONNECTOR_TIMEOUT = "The connector timed out; no external change was made."
 _CONNECTOR_PROTOCOL_ERROR = (
     "The connector reported an error; no external change was made."
 )
+_RETRYABLE_ACQUISITION_LEASE_CODES = frozenset({"pool_saturated", "server_unavailable"})
 
 
 class McpOperationGateResolver:
@@ -416,6 +420,8 @@ class McpOperationAdapter(OperationAdapter):
             )
 
     async def _dispatch(self, resolution: RegisteredMcpServer) -> Mapping[str, object]:
+        client = None
+        cancel_client = True
         try:
             client = resolution.provider.create_client(resolution.card)
             output = await asyncio.wait_for(
@@ -425,11 +431,27 @@ class McpOperationAdapter(OperationAdapter):
                 ),
                 timeout=self._timeout_seconds,
             )
+            cancel_client = False
         except (McpTimeoutError, asyncio.TimeoutError, TimeoutError) as exc:
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,
                 _CONNECTOR_TIMEOUT,
                 retryable=True,
+            ) from exc
+        except McpLeaseError as exc:
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                _CONNECTOR_UNAVAILABLE,
+                retryable=(
+                    exc.acquisition_safe
+                    and exc.code in _RETRYABLE_ACQUISITION_LEASE_CODES
+                ),
+            ) from exc
+        except McpAmbiguousDispatchError as exc:
+            raise OperationGatewayError(
+                OperationGatewayErrorCode.ADAPTER_FAILED,
+                _CONNECTOR_UNAVAILABLE,
+                retryable=False,
             ) from exc
         except McpAuthError as exc:
             # A connector can revoke credentials between the pre-dispatch gate
@@ -445,7 +467,7 @@ class McpOperationAdapter(OperationAdapter):
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,
                 _CONNECTOR_UNAVAILABLE,
-                retryable=True,
+                retryable=False,
             ) from exc
         except (PermissionError, McpConnectionError, ConnectionError) as exc:
             raise OperationGatewayError(
@@ -465,6 +487,9 @@ class McpOperationAdapter(OperationAdapter):
                 _CONNECTOR_UNAVAILABLE,
                 retryable=True,
             ) from exc
+        finally:
+            if client is not None:
+                await aclose_mcp_client_safely(client, cancel=cancel_client)
         if not isinstance(output, Mapping):
             raise OperationGatewayError(
                 OperationGatewayErrorCode.ADAPTER_FAILED,

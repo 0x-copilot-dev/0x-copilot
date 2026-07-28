@@ -1,0 +1,747 @@
+{
+  "schema_version": "agent-runtime-golden-traces.v1",
+  "catalog_id": "active_path_baseline",
+  "revision": "v1",
+  "variant_id": "active_path_baseline_v1",
+  "redaction_policy_revision": "baseline-redaction-v1",
+  "harness_revisions": {
+    "deepagents": "0.6.12",
+    "langchain": "1.3.14",
+    "langgraph": "1.2.9"
+  },
+  "traces": [
+    {
+      "journey_id": "approval_resume",
+      "task_family": "approval_resume",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "e1e8690d1c2d46bd386590f948905387a9fe0a4bb32baf0b735c2c6f0658b88b"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "e45c3efed00b0b62e6d7050da021f3b6b73ed69d948ddb466e6c04da750b7765"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "28d0a5aec7e45177430a78c2c961bc8e9db7bdbee74e6243c6c1d93df389d22f"
+        ],
+        [
+          "approval_requested",
+          "system",
+          "call_mcp_tool",
+          "0c22fa82123f67c2b16a60071e575015b8a250b7e1b18cd3545c7f67c0273131"
+        ],
+        [
+          "approval_resolved",
+          "system",
+          "call_mcp_tool",
+          "3139eaad88865e6487ca2599b206b167d347be3be4dc40f78ec6cfbde967d345"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "call_mcp_tool",
+          "9888c56a823cd352f2176a311364401db98b58461f4092bc8685df94b176f432"
+        ],
+        [
+          "tool_result",
+          "tool",
+          "call_mcp_tool",
+          "ca2d9ea6615dbf0f7d16a32dc652fbe45d0560d5d6deef611cabf2e0f65daf0f"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "ce5c008ad0487bcdbdfff27e7980c5b1db0d4f8e79bdf4ffb2d0b5d238d4c489"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "670b7f2673041bcbaea07b9436a7d291d05f95e601f7bd27a2ee3365a4639da5"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "20aad1f3911214578a4a7487c1bd80475aa55792097ca957db4dcefce041a5e7"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "7611baf8c84d1adba7a3550e87bc6fe566e3938683a53e20a56c7b1bf05cd7e5"
+        ]
+      ],
+      "trace_digest": "1ddb5f6c1ba41a5aacf2cc0e0bb443ce4698fa190415a8c56850b0a716559c2f"
+    },
+    {
+      "journey_id": "cancel",
+      "task_family": "cancel",
+      "expected_last_event_type": "run_cancelled",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "c75c08fbba2433ca784f529a427670014ac6586e8007874e201197c7e8a50caf"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "b1e8fd1d317342b0d65a07cda4ca9203752a4d2d5fdb319c856516a0e3652673"
+        ],
+        [
+          "run_cancelling",
+          "system",
+          null,
+          "8a951885f1b09d0e52aae06d067c5a1767bc0041f428c703e0d608fa83e4ffb1"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "00ef1f6461acfc154a38cde0f8f22b4afe2de32d67ecef8a72bf0333ecd743eb"
+        ],
+        [
+          "run_cancelled",
+          "runtime",
+          null,
+          "8480068d9c1af8c9cd82baf8406fb751493f7ead30fa65515774c256ccd00004"
+        ]
+      ],
+      "trace_digest": "10680e33f169e027b8188736165d88fa00fc6a46c75a32e8c159aa5c05c6064c"
+    },
+    {
+      "journey_id": "large_tool_result",
+      "task_family": "large_tool_result",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "7ccccd186396a2cc92863def08fbebf26741233fe065695177f2429d0640f77f"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "3694d70ba6549765efd40efcef092a76ed3a9f2894ae3b1ea1bb7c45986b22f0"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "6e080037dd02072f8ad34a307c43e2093e05d4e8c13b2ed231a7c552d19c08a1"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "large_result",
+          "522863506938315c097395fb48e0fbe3c9c9ebed66b364de3873b6ff2dcfe5d8"
+        ],
+        [
+          "tool_result",
+          "tool",
+          "large_result",
+          "6ff70aff9bdbd2a08973b1e0b58c9cdd268f4e22261ea6fa3a8723711432731d"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "3b3288a7117b125021c880f6a3ffe0e4eb7f34977a4b8a8e0ad564fe7fb4ef13"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "805230523d9f97465d3972512e76f654401a06927d4a16405614481ff3d2e58f"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "92a7d2a69e16a74bae8db31ce03554403cabebd84896b8b8e66273f6d20b1ad5"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "e538a57b23864648f15fdc7ed19cb4a27735d36fc7b8b5220262c264c06eef2c"
+        ]
+      ],
+      "trace_digest": "90807c7af70356d4025bbbcaf3ab087be3185859b11877ad2b72464012a599e8"
+    },
+    {
+      "journey_id": "local_subagent",
+      "task_family": "local_subagent",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "ba347289bdae58b9396630eff49ffa6f6fde4d553debdf4f1019233d92ccde39"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "6558eadedfdf08d5d8e0e09d40cbe8d17f61acb756a62893a10f18bf05917f22"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "91f43d896810cc3893edd49540cdf278f9c427f6f8272f9467a2f307f595c4b1"
+        ],
+        [
+          "subagent_fleet_started",
+          "system",
+          "task",
+          "0669d82bd5b223933141772522d8ba2fd3cc75935444322d397c3cc23d837910"
+        ],
+        [
+          "subagent_started",
+          "subagent",
+          "task",
+          "93ddcba9e2a9d123281f876473de3fb5bce82edcef02d1095a10ee9728933541"
+        ],
+        [
+          "subagent_progress",
+          "subagent",
+          "task",
+          "f83d8ec35129e73651ed70b7a4d55148e343b1946042bb2a40e89e936f2a89b7"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "read_file",
+          "b30e049f9c08e955afcb3ea360f982b5123004f1514c50d5f12bd86b2f353f1b"
+        ],
+        [
+          "tool_result",
+          "tool",
+          "read_file",
+          "35af8d910b8fc5f1d2946c36e3717883f3278655b9113661cc6e5078098d0b3e"
+        ],
+        [
+          "subagent_completed",
+          "subagent",
+          "task",
+          "fcbc44eadc29d7a4c45e9c94550809c156e11240f73d614a3abcdc85b50048d9"
+        ],
+        [
+          "subagent_fleet_finished",
+          "system",
+          "task",
+          "b0ccd4f0d2fed4f33fe6670b8a1157b89c34f2d071f7b2afc902fffa795f23a4"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "7acafbc5daf09020544b75126bc55d72a77ebdf033c69e4bf0a8eff088c139fb"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "19a2c053cf9c633de045990e1299bbf1c22615f7483569a57618d5278cb52d67"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "318db74c09e3a06d7f7fd683b4d331eae81a80c336cc76b4d0057bfbc3f82f18"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "99834ad16e7972c19a674f77c7a1695c6880b8d73359c59a54e90a201ed5ed18"
+        ]
+      ],
+      "trace_digest": "6561e7cc71a61bbce13935ba3d8314ed14c027b7d4eb41e1aa52418a8162327c"
+    },
+    {
+      "journey_id": "local_tool_use",
+      "task_family": "local_tool_use",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "4f1f199a05f4fa94cb793099fc079c98079f19ed9a83d869d4b016cc94a5f920"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "d00c38a748f92f01b621d38c939133bca663fbe2cc656a6b54ed924cdcf62035"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "47fc832f391af57042bedf5c3eac6cc9f7d1e5b884f50036b3ab829846cbb70d"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "ls",
+          "7f21f30064e41ceab4aedcffcbb2b77d01ccc4667573a731e9555fbfb2073992"
+        ],
+        [
+          "tool_result",
+          "tool",
+          "ls",
+          "6f109ee580e3a4df263b0b0e4b6d1403945ed742d78ec4d1ed5b45a4d8849394"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "158781c474ad354a17756b52db59a75ecc00475360a14cbe2ac2e374785e8c0d"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "e1ae7723bd245ae67a15f6f0bbebf2134807b18ba47bb388e527047a33597c18"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "64bfc17f26286a543b9efe2b8bde0d4aadcba3fa0f442e7deb70a2d080c1433b"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "72f7175a19cdbdbc6e61571105a04a4828e44801f680123dab4d268803b77fbd"
+        ]
+      ],
+      "trace_digest": "552e1ca8cab2844bb0b8d134949ac5515ab741ace1475a66fc2a7f3e1127b226"
+    },
+    {
+      "journey_id": "mcp_auth",
+      "task_family": "mcp_auth",
+      "expected_last_event_type": "mcp_auth_required",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "acdab426af6446d655514a8447f9e9bb2e1df5185ecec4f15b7d0269db606c2a"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "8758b5e59f0d7df67733deb0e2d1f4e92cb5464fe8bec904f37ae953c688a065"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "c89e9cc6b3acaeb8cca996bf8fd17d10b63fa0921222106ff01897657d97261e"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "load_mcp_server",
+          "6fbd0ed2ec126101fdbfa13e2b3c3a78fe568d8ee2424725b79dd8f8c4b81596"
+        ],
+        [
+          "mcp_auth_required",
+          "mcp",
+          "load_mcp_server",
+          "8f5c678587afbcd64a754d21b74f5f65fd176d0f3cd019f4c1eb7004ad64209e"
+        ]
+      ],
+      "trace_digest": "16263c5ae1f1063bd84e25f2ef1cbfdaeb3c581e7f37d01a1505f9d1d87e1f3b"
+    },
+    {
+      "journey_id": "mcp_read",
+      "task_family": "mcp_read",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "53038ac5c806f3a0647e8f3639c23a299d002d651c418c60c4ede5cac26ca631"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "42bfd63db6967faffc9f3bf7be0d4f6ee04ecf20f944ba1ab431369646b234cf"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "fa3ede795fce1c821ef2b2a978293c7aac2ae654a65ccf8601c7647e3393bee9"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "call_mcp_tool",
+          "5654d76e91722ed6a6243d3fcb6fa23a2193cc05f0f7aae9eec916ace104bf6d"
+        ],
+        [
+          "operation.requested",
+          "system",
+          "mcp.read",
+          "c9ce1cdde34ecc3e72a963cc3cbfc69634ca64c16b47e1558cf26378d09f03f1"
+        ],
+        [
+          "operation.classified",
+          "system",
+          "mcp.read",
+          "94d282fbb1bd7d698ed073e13c2408de6d85a4e4e54a06ddf23c7939b43be022"
+        ],
+        [
+          "tool_result",
+          "mcp",
+          "call_mcp_tool",
+          "9d5c46463e0b394e4e2c400878fe77ac7edc8b929ab76faa7b291b6d7a626538"
+        ],
+        [
+          "operation.completed",
+          "system",
+          "mcp.read",
+          "c0a5fac2fa5a3834806adcf2c30b265c79eb6e22d01cef2b5bc85cf567368c28"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "8148b3c04c53a0012bb080a1a28b0fd8f6b26d729b7fa5652e3d7d71e518b7a7"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "bb60f3a1271afde43f085083f98d0435274f83952934097178f75576906ab652"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "2044889350a4f49ecc8c68291b0c3d1a7f91b9acf3789d7fd9bb6633cb023fd2"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "2e4968cf8ea198c88944bb1f69ff91c61ee33303b9cbd5fa797af2a7490b75ee"
+        ]
+      ],
+      "trace_digest": "93cdc5e2d26d8577b0c30e8661b698802690b82ce74479dd87c9ca7e148f14da"
+    },
+    {
+      "journey_id": "mcp_write_staging",
+      "task_family": "mcp_write_staging",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "8268f7bb4098668033b179067ca3992be43e9999d8dc4f27849ccad4bfebebe0"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "d7bca0a214db5b730348993223471c6a57c3b07a073ddd94b2dd2fec872c95b9"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "a2b00bdb74134be76204bfb6b847f0d13a2082a30cb65371bcaba3163779b593"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "call_mcp_tool",
+          "5105db38eee757e10da24701f8a3a1a3cd7bc8d34c3229b9fc86259ed0a293bb"
+        ],
+        [
+          "operation.requested",
+          "system",
+          "mcp.write",
+          "2e5ba2c137121d734461207441768c8a2aa7572826a1694f68f7f184944799a9"
+        ],
+        [
+          "operation.classified",
+          "system",
+          "mcp.write",
+          "f1d262fb3d1020db4f195d821c87f1cbaa3df8817d5acdbd344a30352d336ce1"
+        ],
+        [
+          "effect.staged",
+          "system",
+          "mcp.write",
+          "29ff8fb907eb757ad46812415c14838f0598d5e6990da3df99cd8daea516b9fc"
+        ],
+        [
+          "tool_result",
+          "mcp",
+          "call_mcp_tool",
+          "c00882a713d95b609e758fcd0948433b6d90c518e6966f5d711b59c206381102"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "220b91ad01fafb1793f714a5d8059ed885dfb29de87adbc4c3c96fbbd8630157"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "100f3a6a53dff535d9c29fa98535ac681a66d1eed23f3e4da8a0e3ed42edb711"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "c35f8bb4e5b5ff9e72c2299394cf9f7d6523e8f45bd17e1549fc69e2b48f55f5"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "d5be9fa9e26db6ae61084d22f2c05c949e90ca05d16a8a081c4afb9be9898e12"
+        ]
+      ],
+      "trace_digest": "c1ba7828bbd627398bf5d7652a62452d0c222b015dbf703733542c2716a7c701"
+    },
+    {
+      "journey_id": "ordinary_chat",
+      "task_family": "ordinary_chat",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "88ed0b4476bc0dc339fbf348fa74bb223518144d58ed62d2b0ae70197e2bb078"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "f84af5a6445afdced1e86c487e2fa997916d8931cafb28a830fe8369a40d7b6c"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "3e0ac744569731a85c245467863b98045a5224a6a07546d1070726f12889c015"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "57fba9456becafc7c36f5957990bfebf597be815839c0fbf2c1f3f11564313ab"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "751a2988968ead1582bb3fb6731cd42282f9ab718ed4acfcba82e977b58acfe2"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "b9e724195d27d555c33a5ed8cb6aed04ce33de2ff9eece9ba3bd934553e1a75e"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "b8f0d6b9871f259adbcd475dc98862c77218617a1c011358e18e379dde527117"
+        ]
+      ],
+      "trace_digest": "ab9a0f77bdcaa9a5857bea32f8e3ef8bc3985396ceaa8abf1658f8e4d639f274"
+    },
+    {
+      "journey_id": "provider_error",
+      "task_family": "provider_error",
+      "expected_last_event_type": "run_failed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "33d47fdb827ec1857bd21e3b2e9911da9281419115e5dee0ddd67e41ec1c0000"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "7474ce2dcc00b592edfe206e839604e8579b4d0554772d1617e8ebbe2b35e3db"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "686039958157e835fab4327a406a50e750e987e2e9f8a6b27615310ed05c3797"
+        ],
+        [
+          "error",
+          "model",
+          null,
+          "4f29bb0a8c69e8f57ff119522e3248a10768116ffa4f700a63010b126a9ce2e6"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "e8b280125b512be73559efbee09f5fd1bb80f33bebc569bd07e31ab796e21b6d"
+        ],
+        [
+          "run_failed",
+          "runtime",
+          null,
+          "032e8f50ad7d7be830f5d8c94f2cf18b2ff9e2d482193fe321e99087959833a9"
+        ]
+      ],
+      "trace_digest": "8afa45ba7f3aaf436f8f26bf967feb086c1851fb33f969f062bc3bfae572c43a"
+    },
+    {
+      "journey_id": "timeout",
+      "task_family": "timeout",
+      "expected_last_event_type": "run_failed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "b23072c1a66ab832986ae3dca4f0496c47d6952a950b011b1bd9938540a208aa"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "93639db49156c8207c54ae4a44e127b4e8a15be401362bd224ad9ded49298486"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "a33ee73272621c7998994dca7ab219e02c1a6a23797cbc3641ed4db4ce01d901"
+        ],
+        [
+          "error",
+          "runtime",
+          null,
+          "bbcd3edded6f79a4eed9dd5e0cba844bb28c8e1fccdb7d2f200d436cdb6ad213"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "9a6559c12747498e485e1d3a5df946be12ae92483eeb059c38f22524f143cc81"
+        ],
+        [
+          "run_failed",
+          "runtime",
+          null,
+          "e67740e32ad2a3ffee82cdff8f1b2d0274721c7557fe4d33a2f191f22e5d93e2"
+        ]
+      ],
+      "trace_digest": "8eeb25853a307755f045aea95b4ca7b9942cff2dd960b3c11ef265921c004f5c"
+    },
+    {
+      "journey_id": "workspace_draft",
+      "task_family": "workspace_draft",
+      "expected_last_event_type": "run_completed",
+      "ordered_steps": [
+        [
+          "run_queued",
+          "system",
+          null,
+          "ca7221b77aff21d875f8124600950ad05a69f411d407dd141c7eea5533e84abb"
+        ],
+        [
+          "run_started",
+          "runtime",
+          null,
+          "8c9a44a3d1f72f631729fe754ed11fa36749c98d6367e8bc6df46c3d21e7b267"
+        ],
+        [
+          "model_call_started",
+          "model",
+          null,
+          "158bb4a7f5ce85be377174a952c7ed5b9770ebc30aab2225bb4ac5d30bc4e78d"
+        ],
+        [
+          "tool_call_started",
+          "tool",
+          "write_file",
+          "2004328db1bbe59cc36bfdc76cf32402cd79bcc48faff15d5ed5b624e92ca14c"
+        ],
+        [
+          "draft_updated",
+          "system",
+          "write_file",
+          "822e93099611eb59e2c805d306bdac67ef3aba602b3b29bcd0f03af76c711f55"
+        ],
+        [
+          "tool_result",
+          "tool",
+          "write_file",
+          "cc46b626699c1e3d46e4d11099379214f356b4d9db5c68a1a3dca56d570b79e4"
+        ],
+        [
+          "model_call_completed",
+          "model",
+          null,
+          "73e6e4e504ca3d74cf6fadcb1dfe6aab896efc710eeac9fbe9081284429ab1d0"
+        ],
+        [
+          "final_response",
+          "main_agent",
+          null,
+          "06e41d15153753ffc8455e503c4c0cd62bcbbb625efba454a9e075567a988966"
+        ],
+        [
+          "receipt.emitted",
+          "system",
+          null,
+          "3860bf42fbaf2f360c5d0570e45169e25be1b474226c96980b2e33b3c84eaf1b"
+        ],
+        [
+          "run_completed",
+          "runtime",
+          null,
+          "fb77304dadfaf7d8497af7ca43f535737713a224fbfd4f1ce44a353ef5c844cb"
+        ]
+      ],
+      "trace_digest": "89d167677aecc627cb62d7683c9408ba8320c2a500334201136978072334f50a"
+    }
+  ],
+  "catalog_digest": "5fa401bd78ba0c377684dc05fd3bfdbc8dc7d92a9dca8449d8e95afada1a823a"
+}

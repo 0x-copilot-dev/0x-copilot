@@ -46,8 +46,9 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 import hashlib
+import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from starlette import status
 
@@ -163,6 +164,26 @@ from runtime_api.schemas import (
 )
 
 
+_LOGGER = logging.getLogger(__name__)
+
+
+class ExternalObjectReferenceProvider(Protocol):
+    """Synchronous snapshot of CAS digests owned outside conversation JSONL."""
+
+    def protected_object_digests(self) -> frozenset[str]: ...
+
+
+class ExternalSourceRunDeletionObserver(Protocol):
+    """Delete derived records before their source run bytes are removed."""
+
+    async def delete_source_runs(
+        self,
+        *,
+        source_org_id: str,
+        source_run_ids: frozenset[str],
+    ) -> object: ...
+
+
 class _Tables:
     """State-ledger file basenames (one JSONL per back-office table)."""
 
@@ -243,6 +264,24 @@ class FileRuntimeApiStore:
         self._artifact_lifecycle_jobs = jobs
         jobs.configure_hold_revalidator(self._artifact_candidate_scope_is_held)
 
+    def configure_external_object_references(
+        self,
+        provider: ExternalObjectReferenceProvider,
+    ) -> None:
+        """Register one fail-safe reference source for conversation-triggered GC."""
+
+        if provider not in self._external_object_reference_providers:
+            self._external_object_reference_providers.append(provider)
+
+    def configure_source_run_deletion_observer(
+        self,
+        observer: ExternalSourceRunDeletionObserver,
+    ) -> None:
+        """Register a derived-record cascade that must finish before source erase."""
+
+        if observer not in self._source_run_deletion_observers:
+            self._source_run_deletion_observers.append(observer)
+
     async def tombstone_artifacts_for_org_deletion(
         self,
         *,
@@ -301,6 +340,12 @@ class FileRuntimeApiStore:
         self._retention_days = max(retention_days, 0)
         self.object_store = FileObjectStore(self._layout, quota=self._quota)
         self._reachability = ObjectReachabilityScanner(self._layout)
+        self._external_object_reference_providers: list[
+            ExternalObjectReferenceProvider
+        ] = []
+        self._source_run_deletion_observers: list[
+            ExternalSourceRunDeletionObserver
+        ] = []
         self._session_eraser = SessionEraser(self._layout)
 
         # ---- materialized view (rebuilt from disk on open) --------------
@@ -2190,6 +2235,12 @@ class FileRuntimeApiStore:
         run = await self.get_run(org_id=org_id, run_id=run_id)
         if run is None:
             return ()
+        conversation = self.conversations.get(run.conversation_id)
+        if conversation is not None and conversation.deleted_at is not None:
+            # Keep tombstoned history unavailable through the public replay
+            # port. Lifecycle scans remain separate and retain the canonical
+            # JSONL records until the owning deletion authority purges them.
+            return ()
         docs = self._index.list_events_after(
             run_id=run_id, after_sequence=after_sequence
         )
@@ -2862,22 +2913,45 @@ class FileRuntimeApiStore:
             if dry_run:
                 return outcome
 
-            # 3) Erase session directories, then drop materialised + index state.
+            # 3) Cascade derived source-run records first. Observers are
+            # idempotent and durable; a failure aborts before any conversation
+            # byte is removed, while a later conversation erase failure can be
+            # retried safely against the already-completed cascade.
+            source_run_ids = frozenset(run.run_id for run in victim_runs)
+            if source_run_ids:
+                for observer in self._source_run_deletion_observers:
+                    await observer.delete_source_runs(
+                        source_org_id=org_id,
+                        source_run_ids=source_run_ids,
+                    )
+
+            # 4) Erase session directories, then drop materialised + index state.
             self._session_eraser.erase(planned_dirs)
             for conversation in deletable:
                 self._drop_conversation_state(conversation, victim_runs=victim_runs)
 
-            # 4) GC objects that became unreferenced (survivors recomputed from
+            # 5) GC objects that became unreferenced (survivors recomputed from
             #    the JSONL that remains on disk). Content-addressed sharing keeps
             #    any blob still referenced by another conversation alive.
             survivor_refs = self._reachability.scan_all(self.conversations.values())
-            for digest in self._reachability.collectible(
-                victim_refs=victim_refs,
-                survivor_refs=survivor_refs,
-                object_store=self.object_store,
-            ):
-                if self.object_store.delete(digest):
-                    outcome.objects += 1
+            external_references_available = True
+            try:
+                for provider in self._external_object_reference_providers:
+                    survivor_refs.update(provider.protected_object_digests())
+            except Exception:  # noqa: BLE001 - uncertainty must retain all blobs
+                external_references_available = False
+                _LOGGER.warning(
+                    "external object reachability scan failed; object GC skipped",
+                    exc_info=True,
+                )
+            if external_references_available:
+                for digest in self._reachability.collectible(
+                    victim_refs=victim_refs,
+                    survivor_refs=survivor_refs,
+                    object_store=self.object_store,
+                ):
+                    if self.object_store.delete(digest):
+                        outcome.objects += 1
 
         outcome.audit_event_id = await self._record_deletion_audit(
             org_id=org_id,

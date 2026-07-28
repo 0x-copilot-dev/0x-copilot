@@ -85,6 +85,7 @@ class McpDescriptorFreshnessState(StrEnum):
     REVISION_CHANGED = "revision_changed"
     MAX_STALENESS_EXCEEDED = "max_staleness_exceeded"
     VALUE_EVICTED = "value_evicted"
+    INVALIDATION_RACED = "invalidation_raced"
 
 
 class McpDescriptorFreshnessDecision(RuntimeContract):
@@ -115,12 +116,14 @@ class McpDescriptorInvalidationResult(RuntimeContract):
 
     cached_records_removed: int = Field(ge=0)
     revision_records_removed: int = Field(ge=0)
+    generation_barriers_advanced: int = Field(ge=0)
 
 
 @dataclass(frozen=True, slots=True)
 class _RevisionRecord:
     revision: McpDescriptorRevision
     admitted_at: float
+    generation: int
 
 
 @dataclass(slots=True)
@@ -156,6 +159,7 @@ class RevisionAwareMcpDiscoveryCache:
         self._clock = clock
         self._revisions: dict[McpDiscoveryCacheKey, _RevisionRecord] = {}
         self._key_locks: dict[McpDiscoveryCacheKey, _KeyLock] = {}
+        self._generations: dict[McpDiscoveryCacheKey, int] = {}
         self._state_lock = asyncio.Lock()
 
     async def get(
@@ -175,7 +179,13 @@ class RevisionAwareMcpDiscoveryCache:
         """Admit a descriptor under the request's exact subject and revision."""
         key = request.cache_key()
         async with self._lock_for(key):
-            await self._put_locked(key=key, request=request, record=record)
+            generation = await self._generation_for(key)
+            await self._put_locked(
+                key=key,
+                request=request,
+                record=record,
+                expected_generation=generation,
+            )
 
     async def get_or_load(
         self,
@@ -194,11 +204,24 @@ class RevisionAwareMcpDiscoveryCache:
             if cached.record is not None:
                 return cached
 
+            generation = await self._generation_for(key)
             loaded = await load()
             if loaded is None:
                 return cached
 
-            await self._put_locked(key=key, request=request, record=loaded)
+            admitted_for_generation = await self._put_locked(
+                key=key,
+                request=request,
+                record=loaded,
+                expected_generation=generation,
+            )
+            if not admitted_for_generation:
+                return McpDescriptorCacheResult(
+                    decision=self._decision(
+                        request=request,
+                        state=McpDescriptorFreshnessState.INVALIDATION_RACED,
+                    ),
+                )
             admitted = await self._cache.get(key)
             if admitted is None:  # Defensive: an adapter may reject admission.
                 async with self._state_lock:
@@ -226,24 +249,31 @@ class RevisionAwareMcpDiscoveryCache:
         Both subject fields are mandatory by construction.  This intentionally
         does not expose the wildcard org/user surface of the base cache.
         """
+        async with self._state_lock:
+            matching_keys = tuple(
+                key
+                for key in set(self._revisions).union(self._key_locks)
+                if key.org_id == subject.org_id
+                and key.user_id == subject.user_id
+                and (server_name is None or key.server_name == server_name)
+            )
+            revision_records_removed = 0
+            for key in matching_keys:
+                self._generations[key] = self._generations.get(key, 0) + 1
+                if key in self._revisions:
+                    revision_records_removed += 1
+                self._revisions.pop(key, None)
+                if key not in self._key_locks:
+                    self._generations.pop(key, None)
         cached_removed = await self._cache.invalidate(
             server_name=server_name,
             org_id=subject.org_id,
             user_id=subject.user_id,
         )
-        async with self._state_lock:
-            revision_keys = tuple(
-                key
-                for key in self._revisions
-                if key.org_id == subject.org_id
-                and key.user_id == subject.user_id
-                and (server_name is None or key.server_name == server_name)
-            )
-            for key in revision_keys:
-                self._revisions.pop(key, None)
         return McpDescriptorInvalidationResult(
             cached_records_removed=cached_removed,
-            revision_records_removed=len(revision_keys),
+            revision_records_removed=revision_records_removed,
+            generation_barriers_advanced=len(matching_keys),
         )
 
     async def _get_locked(
@@ -254,6 +284,7 @@ class RevisionAwareMcpDiscoveryCache:
     ) -> McpDescriptorCacheResult:
         async with self._state_lock:
             revision_record = self._revisions.get(key)
+            generation = self._generations.get(key, 0)
 
         if revision_record is None:
             return McpDescriptorCacheResult(
@@ -297,6 +328,21 @@ class RevisionAwareMcpDiscoveryCache:
                 ),
             )
 
+        async with self._state_lock:
+            generation_unchanged = (
+                self._generations.get(key, 0) == generation
+                and self._revisions.get(key) == revision_record
+            )
+        if not generation_unchanged:
+            return McpDescriptorCacheResult(
+                decision=self._decision(
+                    request=request,
+                    state=McpDescriptorFreshnessState.INVALIDATION_RACED,
+                    cached_revision=revision_record.revision,
+                    age_seconds=age_seconds,
+                ),
+            )
+
         return McpDescriptorCacheResult(
             decision=self._decision(
                 request=request,
@@ -313,13 +359,31 @@ class RevisionAwareMcpDiscoveryCache:
         key: McpDiscoveryCacheKey,
         request: McpDescriptorFreshnessRequest,
         record: LoadedMcpServer,
-    ) -> None:
+        expected_generation: int,
+    ) -> bool:
         await self._cache.put(key, record)
         async with self._state_lock:
-            self._revisions[key] = _RevisionRecord(
-                revision=request.revision,
-                admitted_at=self._clock(),
+            if self._generations.get(key, 0) != expected_generation:
+                admitted = False
+            else:
+                admitted = True
+                self._revisions[key] = _RevisionRecord(
+                    revision=request.revision,
+                    admitted_at=self._clock(),
+                    generation=expected_generation,
+                )
+        if not admitted:
+            await self._cache.invalidate(
+                server_name=key.server_name,
+                org_id=key.org_id,
+                user_id=key.user_id,
             )
+            return False
+        return True
+
+    async def _generation_for(self, key: McpDiscoveryCacheKey) -> int:
+        async with self._state_lock:
+            return self._generations.get(key, 0)
 
     async def _evict_exact(self, key: McpDiscoveryCacheKey) -> None:
         await self._cache.invalidate(
@@ -370,3 +434,5 @@ class RevisionAwareMcpDiscoveryCache:
                 key_lock.users -= 1
                 if key_lock.users == 0:
                     self._key_locks.pop(key, None)
+                    if key not in self._revisions:
+                        self._generations.pop(key, None)

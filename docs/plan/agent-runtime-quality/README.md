@@ -290,6 +290,347 @@ subagent authority intersection.
 10. **Feature off is honest.** No empty in-memory fallback masquerades as
     durable production behavior.
 
+## F1–F12 implementation program
+
+The twelve Wave F feature PRDs are implemented through one ordered production
+architecture:
+
+- [F1–F12 production integration implementation PRD](./IMPLEMENTATION-PRD-F1-F12-PRODUCTION-INTEGRATION.md)
+- [Implementation history and resolved/open ARQ record](./IMPLEMENTATION-BACKLOG.md)
+
+The implementation PRD contains the normative checkbox queue. Work proceeds in
+order and a step is not marked complete until its code, adapters, tests,
+rollout controls, recovery, and Definition of Done pass. It preserves one
+Deep Agents graph, one Operation Gateway, one run event journal, desktop
+file-native runtime state, backend-owned MCP credentials/sessions, and
+desktop-owned host mutation authority.
+
+### Active execution — Step 4 task-aware tool controller
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate.
+
+- [x] **F4.1 — Versioned policy bundle and selection.** Define one
+      self-authenticating deployment-owned `TaskPolicyBundle`, conservative
+      unknown profile, deterministic task-family resolver, and immutable
+      selection reference. Bind selection from verified persisted run facts
+      before the first model call; effect and delegation facts may only tighten
+      the selected profile.
+- [x] **F4.2 — Plan and controller record contracts.** Bind a deterministic
+      public `RunToolPlan` before the first governed call and define bounded,
+      content-free intent, admission, outcome, feedback, budget, and progress
+      records keyed by stable runtime call/operation identity plus keyed
+      canonical argument/result fingerprints.
+- [x] **F4.3 — Canonical event-journal persistence.** Persist F4 records through
+      the existing tenant-scoped run event journal with stable event IDs,
+      idempotency-conflict detection, replay validation, deletion/retention
+      parity, and no new database, queue, JSONL ledger, or checkpoint-only
+      source of truth.
+- [x] **F4.4 — Restart-safe reducer.** Reconstruct exact-duplicate,
+      unchanged-error, plan progress, model-turn, tool-call, cost, and deadline
+      state from durable records on worker claim and approval resume. Keep
+      incremental admission expected `O(1)`, bounded source history at 500,
+      and bounded semantic comparison advisory-only.
+- [x] **F4.5 — Graph-wide authoritative enforcement.** Compose F4 once in the
+      existing `RuntimeControlMiddleware` around every final supervisor and
+      local-subagent model-visible tool. Preserve policy-before-budget ordering,
+      prevent blocked calls from consuming tool budget, and enforce the minimum
+      of platform, user/workspace, run-envelope, task-profile, capability, and
+      model-declared ceilings.
+- [x] **F4.6 — Recovery, progress, and prompt handoff.** Rebind the same
+      controller after approval/restart without resetting spend; emit body-free
+      profile/plan/intent/feedback/progress events; expose one typed bounded
+      progress/budget projection for Step 5 prompt assembly rather than
+      appending ad-hoc system strings.
+- [x] **F4.7 — Evaluation, rollout, and operations.** Add fixed F1 cases for
+      one-call lookup, pagination, exact duplicates, changed cursors,
+      unchanged/retryable errors, repeated evidence, crash/resume, and
+      premature-stop protection. Document shadow/enforce/backout behavior and
+      prove feature-off parity.
+- [x] **F4.8 — Step gate.** Focused F4 tests, graph/tool-surface conformance,
+      full `ai-backend` suite, ruff, formatting, `git diff --check`, desktop
+      file-store recovery evidence, and every Step 4 exit criterion pass before
+      the normative ordered checklist is marked complete.
+
+Step 4 completion evidence: domain, journal, graph-wide runtime, concrete
+desktop/event-store composition, F1 evaluation, and regression lanes were
+merged through `79d0acb3`. The merged tree passed 173 focused integration
+tests, 157 call-identity/workspace/F4 regression tests, API contract typecheck,
+ruff, compile validation, formatting/commit hooks, and `git diff --check`.
+The final service gate passed 5,777 tests with 127 environment-dependent skips
+and one explicitly deselected live evaluation.
+
+### Active execution — Step 5 per-call prompt assembly and cache observation
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate.
+
+- [x] **F2.1 — Complete prompt contracts and cache-scope proof.** Extend the
+      existing typed fragments and plan with source owner/revision,
+      sensitivity, provider/model family, harness and bridge/tool-schema
+      revisions, F4 profile binding, deterministic plan identity, and a
+      reusable-prefix digest that contains every authority-changing input.
+      Reject duplicate IDs, secret material, broader-than-source cache scope,
+      and non-contiguous stable prefixes before provider dispatch.
+- [x] **F2.2 — Convert every system source into an attributable provider.**
+      Preserve the exact established instruction order while assigning static
+      safety/tool protocol, MCP and skill cards, suggested connectors,
+      workspace/application boundaries, approval state, F4 progress, and
+      capability guidance to typed fragment providers. Untrusted or retrieved
+      material must remain after immutable policy and never become an
+      installation-wide reusable prefix.
+- [x] **F2.3 — Assemble at the graph-wide model seam.** Bind one per-run prompt
+      runtime through `RunControlContext` and assemble in
+      `RuntimeControlMiddleware.awrap_model_call` for every supervisor and
+      local-subagent invocation. Apply only
+      `ModelRequest.override(system_message=..., tools=...)`; never mutate
+      provider-neutral persisted conversation messages or reconstruct the
+      graph per turn.
+- [x] **F2.4 — Single cache owner and versioned provider adapter registry.**
+      Generalize the current decorator into explicit provider/model-family
+      adapters, delegating to the pinned upstream cache middleware where it is
+      the selected owner. Product and framework decoration must be mutually
+      exclusive, unsupported routes preserve identical prompt semantics, and
+      decoration-off remains an immediate release-controlled backout.
+- [x] **F2.5 — Canonical observation and usage reconciliation.** Persist
+      body-free `prompt.assembled.v1` and `prompt.cache.observed.v1` facts
+      through the existing run event journal with stable IDs, fragment/token
+      totals, digests, owner, outcome, and closed reason codes. Normalize only
+      provider-reported cache read/write/miss/unsupported metadata through the
+      existing model-usage path; never infer a hit from local digests.
+- [x] **F2.6 — Failure, fallback, and recovery contract.** Fail closed before
+      dispatch on assembly/scope errors, make replay idempotent, preserve one
+      undecorated semantic-equivalent fallback signal for Step 6/F10, and
+      prohibit an independent retry loop or fallback after provider content,
+      tool calls, or ambiguous acknowledgement.
+- [x] **F2.7 — Golden parity, F1 evaluation, and desktop operations.** Prove
+      byte-for-byte legacy rendering parity, randomized provider/registry
+      ordering determinism, auth/profile/task revision invalidation,
+      supervisor/subagent parity, feature-off behavior, prefix reuse, and no
+      protected-task regression. Extend the existing F1 corpus and desktop
+      runbook rather than creating another evaluator or service.
+- [x] **F2.8 — Step gate.** Focused prompt/cache/middleware/usage/replay tests,
+      full `ai-backend` suite, API contract typecheck, ruff, formatting,
+      `git diff --check`, and all Step 5 exit criteria must pass before the
+      normative ordered checklist is marked complete.
+
+Step 5 completion evidence: typed prompt contracts, per-call model/cache seam,
+verified snapshot/F4 authority binding, canonical observation/F1 evaluation,
+worker/approval-resume composition, and post-response retry-safety fixes were
+merged through `78fe02d6`. The merged tree passed 184 combined
+prompt/observation/control/F1 tests, 138 post-composition integration tests,
+and the final service gate of 5,846 tests with 127 environment-dependent skips
+and one explicitly deselected live evaluation. Full-service ruff and format
+checks, compile validation, API-types TypeScript checking, commit hooks, and
+`git diff --check` also passed.
+
+### Active execution — Step 6 model invocation routing and reliability
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. The existing pure
+`execution/model_invocation` contracts and `O(D)` route/admission policies are
+the source of truth; this step composes them into the real root/subagent model
+path and does not introduce a second router or retry policy.
+
+- [x] **F10.1 — Trusted deployment-catalog and requirements adapters.** Adapt
+      the existing resolved `ModelConfig`, curated model catalog, workspace
+      enablement, ephemeral BYOK availability, user privacy/region policy,
+      current-call capability/context/deadline budgets, and bounded health
+      facts into `ModelDeploymentDescriptor` and
+      `ModelInvocationRequirements`. Give deployment, descriptor, endpoint,
+      price, and qualification revisions stable non-secret identities; retain
+      endpoint URLs and plaintext keys only in the existing ephemeral runtime
+      context. Preserve an explicit-model default of
+      `ModelFallbackPolicy.NONE`.
+- [x] **F10.2 — Replay-stable invocation identity and route authority.** Bind
+      each invocation to the Step 5 `RuntimeModelCallIdentity`, purpose,
+      request digest, verified run/control revisions, requirements revision,
+      descriptor-set revision, and route-plan digest. Reject stale or
+      mismatched plans before dispatch. Keep deterministic route planning
+      `O(D)` with one catalog pass and a measured p95 planning target below
+      5 ms for the bounded local catalog.
+- [x] **F10.3 — Canonical model-invocation event journal.** Define body-free,
+      versioned invocation, route, exclusion, attempt-admission, attempt-state,
+      usage, completion, failure, and recovery records behind a
+      `ModelInvocationStorePort`. Implement the port over the existing
+      tenant-scoped run event journal so in-memory, file/desktop, and Postgres
+      inherit stable event IDs, idempotency-conflict detection, replay,
+      retention, and deletion without a new table, JSONL ledger, queue, or
+      daemon.
+- [x] **F10.4 — Graph-wide per-call middleware and central model construction.**
+      Install one `ModelInvocationMiddleware.awrap_model_call` for the
+      supervisor and every locally compiled subagent, ordered after final
+      Step 5 prompt/tool assembly and before provider dispatch. Persist the
+      invocation, route plan, and admitted attempt before calling the handler.
+      Select only the admitted route through `ModelRequest.override(model=...)`
+      using the existing `build_chat_model` funnel and an ephemeral
+      credential/endpoint resolver; never rebuild the graph or import provider
+      SDKs into the domain.
+- [x] **F10.5 — Provider lifecycle attestation and failure normalization.**
+      Observe dispatch acknowledgement, stream start, first visible text,
+      first tool-call content, usage, completion, cancellation, and sanitized
+      failure through LangChain callbacks/stream observers at the concrete
+      model boundary. Provider-specific adapters may inspect typed exception
+      classes/status fields, but must output only reviewed
+      `ProviderFailureObservation` facts; exception-string heuristics are
+      forbidden and unknown progress becomes ambiguous.
+- [x] **F10.6 — Bounded attempt controller with no mixed streams.** Execute the
+      existing `ModelAttemptAdmissionPolicy` with default two attempts, hard
+      maximum three, and no hedging. Permit only proven pre-content,
+      pre-effect recovery, including the Step 5 one-time undecorated cache
+      retry signal. Deny replay after visible text, tool-call content, usage
+      with uncertain completion, child/effect observation, cancellation,
+      invalid/auth/policy failures, or ambiguous provider state. Keep
+      alternate/equivalent routes release-disabled until a named F1
+      qualification record authorizes the exact task-family/revision pair.
+- [x] **F10.7 — Per-attempt metering and aggregate reconciliation.** Record
+      successful and failed attempt usage/cost independently using only
+      provider-reported metadata, charge every attempt against the shared
+      invocation budget, and reconcile exactly once into the existing
+      run/model-call usage path. Attribute the user-visible response to one
+      terminal attempt and prove that discarded attempts cannot leak duplicate
+      deltas, tool calls, or final content.
+- [x] **F10.8 — Bounded circuit health and release controls.** Add a
+      process-local bounded health reducer keyed by provider, deployment,
+      region, and credential scope, with an optional capped file snapshot only
+      for desktop restart continuity. User-specific BYOK authentication
+      failures may affect only that user credential scope and must never open a
+      deployment-global circuit. Supply independent modes/kill switches for
+      retry, alternate route, equivalent route, and circuit influence, plus
+      immediate feature-off parity.
+- [x] **F10.9 — Crash, resume, and worker retry fences.** On worker claim or
+      approval resume, replay the journal before a new attempt. Treat an open
+      provider attempt after process loss as ambiguous and require honest
+      reconciliation/failure; never blindly replay it. Limit queue/worker
+      retry to failures proven before model-handler entry, and preserve the
+      original invocation/attempt lineage across continuation.
+- [x] **F10.10 — Qualification, operations, and step gate.** Extend the
+      existing F1 corpus with primary/subagent lineage, deterministic route
+      ordering, BYOK/region/privacy exclusion, safe pre-content retry, cache
+      rejection, visible-output interruption, ambiguous crash recovery,
+      budget exhaustion, circuit isolation, and feature-off parity cases.
+      Document desktop support/recovery/backout. Run focused F10 and
+      graph-surface tests, the full `ai-backend` suite, API-types typecheck,
+      ruff, formatting, compile validation, `git diff --check`, and every Step
+      6 exit criterion before marking the normative checklist complete.
+
+Step 6 completion evidence: deployment/catalog authority, the body-free
+invocation journal, provider lifecycle and bounded circuit substrate, signed
+per-run reliability controls, graph-wide model middleware, F2 cache-rejection
+handoff, worker initial/resume composition, terminal usage/metrics projection,
+and restart-safe aggregate rebuilding landed through `de9aad1a`; `ce938056`
+records the reviewed central model-construction seam. The pinned Deep Agents
+release has no supported per-run cache-middleware exclusion, so production
+retains framework cache ownership and the typed product undecorated-retry
+contract stays safely dormant—there is no private monkey-patch or generic
+provider-error retry. The merged tree passed 275 combined F10/control/prompt/
+worker/adapter tests and the final service gate of 5,901 tests with 97
+environment-dependent skips. Full-service ruff and format checks, compile
+validation, API-types and desktop TypeScript checking, 42 desktop
+service-environment tests, commit hooks, and `git diff --check` also passed.
+
+### Active execution — Step 7 MCP freshness and session reuse
+
+Root owns architecture, integration, commits, and the normative ordered
+checklist. Implementation lanes use isolated worktrees and return reviewed
+commits for root to integrate. Backend remains the only MCP registry,
+credential, remote-transport, descriptor-revision, and live-session authority;
+ai-backend consumes authenticated metadata and retains the existing
+process-local descriptor cache. This step adds no Redis, second database,
+backend-to-ai callback, or desktop daemon.
+
+- [ ] **F8.1 — Canonical revision, cursor, and lease contracts.** Define
+      versioned body-free contracts for descriptor views, append-only notices,
+      paginated feed state, exact revision checks, cursor expiry, transport
+      sessions, lease outcomes, and sanitized failures. Bind each view to the
+      verified local profile/user/server, one-way credential-subject identity,
+      auth epoch, transport/config revision, and tool-filter revision. Cursors
+      are opaque and bounded; revisions are compared for equality, never
+      inferred from caller-shaped order. Add cross-service golden fixtures
+      instead of a deployable cross-service import.
+- [x] **F8.2 — Durable backend revision authority.** Add one backend migration
+      and matching in-memory/Postgres store ports for current descriptor view
+      state plus an append-only revision feed. Commit a view update and its
+      feed notice in the same existing registry transaction, with stable
+      idempotency identity, monotonic store sequence, RLS/profile isolation,
+      bounded retention, deletion/account-merge behavior, and no raw schemas,
+      endpoints, tokens, or tool-result bodies. Preserve the registry as the
+      source of truth; the connectors table remains a projection.
+- [x] **F8.3 — Transactional mutation and discovery publication.** Advance the
+      appropriate config/auth/transport generation on install, update,
+      enable/disable, delete, OAuth start/complete/failure, test-token upsert,
+      token refresh/rotation, and explicit refresh. Observe complete paginated
+      `tools/list`/`resources/list` cycles inside the backend proxy in
+      `O(total descriptor bytes)`, canonicalize safe descriptor metadata once,
+      debounce unchanged or bursty observations, and publish a new view only
+      after the complete cycle succeeds. Partial/failed discovery cannot
+      become a successful empty revision.
+- [x] **F8.4 — Authenticated pull and exact-check API.** Expose internal
+      service-authenticated feed and exact-revision endpoints using the
+      existing trusted service-token plus profile/user header boundary.
+      Enforce a capped page size, opaque durable cursor, deterministic
+      at-least-once replay, explicit `cursor_expired` recovery state, optional
+      server-scoped exact checks, and constant-shape not-found/unauthorized
+      behavior. Apps and Electron continue to call only the facade; these
+      internal routes remain ai-backend-only.
+- [x] **F8.5 — Backend-owned bounded remote session pool.** Replace the
+      stateless per-RPC remote transport path with a process-local pool keyed
+      by verified profile/user/server, one-way credential subject, auth epoch,
+      transport revision, and required session scope. Keep opaque leases,
+      connection/session identifiers, and transport handles inside backend;
+      enforce global/per-key capacity, idle and absolute TTL, active-lease
+      accounting, least-expensive protocol keepalive, bounded reconnect, and
+      deterministic saturation/unavailable outcomes. Never use
+      `tools/list` as routine keepalive or reuse across credentials.
+- [x] **F8.6 — Pool lifecycle, invalidation, and proxy integration.** Acquire
+      or reuse a lease through `client-session`, bind every proxy RPC to that
+      opaque lease, reject stale/wrong-subject leases before token decryption,
+      and retire sessions on auth/config revision, credential rotation,
+      cancellation, server removal, backend shutdown, or desktop ordered
+      service stop. Reconnect only when remote acceptance/effect is proven
+      absent; ambiguous/effecting requests fail honestly and remain under the
+      existing F4 retry/Operation Gateway authority.
+- [ ] **F8.7 — Revision-aware ai-backend discovery composition.** Compose the
+      existing `RevisionAwareMcpDiscoveryCache` over the current TTL/LRU
+      single-flight cache in the real worker/root/subagent loader path. Fetch
+      trusted current revisions before stale-sensitive discovery, attach the
+      backend revision/lease to `BackendMcpClient`, and preserve permission
+      rechecks and defensive copies on every hit. A generation barrier must
+      prevent an in-flight pre-invalidation load from publishing or being
+      returned across a revocation boundary.
+- [ ] **F8.8 — Active-only pull consumer and desktop cursor recovery.** Add one
+      bounded poller owned by each active worker composition, not a free-running
+      daemon. Persist only its opaque high-water cursor through a small port:
+      in-memory for tests, atomic capped file state beneath the existing
+      desktop runtime root, and an optional hosted adapter later. Start after
+      worker readiness, stop/drain before HTTP/store shutdown, back off with
+      jitter while offline, flush subject-scoped generations on
+      `cursor_expired`, and resume without eager descriptor hydration.
+- [ ] **F8.9 — Atomic descriptor/F3 invalidation and safe stale handling.**
+      Route every feed or exact-check change through one invalidation
+      coordinator that evicts the descriptor entry and advances the matching
+      F3 catalog-generation authority before acknowledging the cursor.
+      Duplicate/out-of-order notices are idempotent. A stale discovery may
+      perform one coalesced exact check/reload; read execution may retry only
+      when the established operation classifier and effect tracker prove no
+      provider-side work, while effects and ambiguous calls are never replayed
+      by F8.
+- [ ] **F8.10 — Diagnostics, qualification, lifecycle, and step gate.** Emit
+      low-cardinality body-free phase timings and counts for card validation,
+      lease acquisition/reuse, initialization, descriptor paging/bytes,
+      validation/admission, feed lag/convergence, coalescing, stale rejects,
+      reconnect, saturation, and pool size. Add fault/concurrency tests for
+      scope isolation, cursor replay/expiry, notification loss, auth rotation,
+      cold-load races, paginated discovery, warm session reuse, restart,
+      offline/backoff, shutdown drain, and feature backout. Document desktop
+      resource limits and operations; run backend and ai-backend focused/full
+      suites, migration-manifest checks, ruff/format/compile, API and desktop
+      typechecks, lifecycle tests, commit hooks, `git diff --check`, and every
+      Step 7 exit criterion before checking the normative step.
+
 ## Complete PRD index
 
 ### Wave F — Harness quality and efficiency

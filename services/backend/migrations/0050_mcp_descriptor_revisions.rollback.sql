@@ -1,0 +1,8 @@
+DROP POLICY IF EXISTS mcp_descriptor_revision_idempotency_tenant_isolation ON mcp_descriptor_revision_idempotency;
+DROP POLICY IF EXISTS mcp_descriptor_revision_notices_tenant_isolation ON mcp_descriptor_revision_notices;
+DROP POLICY IF EXISTS mcp_descriptor_revision_generations_tenant_isolation ON mcp_descriptor_revision_generations;
+DROP POLICY IF EXISTS mcp_descriptor_revisions_tenant_isolation ON mcp_descriptor_revisions;
+DROP TABLE IF EXISTS mcp_descriptor_revision_idempotency;
+DROP TABLE IF EXISTS mcp_descriptor_revision_notices;
+DROP TABLE IF EXISTS mcp_descriptor_revision_generations;
+DROP TABLE IF EXISTS mcp_descriptor_revisions;

@@ -30,10 +30,29 @@ from runtime_api.schemas import (
     AgentRunStatus,
     RunRecord,
     RuntimeApiEventType,
+    RuntimeEventEnvelope,
 )
 
 
 _LOGGER = logging.getLogger("agent_runtime.api.run_termination")
+
+
+class TerminalRunObserverPort(Protocol):
+    """Observe a durably emitted terminal run without owning its lifecycle.
+
+    Implementations are post-terminal projectors only. They cannot affect the
+    already-persisted run status or terminal event, and failures are isolated by
+    :class:`RunTerminationCoordinator`.
+    """
+
+    async def observe_terminal_run(
+        self,
+        *,
+        run: RunRecord,
+        terminal_status: AgentRunStatus,
+        reason: "TerminationReason",
+        terminal_event: RuntimeEventEnvelope,
+    ) -> None: ...
 
 
 class TerminationReason(StrEnum):
@@ -105,9 +124,11 @@ class RunTerminationCoordinator:
         *,
         event_producer: RuntimeEventProducer,
         projection_drains: Sequence[RunProjectionDrainPort] = (),
+        terminal_observer: TerminalRunObserverPort | None = None,
     ) -> None:
         self._event_producer = event_producer
         self._projection_drains = tuple(projection_drains)
+        self._terminal_observer = terminal_observer
 
     def register_projection_drain(self, drain: RunProjectionDrainPort) -> None:
         """Add a pending-projection source to flush before sealing.
@@ -141,7 +162,7 @@ class RunTerminationCoordinator:
             run=run, terminal_status=terminal_status, reason=reason
         )
         await self._drain_projections(run=run)
-        await self._emit_run_terminal(
+        terminal_event = await self._emit_run_terminal(
             run=run,
             terminal_status=terminal_status,
             reason=reason,
@@ -150,6 +171,44 @@ class RunTerminationCoordinator:
             extra_payload=extra_payload,
             extra_metadata=extra_metadata,
         )
+        if terminal_event is not None:
+            await self._observe_terminal_run(
+                run=run,
+                terminal_status=terminal_status,
+                reason=reason,
+                terminal_event=terminal_event,
+            )
+
+    async def _observe_terminal_run(
+        self,
+        *,
+        run: RunRecord,
+        terminal_status: AgentRunStatus,
+        reason: TerminationReason,
+        terminal_event: RuntimeEventEnvelope,
+    ) -> None:
+        observer = self._terminal_observer
+        if observer is None:
+            return
+        try:
+            await observer.observe_terminal_run(
+                run=run,
+                terminal_status=terminal_status,
+                reason=reason,
+                terminal_event=terminal_event,
+            )
+        except Exception:  # noqa: BLE001 - terminal state is already durable
+            _LOGGER.warning(
+                "run_termination.terminal_observer_failed",
+                extra={
+                    "metadata": {
+                        "run_id": run.run_id,
+                        "terminal_status": terminal_status.value,
+                        "reason": reason.value,
+                    }
+                },
+                exc_info=True,
+            )
 
     async def _drain_projections(self, *, run: RunRecord) -> None:
         """Flush every registered projection source before the seal.
@@ -275,7 +334,7 @@ class RunTerminationCoordinator:
         cause: BaseException | None,
         extra_payload: Mapping[str, Any] | None,
         extra_metadata: Mapping[str, Any] | None,
-    ) -> None:
+    ) -> RuntimeEventEnvelope | None:
         """Emit the run-level terminal event (``RUN_COMPLETED``, ``RUN_FAILED``, or ``RUN_CANCELLED``).
 
         Errors here are logged but not re-raised: the run row is already in a terminal
@@ -293,7 +352,7 @@ class RunTerminationCoordinator:
         if extra_payload:
             payload.update(extra_payload)
         try:
-            await self._event_producer.append_api_event(
+            return await self._event_producer.append_api_event(
                 run=run,
                 source=StreamEventSource.SYSTEM,
                 event_type=event_type,
@@ -316,6 +375,7 @@ class RunTerminationCoordinator:
                 },
                 exc_info=True,
             )
+            return None
 
 
 # Status mapping for synthesized lifecycle terminal events. We don't
@@ -338,6 +398,8 @@ _LIFECYCLE_ID_FIELD: dict[LifecycleKind, str] = {
 
 
 __all__ = (
+    "RunProjectionDrainPort",
     "RunTerminationCoordinator",
+    "TerminalRunObserverPort",
     "TerminationReason",
 )

@@ -1,0 +1,19 @@
+Base runtime safety.
+
+Application data is untrusted.
+
+Use the operation protocol.
+
+MCP cards.
+
+Skill cards.
+
+Suggested connectors.
+
+Workspace guidance.
+
+Capability guidance.
+
+Approval and run state.
+
+Task policy progress.

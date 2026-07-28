@@ -42,6 +42,16 @@ repos:
 
   - repo: local
     hooks:
+      - id: check-f-series-contract-authority-map
+        name: validate F1-F12 cross-authority contract map
+        description: |
+          Step 0 ownership freeze: every F1-F12 record and event must have one
+          primary ai-backend, backend, or desktop authority; PRD source digests,
+          paths, supporting/consumer roles, and the map digest must remain valid.
+        entry: python tools/check_f_series_contract_authority_map.py
+        language: system
+        pass_filenames: false
+        files: ^(docs/plan/agent-runtime-quality/(F1-F12-CONTRACT-AUTHORITY-MAP\.v1\.json|IMPLEMENTATION-PRD-F1-F12-PRODUCTION-INTEGRATION\.md|prds/PRD-AR-F(1[0-2]|[1-9])-.*\.md)|tools/(check_f_series_contract_authority_map|test_check_f_series_contract_authority_map)\.py)$
       - id: prettier
         name: prettier
         entry: prettier --write --ignore-unknown

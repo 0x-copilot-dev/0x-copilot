@@ -31,6 +31,15 @@ class RequirementStatus(StrEnum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class RequirementCompletionSource(StrEnum):
+    """Trusted origin from which a requirement was compiled."""
+
+    EXPLICIT_REQUEST = "explicit_request"
+    TASK_PLAN = "task_plan"
+    OPERATION_RESULT = "operation_result"
+    HARNESS_POLICY = "harness_policy"
+
+
 class ClaimKind(StrEnum):
     """How a claim relates to evidence and the answer author."""
 
@@ -57,6 +66,33 @@ class EvidenceRelationship(StrEnum):
     SUPPORTS = "supports"
     CONTRADICTS = "contradicts"
     CONTEXTUALIZES = "contextualizes"
+
+
+class EvidenceSourceClass(StrEnum):
+    """Resolver-owned source class used for mechanical claim compatibility."""
+
+    USER_INPUT = "user_input"
+    CONVERSATION_RECORD = "conversation_record"
+    WORKSPACE_CONTENT = "workspace_content"
+    WEB_DOCUMENT = "web_document"
+    SEARCH_SNIPPET = "search_snippet"
+    CONNECTOR_RECORD = "connector_record"
+    TOOL_RESULT = "tool_result"
+    EFFECT_RECEIPT = "effect_receipt"
+    MEMORY = "memory"
+    SYSTEM_RECORD = "system_record"
+    MODEL_OUTPUT = "model_output"
+
+
+class EvidenceTrustClass(StrEnum):
+    """Resolver-owned trust class; never accepted from answer-model output."""
+
+    AUTHORITATIVE = "authoritative"
+    PRIMARY = "primary"
+    VERIFIED = "verified"
+    USER_ASSERTED = "user_asserted"
+    DERIVED = "derived"
+    UNVERIFIED = "unverified"
 
 
 class EvidenceAccessState(StrEnum):
@@ -120,6 +156,9 @@ class VerificationIssueCode(StrEnum):
     """Stable, content-free verifier findings."""
 
     ANSWER_TOO_LARGE = "answer_too_large"
+    ANSWER_MATERIAL_MISMATCH = "answer_material_mismatch"
+    RUN_BINDING_MISMATCH = "run_binding_mismatch"
+    REQUIREMENT_LEDGER_MISMATCH = "requirement_ledger_mismatch"
     PROFILE_REVISION_MISMATCH = "profile_revision_mismatch"
     DUPLICATE_REQUIREMENT = "duplicate_requirement"
     DUPLICATE_REQUIREMENT_RESULT = "duplicate_requirement_result"
@@ -127,11 +166,16 @@ class VerificationIssueCode(StrEnum):
     MISSING_REQUIRED_REQUIREMENT_RESULT = "missing_required_requirement_result"
     REQUIRED_REQUIREMENT_INCOMPLETE = "required_requirement_incomplete"
     REQUIREMENT_SUPPORT_MISSING = "requirement_support_missing"
+    REQUIREMENT_RUN_MISMATCH = "requirement_run_mismatch"
+    REQUIREMENT_SOURCE_MISMATCH = "requirement_source_mismatch"
     DUPLICATE_SPAN = "duplicate_span"
     SPAN_OUT_OF_BOUNDS = "span_out_of_bounds"
     UNKNOWN_SPAN = "unknown_span"
     DUPLICATE_CLAIM = "duplicate_claim"
     MATERIAL_CLAIM_UNSUPPORTED = "material_claim_unsupported"
+    CLAIM_SOURCE_INCOMPATIBLE = "claim_source_incompatible"
+    CLAIM_TRUST_INSUFFICIENT = "claim_trust_insufficient"
+    CLAIM_CONFIDENCE_UNSUPPORTED = "claim_confidence_unsupported"
     DUPLICATE_EVIDENCE_FACT = "duplicate_evidence_fact"
     EVIDENCE_FACT_MISSING = "evidence_fact_missing"
     EVIDENCE_UNAUTHORIZED = "evidence_unauthorized"
@@ -145,6 +189,9 @@ class VerificationIssueCode(StrEnum):
     EVIDENCE_LOCATOR_UNKNOWN = "evidence_locator_unknown"
     EVIDENCE_STALE = "evidence_stale"
     EVIDENCE_FRESHNESS_UNKNOWN = "evidence_freshness_unknown"
+    EVIDENCE_NOT_YET_VALID = "evidence_not_yet_valid"
+    EVIDENCE_VALIDITY_EXPIRED = "evidence_validity_expired"
+    EVIDENCE_OBSERVATION_IN_FUTURE = "evidence_observation_in_future"
     DUPLICATE_CONFLICT_FACT = "duplicate_conflict_fact"
     DUPLICATE_CONFLICT_RESOLUTION = "duplicate_conflict_resolution"
     UNKNOWN_CONFLICT_RESOLUTION = "unknown_conflict_resolution"
@@ -172,6 +219,8 @@ class AnswerRequirement(RuntimeContract):
 
     requirement_id: str = Field(min_length=1, max_length=128)
     description_ref: str = Field(min_length=1, max_length=512)
+    completion_source: RequirementCompletionSource
+    completion_source_digest: str = Field(pattern=_SHA256_PATTERN)
     required: bool = True
 
 
@@ -179,13 +228,14 @@ class AnswerRequirementLedger(RuntimeContract):
     """Bounded requirement inventory compiled before answer synthesis."""
 
     ledger_id: str = Field(min_length=1, max_length=128)
+    run_id: str = Field(min_length=1, max_length=255)
     profile_revision: str = Field(min_length=1, max_length=128)
     source_request_digest: str = Field(pattern=_SHA256_PATTERN)
     requirements: tuple[AnswerRequirement, ...] = Field(max_length=50)
 
 
 class AnswerSpan(RuntimeContract):
-    """Character offsets into ``AnswerEnvelope.answer_text``."""
+    """Character offsets into protected answer content."""
 
     span_id: str = Field(min_length=1, max_length=128)
     start: int = Field(ge=0)
@@ -202,6 +252,9 @@ class AnswerRequirementResult(RuntimeContract):
     """Answer-declared outcome for a requirement."""
 
     requirement_id: str = Field(min_length=1, max_length=128)
+    completion_run_id: str = Field(min_length=1, max_length=255)
+    completion_source: RequirementCompletionSource
+    completion_source_digest: str = Field(pattern=_SHA256_PATTERN)
     status: RequirementStatus
     answer_span_ids: tuple[str, ...] = Field(default_factory=tuple, max_length=32)
     evidence_refs: tuple[EvidenceReference, ...] = Field(
@@ -227,6 +280,7 @@ class AnswerClaim(RuntimeContract):
     answer_span_id: str = Field(min_length=1, max_length=128)
     kind: ClaimKind
     materiality: ClaimMateriality
+    confidence: int = Field(ge=0, le=1_000)
     evidence_bindings: tuple[AnswerEvidenceBinding, ...] = Field(
         default_factory=tuple,
         max_length=32,
@@ -243,12 +297,27 @@ class AnswerConflictResolution(RuntimeContract):
     answer_span_ids: tuple[str, ...] = Field(min_length=1, max_length=32)
 
 
-class AnswerEnvelope(RuntimeContract):
-    """Versioned final-answer candidate produced by synthesis."""
+class ProtectedAnswerContent(RuntimeContract):
+    """Protected answer identity; raw answer text never enters verifier records."""
 
+    content_ref: str = Field(
+        min_length=11,
+        max_length=512,
+        pattern=r"^payload://[A-Za-z0-9][A-Za-z0-9._:/-]*$",
+    )
+    content_digest: str = Field(pattern=_SHA256_PATTERN)
+    size_bytes: int = Field(ge=0, le=_MAX_ANSWER_BYTES)
+    character_count: int = Field(ge=0, le=_MAX_ANSWER_BYTES)
+
+
+class AnswerEnvelope(RuntimeContract):
+    """Versioned metadata envelope for protected final-answer content."""
+
+    run_id: str = Field(min_length=1, max_length=255)
     envelope_revision: str = Field(min_length=1, max_length=128)
     profile_revision: str = Field(min_length=1, max_length=128)
-    answer_text: str = Field(max_length=262_144)
+    requirement_ledger_id: str = Field(min_length=1, max_length=128)
+    answer_content: ProtectedAnswerContent
     spans: tuple[AnswerSpan, ...] = Field(default_factory=tuple, max_length=256)
     requirement_results: tuple[AnswerRequirementResult, ...] = Field(
         default_factory=tuple,
@@ -268,10 +337,47 @@ class EvidenceVerificationFact(RuntimeContract):
 
     evidence: EvidenceReference
     source_digest: str = Field(pattern=_SHA256_PATTERN)
+    source_class: EvidenceSourceClass
+    trust_class: EvidenceTrustClass
+    max_supported_confidence: int = Field(ge=0, le=1_000)
     access_state: EvidenceAccessState
     freshness_state: EvidenceFreshnessState
     locator_state: EvidenceLocatorState
     locator_ref: str | None = Field(default=None, max_length=512)
+    observed_at: datetime
+    valid_from: datetime
+    valid_until: datetime | None = None
+
+    @field_validator("observed_at", "valid_from", "valid_until")
+    @classmethod
+    def _timestamps_are_aware(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("evidence timestamps must be timezone-aware")
+        return value
+
+    @model_validator(mode="after")
+    def _validity_window_is_ordered(self) -> EvidenceVerificationFact:
+        if self.valid_until is not None and self.valid_until < self.valid_from:
+            raise ValueError("valid_until cannot precede valid_from")
+        return self
+
+
+class AnswerMaterialVerificationFact(RuntimeContract):
+    """Trusted resolution metadata for protected final-answer bytes."""
+
+    run_id: str = Field(min_length=1, max_length=255)
+    content_ref: str = Field(min_length=1, max_length=512)
+    content_digest: str = Field(pattern=_SHA256_PATTERN)
+    size_bytes: int = Field(ge=0)
+    character_count: int = Field(ge=0)
+    resolved_at: datetime
+
+    @field_validator("resolved_at")
+    @classmethod
+    def _resolved_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("resolved_at must be timezone-aware")
+        return value
 
 
 class EvidenceConflictFact(RuntimeContract):
@@ -294,8 +400,10 @@ class SecretLeakFinding(RuntimeContract):
 class AnswerVerificationFacts(RuntimeContract):
     """Complete trusted fact snapshot consumed by the pure verifier."""
 
+    run_id: str = Field(min_length=1, max_length=255)
     profile_revision: str = Field(min_length=1, max_length=128)
     checked_at: datetime
+    answer_material: AnswerMaterialVerificationFact
     evidence: tuple[EvidenceVerificationFact, ...] = Field(
         default_factory=tuple,
         max_length=200,
@@ -341,6 +449,8 @@ class AnswerVerificationReport(RuntimeContract):
     status: VerificationStatus
     failures: tuple[VerificationIssue, ...]
     warnings: tuple[VerificationIssue, ...]
+    declared_claim_count: int = Field(ge=0)
+    unique_claim_count: int = Field(ge=0)
     verified_claim_count: int = Field(ge=0)
     unsupported_claim_count: int = Field(ge=0)
     citation_error_count: int = Field(ge=0)
@@ -369,8 +479,96 @@ class AnswerVerifier:
             ClaimKind.ATTRIBUTED,
             ClaimKind.INFERENCE,
             ClaimKind.ESTIMATE,
+            ClaimKind.USER_PROVIDED,
         }
     )
+    _CLAIM_SOURCE_COMPATIBILITY = {
+        ClaimKind.OBSERVED: frozenset(
+            {
+                EvidenceSourceClass.WORKSPACE_CONTENT,
+                EvidenceSourceClass.WEB_DOCUMENT,
+                EvidenceSourceClass.CONNECTOR_RECORD,
+                EvidenceSourceClass.TOOL_RESULT,
+                EvidenceSourceClass.EFFECT_RECEIPT,
+                EvidenceSourceClass.SYSTEM_RECORD,
+            }
+        ),
+        ClaimKind.ATTRIBUTED: frozenset(
+            {
+                EvidenceSourceClass.USER_INPUT,
+                EvidenceSourceClass.CONVERSATION_RECORD,
+                EvidenceSourceClass.WORKSPACE_CONTENT,
+                EvidenceSourceClass.WEB_DOCUMENT,
+                EvidenceSourceClass.CONNECTOR_RECORD,
+                EvidenceSourceClass.TOOL_RESULT,
+                EvidenceSourceClass.SYSTEM_RECORD,
+            }
+        ),
+        ClaimKind.INFERENCE: frozenset(
+            source
+            for source in EvidenceSourceClass
+            if source is not EvidenceSourceClass.MODEL_OUTPUT
+        ),
+        ClaimKind.ESTIMATE: frozenset(
+            source
+            for source in EvidenceSourceClass
+            if source
+            not in {
+                EvidenceSourceClass.MODEL_OUTPUT,
+                EvidenceSourceClass.SEARCH_SNIPPET,
+            }
+        ),
+        ClaimKind.RECOMMENDATION: frozenset(
+            source
+            for source in EvidenceSourceClass
+            if source is not EvidenceSourceClass.MODEL_OUTPUT
+        ),
+        ClaimKind.USER_PROVIDED: frozenset(
+            {
+                EvidenceSourceClass.USER_INPUT,
+                EvidenceSourceClass.CONVERSATION_RECORD,
+            }
+        ),
+        ClaimKind.UNKNOWN: frozenset(),
+    }
+    _MATERIAL_TRUST_COMPATIBILITY = {
+        ClaimKind.OBSERVED: frozenset(
+            {
+                EvidenceTrustClass.AUTHORITATIVE,
+                EvidenceTrustClass.PRIMARY,
+                EvidenceTrustClass.VERIFIED,
+            }
+        ),
+        ClaimKind.ATTRIBUTED: frozenset(
+            {
+                EvidenceTrustClass.AUTHORITATIVE,
+                EvidenceTrustClass.PRIMARY,
+                EvidenceTrustClass.VERIFIED,
+            }
+        ),
+        ClaimKind.INFERENCE: frozenset(
+            {
+                EvidenceTrustClass.AUTHORITATIVE,
+                EvidenceTrustClass.PRIMARY,
+                EvidenceTrustClass.VERIFIED,
+            }
+        ),
+        ClaimKind.ESTIMATE: frozenset(
+            {
+                EvidenceTrustClass.AUTHORITATIVE,
+                EvidenceTrustClass.PRIMARY,
+                EvidenceTrustClass.VERIFIED,
+            }
+        ),
+        ClaimKind.RECOMMENDATION: frozenset(EvidenceTrustClass),
+        ClaimKind.USER_PROVIDED: frozenset(
+            {
+                EvidenceTrustClass.VERIFIED,
+                EvidenceTrustClass.USER_ASSERTED,
+            }
+        ),
+        ClaimKind.UNKNOWN: frozenset(),
+    }
     _CITATION_CODES = frozenset(
         {
             VerificationIssueCode.DUPLICATE_EVIDENCE_FACT,
@@ -390,6 +588,9 @@ class AnswerVerifier:
         {
             VerificationIssueCode.EVIDENCE_STALE,
             VerificationIssueCode.EVIDENCE_FRESHNESS_UNKNOWN,
+            VerificationIssueCode.EVIDENCE_NOT_YET_VALID,
+            VerificationIssueCode.EVIDENCE_VALIDITY_EXPIRED,
+            VerificationIssueCode.EVIDENCE_OBSERVATION_IN_FUTURE,
         }
     )
     _CONFLICT_CODES = frozenset(
@@ -437,17 +638,28 @@ class AnswerVerifier:
             )
 
         cls._verify_profiles(envelope, requirements, facts, add)
-        if len(envelope.answer_text.encode("utf-8")) > _MAX_ANSWER_BYTES:
-            add(
-                VerificationIssueCode.ANSWER_TOO_LARGE,
-                VerificationDisposition.REPAIR,
-            )
+        cls._verify_run_and_material_bindings(envelope, requirements, facts, add)
 
-        span_by_id = cls._verify_spans(envelope, add)
+        span_by_id = cls._verify_spans(
+            envelope,
+            answer_character_count=facts.answer_material.character_count,
+            add=add,
+        )
         cls._verify_requirements(envelope, requirements, span_by_id, add)
         evidence_by_ref = cls._index_evidence(facts, add)
-        cls._verify_claims(envelope, span_by_id, evidence_by_ref, add)
-        cls._verify_requirement_evidence(envelope, evidence_by_ref, add)
+        cls._verify_claims(
+            envelope,
+            span_by_id,
+            evidence_by_ref,
+            checked_at=facts.checked_at,
+            add=add,
+        )
+        cls._verify_requirement_evidence(
+            envelope,
+            evidence_by_ref,
+            checked_at=facts.checked_at,
+            add=add,
+        )
         cls._verify_conflicts(envelope, facts, span_by_id, evidence_by_ref, add)
 
         for finding in facts.secret_leak_findings:
@@ -469,6 +681,7 @@ class AnswerVerifier:
             if issue.disposition is VerificationDisposition.WARN
         )
         status = cls._status(failures)
+        unique_claim_ids = {claim.claim_id for claim in envelope.claims}
         claim_failure_ids = {
             issue.claim_id for issue in failures if issue.claim_id is not None
         }
@@ -493,10 +706,16 @@ class AnswerVerifier:
             status=status,
             failures=failures,
             warnings=warnings,
-            verified_claim_count=len(envelope.claims) - len(claim_failure_ids),
-            unsupported_claim_count=sum(
-                issue.code is VerificationIssueCode.MATERIAL_CLAIM_UNSUPPORTED
-                for issue in failures
+            declared_claim_count=len(envelope.claims),
+            unique_claim_count=len(unique_claim_ids),
+            verified_claim_count=len(unique_claim_ids - claim_failure_ids),
+            unsupported_claim_count=len(
+                {
+                    issue.claim_id
+                    for issue in failures
+                    if issue.code is VerificationIssueCode.MATERIAL_CLAIM_UNSUPPORTED
+                    and issue.claim_id is not None
+                }
             ),
             citation_error_count=sum(
                 issue.code in cls._CITATION_CODES for issue in failures
@@ -528,7 +747,49 @@ class AnswerVerifier:
             )
 
     @staticmethod
-    def _verify_spans(envelope: AnswerEnvelope, add: object) -> dict[str, AnswerSpan]:
+    def _verify_run_and_material_bindings(
+        envelope: AnswerEnvelope,
+        requirements: AnswerRequirementLedger,
+        facts: AnswerVerificationFacts,
+        add: object,
+    ) -> None:
+        if not (envelope.run_id == requirements.run_id == facts.run_id):
+            add(  # type: ignore[operator]
+                VerificationIssueCode.RUN_BINDING_MISMATCH,
+                VerificationDisposition.BLOCK,
+            )
+        if envelope.requirement_ledger_id != requirements.ledger_id:
+            add(  # type: ignore[operator]
+                VerificationIssueCode.REQUIREMENT_LEDGER_MISMATCH,
+                VerificationDisposition.BLOCK,
+            )
+        material = facts.answer_material
+        declared = envelope.answer_content
+        if (
+            material.run_id != facts.run_id
+            or material.content_ref != declared.content_ref
+            or material.content_digest != declared.content_digest
+            or material.size_bytes != declared.size_bytes
+            or material.character_count != declared.character_count
+            or material.resolved_at > facts.checked_at
+        ):
+            add(  # type: ignore[operator]
+                VerificationIssueCode.ANSWER_MATERIAL_MISMATCH,
+                VerificationDisposition.BLOCK,
+            )
+        if material.size_bytes > _MAX_ANSWER_BYTES:
+            add(  # type: ignore[operator]
+                VerificationIssueCode.ANSWER_TOO_LARGE,
+                VerificationDisposition.REPAIR,
+            )
+
+    @staticmethod
+    def _verify_spans(
+        envelope: AnswerEnvelope,
+        *,
+        answer_character_count: int,
+        add: object,
+    ) -> dict[str, AnswerSpan]:
         counts = Counter(span.span_id for span in envelope.spans)
         for span_id, count in counts.items():
             if count > 1:
@@ -540,7 +801,7 @@ class AnswerVerifier:
         span_by_id: dict[str, AnswerSpan] = {}
         for span in envelope.spans:
             span_by_id.setdefault(span.span_id, span)
-            if span.end > len(envelope.answer_text):
+            if span.end > answer_character_count:
                 add(  # type: ignore[operator]
                     VerificationIssueCode.SPAN_OUT_OF_BOUNDS,
                     VerificationDisposition.REPAIR,
@@ -577,6 +838,11 @@ class AnswerVerifier:
                 )
 
         known = set(requirement_counts)
+        requirement_by_id = {
+            item.requirement_id: item
+            for item in ledger.requirements
+            if requirement_counts[item.requirement_id] == 1
+        }
         result_by_id: dict[str, AnswerRequirementResult] = {}
         for result in envelope.requirement_results:
             result_by_id.setdefault(result.requirement_id, result)
@@ -584,6 +850,23 @@ class AnswerVerifier:
                 add(  # type: ignore[operator]
                     VerificationIssueCode.UNKNOWN_REQUIREMENT_RESULT,
                     VerificationDisposition.WARN,
+                    requirement_id=result.requirement_id,
+                )
+            requirement = requirement_by_id.get(result.requirement_id)
+            if result.completion_run_id != ledger.run_id:
+                add(  # type: ignore[operator]
+                    VerificationIssueCode.REQUIREMENT_RUN_MISMATCH,
+                    VerificationDisposition.BLOCK,
+                    requirement_id=result.requirement_id,
+                )
+            if requirement is not None and (
+                result.completion_source != requirement.completion_source
+                or result.completion_source_digest
+                != requirement.completion_source_digest
+            ):
+                add(  # type: ignore[operator]
+                    VerificationIssueCode.REQUIREMENT_SOURCE_MISMATCH,
+                    VerificationDisposition.BLOCK,
                     requirement_id=result.requirement_id,
                 )
             if (
@@ -650,6 +933,8 @@ class AnswerVerifier:
         envelope: AnswerEnvelope,
         span_by_id: dict[str, AnswerSpan],
         evidence_by_ref: dict[str, EvidenceVerificationFact],
+        *,
+        checked_at: datetime,
         add: object,
     ) -> None:
         claim_counts = Counter(claim.claim_id for claim in envelope.claims)
@@ -668,28 +953,47 @@ class AnswerVerifier:
                     claim_id=claim.claim_id,
                     answer_span_id=claim.answer_span_id,
                 )
-            supporting = tuple(
-                binding
-                for binding in claim.evidence_bindings
-                if binding.relationship is EvidenceRelationship.SUPPORTS
-            )
-            if (
+            usable_support: list[EvidenceVerificationFact] = []
+            for binding in claim.evidence_bindings:
+                usable = cls._verify_binding(
+                    binding=binding,
+                    claim=claim,
+                    fact=evidence_by_ref.get(binding.evidence.evidence_ref),
+                    checked_at=checked_at,
+                    add=add,
+                )
+                if (
+                    binding.relationship is EvidenceRelationship.SUPPORTS
+                    and usable is not None
+                    and cls._verify_claim_source_compatibility(
+                        claim=claim,
+                        fact=usable,
+                        add=add,
+                    )
+                ):
+                    usable_support.append(usable)
+            requires_support = (
                 claim.materiality is ClaimMateriality.MATERIAL
                 and claim.kind in cls._CLAIMS_REQUIRING_SUPPORT
-                and not supporting
-            ):
+            )
+            if requires_support and not usable_support:
                 add(  # type: ignore[operator]
                     VerificationIssueCode.MATERIAL_CLAIM_UNSUPPORTED,
                     VerificationDisposition.REPAIR,
                     claim_id=claim.claim_id,
                     answer_span_id=claim.answer_span_id,
                 )
-            for binding in claim.evidence_bindings:
-                cls._verify_binding(
-                    binding=binding,
-                    claim=claim,
-                    fact=evidence_by_ref.get(binding.evidence.evidence_ref),
-                    add=add,
+            elif usable_support and claim.confidence > max(
+                fact.max_supported_confidence for fact in usable_support
+            ):
+                add(  # type: ignore[operator]
+                    VerificationIssueCode.CLAIM_CONFIDENCE_UNSUPPORTED,
+                    VerificationDisposition.REPAIR,
+                    claim_id=claim.claim_id,
+                    answer_span_id=claim.answer_span_id,
+                    evidence_refs=tuple(
+                        fact.evidence.evidence_ref for fact in usable_support
+                    ),
                 )
 
     @classmethod
@@ -699,8 +1003,9 @@ class AnswerVerifier:
         binding: AnswerEvidenceBinding,
         claim: AnswerClaim,
         fact: EvidenceVerificationFact | None,
+        checked_at: datetime,
         add: object,
-    ) -> None:
+    ) -> EvidenceVerificationFact | None:
         evidence_ref = binding.evidence.evidence_ref
         if fact is None:
             add(  # type: ignore[operator]
@@ -709,9 +1014,11 @@ class AnswerVerifier:
                 claim_id=claim.claim_id,
                 evidence_refs=(evidence_ref,),
             )
-            return
+            return None
+        usable = fact.access_state is EvidenceAccessState.AUTHORIZED
         cls._verify_access(fact, claim_id=claim.claim_id, add=add)
         if binding.source_digest != fact.source_digest:
+            usable = False
             add(  # type: ignore[operator]
                 VerificationIssueCode.EVIDENCE_DIGEST_MISMATCH,
                 VerificationDisposition.BLOCK,
@@ -722,6 +1029,7 @@ class AnswerVerifier:
             binding.evidence.citation is not None
             and binding.evidence.citation != fact.evidence.citation
         ):
+            usable = False
             add(  # type: ignore[operator]
                 VerificationIssueCode.EVIDENCE_CITATION_MISMATCH,
                 VerificationDisposition.REPAIR,
@@ -731,6 +1039,7 @@ class AnswerVerifier:
         if fact.locator_state is EvidenceLocatorState.INVALID or (
             binding.locator_ref is not None and binding.locator_ref != fact.locator_ref
         ):
+            usable = False
             add(  # type: ignore[operator]
                 VerificationIssueCode.EVIDENCE_LOCATOR_INVALID,
                 VerificationDisposition.REPAIR,
@@ -738,14 +1047,23 @@ class AnswerVerifier:
                 evidence_refs=(evidence_ref,),
             )
         elif fact.locator_state is EvidenceLocatorState.UNKNOWN:
+            usable = False
             add(  # type: ignore[operator]
                 VerificationIssueCode.EVIDENCE_LOCATOR_UNKNOWN,
                 VerificationDisposition.DEGRADE,
                 claim_id=claim.claim_id,
                 evidence_refs=(evidence_ref,),
             )
+        if not cls._verify_fact_validity(
+            fact,
+            checked_at=checked_at,
+            claim_id=claim.claim_id,
+            add=add,
+        ):
+            usable = False
         if claim.freshness_required:
             if fact.freshness_state is EvidenceFreshnessState.STALE:
+                usable = False
                 add(  # type: ignore[operator]
                     VerificationIssueCode.EVIDENCE_STALE,
                     VerificationDisposition.REPAIR,
@@ -756,18 +1074,66 @@ class AnswerVerifier:
                 EvidenceFreshnessState.UNKNOWN,
                 EvidenceFreshnessState.NOT_REQUIRED,
             }:
+                usable = False
                 add(  # type: ignore[operator]
                     VerificationIssueCode.EVIDENCE_FRESHNESS_UNKNOWN,
                     VerificationDisposition.DEGRADE,
                     claim_id=claim.claim_id,
                     evidence_refs=(evidence_ref,),
                 )
+        return fact if usable else None
+
+    @classmethod
+    def _verify_claim_source_compatibility(
+        cls,
+        *,
+        claim: AnswerClaim,
+        fact: EvidenceVerificationFact,
+        add: object,
+    ) -> bool:
+        compatible = True
+        if fact.source_class not in cls._CLAIM_SOURCE_COMPATIBILITY[claim.kind]:
+            compatible = False
+            add(  # type: ignore[operator]
+                VerificationIssueCode.CLAIM_SOURCE_INCOMPATIBLE,
+                VerificationDisposition.REPAIR,
+                claim_id=claim.claim_id,
+                answer_span_id=claim.answer_span_id,
+                evidence_refs=(fact.evidence.evidence_ref,),
+            )
+        if (
+            claim.materiality is ClaimMateriality.MATERIAL
+            and fact.source_class is EvidenceSourceClass.SEARCH_SNIPPET
+        ):
+            compatible = False
+            add(  # type: ignore[operator]
+                VerificationIssueCode.CLAIM_SOURCE_INCOMPATIBLE,
+                VerificationDisposition.REPAIR,
+                claim_id=claim.claim_id,
+                answer_span_id=claim.answer_span_id,
+                evidence_refs=(fact.evidence.evidence_ref,),
+            )
+        if (
+            claim.materiality is ClaimMateriality.MATERIAL
+            and fact.trust_class not in cls._MATERIAL_TRUST_COMPATIBILITY[claim.kind]
+        ):
+            compatible = False
+            add(  # type: ignore[operator]
+                VerificationIssueCode.CLAIM_TRUST_INSUFFICIENT,
+                VerificationDisposition.REPAIR,
+                claim_id=claim.claim_id,
+                answer_span_id=claim.answer_span_id,
+                evidence_refs=(fact.evidence.evidence_ref,),
+            )
+        return compatible
 
     @classmethod
     def _verify_requirement_evidence(
         cls,
         envelope: AnswerEnvelope,
         evidence_by_ref: dict[str, EvidenceVerificationFact],
+        *,
+        checked_at: datetime,
         add: object,
     ) -> None:
         for result in envelope.requirement_results:
@@ -786,6 +1152,51 @@ class AnswerVerifier:
                         requirement_id=result.requirement_id,
                         add=add,
                     )
+                    cls._verify_fact_validity(
+                        fact,
+                        checked_at=checked_at,
+                        requirement_id=result.requirement_id,
+                        add=add,
+                    )
+
+    @staticmethod
+    def _verify_fact_validity(
+        fact: EvidenceVerificationFact,
+        *,
+        checked_at: datetime,
+        add: object,
+        requirement_id: str | None = None,
+        claim_id: str | None = None,
+    ) -> bool:
+        valid = True
+        if fact.observed_at > checked_at:
+            valid = False
+            add(  # type: ignore[operator]
+                VerificationIssueCode.EVIDENCE_OBSERVATION_IN_FUTURE,
+                VerificationDisposition.BLOCK,
+                requirement_id=requirement_id,
+                claim_id=claim_id,
+                evidence_refs=(fact.evidence.evidence_ref,),
+            )
+        if checked_at < fact.valid_from:
+            valid = False
+            add(  # type: ignore[operator]
+                VerificationIssueCode.EVIDENCE_NOT_YET_VALID,
+                VerificationDisposition.BLOCK,
+                requirement_id=requirement_id,
+                claim_id=claim_id,
+                evidence_refs=(fact.evidence.evidence_ref,),
+            )
+        if fact.valid_until is not None and checked_at > fact.valid_until:
+            valid = False
+            add(  # type: ignore[operator]
+                VerificationIssueCode.EVIDENCE_VALIDITY_EXPIRED,
+                VerificationDisposition.DEGRADE,
+                requirement_id=requirement_id,
+                claim_id=claim_id,
+                evidence_refs=(fact.evidence.evidence_ref,),
+            )
+        return valid
 
     @staticmethod
     def _verify_access(
@@ -886,6 +1297,11 @@ class AnswerVerifier:
                     )
                 else:
                     AnswerVerifier._verify_access(fact, add=add)
+                    AnswerVerifier._verify_fact_validity(
+                        fact,
+                        checked_at=facts.checked_at,
+                        add=add,
+                    )
 
         for conflict in facts_by_id.values():
             if not conflict.resolution_required:
@@ -983,6 +1399,7 @@ __all__ = (
     "AnswerRequirementLedger",
     "AnswerRequirementResult",
     "AnswerSpan",
+    "AnswerMaterialVerificationFact",
     "AnswerVerificationFacts",
     "AnswerVerificationReport",
     "AnswerVerifier",
@@ -996,7 +1413,11 @@ __all__ = (
     "EvidenceLocatorState",
     "EvidenceReference",
     "EvidenceRelationship",
+    "EvidenceSourceClass",
+    "EvidenceTrustClass",
     "EvidenceVerificationFact",
+    "ProtectedAnswerContent",
+    "RequirementCompletionSource",
     "RequirementStatus",
     "SecretLeakFinding",
     "VerificationDisposition",

@@ -154,3 +154,50 @@ async def test_pre_dispatch_transient_failure_can_retry_without_replaying_handle
     assert handler.calls == 1
     assert store._queue_statuses[command_id] is OutboxStatus.COMPLETED
     assert store.dead_letter_results == []
+
+
+class _ProjectionRunner:
+    def __init__(self, outcomes: list[bool | Exception]) -> None:
+        self._outcomes = outcomes
+        self.calls = 0
+
+    async def run_once(self) -> bool:
+        self.calls += 1
+        outcome = self._outcomes.pop(0) if self._outcomes else False
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+
+async def test_worker_drains_one_projection_job_without_a_runtime_command() -> None:
+    store = _RecordingStore()
+    projection = _ProjectionRunner([True, False])
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=_settings(),
+        evaluation_projection_runner=projection,
+    )
+
+    assert await worker.run_once() is True
+    assert await worker.run_once() is False
+    assert projection.calls == 2
+
+
+async def test_projection_failure_does_not_block_runtime_command_claiming() -> None:
+    store = _RecordingStore()
+    await store.enqueue_run(_command("run_projection_failure"))
+    handler = _SuccessfulRunHandler()
+    projection = _ProjectionRunner([RuntimeError("projection store unavailable")])
+    worker = RuntimeWorker(
+        persistence=store,
+        event_store=store,
+        queue=store,
+        settings=_settings(),
+        run_handler=handler,
+        evaluation_projection_runner=projection,
+    )
+
+    assert await worker.run_once() is True
+    assert handler.calls == 1

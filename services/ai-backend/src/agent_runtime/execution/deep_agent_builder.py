@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
 from deepagents import HarnessProfile, create_deep_agent, register_harness_profile
+from langchain.agents.middleware import AgentMiddleware
 from langchain.chat_models import init_chat_model
 from langchain.embeddings import init_embeddings
 from langchain_core.embeddings import Embeddings
@@ -22,16 +24,17 @@ from agent_runtime.execution.contracts import (
 from agent_runtime.execution.errors import AgentRuntimeError
 from agent_runtime.execution.fake_model import FakeModelProvider
 from agent_runtime.execution.openai_compat import OpenAICompatibleProviders
-
-WEB_EXCLUDED_DEEP_AGENT_TOOLS = frozenset(
-    {
-        "edit_file",
-        "execute",
-        "write_file",
-    }
+from agent_runtime.execution.tool_surface import (
+    DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES,
 )
+
+WEB_EXCLUDED_DEEP_AGENT_TOOLS = DEEP_AGENT_PROFILE_EXCLUDED_TOOL_NAMES
 _WEB_HARNESS_PROFILE_KEYS = (
     "anthropic",
+    # Hermetic runtime tests use this provider identity. Keeping it on the
+    # same profile is what lets integration tests exercise the production
+    # middleware topology instead of silently dropping graph-wide controls.
+    "deterministicfakechatmodel",
     "gemini",
     "google_genai",
     "openai",
@@ -181,6 +184,36 @@ SANDBOX_EXECUTE_GUIDANCE = (
 )
 _web_harness_profiles_registered = False
 _runtime_checkpointer: object | None = None
+_UNIVERSAL_MIDDLEWARE_FACTORIES: ContextVar[
+    tuple[Callable[[], AgentMiddleware], ...]
+] = ContextVar(
+    "universal_deep_agent_middleware_factories",
+    default=(),
+)
+_UNIVERSAL_CHILD_GRAPHS_REMAINING: ContextVar[int | None] = ContextVar(
+    "universal_deep_agent_child_graphs_remaining",
+    # ``None`` retains compatibility for direct callers that supply only the
+    # historical universal factories. Canonical factory builds set an exact
+    # child count and pass the reviewed root sequence explicitly.
+    default=None,
+)
+
+
+def _materialize_universal_middleware() -> tuple[AgentMiddleware, ...]:
+    """Build a fresh universal stack for one local child graph.
+
+    Pinned Deep Agents materializes harness middleware for declarative children
+    before it assembles the supervisor. Canonical builds pass the supervisor
+    sequence through ``create_deep_agent(middleware=...)`` and set an exact
+    child-materialization count here, preventing duplicate root admission.
+    """
+
+    remaining = _UNIVERSAL_CHILD_GRAPHS_REMAINING.get()
+    if remaining is not None:
+        if remaining <= 0:
+            return ()
+        _UNIVERSAL_CHILD_GRAPHS_REMAINING.set(remaining - 1)
+    return tuple(factory() for factory in _UNIVERSAL_MIDDLEWARE_FACTORIES.get())
 
 
 def _ensure_web_harness_profiles_registered() -> None:
@@ -196,6 +229,11 @@ def _ensure_web_harness_profiles_registered() -> None:
     profile = HarnessProfile(
         system_prompt_suffix=WEB_SUBAGENT_CHECKPOINT_SUFFIX,
         excluded_tools=WEB_EXCLUDED_DEEP_AGENT_TOOLS,
+        # Deep Agents materializes profile middleware independently for the
+        # supervisor, explicit local subagents, and the built-in general-purpose
+        # subagent. The ContextVar supplies the current build's reviewed
+        # factories without global mutable per-run state.
+        extra_middleware=_materialize_universal_middleware,
     )
     for profile_key in _WEB_HARNESS_PROFILE_KEYS:
         register_harness_profile(profile_key, profile)
@@ -245,6 +283,14 @@ class DeepAgentBuildRequest:
     # including subagents — honours policy uniformly. ``repr=False`` because
     # the mapping may carry a plaintext user API key.
     extra_model_kwargs: Mapping[str, object] | None = field(default=None, repr=False)
+    # Main-agent-only middleware supplied through Deep Agents' public API.
+    middleware: tuple[AgentMiddleware, ...] = ()
+    # Factories materialized through the active harness profile for the
+    # supervisor and every locally compiled Deep Agents subagent.
+    universal_middleware_factories: tuple[
+        Callable[[], AgentMiddleware],
+        ...,
+    ] = ()
 
     @property
     def model_name(self) -> str:
@@ -286,7 +332,35 @@ def build_deep_agent(request: DeepAgentBuildRequest) -> object:
         kwargs["permissions"] = list(request.permissions)
     if request.checkpointer is not None:
         kwargs["checkpointer"] = request.checkpointer
-    return create_deep_agent(**kwargs)
+    # Always exercise the reviewed public seam, including an intentionally
+    # empty immutable sequence on compatibility/test builds.
+    kwargs["middleware"] = list(request.middleware)
+    middleware_token = _UNIVERSAL_MIDDLEWARE_FACTORIES.set(
+        request.universal_middleware_factories
+    )
+    child_count_token = _UNIVERSAL_CHILD_GRAPHS_REMAINING.set(
+        (_local_subagent_graph_count(request.subagents) if request.middleware else None)
+    )
+    try:
+        return create_deep_agent(**kwargs)
+    finally:
+        _UNIVERSAL_CHILD_GRAPHS_REMAINING.reset(child_count_token)
+        _UNIVERSAL_MIDDLEWARE_FACTORIES.reset(middleware_token)
+
+
+def _local_subagent_graph_count(subagents: Sequence[object]) -> int:
+    """Return pinned Deep Agents' harness-middleware materialization count."""
+
+    declarative = 0
+    has_explicit_general_purpose = False
+    for spec in subagents:
+        if not isinstance(spec, Mapping) or "graph_id" in spec:
+            continue
+        if str(spec.get("name", "")).strip() == "general-purpose":
+            has_explicit_general_purpose = True
+        if "runnable" not in spec:
+            declarative += 1
+    return declarative + (0 if has_explicit_general_purpose else 1)
 
 
 def runtime_checkpointer(checkpointer: object | None = None) -> object:
