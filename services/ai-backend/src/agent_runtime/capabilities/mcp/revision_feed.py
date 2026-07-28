@@ -13,12 +13,7 @@ from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-import hashlib
 import json
-import os
-from pathlib import Path
-import secrets
-import stat
 import time
 from typing import Final, Protocol
 
@@ -36,7 +31,7 @@ from agent_runtime.capabilities.mcp.revision_wire import (
 from agent_runtime.execution.contracts import RuntimeContract
 
 _IDENTITY_MAX_LENGTH: Final = 256
-_CURSOR_MAX_BYTES: Final = 1024
+MCP_REVISION_CURSOR_MAX_BYTES: Final = 1024
 
 
 class McpRevisionSubject(RuntimeContract):
@@ -116,7 +111,7 @@ class InMemoryMcpRevisionCursorStore:
             return self._cursors.get(subject)
 
     async def save(self, subject: McpRevisionSubject, cursor: str) -> None:
-        _validate_cursor(cursor)
+        validate_mcp_revision_cursor(cursor)
         async with self._guard:
             self._cursors[subject] = cursor
 
@@ -125,157 +120,8 @@ class InMemoryMcpRevisionCursorStore:
             self._cursors.pop(subject, None)
 
 
-class DesktopFilesystemMcpRevisionCursorStore:
-    """Desktop-only durable cursor adapter rooted at ``RUNTIME_FILE_STORE_ROOT``.
-
-    The directory contains opaque SHA-256 filenames, never tenant/user strings.
-    Each write is staged in the same directory, fsynced, atomically replaced,
-    then the directory is fsynced.  Bad bytes are a hard error rather than a
-    reason to silently rewind a feed.
-    """
-
-    def __init__(
-        self,
-        root: Path | str | None = None,
-        *,
-        max_bytes: int = _CURSOR_MAX_BYTES,
-    ) -> None:
-        configured_root = (
-            root if root is not None else os.environ.get("RUNTIME_FILE_STORE_ROOT")
-        )
-        if not configured_root:
-            raise ValueError(
-                "RUNTIME_FILE_STORE_ROOT is required for filesystem cursors"
-            )
-        if max_bytes <= 0 or max_bytes > _CURSOR_MAX_BYTES:
-            raise ValueError("max_bytes must be between 1 and 1024")
-        self._root = Path(configured_root).absolute()
-        self._max_bytes = max_bytes
-        self._guard = asyncio.Lock()
-
-    def _ensure_root(self) -> None:
-        self._root.mkdir(mode=0o700, parents=True, exist_ok=True)
-        root_stat = os.lstat(self._root)
-        if stat.S_ISLNK(root_stat.st_mode) or not stat.S_ISDIR(root_stat.st_mode):
-            raise McpRevisionCursorStoreError("cursor root is not a real directory")
-        if os.path.realpath(self._root) != str(self._root):
-            raise McpRevisionCursorStoreError("cursor root traverses a symlink")
-        os.chmod(self._root, 0o700)
-
-    def _path_for(self, subject: McpRevisionSubject) -> Path:
-        digest = hashlib.sha256(
-            f"{subject.org_id}\0{subject.user_id}".encode("utf-8")
-        ).hexdigest()
-        return self._root / f"mcp-revision-{digest}.cursor"
-
-    def _validate_path(self, path: Path) -> None:
-        if path.parent != self._root or path.name != path.name.replace("/", ""):
-            raise McpRevisionCursorStoreError("unsafe cursor path")
-        try:
-            file_stat = os.lstat(path)
-        except FileNotFoundError:
-            return
-        if stat.S_ISLNK(file_stat.st_mode) or not stat.S_ISREG(file_stat.st_mode):
-            raise McpRevisionCursorStoreError("cursor path is not a regular file")
-        if file_stat.st_mode & 0o077:
-            raise McpRevisionCursorStoreError(
-                "cursor file permissions are not restrictive"
-            )
-
-    async def load(self, subject: McpRevisionSubject) -> str | None:
-        async with self._guard:
-            self._ensure_root()
-            path = self._path_for(subject)
-            self._validate_path(path)
-            try:
-                fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
-            except FileNotFoundError:
-                return None
-            except OSError as exc:
-                raise McpRevisionCursorStoreError(
-                    "could not safely open cursor"
-                ) from exc
-            try:
-                file_stat = os.fstat(fd)
-                if (
-                    not stat.S_ISREG(file_stat.st_mode)
-                    or file_stat.st_size > self._max_bytes
-                ):
-                    raise McpRevisionCursorStoreError(
-                        "cursor file is invalid or too large"
-                    )
-                raw = os.read(fd, self._max_bytes + 1)
-            finally:
-                os.close(fd)
-            if len(raw) > self._max_bytes:
-                raise McpRevisionCursorStoreError("cursor file is too large")
-            try:
-                payload = json.loads(raw.decode("utf-8"))
-            except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-                raise McpRevisionCursorStoreError("cursor file is corrupt") from exc
-            if not isinstance(payload, dict) or set(payload) != {"cursor"}:
-                raise McpRevisionCursorStoreError("cursor file has an invalid schema")
-            cursor = payload["cursor"]
-            if not isinstance(cursor, str):
-                raise McpRevisionCursorStoreError("cursor is not a string")
-            _validate_cursor(cursor)
-            return cursor
-
-    async def save(self, subject: McpRevisionSubject, cursor: str) -> None:
-        _validate_cursor(cursor)
-        encoded = json.dumps({"cursor": cursor}, separators=(",", ":")).encode("utf-8")
-        if len(encoded) > self._max_bytes:
-            raise McpRevisionCursorStoreError("cursor is too large")
-        async with self._guard:
-            self._ensure_root()
-            path = self._path_for(subject)
-            self._validate_path(path)
-            temporary = self._root / f".{path.name}.{secrets.token_hex(16)}.tmp"
-            fd = -1
-            try:
-                fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-                written = 0
-                while written < len(encoded):
-                    written += os.write(fd, encoded[written:])
-                os.fsync(fd)
-                os.close(fd)
-                fd = -1
-                os.replace(temporary, path)
-                dir_fd = os.open(self._root, os.O_RDONLY)
-                try:
-                    os.fsync(dir_fd)
-                finally:
-                    os.close(dir_fd)
-            except OSError as exc:
-                raise McpRevisionCursorStoreError(
-                    "could not durably save cursor"
-                ) from exc
-            finally:
-                if fd >= 0:
-                    os.close(fd)
-                try:
-                    temporary.unlink()
-                except FileNotFoundError:
-                    pass
-
-    async def clear(self, subject: McpRevisionSubject) -> None:
-        async with self._guard:
-            self._ensure_root()
-            path = self._path_for(subject)
-            self._validate_path(path)
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                return
-            dir_fd = os.open(self._root, os.O_RDONLY)
-            try:
-                os.fsync(dir_fd)
-            finally:
-                os.close(dir_fd)
-
-
-def _validate_cursor(cursor: str) -> None:
-    if not cursor or len(cursor.encode("utf-8")) > _CURSOR_MAX_BYTES:
+def validate_mcp_revision_cursor(cursor: str) -> None:
+    if not cursor or len(cursor.encode("utf-8")) > MCP_REVISION_CURSOR_MAX_BYTES:
         raise ValueError("cursor must be non-empty and at most 1024 bytes")
 
 
@@ -454,6 +300,7 @@ class McpRevisionFeedSubjectState(StrEnum):
     OFFLINE = "offline"
     CURSOR_EXPIRED = "cursor_expired"
     BOUND_EXCEEDED = "bound_exceeded"
+    CURSOR_STALLED = "cursor_stalled"
     FAILED = "failed"
 
 
@@ -545,6 +392,7 @@ class McpRevisionFeedRunner:
             pages = notices = bytes_read = 0
             try:
                 cursor = await self._cursors.load(subject)
+                seen_cursors = {cursor} if cursor is not None else set()
                 while pages < self._max_pages:
                     calls += 1
                     try:
@@ -585,10 +433,25 @@ class McpRevisionFeedRunner:
                             bytes_read,
                         )
                         break
+                    quiescent = (
+                        not feed.notices
+                        or len(feed.notices) < self._page_limit
+                        or feed.next_cursor is None
+                    )
+                    if not quiescent and (
+                        feed.next_cursor == cursor or feed.next_cursor in seen_cursors
+                    ):
+                        result = McpRevisionFeedSubjectResult(
+                            McpRevisionFeedSubjectState.CURSOR_STALLED,
+                            pages,
+                            notices,
+                            bytes_read,
+                        )
+                        break
                     await self._coordinator.apply_page(subject=subject, feed=feed)
                     notices += len(feed.notices)
                     bytes_read += page_bytes
-                    if feed.next_cursor is None:
+                    if quiescent:
                         result = McpRevisionFeedSubjectResult(
                             McpRevisionFeedSubjectState.APPLIED,
                             pages,
@@ -597,6 +460,8 @@ class McpRevisionFeedRunner:
                         )
                         break
                     cursor = feed.next_cursor
+                    if cursor is not None:
+                        seen_cursors.add(cursor)
                 else:
                     result = McpRevisionFeedSubjectResult(
                         McpRevisionFeedSubjectState.BOUND_EXCEEDED,

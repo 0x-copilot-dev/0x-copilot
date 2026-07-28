@@ -7,7 +7,6 @@ import pytest
 
 from agent_runtime.capabilities.mcp.revision_feed import (
     ActiveMcpRevisionSubjectRegistry,
-    DesktopFilesystemMcpRevisionCursorStore,
     InMemoryMcpRevisionCursorStore,
     McpCatalogGenerationAuthorityPort,
     McpDescriptorCacheInvalidationPort,
@@ -24,6 +23,9 @@ from agent_runtime.capabilities.mcp.revision_wire import (
     BackendMcpRevisionFeed,
     BackendMcpRevisionNotice,
     BackendMcpRevisionUnavailable,
+)
+from runtime_adapters.file.mcp_revision_cursor import (
+    DesktopFilesystemMcpRevisionCursorStore,
 )
 
 
@@ -129,18 +131,20 @@ async def test_filesystem_cursor_is_opaque_restrictive_and_atomic(
     store = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
     subject = _subject()
     await store.save(subject, "cursor-a")
-    path = next(tmp_path.iterdir())
+    cursor_dir = tmp_path / "mcp-revision-cursors"
+    path = next(cursor_dir.iterdir())
     assert subject.org_id not in path.name and subject.user_id not in path.name
     assert path.stat().st_mode & 0o077 == 0
     assert await store.load(subject) == "cursor-a"
 
-    def fail_replace(*_args: object) -> None:
+    def fail_replace(*_args: object, **_kwargs: object) -> None:
         raise OSError("no replace")
 
     monkeypatch.setattr(os, "replace", fail_replace)
     with pytest.raises(McpRevisionCursorStoreError):
         await store.save(subject, "cursor-b")
     assert await store.load(subject) == "cursor-a"
+    assert not list(cursor_dir.glob(".*.tmp"))
 
 
 @pytest.mark.asyncio
@@ -149,7 +153,9 @@ async def test_filesystem_cursor_rejects_symlink_oversize_and_corruption(
 ) -> None:
     store = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
     subject = _subject()
-    path = store._path_for(subject)
+    await store.save(subject, "cursor-a")
+    path = next((tmp_path / "mcp-revision-cursors").iterdir())
+    path.unlink()
     path.symlink_to(tmp_path / "target")
     with pytest.raises(McpRevisionCursorStoreError):
         await store.load(subject)
@@ -173,6 +179,24 @@ async def test_filesystem_cursor_rejects_a_symlinked_root(tmp_path: Path) -> Non
     store = DesktopFilesystemMcpRevisionCursorStore(linked_root)
     with pytest.raises(McpRevisionCursorStoreError):
         await store.load(_subject())
+
+
+@pytest.mark.asyncio
+async def test_filesystem_cursor_clear_rejects_symlink_without_touching_target(
+    tmp_path: Path,
+) -> None:
+    store = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
+    subject = _subject()
+    await store.save(subject, "cursor-a")
+    path = next((tmp_path / "mcp-revision-cursors").iterdir())
+    external = tmp_path / "external"
+    external.write_text("keep")
+    path.unlink()
+    path.symlink_to(external)
+    with pytest.raises(McpRevisionCursorStoreError):
+        await store.clear(subject)
+    assert external.read_text() == "keep"
+    assert path.is_symlink()
 
 
 @pytest.mark.asyncio
@@ -324,3 +348,128 @@ async def test_runner_empty_offline_bounds_and_cursor_expiry() -> None:
     assert (await bounded.run_once()).results[
         0
     ].state is McpRevisionFeedSubjectState.BOUND_EXCEEDED
+
+
+@pytest.mark.asyncio
+async def test_runner_treats_empty_or_short_pages_as_quiescent() -> None:
+    registry = ActiveMcpRevisionSubjectRegistry()
+    await registry.touch_verified(_subject())
+    cursors = InMemoryMcpRevisionCursorStore()
+    await cursors.save(_subject(), "old")
+    coordinator = McpRevisionFeedCoordinator(
+        resolver=_Resolver([]),
+        descriptors=_Descriptors([]),
+        catalog=_Catalog([]),
+        cursors=cursors,
+    )
+    empty = McpRevisionFeedRunner(
+        client=_FeedClient([BackendMcpRevisionFeed(notices=(), next_cursor="old")]),  # type: ignore[arg-type]
+        subjects=registry,
+        cursors=cursors,
+        coordinator=coordinator,
+        page_limit=1,
+    )
+    empty_result = await empty.run_once()
+    assert empty_result.results[0].state is McpRevisionFeedSubjectState.APPLIED
+    assert empty_result.http_calls == 1
+    assert await cursors.load(_subject()) == "old"
+
+    short = McpRevisionFeedRunner(
+        client=_FeedClient(
+            [BackendMcpRevisionFeed(notices=(_notice(),), next_cursor="new")]
+        ),  # type: ignore[arg-type]
+        subjects=registry,
+        cursors=cursors,
+        coordinator=coordinator,
+        page_limit=2,
+    )
+    assert (await short.run_once()).results[
+        0
+    ].state is McpRevisionFeedSubjectState.APPLIED
+    assert await cursors.load(_subject()) == "new"
+
+
+@pytest.mark.asyncio
+async def test_runner_rejects_nonempty_stalled_or_cyclic_cursors_before_reapply() -> (
+    None
+):
+    registry = ActiveMcpRevisionSubjectRegistry()
+    await registry.touch_verified(_subject())
+    cursors = InMemoryMcpRevisionCursorStore()
+    await cursors.save(_subject(), "old")
+    events: list[str] = []
+    coordinator = McpRevisionFeedCoordinator(
+        resolver=_Resolver(events),
+        descriptors=_Descriptors(events),
+        catalog=_Catalog(events),
+        cursors=cursors,
+    )
+    stalled = McpRevisionFeedRunner(
+        client=_FeedClient(
+            [BackendMcpRevisionFeed(notices=(_notice(),), next_cursor="old")]
+        ),  # type: ignore[arg-type]
+        subjects=registry,
+        cursors=cursors,
+        coordinator=coordinator,
+        page_limit=1,
+    )
+    assert (await stalled.run_once()).results[
+        0
+    ].state is McpRevisionFeedSubjectState.CURSOR_STALLED
+    assert events == []
+    assert await cursors.load(_subject()) == "old"
+
+    cycling = McpRevisionFeedRunner(
+        client=_FeedClient(
+            [
+                BackendMcpRevisionFeed(
+                    notices=(_notice(notice_id="one"),), next_cursor="cursor-one"
+                ),
+                BackendMcpRevisionFeed(
+                    notices=(_notice(notice_id="two"),), next_cursor="old"
+                ),
+            ]
+        ),  # type: ignore[arg-type]
+        subjects=registry,
+        cursors=cursors,
+        coordinator=coordinator,
+        page_limit=1,
+    )
+    cycle_result = await cycling.run_once()
+    assert cycle_result.results[0].state is McpRevisionFeedSubjectState.CURSOR_STALLED
+    assert events == [
+        "resolver:org-a:user-a",
+        "descriptor:server-a",
+        "catalog:server-a",
+    ]
+    assert await cursors.load(_subject()) == "cursor-one"
+
+
+@pytest.mark.asyncio
+async def test_cursor_load_error_does_not_reset_or_advance_feed_state(
+    tmp_path: Path,
+) -> None:
+    registry = ActiveMcpRevisionSubjectRegistry()
+    await registry.touch_verified(_subject())
+    cursors = DesktopFilesystemMcpRevisionCursorStore(tmp_path)
+    await cursors.save(_subject(), "old")
+    cursor_path = next((tmp_path / "mcp-revision-cursors").iterdir())
+    cursor_path.write_text("corrupt")
+    cursor_path.chmod(0o600)
+    client = _FeedClient([])
+    runner = McpRevisionFeedRunner(
+        client=client,  # type: ignore[arg-type]
+        subjects=registry,
+        cursors=cursors,
+        coordinator=McpRevisionFeedCoordinator(
+            resolver=_Resolver([]),
+            descriptors=_Descriptors([]),
+            catalog=_Catalog([]),
+            cursors=cursors,
+        ),
+    )
+    assert (await runner.run_once()).results[
+        0
+    ].state is McpRevisionFeedSubjectState.FAILED
+    assert client.calls == 0
+    assert cursor_path.read_text() == "corrupt"

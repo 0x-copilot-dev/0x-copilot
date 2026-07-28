@@ -47,6 +47,9 @@ from runtime_adapters.file.export_import import (
     ImportOutcome,
 )
 from runtime_adapters.file.large_tool_result_backend import FileLargeToolResultBackend
+from runtime_adapters.file.mcp_revision_cursor import (
+    DesktopFilesystemMcpRevisionCursorStore,
+)
 from runtime_adapters.file.migration import (
     ConversationOutcome,
     MigrationError,
@@ -79,6 +82,7 @@ __all__ = [
     "ObjectRef",
     "FileOffloadWriter",
     "FileLargeToolResultBackend",
+    "DesktopFilesystemMcpRevisionCursorStore",
     "FileSubagentTraceBackend",
     "FileCitationStore",
     "FileDraftStore",
