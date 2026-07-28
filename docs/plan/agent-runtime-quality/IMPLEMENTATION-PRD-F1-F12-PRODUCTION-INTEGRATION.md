@@ -151,21 +151,25 @@ create a second planning queue.
         focused Step 3 tests; isolated committed tree: 5,628 passed, 127
         skipped, 1 live-eval deselected; ruff, Prettier, repository pre-commit,
         and `git diff --check` passed).
-- [ ] **Step 4:** Bind F4 task policy, tool plan, budgets, fingerprints, and
+- [x] **Step 4:** Bind F4 task policy, tool plan, budgets, fingerprints, and
       restart-safe controller state.
-  - [ ] Deployment-owned, self-authenticating policy bundle, deterministic
+  - [x] Deployment-owned, self-authenticating policy bundle, deterministic
         verified-run selection, and conservative unknown profile.
-  - [ ] Durable deterministic plan plus content-free intent, admission,
+  - [x] Durable deterministic plan plus content-free intent, admission,
         outcome, feedback, budget, and progress records.
-  - [ ] Canonical event-journal adapter with stable idempotency, scope,
+  - [x] Canonical event-journal adapter with stable idempotency, scope,
         replay, retention, deletion, and desktop file-store parity.
-  - [ ] Restart-safe reducer for duplicate/error-loop, progress, model-turn,
+  - [x] Restart-safe reducer for duplicate/error-loop, progress, model-turn,
         tool-call, cost, and deadline state.
-  - [ ] Exactly one graph-wide F4 decision per final supervisor/subagent
+  - [x] Exactly one graph-wide F4 decision per final supervisor/subagent
         model-visible tool call, ordered after policy and before budget.
-  - [ ] Approval/restart rebind, typed Step 5 progress handoff, body-free
+  - [x] Approval/restart rebind, typed Step 5 progress handoff, body-free
         events, feature-off parity, shadow/enforce/backout, and F1 cases.
-  - [ ] Focused and full regression suites plus all Step 4 exit criteria.
+  - [x] Focused and full regression suites plus all Step 4 exit criteria
+        (`79d0acb3`; 173 focused integration tests; 157 regression tests; final
+        service gate: 5,777 passed, 127 skipped, one live evaluation
+        deselected; API types, ruff, compile validation, formatting/commit
+        hooks, and `git diff --check` passed).
 - [ ] **Step 5:** Complete F2 effective-prompt assembly, single cache ownership,
       outcome telemetry, and fallback.
 - [ ] **Step 6:** Attach F10 route selection, credential mode, attempt journal,

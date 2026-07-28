@@ -311,47 +311,55 @@ Root owns architecture, integration, commits, and the normative ordered
 checklist. Implementation lanes use isolated worktrees and return reviewed
 commits for root to integrate.
 
-- [ ] **F4.1 — Versioned policy bundle and selection.** Define one
+- [x] **F4.1 — Versioned policy bundle and selection.** Define one
       self-authenticating deployment-owned `TaskPolicyBundle`, conservative
       unknown profile, deterministic task-family resolver, and immutable
       selection reference. Bind selection from verified persisted run facts
       before the first model call; effect and delegation facts may only tighten
       the selected profile.
-- [ ] **F4.2 — Plan and controller record contracts.** Bind a deterministic
+- [x] **F4.2 — Plan and controller record contracts.** Bind a deterministic
       public `RunToolPlan` before the first governed call and define bounded,
       content-free intent, admission, outcome, feedback, budget, and progress
       records keyed by stable runtime call/operation identity plus keyed
       canonical argument/result fingerprints.
-- [ ] **F4.3 — Canonical event-journal persistence.** Persist F4 records through
+- [x] **F4.3 — Canonical event-journal persistence.** Persist F4 records through
       the existing tenant-scoped run event journal with stable event IDs,
       idempotency-conflict detection, replay validation, deletion/retention
       parity, and no new database, queue, JSONL ledger, or checkpoint-only
       source of truth.
-- [ ] **F4.4 — Restart-safe reducer.** Reconstruct exact-duplicate,
+- [x] **F4.4 — Restart-safe reducer.** Reconstruct exact-duplicate,
       unchanged-error, plan progress, model-turn, tool-call, cost, and deadline
       state from durable records on worker claim and approval resume. Keep
       incremental admission expected `O(1)`, bounded source history at 500,
       and bounded semantic comparison advisory-only.
-- [ ] **F4.5 — Graph-wide authoritative enforcement.** Compose F4 once in the
+- [x] **F4.5 — Graph-wide authoritative enforcement.** Compose F4 once in the
       existing `RuntimeControlMiddleware` around every final supervisor and
       local-subagent model-visible tool. Preserve policy-before-budget ordering,
       prevent blocked calls from consuming tool budget, and enforce the minimum
       of platform, user/workspace, run-envelope, task-profile, capability, and
       model-declared ceilings.
-- [ ] **F4.6 — Recovery, progress, and prompt handoff.** Rebind the same
+- [x] **F4.6 — Recovery, progress, and prompt handoff.** Rebind the same
       controller after approval/restart without resetting spend; emit body-free
       profile/plan/intent/feedback/progress events; expose one typed bounded
       progress/budget projection for Step 5 prompt assembly rather than
       appending ad-hoc system strings.
-- [ ] **F4.7 — Evaluation, rollout, and operations.** Add fixed F1 cases for
+- [x] **F4.7 — Evaluation, rollout, and operations.** Add fixed F1 cases for
       one-call lookup, pagination, exact duplicates, changed cursors,
       unchanged/retryable errors, repeated evidence, crash/resume, and
       premature-stop protection. Document shadow/enforce/backout behavior and
       prove feature-off parity.
-- [ ] **F4.8 — Step gate.** Focused F4 tests, graph/tool-surface conformance,
+- [x] **F4.8 — Step gate.** Focused F4 tests, graph/tool-surface conformance,
       full `ai-backend` suite, ruff, formatting, `git diff --check`, desktop
       file-store recovery evidence, and every Step 4 exit criterion pass before
       the normative ordered checklist is marked complete.
+
+Step 4 completion evidence: domain, journal, graph-wide runtime, concrete
+desktop/event-store composition, F1 evaluation, and regression lanes were
+merged through `79d0acb3`. The merged tree passed 173 focused integration
+tests, 157 call-identity/workspace/F4 regression tests, API contract typecheck,
+ruff, compile validation, formatting/commit hooks, and `git diff --check`.
+The final service gate passed 5,777 tests with 127 environment-dependent skips
+and one explicitly deselected live evaluation.
 
 ## Complete PRD index
 
