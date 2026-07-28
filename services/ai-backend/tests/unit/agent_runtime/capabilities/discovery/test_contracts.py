@@ -88,6 +88,7 @@ class CatalogIdentityMixin:
         projected = AuthorizedCatalogBuilder(reference_key=_REFERENCE_KEY).build(
             context=context,
             scope=scope,
+            task_policy_selection_ref=_SELECTION_REF,
             tool_cards=(
                 ToolCard(
                     name="drive_search",
@@ -110,6 +111,19 @@ class CatalogIdentityMixin:
             revision=CapabilityCatalogRevision(
                 **projected.revision.model_dump(exclude={"generation"}),
                 generation=generation,
+            ),
+            entries=projected.entries,
+        )
+
+    @classmethod
+    def ungenerated_catalog(cls) -> CapabilityCatalog:
+        """Build the generation-less catalog only a direct construction allows."""
+
+        projected = cls.catalog()
+        return CapabilityCatalog(
+            scope=projected.scope,
+            revision=CapabilityCatalogRevision(
+                **projected.revision.model_dump(exclude={"generation"}),
             ),
             entries=projected.entries,
         )
@@ -301,8 +315,15 @@ class TestCapabilityCatalogGeneration(CatalogIdentityMixin):
 
 
 class TestCapabilityCatalogRevisionGeneration(CatalogIdentityMixin):
-    def test_a_catalog_may_be_built_without_a_generation(self) -> None:
+    def test_the_shipped_builder_always_stamps_a_generation(self) -> None:
         catalog = self.catalog()
+
+        assert catalog.generation is not None
+
+    def test_the_contract_still_permits_a_generationless_catalog(self) -> None:
+        """The field stays optional so an unstamped catalog fails closed."""
+
+        catalog = self.ungenerated_catalog()
 
         assert catalog.generation is None
 
@@ -337,7 +358,19 @@ class TestCapabilityRefBinding(CatalogIdentityMixin):
         assert binding.capability_ref == catalog.entries[0].capability_ref
         assert binding.catalog_id == catalog.revision.catalog_id
         assert binding.catalog_revision == catalog.revision.revision
-        assert binding.is_bound_to(generation)
+        assert binding.issued_generation == generation
+
+    def test_a_binding_answers_no_currency_question_of_its_own(self) -> None:
+        """Use-time currency belongs to the shared Step RB primitive alone."""
+
+        catalog = self.catalog(generation=self.generation())
+
+        binding = catalog.bind_ref(catalog.entries[0].capability_ref)
+
+        assert not hasattr(binding, "is_bound_to")
+        assert not any(
+            "stale" in name or "current" in name for name in dir(type(binding))
+        )
 
     def test_refs_from_different_generations_are_distinguishable(self) -> None:
         first_generation = self.generation()
@@ -351,8 +384,8 @@ class TestCapabilityRefBinding(CatalogIdentityMixin):
         other_binding = other.bind_ref(other.entries[0].capability_ref)
 
         assert binding.capability_ref == other_binding.capability_ref
-        assert not binding.is_bound_to(second_generation)
-        assert not other_binding.is_bound_to(first_generation)
+        assert not binding.issued_generation.is_same_generation(second_generation)
+        assert not other_binding.issued_generation.is_same_generation(first_generation)
         assert binding.binding_digest != other_binding.binding_digest
 
     def test_binding_is_reproducible_for_identical_inputs(self) -> None:
@@ -366,7 +399,7 @@ class TestCapabilityRefBinding(CatalogIdentityMixin):
         assert first.binding_ref == second.binding_ref
 
     def test_a_catalog_without_a_generation_cannot_bind(self) -> None:
-        catalog = self.catalog()
+        catalog = self.ungenerated_catalog()
 
         with pytest.raises(CapabilityCatalogIdentityError, match="no generation"):
             catalog.bind_ref(catalog.entries[0].capability_ref)

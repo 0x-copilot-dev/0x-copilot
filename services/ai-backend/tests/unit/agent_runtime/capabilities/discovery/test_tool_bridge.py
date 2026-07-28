@@ -19,6 +19,7 @@ from agent_runtime.capabilities.tools.cards import ToolCard, ToolRiskLevel
 from agent_runtime.execution.contracts import AgentRuntimeContext, ModelConfig
 
 _NOW = datetime(2026, 7, 27, 12, tzinfo=UTC)
+_SELECTION_REF = f"task-policy-selection://run_discovery/default/sha256/{'e' * 64}"
 
 
 def _context(*, run_id: str = "run_discovery") -> AgentRuntimeContext:
@@ -66,6 +67,7 @@ def _catalog(
             policy_revision="policy_1",
             connector_scope_revision="scope_1",
         ),
+        task_policy_selection_ref=_SELECTION_REF,
         tool_cards=tuple(_card(index) for index in range(count)),
         expires_at=expires_at,
     )

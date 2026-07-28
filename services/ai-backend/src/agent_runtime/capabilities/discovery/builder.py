@@ -10,11 +10,14 @@ import json
 
 from agent_runtime.capabilities.discovery.contracts import (
     ApprovalCue,
+    CapabilityBridgeToolName,
     CapabilityCatalog,
+    CapabilityCatalogGeneration,
     CapabilityCatalogRevision,
     CapabilityCatalogScope,
     CapabilityIndexEntry,
     CapabilitySource,
+    CatalogDescriptorRevision,
 )
 from agent_runtime.capabilities.mcp.cards import McpServerCard
 from agent_runtime.capabilities.mcp.permissions import McpPermissionPolicy
@@ -25,8 +28,21 @@ from agent_runtime.execution.contracts import AgentRuntimeContext
 _REF_KEY_MIN_BYTES = 32
 
 
-class AuthorizedCatalogBuilder:
-    """Build a schema-free catalog and defensively recheck every compact card."""
+class CapabilitySubjectFingerprint:
+    """Derive the protected subject identity a catalog generation is keyed to.
+
+    The shared revision-binding primitive constrains a bound scope's subject to
+    lowercase SHA-256 hexadecimal, so raw organization and user identifiers are
+    never carried into a generation, a ref, or an event.  Derivation is keyed
+    and domain-separated: the same subject reproduces the same fingerprint, and
+    a fingerprint minted for another purpose cannot be replayed here.
+
+    The fingerprint is derived from the *verified* runtime context rather than
+    accepted from a caller, so no call site can key a catalog to a subject it
+    did not authenticate.
+    """
+
+    PURPOSE = "capability-catalog-subject-v1"
 
     def __init__(self, *, reference_key: bytes) -> None:
         if len(reference_key) < _REF_KEY_MIN_BYTES:
@@ -34,17 +50,62 @@ class AuthorizedCatalogBuilder:
             raise ValueError(msg)
         self._reference_key = bytes(reference_key)
 
+    def derive(self, context: AgentRuntimeContext) -> str:
+        """Return the domain-separated fingerprint of one verified subject."""
+
+        payload = json.dumps(
+            {
+                "purpose": self.PURPOSE,
+                "org_id": context.org_id,
+                "user_id": context.user_id,
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hmac.new(self._reference_key, payload, hashlib.sha256).hexdigest()
+
+
+class AuthorizedCatalogBuilder:
+    """Build a schema-free catalog and defensively recheck every compact card."""
+
+    def __init__(self, *, reference_key: bytes) -> None:
+        # The fingerprint derivation owns the key-strength check, so opaque refs
+        # and subject fingerprints can never be produced from different bars.
+        self._subject_fingerprint = CapabilitySubjectFingerprint(
+            reference_key=reference_key
+        )
+        self._reference_key = bytes(reference_key)
+
+    def subject_fingerprint(self, context: AgentRuntimeContext) -> str:
+        """Return the same subject fingerprint this builder keys generations to.
+
+        Use-time revalidation has to present the verified subject in exactly the
+        representation the minted reference was bound to; exposing the one
+        derivation keeps that from being reimplemented at a call site.
+        """
+
+        return self._subject_fingerprint.derive(context)
+
     def build(
         self,
         *,
         context: AgentRuntimeContext,
         scope: CapabilityCatalogScope,
+        task_policy_selection_ref: str,
         tool_cards: Sequence[ToolCard] = (),
         mcp_server_cards: Sequence[McpServerCard] = (),
+        descriptor_revisions: Sequence[CatalogDescriptorRevision] = (),
         deferred_schema_tokens: int = 0,
         expires_at: datetime,
     ) -> CapabilityCatalog:
-        """Project only cards visible under the supplied verified run context."""
+        """Project only cards visible under the supplied verified run context.
+
+        The catalog is always stamped with the generation identity of the four
+        trusted inputs it was projected from — the verified subject, the
+        connector scope revision, the F4 task-policy selection, and the folded
+        F8 descriptor revisions — so every ref it mints is bindable and can be
+        revalidated against live authority at use time.
+        """
 
         if not scope.matches(context):
             msg = "catalog scope does not match the runtime context"
@@ -64,6 +125,7 @@ class AuthorizedCatalogBuilder:
             )
             for card in tool_cards
             if ToolPermissionChecker.is_card_authorized(context, card)
+            and not self._claims_a_bridge_name(card.name)
         ]
         entries.extend(
             self._mcp_server_entry(
@@ -72,6 +134,7 @@ class AuthorizedCatalogBuilder:
             )
             for card in mcp_server_cards
             if McpPermissionPolicy.is_server_card_visible(context, card)
+            and not self._claims_a_bridge_name(card.name)
         )
         entries.sort(
             key=lambda entry: (
@@ -96,9 +159,28 @@ class AuthorizedCatalogBuilder:
                 descriptor_count=len(entries),
                 deferred_schema_tokens=deferred_schema_tokens,
                 expires_at=expires_at,
+                generation=CapabilityCatalogGeneration.create(
+                    subject_fingerprint=self.subject_fingerprint(context),
+                    connector_scope_revision=scope.connector_scope_revision,
+                    task_policy_selection_ref=task_policy_selection_ref,
+                    descriptor_revisions=descriptor_revisions,
+                ),
             ),
             entries=tuple(entries),
         )
+
+    @staticmethod
+    def _claims_a_bridge_name(name: str) -> bool:
+        """Drop a compact card that would collide with a bridge tool name.
+
+        Excluding the card narrows: the capability simply stays undiscoverable
+        through F3 while the pre-F3 direct/server disclosure is untouched.
+        Refusing the whole catalog instead would let one misconfigured card fail
+        an entire run, and admitting it is the one thing that could make a
+        bridge tool reachable from a bridge tool.
+        """
+
+        return CapabilityBridgeToolName.is_reserved(name)
 
     def _tool_entry(
         self,
