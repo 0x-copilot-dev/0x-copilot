@@ -8,7 +8,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from contextvars import ContextVar
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
@@ -368,6 +368,59 @@ class ToolBudgetGuard:
             controller.observe_dispatched(intent)
         return intent
 
+    @staticmethod
+    async def aadmit_task_policy_for_async_dispatch(
+        guard: object,
+        *,
+        tool_name: str,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
+    ) -> ToolUseIntent | None:
+        """Bridge the canonical async seam to legacy sync-only guards.
+
+        ``ToolBudgetGuard.aadmit_task_policy`` is the production path.  Its
+        await is what makes a durable F4 controller persist its admission
+        before the graph dispatches the inner tool.  Some compatibility
+        adapters and focused test guards predate that asynchronous boundary
+        and intentionally expose only ``admit_task_policy``.  Calling that
+        one synchronous method is still one canonical admission; the guarded
+        tool wrapper observes the already-bound :class:`RuntimeCallContext`
+        and remains dormant, so it cannot charge or admit a second time.
+
+        This is deliberately a narrow structural adapter rather than a broad
+        exception fallback.  If a guard advertises the async contract, it
+        must return an awaitable; otherwise the composition is invalid.
+        """
+
+        async_admit = getattr(guard, "aadmit_task_policy", None)
+        if callable(async_admit):
+            admission = async_admit(
+                tool_name=tool_name,
+                args=args,
+                kwargs=kwargs,
+            )
+            if not inspect.isawaitable(admission):
+                raise TypeError(
+                    "aadmit_task_policy must return an awaitable from the "
+                    "canonical async tool-dispatch seam"
+                )
+            return cast(ToolUseIntent | None, await admission)
+
+        sync_admit = getattr(guard, "admit_task_policy", None)
+        if not callable(sync_admit):
+            raise TypeError(
+                "active tool budget guard must implement "
+                "aadmit_task_policy or admit_task_policy"
+            )
+        return cast(
+            ToolUseIntent | None,
+            sync_admit(
+                tool_name=tool_name,
+                args=args,
+                kwargs=kwargs,
+            ),
+        )
+
     async def aadmit_task_policy(
         self,
         *,
@@ -402,6 +455,51 @@ class ToolBudgetGuard:
         ):
             controller.observe_dispatched(intent)
         return intent
+
+    @staticmethod
+    async def arecord_task_policy_outcome_for_async_dispatch(
+        guard: object,
+        *,
+        intent: ToolUseIntent | None,
+        succeeded: bool,
+        error_class: str | None = None,
+        result: object | None = None,
+        retryable: bool = False,
+    ) -> None:
+        """Bridge async completion recording to a legacy sync-only guard.
+
+        This mirrors :meth:`aadmit_task_policy_for_async_dispatch` for the
+        other half of the same lifecycle.  A real ``ToolBudgetGuard`` always
+        uses its async method so durable outcome state is written before the
+        canonical middleware returns.  A legacy guard can remain sync-only
+        without changing admission cardinality or call identity.
+        """
+
+        arguments = {
+            "intent": intent,
+            "succeeded": succeeded,
+            "error_class": error_class,
+            "result": result,
+            "retryable": retryable,
+        }
+        async_record = getattr(guard, "arecord_task_policy_outcome", None)
+        if callable(async_record):
+            completion = async_record(**arguments)
+            if not inspect.isawaitable(completion):
+                raise TypeError(
+                    "arecord_task_policy_outcome must return an awaitable "
+                    "from the canonical async tool-dispatch seam"
+                )
+            await completion
+            return
+
+        sync_record = getattr(guard, "record_task_policy_outcome", None)
+        if not callable(sync_record):
+            raise TypeError(
+                "active tool budget guard must implement "
+                "arecord_task_policy_outcome or record_task_policy_outcome"
+            )
+        sync_record(**arguments)
 
     def observe_upstream_policy_block(
         self,

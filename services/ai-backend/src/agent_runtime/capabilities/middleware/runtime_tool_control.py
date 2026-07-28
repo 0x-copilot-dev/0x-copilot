@@ -676,7 +676,8 @@ class RuntimeControlMiddleware(AgentMiddleware):
             return await handler(request)
         tool_name, arguments, estimated = _request_facts(request)
         try:
-            intent = await guard.aadmit_task_policy(
+            intent = await ToolBudgetGuard.aadmit_task_policy_for_async_dispatch(
+                guard,
                 tool_name=tool_name,
                 args=(),
                 kwargs=arguments,
@@ -703,7 +704,8 @@ class RuntimeControlMiddleware(AgentMiddleware):
         try:
             result = await handler(request)
         except BaseException as exc:
-            await guard.arecord_task_policy_outcome(
+            await ToolBudgetGuard.arecord_task_policy_outcome_for_async_dispatch(
+                guard,
                 intent=intent,
                 succeeded=False,
                 error_class=type(exc).__name__,
@@ -711,7 +713,8 @@ class RuntimeControlMiddleware(AgentMiddleware):
             raise
         else:
             succeeded = _succeeded(result)
-            await guard.arecord_task_policy_outcome(
+            await ToolBudgetGuard.arecord_task_policy_outcome_for_async_dispatch(
+                guard,
                 intent=intent,
                 succeeded=succeeded,
                 error_class=None if succeeded else "ToolMessageError",
