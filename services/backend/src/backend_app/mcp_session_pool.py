@@ -164,6 +164,7 @@ class McpSessionPoolDiagnostics:
     total_sessions: int
     active_leases: int
     idle_sessions: int
+    maintenance_sessions: int
     opening_sessions: int
     invalidated_sessions: int
     draining: bool
@@ -221,6 +222,7 @@ class _SessionEntry:
     created_at: float
     last_released_at: float
     active_lease_id: str | None = None
+    maintenance_reserved: bool = False
     invalidated: bool = False
 
 
@@ -411,18 +413,34 @@ class McpSessionPool:
                 (
                     item
                     for item in self._sessions.values()
-                    if item.active_lease_id is None and not item.invalidated
+                    if item.active_lease_id is None
+                    and not item.maintenance_reserved
+                    and not item.invalidated
                 ),
                 key=lambda item: (item.last_released_at, item.session_id),
             )[:limit]
+            for item in candidates:
+                item.maintenance_reserved = True
+        failed = False
         for item in candidates:
+            with self._lock:
+                transport = self._prepare_keepalive_locked(item)
+            if transport is None:
+                continue
             try:
-                item.transport.keepalive()
+                transport.keepalive()
             except Exception:
                 with self._lock:
-                    self._remove_session_locked(item.session_id)
-                return McpSessionPoolOutcome.KEEPALIVE_FAILED
-        return McpSessionPoolOutcome.RELEASED
+                    self._complete_keepalive_locked(item, succeeded=False)
+                failed = True
+                continue
+            with self._lock:
+                self._complete_keepalive_locked(item, succeeded=True)
+        return (
+            McpSessionPoolOutcome.KEEPALIVE_FAILED
+            if failed
+            else McpSessionPoolOutcome.RELEASED
+        )
 
     def reap_expired(self) -> int:
         """Close expired idle *and active* transports and revoke leaked leases.
@@ -450,7 +468,7 @@ class McpSessionPool:
                     continue
                 session.invalidated = True
                 invalidated += 1
-                if session.active_lease_id is None:
+                if session.active_lease_id is None and not session.maintenance_reserved:
                     self._remove_session_locked(session.session_id)
             return invalidated
 
@@ -465,7 +483,7 @@ class McpSessionPool:
                 self._invalidate_scope_fingerprint_locked(session.scope.fingerprint)
                 session.invalidated = True
                 invalidated += 1
-                if session.active_lease_id is None:
+                if session.active_lease_id is None and not session.maintenance_reserved:
                     self._remove_session_locked(session.session_id)
             for scope in self._opening_scopes.values():
                 if scope.credential_subject == credential_subject:
@@ -494,12 +512,14 @@ class McpSessionPool:
         with self._lock:
             self._draining = True
             for session in tuple(self._sessions.values()):
-                if session.active_lease_id is None:
+                if session.maintenance_reserved:
+                    session.invalidated = True
+                elif session.active_lease_id is None:
                     self._remove_session_locked(session.session_id)
             if timeout_seconds is None:
-                return not self._leases
+                return not self._leases and not self._maintenance_count_locked()
             deadline = self._clock() + timeout_seconds
-            while self._leases:
+            while self._leases or self._maintenance_count_locked():
                 remaining = deadline - self._clock()
                 if remaining <= 0:
                     return False
@@ -513,10 +533,12 @@ class McpSessionPool:
             self._reap_locked(self._clock())
             active = len(self._leases)
             total = len(self._sessions)
+            maintenance = self._maintenance_count_locked()
             return McpSessionPoolDiagnostics(
                 total_sessions=total,
                 active_leases=active,
-                idle_sessions=total - active,
+                idle_sessions=total - active - maintenance,
+                maintenance_sessions=maintenance,
                 opening_sessions=sum(self._opening_by_scope.values()),
                 invalidated_sessions=sum(
                     item.invalidated for item in self._sessions.values()
@@ -582,6 +604,7 @@ class McpSessionPool:
                 for item in self._sessions.values()
                 if item.scope == scope
                 and item.active_lease_id is None
+                and not item.maintenance_reserved
                 and not item.invalidated
             ),
             key=lambda item: (item.last_released_at, item.session_id),
@@ -657,6 +680,15 @@ class McpSessionPool:
             lease_entry = self._leases.get(lease._lease_id)
             if lease_entry is None or not self._lease_scope_matches(lease_entry, scope):
                 raise McpSessionPoolRejected(McpSessionPoolOutcome.STALE)
+            session = self._sessions.get(lease_entry.session_id)
+            if (
+                session is None
+                or session.active_lease_id != lease._lease_id
+                or session.invalidated
+                or self._expired(session, self._clock())
+                or not self._scope_is_current_locked(scope)
+            ):
+                raise McpSessionPoolRejected(McpSessionPoolOutcome.STALE)
             lease_entry.dispatch_committed = True
 
     def _lease_dispatched_or_stale(
@@ -668,6 +700,10 @@ class McpSessionPool:
                 lease_entry is None
                 or not self._lease_scope_matches(lease_entry, scope)
                 or lease_entry.dispatch_committed
+                or (session := self._sessions.get(lease_entry.session_id)) is None
+                or session.invalidated
+                or self._expired(session, self._clock())
+                or not self._scope_is_current_locked(scope)
             )
 
     def _reconnect_pre_dispatch(
@@ -676,6 +712,8 @@ class McpSessionPool:
         with self._lock:
             lease_entry = self._leases.get(lease._lease_id)
             if lease_entry is None or not self._lease_scope_matches(lease_entry, scope):
+                return False
+            if not self._scope_is_current_locked(scope):
                 return False
             old = self._sessions.get(lease_entry.session_id)
             if old is None:
@@ -743,6 +781,9 @@ class McpSessionPool:
         self._prune_invalidations_locked(now)
         for session in tuple(self._sessions.values()):
             if self._expired(session, now):
+                if session.maintenance_reserved:
+                    session.invalidated = True
+                    continue
                 if session.active_lease_id is not None:
                     self._leases.pop(session.active_lease_id, None)
                     self._drained.notify_all()
@@ -756,16 +797,65 @@ class McpSessionPool:
 
     def _evict_oldest_idle_locked(self) -> None:
         idle = sorted(
-            (item for item in self._sessions.values() if item.active_lease_id is None),
+            (
+                item
+                for item in self._sessions.values()
+                if item.active_lease_id is None and not item.maintenance_reserved
+            ),
             key=lambda item: (item.last_released_at, item.session_id),
         )
         if idle:
             self._remove_session_locked(idle[0].session_id)
 
     def _remove_session_locked(self, session_id: str) -> None:
+        session = self._sessions.get(session_id)
+        if session is not None and session.maintenance_reserved:
+            session.invalidated = True
+            return
         session = self._sessions.pop(session_id, None)
         if session is not None:
             self._close_transport(session.transport)
+
+    def _prepare_keepalive_locked(
+        self, candidate: _SessionEntry
+    ) -> McpSessionTransport | None:
+        """Revalidate a maintenance reservation before its ping leaves process."""
+
+        session = self._sessions.get(candidate.session_id)
+        if session is not candidate or not session.maintenance_reserved:
+            return None
+        if (
+            self._draining
+            or session.invalidated
+            or self._expired(session, self._clock())
+            or not self._scope_is_current_locked(session.scope)
+        ):
+            session.maintenance_reserved = False
+            self._remove_session_locked(session.session_id)
+            self._drained.notify_all()
+            return None
+        return session.transport
+
+    def _complete_keepalive_locked(
+        self, candidate: _SessionEntry, *, succeeded: bool
+    ) -> None:
+        """Release a reservation and retire a session when it became unsafe."""
+
+        session = self._sessions.get(candidate.session_id)
+        if session is not candidate or not session.maintenance_reserved:
+            return
+        session.maintenance_reserved = False
+        if (
+            not succeeded
+            or self._draining
+            or session.invalidated
+            or self._expired(session, self._clock())
+        ):
+            self._remove_session_locked(session.session_id)
+        self._drained.notify_all()
+
+    def _maintenance_count_locked(self) -> int:
+        return sum(item.maintenance_reserved for item in self._sessions.values())
 
     @staticmethod
     def _close_transport(transport: McpSessionTransport) -> None:

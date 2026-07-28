@@ -70,6 +70,49 @@ class _BlockingFactory(_Factory):
         return super().connect(scope)
 
 
+@dataclass
+class _BlockingKeepaliveTransport(_Transport):
+    started: threading.Event = field(default_factory=threading.Event)
+    release_keepalive: threading.Event = field(default_factory=threading.Event)
+
+    def keepalive(self) -> None:
+        self.started.set()
+        assert self.release_keepalive.wait(timeout=1)
+        super().keepalive()
+
+
+class _BlockingKeepaliveFactory:
+    def __init__(self) -> None:
+        self.transport = _BlockingKeepaliveTransport()
+        self.connects = 0
+
+    def connect(
+        self, _scope: VerifiedMcpSessionScopeKey
+    ) -> _BlockingKeepaliveTransport:
+        self.connects += 1
+        return self.transport
+
+
+@dataclass
+class _FailingKeepaliveTransport(_Transport):
+    def keepalive(self) -> None:
+        raise OSError("keepalive failed")
+
+
+class _MixedKeepaliveFactory:
+    def __init__(self) -> None:
+        self.transports: list[_Transport] = []
+
+    def connect(self, _scope: VerifiedMcpSessionScopeKey) -> _Transport:
+        transport: _Transport
+        if not self.transports:
+            transport = _FailingKeepaliveTransport()
+        else:
+            transport = _Transport()
+        self.transports.append(transport)
+        return transport
+
+
 def _scope(
     *,
     user: str = "user-1",
@@ -300,6 +343,43 @@ def test_never_reconnects_after_backend_dispatch_fence() -> None:
     pool.release(lease, scope=scope)
 
 
+def test_dispatch_commit_revalidates_after_mid_operation_invalidation() -> None:
+    factory = _Factory()
+    pool = McpSessionPool(factory=factory)
+    scope = _scope()
+    lease = _acquire(pool, scope)
+    entered = threading.Event()
+    continue_to_commit = threading.Event()
+    dispatched = threading.Event()
+    failures: list[Exception] = []
+
+    def operation(_transport: _Transport, fence) -> None:
+        entered.set()
+        assert continue_to_commit.wait(timeout=1)
+        fence.commit()
+        dispatched.set()
+
+    def invoke() -> None:
+        try:
+            pool.invoke(lease, scope=scope, operation=operation)
+        except Exception as error:
+            failures.append(error)
+
+    worker = threading.Thread(target=invoke)
+    worker.start()
+    assert entered.wait(timeout=1)
+    assert pool.invalidate_scope(scope) == 1
+    continue_to_commit.set()
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert not dispatched.is_set()
+    assert len(failures) == 1
+    assert isinstance(failures[0], McpSessionPoolRejected)
+    assert failures[0].outcome is McpSessionPoolOutcome.STALE
+    assert pool.release(lease, scope=scope) is McpSessionPoolOutcome.RELEASED
+
+
 def test_scope_mismatch_cancellation_and_invalidation_fail_closed() -> None:
     factory = _Factory()
     pool = McpSessionPool(factory=factory)
@@ -350,6 +430,59 @@ def test_keepalive_uses_only_transport_ping_contract_and_retires_failures() -> N
     assert pool.keepalive_idle() is McpSessionPoolOutcome.RELEASED
     assert factory.transports[0].keepalives == 1
     assert not hasattr(factory.transports[0], "tools_list")
+
+
+def test_keepalive_reservation_prevents_concurrent_transport_reuse() -> None:
+    factory = _BlockingKeepaliveFactory()
+    pool = McpSessionPool(
+        factory=factory,
+        config=McpSessionPoolConfig(max_total_sessions=1, max_sessions_per_key=1),
+    )
+    scope = _scope()
+    lease = _acquire(pool, scope)
+    assert pool.release(lease, scope=scope) is McpSessionPoolOutcome.RELEASED
+    outcomes: list[McpSessionPoolOutcome] = []
+
+    worker = threading.Thread(target=lambda: outcomes.append(pool.keepalive_idle()))
+    worker.start()
+    assert factory.transport.started.wait(timeout=1)
+
+    diagnostics = pool.diagnostics()
+    assert diagnostics.active_leases == 0
+    assert diagnostics.idle_sessions == 0
+    assert diagnostics.maintenance_sessions == 1
+    assert pool.acquire(scope).outcome is McpSessionPoolOutcome.SATURATED
+    assert factory.connects == 1
+
+    factory.transport.release_keepalive.set()
+    worker.join(timeout=1)
+    assert not worker.is_alive()
+    assert outcomes == [McpSessionPoolOutcome.RELEASED]
+    assert factory.transport.keepalives == 1
+
+    reused = _acquire(pool, scope)
+    assert factory.connects == 1
+    assert pool.release(reused, scope=scope) is McpSessionPoolOutcome.RELEASED
+
+
+def test_keepalive_failure_releases_every_selected_reservation() -> None:
+    clock = _Clock()
+    factory = _MixedKeepaliveFactory()
+    pool = McpSessionPool(factory=factory, clock=clock)
+    first_scope = _scope(server="server-first")
+    first = _acquire(pool, first_scope)
+    assert pool.release(first, scope=first_scope) is McpSessionPoolOutcome.RELEASED
+    clock.advance(1)
+    second_scope = _scope(server="server-second")
+    second = _acquire(pool, second_scope)
+    assert pool.release(second, scope=second_scope) is McpSessionPoolOutcome.RELEASED
+
+    assert pool.keepalive_idle(limit=2) is McpSessionPoolOutcome.KEEPALIVE_FAILED
+    diagnostics = pool.diagnostics()
+    assert diagnostics.maintenance_sessions == 0
+    assert diagnostics.idle_sessions == 1
+    assert factory.transports[0].closed == 1
+    assert factory.transports[1].keepalives == 1
 
 
 def test_shutdown_drains_active_leases_and_rejects_new_work() -> None:
@@ -411,6 +544,25 @@ def test_complete_paginated_discovery_observes_only_body_free_facts() -> None:
     assert observation.item_count == 3
     assert observation.complete
     pool.release(lease, scope=scope)
+
+
+def test_discovery_fetch_failure_after_dispatch_never_reconnects() -> None:
+    factory = _Factory()
+    pool = McpSessionPool(factory=factory)
+    scope = _scope()
+    lease = _acquire(pool, scope)
+    attempts = 0
+
+    def fetch(_transport: _Transport, _cursor: str | None) -> McpDiscoveryPage:
+        nonlocal attempts
+        attempts += 1
+        raise ConnectionError("remote response is ambiguous")
+
+    with pytest.raises(ConnectionError):
+        pool.observe_paginated_discovery(lease, scope=scope, fetch_page=fetch)
+    assert attempts == 1
+    assert len(factory.transports) == 1
+    assert pool.release(lease, scope=scope) is McpSessionPoolOutcome.RELEASED
 
 
 def test_discovery_cycle_is_stale_not_partially_complete() -> None:
