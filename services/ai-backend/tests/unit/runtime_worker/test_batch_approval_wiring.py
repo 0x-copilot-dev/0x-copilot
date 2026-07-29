@@ -466,17 +466,28 @@ class TestTheAuthorityIsAlwaysPassed(ComposedRunMixin):
         assert journal.plans == []
         assert admission.tracked_children == 0
 
-    def test_both_composition_roots_pass_the_run_context(self) -> None:
-        """A source canary: neither handler may drift back to the BUG-19 state.
+    def test_the_only_construction_site_in_the_service_names_the_authority(
+        self,
+    ) -> None:
+        """BUG-19 restated as the invariant that makes it unrepeatable.
 
-        Cheap and deliberately literal, in the shape W3 already uses for this
-        pair of files. A behavioural test can only cover the root it happens to
-        drive; this one fails the moment either root stops naming the authority.
+        ``approvals`` has a default of ``None`` and must keep it: BUG-15's own
+        proofs pass ``None`` deliberately, to establish that an absent source
+        leaves the catalog untouched. So the guarantee cannot live on the
+        constructor's signature. It lives here instead — there is exactly one
+        place in ``src/`` that builds a :class:`RunBatchAdmission`, and that
+        place names an authority. A second construction site is the regression
+        to catch, because it is the only way the keyword can go missing again.
         """
 
-        for name in ("run.py", "approval.py"):
-            source = (_SOURCE_ROOT / "runtime_worker" / "handlers" / name).read_text()
-            assert "runtime_context=run.runtime_context" in source, name
+        sites = sorted(
+            path
+            for path in _SOURCE_ROOT.rglob("*.py")
+            if "RunBatchAdmission(" in path.read_text()
+        )
+
+        assert [path.name for path in sites] == ["batch_concurrency_composition.py"]
+        assert "approvals=self._approvals(" in sites[0].read_text()
 
 
 class TestTheAuthorityAnswersConservativelyWhenItCannotRead(ComposedRunMixin):
