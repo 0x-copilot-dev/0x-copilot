@@ -15,7 +15,6 @@ import it without a cycle.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass, field
 import hashlib
 from typing import ClassVar
@@ -71,10 +70,10 @@ class _RunJournal:
     it scale with model deltas and tool events F6 does not even look at.
 
     ``read_through`` is the contract that keeps it honest: the projection has
-    folded the run's log *contiguously* up to that sequence and no further, so
-    the next read asks only for what comes after it.  Nothing here is ever
-    trusted across a process boundary — a new store instance starts empty and
-    rebuilds from the durable log, which is what recovery and restart do.
+    folded the run's log up to that sequence and no further, so the next read
+    asks only for what comes after it.  Nothing here is ever trusted across a
+    process boundary — a new store instance starts empty and rebuilds from the
+    durable log, which is what recovery and restart do.
     """
 
     snapshot: RunControlSnapshot
@@ -267,7 +266,14 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
                 run_id=record.run_id,
                 reason="appended F6 record does not match its canonical digest",
             )
-        return self._fold(journal=journal, event=envelope, record=durable)
+        item = self._fold(journal=journal, event=envelope, record=durable)
+        # Reading back the record we just wrote would be pointless, but only a
+        # contiguous sequence proves that is all we would find: the store
+        # allocates per-run sequences without gaps, so landing one past the
+        # last read means nothing else slipped in unseen.
+        if envelope.sequence_no == journal.read_through + 1:
+            journal.read_through = envelope.sequence_no
+        return item
 
     async def load_recovery_view(
         self,
@@ -383,12 +389,19 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
         Returns ``False`` when the run rebound its control snapshot, which
         invalidates the projection rather than extending it.
 
-        The fold stops at the first gap in the sequence.  Sequence allocation
-        is not the same thing as commit order — the postgres adapter appends
-        without a per-run row lock, so a later event can become visible while
-        its predecessor is still in flight.  Folding past that hole would drop
-        the missing record from this projection for good; stopping means the
-        next read covers it.
+        A projection that has folded nothing reads the whole log and folds
+        everything the store makes visible, which is exactly what a full replay
+        did and is what restart recovery must keep seeing: truncating a
+        recovery view would understate what already ran, and understating that
+        is how a child gets dispatched twice.
+
+        Once it *has* folded something the rule tightens, because the cost of
+        being wrong is now permanent: the fold stops at the first gap in the
+        sequence.  Sequence allocation is not commit order — the postgres
+        adapter appends without a per-run row lock, so a later event can become
+        visible while its predecessor is still in flight.  Advancing past that
+        hole would skip the missing record for the life of this projection;
+        stopping leaves it for the next read, which self-heals.
         """
 
         events = await self._events.list_events_after(
@@ -396,9 +409,9 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
             run_id=journal.snapshot.run_id,
             after_sequence=journal.read_through,
         )
-        expected = self._first_expected(journal=journal, events=events)
+        primed = journal.read_through > 0
         for event in events:
-            if event.sequence_no != expected:
+            if primed and event.sequence_no != journal.read_through + 1:
                 return True
             if event.event_type is self.SNAPSHOT_EVENT_TYPE:
                 # The run's own binding is expected — it is the event the
@@ -418,26 +431,7 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
                     ),
                 )
             journal.read_through = event.sequence_no
-            expected += 1
         return True
-
-    @staticmethod
-    def _first_expected(
-        *,
-        journal: _RunJournal,
-        events: Sequence[RuntimeEventEnvelope],
-    ) -> int:
-        """Return the sequence the next folded event must carry.
-
-        A projection that has folded nothing anchors on whatever the store
-        hands back first, so a run whose earliest events retention has already
-        removed still folds — reading exactly what a full replay would read.
-        Once anything has been folded, the contiguity rule takes over.
-        """
-
-        if journal.read_through or not events:
-            return journal.read_through + 1
-        return events[0].sequence_no
 
     def _fold(
         self,
@@ -460,12 +454,6 @@ class EventJournalBatchPlanStore(BatchPlanStorePort):
             )
         self._commit(journal=journal, item=item)
         journal.by_event_id[event.event_id] = item
-        # Advancing across our own append is only safe when nothing landed
-        # between the last read and it: the store allocates per-run sequences
-        # without gaps, so a contiguous sequence proves no concurrent writer
-        # slipped a record in that this projection has not seen.
-        if event.sequence_no == journal.read_through + 1:
-            journal.read_through = event.sequence_no
         return item
 
     async def _load_snapshot(

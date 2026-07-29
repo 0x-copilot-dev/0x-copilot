@@ -852,6 +852,260 @@ class TestBatchPlanDurability(BatchJournalFixtureMixin):
             "op-write",
         )
 
+    async def test_a_journal_that_has_been_writing_still_reads_a_second_writer(
+        self,
+        seeded_store,
+    ) -> None:
+        """A journal carried across appends is a read cursor, not a private copy.
+
+        A store instance lives for a whole run, so the durable prefix it holds
+        has to keep meaning *the journal* rather than the part of it this
+        process happened to write.  A second worker's plan must therefore both
+        appear in its recovery view and be enough to admit that plan's children
+        — the alternative is refusing legitimate work as corruption.
+        """
+
+        store, _conversation, run, controls, _snapshot = seeded_store
+        snapshot = await self._snapshot(controls, run)
+        gate = self.gate()
+        carried = EventJournalBatchPlanStore(events=store, snapshots=controls)
+
+        mine = await BatchPlanRecorder(journal=carried, gate=gate).record(
+            self.parallel_request(run),
+            snapshot=snapshot,
+        )
+        theirs = await BatchPlanRecorder(
+            journal=EventJournalBatchPlanStore(events=store, snapshots=controls),
+            gate=gate,
+        ).record(self.undeclared_request(run), snapshot=snapshot)
+
+        view = await carried.load_recovery_view(
+            org_id=_ORG,
+            run_id=run.run_id,
+            subject_fingerprint=_SUBJECT,
+        )
+        assert view.plans == (mine, theirs)
+
+        transition = await BatchChildTransitionRecorder(
+            journal=carried,
+            binding=BatchRunBinding.of(
+                org_id=_ORG,
+                trace_id=run.trace_id,
+                snapshot=snapshot,
+            ),
+        ).record_dispatch_intent(
+            batch_id="batch-unknown",
+            operation_id="op-unknown-a",
+        )
+        assert transition.sequence_no > theirs.sequence_no
+
+    async def test_a_journal_that_has_been_writing_converges_when_it_loses(
+        self,
+        seeded_store,
+    ) -> None:
+        """Losing a race is never answered from state that predates the race.
+
+        F6.2 pinned this for a writer whose *first* read lost. The same store
+        instance goes on to write for the rest of the run, so the case that
+        actually recurs is a writer that already holds a durable prefix and
+        whose next read missed the winner — where answering from the prefix it
+        holds would report a second plan for a batch that has exactly one.
+        """
+
+        store, _conversation, run, controls, _snapshot = seeded_store
+        snapshot = await self._snapshot(controls, run)
+        gate = self.gate()
+        blind = _LateRaceBlindEventStore(store)
+        carried = EventJournalBatchPlanStore(events=blind, snapshots=controls)
+
+        await BatchPlanRecorder(journal=carried, gate=gate).record(
+            self.parallel_request(run),
+            snapshot=snapshot,
+        )
+        winner = await BatchPlanRecorder(
+            journal=EventJournalBatchPlanStore(events=store, snapshots=controls),
+            gate=gate,
+        ).record(self.undeclared_request(run), snapshot=snapshot)
+
+        blind.blind_next_read()
+        racing = await BatchPlanRecorder(journal=carried, gate=gate).record(
+            self.undeclared_request(run),
+            snapshot=snapshot,
+        )
+
+        assert blind.hidden_reads == 1
+        assert racing == winner
+        view = await EventJournalBatchPlanStore(
+            events=store,
+            snapshots=controls,
+        ).load_recovery_view(
+            org_id=_ORG,
+            run_id=run.run_id,
+            subject_fingerprint=_SUBJECT,
+        )
+        assert len(view.plans) == 2
+
+    async def test_a_journal_that_read_across_an_uncommitted_append_recovers(
+        self,
+        seeded_store,
+    ) -> None:
+        """A record read over is still found when the writer loses to it.
+
+        Allocating a sequence is not committing it: the postgres adapter
+        appends without a per-run row lock, so a reader can legitimately see
+        event N+1 while N is still in flight and read straight past the hole.
+        A journal that then tries to write N's record must not answer from the
+        prefix it read — that prefix is precisely the one N is missing from.
+        """
+
+        store, _conversation, run, controls, _snapshot = seeded_store
+        snapshot = await self._snapshot(controls, run)
+        gate = self.gate()
+        writer = EventJournalBatchPlanStore(events=store, snapshots=controls)
+        committing = await BatchPlanRecorder(journal=writer, gate=gate).record(
+            self.undeclared_request(run),
+            snapshot=snapshot,
+        )
+        visible = await BatchPlanRecorder(journal=writer, gate=gate).record(
+            self.parallel_request(run),
+            snapshot=snapshot,
+        )
+        assert visible.sequence_no > committing.sequence_no
+
+        # A second process reads the run while the first plan is still
+        # committing, so its view legitimately skips over that sequence.
+        flight = _InFlightAppendEventStore(store, in_flight=committing.sequence_no)
+        losing = EventJournalBatchPlanStore(events=flight, snapshots=controls)
+        view = await losing.load_recovery_view(
+            org_id=_ORG,
+            run_id=run.run_id,
+            subject_fingerprint=_SUBJECT,
+        )
+        assert view.plans == (visible,)
+
+        # It commits, and the loser writes the decision it could not see.
+        flight.commit()
+        racing = await BatchPlanRecorder(journal=losing, gate=gate).record(
+            self.undeclared_request(run),
+            snapshot=snapshot,
+        )
+
+        assert racing == committing
+        after = await EventJournalBatchPlanStore(
+            events=store,
+            snapshots=controls,
+        ).load_recovery_view(
+            org_id=_ORG,
+            run_id=run.run_id,
+            subject_fingerprint=_SUBJECT,
+        )
+        assert after.plans == (committing, visible)
+
+    async def test_a_journal_that_has_been_writing_waits_out_a_hole(
+        self,
+        seeded_store,
+    ) -> None:
+        """A record still committing is read later, never read over.
+
+        This is the half a carried journal cannot get wrong.  It asks the store
+        only for what follows the sequence it has folded through, so a record
+        it skips is one it will never ask for again — and a plan missing from
+        the recovery view is a batch a restart believes was never ordered.
+        """
+
+        store, _conversation, run, controls, _snapshot = seeded_store
+        snapshot = await self._snapshot(controls, run)
+        gate = self.gate()
+        flight = _InFlightAppendEventStore(store)
+        carried = EventJournalBatchPlanStore(events=flight, snapshots=controls)
+
+        mine = await BatchPlanRecorder(journal=carried, gate=gate).record(
+            self.parallel_request(run),
+            snapshot=snapshot,
+        )
+        other = BatchPlanRecorder(
+            journal=EventJournalBatchPlanStore(events=store, snapshots=controls),
+            gate=gate,
+        )
+        committing = await other.record(
+            self.undeclared_request(run),
+            snapshot=snapshot,
+        )
+        visible = await other.record(
+            self.parallel_request(run, batch_id="batch-turn-2", turn_ordinal=2),
+            snapshot=snapshot,
+        )
+
+        flight.hide(committing.sequence_no)
+        held = await carried.load_recovery_view(
+            org_id=_ORG,
+            run_id=run.run_id,
+            subject_fingerprint=_SUBJECT,
+        )
+        assert held.plans == (mine,)
+
+        flight.commit()
+        healed = await carried.load_recovery_view(
+            org_id=_ORG,
+            run_id=run.run_id,
+            subject_fingerprint=_SUBJECT,
+        )
+        assert healed.plans == (mine, committing, visible)
+
+    async def test_a_second_control_binding_invalidates_a_carried_journal(
+        self,
+        seeded_store,
+    ) -> None:
+        """Holding the snapshot must not stop the journal from noticing a rebind.
+
+        A run's control snapshot is bound once, so a journal that lives for the
+        whole run reads it once.  That is only safe while the log can still
+        overrule it — otherwise the one instance doing all the writing would be
+        the one instance that cannot see the run's control state was forged.
+        """
+
+        store, _conversation, run, controls, _snapshot = seeded_store
+        snapshot = await self._snapshot(controls, run)
+        carried = EventJournalBatchPlanStore(events=store, snapshots=controls)
+        await BatchPlanRecorder(journal=carried, gate=self.gate()).record(
+            self.parallel_request(run),
+            snapshot=snapshot,
+        )
+
+        events = await store.list_events_after(
+            org_id=_ORG,
+            run_id=run.run_id,
+            after_sequence=0,
+        )
+        bound = next(
+            event
+            for event in events
+            if event.event_type is RuntimeApiEventType.QUALITY_CONTROL_BOUND
+        )
+        await store.append_event(
+            RuntimeEventDraft(
+                org_id=_ORG,
+                event_id="forged-second-control-binding",
+                created_at=bound.created_at,
+                run_id=run.run_id,
+                conversation_id=bound.conversation_id,
+                trace_id=run.trace_id,
+                source=StreamEventSource.RUNTIME,
+                event_type=RuntimeApiEventType.QUALITY_CONTROL_BOUND,
+                activity_kind=RuntimeActivityKind.EVENT,
+                visibility=RuntimeEventVisibility.INTERNAL,
+                redaction_state=RuntimeEventRedactionState.REDACTED,
+                payload=bound.payload,
+            )
+        )
+
+        with pytest.raises(BatchJournalCorruption, match="control snapshot"):
+            await carried.load_recovery_view(
+                org_id=_ORG,
+                run_id=run.run_id,
+                subject_fingerprint=_SUBJECT,
+            )
+
     async def test_scope_and_snapshot_binding_fail_closed(
         self,
         seeded_store,
@@ -1531,6 +1785,69 @@ class _RaceBlindEventStore:
             for event in events
             if event.event_type is not RuntimeApiEventType.OPERATION_BATCH_JOURNAL
         )
+
+
+class _LateRaceBlindEventStore:
+    """Hides the durable F6 prefix from one read, chosen by the test.
+
+    :class:`_RaceBlindEventStore` blinds a writer's *first* read, which is the
+    cold start of a race. This blinds a nominated later one, so the loser is a
+    writer that has already been appending to this run — the state a store
+    instance carried across a whole run is actually in.
+    """
+
+    def __init__(self, inner) -> None:
+        self._inner = inner
+        self._blind = False
+        self.hidden_reads = 0
+
+    def blind_next_read(self) -> None:
+        self._blind = True
+
+    async def append_event(self, event):
+        return await self._inner.append_event(event)
+
+    async def list_events_after(self, **kwargs):
+        events = await self._inner.list_events_after(**kwargs)
+        if not self._blind:
+            return events
+        self._blind = False
+        self.hidden_reads += 1
+        return tuple(
+            event
+            for event in events
+            if event.event_type is not RuntimeApiEventType.OPERATION_BATCH_JOURNAL
+        )
+
+
+class _InFlightAppendEventStore:
+    """Hides one already-sequenced event until it "commits".
+
+    The postgres adapter allocates a run's event sequence without holding a row
+    lock, so a later event can be visible while an earlier one is still
+    committing.  A reader in that window sees a hole at a sequence that will
+    shortly be filled — which is a different thing from a sequence that will
+    stay empty, and the store has no way to tell them apart at read time.
+    """
+
+    def __init__(self, inner, *, in_flight: int | None = None) -> None:
+        self._inner = inner
+        self._in_flight = in_flight
+
+    def hide(self, sequence_no: int) -> None:
+        self._in_flight = sequence_no
+
+    def commit(self) -> None:
+        self._in_flight = None
+
+    async def append_event(self, event):
+        return await self._inner.append_event(event)
+
+    async def list_events_after(self, **kwargs):
+        events = await self._inner.list_events_after(**kwargs)
+        if self._in_flight is None:
+            return events
+        return tuple(event for event in events if event.sequence_no != self._in_flight)
 
 
 class _EmptySnapshotStore:
