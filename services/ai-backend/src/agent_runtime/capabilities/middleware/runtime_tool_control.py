@@ -42,6 +42,7 @@ from agent_runtime.control_plane.context import (
     RunSerialAdmission,
     RuntimeToolControlOutcome,
     RuntimeToolLifecycleReducer,
+    ToolAdmissionRequest,
 )
 from agent_runtime.execution.tool_errors import BudgetExceeded
 from agent_runtime.execution.tool_errors import ToolBudgetRejected
@@ -389,7 +390,13 @@ class RuntimeControlMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: ToolHandler,
     ) -> ToolHandlerResult:
-        """Synchronously execute one graph-visible tool under the common gate."""
+        """Synchronously execute one graph-visible tool under the common gate.
+
+        This lane is never widened. It passes no admission request because
+        ``sync_permit`` has no widened form to select: F6 gates children on
+        ``asyncio`` futures and runs them through an awaitable runner, so a
+        synchronous graph tool call is never a batch child.
+        """
 
         admission = (
             RunControlContext.serial_admission() or self._fallback_serial_admission
@@ -418,12 +425,20 @@ class RuntimeControlMiddleware(AgentMiddleware):
         request: ToolCallRequest,
         handler: AsyncToolHandler,
     ) -> ToolHandlerResult:
-        """Asynchronously execute one graph-visible tool under the common gate."""
+        """Asynchronously execute one graph-visible tool under the common gate.
+
+        The gate is unchanged and unconditional; only its *width* is now a
+        decision. Handing it this call's description is what lets an F6-admitted
+        batch child overlap its siblings up to the width F6 already computed.
+        Every other call — which is every call while F6 is dark — takes the same
+        exclusive permit Step 2 installed, and a call the admission cannot
+        positively identify is one of them.
+        """
 
         admission = (
             RunControlContext.serial_admission() or self._fallback_serial_admission
         )
-        async with admission.async_permit():
+        async with admission.async_permit(self._admission_request(request)):
             identity = self._call_identity(request)
             with RuntimeCallContext.bind(identity):
 
@@ -630,6 +645,25 @@ class RuntimeControlMiddleware(AgentMiddleware):
         if not _succeeded(result):
             return RuntimeToolControlOutcome.ERROR
         return RuntimeToolControlOutcome.SUCCESS
+
+    @classmethod
+    def _admission_request(cls, request: ToolCallRequest) -> ToolAdmissionRequest:
+        """Describe this call for the admission, without validating it.
+
+        Deliberately total: a call missing its provider id or its registered
+        name still produces a request, one that carries an empty identifier no
+        grant can ever authorize, so the unidentifiable case is admitted
+        *serially* rather than refused before the gate. :meth:`_call_identity`
+        still raises on that same malformed call inside the permit, exactly
+        where it did when the permit was unconditionally exclusive.
+        """
+
+        tool_call = request.tool_call
+        return ToolAdmissionRequest(
+            tool_call_id=str(tool_call.get("id", "") or "").strip(),
+            tool_name=str(tool_call.get("name", "") or "").strip(),
+            execution_scope=cls._execution_scope(request),
+        )
 
     @classmethod
     def _call_identity(
