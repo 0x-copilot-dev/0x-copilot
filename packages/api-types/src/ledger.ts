@@ -210,6 +210,23 @@ export type PresentationDecision =
   | "chat_card"
   | "activity_only"
   | "none";
+/**
+ * A surface's identity hue, chosen by NAME so the wire never carries a colour.
+ * `none` is a real choice (render a hollow ring, claim no identity); an ABSENT
+ * `accent` is the different thing — no preference, so the client derives a hue
+ * from `kind`. Mirrors `SurfaceAccent` in ai-backend, `SURFACE_HUES` in
+ * chat-surface, and the `[data-surface-hue]` blocks in the design system, all
+ * four pinned to `work_ledger.json`'s `surface_accent`.
+ */
+export type SurfaceAccent =
+  | "jade"
+  | "sky"
+  | "indigo"
+  | "ember"
+  | "violet"
+  | "plum"
+  | "amber"
+  | "none";
 export type SurfaceSubjectType =
   | "artifact"
   | "stage"
@@ -977,6 +994,8 @@ export interface ArtifactIntent {
   readonly media_type?: string;
   readonly suggested_filename?: string;
   readonly presentation_preference: ArtifactPresentationPreference;
+  /** The author's hue choice, when they expressed one. See `Artifact.accent`. */
+  readonly accent?: SurfaceAccent;
 }
 
 export interface OperationRequest {
@@ -1079,6 +1098,14 @@ export interface Artifact {
   readonly media_type: string;
   readonly current_revision: number;
   readonly created_by: ArtifactAuthor;
+  /**
+   * The identity hue chosen at publication, persisted with the artifact rather
+   * than only emitted on the ledger event: a tab reopened from an earlier turn
+   * reads this record, not that run's event stream. Optional forever —
+   * artifacts predate the field, so absence means "derive from `kind`", never
+   * "invalid".
+   */
+  readonly accent?: SurfaceAccent;
   readonly created_at: string;
   readonly updated_at: string;
   readonly deleted_at?: string;
@@ -1774,11 +1801,20 @@ export interface SurfaceViewState {
 
 /** One surface's folded metadata. `view` is present only once a `view.derived`
  * has landed for the surface. PRD-B2 content hydration: `state` carries the
- * surface's materialized `{spec?, data}`, resolved server-side from the run's
- * events — `null`/absent until a content event has landed (honest "not
- * hydrated", never fabricated). The metadata fields are pinned by the
+ * surface's materialized `{spec?, source?, data}`, resolved server-side from
+ * the run's events — `null`/absent until a content event has landed (honest
+ * "not hydrated", never fabricated). The metadata fields are pinned by the
  * cross-language parity snapshot; `state` is additive and NOT part of it (the
- * pure fold cannot produce content). */
+ * pure fold cannot produce content).
+ *
+ * `state.source` is `{server, tool}` — this snapshot's own `connector` / `op`
+ * restated INSIDE the state, because the client hands only `state` to a
+ * renderer and the sibling metadata fields never become payload. It is the one
+ * thing that can name the tool on a spec-less surface, which is what the
+ * no-spec note reads out. Present whenever the state has content at all; a
+ * source-only state is withheld rather than shipped as a hydrated empty body.
+ * `data` is the connector's response and the ONLY member of the three that is
+ * not the runtime's own output. */
 export interface SurfaceSnapshot {
   surface_id: string;
   kind: SurfaceKind;
@@ -1790,7 +1826,9 @@ export interface SurfaceSnapshot {
   first_sequence_no: number;
   last_sequence_no: number;
   ledger_id: string;
-  /** PRD-B2 hydrated content (`{spec?, data}`); absent/null when not hydrated. */
+  /** PRD-B2 hydrated content (`{spec?, source?, data}`); absent/null when not
+   * hydrated. Untyped on purpose: `data` is connector output of no known shape,
+   * and a renderer narrows it. */
   state?: Record<string, unknown> | null;
 }
 

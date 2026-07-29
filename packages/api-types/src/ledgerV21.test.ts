@@ -101,6 +101,7 @@ const ENTITY_KEYS = {
     "media_type",
     "current_revision",
     "created_by",
+    "accent",
     "created_at",
     "updated_at",
     "deleted_at",
@@ -122,6 +123,7 @@ const ENTITY_KEYS = {
     "media_type",
     "suggested_filename",
     "presentation_preference",
+    "accent",
   ),
   SurfaceSubject: exactKeys<SurfaceSubject>()("subject_type", "subject_id"),
   EffectTarget: exactKeys<EffectTarget>()(

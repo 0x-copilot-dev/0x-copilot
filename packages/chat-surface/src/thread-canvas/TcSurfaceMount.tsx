@@ -14,7 +14,7 @@ import { TIER3_SCHEME } from "../surfaces/SaaSRendererAdapter";
 import { useSurfaceRegistry } from "../surfaces/SurfaceRegistryContext";
 import type { SaaSRendererAdapter } from "../surfaces/SaaSRendererAdapter";
 import type { PendingDiff } from "../surfaces/types";
-import { resolveSurfaceHue } from "../surfaces/surfaceHue";
+import { resolveSurfaceHue, type SurfaceHue } from "../surfaces/surfaceHue";
 import { GenericRecordFallback } from "../surfaces/record/GenericRecordFallback";
 import { projectAt, type SurfacePayload } from "./eventProjector";
 
@@ -90,8 +90,15 @@ export interface TcSurfaceMountProps {
    * uses rather than re-deriving the fallback here. A tab and the card it opens
    * are one surface's identity shown twice; a second copy of the rule is how
    * they would come to disagree.
+   *
+   * Typed as the closed hue set, not `string`. A model-authored accent is
+   * narrowed with `isSurfaceHue` at the boundary it enters (the conversation
+   * record parser), so callers hold a `SurfaceHue` by the time they get here.
+   * `resolveSurfaceHue` still validates at runtime — the mount stays total over
+   * a value that arrived without a type — but the prop no longer throws away a
+   * check its callers can already satisfy.
    */
-  readonly hue?: string;
+  readonly hue?: SurfaceHue;
   readonly transport: Transport;
   readonly state?: unknown;
   readonly pendingDiff?: PendingDiffHandle | null;

@@ -9,6 +9,7 @@ import {
   type SaaSRendererAdapter,
 } from "../surfaces/SaaSRendererAdapter";
 import { clearRegistry, registerAdapter } from "../surfaces/SurfaceRegistry";
+import type { SurfaceHue } from "../surfaces/surfaceHue";
 import type { PendingDiff } from "../surfaces/types";
 import {
   TcSurfaceMount,
@@ -385,7 +386,11 @@ describe("TcSurfaceMount", () => {
       uri: string,
       chosen?: string,
     ): { readonly tab: string | null; readonly mount: string | null } {
-      const choice = chosen === undefined ? {} : { hue: chosen };
+      // `TcSurfaceMount.hue` is now the closed hue set, so the malformed case
+      // below has to lie about its type to get in — which is precisely the
+      // caller this degradation exists for: one that skipped `isSurfaceHue`.
+      // One object still feeds both halves, so tab and card get the same value.
+      const choice = chosen === undefined ? {} : { hue: chosen as SurfaceHue };
       render(
         <>
           <TcTabs

@@ -16,9 +16,15 @@
  *
  * Run: node tools/design-parity/lib/run-surface-language-parity.mjs
  * ========================================================================= */
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, extname, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -313,4 +319,27 @@ const lines = [
   "```",
 ];
 writeFileSync(resolve(OUT, "report.md"), `${lines.join("\n")}\n`);
+
+// Format everything this run wrote, with the version .pre-commit-config.yaml
+// pins. The reports are TRACKED files, so unformatted output turns
+// `lint-and-secrets` red the moment anyone regenerates them — a CI failure
+// caused by running the tool, which is the worst kind to debug. Formatting here
+// rather than expecting each caller to remember it is what makes the runner
+// safe to just run.
+try {
+  const written = readdirSync(OUT)
+    .filter((name) => name.endsWith(".md"))
+    .map((name) => resolve(OUT, name));
+  execFileSync(
+    "npx",
+    ["--yes", "prettier@3.8.3", "--write", "--log-level", "warn", ...written],
+    { cwd: TOOLS, stdio: "inherit" },
+  );
+} catch {
+  console.warn(
+    "[surface-language] prettier pass failed; run " +
+      "`npx prettier@3.8.3 --write tools/design-parity/surfaces/surface-language/out/*.md` " +
+      "before committing or lint-and-secrets will fail.",
+  );
+}
 console.log(`${SURFACE}/out/report.md`);

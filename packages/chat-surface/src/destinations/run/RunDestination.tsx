@@ -2565,25 +2565,31 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
   // Studio in that case, while lifecycle remains canonical whenever it does
   // already carry the same artifact URI.
   const explicitArtifactCanvasTabs = useMemo<readonly CanvasTabEntry[]>(() => {
-    if (!surfacesV2)
-      // An explicit re-open carries no accent of its own: it derives from the
-      // URI, which is the same artifact URI the lifecycle tab would have used,
-      // so the colour matches either way.
-      return [];
+    if (!surfacesV2) return [];
     const lifecycleUris = new Set(v2CanvasTabs.tabs.map((tab) => tab.uri));
     return explicitArtifactTabs.flatMap((tab) => {
       const uri = explicitArtifactTabUri(tab);
-      return lifecycleUris.has(uri)
-        ? []
-        : [
-            {
-              uri,
-              title: explicitArtifactTabTitle(tab),
-              lastSeq: ledger.lastLedgerSeq,
-            },
-          ];
+      if (lifecycleUris.has(uri)) return [];
+      // The SAME lookup the card does, and the reason this is not "derive from
+      // the URI like the lifecycle tab would have". That claim held only while
+      // nothing read a chosen accent; the card now reads `accentByArtifactId`,
+      // so a re-opened artifact WITH an accent would show the chosen colour on
+      // its surface and the URI default on its tab — the exact divergence the
+      // seam exists to remove, reached by the one path that skips it.
+      const parsed = parseArtifactSurfaceUri(uri);
+      const hue =
+        parsed === null ? undefined : accentByArtifactId.get(parsed.artifactId);
+      return [
+        {
+          uri,
+          title: explicitArtifactTabTitle(tab),
+          lastSeq: ledger.lastLedgerSeq,
+          ...(hue === undefined ? {} : { hue }),
+        },
+      ];
     });
   }, [
+    accentByArtifactId,
     surfacesV2,
     v2CanvasTabs.tabs,
     explicitArtifactTabs,

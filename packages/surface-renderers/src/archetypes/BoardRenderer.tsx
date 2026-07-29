@@ -22,6 +22,7 @@ import {
   type SurfaceColumn,
   type SurfaceDiff,
   type SurfaceFieldChange,
+  type SurfaceFieldFormat,
   type SurfaceSpec,
   type SurfaceState,
 } from "../_shared/specTypes";
@@ -116,6 +117,148 @@ interface MetaEntry {
 }
 
 /**
+ * The spec fields this renderer reads, narrowed ONCE at the boundary.
+ *
+ * `SurfaceSpec` is an annotation, not a guarantee. `specFromState` admits a
+ * value on two checks — a string `archetype` and a string `title_path` — and
+ * `applySurfaceEvent` merges `payload.state` / `payload.result` verbatim with no
+ * allow-list, so every OTHER field on a spec that reaches this file is untrusted
+ * tool output wearing the annotation.
+ *
+ * The annotation is exactly what kept the holes invisible. A tool emitting
+ * `spec:{archetype:"board",title_path:"x",columns:5}` type-checked at every call
+ * site and threw `columns is not iterable` on the rest destructure below, taking
+ * the whole surface down — in a file whose "never throws" contract the mark's
+ * provenance argument leans on. Four shapes threw: a non-list `columns` (both
+ * here and in the diff), a null entry inside `columns` (`reading 'path'`), and a
+ * non-string `label` on either a column or the link (React: "Objects are not
+ * valid as a React child").
+ *
+ * Narrowing here rather than defensively at each read is what makes the contract
+ * checkable: past this point the renderer reads ordinary typed values, and there
+ * is exactly one place to audit. It also removes a coupling the old code
+ * maintained by hand — `cardMarks` and `renderWithSpec` each read
+ * `spec.group_by_path` and had to agree on what an empty one meant. They now
+ * read the same narrowed value, so they cannot disagree.
+ */
+interface BoardView {
+  /** `specFromState` already guarantees a string; carried here so the render
+   * path reads one narrowed value and never reaches back into the raw spec. */
+  readonly titlePath: string;
+  readonly itemsPath: string | undefined;
+  readonly groupPath: string | undefined;
+  /**
+   * Positions are PRESERVED — a malformed entry becomes a hole rather than
+   * being compacted away.
+   *
+   * The first column is the card TITLE and every later one is a field, so
+   * dropping entry 0 would silently promote entry 1 from field to title: a
+   * wrong render where an absent one was available. A hole falls through the
+   * same branches an absent column already had.
+   */
+  readonly columns: readonly (SurfaceColumn | undefined)[];
+  readonly link: BoardLinkView | undefined;
+}
+
+interface BoardLinkView {
+  readonly label: string;
+  readonly urlPath: string | undefined;
+}
+
+const NO_COLUMNS: readonly (SurfaceColumn | undefined)[] = [];
+
+function boardView(spec: SurfaceSpec): BoardView {
+  return {
+    titlePath: specString(spec.title_path) ?? "",
+    itemsPath: specString(spec.items_path),
+    groupPath: specString(spec.group_by_path),
+    columns: specColumns(spec.columns),
+    link: specLink(spec.link),
+  };
+}
+
+/**
+ * A path or label field of an untrusted spec, or `undefined`.
+ *
+ * Non-strings are ABSENT, never coerced. `String({})` is "[object Object]",
+ * which would be painted as a label or handed to `resolvePath` as an accessor —
+ * a wrong answer where an absent one is available, and the whole reason
+ * `toolNameFromState` makes the same call one layer up.
+ *
+ * The empty string is absent for the reason it always was on this surface: an
+ * empty `group_by_path` groups nothing and an empty `items_path` addresses
+ * nothing. Folding `""` in here is what lets both readers of `groupPath` test it
+ * the same way.
+ */
+function specString(value: unknown): string | undefined {
+  return typeof value === "string" && value !== "" ? value : undefined;
+}
+
+function specColumns(value: unknown): readonly (SurfaceColumn | undefined)[] {
+  return Array.isArray(value) ? value.map(specColumn) : NO_COLUMNS;
+}
+
+/**
+ * One column, or `undefined` when the entry is not one.
+ *
+ * A column with no usable `path` addresses nothing — `resolvePath` would return
+ * `undefined` for it at every card — so it is a hole, and the type says so
+ * rather than leaving each reader to discover it.
+ */
+function specColumn(value: unknown): SurfaceColumn | undefined {
+  if (value === null || typeof value !== "object") {
+    return undefined;
+  }
+  const entry = value as { label?: unknown; path?: unknown; format?: unknown };
+  const path = specString(entry.path);
+  if (path === undefined) {
+    return undefined;
+  }
+  return {
+    // A label the tool could not spell is no label — but the value it names is
+    // still a real fact, so the entry survives without one and `metaEntries`
+    // paints the value bare rather than dropping the fact or painting
+    // "[object Object]" as its name.
+    label: specString(entry.label) ?? "",
+    path,
+    format: specFormat(entry.format),
+  };
+}
+
+const FIELD_FORMATS: ReadonlySet<string> = new Set<SurfaceFieldFormat>([
+  "text",
+  "number",
+  "currency",
+  "datetime",
+  "badge",
+  "user",
+]);
+
+/** The format hint is purely visual. An unrecognised one falls through to plain
+ * text rather than being asserted into the union — `formatValue`'s `default`
+ * would swallow it either way, and a cast that can be wrong is worse than a set
+ * membership test that cannot. */
+function specFormat(value: unknown): SurfaceFieldFormat | undefined {
+  return typeof value === "string" && FIELD_FORMATS.has(value)
+    ? (value as SurfaceFieldFormat)
+    : undefined;
+}
+
+/** A link is a link only when it is an object. A string `link` used to render as
+ * an empty inert row — a band of chrome stating nothing — because `"…".label`
+ * and `"…".url_path` are both `undefined`. */
+function specLink(value: unknown): BoardLinkView | undefined {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const link = value as { label?: unknown; url_path?: unknown };
+  return {
+    label: specString(link.label) ?? "",
+    urlPath: specString(link.url_path),
+  };
+}
+
+/**
  * The facts a card actually has, in spec column order.
  *
  * Columns whose value resolves to nothing are DROPPED, not rendered empty. A
@@ -127,10 +270,15 @@ interface MetaEntry {
  */
 function metaEntries(
   item: unknown,
-  columns: readonly SurfaceColumn[],
+  columns: readonly (SurfaceColumn | undefined)[],
 ): readonly MetaEntry[] {
   const entries: MetaEntry[] = [];
   columns.forEach((column, index) => {
+    // A hole left by `specColumn` — an entry that was not a column. Skipped for
+    // the same reason an empty value is: there is no fact here to state.
+    if (column === undefined) {
+      return;
+    }
     const value = formatValue(resolvePath(item, column.path), column.format);
     if (value === "") {
       return;
@@ -161,6 +309,8 @@ export function BoardRenderer(
 ): ReactElement {
   const spec = specFromState(state);
   const data = dataFromState(state);
+  // Narrowed once, and both readers take the SAME view — see `BoardView`.
+  const view = spec === undefined ? undefined : boardView(spec);
   return (
     <article
       style={pageStyle}
@@ -170,8 +320,8 @@ export function BoardRenderer(
       aria-label="Board surface"
     >
       <section style={cardStyle}>
-        {spec
-          ? renderWithSpec(spec, data, cardMarks(trustedChanges, spec))
+        {view
+          ? renderWithSpec(view, data, cardMarks(trustedChanges, view))
           : renderFallback(state, data)}
       </section>
     </article>
@@ -217,14 +367,14 @@ export function BoardRenderer(
  */
 function cardMarks(
   trustedChanges: readonly SurfaceFieldChange[] | undefined,
-  spec: SurfaceSpec,
+  view: BoardView,
 ): ReadonlyMap<number, CardMark> {
-  const itemsPath = spec.items_path;
-  if (!Array.isArray(trustedChanges) || !itemsPath) {
+  const itemsPath = view.itemsPath;
+  if (!Array.isArray(trustedChanges) || itemsPath === undefined) {
     return NO_MARKS;
   }
   const prefix = `${itemsPath}.`;
-  const groupPath = spec.group_by_path;
+  const groupPath = view.groupPath;
   const marks = new Map<number, CardMark>();
   for (const change of trustedChanges) {
     if (change === null || typeof change !== "object") {
@@ -249,13 +399,17 @@ function cardMarks(
     marks.set(index, {
       transition:
         prior?.transition ??
-        // Truthy, not `!== undefined`, and it has to match `renderWithSpec`'s
-        // test exactly: a spec with `group_by_path: ""` groups nothing, so
-        // every card sits in "Ungrouped" and no card can move between lanes.
-        // Under `!== undefined` the empty path also matched the empty `tail` of
-        // a bare `cards.0` change, and the chip stated the whole card object as
-        // its destination — "→ {"title":"…","status":"…"}".
-        (groupPath && tail === groupPath
+        // A spec with `group_by_path: ""` groups nothing, so every card sits in
+        // "Ungrouped" and no card can move between lanes. That empty path also
+        // matched the empty `tail` of a bare `cards.0` change once, and the chip
+        // stated the whole card object as its destination —
+        // "→ {"title":"…","status":"…"}".
+        //
+        // The guard used to be a truthiness test that had to be kept in step by
+        // hand with `renderWithSpec`'s. It no longer does: `specString` folds
+        // `""` into `undefined` before either reader sees it, so "no lane axis"
+        // is one value with one spelling.
+        (groupPath !== undefined && tail === groupPath
           ? transitionLabel((change as { new?: unknown }).new)
           : undefined),
     });
@@ -271,29 +425,33 @@ function transitionLabel(value: unknown): string | undefined {
 }
 
 function renderWithSpec(
-  spec: SurfaceSpec,
+  view: BoardView,
   data: unknown,
   marks: ReadonlyMap<number, CardMark>,
 ): ReactElement {
-  const title = formatValue(resolvePath(data, spec.title_path));
-  const rawItems = spec.items_path
-    ? resolvePath(data, spec.items_path)
-    : undefined;
+  const title = formatValue(resolvePath(data, view.titlePath));
+  const rawItems =
+    view.itemsPath === undefined
+      ? undefined
+      : resolvePath(data, view.itemsPath);
   const items = Array.isArray(rawItems) ? rawItems : [];
   const visibleItems = items.slice(0, CARD_RENDER_CAP);
   const truncated = items.length > CARD_RENDER_CAP;
-  const columns: readonly SurfaceColumn[] = spec.columns ?? [];
-  const [titleColumn, ...fieldColumns] = columns;
-  const groupPath = spec.group_by_path;
+  // Always a real array — `specColumns` guarantees it, which is what keeps this
+  // rest destructure from throwing `columns is not iterable` on a spec that
+  // spelled `columns` as a number.
+  const [titleColumn, ...fieldColumns] = view.columns;
+  const groupPath = view.groupPath;
 
   // Lanes keep first-appearance order. Each card carries its index in the
   // original list so a change mark survives grouping; the `-card-N` testid
   // index stays lane-local, which is what it has always meant.
   const lanes = new Map<string, LaneCard[]>();
   visibleItems.forEach((item, index) => {
-    const laneKey = groupPath
-      ? formatValue(resolvePath(item, groupPath)) || UNGROUPED
-      : UNGROUPED;
+    const laneKey =
+      groupPath === undefined
+        ? UNGROUPED
+        : formatValue(resolvePath(item, groupPath)) || UNGROUPED;
     const bucket = lanes.get(laneKey);
     if (bucket) {
       bucket.push({ item, index });
@@ -343,6 +501,34 @@ function renderWithSpec(
                   <div
                     key={index}
                     style={cardChromeStyle(isChanged)}
+                    // A HANDLE on the changed register, not the mark.
+                    //
+                    // The mark itself is the inline border and inset bar in
+                    // `cardChromeStyle`: no stylesheet matches `[data-changed]`,
+                    // and no host or renderer reads it at runtime.
+                    //
+                    // It is kept for two reasons, and the second one is checked.
+                    // It is the package's shared spelling for this state
+                    // (`DiffFieldRow`, `SheetDiff` and `OpportunityDiff` all
+                    // emit it), and it is a real load-bearing handle for static
+                    // markup: `tools/design-parity/lib/render-live-surface-
+                    // language.test.tsx` asserts `data-changed="true"` is absent
+                    // on the board at rest and appears exactly once on the
+                    // changed board. That harness reads `renderToStaticMarkup`
+                    // output, where there are no computed styles to read a
+                    // colour back out of — so DELETING THIS ATTRIBUTE BREAKS THE
+                    // PARITY HARNESS. It is unused-looking, not unused.
+                    //
+                    // What it must never be is the PROOF. A test asserting only
+                    // this attribute still passes when a forged change list
+                    // paints a real accent bar and merely loses the attribute —
+                    // measured, not assumed: the three provenance tests as they
+                    // shipped before this change all passed against a renderer
+                    // that let tool output paint the chrome while emitting no
+                    // attribute, no off-screen word and no chip. So every
+                    // assertion about the mark checks the CHROME first and
+                    // checks this alongside it, and the handle cannot drift away
+                    // from what ships.
                     data-changed={isChanged ? "true" : undefined}
                     data-testid={`board-lane-${laneIndex}-card-${cardIndex}`}
                   >
@@ -367,7 +553,7 @@ function renderWithSpec(
                             resolvePath(item, titleColumn.path),
                             titleColumn.format,
                           )
-                        : formatValue(resolvePath(item, spec.title_path))}
+                        : formatValue(resolvePath(item, view.titlePath))}
                     </div>
                     {meta.length > 0 || transition !== undefined ? (
                       <div
@@ -376,9 +562,18 @@ function renderWithSpec(
                       >
                         {meta.map((entry) => (
                           <span key={entry.key} style={cardMetaItemStyle}>
-                            <span style={cardMetaLabelStyle}>
-                              {entry.label}
-                            </span>
+                            {/* A column whose spec gave it no usable label
+                                still states its VALUE — the fact is real, only
+                                its name is missing. The empty span is dropped
+                                rather than rendered, on the same reasoning as
+                                the empty-value case in `metaEntries`: it would
+                                otherwise leave the item's 4px gap opening onto
+                                nothing. */}
+                            {entry.label === "" ? null : (
+                              <span style={cardMetaLabelStyle}>
+                                {entry.label}
+                              </span>
+                            )}
                             <span style={cardMetaValueStyle}>
                               {entry.value}
                             </span>
@@ -412,10 +607,14 @@ function renderWithSpec(
           Showing {CARD_RENDER_CAP} of {items.length} cards.
         </div>
       ) : null}
-      {spec.link ? (
+      {view.link ? (
         <SurfaceLinkRow
-          label={spec.link.label}
-          value={resolvePath(data, spec.link.url_path)}
+          label={view.link.label}
+          value={
+            view.link.urlPath === undefined
+              ? undefined
+              : resolvePath(data, view.link.urlPath)
+          }
         />
       ) : null}
     </>
@@ -466,9 +665,16 @@ function renderFallback(state: unknown, data: unknown): ReactElement {
 export function BoardDiffRenderer(diff: SurfaceDiff | unknown): ReactElement {
   const spec = specFromState(diff);
   const changes = changesFromDiff(diff);
-  const labelFor = new Map<string, string>(
-    (spec?.columns ?? []).map((column) => [column.path, column.label]),
-  );
+  // The same narrowing the current view uses, and for the same reason: this
+  // `.map` threw `((intermediate value) ?? []).map is not a function` on a spec
+  // whose `columns` was a number, and handed `DiffFieldRow` a non-string label
+  // — a React child throw — on a spec whose column label was an object.
+  const labelFor = new Map<string, string>();
+  for (const column of specColumns(spec?.columns)) {
+    if (column !== undefined) {
+      labelFor.set(column.path, column.label);
+    }
+  }
   return (
     <article
       style={pageStyle}
@@ -488,7 +694,11 @@ export function BoardDiffRenderer(diff: SurfaceDiff | unknown): ReactElement {
               <DiffFieldRow
                 key={`${change.field}:${index}`}
                 fieldKey={change.field}
-                label={labelFor.get(change.field) ?? change.field}
+                // `||`, not `??`: a column whose spec gave it no usable label
+                // narrows to `""`, and a row with a blank label rail states
+                // nothing about what changed. The field path is the machine's
+                // own name for it, which is the honest fallback.
+                label={labelFor.get(change.field) || change.field}
                 previousValue={formatValue(change.old)}
                 nextValue={formatValue(change.new)}
               />
