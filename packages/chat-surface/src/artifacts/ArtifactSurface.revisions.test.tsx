@@ -14,6 +14,17 @@ import { ArtifactSurface } from "./ArtifactSurface";
 
 const ARTIFACT_ID = "art_550e8400-e29b-41d4-a716-446655440000";
 
+/** Independently recomputed here, so the assertion is not the code's own maths. */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest(
+    "SHA-256",
+    new Uint8Array(bytes).buffer,
+  );
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
 function revision(number: number): ArtifactRevision {
   return {
     artifact_id: ARTIFACT_ID,
@@ -133,8 +144,18 @@ describe("ArtifactSurface revision controls", () => {
     expect(request).toMatchObject({
       artifactId: ARTIFACT_ID,
       parentRevision: 2,
-      expectedDigest: "2".repeat(64),
     });
+    // `expectedDigest` is a transit-integrity check the server runs over the
+    // INCOMING bytes. This previously asserted the parent's digest ("2"x64),
+    // which is what the surface actually sent — so every real edit failed its
+    // own integrity check with a 422, invisible for as long as the sealed-run
+    // 409 fired first. The invariant, not a literal, is what matters here.
+    expect(request.expectedDigest).not.toBe("2".repeat(64));
+    if (request.expectedDigest !== undefined) {
+      expect(request.expectedDigest).toBe(
+        await sha256Hex(new TextEncoder().encode("title\nold line\n")),
+      );
+    }
     expect(Array.from(request.content)).toEqual(
       Array.from(new TextEncoder().encode("title\nold line\n")),
     );

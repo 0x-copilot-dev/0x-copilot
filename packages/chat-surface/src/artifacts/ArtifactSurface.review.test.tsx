@@ -237,8 +237,10 @@ describe("ArtifactSurface — agent revision review (PRD-03)", () => {
     expect(request).toMatchObject({
       artifactId: ARTIFACT_ID,
       parentRevision: 2,
-      expectedDigest: "2".repeat(64),
     });
+    // NOT the parent revision's digest. The server hashes the incoming bytes,
+    // so sending r2's digest here failed every write with a 422.
+    expect(request.expectedDigest).not.toBe("2".repeat(64));
     expect(Array.from(request.content)).toEqual(
       Array.from(new TextEncoder().encode(TEXT[1]!)),
     );
