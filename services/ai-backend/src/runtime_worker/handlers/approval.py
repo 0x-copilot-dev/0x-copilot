@@ -111,7 +111,13 @@ from runtime_api.schemas import (
     RunRecord,
 )
 from runtime_worker.audit import WorkerAuditEmitter
-from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.capability_discovery_composition import (
+    build_capability_discovery_composer,
+)
+from runtime_worker.dependencies import (
+    DefaultRuntimeDependenciesFactory,
+    compose_capability_discovery,
+)
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.handlers.run import RuntimeRunHandler
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -194,6 +200,7 @@ class RuntimeApprovalHandler:
         artifact_service: object | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
+        run_control_decision_store: object | None = None,
         model_invocation_store: ModelInvocationStorePort | None = None,
         model_invocation_composer: ModelInvocationWorkerComposer | None = None,
         usage_recorder: UsageRecorder | None = None,
@@ -238,13 +245,27 @@ class RuntimeApprovalHandler:
             if user_policies_resolver is not None
             else None
         )
+        # Single source of truth for the desktop file-store gate shared with the
+        # run handler. On non-file backends every method returns ``None`` so the
+        # resume path stays byte-identical to before (offloader ``None`` → inline).
+        # Built before the dependency factory because the F3 schema-artifact
+        # writer is read off it.
+        self._file_store_wiring = FileStoreWorkerWiring(self.event_store)
         # Same pattern as ``RuntimeRunHandler``: caller-supplied factory wins
         # (tests inject their own); otherwise the default factory threads the
-        # process-wide MCP discovery cache through ``RuntimeDependencies``.
+        # process-wide MCP discovery cache through ``RuntimeDependencies``, and
+        # the same F3 composer the run path uses, so a resumed run's bridge is
+        # wired identically to the one its first turn had.
         self.dependencies_factory = dependencies_factory or (
             DefaultRuntimeDependenciesFactory(
                 self.settings,
                 mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+                capability_discovery=build_capability_discovery_composer(
+                    decision_store=run_control_decision_store,
+                    schema_artifact_writer=(
+                        self._file_store_wiring.schema_artifact_writer()
+                    ),
+                ),
             )
         )
         self.agent_factory = agent_factory
@@ -258,10 +279,6 @@ class RuntimeApprovalHandler:
             event_producer=self.event_producer,
             terminal_observer=terminal_run_observer,
         )
-        # Single source of truth for the desktop file-store gate shared with the
-        # run handler. On non-file backends every method returns ``None`` so the
-        # resume path stays byte-identical to before (offloader ``None`` → inline).
-        self._file_store_wiring = FileStoreWorkerWiring(self.event_store)
         # Mirror the run handler: on the desktop file store, oversized tool
         # output produced *after* an approval is offloaded to the object store
         # instead of persisted inline in ``events.jsonl``. ``None`` everywhere
@@ -471,6 +488,15 @@ class RuntimeApprovalHandler:
                 if prepared_run_control is not None
                 else None
             ),
+        )
+        # The resumed run composes F3 exactly as its first turn did: the
+        # authorized card snapshot is awaited off this run's own registry and
+        # the catalog is re-projected under the same reference key. Skipping it
+        # here is what bug R1 was — one path wiring a seam the other did not.
+        dependencies = await compose_capability_discovery(
+            self.dependencies_factory,
+            dependencies,
+            running.runtime_context,
         )
         mcp_display_registry: dict[str, ToolDisplayTemplate] = {}
         mcp_display_token = McpDisplayRegistryContext.bind_for_run(mcp_display_registry)

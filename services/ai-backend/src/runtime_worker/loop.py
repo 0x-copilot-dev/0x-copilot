@@ -30,7 +30,10 @@ from agent_runtime.api.prompt_observation_store import (
 )
 from agent_runtime.api.run_termination import TerminalRunObserverPort
 from agent_runtime.harness_quality.ports import EvaluationRepositoryPort
-from agent_runtime.control_plane.ports import RunControlSnapshotStorePort
+from agent_runtime.control_plane.ports import (
+    RunControlDecisionStorePort,
+    RunControlSnapshotStorePort,
+)
 from agent_runtime.prompts.observation import PromptObservationStorePort
 from agent_runtime.execution.model_invocation.journal import ModelInvocationStorePort
 from agent_runtime.execution.model_invocation.circuit_health import (
@@ -197,6 +200,7 @@ class RuntimeWorker:
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         run_control_snapshot_store: RunControlSnapshotStorePort | None = None,
+        run_control_decision_store: object | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
         model_invocation_store: ModelInvocationStorePort | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
@@ -290,7 +294,19 @@ class RuntimeWorker:
                 event_store=self.event_store,
                 environment=worker_environment,
             )
+        # The decision journal the F3 discovery recorder appends to. The
+        # canonical ``EventJournalRunControlStore`` satisfies both control-plane
+        # ports, so a deployment that wired only the snapshot store already has
+        # the decision half — reusing that object keeps snapshots and decisions
+        # on one journal rather than opening a second writer over the same
+        # events. The port is ``runtime_checkable``, so this narrows on the
+        # append/list contract, never on a concrete adapter.
+        if run_control_decision_store is None and isinstance(
+            run_control_snapshot_store, RunControlDecisionStorePort
+        ):
+            run_control_decision_store = run_control_snapshot_store
         self.run_control_builder = run_control_builder
+        self.run_control_decision_store = run_control_decision_store
         self.prompt_observation_store = prompt_observation_store
         self.model_invocation_store = model_invocation_store
         self._provider_circuit_health = ProcessLocalProviderCircuitHealth()
@@ -394,6 +410,7 @@ class RuntimeWorker:
             capability_env=capability_env,
             run_control_builder=self.run_control_builder,
             prompt_observation_store=self.prompt_observation_store,
+            run_control_decision_store=self.run_control_decision_store,
             model_invocation_store=self.model_invocation_store,
             model_invocation_composer=model_invocation_composer,
             usage_recorder=usage_recorder,
@@ -444,6 +461,7 @@ class RuntimeWorker:
             artifact_service=artifact_service,
             run_control_builder=self.run_control_builder,
             prompt_observation_store=self.prompt_observation_store,
+            run_control_decision_store=self.run_control_decision_store,
             model_invocation_store=self.model_invocation_store,
             model_invocation_composer=model_invocation_composer,
             usage_recorder=usage_recorder,

@@ -162,7 +162,13 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
 )
 from runtime_worker.audit import WorkerAuditEmitter
-from runtime_worker.dependencies import DefaultRuntimeDependenciesFactory
+from runtime_worker.capability_discovery_composition import (
+    build_capability_discovery_composer,
+)
+from runtime_worker.dependencies import (
+    DefaultRuntimeDependenciesFactory,
+    compose_capability_discovery,
+)
 from runtime_worker.file_store_wiring import FileStoreWorkerWiring
 from runtime_worker.workspace_backend_wiring import WorkspaceBackendWorkerWiring
 from runtime_worker.run_metrics import AssistantRunMetrics
@@ -269,6 +275,7 @@ class RuntimeRunHandler:
         capability_env: Mapping[str, str] | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
         prompt_observation_store: PromptObservationStorePort | None = None,
+        run_control_decision_store: object | None = None,
         model_invocation_store: ModelInvocationStorePort | None = None,
         model_invocation_composer: ModelInvocationWorkerComposer | None = None,
         model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
@@ -335,6 +342,12 @@ class RuntimeRunHandler:
             DefaultRuntimeDependenciesFactory(
                 self.settings,
                 mcp_discovery_cache=mcp_discovery_cache,  # type: ignore[arg-type]
+                capability_discovery=build_capability_discovery_composer(
+                    decision_store=run_control_decision_store,
+                    schema_artifact_writer=(
+                        self._file_store_worker_wiring.schema_artifact_writer()
+                    ),
+                ),
             )
         )
         self.agent_factory = agent_factory
@@ -631,6 +644,17 @@ class RuntimeRunHandler:
                 workspace_backend=workspace_backend,
                 run=run,
                 mcp_gateway_services=mcp_gateway_services,
+            )
+            # F3 needs the run's authorized MCP card snapshot, which only exists
+            # once the registry above does and can only be obtained by awaiting
+            # it. Composing here — after the run-control binding is installed
+            # and against the run's own registry — is what makes the deferred
+            # posture reachable at all. A deployment with no F3 activation
+            # configured returns immediately and lists nothing.
+            dependencies = await compose_capability_discovery(
+                self.dependencies_factory,
+                dependencies,
+                command.runtime_context,
             )
             mcp_display_token = McpDisplayRegistryContext.bind_for_run(
                 mcp_display_registry

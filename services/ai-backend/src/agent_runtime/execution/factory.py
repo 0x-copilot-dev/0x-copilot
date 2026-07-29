@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
+    CapabilityBridgeComposition,
     RuntimeDependencies,
     RuntimeErrorCode,
 )
@@ -278,6 +279,7 @@ async def _assemble_harness(
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
             capability_activation=runtime_dependencies.capability_activation,
             capability_catalog=runtime_dependencies.capability_catalog,
+            capability_bridge=runtime_dependencies.capability_bridge,
             runtime_context=runtime_context,
         )
         # Display-schema decoration precedes policy wrapping so a rejected
@@ -480,6 +482,7 @@ def _model_visible_tools(
     publish_artifact_tool: object | None = None,
     capability_activation: object | None = None,
     capability_catalog: object | None = None,
+    capability_bridge: object | None = None,
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     model_tools = [
@@ -503,6 +506,14 @@ def _model_visible_tools(
         if isinstance(mcp_discovery_cache, McpDiscoveryCachePort)
         else None
     )
+    # Bound below when the registry exposes the MCP seam, and read again by the
+    # F3 bridge composition. The bridge borrows *these* instances rather than
+    # building its own: the loader is what its bounded second tier opens servers
+    # through, and this dispatcher is the single route by which an inner
+    # operation reaches the Operation Gateway. A second construction here would
+    # be a second dispatch route in everything but name.
+    loader: McpLoader | None = None
+    mcp_dispatcher: CallMcpTool | None = None
     if callable(getattr(mcp_registry, "resolve_server", None)):
         loader = McpLoader(mcp_registry, cache=typed_discovery_cache)  # type: ignore[arg-type]
         model_tools.append(
@@ -515,20 +526,16 @@ def _model_visible_tools(
                 LoadMcpServerInput,
             )
         )
-        model_tools.append(
-            _structured_tool(
-                CallMcpTool(
-                    registry=mcp_registry,  # type: ignore[arg-type]
-                    loader=loader,
-                    runtime_context=runtime_context,
-                    gate=_tool_access_gate(
-                        auth_session_creator=auth_session_creator,
-                        runtime_context=runtime_context,
-                    ),
-                ),
-                McpToolCallRequest,
-            )
+        mcp_dispatcher = CallMcpTool(
+            registry=mcp_registry,  # type: ignore[arg-type]
+            loader=loader,
+            runtime_context=runtime_context,
+            gate=_tool_access_gate(
+                auth_session_creator=auth_session_creator,
+                runtime_context=runtime_context,
+            ),
         )
+        model_tools.append(_structured_tool(mcp_dispatcher, McpToolCallRequest))
     if auth_session_creator is not None:
         model_tools.append(
             _structured_tool(
@@ -582,6 +589,10 @@ def _model_visible_tools(
         _capability_bridge_tools(
             activation=capability_activation,
             catalog=capability_catalog,
+            bridge=capability_bridge,
+            loader=loader,
+            dispatcher=mcp_dispatcher,
+            local_tool_names=local_tool_names,
             runtime_context=runtime_context,
         )
     )
@@ -621,6 +632,10 @@ def _capability_bridge_tools(
     *,
     activation: object | None,
     catalog: object | None,
+    bridge: object | None = None,
+    loader: McpLoader | None = None,
+    dispatcher: CallMcpTool | None = None,
+    local_tool_names: frozenset[str] = frozenset(),
     runtime_context: AgentRuntimeContext,
 ) -> tuple[object, ...]:
     """Return the F3 bridge tools this run may expose, or nothing at all.
@@ -633,14 +648,25 @@ def _capability_bridge_tools(
     tool composition keeps exactly one owner and the discovery package keeps
     importing no model-framework type.
 
-    Every unresolved input narrows to zero bridge tools and leaves the run on
-    the untouched pre-F3 disclosure path:
+    What this function adds beyond delegation is the *join* the registrar cannot
+    perform for itself.  A bridge that can act needs one run-scoped disclosure
+    ledger written by search and read by the executor, and it needs the loader
+    and the MCP dispatcher — which exist only here, one per run, and are handed
+    over rather than rebuilt.  :meth:`CapabilityBridgeSeam.compose` owns the
+    ledger, and the executor is constructed from ``seam.disclosure`` itself, so
+    "the registrar and the executor share one ledger" is a property of how this
+    code is written rather than a rule someone has to remember.
+
+    Every unresolved input narrows and leaves the run further back on the
+    pre-F3 path, never further forward:
 
     * an absent activation or catalog — the production default while F3 is
       dark — registers nothing and does not even import the discovery package,
       so the dark path's composed surface and import graph are unchanged;
     * a value that is not the expected typed contract registers nothing rather
-      than guessing at a posture; and
+      than guessing at a posture;
+    * an absent bridge composition, minter, or loader registers the catalog-only
+      search and describe pair, exactly as before this seam existed; and
     * a registrar failure degrades to the same empty surface, because a dark
       feature must never widen a tool surface *or* fail an otherwise healthy
       run.  The failure is logged, never surfaced to the model.
@@ -662,11 +688,29 @@ def _capability_bridge_tools(
             "keeping the pre-F3 disclosure path."
         )
         return ()
+    composition = _capability_bridge_composition(bridge)
     try:
+        seam = _capability_bridge_seam(
+            catalog=catalog,
+            loader=loader,
+            composition=composition,
+        )
         registrations = CapabilityBridgeRegistrar.registrations_for(
             activation=activation,
             catalog=catalog,
             runtime_context=runtime_context,
+            seam=seam,
+            executor=_capability_executor(
+                seam=seam,
+                loader=loader,
+                dispatcher=dispatcher,
+            ),
+            revalidation=None if composition is None else composition.revalidation,
+            schema_artifacts=(
+                None if composition is None else composition.schema_artifacts
+            ),
+            observer=None if composition is None else composition.observer,
+            local_tool_names=local_tool_names,
         )
     except Exception:
         _LOGGER.warning(
@@ -678,6 +722,92 @@ def _capability_bridge_tools(
     return tuple(
         _structured_tool(registration.adapter, registration.args_schema)
         for registration in registrations
+    )
+
+
+def _capability_bridge_composition(
+    bridge: object | None,
+) -> CapabilityBridgeComposition | None:
+    """Narrow the injected bridge inputs, or discard them entirely.
+
+    A wrongly typed value is treated exactly like an absent one.  Reading
+    attributes off whatever arrived would let a partially-shaped object mount
+    half a seam, and half a seam is the state where search discloses references
+    that nothing can dispatch.
+    """
+
+    if bridge is None:
+        return None
+    if isinstance(bridge, CapabilityBridgeComposition):
+        return bridge
+    _LOGGER.warning(
+        "Capability bridge composition is not the expected contract; "
+        "keeping the catalog-only bridge."
+    )
+    return None
+
+
+def _capability_bridge_seam(
+    *,
+    catalog: object,
+    loader: McpLoader | None,
+    composition: CapabilityBridgeComposition | None,
+) -> object | None:
+    """Compose this run's second tier and the ledger it discloses into.
+
+    Both inputs are required and neither is invented here.  The minter is the
+    composition root's — keyed identically to the builder that projected
+    ``catalog``, which is what makes an expanded reference indistinguishable
+    from a catalog member — and the loader is the run's own, so tier two opens
+    servers through the same bounded descriptor read ``load_mcp_server`` uses.
+    Missing either one composes no seam, and the registrar then mounts the
+    catalog-only search it mounted before.
+    """
+
+    if composition is None or composition.minter is None or loader is None:
+        return None
+    from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+        CapabilityBridgeSeam,
+    )
+
+    return CapabilityBridgeSeam.compose(
+        catalog=catalog,  # type: ignore[arg-type]
+        loader=loader,
+        minter=composition.minter,
+        limits=composition.expansion_limits,
+        observer=composition.expansion_observer,
+    )
+
+
+def _capability_executor(
+    *,
+    seam: object | None,
+    loader: McpLoader | None,
+    dispatcher: CallMcpTool | None,
+) -> object | None:
+    """Build the one non-model route a disclosed capability may be dispatched by.
+
+    ``bindings`` is ``seam.disclosure`` — the *same object* the registrar hands
+    the catalog access, never a second ledger built from the same catalog.  A
+    foreign ledger is refused downstream, but relying on that refusal would mean
+    the safe construction is merely the one that happens to pass; taking it off
+    the seam makes it the only one available.
+
+    ``dispatcher`` is this run's own ``CallMcpTool``.  The executor type-checks
+    it, so a substitute callable cannot quietly become a parallel route to the
+    Operation Gateway, and there is nothing to substitute here anyway.
+    """
+
+    if seam is None or loader is None or dispatcher is None:
+        return None
+    from agent_runtime.capabilities.discovery.executor import (  # noqa: PLC0415
+        GatewayCapabilityExecutor,
+    )
+
+    return GatewayCapabilityExecutor(
+        bindings=seam.disclosure,  # type: ignore[attr-defined]
+        loader=loader,
+        dispatcher=dispatcher,
     )
 
 
