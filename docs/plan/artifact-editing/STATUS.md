@@ -34,15 +34,32 @@ Design change made during implementation: the PRD had proposed an
 wrong — the artifact record already carries its conversation, so the field would
 have added a forgeable input for a derivable fact. Dropped; PRD updated to match.
 
-## PRD-02 — `artifact.revise` + tab identity
+## PRD-02 — `artifact.revise` + tab identity ✅ (commit `9fa5b836`)
 
-- [ ] "Add one more row" produces revision 2 of the same artifact and one tab
-- [ ] Tabs show the artifact's real title
-- [ ] Model cannot clobber a user revision (CAS enforced)
-- [ ] Conformance asserts human/model surface parity for the artifact domain
-- [ ] ai-backend / chat-surface green
+- [x] "Add one more row" produces revision 2 of the same artifact —
+      `test_revision_appends_to_the_same_artifact` asserts one artifact id,
+      `parent_revision: 1`, and that the fake fails loudly if publication is
+      called instead. The tab follows because the projection already keys on
+      `artifact_id`. _Live re-verification pending._
+- [x] Tabs show the artifact's real title — the Run cockpit overlays the
+      conversation-canvas record's title onto its own tabs, so both derivations
+      agree. chat-surface suite green including the tab-label contract test.
+- [x] Model cannot clobber a user revision — `parent_revision` is required and
+      `test_a_lost_compare_and_append_does_not_write` asserts a lost CAS returns
+      a failure carrying no `artifact_id` and no internal detail.
+- [x] Conformance registers `("artifact", "revise")`; the descriptor catalog and
+      E2 conformance report both accept it (`test_e2_final_conformance` green).
+- [x] ai-backend **6938 passed** · chat-surface **3302 passed** · chat-surface
+      typecheck clean.
 
-## PRD-03 — revision review
+Deviation from the PRD, recorded: D4 proposed making the tab title come from the
+event. The `artifact.created` payload carries no title, and adding one means
+changing a three-way SSOT (contract JSON + pydantic + api-types, pinned by
+parity tests). The conversation-canvas record already holds the title
+authoritatively, so that is used instead. D5's `kind` fallback landed as
+specified.
+
+## PRD-03 — revision review ⬜ NOT STARTED
 
 - [ ] A model revision presents a diff with keep/revert rather than a silent swap
 - [ ] Revert appends rather than rewrites; all revisions remain retrievable
@@ -50,12 +67,39 @@ have added a forgeable input for a derivable fact. Dropped; PRD updated to match
 - [ ] No pre-commit gate was added to the artifact write path
 - [ ] chat-surface / surface-renderers / ai-backend green
 
-## PRD-04 — truthful publication
+Nothing here is built. The primitives it wires (`compareArtifactText`,
+`DiffText`, `restore`) already exist, so this is expected to be small, but it is
+not done and must not be read as done.
 
-- [ ] Publish and revise results state destination explicitly
-- [ ] Narration rule present on both tool descriptions
-- [ ] Hermetic eval asserts no filesystem claim when workspace disabled; baseline committed
-- [ ] ai-backend green
+## PRD-04 — truthful publication 🟡 PARTIAL (D1/D2 in `9fa5b836`)
+
+- [x] Publish and revise results state destination explicitly —
+      `stored_in="artifact_library"`, `wrote_to_filesystem=False`, both asserted.
+- [x] Narration rule present on both tool descriptions, binding the model's
+      claim to the result field rather than to prose it read once.
+- [ ] Hermetic eval asserts no filesystem claim when workspace is disabled;
+      baseline committed. **Not done** — this is the part that would catch a
+      regression, so the defect is mitigated but not yet pinned.
+- [x] ai-backend **6938 passed**.
+
+## Live end-to-end verification ⬜ NOT DONE
+
+Every box ticked above rests on unit/contract tests. The packaged app has **not**
+been re-staged or driven against these changes.
+
+`tools/desktop-journeys/README.md` is explicit that
+`apps/desktop/resources/runtime/**` is a snapshot of the Python services, so a
+journey run without re-staging would exercise the old backend. The relevant
+journeys already exist —
+`tools/desktop-journeys/generative-workflows/g2a_csv_artifact_surface.py` drives
+a real CSV artifact surface, and the credentialed pass reads a key through
+`load_env_key` from `services/ai-backend/.env`.
+
+Required before this can be called verified:
+
+1. re-stage (`make desktop-install` or `node tools/desktop-runtime/stage.mjs`);
+2. run the G2/G2a journeys plus a scripted repro of both reported bugs;
+3. record the run directory and outcomes here.
 
 ## Evidence log
 
