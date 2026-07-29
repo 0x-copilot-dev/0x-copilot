@@ -15,6 +15,7 @@ from agent_runtime.harness_quality.evaluation_contracts import (
     ScorerAttribution,
     ScorerResult,
     TrajectoryManifest,
+    TrajectoryStep,
 )
 
 
@@ -710,6 +711,300 @@ class CapabilityDiscoveryTrajectoryScorer:
         )
 
 
+#: Every expectation whose quantity comes from a *plan record's* segment list
+#: rather than from counting steps. Named in one place so the scorer can refuse
+#: to grade a width nobody measured — the same refusal
+#: :data:`_DISCOVERY_NUMERIC_KEYS` exists for, and for the same reason.
+#:
+#: ``maximum_planned_batches``, ``minimum_dispatch_intents``,
+#: ``maximum_settled_children``, and ``minimum_tool_calls`` are deliberately
+#: *not* here. Those count observable steps, so their quantity is present
+#: whenever the trajectory is, and an unplannable case must be able to assert
+#: "no plan was bound" without a plan record to read it from.
+_PARALLEL_SEGMENT_NUMERIC_KEYS = (
+    "minimum_planned_operations",
+    "minimum_overlapping_operations",
+    "maximum_overlapping_operations",
+    "minimum_segment_width",
+    "maximum_segment_width",
+)
+
+
+class ParallelExecutionTrajectoryScorer:
+    """Score the closed, body-free F6 batch-journal projection.
+
+    Step 10 turns on graph-level parallel execution, and ARQ-010 gates that on
+    F1 evaluation being present. Six properties carry that gate, and all six are
+    expressible over one projection of ``operation_batch.journal.v1``:
+
+    * **independent reads overlap** — a ``parallel`` segment exists, every one
+      of them carries ``independent_reads``, and enough operations actually sat
+      inside one. ``minimum_overlapping_operations`` is the load-bearing half:
+      a planner that emitted a parallel segment of nothing would satisfy the
+      mode check and overlap no work at all.
+    * **unknown stays serial** — ``forbidden_segment_modes`` plus the serial
+      reasons the planner is required to have used. Stated as reasons rather
+      than as "no parallel segment" so a plan that went serial for the *wrong*
+      reason still fails.
+    * **a write never overlaps the reads planned before it** —
+      ``required_segment_mode_order`` compares the plan's modes as an ordered
+      tuple. A set cannot express this: ``{parallel, serial}`` is equally true
+      of a plan that overlapped the write.
+    * **approval-gated work is unplannable** — ``maximum_planned_batches: 0``
+      with ``minimum_tool_calls``. The floor is what stops the ceiling from
+      passing on an empty trajectory: absence of a plan proves nothing unless
+      the turn demonstrably ran.
+    * **a sibling failure leaves a completed child intact** — the settled
+      dispositions must still contain ``succeeded``.
+    * **cancel and restart invent neither rollback nor success** —
+      ``require_unsettled_child`` states positively that a child was begun and
+      the journal declines to say what became of it. Any manufactured outcome,
+      whether ``succeeded`` (invented success) or ``failed`` (invented "nothing
+      happened"), removes the unsettled child and fails the case.
+
+    Every segment-derived numeric bound is refused outright when no step carried
+    a plan record, because a ``maximum_`` ceiling over an unpopulated width is
+    satisfied by absence.
+    """
+
+    scorer_id = "parallel_execution_trajectory"
+
+    def score(
+        self,
+        *,
+        case: EvaluationCase,
+        trajectory: TrajectoryManifest,
+    ) -> ScorerResult:
+        assertion = _assertion(case, self.scorer_id)
+        if assertion is None:
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=1.0,
+                passed=True,
+                hard_gate=False,
+                reason_code="parallel_execution_not_applicable",
+            )
+        expected = assertion.expected
+        if not isinstance(expected, Mapping):
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=0,
+                passed=False,
+                hard_gate=assertion.hard_gate,
+                reason_code="parallel_execution_assertion_invalid",
+            )
+        reason = self._reason(expected=expected, trajectory=trajectory)
+        passed = reason == "parallel_execution_trajectory_passed"
+        return ScorerResult(
+            scorer_id=self.scorer_id,
+            score=1.0 if passed else 0.0,
+            passed=passed,
+            hard_gate=assertion.hard_gate,
+            reason_code=reason,
+        )
+
+    @classmethod
+    def _reason(
+        cls,
+        *,
+        expected: Mapping[str, object],
+        trajectory: TrajectoryManifest,
+    ) -> str:
+        steps = tuple(
+            step for step in trajectory.ordered_steps if step.parallel_record_kind
+        )
+        plan_steps = tuple(
+            step for step in steps if step.parallel_record_kind == "plan_bound"
+        )
+        child_steps = tuple(
+            step for step in steps if step.parallel_record_kind == "child_transition"
+        )
+        record_kinds = {step.parallel_record_kind for step in steps}
+        # Modes are concatenated across plan steps in trajectory order, so a
+        # turn planned as one batch reads as one ordered tuple.
+        segment_modes = tuple(
+            mode for step in plan_steps for mode in step.parallel_segment_modes
+        )
+        parallel_reasons = {
+            item
+            for step in plan_steps
+            for item in step.parallel_parallel_segment_reasons
+        }
+        serial_reasons = {
+            item for step in plan_steps for item in step.parallel_serial_segment_reasons
+        }
+        kill_switch_reasons = {
+            reason
+            for step in plan_steps
+            if (reason := step.parallel_kill_switch_reason) is not None
+        }
+        child_phases = {
+            phase
+            for step in child_steps
+            if (phase := step.parallel_child_phase) is not None
+        }
+        child_dispositions = {
+            disposition
+            for step in child_steps
+            if (disposition := step.parallel_child_disposition) is not None
+        }
+        dispatch_intents = sum(
+            step.parallel_child_phase == "dispatch_intent" for step in child_steps
+        )
+        settled_children = sum(
+            step.parallel_child_phase == "settled" for step in child_steps
+        )
+        counts_observed = any(step.parallel_counts_observed for step in plan_steps)
+
+        checks = (
+            (
+                _string_set(expected.get("required_record_kinds", ())) - record_kinds,
+                "parallel_execution_record_missing",
+            ),
+            (
+                _string_set(expected.get("forbidden_record_kinds", ())) & record_kinds,
+                "parallel_execution_forbidden_record_observed",
+            ),
+            (
+                _string_set(expected.get("forbidden_segment_modes", ()))
+                & set(segment_modes),
+                "parallel_execution_forbidden_mode_observed",
+            ),
+            (
+                _string_set(expected.get("required_parallel_segment_reasons", ()))
+                - parallel_reasons,
+                "parallel_execution_parallel_reason_missing",
+            ),
+            (
+                _string_set(expected.get("required_serial_segment_reasons", ()))
+                - serial_reasons,
+                "parallel_execution_serial_reason_missing",
+            ),
+            (
+                _string_set(expected.get("required_kill_switch_reasons", ()))
+                - kill_switch_reasons,
+                "parallel_execution_kill_switch_reason_missing",
+            ),
+            (
+                _string_set(expected.get("required_child_phases", ())) - child_phases,
+                "parallel_execution_child_phase_missing",
+            ),
+            (
+                _string_set(expected.get("required_child_dispositions", ()))
+                - child_dispositions,
+                "parallel_execution_child_disposition_missing",
+            ),
+            (
+                _string_set(expected.get("forbidden_child_dispositions", ()))
+                & child_dispositions,
+                "parallel_execution_forbidden_disposition_observed",
+            ),
+        )
+        reason = next(
+            (reason_code for observed, reason_code in checks if observed),
+            None,
+        )
+        # An allowlist rather than a denylist, because the planner's reason
+        # vocabulary is open to extension and the claim being made is "every
+        # segment that overlapped did so *only* because the reads were
+        # independent". A forbidden-list version of this would silently admit
+        # any reason added after the case was written.
+        if reason is None and "allowed_parallel_segment_reasons" in expected:
+            allowed = _string_set(expected.get("allowed_parallel_segment_reasons"))
+            if parallel_reasons - allowed:
+                reason = "parallel_execution_parallel_reason_unexpected"
+        if reason is None and "required_segment_mode_order" in expected:
+            required_order = _string_tuple(expected.get("required_segment_mode_order"))
+            if segment_modes != required_order:
+                reason = "parallel_execution_segment_order_mismatch"
+        if reason is None:
+            reason = cls._count_reason(
+                expected=expected,
+                trajectory=trajectory,
+                plan_steps=plan_steps,
+                counts_observed=counts_observed,
+                dispatch_intents=dispatch_intents,
+                settled_children=settled_children,
+            )
+        return reason or "parallel_execution_trajectory_passed"
+
+    @staticmethod
+    def _count_reason(
+        *,
+        expected: Mapping[str, object],
+        trajectory: TrajectoryManifest,
+        plan_steps: Sequence[TrajectoryStep],
+        counts_observed: bool,
+        dispatch_intents: int,
+        settled_children: int,
+    ) -> str | None:
+        # A plan whose widths were never measured cannot answer a width
+        # question. Every ``maximum_`` bound below is satisfied by an
+        # unpopulated field, so a case declaring one over an unmeasured plan
+        # would report safety nobody observed. This is BUG-14 in F6's shape.
+        if not counts_observed and any(
+            key in expected for key in _PARALLEL_SEGMENT_NUMERIC_KEYS
+        ):
+            return "parallel_execution_counts_unobserved"
+        planned_operations = sum(
+            step.parallel_planned_operations for step in plan_steps
+        )
+        overlapping = sum(step.parallel_overlapping_operations for step in plan_steps)
+        widest = max(
+            (step.parallel_maximum_segment_width for step in plan_steps),
+            default=0,
+        )
+        # ``maximum_planned_batches`` counts plan records, which is why it is
+        # not gated above: an unplannable case has no plan record by definition
+        # and must still be gradeable.
+        if "maximum_planned_batches" in expected and len(
+            plan_steps
+        ) > _non_negative_int(expected.get("maximum_planned_batches")):
+            return "parallel_execution_unexpected_plan"
+        tool_calls = _usage_int(trajectory, "tool_calls") or sum(
+            step.capability_id is not None for step in trajectory.ordered_steps
+        )
+        # The floor that stops an absence assertion from passing on an empty
+        # trajectory: "no plan was bound" is only evidence when the turn ran.
+        if tool_calls < _non_negative_int(expected.get("minimum_tool_calls", 0)):
+            return "parallel_execution_tool_call_minimum_not_met"
+        if planned_operations < _non_negative_int(
+            expected.get("minimum_planned_operations", 0)
+        ):
+            return "parallel_execution_planned_operations_below_minimum"
+        if overlapping < _non_negative_int(
+            expected.get("minimum_overlapping_operations", 0)
+        ):
+            return "parallel_execution_overlap_below_minimum"
+        if "maximum_overlapping_operations" in expected and overlapping > (
+            _non_negative_int(expected.get("maximum_overlapping_operations"))
+        ):
+            return "parallel_execution_overlap_above_maximum"
+        if widest < _non_negative_int(expected.get("minimum_segment_width", 0)):
+            return "parallel_execution_segment_width_below_minimum"
+        # Read by key presence rather than truthiness, because ``0`` and ``1``
+        # are this ceiling's most important settings: they are how a case says
+        # "nothing overlapped".
+        if "maximum_segment_width" in expected and widest > _non_negative_int(
+            expected.get("maximum_segment_width")
+        ):
+            return "parallel_execution_segment_width_exceeded"
+        if dispatch_intents < _non_negative_int(
+            expected.get("minimum_dispatch_intents", 0)
+        ):
+            return "parallel_execution_dispatch_intent_minimum_not_met"
+        if "maximum_settled_children" in expected and settled_children > (
+            _non_negative_int(expected.get("maximum_settled_children"))
+        ):
+            return "parallel_execution_settled_count_exceeded"
+        if (
+            expected.get("require_unsettled_child", False)
+            and dispatch_intents <= settled_children
+        ):
+            return "parallel_execution_unsettled_child_missing"
+        return None
+
+
 class RedactedGradeRequest(RuntimeContract):
     """The complete, content-free payload available to an optional grader."""
 
@@ -849,6 +1144,7 @@ DEFAULT_HARD_SCORERS = (
     PromptCacheTrajectoryScorer(),
     ModelInvocationTrajectoryScorer(),
     CapabilityDiscoveryTrajectoryScorer(),
+    ParallelExecutionTrajectoryScorer(),
 )
 
 
@@ -909,6 +1205,17 @@ def _string_set(value: object) -> frozenset[str]:
     )
 
 
+def _string_tuple(value: object) -> tuple[str, ...]:
+    """Return a declared sequence in order, for expectations where order is the
+    assertion rather than an incidental detail."""
+
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return ()
+    return tuple(
+        item.strip() for item in value if isinstance(item, str) and item.strip()
+    )
+
+
 def _count_mapping(value: object) -> dict[str, int]:
     if not isinstance(value, Mapping):
         return {}
@@ -934,6 +1241,7 @@ __all__ = [
     "HardGroundednessScorer",
     "HardSafetyScorer",
     "ModelInvocationTrajectoryScorer",
+    "ParallelExecutionTrajectoryScorer",
     "RedactedGradeRequest",
     "RedactedGraderPort",
     "PromptCacheTrajectoryScorer",

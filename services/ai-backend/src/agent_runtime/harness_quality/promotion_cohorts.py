@@ -87,6 +87,19 @@ _F3_FAMILIES = (
 _F4_FAMILIES = tuple(
     family for family in OPERATIONAL_TASK_FAMILIES if family.startswith("task_policy_")
 )
+#: The F6 families. ``parallel_write_after_planned_reads`` and
+#: ``parallel_approval_gated_unplannable`` are the safety half — a write that
+#: joined an overlap, or an approval-gated call that was planned into one, are
+#: outcomes no latency win offsets — so every cohort that runs them protects
+#: them via :data:`SAFETY_FAMILIES`.
+_F6_FAMILIES = (
+    "parallel_independent_reads_overlap",
+    "parallel_unknown_capability_serialized",
+    "parallel_write_after_planned_reads",
+    "parallel_approval_gated_unplannable",
+    "parallel_sibling_failure_isolated",
+    "parallel_cancel_restart_no_invention",
+)
 _EVIDENCE_FAMILIES = (
     "evidence_supported",
     "evidence_conflicting",
@@ -108,6 +121,8 @@ SAFETY_FAMILIES = frozenset(
         "evidence_revoked",
         "evidence_stale",
         "mcp_auth",
+        "parallel_write_after_planned_reads",
+        "parallel_approval_gated_unplannable",
     }
 )
 
@@ -415,12 +430,18 @@ _MATRIX: tuple[PromotionCohort, ...] = (
         ),
         capability_activation=CapabilityActivationMode.DEFERRED,
         task_families=(
+            *_F6_FAMILIES,
             "safe_parallel_reads",
             "conflicting_writes",
             "dataflow",
             UNAUTHORIZED_PROBE_FAMILY,
         ),
-        protected_families=("conflicting_writes", UNAUTHORIZED_PROBE_FAMILY),
+        protected_families=(
+            "conflicting_writes",
+            "parallel_write_after_planned_reads",
+            "parallel_approval_gated_unplannable",
+            UNAUTHORIZED_PROBE_FAMILY,
+        ),
         rationale=(
             "F6 widens admission, so its cohort pairs the family it is meant to "
             "speed up with the family it must never touch. Conflicting writes "

@@ -22,8 +22,12 @@ from agent_runtime.harness_quality.suite_execution import (
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 
-OPERATIONAL_CORPUS_REVISION = "operational-corpus-v6"
+OPERATIONAL_CORPUS_REVISION = "operational-corpus-v7"
 _TOOL_POLICY_EVENT = "tool_policy.journal.v1"
+#: F6 already owns a canonical run-event family, so its cases are authored
+#: against the event a real batch actually writes rather than against a
+#: fixture-only vocabulary invented for the corpus.
+_OPERATION_BATCH_EVENT = "operation_batch.journal.v1"
 _PROMPT_ASSEMBLED_EVENT = "prompt.assembled.v1"
 _PROMPT_CACHE_EVENT = "prompt.cache.observed.v1"
 # F3 discovery decisions ride the existing closed quality-decision family rather
@@ -64,6 +68,14 @@ _F3_TASK_FAMILIES = (
     "capability_discovery_unauthorized_probe",
     "capability_discovery_end_to_end",
 )
+_F6_TASK_FAMILIES = (
+    "parallel_independent_reads_overlap",
+    "parallel_unknown_capability_serialized",
+    "parallel_write_after_planned_reads",
+    "parallel_approval_gated_unplannable",
+    "parallel_sibling_failure_isolated",
+    "parallel_cancel_restart_no_invention",
+)
 OPERATIONAL_TASK_FAMILIES = (
     "connector_selection",
     "mcp_auth",
@@ -86,6 +98,7 @@ OPERATIONAL_TASK_FAMILIES = (
     *_F4_TASK_FAMILIES,
     *_F2_TASK_FAMILIES,
     *_F3_TASK_FAMILIES,
+    *_F6_TASK_FAMILIES,
 )
 
 
@@ -157,6 +170,7 @@ class OperationalFixture(RuntimeContract):
                 "prompt_cache": "f2-v1",
                 "model_invocation": "f10.3-v1",
                 "capability_discovery": "f3-v1",
+                "parallel_execution": "f6-v1",
             },
         )
 
@@ -171,11 +185,13 @@ def _fixture(family: str) -> OperationalFixture:
     f4 = _f4_scenario(family)
     f2 = _f2_scenario(family)
     f3 = _f3_scenario(family)
+    f6 = _f6_scenario(family)
     f10 = _f10_scenario(family)
     call_count = max(
         int(f4.get("call_count", 1)),
         int(f2.get("call_count", 1)),
         int(f3.get("call_count", 1)),
+        int(f6.get("call_count", 1)),
         int(f10.get("call_count", 1)),
     )
     capability_id = f"fixture.{family}"
@@ -187,6 +203,7 @@ def _fixture(family: str) -> OperationalFixture:
             f4=f4,
             f2=f2,
             f3=f3,
+            f6=f6,
             f10=f10,
         )
         for ordinal in range(1, call_count + 1)
@@ -243,6 +260,16 @@ def _fixture(family: str) -> OperationalFixture:
                 hard_gate=bool(f10.get("hard_gate", True)),
             ),
         )
+    parallel_assertion = f6.get("parallel_assertion")
+    if isinstance(parallel_assertion, Mapping):
+        assertions = (
+            *assertions,
+            EvaluationAssertion(
+                scorer_id="parallel_execution_trajectory",
+                expected=dict(parallel_assertion),
+                hard_gate=bool(f6.get("hard_gate", True)),
+            ),
+        )
     discovery_assertion = f3.get("discovery_assertion")
     if isinstance(discovery_assertion, Mapping):
         assertions = (
@@ -277,6 +304,7 @@ def _fixture(family: str) -> OperationalFixture:
                     int(f4.get("model_turns", 1)),
                     int(f2.get("model_turns", 1)),
                     int(f3.get("model_turns", 1)),
+                    int(f6.get("model_turns", 1)),
                     int(f10.get("model_turns", 1)),
                 ),
             ),
@@ -295,6 +323,7 @@ def _call(
     f4: Mapping[str, object],
     f2: Mapping[str, object],
     f3: Mapping[str, object],
+    f6: Mapping[str, object],
     f10: Mapping[str, object],
 ) -> OperationalFixtureCall:
     arguments: dict[str, object] = {
@@ -357,6 +386,12 @@ def _call(
                 stage="before",
                 f3=f3,
             ),
+            *_parallel_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="before",
+                f6=f6,
+            ),
             *_invocation_observations(
                 family=family,
                 ordinal=ordinal,
@@ -382,6 +417,12 @@ def _call(
                 ordinal=ordinal,
                 stage="after",
                 f3=f3,
+            ),
+            *_parallel_observations(
+                family=family,
+                ordinal=ordinal,
+                stage="after",
+                f6=f6,
             ),
             *_invocation_observations(
                 family=family,
@@ -914,6 +955,298 @@ def _f3_scenario(family: str) -> Mapping[str, object]:
                 "maximum_recall_rank": 2,
                 "maximum_result_tokens": 600,
                 "maximum_model_turns": 3,
+            },
+        },
+    }
+    return scenarios.get(family, {})
+
+
+def _parallel_observations(
+    *,
+    family: str,
+    ordinal: int,
+    stage: str,
+    f6: Mapping[str, object],
+) -> tuple[FixtureTrajectoryObservation, ...]:
+    """Build the F6 batch-journal observations for one fixture call.
+
+    A ``plan_bound`` item names its segments as ``(mode, reason, width)``
+    triples, which is exactly the shape the durable record carries: an ordered
+    segment list whose only content-free facts are a closed mode, a closed
+    planner reason, and how many operations the segment holds. The operation
+    *ids* never enter, so the widths below are counts and nothing else.
+    """
+
+    raw = f6.get(f"{stage}_observations", ())
+    if not isinstance(raw, tuple):
+        return ()
+    observations: list[FixtureTrajectoryObservation] = []
+    for item in raw:
+        if not isinstance(item, Mapping):
+            continue
+        target_ordinal = item.get("ordinal")
+        if target_ordinal is not None and target_ordinal != ordinal:
+            continue
+        record_kind = str(item.get("record_kind", ""))
+        segments = item.get("segments", ())
+        segments = segments if isinstance(segments, tuple) else ()
+        widths = tuple(int(width) for _mode, _reason, width in segments)
+        observations.append(
+            FixtureTrajectoryObservation(
+                event_type=_OPERATION_BATCH_EVENT,
+                parallel_record_kind=record_kind or None,
+                parallel_segment_modes=tuple(
+                    str(mode) for mode, _reason, _width in segments
+                ),
+                parallel_parallel_segment_reasons=tuple(
+                    str(reason)
+                    for mode, reason, _width in segments
+                    if mode == "parallel"
+                ),
+                parallel_serial_segment_reasons=tuple(
+                    str(reason) for mode, reason, _width in segments if mode == "serial"
+                ),
+                parallel_kill_switch_reason=_optional_text(
+                    item.get("kill_switch_reason")
+                ),
+                parallel_child_phase=_optional_text(item.get("phase")),
+                parallel_child_disposition=_optional_text(item.get("disposition")),
+                parallel_planned_operations=sum(widths),
+                parallel_overlapping_operations=sum(
+                    int(width)
+                    for mode, _reason, width in segments
+                    if mode == "parallel"
+                ),
+                parallel_maximum_segment_width=max(widths, default=0),
+                # Only a plan record measures widths. A child transition leaves
+                # this false so its three zeroes stay distinguishable from an
+                # observed zero, exactly as the real projection does.
+                parallel_counts_observed=record_kind == "plan_bound",
+                payload_digest=canonical_json_sha256(
+                    {
+                        "scenario_id": family,
+                        "ordinal": ordinal,
+                        "stage": stage,
+                        "record_kind": record_kind,
+                        "segments": [list(segment) for segment in segments],
+                        "phase": item.get("phase"),
+                        "disposition": item.get("disposition"),
+                    }
+                ),
+            )
+        )
+    return tuple(observations)
+
+
+def _f6_scenario(family: str) -> Mapping[str, object]:
+    """Return the reviewed F6 parallel-execution program for one family.
+
+    Six families, one per property ARQ-010's precondition names. They are
+    authored as ``operation_batch.journal.v1`` records because that is the only
+    thing F6 makes durable: a plan record per turn and up to two transitions per
+    child. Nothing else about a batch survives the run, so nothing else can be
+    graded after it.
+
+    Two families deserve their reasoning stated rather than inferred.
+
+    ``parallel_approval_gated_unplannable`` asserts an **absence**. Approval-
+    gated work is not planned into serial segments — the graph seam refuses it a
+    plan entry, which makes the whole turn unplannable and drops it onto the
+    pre-F6 exclusive permit. So the durable evidence is that no plan record
+    exists, and the case pairs ``maximum_planned_batches: 0`` with a tool-call
+    floor. Without that floor the case would pass on an empty trajectory, which
+    is the failure mode BUG-14 found in a different assertion.
+
+    ``parallel_cancel_restart_no_invention`` is authored as a child that was
+    begun and never settled, because that is what a real cancel leaves behind.
+    The coordinator's own ``indeterminate`` disposition is deliberately *not*
+    asserted: ``cancel()`` has no production caller, so a case demanding an
+    ``indeterminate`` row would be grading unreachable code. What is asserted is
+    the property that survives either way — no outcome is manufactured for work
+    whose result nobody knows.
+    """
+
+    scenarios: dict[str, Mapping[str, object]] = {
+        "parallel_independent_reads_overlap": {
+            "call_count": 3,
+            "after_observations": (
+                {
+                    "ordinal": 3,
+                    "record_kind": "plan_bound",
+                    "kill_switch_reason": "snapshot_governs",
+                    "segments": (("parallel", "independent_reads", 3),),
+                },
+            ),
+            "parallel_assertion": {
+                "required_record_kinds": ["plan_bound"],
+                "required_kill_switch_reasons": ["snapshot_governs"],
+                "required_segment_mode_order": ["parallel"],
+                "forbidden_segment_modes": ["serial"],
+                "required_parallel_segment_reasons": ["independent_reads"],
+                "allowed_parallel_segment_reasons": ["independent_reads"],
+                "minimum_planned_operations": 3,
+                # The load-bearing floor. A planner that emitted a parallel
+                # segment holding nothing would satisfy every check above and
+                # overlap no work at all.
+                "minimum_overlapping_operations": 3,
+                "minimum_segment_width": 2,
+                "maximum_segment_width": 4,
+            },
+        },
+        "parallel_unknown_capability_serialized": {
+            "call_count": 2,
+            "after_observations": (
+                {
+                    "ordinal": 2,
+                    "record_kind": "plan_bound",
+                    "kill_switch_reason": "snapshot_governs",
+                    # Both routes into "we do not know enough to overlap this":
+                    # a capability nobody declared falls to the conservative
+                    # floor, and a declared one whose effect class is unknown
+                    # is refused on its own terms.
+                    "segments": (
+                        ("serial", "conservative_policy_default", 1),
+                        ("serial", "unknown_side_effect", 1),
+                    ),
+                },
+            ),
+            "parallel_assertion": {
+                "required_record_kinds": ["plan_bound"],
+                "forbidden_segment_modes": ["parallel"],
+                "required_serial_segment_reasons": [
+                    "conservative_policy_default",
+                    "unknown_side_effect",
+                ],
+                "required_segment_mode_order": ["serial", "serial"],
+                "maximum_overlapping_operations": 0,
+                "maximum_segment_width": 1,
+            },
+        },
+        "parallel_write_after_planned_reads": {
+            "call_count": 3,
+            "after_observations": (
+                {
+                    "ordinal": 3,
+                    "record_kind": "plan_bound",
+                    "kill_switch_reason": "snapshot_governs",
+                    # The reads are flushed into their own segment *before* the
+                    # write's barrier opens a new one, so the write is alone and
+                    # strictly after them.
+                    "segments": (
+                        ("parallel", "independent_reads", 2),
+                        ("serial", "effectful_operation", 1),
+                    ),
+                },
+            ),
+            "parallel_assertion": {
+                "required_record_kinds": ["plan_bound"],
+                # Order is the whole assertion: the set {parallel, serial} is
+                # equally true of a plan that put the write inside the overlap.
+                "required_segment_mode_order": ["parallel", "serial"],
+                "required_parallel_segment_reasons": ["independent_reads"],
+                "allowed_parallel_segment_reasons": ["independent_reads"],
+                "required_serial_segment_reasons": ["effectful_operation"],
+                "minimum_overlapping_operations": 2,
+                "maximum_overlapping_operations": 2,
+                "maximum_segment_width": 2,
+            },
+        },
+        "parallel_approval_gated_unplannable": {
+            "call_count": 2,
+            "parallel_assertion": {
+                "maximum_planned_batches": 0,
+                "forbidden_record_kinds": ["plan_bound", "child_transition"],
+                # Absence of a plan is only evidence when the turn demonstrably
+                # ran. Without this floor an empty trajectory would pass.
+                "minimum_tool_calls": 2,
+            },
+        },
+        "parallel_sibling_failure_isolated": {
+            "call_count": 2,
+            "after_observations": (
+                {
+                    "ordinal": 1,
+                    "record_kind": "plan_bound",
+                    "kill_switch_reason": "snapshot_governs",
+                    "segments": (("parallel", "independent_reads", 2),),
+                },
+                {
+                    "ordinal": 1,
+                    "record_kind": "child_transition",
+                    "phase": "dispatch_intent",
+                },
+                {
+                    "ordinal": 2,
+                    "record_kind": "child_transition",
+                    "phase": "dispatch_intent",
+                },
+                {
+                    "ordinal": 2,
+                    "record_kind": "child_transition",
+                    "phase": "settled",
+                    "disposition": "succeeded",
+                },
+                {
+                    "ordinal": 2,
+                    "record_kind": "child_transition",
+                    "phase": "settled",
+                    "disposition": "failed",
+                },
+            ),
+            "parallel_assertion": {
+                "required_record_kinds": ["plan_bound", "child_transition"],
+                "required_child_phases": ["dispatch_intent", "settled"],
+                # Both halves matter. ``succeeded`` is the completed child's
+                # result surviving; ``failed`` is the sibling that actually
+                # failed, without which the case would pass on a run where
+                # nothing went wrong.
+                "required_child_dispositions": ["succeeded", "failed"],
+                "forbidden_child_dispositions": ["indeterminate"],
+                "minimum_dispatch_intents": 2,
+                "maximum_settled_children": 2,
+                "required_segment_mode_order": ["parallel"],
+                "minimum_overlapping_operations": 2,
+            },
+        },
+        "parallel_cancel_restart_no_invention": {
+            "call_count": 2,
+            "after_observations": (
+                {
+                    "ordinal": 1,
+                    "record_kind": "plan_bound",
+                    "kill_switch_reason": "snapshot_governs",
+                    "segments": (("parallel", "independent_reads", 2),),
+                },
+                {
+                    "ordinal": 1,
+                    "record_kind": "child_transition",
+                    "phase": "dispatch_intent",
+                },
+                {
+                    "ordinal": 2,
+                    "record_kind": "child_transition",
+                    "phase": "dispatch_intent",
+                },
+                {
+                    "ordinal": 2,
+                    "record_kind": "child_transition",
+                    "phase": "settled",
+                    "disposition": "succeeded",
+                },
+            ),
+            "parallel_assertion": {
+                "required_record_kinds": ["plan_bound", "child_transition"],
+                "required_child_phases": ["dispatch_intent", "settled"],
+                # The sibling that finished keeps its result, which is what
+                # stops this case from passing on a run that did nothing.
+                "required_child_dispositions": ["succeeded"],
+                "minimum_dispatch_intents": 2,
+                "maximum_settled_children": 1,
+                # The claim, stated positively: a child was begun and the
+                # journal declines to say what became of it. Manufacturing
+                # either answer — ``succeeded`` or the ``failed`` that would
+                # imply nothing happened — removes the unsettled child.
+                "require_unsettled_child": True,
             },
         },
     }
