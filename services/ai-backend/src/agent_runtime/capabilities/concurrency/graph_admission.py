@@ -1,0 +1,613 @@
+"""The capabilities-side join between one model turn and the F6 machinery.
+
+Seven lanes built F6 and every one of them stopped short of the graph. The
+result was a subsystem that could plan, journal, permit, gate, cancel, and
+restart batches, and a runtime in which no batch ever existed: nothing turned a
+model's tool calls into an :class:`~agent_runtime.capabilities.concurrency.contracts.OperationBatch`,
+so the effective width of every run stayed ``1``. This module is that missing
+translation, and it is deliberately the only one.
+
+It implements **both** halves of the graph seam, on this side of the boundary:
+
+- :class:`~agent_runtime.control_plane.parallel_admission.ParallelAdmissionPort`,
+  which answers how wide one call may run. ``control_plane`` may never import
+  ``capabilities.concurrency`` — that edge is a genuine cycle and an
+  architecture test pins it — so the port is declared there and satisfied here,
+  the same direction ``BatchAllowanceSupplier`` and
+  ``ConcurrencyKillSwitchSourcePort`` already point.
+- :class:`~agent_runtime.execution.contracts.RuntimeBatchAdmissionPort`, which
+  carries the two moments only the graph knows: a model turn produced tool
+  calls, and one of those calls is about to run.
+
+Five properties are structural rather than conventional.
+
+**A child cannot dispatch before its plan is durable.** ``aplan_model_batch`` is
+awaited from ``aafter_model``, which the framework runs to completion before it
+routes to the tool node, and it registers a batch with the coordinator only
+after :meth:`BatchPlanRecorder.record` has returned a
+:class:`~agent_runtime.capabilities.concurrency.batch_journal.DurableBatchPlan`
+— a value only a completed append produces. There is no ordering to remember:
+the handle that authorizes dispatch is the receipt for the write.
+
+**Unknown means serial, by construction.** A call reaches F6 only by being found
+in an index built from a durable plan, keyed by the provider's own tool-call id.
+No verified run binding, fewer than two calls in the turn, an unparseable turn, a
+policy the operator never declared, a plan that refused to persist, an
+unrecognised call, a call already claimed — every one of them leaves the index
+without an entry, and an absent entry is answered by the pre-F6 exclusive permit
+and an unmediated body. The serial path is what happens when nothing positively
+says otherwise, rather than what a branch selects.
+
+**Width comes from the plan, never from a lease.** The Step-2 admission gate runs
+*before* the coordinator sees the child at all, so the grant is bounded by
+:meth:`BatchExecutionCoordinator.planned_allowance` — segment ∧ plan ∧ live kill
+switch, all of which exist before any permit is acquired. ``RunPermitManager``
+narrows again inside ``run_child``. Both narrow; neither widens.
+
+**A refused child never runs.** ``run_child`` settles a refusal durably, so
+falling back to the body afterwards would leave the journal claiming a child was
+refused while its external effect happened. A refusal is raised as the closed
+:class:`BatchChildExecutionError` the vocabulary already has for exactly this —
+work that never reached the connector.
+
+**Nothing here can fail a healthy run.** Planning is total: every fault, from a
+malformed tool call to a journal that would not accept the plan, ends with the
+turn unplanned and therefore serial. The only exception this module raises is the
+refusal above, which is a decision rather than a fault.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Final, Protocol, runtime_checkable
+
+from agent_runtime.capabilities.concurrency.batch_coordinator import (
+    BatchChildAdmission,
+    BatchChildStatus,
+    BatchExecutionCoordinator,
+)
+from agent_runtime.capabilities.concurrency.batch_journal import (
+    BatchJournalLimits,
+    BatchPlanRecorder,
+    BatchPlanRequest,
+    PlannedOperation,
+)
+from agent_runtime.capabilities.concurrency.child_execution import (
+    BatchChildExecutionError,
+    BatchChildExecutionReason,
+    BatchChildWork,
+    RunScopedBatchChildWork,
+)
+from agent_runtime.capabilities.concurrency.contracts import (
+    BatchFailurePolicy,
+    BatchOperation,
+    ConcurrencyPolicy,
+)
+from agent_runtime.capabilities.concurrency.descriptor_policy import (
+    CapabilityConcurrencyDeclaration,
+    ConcurrencyPolicyResolution,
+    ConcurrencyPolicyResolver,
+)
+from agent_runtime.control_plane.contracts import RunControlSnapshot
+from agent_runtime.control_plane.parallel_admission import (
+    ParallelAdmissionGrant,
+    ToolAdmissionRequest,
+)
+from agent_runtime.execution.call_identity import RuntimeToolCallIdentity
+from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
+
+
+class GraphBatchBounds:
+    """Hard, content-free bounds on what one run's graph seam may hold."""
+
+    #: One model turn can plan at most what a batch may name.
+    MAX_OPERATIONS_PER_TURN: Final[int] = BatchJournalLimits.MAX_OPERATIONS
+    #: Live planned children across every batch of one run. Entries are removed
+    #: as they are claimed, so this bounds concurrent turns, not run length.
+    MAX_TRACKED_CHILDREN: Final[int] = 1024
+    #: Truncation guard for the opaque key a capability is looked up by.
+    MAX_CAPABILITY_KEY_LENGTH: Final[int] = 512
+
+
+class GraphBatchMessages:
+    """Public, content-free text for the one fault this module can surface."""
+
+    CAPABILITY_REF_PREFIX = "cap_"
+
+
+@runtime_checkable
+class GraphConcurrencyPolicySource(Protocol):
+    """Resolve the F6.1 policy that governs one graph-visible tool call.
+
+    Returning ``None`` is the undeclared case and is the common one: it yields a
+    conservative policy, which the planner turns into a serial segment. A source
+    is therefore only ever able to *permit* overlap for capabilities somebody
+    with catalog authority positively described.
+    """
+
+    def resolution_for(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> ConcurrencyPolicyResolution | None:
+        """Return the resolved policy for this call, or ``None`` if undeclared."""
+
+
+class DeclaredConcurrencyPolicySource:
+    """Resolve policies from a fixed, operator-supplied declaration table.
+
+    The table is keyed by the same opaque capability key
+    :func:`graph_capability_key` derives, so a declaration and a live call agree
+    about what a capability *is* without either one carrying arguments. The
+    resolver is F6.1's own: this class chooses no policy, it only decides which
+    declarations apply, and every declaration it holds is one an operator with
+    catalog authority wrote.
+
+    Immutable after construction. A run cannot acquire a policy mid-flight, so
+    the ordering a turn was planned under is the ordering the whole turn runs
+    under.
+    """
+
+    __slots__ = ("_declarations", "_resolver")
+
+    def __init__(
+        self,
+        declarations: Mapping[str, Sequence[CapabilityConcurrencyDeclaration]],
+        *,
+        resolver: ConcurrencyPolicyResolver | None = None,
+    ) -> None:
+        self._declarations = {
+            key: tuple(value) for key, value in declarations.items() if value
+        }
+        self._resolver = resolver or ConcurrencyPolicyResolver()
+
+    def __len__(self) -> int:
+        return len(self._declarations)
+
+    def resolution_for(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> ConcurrencyPolicyResolution | None:
+        """Return the resolved policy for this call, or ``None`` if undeclared."""
+
+        key = graph_capability_key(tool_name=tool_name, arguments=arguments)
+        declarations = self._declarations.get(key)
+        if not declarations:
+            return None
+        capability_ref = graph_capability_ref(key)
+        if any(
+            declaration.capability_ref != capability_ref for declaration in declarations
+        ):
+            # A declaration filed under a key it does not describe cannot be
+            # attributed to this call, and guessing which one was meant would be
+            # the one place an operator typo could widen something.
+            return None
+        return self._resolver.resolve(
+            capability_ref=capability_ref,
+            declarations=declarations,
+        )
+
+
+def graph_capability_key(*, tool_name: str, arguments: Mapping[str, Any]) -> str:
+    """Return the opaque key one graph-visible call is declared under.
+
+    An MCP call names its server and tool inside the arguments of the single
+    ``call_mcp_tool`` surface, so keying on the graph tool name alone would file
+    every MCP capability in the deployment under one policy. When both are
+    present the key is ``server:tool``; otherwise it is the graph tool's own
+    name. Nothing else from the arguments is ever read, so the key cannot carry
+    a body.
+    """
+
+    server = arguments.get("server_name")
+    inner = arguments.get("tool_name")
+    if isinstance(server, str) and isinstance(inner, str):
+        server = server.strip()
+        inner = inner.strip()
+        if server and inner:
+            return f"{server}:{inner}"[: GraphBatchBounds.MAX_CAPABILITY_KEY_LENGTH]
+    return tool_name.strip()[: GraphBatchBounds.MAX_CAPABILITY_KEY_LENGTH]
+
+
+def graph_capability_ref(capability_key: str) -> str:
+    """Return the opaque ``cap_`` reference a capability key is journaled as.
+
+    F6's records constrain a capability reference to ``cap_`` plus 32 hex
+    characters and otherwise treat it as opaque. Deriving it from the key by
+    digest keeps two properties at once: the same capability produces the same
+    reference in every run, so a journal is comparable across runs; and the
+    reference reveals nothing about the connector, because a digest of a name is
+    not the name.
+    """
+
+    digest = canonical_json_sha256({"capability_key": capability_key})
+    return f"{GraphBatchMessages.CAPABILITY_REF_PREFIX}{digest[:32]}"
+
+
+@dataclass(frozen=True, slots=True)
+class PlannedGraphChild:
+    """One durable plan entry, reachable from the id the provider assigned."""
+
+    batch_id: str
+    operation_id: str
+    model_tool_call_id: str
+
+
+class RunBatchAdmission:
+    """One run's translation between graph tool calls and F6 batches.
+
+    Constructed per run by the composition root and installed twice: into
+    ``RunSerialAdmission`` as the width authority, and into
+    :class:`~agent_runtime.execution.contracts.RuntimeBatchAdmissionContext` as
+    the execution route. Both installs point at the *same object*, which is what
+    makes "the width a call was granted" and "the batch it actually ran in" two
+    readings of one decision rather than two decisions that could disagree.
+
+    Single-loop, like every other F6 component: the index is mutated only from
+    coroutines on the run's own event loop, and every mutation is await-free, so
+    the check and the claim are atomic against the calls they gate.
+    """
+
+    __slots__ = (
+        "_children",
+        "_coordinator",
+        "_deadline_at",
+        "_org_id",
+        "_planned_batches",
+        "_policies",
+        "_recorder",
+        "_snapshot",
+        "_trace_id",
+        "_work",
+    )
+
+    def __init__(
+        self,
+        *,
+        recorder: BatchPlanRecorder,
+        coordinator: BatchExecutionCoordinator,
+        policies: GraphConcurrencyPolicySource,
+        snapshot: RunControlSnapshot,
+        org_id: str,
+        trace_id: str,
+        deadline_at: datetime | None = None,
+    ) -> None:
+        self._recorder = recorder
+        self._coordinator = coordinator
+        self._policies = policies
+        self._snapshot = snapshot
+        self._org_id = org_id
+        self._trace_id = trace_id
+        self._deadline_at = deadline_at
+        self._children: dict[str, PlannedGraphChild] = {}
+        self._work: dict[str, RunScopedBatchChildWork] = {}
+        self._planned_batches: set[str] = set()
+
+    @property
+    def tracked_children(self) -> int:
+        """Return how many planned children are currently claimable."""
+
+        return len(self._children)
+
+    def work_for_batch(self, batch_id: str) -> RunScopedBatchChildWork | None:
+        """Return one batch's immutable child work table, if it was planned."""
+
+        return self._work.get(batch_id)
+
+    async def aplan_model_batch(
+        self,
+        *,
+        execution_scope: str,
+        model_turn: int,
+        tool_calls: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Plan and durably record one model turn's tool calls.
+
+        Total by contract. Every refusal below leaves the index untouched, and an
+        untouched index is a serial turn — so this method has exactly one
+        externally visible effect, and its absence is the pre-F6 behaviour.
+        """
+
+        try:
+            await self._aplan(
+                execution_scope=execution_scope,
+                model_turn=model_turn,
+                tool_calls=tool_calls,
+            )
+        except Exception:  # noqa: BLE001 - an unplannable turn is a serial turn.
+            return
+
+    def grant_for(
+        self,
+        request: ToolAdmissionRequest,
+    ) -> ParallelAdmissionGrant | None:
+        """Return the width this call may overlap at, or ``None`` for serial.
+
+        Synchronous and allocation-light because the Step-2 admission consults it
+        on the hot path before taking any lock. It reads the coordinator's
+        pre-permit fold and nothing else, so it can neither wait for, nor be
+        blocked by, the gate it is answering for.
+        """
+
+        planned = self._children.get(request.tool_call_id)
+        if planned is None:
+            return None
+        allowance = self._coordinator.planned_allowance(
+            batch_id=planned.batch_id,
+            operation_id=planned.operation_id,
+        )
+        width = allowance.effective_max_parallelism
+        if not allowance.permits_parallel or width < 2:
+            return None
+        return ParallelAdmissionGrant(
+            tool_call_id=planned.model_tool_call_id,
+            cohort_id=self._cohort_id(planned),
+            max_parallelism=width,
+        )
+
+    async def arun_tool_body(
+        self,
+        *,
+        tool_call_id: str,
+        body: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Run one graph tool body, through the coordinator when it is planned.
+
+        The claim is consumed before anything is awaited, so a replayed or
+        duplicated wrapper for the same provider id can never present itself to
+        the coordinator twice — the second arrival is simply not a planned child,
+        and runs exactly as it would have before F6.
+        """
+
+        planned = self._children.pop(tool_call_id, None)
+        if planned is None:
+            return await body()
+
+        async def runner(admission: BatchChildAdmission) -> Any:
+            del admission
+            return await body()
+
+        result = await self._coordinator.run_child(
+            batch_id=planned.batch_id,
+            operation_id=planned.operation_id,
+            runner=runner,
+        )
+        if result.error is not None:
+            raise result.error
+        if result.outcome.status is not BatchChildStatus.SUCCEEDED:
+            # The coordinator has already settled this child durably as one that
+            # did not run. Running the body now would leave the journal saying
+            # "refused" about work that reached the connector.
+            raise BatchChildExecutionError(BatchChildExecutionReason.NOT_ADMITTED)
+        return result.value
+
+    async def _aplan(
+        self,
+        *,
+        execution_scope: str,
+        model_turn: int,
+        tool_calls: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Build, persist, and register one turn's batch, or leave it serial."""
+
+        turn = max(model_turn, 1)
+        if len(tool_calls) < 2 or len(tool_calls) > (
+            GraphBatchBounds.MAX_OPERATIONS_PER_TURN
+        ):
+            # A lone call has nothing to overlap with, and the planner would
+            # place it in its own serial segment anyway. Skipping the write is
+            # not an optimisation: it keeps the journal free of batches that
+            # never described a decision.
+            return
+        if (
+            len(self._children) + len(tool_calls)
+            > GraphBatchBounds.MAX_TRACKED_CHILDREN
+        ):
+            return
+        batch_id = self._batch_id(execution_scope=execution_scope, model_turn=turn)
+        if batch_id in self._planned_batches:
+            return
+
+        planned_operations: list[PlannedOperation] = []
+        work: list[BatchChildWork] = []
+        children: list[PlannedGraphChild] = []
+        for tool_call in tool_calls:
+            prepared = self._prepare(
+                tool_call=tool_call,
+                execution_scope=execution_scope,
+                model_turn=turn,
+            )
+            if prepared is None:
+                # One unusable call makes the whole turn unplannable rather than
+                # partially planned: a batch that silently omitted a call would
+                # let that call run outside every ordering decision F6 made
+                # about its siblings.
+                return
+            operation, child_work, child = prepared
+            planned_operations.append(operation)
+            work.append(child_work)
+            children.append(child)
+
+        request = BatchPlanRequest(
+            org_id=self._org_id,
+            trace_id=self._trace_id,
+            subject_fingerprint=self._snapshot.subject_fingerprint,
+            run_id=self._snapshot.run_id,
+            batch_id=batch_id,
+            turn_ordinal=turn,
+            operations=tuple(planned_operations),
+            deadline_at=self._deadline_at,
+            # Independent reads have no reason to stop one another: a sibling
+            # that failed says nothing about the ones still running, and
+            # stopping them would turn one connector error into several.
+            failure_policy=BatchFailurePolicy.COLLECT_ALL,
+        )
+        plan = await self._recorder.record(request, snapshot=self._snapshot)
+        self._coordinator.begin(plan)
+        self._planned_batches.add(batch_id)
+        self._work[batch_id] = RunScopedBatchChildWork(work)
+        for child in children:
+            self._children[child.model_tool_call_id] = child
+
+    def _prepare(
+        self,
+        *,
+        tool_call: Mapping[str, Any],
+        execution_scope: str,
+        model_turn: int,
+    ) -> tuple[PlannedOperation, BatchChildWork, PlannedGraphChild] | None:
+        """Turn one model tool call into its plan entry, or refuse the turn."""
+
+        model_tool_call_id = str(tool_call.get("id", "") or "").strip()
+        tool_name = str(tool_call.get("name", "") or "").strip()
+        if not model_tool_call_id or not tool_name:
+            return None
+        raw_arguments = tool_call.get("args")
+        arguments = raw_arguments if isinstance(raw_arguments, Mapping) else {}
+        identity = RuntimeToolCallIdentity.from_current(
+            execution_scope=execution_scope,
+            model_turn=model_turn,
+            model_tool_call_id=model_tool_call_id,
+        )
+        if identity is None:
+            # No verified run binding. The gateway would allocate an operation
+            # id the plan never named, so there is nothing honest to record.
+            return None
+
+        resolution = self._policies.resolution_for(
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        operation = BatchOperation(
+            operation_id=identity.operation_id,
+            # One turn's calls were all authorized under one snapshot, so they
+            # share an epoch and no epoch barrier is introduced between them.
+            authorization_epoch=self._snapshot.snapshot_id,
+            # The model emitted these calls together with no ordering between
+            # them, which is the attestation of independence. It is only ever
+            # *usable* because a declared policy must also say the capability is
+            # a parallel-safe read; without one the planner serializes anyway.
+            dependency_ids=(),
+            resource_fingerprints=self._resource_fingerprints(resolution),
+        )
+        planned = (
+            PlannedOperation.of(
+                operation=operation,
+                capability_ref=graph_capability_ref(
+                    graph_capability_key(tool_name=tool_name, arguments=arguments)
+                ),
+            )
+            if resolution is None
+            else PlannedOperation.resolved(operation=operation, resolution=resolution)
+        )
+        child_work = BatchChildWork(
+            operation_id=identity.operation_id,
+            server_name=str(arguments.get("server_name", "") or "") or tool_name,
+            tool_name=str(arguments.get("tool_name", "") or "") or tool_name,
+            arguments=dict(arguments),
+            model_tool_call_id=model_tool_call_id,
+            model_turn=model_turn,
+            execution_scope=execution_scope,
+        )
+        child = PlannedGraphChild(
+            batch_id=self._batch_id(
+                execution_scope=execution_scope,
+                model_turn=model_turn,
+            ),
+            operation_id=identity.operation_id,
+            model_tool_call_id=model_tool_call_id,
+        )
+        return (planned, child_work, child)
+
+    @staticmethod
+    def _resource_fingerprints(
+        resolution: ConcurrencyPolicyResolution | None,
+    ) -> tuple[str, ...] | None:
+        """Return this call's resource subjects, or ``None`` for unknown.
+
+        ``None`` and ``()`` are different claims and the planner treats them
+        differently: ``()`` attests that the call has no resource subject at
+        all, while ``None`` says nobody knows, which is a serial barrier.
+
+        A policy that declares a resource-key template is declaring that this
+        capability *does* have a subject and that overlap must be decided per
+        subject. The graph seam cannot render that key — the template's
+        dimensions are connector-specific and its digest needs keyed material —
+        so the honest answer is unknown, and the call is serialized.
+        """
+
+        policy = resolution.policy if resolution is not None else ConcurrencyPolicy()
+        return None if policy.resource_key_template is not None else ()
+
+    def _batch_id(self, *, execution_scope: str, model_turn: int) -> str:
+        """Return the one batch id a given turn of a given scope may occupy.
+
+        Derived rather than allocated, so a replayed turn converges on the same
+        batch the journal already holds instead of writing a second plan for the
+        same work. It is also why exactly one batch exists per turn per scope,
+        which is half of why one cohort is live at a time.
+        """
+
+        digest = canonical_json_sha256(
+            {
+                "execution_scope": execution_scope,
+                "model_turn": model_turn,
+                "run_id": self._snapshot.run_id,
+                "snapshot_id": self._snapshot.snapshot_id,
+            }
+        )
+        return f"batch-{digest[:32]}"
+
+    def _cohort_id(self, planned: PlannedGraphChild) -> str:
+        """Return the identity of the set this call shares a width with.
+
+        A cohort is one *segment* of one batch, which is the exact scope the
+        durable plan decided may run together. It cannot be the batch: a batch's
+        segments are ordered and carry different widths, so one width across a
+        whole batch would be a width the plan never authorized.
+
+        The coordinator admits only children of its current segment cursor, and
+        a turn produces exactly one batch, so at most one cohort of an execution
+        scope is live at any moment — which is what keeps the run's admitted
+        width equal to the cohort's own width rather than a sum over cohorts.
+        """
+
+        segment_index = self._segment_index(planned)
+        return f"{planned.batch_id}#{segment_index}"
+
+    def _segment_index(self, planned: PlannedGraphChild) -> int:
+        """Return the plan's segment for one child, or a per-child fallback.
+
+        The fallback is deliberately *not* a shared value. If the segment cannot
+        be read the child gets a cohort of its own, whose width is then bounded
+        by ``planned_allowance`` — which answers serial for exactly the states
+        that make the segment unreadable.
+        """
+
+        try:
+            identities = self._coordinator.identities(planned.batch_id)
+        except Exception:  # noqa: BLE001 - an unreadable plan is a serial plan.
+            return -1
+        for identity in identities:
+            if identity.operation_id == planned.operation_id:
+                if identity.segment_index is not None:
+                    return identity.segment_index
+                break
+        return -1
+
+
+__all__ = (
+    "DeclaredConcurrencyPolicySource",
+    "GraphBatchBounds",
+    "GraphBatchMessages",
+    "GraphConcurrencyPolicySource",
+    "PlannedGraphChild",
+    "RunBatchAdmission",
+    "graph_capability_key",
+    "graph_capability_ref",
+)

@@ -750,6 +750,40 @@ class BatchExecutionCoordinator:
         batch = self._require(batch_id)
         return tuple(batch.children[key].identity for key in batch.order)
 
+    def planned_allowance(
+        self,
+        *,
+        batch_id: str,
+        operation_id: str,
+    ) -> ConcurrencyAllowance:
+        """Return the width one planned child may overlap at, before admission.
+
+        :class:`BatchChildAdmission` also carries an ``effective_allowance``, but
+        only *after* the child has been gated and permitted — which is too late
+        for a caller that must decide the width of the seam the child will be
+        admitted *through*. That is the position the graph tool seam is in: the
+        Step-2 admission gate runs before this coordinator sees the child at all,
+        so it needs the number now.
+
+        This is the same fold :meth:`_run_admitted` uses — segment ∧ plan ∧ live
+        kill switch — deliberately reusing ``_effective_allowance`` rather than
+        restating it, so a pre-admission answer and an admission answer cannot
+        drift apart. It excludes only the permit table, which narrows again
+        inside :meth:`run_child`; both narrow, and neither can widen the other.
+
+        An unknown batch, an unknown operation, or a settled child answers
+        serial. A width this method cannot positively establish is never one a
+        caller may overlap on.
+        """
+
+        batch = self._batches.get(batch_id)
+        if batch is None:
+            return ConcurrencyAllowance.serial()
+        state = batch.children.get(operation_id)
+        if state is None or state.status is not BatchChildStatus.PENDING:
+            return ConcurrencyAllowance.serial()
+        return self._effective_allowance(batch, state.segment_index)
+
     def results(self, batch_id: str) -> tuple[BatchChildResult, ...]:
         """Return one batch's results in **input order**.
 

@@ -638,7 +638,59 @@ class ConcurrencyKillSwitchGate:
         )
 
 
+class ConcurrencyKillSwitchAllowanceSupplier:
+    """Adapt one run's gate to the coordinator's ``BatchAllowanceSupplier``.
+
+    F6.3's :class:`~agent_runtime.capabilities.concurrency.batch_coordinator.BatchExecutionCoordinator`
+    accepts a ``live_allowance`` callable and folds it into every child's width,
+    and F6.7 built the gate whose whole purpose is to answer that question — but
+    nothing joined them, so an operator flipping a switch mid-run could not
+    narrow a batch that was already executing. It could only narrow the *next*
+    plan. This class is that missing edge, and it is deliberately trivial: the
+    safety reasoning already lives in the gate, and a bridge with logic of its
+    own would be a second place for it to live.
+
+    Two properties are structural rather than conventional:
+
+    - **It is a live read, not a captured value.** The gate re-reads its source
+      on every :meth:`ConcurrencyKillSwitchGate.admit`, so each call answers with
+      the switch as it is *now*. That is what lets a flip take effect on
+      in-flight batches, which is the entire point of a kill switch.
+
+    - **It cannot raise into the coordinator.** ``_effective_allowance`` calls
+      this on the admission path with no guard of its own, so a failing supplier
+      would fail a run rather than narrow it. Every failure lands on serial,
+      matching how the resolver already treats an unreadable source.
+    """
+
+    __slots__ = ("_capability_id", "_connector_id", "_gate")
+
+    def __init__(
+        self,
+        gate: ConcurrencyKillSwitchGate,
+        *,
+        connector_id: object = None,
+        capability_id: object = None,
+    ) -> None:
+        self._gate = gate
+        self._connector_id = connector_id
+        self._capability_id = capability_id
+
+    def __call__(self) -> ConcurrencyAllowance:
+        """Return the live allowance this run's switch currently permits."""
+
+        try:
+            decision = self._gate.admit(
+                connector_id=self._connector_id,
+                capability_id=self._capability_id,
+            )
+        except Exception:  # noqa: BLE001 - an unreadable switch is a serial switch.
+            return ConcurrencyAllowance.serial()
+        return decision.effective_allowance
+
+
 __all__ = (
+    "ConcurrencyKillSwitchAllowanceSupplier",
     "ConcurrencyKillSwitchDecision",
     "ConcurrencyKillSwitchDirectives",
     "ConcurrencyKillSwitchError",

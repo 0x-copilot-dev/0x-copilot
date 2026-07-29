@@ -75,6 +75,9 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
     RuntimeStageCommitCommand,
 )
+from runtime_worker.batch_concurrency_composition import (
+    build_batch_concurrency_composer,
+)
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
 from runtime_worker.handlers.artifact_event import RuntimeArtifactEventHandler
 from runtime_worker.handlers.cancel import RuntimeCancelHandler
@@ -316,6 +319,16 @@ class RuntimeWorker:
         if self._provider_circuit_snapshot is not None:
             self._provider_circuit_snapshot.restore(self._provider_circuit_health)
         circuit_registry = ProviderCircuitHealthRegistry(self._provider_circuit_health)
+        # One F6 composer per worker, handed to both composition roots. It is
+        # ``None`` unless an operator configured F6, and the gate that decides
+        # that is read before any F6 module is imported — so an unconfigured
+        # worker loads exactly the modules it loaded before F6 existed.
+        batch_concurrency_composer = build_batch_concurrency_composer(
+            events=self.event_store,
+            snapshots=run_control_snapshot_store,
+            environ=worker_environment,
+        )
+        self.batch_concurrency_composer = batch_concurrency_composer
         model_invocation_composer = ModelInvocationWorkerComposer(
             settings=self.settings,
             persistence=self.persistence,
@@ -416,6 +429,7 @@ class RuntimeWorker:
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
+            batch_concurrency_composer=batch_concurrency_composer,
         )
         # Give artifact publication its live path. Without this the artifact's
         # ledger events only reach the run through the outbox, which is drained
@@ -467,6 +481,7 @@ class RuntimeWorker:
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
+            batch_concurrency_composer=batch_concurrency_composer,
         )
         self.artifact_event_handler = (
             artifact_event_handler

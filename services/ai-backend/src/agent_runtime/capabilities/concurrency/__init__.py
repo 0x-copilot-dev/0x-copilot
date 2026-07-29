@@ -6,11 +6,21 @@ The whole domain shares one vocabulary in
 policy over those types: descriptor precedence, batch planning, scoped permits,
 and serial kill switches.
 
-:mod:`agent_runtime.capabilities.concurrency.batch_journal_store` is
-deliberately **not** re-exported here. It is the one F6 module that knows the
-run-event transport schema, and that schema imports this package's record
-vocabulary — so importing the adapter from this ``__init__`` would close a
-cycle. Import it by module path.
+Two modules are deliberately **not** re-exported here, for two different
+reasons, and both must be imported by module path.
+
+:mod:`agent_runtime.capabilities.concurrency.batch_journal_store` is the one F6
+module that knows the run-event transport schema, and that schema imports this
+package's record vocabulary — so importing the adapter from this ``__init__``
+would close a cycle.
+
+:mod:`agent_runtime.capabilities.concurrency.graph_admission` is kept out for a
+parity reason instead. ``runtime_api.schemas.events`` imports this package's
+journal record, which means *this* ``__init__`` runs in every deployment,
+configured or not. Anything re-exported from here is therefore loaded by every
+deployment, and the graph seam is exactly the module a deployment without F6
+configured must not pay for. Keeping it off this list is what lets a test assert
+that importing the tool middleware never loads it.
 """
 
 from agent_runtime.capabilities.concurrency.batch_cancellation import (
@@ -147,6 +157,7 @@ from agent_runtime.capabilities.concurrency.errors import (
     ResourceKeyTemplateRejected,
 )
 from agent_runtime.capabilities.concurrency.kill_switches import (
+    ConcurrencyKillSwitchAllowanceSupplier,
     ConcurrencyKillSwitchDecision,
     ConcurrencyKillSwitchDirectives,
     ConcurrencyKillSwitchError,
@@ -172,23 +183,23 @@ __all__ = (
     "BatchChildDispatch",
     "BatchChildDispatchPort",
     "BatchChildDispatchStatus",
+    "BatchChildDisposition",
     "BatchChildExecutionBounds",
     "BatchChildExecutionError",
     "BatchChildExecutionMessages",
     "BatchChildExecutionReason",
     "BatchChildExecutorMisconfigured",
-    "BatchChildDisposition",
     "BatchChildIdentity",
     "BatchChildOutcome",
     "BatchChildPhase",
     "BatchChildResult",
     "BatchChildRunner",
     "BatchChildStatus",
-    "BatchChildWork",
-    "BatchChildWorkPort",
     "BatchChildTransitionRecord",
     "BatchChildTransitionRecorder",
     "BatchChildTransitionWrite",
+    "BatchChildWork",
+    "BatchChildWorkPort",
     "BatchClock",
     "BatchCoordinatorBounds",
     "BatchCoordinatorError",
@@ -209,11 +220,11 @@ __all__ = (
     "BatchJournalSnapshotConflict",
     "BatchJournalWrite",
     "BatchOperation",
+    "BatchPermitScopeFactory",
     "BatchPlan",
     "BatchPlanBoundRecord",
     "BatchPlanRecorder",
     "BatchPlanRequest",
-    "BatchPermitScopeFactory",
     "BatchPlanStorePort",
     "BatchPlanner",
     "BatchRecoveryView",
@@ -235,6 +246,7 @@ __all__ = (
     "ConcurrencyBounds",
     "ConcurrencyDeclarationRejected",
     "ConcurrencyDescriptorParser",
+    "ConcurrencyKillSwitchAllowanceSupplier",
     "ConcurrencyKillSwitchDecision",
     "ConcurrencyKillSwitchDirectives",
     "ConcurrencyKillSwitchError",
@@ -258,8 +270,8 @@ __all__ = (
     "ConcurrencyRejectionReason",
     "ConcurrencyScope",
     "DurableBatchPlan",
-    "GatewayBatchChildExecutor",
     "DurableChildTransition",
+    "GatewayBatchChildExecutor",
     "IdempotencyKind",
     "NarrowableEnum",
     "OperationBatch",
@@ -286,8 +298,8 @@ __all__ = (
     "ResourceKeyTemplate",
     "ResourceKeyTemplateRejected",
     "RunPermitManager",
-    "RunScopedBatchChildWork",
     "RunRestartPlan",
+    "RunScopedBatchChildWork",
     "SequencedBatchJournalRecord",
     "SideEffectKind",
     "validate_batch_journal_record",

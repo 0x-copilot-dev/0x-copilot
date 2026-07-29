@@ -44,6 +44,7 @@ from agent_runtime.surfaces_v2.emitter import WorkLedgerEmitter
 from runtime_worker.handlers.receipt_hook import emit_receipt_if_enabled
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
+    RuntimeBatchAdmissionContext,
     RuntimeDependencies,
     RuntimeErrorCode,
     RuntimeErrorEnvelope,
@@ -162,6 +163,7 @@ from runtime_api.schemas import (
     RuntimeRunCommand,
 )
 from runtime_worker.audit import WorkerAuditEmitter
+from runtime_worker.batch_concurrency_composition import BatchConcurrencyComposer
 from runtime_worker.capability_discovery_composition import (
     build_capability_discovery_composer,
 )
@@ -280,6 +282,7 @@ class RuntimeRunHandler:
         model_invocation_composer: ModelInvocationWorkerComposer | None = None,
         model_invocation_terminal: ModelInvocationTerminalIntegration | None = None,
         terminal_run_observer: TerminalRunObserverPort | None = None,
+        batch_concurrency_composer: BatchConcurrencyComposer | None = None,
     ) -> None:
         self.persistence: PersistencePort = persistence
         self.event_store: EventStorePort = event_store
@@ -308,6 +311,11 @@ class RuntimeRunHandler:
         self._run_control_builder = run_control_builder
         self._prompt_observation_store = prompt_observation_store
         self.settings = settings or RuntimeSettings.load()
+        # F6 batch concurrency. ``None`` — the default, and what an unconfigured
+        # deployment gets — means no coordinator is ever built, no admission is
+        # ever installed, and every tool call takes the exclusive Step-2 permit
+        # exactly as it did before F6 existed.
+        self._batch_concurrency_composer = batch_concurrency_composer
         self._model_invocation_composer = (
             model_invocation_composer
             or ModelInvocationWorkerComposer(
@@ -579,6 +587,7 @@ class RuntimeRunHandler:
         # exit path — completion, failure, timeout, or cancel.
         workspace_backend: object | None = None
         run_control_token: object | None = None
+        batch_admission_token: object | None = None
         try:
             if prepared_run_control is not None:
                 run_control_token = RunControlContext.bind_for_run(
@@ -598,6 +607,25 @@ class RuntimeRunHandler:
                     )
                     model_invocation_effect_tracker = (
                         composed_model_invocation.effect_tracker
+                    )
+                # F6 is installed here, immediately after ``bind_for_run``, for
+                # the reason ``install_parallel_admission`` states: the
+                # coordinator is per run, so its slot can only be filled once
+                # the run's control binding exists. The same object fills both
+                # slots — the width authority the Step-2 admission consults, and
+                # the execution route the graph tool seam takes — so a call's
+                # granted width and the batch it actually ran in are two
+                # readings of one decision.
+                batch_admission = self._compose_batch_admission(
+                    run=run,
+                    control=prepared_run_control.control,
+                )
+                if batch_admission is not None:
+                    serial_admission = RunControlContext.serial_admission()
+                    if serial_admission is not None:
+                        serial_admission.install_parallel_admission(batch_admission)
+                    batch_admission_token = RuntimeBatchAdmissionContext.install(
+                        batch_admission
                     )
             if self._shadow_comparison_enabled():
                 shadow_comparison_token = ShadowComparisonContext.bind_for_run(
@@ -863,6 +891,8 @@ class RuntimeRunHandler:
             self.stream_event_mapper.update_processor.discard_metrics(run.run_id)
             raise
         finally:
+            if batch_admission_token is not None:
+                RuntimeBatchAdmissionContext.reset(batch_admission_token)  # type: ignore[arg-type]
             if run_control_token is not None:
                 RunControlContext.unbind(run_control_token)  # type: ignore[arg-type]
             if shadow_comparison_token is not None:
@@ -1519,6 +1549,29 @@ class RuntimeRunHandler:
                 ),
             ),
             grants=session.grants,
+        )
+
+    def _compose_batch_admission(
+        self,
+        *,
+        run: object,
+        control: object,
+    ) -> object | None:
+        """Return this run's F6 admission, or ``None`` to stay strictly serial.
+
+        Three independent things must all be true before this returns an object:
+        an operator configured F6 at all (which is what decides whether the
+        composer exists), the run's control snapshot resolved F6 to ``enforce``,
+        and the operator declared at least one capability's concurrency policy.
+        Any one of them missing leaves the run on the untouched serial path.
+        """
+
+        if self._batch_concurrency_composer is None:
+            return None
+        return self._batch_concurrency_composer.compose(
+            org_id=run.org_id,  # type: ignore[attr-defined]
+            trace_id=run.trace_id,  # type: ignore[attr-defined]
+            control=control,  # type: ignore[arg-type]
         )
 
     def _dependencies_for_run(

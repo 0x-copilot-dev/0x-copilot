@@ -44,6 +44,7 @@ from agent_runtime.control_plane.context import (
     RuntimeToolLifecycleReducer,
     ToolAdmissionRequest,
 )
+from agent_runtime.execution.contracts import RuntimeBatchAdmissionContext
 from agent_runtime.execution.tool_errors import BudgetExceeded
 from agent_runtime.execution.tool_errors import ToolBudgetRejected
 from agent_runtime.execution.tool_error_policy import DefaultToolErrorPolicy
@@ -261,7 +262,13 @@ class RuntimeControlMiddleware(AgentMiddleware):
         state: RuntimeControlState,
         runtime: object,
     ) -> None:
-        """Synchronous compatibility adapter for the reserved seam."""
+        """Synchronous compatibility adapter for the reserved seam.
+
+        Deliberately still a no-op. Recording a batch plan is a durable append,
+        so it cannot happen without awaiting, and a synchronous turn's tool calls
+        take the never-widened ``sync_permit`` anyway — planning them would
+        journal an ordering nothing could ever act on.
+        """
 
         del state, runtime
         return None
@@ -271,10 +278,53 @@ class RuntimeControlMiddleware(AgentMiddleware):
         state: RuntimeControlState,
         runtime: object,
     ) -> None:
-        """Reserved supported seam for Step 6 tool-group planning."""
+        """Durably record this turn's tool-group ordering before it dispatches.
 
-        del state, runtime
+        This is the Step-6 seam, now occupied. The framework runs this hook to
+        completion before it routes to the tool node, so a plan recorded here is
+        durable before any child it names can be admitted — the ordering is a
+        property of the graph's topology rather than of a lock somebody has to
+        hold correctly.
+
+        With no F6 binding installed this reads one context variable and returns,
+        which is what every deployment without F6 configured does. The planner
+        itself is total: an unplannable turn simply has no plan, and a turn with
+        no plan is the serial turn it has always been.
+        """
+
+        admission = RuntimeBatchAdmissionContext.current()
+        if admission is None:
+            return None
+        await admission.aplan_model_batch(
+            execution_scope=self._execution_scope_for_runtime(runtime),
+            model_turn=max(self._model_turn(state), 1),
+            tool_calls=self._emitted_tool_calls(state),
+        )
         return None
+
+    @staticmethod
+    def _emitted_tool_calls(state: object) -> tuple[Mapping[str, Any], ...]:
+        """Return the tool calls the model just emitted, in model order.
+
+        Total by construction: a state shape this does not recognize yields no
+        tool calls, which yields no plan, which yields the serial default. It
+        reads the last message only — the one the model turn just produced — so
+        an earlier turn's calls can never be re-planned into this turn's batch.
+        """
+
+        messages = (
+            state.get("messages") if isinstance(state, Mapping) else None
+        ) or getattr(state, "messages", None)
+        if (
+            not isinstance(messages, Sequence)
+            or isinstance(messages, (str, bytes))
+            or not messages
+        ):
+            return ()
+        tool_calls = getattr(messages[-1], "tool_calls", None)
+        if not isinstance(tool_calls, Sequence):
+            return ()
+        return tuple(call for call in tool_calls if isinstance(call, Mapping))
 
     def after_agent(
         self,
@@ -433,6 +483,13 @@ class RuntimeControlMiddleware(AgentMiddleware):
         Every other call — which is every call while F6 is dark — takes the same
         exclusive permit Step 2 installed, and a call the admission cannot
         positively identify is one of them.
+
+        The body is then routed through F6's coordinator, which narrows a second
+        time — segment slot, then permit table — and makes the child's dispatch
+        durable before it is awaited. That routing happens *inside* the permit
+        and *inside* the bound call identity, so a batch child is gated by
+        everything a solo call is gated by and then by more. It is never a path
+        around this seam: overlap is something the seam grants.
         """
 
         admission = (
@@ -453,8 +510,43 @@ class RuntimeControlMiddleware(AgentMiddleware):
                 return await self._observe_async_tool_lifecycle(
                     request=request,
                     identity=identity,
-                    execute=execute,
+                    execute=self._batch_routed(request, execute),
                 )
+
+    @staticmethod
+    def _batch_routed(
+        request: ToolCallRequest,
+        execute: Callable[[], Awaitable[ToolHandlerResult]],
+    ) -> Callable[[], Awaitable[ToolHandlerResult]]:
+        """Return ``execute``, routed through F6 when this call is a planned child.
+
+        Returning the *same callable* when no F6 binding is installed is the
+        point: the dark path gains one context-variable read and no wrapper, no
+        extra frame, and no new object on the tool path.
+
+        The coordinator's own re-entry — permit acquisition and the durable
+        dispatch-intent append — happens between the lifecycle open and the body,
+        so a child that waited for a permit is a child whose observed lifetime
+        includes the wait. That is the honest reading: the call really did start
+        when the graph handed it over.
+        """
+
+        admission = RuntimeBatchAdmissionContext.current()
+        if admission is None:
+            return execute
+        tool_call_id = str(request.tool_call.get("id", "") or "").strip()
+        if not tool_call_id:
+            # An unidentifiable call can never be matched to a durable plan, so
+            # it is not a batch child and takes the unmediated path.
+            return execute
+
+        async def routed() -> ToolHandlerResult:
+            return await admission.arun_tool_body(
+                tool_call_id=tool_call_id,
+                body=execute,
+            )
+
+        return routed
 
     def _observe_sync_tool_lifecycle(
         self,
