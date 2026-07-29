@@ -38,6 +38,12 @@ from agent_runtime.artifacts.errors import (
     ArtifactStorageError,
     ArtifactTooLargeError,
 )
+from agent_runtime.artifacts.execution_mode import (
+    ArtifactExecutionMode,
+    ArtifactExecutionModeResolver,
+    ArtifactOperation,
+    ArtifactOperationAudit,
+)
 from agent_runtime.artifacts.cleanup_schedule import (
     ArtifactCleanupDeferredTenant,
     ArtifactCleanupLease,
@@ -50,6 +56,7 @@ from agent_runtime.artifacts.ports import (
     ArtifactGarbageCollectorPort,
     ArtifactLedgerPublisherPort,
     ArtifactMetadataStorePort,
+    ArtifactOperationAuditPort,
     ArtifactReferenceProviderPort,
     ArtifactRunScopeResolverPort,
     ArtifactSourceResolverPort,
@@ -78,6 +85,8 @@ __all__ = (
     "ArtifactCreateRequest",
     "ArtifactDigestMismatchError",
     "ArtifactError",
+    "ArtifactExecutionMode",
+    "ArtifactExecutionModeResolver",
     "ArtifactGcCandidate",
     "ArtifactGarbageCollectorPort",
     "ArtifactIdempotencyBinding",
@@ -92,6 +101,9 @@ __all__ = (
     "ArtifactListQuery",
     "ArtifactMetadataStorePort",
     "ArtifactMutationResult",
+    "ArtifactOperation",
+    "ArtifactOperationAudit",
+    "ArtifactOperationAuditPort",
     "ArtifactProvenance",
     "ArtifactPromotionRequest",
     "ArtifactProjection",
