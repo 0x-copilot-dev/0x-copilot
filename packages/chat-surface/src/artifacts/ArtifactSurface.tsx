@@ -44,6 +44,33 @@ function idempotencyKey(): string {
     : `artifact-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
+/**
+ * SHA-256 of the bytes about to be uploaded, as the server expects.
+ *
+ * Returns an empty object when `crypto.subtle` is unavailable (a non-secure
+ * context) rather than sending something wrong: the field is optional, and an
+ * absent integrity check is honest where an incorrect one rejects every write.
+ */
+async function contentDigest(
+  content: Uint8Array,
+): Promise<{ expectedDigest?: string }> {
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle === undefined) return {};
+  try {
+    const digest = await subtle.digest(
+      "SHA-256",
+      new Uint8Array(content).buffer,
+    );
+    return {
+      expectedDigest: Array.from(new Uint8Array(digest))
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join(""),
+    };
+  } catch {
+    return {};
+  }
+}
+
 export function ArtifactSurface(props: {
   readonly uri: string;
   readonly transport: Transport;
@@ -110,7 +137,14 @@ export function ArtifactSurface(props: {
         const response = await props.transport.createArtifactRevision({
           artifactId: data.detail.artifact.artifact_id,
           parentRevision: parent.revision,
-          expectedDigest: parent.content_digest,
+          // The digest of the bytes BEING UPLOADED, never the parent's.
+          // The server hashes the incoming stream and compares, so sending the
+          // parent digest made every real edit fail its own integrity check —
+          // a 422 that was invisible while the sealed-run 409 fired first.
+          // Optimistic concurrency is carried by `parentRevision` and the
+          // If-Match etag; this field is only a transit-integrity check, so it
+          // is omitted rather than faked when the platform cannot compute it.
+          ...(await contentDigest(content)),
           ...(etag !== undefined ? { etag } : {}),
           content,
           contentType: data.detail.artifact.media_type,
