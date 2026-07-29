@@ -32,17 +32,27 @@ measured still runs.
 :class:`CapabilityDiscoveryPhase` that plays the PRD's ``decision_kind``, and
 ``outcome_code`` is the closed :class:`CapabilityDiscoveryOutcome`.  No new
 event family, no new table, no new queue.
+
+**Counts reach the journal; the things counted do not.**  Each decision carries
+the bounded numeric extension the row already reserves — candidates, selection
+rank, result tokens, model turns — because an F1 case that declares a ceiling
+and grades it over an unpopulated field attests to safety nobody measured.  A
+quantity this call did not measure is left *unobserved* rather than written as
+zero, and the one fact that spans two calls,
+:class:`CapabilitySelectionCorrelator`, keeps its references in memory and emits
+only a position.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 import logging
 from time import perf_counter
 from typing import Any, ClassVar, Literal, Protocol, Self, runtime_checkable
+import weakref
 
 from pydantic import Field, NonNegativeInt, PositiveInt
 
@@ -58,7 +68,10 @@ from agent_runtime.capabilities.discovery.expansion import (
 )
 from agent_runtime.capabilities.discovery.ranker import DeterministicLexicalRanker
 from agent_runtime.context.memory.token_budget import TokenBudgetEvaluator
-from agent_runtime.control_plane.contracts import RunControlDecision
+from agent_runtime.control_plane.contracts import (
+    DECISION_COUNT_CEILINGS,
+    RunControlDecision,
+)
 from agent_runtime.control_plane.feature_modes import AgentQualityFeature
 from agent_runtime.control_plane.ports import (
     RunControlDecisionStorePort,
@@ -87,6 +100,16 @@ _EXPANSION_SECONDS = "capability_discovery_expansion_seconds"
 _LATENCY_BUCKETS = (0.01, 0.05, 0.1, 0.5, 1, 5, 15, 60)
 _TOKEN_BUCKETS = (16, 64, 256, 1024, 4096)
 _COUNT_BUCKETS = (1, 2, 5, 10)
+
+#: How many offered references one run's correlator will remember. A search
+#: answers with at most ``CapabilitySearchBounds.MAX_CANDIDATES``, so this is
+#: dozens of searches' worth; past it the correlator stops growing rather than
+#: letting a pathological run turn observation into a memory leak.
+_MAX_TRACKED_OFFERS = 256
+
+#: The rank ceiling, read from the record the producer feeds so the clamp and
+#: the validation bound cannot drift apart.
+_MAX_SELECTION_RANK = DECISION_COUNT_CEILINGS["selection_rank"]
 
 
 def _utc_now() -> datetime:
@@ -202,6 +225,13 @@ class CapabilityDiscoveryObservation(RuntimeContract):
     result_tokens: NonNegativeInt = 0
     candidate_count: NonNegativeInt = 0
     scanned_count: NonNegativeInt = 0
+    #: Where the reference this call *selected* sat in the search that offered
+    #: it, 1-based. ``None`` means this call selected nothing whose position is
+    #: knowable — a search, which offers references rather than choosing one,
+    #: and a request no reference could be parsed from. An observed ``0`` is the
+    #: opposite and much stronger statement: this call named a reference that no
+    #: search in this run ever returned, which is the guessed-reference probe.
+    selection_rank: int | None = Field(default=None, ge=0, le=_MAX_SELECTION_RANK)
 
 
 class CapabilityExpansionObservation(RuntimeContract):
@@ -243,6 +273,86 @@ class CapabilityExpansionObservation(RuntimeContract):
             deadline_exceeded=result.deadline_exceeded,
             servers_by_state=by_state,
         )
+
+
+@dataclass
+class CapabilitySelectionCorrelator:
+    """Remember where a run offered each reference, so a selection has a rank.
+
+    Selection recall is a *pair* of facts measured at two different seams: a
+    search offers references in a ranked order, and some later describe or
+    invoke picks one of them. Neither call knows the other's half, so the rank
+    only exists if something spans them. This is that something, and it is
+    deliberately the smallest possible one — a run-scoped ``ref -> position``
+    map, nothing else.
+
+    **It holds references and emits only numbers.** The map is in-memory for
+    the life of one run's bridge tools and is never serialised, never journaled,
+    and never handed to an observer. What leaves this object is an ``int``.
+
+    **First offer wins.** A reference that comes back from two searches keeps
+    the position it held when it first became selectable to the model, which is
+    the search that actually put it in front of the model. Taking the best of
+    several would let a run improve its own recall score by searching again.
+
+    **Zero is a measurement, not a gap.** ``rank_for`` answers ``0`` for a
+    reference no search in this run offered — the guessed or forged reference —
+    and that is a stronger statement than "unknown", which is why callers pass
+    it through as an observed value rather than as ``None``.
+    """
+
+    _ranks: dict[str, int] = field(default_factory=dict, init=False, repr=False)
+
+    def record_offer(self, refs: Sequence[object]) -> None:
+        """Remember the 1-based position each newly offered reference held."""
+
+        for position, ref in enumerate(refs, start=1):
+            if not isinstance(ref, str) or not ref or ref in self._ranks:
+                continue
+            if len(self._ranks) >= _MAX_TRACKED_OFFERS:
+                return
+            # Clamped, not refused: a position past the record's ceiling still
+            # has to read as "came back, but far too deep" rather than vanish
+            # into "not observed" and leave a maximum-rank bound ungraded.
+            self._ranks[ref] = min(position, _MAX_SELECTION_RANK)
+
+    def rank_for(self, ref: object) -> int:
+        """Return where this run offered ``ref``, or ``0`` if it never did."""
+
+        if not isinstance(ref, str) or not ref:
+            return 0
+        return self._ranks.get(ref, 0)
+
+
+#: One correlator per shared observer instance, keyed by identity and dropped
+#: when that observer is collected. The three bridge wrappers are built with the
+#: *same* observer object, so keying on it is what lets a search in one wrapper
+#: and an invoke in another share a run's offer history without any new
+#: constructor argument reaching ``registration.py``.
+_SELECTION_CORRELATORS: dict[int, CapabilitySelectionCorrelator] = {}
+
+
+def _correlator_for(observer: object) -> CapabilitySelectionCorrelator:
+    """Return the correlator every wrapper sharing ``observer`` also sees.
+
+    Identity keying rather than equality keying: two structurally equal observer
+    groups belong to two different runs and must not pool their offers. An
+    observer that cannot be weak-referenced still gets a correlator, just an
+    unshared one, because degrading to "no correlation" is better than either
+    leaking an entry forever or failing the run.
+    """
+
+    key = id(observer)
+    existing = _SELECTION_CORRELATORS.get(key)
+    if existing is not None:
+        return existing
+    correlator = CapabilitySelectionCorrelator()
+    try:
+        weakref.finalize(observer, _SELECTION_CORRELATORS.pop, key, None)
+    except TypeError:
+        return correlator
+    _SELECTION_CORRELATORS[key] = correlator
+    return correlator
 
 
 @runtime_checkable
@@ -313,6 +423,10 @@ class ObservedCapabilityBridgeTool:
     observer: CapabilityDiscoveryObserver
     tool: CapabilityBridgeToolName
     clock: Callable[[], float] = perf_counter
+    #: Left unset by every production call site. When it is unset the shared
+    #: correlator for this wrapper's observer is used, which is how the three
+    #: wrappers registered together come to agree about one run's offers.
+    correlator: CapabilitySelectionCorrelator | None = None
 
     @property
     def name(self) -> str:
@@ -362,6 +476,35 @@ class ObservedCapabilityBridgeTool:
         except Exception:
             return 0
 
+    def _selection_rank(self, raw_input: object, answer: object) -> int | None:
+        """Correlate this call against what this run's searches have offered.
+
+        Two directions, one shared map. A search *writes* the map — the ranked
+        references it just put in front of the model — and reports no rank of
+        its own, because offering ten references is not selecting one and a
+        fabricated rank here would mask a genuinely bad one reported later by
+        the describe or invoke that did the selecting. A describe or invoke
+        *reads* it: the reference it names is placed against the search that
+        offered it, and answers ``0`` when no search in this run offered it at
+        all.
+
+        Every failure narrows to ``None`` — not observed — because a wrong rank
+        is worse than a missing one when a bound is graded over it.
+        """
+
+        try:
+            correlator = self.correlator or _correlator_for(self.observer)
+            if self.tool is CapabilityBridgeToolName.SEARCH_CAPABILITIES:
+                correlator.record_offer(_candidate_refs(self.tool, answer))
+                return None
+            requested = _requested_ref(raw_input)
+            if requested is None:
+                return None
+            return correlator.rank_for(requested)
+        except Exception:
+            _LOGGER.debug("capability_discovery.correlate_failed", exc_info=True)
+            return None
+
     async def _record(
         self,
         *,
@@ -380,6 +523,7 @@ class ObservedCapabilityBridgeTool:
                 result_tokens=(0 if answer is None else estimate_answer_tokens(answer)),
                 candidate_count=_candidate_count(self.tool, answer),
                 scanned_count=_scanned_count(self.tool, answer),
+                selection_rank=self._selection_rank(raw_input, answer),
             )
             await self.observer.observe(observation)
         except Exception:
@@ -443,6 +587,15 @@ class RunJournalDiscoveryDecisionRecorder:
     body, because two identical searches in one run are two decisions.  A
     digest-derived id would silently collapse them into one journal row and
     under-count the exact repetition the F4 controller most wants to see.
+
+    **Every row carries what this call measured, and nothing it did not.**
+    ``result_tokens`` and ``model_turns`` are known for every bridge call and
+    are always written.  ``candidate_count`` is written only for a search,
+    because a describe has no candidate list and a zero there would be a
+    measurement nobody took.  ``selection_rank`` is written only where a
+    selection happened.  Anything else is passed as ``None`` — *not observed* —
+    which the row carries as null, so a ceiling of zero keeps meaning "observed
+    to be zero" rather than "nobody looked".
     """
 
     store: RunControlDecisionStorePort
@@ -460,6 +613,7 @@ class RunJournalDiscoveryDecisionRecorder:
 
         try:
             self._ordinal += 1
+            is_search = observation.phase is CapabilityDiscoveryPhase.SEARCH
             decision = RunControlDecision.create(
                 decision_id=f"f3.{observation.phase.value}.{self._ordinal}",
                 run_id=self.run_id,
@@ -469,6 +623,14 @@ class RunJournalDiscoveryDecisionRecorder:
                 policy_revision=self.policy_revision,
                 input_digest=observation.input_digest,
                 outcome_code=observation.outcome.value,
+                candidate_count=(
+                    _clamped("candidate_count", observation.candidate_count)
+                    if is_search
+                    else None
+                ),
+                selection_rank=_clamped("selection_rank", observation.selection_rank),
+                result_tokens=_clamped("result_tokens", observation.result_tokens),
+                model_turns=_clamped("model_turns", observation.model_turns),
                 created_at=self.clock(),
             )
             await self.store.append(
@@ -640,6 +802,22 @@ class CapabilityDiscoveryObserverGroup:
                 _LOGGER.debug("capability_discovery.observer_failed", exc_info=True)
 
 
+def _clamped(name: str, value: int | None) -> int | None:
+    """Hold one measurement inside the ceiling its durable record enforces.
+
+    Clamped rather than dropped, and clamped rather than left to be refused at
+    validation.  Both alternatives fail *open*: a dropped or refused value reads
+    as "not observed", and a ``maximum_`` bound over an unobserved quantity is
+    either satisfied by absence or refuses to grade at all.  A clamped value is
+    still above every realistic ceiling a case declares, so a runaway producer
+    fails the bound it should fail instead of escaping it.
+    """
+
+    if value is None:
+        return None
+    return max(min(value, DECISION_COUNT_CEILINGS[name]), 0)
+
+
 def _answer_search_block(
     tool: CapabilityBridgeToolName,
     answer: object,
@@ -658,6 +836,47 @@ def _candidate_count(tool: CapabilityBridgeToolName, answer: object) -> int:
         return 0
     candidates = block.get("candidates")
     return len(candidates) if isinstance(candidates, (list, tuple)) else 0
+
+
+def _candidate_refs(
+    tool: CapabilityBridgeToolName,
+    answer: object,
+) -> tuple[object, ...]:
+    """Return the opaque references one search answered with, in rank order.
+
+    These never leave the correlator. They are read here, positioned there, and
+    only the position is ever emitted.
+    """
+
+    block = _answer_search_block(tool, answer)
+    if block is None:
+        return ()
+    candidates = block.get("candidates")
+    if not isinstance(candidates, (list, tuple)):
+        return ()
+    return tuple(
+        candidate.get("capability_ref")
+        for candidate in candidates
+        if isinstance(candidate, Mapping)
+    )
+
+
+def _requested_ref(raw_input: object) -> object | None:
+    """Return the opaque reference a describe or invoke request names, if any.
+
+    Accepts the three shapes the bridge adapters themselves accept — the parsed
+    request contract, a mapping, and a bare reference string — so the rank is
+    read from the same value the adapter acted on rather than from a
+    re-parse that could disagree with it. A request no reference can be read
+    from returns ``None``, which is reported as *not observed* rather than as an
+    observed miss.
+    """
+
+    if isinstance(raw_input, str):
+        return raw_input or None
+    if isinstance(raw_input, Mapping):
+        return raw_input.get("capability_ref")
+    return getattr(raw_input, "capability_ref", None)
 
 
 def _scanned_count(tool: CapabilityBridgeToolName, answer: object) -> int:
@@ -679,6 +898,7 @@ __all__ = (
     "CapabilityDiscoveryPhase",
     "CapabilityExpansionObservation",
     "CapabilityExpansionObserver",
+    "CapabilitySelectionCorrelator",
     "ObservedCapabilityBridgeTool",
     "ObservedTwoTierCapabilitySearch",
     "RunJournalDiscoveryDecisionRecorder",

@@ -14,6 +14,7 @@ from pydantic import ValidationError
 
 from agent_runtime.api.ports import EventStorePort
 from agent_runtime.control_plane.contracts import (
+    DECISION_COUNT_FIELDS,
     RunControlDecision,
     RunControlSnapshot,
 )
@@ -367,6 +368,10 @@ class EventJournalRunControlStore(
                     "outcome_code": payload.outcome_code,
                     "record_ref": payload.record_ref,
                     "parent_decision_refs": payload.parent_decision_refs,
+                    "candidate_count": payload.candidate_count,
+                    "selection_rank": payload.selection_rank,
+                    "result_tokens": payload.result_tokens,
+                    "model_turns": payload.model_turns,
                     "created_at": payload.created_at,
                 }
             )
@@ -375,7 +380,9 @@ class EventJournalRunControlStore(
                 run_id=event.run_id,
                 reason="malformed quality.decision.v1 payload",
             ) from exc
-        if event.payload != cls._decision_payload(decision):
+        if cls._observed_counts_spelled_out(event.payload) != cls._decision_payload(
+            decision
+        ):
             raise RunControlJournalCorruption(
                 run_id=event.run_id,
                 reason="decision event mirrors do not match the canonical record",
@@ -453,7 +460,28 @@ class EventJournalRunControlStore(
         return payload.model_dump(mode="json", exclude=excluded)
 
     @staticmethod
+    def _observed_counts_spelled_out(payload: dict[str, object]) -> dict[str, object]:
+        """Say a stored row's *unobserved* counts the way a fresh dump says them.
+
+        A ``quality.decision.v1`` row written before the numeric extension
+        existed carries none of the four keys; one written now by a producer
+        that measured nothing carries them as ``null``. Both make the identical
+        statement — not observed — so the mirror check must not read the
+        difference as corruption and refuse to replay every older row in the
+        journal.
+
+        This normalizes only *absence*. A key that is present keeps its value
+        exactly, so a stored count that disagrees with the canonical record
+        still fails the check it exists to fail.
+        """
+
+        missing = {name: None for name in DECISION_COUNT_FIELDS if name not in payload}
+        return {**payload, **missing} if missing else payload
+
+    @staticmethod
     def _decision_payload(decision: RunControlDecision) -> dict[str, object]:
+        """Mirror one decision into the closed event payload it is carried by."""
+
         return QualityDecisionPayload(
             schema_version=decision.schema_version,
             decision_id=decision.decision_id,
@@ -466,6 +494,10 @@ class EventJournalRunControlStore(
             outcome_code=decision.outcome_code,
             record_ref=decision.record_ref,
             parent_decision_refs=decision.parent_decision_refs,
+            candidate_count=decision.candidate_count,
+            selection_rank=decision.selection_rank,
+            result_tokens=decision.result_tokens,
+            model_turns=decision.model_turns,
             created_at=decision.created_at,
         ).model_dump(mode="json")
 

@@ -1,6 +1,8 @@
 """Shared control-plane contracts for one agent-runtime execution."""
 
 from agent_runtime.control_plane.contracts import (
+    DECISION_COUNT_CEILINGS,
+    DECISION_COUNT_FIELDS,
     BudgetEnvelope,
     RunControlDecision,
     RunControlSnapshot,
@@ -88,6 +90,8 @@ __all__ = [
     "AGENT_QUALITY_FEATURE_POLICIES",
     "AgentQualityFeature",
     "BoundRevision",
+    "DECISION_COUNT_CEILINGS",
+    "DECISION_COUNT_FIELDS",
     "BudgetEnvelope",
     "FeatureFallback",
     "FeatureMode",
