@@ -45,6 +45,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import StructuredTool
 
 from agent_runtime.capabilities.concurrency import (
+    ApprovalRequirement,
     BatchSegmentMode,
     BatchSegmentReason,
     ConcurrencyMode,
@@ -310,6 +311,11 @@ class TestAResourceSubjectIsSerialAtTheGraphSeam:
                     source=PolicySource.PRODUCT_CATALOG,
                     mode=ConcurrencyMode.PARALLEL_SAFE,
                     side_effect=SideEffectKind.READ,
+                    # Declared so this fixture keeps testing the *resource*
+                    # barrier. Without it the approval floor would narrow the
+                    # mode first and the assertions below would be passing for
+                    # the wrong reason.
+                    approval_requirement=ApprovalRequirement.NEVER,
                     max_parallelism=_FANOUT,
                     resource_key_template=ResourceKeyTemplate.from_template(
                         "{connector}/{object}"

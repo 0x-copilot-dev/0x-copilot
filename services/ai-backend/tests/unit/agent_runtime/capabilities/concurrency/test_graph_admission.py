@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from agent_runtime.capabilities.concurrency import (
+    ApprovalRequirement,
     BatchChildExecutionError,
     BatchChildExecutionReason,
     BatchChildTransitionWrite,
@@ -184,6 +185,7 @@ def _catalog() -> dict[str, tuple[CapabilityConcurrencyDeclaration, ...]]:
                 source=PolicySource.PRODUCT_CATALOG,
                 mode=ConcurrencyMode.PARALLEL_SAFE,
                 side_effect=SideEffectKind.READ,
+                approval_requirement=ApprovalRequirement.NEVER,
                 max_parallelism=_WIDTH,
             ),
         )

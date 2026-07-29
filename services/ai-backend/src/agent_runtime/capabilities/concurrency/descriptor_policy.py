@@ -21,11 +21,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 import hashlib
-from typing import ClassVar, Self
+from typing import ClassVar, Final, Self
 
 from pydantic import Field, model_validator
 
 from agent_runtime.capabilities.concurrency.contracts import (
+    ApprovalRequirement,
     ConcurrencyBounds,
     ConcurrencyMode,
     ConcurrencyPolicy,
@@ -46,6 +47,12 @@ from agent_runtime.capabilities.concurrency.errors import (
 )
 from agent_runtime.execution.contracts import RuntimeContract
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_bytes
+
+
+#: Wire key for the one declarable fact that is not a :class:`ConcurrencyPolicy`
+#: attribute. Named once here so the operator catalog, the parser, and the
+#: declaration cannot drift apart the way a literal in three places would.
+APPROVAL_REQUIREMENT_KEY: Final[str] = "approval_requirement"
 
 
 class ConcurrencyPolicyRejection(RuntimeContract):
@@ -91,6 +98,16 @@ class CapabilityConcurrencyDeclaration(RuntimeContract):
     crossed. It is never read out of the payload, and
     ``CONSERVATIVE_DEFAULT`` is not an admissible declaration source — that
     member is the resolver's floor, not a claim anyone may make.
+
+    ``approval_requirement`` is the one declarable field that is deliberately
+    **not** a member of :class:`ConcurrencyPolicyField`. Every other field names
+    an attribute of the resolved :class:`ConcurrencyPolicy`, which is a
+    published cross-language record mirrored field-for-field in
+    ``packages/api-types``; this one names a fact about the capability that the
+    resolver *translates* into that record's ``mode`` rather than carrying onto
+    the wire. It is folded across sources by :meth:`approval_narrowest`, the
+    same ``narrowest`` minimum the closed fields use — so a later source may
+    make a capability more approval-bound and never less.
     """
 
     CAPABILITY_REF_PATTERN: ClassVar[str] = r"^cap_[0-9a-f]{32}$"
@@ -100,6 +117,7 @@ class CapabilityConcurrencyDeclaration(RuntimeContract):
     mode: ConcurrencyMode | None = None
     side_effect: SideEffectKind | None = None
     idempotency: IdempotencyKind | None = None
+    approval_requirement: ApprovalRequirement | None = None
     resource_key_template: ResourceKeyTemplate | None = None
     max_parallelism: int | None = Field(
         default=None,
@@ -127,6 +145,30 @@ class CapabilityConcurrencyDeclaration(RuntimeContract):
             for policy_field in ConcurrencyPolicyField
             if getattr(self, policy_field.value) is not None
         )
+
+    @staticmethod
+    def approval_narrowest(
+        declarations: Sequence[CapabilityConcurrencyDeclaration],
+    ) -> ApprovalRequirement:
+        """Return the narrowest approval requirement these sources jointly support.
+
+        ``None`` on a declaration means *not declared*, exactly as it does for
+        every closed field, so an absent claim leaves the others untouched.
+        When **no** source declares one at all the answer is the vocabulary's
+        conservative floor, ``UNKNOWN`` — which is why an operator who wants a
+        capability to overlap has to say that it never pauses for a human, and
+        why every catalog written before this field existed resolves to serial
+        rather than silently keeping the overlap it was never entitled to.
+        """
+
+        declared = tuple(
+            declaration.approval_requirement
+            for declaration in declarations
+            if declaration.approval_requirement is not None
+        )
+        if not declared:
+            return ApprovalRequirement.conservative()
+        return ApprovalRequirement.narrowest(*declared)
 
     def establish(self) -> ConcurrencyPolicy:
         """Return the policy this declaration establishes as the resolution base.
@@ -245,12 +287,41 @@ class ConcurrencyDescriptorParser:
                 )
             if parsed is not None:
                 values[policy_field.value] = parsed
+        approval = self._parse_approval(mapping.get(APPROVAL_REQUIREMENT_KEY))
+        if approval is not None:
+            values[APPROVAL_REQUIREMENT_KEY] = approval
         return CapabilityConcurrencyDeclaration(
             capability_ref=capability_ref,
             source=source,
             rejections=tuple(rejections),
             **values,
         )
+
+    @staticmethod
+    def _parse_approval(raw: object) -> ApprovalRequirement | None:
+        """Return the declared approval requirement, or ``None`` if undeclared.
+
+        Parsed on its own because ``approval_requirement`` is intentionally not
+        a member of :class:`ConcurrencyPolicyField` — that vocabulary names
+        attributes of the wire-published :class:`ConcurrencyPolicy`, and this
+        fact never reaches the wire. An unparseable value lands on the
+        vocabulary's conservative floor, the same outcome the generic path gives
+        every other enum. No typed rejection accompanies it: a
+        :class:`ConcurrencyPolicyRejection` must name a closed policy field and
+        there is none to name, and the safety consequence is identical either
+        way — the floor is ``UNKNOWN``, and ``UNKNOWN`` is serial.
+        """
+
+        if raw is None:
+            return None
+        if isinstance(raw, ApprovalRequirement):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return ApprovalRequirement(raw.strip().lower())
+            except ValueError:
+                pass
+        return ApprovalRequirement.conservative()
 
     @classmethod
     def _parse_field(
@@ -300,6 +371,11 @@ class ConcurrencyPolicyResolution(RuntimeContract):
         pattern=CapabilityConcurrencyDeclaration.CAPABILITY_REF_PATTERN
     )
     policy: ConcurrencyPolicy
+    #: The folded approval fact, retained so *why* a policy is serial stays
+    #: readable after the translation into ``mode`` has happened. It is not part
+    #: of ``policy`` because ``policy`` is a wire-published record; keeping it
+    #: here means a later source — a run-scoped one, say — can still narrow it.
+    approval_requirement: ApprovalRequirement = ApprovalRequirement.conservative()
     considered_sources: tuple[PolicySource, ...] = ()
     contributing_sources: tuple[PolicySource, ...] = ()
     rejections: tuple[ConcurrencyPolicyRejection, ...] = ()
@@ -311,19 +387,29 @@ class ConcurrencyPolicyResolution(RuntimeContract):
         *,
         capability_ref: str,
         policy: ConcurrencyPolicy,
+        approval_requirement: ApprovalRequirement = ApprovalRequirement.conservative(),
         considered_sources: Sequence[PolicySource] = (),
         contributing_sources: Sequence[PolicySource] = (),
         rejections: Sequence[ConcurrencyPolicyRejection] = (),
     ) -> Self:
-        """Build a resolution and bind its policy digest for plan lineage."""
+        """Build a resolution, applying approval and binding the policy digest.
 
+        The narrowing happens *here*, before the digest is taken, so the digest
+        is always of the policy this resolution actually holds. A caller cannot
+        obtain a resolution whose approval fact and concurrency posture
+        disagree, because this is the only constructor the resolver and the
+        graph seam use.
+        """
+
+        narrowed = policy.narrowed_by_approval(approval_requirement)
         return cls(
             capability_ref=capability_ref,
-            policy=policy,
+            policy=narrowed,
+            approval_requirement=approval_requirement,
             considered_sources=tuple(considered_sources),
             contributing_sources=tuple(contributing_sources),
             rejections=tuple(rejections),
-            policy_digest=cls.digest_of(policy),
+            policy_digest=cls.digest_of(narrowed),
         )
 
     @classmethod
@@ -389,6 +475,13 @@ class ConcurrencyPolicyResolver:
         return ConcurrencyPolicyResolution.of(
             capability_ref=capability_ref,
             policy=policy.model_copy(update={"policy_source": effective_source}),
+            # Folded over *every* considered source, not only the contributing
+            # ones: a source whose approval claim changed no closed field still
+            # narrows this, because narrowing here is what "changed" would have
+            # meant if the fact lived on the policy.
+            approval_requirement=CapabilityConcurrencyDeclaration.approval_narrowest(
+                ordered
+            ),
             considered_sources=tuple(declaration.source for declaration in ordered),
             contributing_sources=tuple(dict.fromkeys(contributing)),
             rejections=rejections,
@@ -435,6 +528,7 @@ class ConcurrencyPolicyResolver:
 
 
 __all__ = (
+    "APPROVAL_REQUIREMENT_KEY",
     "CapabilityConcurrencyDeclaration",
     "ConcurrencyDescriptorParser",
     "ConcurrencyNarrowing",

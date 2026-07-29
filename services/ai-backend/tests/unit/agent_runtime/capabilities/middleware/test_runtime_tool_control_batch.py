@@ -38,6 +38,7 @@ from langchain_core.runnables import Runnable
 from langchain_core.tools import StructuredTool
 
 from agent_runtime.capabilities.concurrency import (
+    ApprovalRequirement,
     BatchChildTransitionWrite,
     BatchExecutionCoordinator,
     BatchJournalWrite,
@@ -208,12 +209,18 @@ def _declarations(
     *,
     mode: ConcurrencyMode = ConcurrencyMode.PARALLEL_SAFE,
     side_effect: SideEffectKind = SideEffectKind.READ,
+    approval_requirement: ApprovalRequirement = ApprovalRequirement.NEVER,
 ) -> dict[str, tuple[CapabilityConcurrencyDeclaration, ...]]:
     """Return the operator catalog entry that makes ``observed_tool`` overlap.
 
     ``PRODUCT_CATALOG`` is the only source that may *establish* a policy, which
     is why an operator declaration — not a connector's self-description — is
     what an overlapping deployment turns on.
+
+    ``approval_requirement`` is part of that turn-on and not a detail: the
+    conservative floor is ``UNKNOWN``, which narrows the mode to serial, so an
+    operator who wants overlap has to state that the capability never pauses for
+    a human. Declaring parallel-safe alone no longer buys anything.
     """
 
     return {
@@ -223,6 +230,7 @@ def _declarations(
                 source=PolicySource.PRODUCT_CATALOG,
                 mode=mode,
                 side_effect=side_effect,
+                approval_requirement=approval_requirement,
                 max_parallelism=_FANOUT,
             ),
         )
@@ -234,8 +242,14 @@ def _admission(
     *,
     declarations: Mapping[str, tuple[CapabilityConcurrencyDeclaration, ...]],
     ceiling: int = _FANOUT,
+    approvals: object = None,
 ) -> RunBatchAdmission:
-    """Compose exactly what the worker's composition root composes."""
+    """Compose exactly what the worker's composition root composes.
+
+    ``approvals`` is the run-scoped approval surface. ``None`` is what the
+    worker wires today, and it means the seam establishes nothing about
+    approval — so only a catalog declaration can permit overlap.
+    """
 
     gate = ConcurrencyKillSwitchGate(
         snapshot_allowance=ConcurrencyAllowance(
@@ -266,6 +280,7 @@ def _admission(
         snapshot=snapshot,
         org_id=_ORG,
         trace_id=_TRACE,
+        approvals=approvals,  # type: ignore[arg-type]
     )
 
 

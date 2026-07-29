@@ -5,6 +5,8 @@ from collections.abc import Mapping, Sequence
 import pytest
 
 from agent_runtime.capabilities.concurrency import (
+    APPROVAL_REQUIREMENT_KEY,
+    ApprovalRequirement,
     BatchOperation,
     BatchPlanner,
     BatchSegmentMode,
@@ -59,6 +61,10 @@ class DescriptorFixtureMixin:
         ConcurrencyPolicyField.MODE.value: ConcurrencyMode.PARALLEL_SAFE.value,
         ConcurrencyPolicyField.SIDE_EFFECT.value: SideEffectKind.READ.value,
         ConcurrencyPolicyField.IDEMPOTENCY.value: IdempotencyKind.NATURAL.value,
+        # A catalog entry that wants overlap must also state that the capability
+        # never pauses for a human: the approval floor is ``UNKNOWN``, and an
+        # unknown approval requirement narrows the mode all the way to serial.
+        APPROVAL_REQUIREMENT_KEY: ApprovalRequirement.NEVER.value,
         ConcurrencyPolicyField.RESOURCE_KEY_TEMPLATE.value: "{connector}/{object}",
         ConcurrencyPolicyField.MAX_PARALLELISM.value: 4,
         ConcurrencyPolicyField.RATE_LIMIT_SCOPE.value: ConcurrencyScope.CONNECTOR.value,

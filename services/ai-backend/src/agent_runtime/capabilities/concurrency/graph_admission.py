@@ -54,6 +54,37 @@ work that never reached the connector.
 malformed tool call to a journal that would not accept the plan, ends with the
 turn unplanned and therefore serial. The only exception this module raises is the
 refusal above, which is a decision rather than a fault.
+
+**Approval-gated work is never planned at all, whatever the catalog says.** The
+declared effect class and the approval requirement were decided by authorities
+that never consulted each other: an operator could write ``side_effect=read`` and
+``mode=parallel_safe`` about a capability whose every dispatch opens a human
+decision, and the planner would admit the whole turn to one parallel segment.
+:class:`GraphApprovalRequirementSource` is the run-scoped half of that fact — the
+tool-use policy's ``interrupt_on`` set, the connector's live auth state — folded
+with the catalog's half by ``narrowest``, so a run may only ever make a
+capability *more* approval-bound than the catalog claimed.
+
+A call that may park is then refused a plan entry, which is the same route this
+module already takes for everything it cannot positively establish, and it is
+deliberately stronger than planning it into serial segments. A parked child under
+the coordinator's segment gate holds that gate while it waits on a person: its
+siblings wait out the 300-second admission budget and are then refused, and the
+suspend itself is settled durably as ``FAILED``, because a ``GraphInterrupt``
+reaches the coordinator as an ordinary ``Exception``. An unplanned turn has none
+of that — it is the pre-F6 exclusive permit, which parks one call at a time and
+records nothing it would later have to retract.
+
+One consequence is deliberate and worth stating plainly, because it narrows what
+F6 plans at all: **an undeclared capability is now unplannable, not merely
+serial.** Silence about a capability includes silence about whether it parks, and
+the default deployment policy already gates ``call_mcp_tool`` — the single
+umbrella every connector action flows through — at ``write=ask``. So the common
+undeclared call is a parking one. Combined with the existing rule that one
+unusable call makes the whole turn unplannable, F6 now records a batch only when
+it positively knows *every* call in the turn is a non-parking capability an
+operator declared parallel-safe. Turns it does not know that about run exactly as
+they did before F6 existed.
 """
 
 from __future__ import annotations
@@ -81,6 +112,7 @@ from agent_runtime.capabilities.concurrency.child_execution import (
     RunScopedBatchChildWork,
 )
 from agent_runtime.capabilities.concurrency.contracts import (
+    ApprovalRequirement,
     BatchFailurePolicy,
     BatchOperation,
     ConcurrencyPolicy,
@@ -193,6 +225,118 @@ class DeclaredConcurrencyPolicySource:
         )
 
 
+@runtime_checkable
+class GraphApprovalRequirementSource(Protocol):
+    """Answer whether one graph-visible call's dispatch can park for approval.
+
+    This is the *run-scoped* half of the approval fact, and it exists because
+    the catalog half cannot cover it. A ``PRODUCT_CATALOG`` author can say that
+    a capability's own execution involves no human decision; they cannot know
+    that **this run's** tool-use policy sets the ``read`` axis to ``ask``, or
+    that the connector this call targets is currently unauthenticated and will
+    open a Connect card. Those facts belong to the run, arrive after the catalog
+    was written, and can only narrow — which is exactly the shape F6.1 already
+    composes.
+
+    The two known production sources are the ``interrupt_on`` map the tool-use
+    policy enforcer builds (keyed by graph tool name) and the MCP access gate's
+    live auth state. Neither is reachable from this package, so this is a port:
+    declared here, satisfied by whoever composes the run.
+    """
+
+    def approval_requirement_for(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> ApprovalRequirement:
+        """Return what this run knows about the call's approval requirement."""
+
+
+class DeclaredApprovalRequirementSource:
+    """Answer from an explicit set of tool names this run will interrupt on.
+
+    Models the one production fact that is already computed and already keyed
+    the right way: ``EnforcedToolSurface.interrupt_on``. A tool named there
+    parks on every dispatch under ``require`` and on the first under ``ask``,
+    so ``ALWAYS`` is the honest reading for both — neither permits overlap, and
+    distinguishing them would be a distinction without a decision.
+
+    Everything else answers ``unknown_requirement``, which defaults to
+    ``UNKNOWN``. A caller that has genuinely enumerated its run's whole approval
+    surface may pass ``NEVER`` for the remainder; a caller that has only a
+    partial view must not, and gets serial for the rest.
+    """
+
+    __slots__ = ("_gated", "_unknown_requirement")
+
+    def __init__(
+        self,
+        gated_tool_names: Sequence[str] | frozenset[str] = (),
+        *,
+        unknown_requirement: ApprovalRequirement = ApprovalRequirement.UNKNOWN,
+    ) -> None:
+        self._gated = frozenset(
+            name.strip() for name in gated_tool_names if isinstance(name, str)
+        ) - {""}
+        self._unknown_requirement = unknown_requirement
+
+    def approval_requirement_for(
+        self,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> ApprovalRequirement:
+        """Return ``ALWAYS`` for a gated tool, else the configured remainder."""
+
+        del arguments
+        if tool_name.strip() in self._gated:
+            return ApprovalRequirement.ALWAYS
+        return self._unknown_requirement
+
+
+class GraphApprovalRequirementResolver:
+    """The single fail-closed reading of an approval source's answer.
+
+    Two absences that look alike are kept apart, exactly as F6.1 keeps them
+    apart for declarations:
+
+    - **No source at all** answers ``None`` — *not declared*. The catalog's own
+      value survives untouched, which is what an absent declaration has always
+      meant. This is not a hole: the catalog's structural default is already
+      ``UNKNOWN``, so a deployment where nobody has said anything about approval
+      is serial by the field's default rather than by this resolver's.
+    - **A source that exists and cannot answer** — one that raises, or returns
+      something outside the closed vocabulary — answers ``UNKNOWN``. It was
+      asked and it failed, which is a fact, and the conservative one.
+
+    Collapsing the two would make wiring an approval source strictly worse than
+    not wiring one, which is the wrong incentive to build into a safety seam.
+    """
+
+    @staticmethod
+    def resolve(
+        source: GraphApprovalRequirementSource | None,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> ApprovalRequirement | None:
+        """Return the run's declaration, ``UNKNOWN`` on fault, or ``None``."""
+
+        if source is None:
+            return None
+        try:
+            requirement = source.approval_requirement_for(
+                tool_name=tool_name,
+                arguments=arguments,
+            )
+        except Exception:  # noqa: BLE001 - a source that fails answers unknown.
+            return ApprovalRequirement.UNKNOWN
+        if not isinstance(requirement, ApprovalRequirement):
+            return ApprovalRequirement.UNKNOWN
+        return requirement
+
+
 def graph_capability_key(*, tool_name: str, arguments: Mapping[str, Any]) -> str:
     """Return the opaque key one graph-visible call is declared under.
 
@@ -254,6 +398,7 @@ class RunBatchAdmission:
     """
 
     __slots__ = (
+        "_approvals",
         "_children",
         "_coordinator",
         "_deadline_at",
@@ -276,6 +421,7 @@ class RunBatchAdmission:
         org_id: str,
         trace_id: str,
         deadline_at: datetime | None = None,
+        approvals: GraphApprovalRequirementSource | None = None,
     ) -> None:
         self._recorder = recorder
         self._coordinator = coordinator
@@ -284,6 +430,7 @@ class RunBatchAdmission:
         self._org_id = org_id
         self._trace_id = trace_id
         self._deadline_at = deadline_at
+        self._approvals = approvals
         self._children: dict[str, PlannedGraphChild] = {}
         self._work: dict[str, RunScopedBatchChildWork] = {}
         self._planned_batches: set[str] = set()
@@ -483,6 +630,21 @@ class RunBatchAdmission:
             tool_name=tool_name,
             arguments=arguments,
         )
+        if self._approval_for(
+            resolution,
+            tool_name=tool_name,
+            arguments=arguments,
+        ).may_park:
+            # A capability whose dispatch can pause for a human is refused a
+            # plan entry entirely, which makes the whole turn unplannable and
+            # therefore serial on the pre-F6 exclusive permit. Planning it into
+            # serial *segments* would also forbid the overlap, but it would put
+            # a parked child under the coordinator's segment gate — where a
+            # sibling waits on the admission budget while the first one waits on
+            # a person, and where the suspend is settled durably as a failure.
+            # Not planning it is the route this module already documents for
+            # everything it cannot positively establish.
+            return None
         operation = BatchOperation(
             operation_id=identity.operation_id,
             # One turn's calls were all authorized under one snapshot, so they
@@ -523,6 +685,41 @@ class RunBatchAdmission:
             model_tool_call_id=model_tool_call_id,
         )
         return (planned, child_work, child)
+
+    def _approval_for(
+        self,
+        resolution: ConcurrencyPolicyResolution | None,
+        *,
+        tool_name: str,
+        arguments: Mapping[str, Any],
+    ) -> ApprovalRequirement:
+        """Return everything known about whether this call's dispatch can park.
+
+        The catalog's ``approval_requirement`` and the run's are two readings of
+        one fact, folded by ``narrowest`` like every other pair of F6
+        declarations: the run may only make a capability more approval-bound
+        than the catalog claimed, never less. A catalog that says ``NEVER`` and
+        a run whose tool-use policy gates the tool resolves to the run's answer,
+        which is the whole point — the catalog author could not have known.
+
+        An undeclared capability has no resolution and therefore no catalog
+        claim, which is the conservative floor. It is already unplannable for
+        other reasons; answering ``UNKNOWN`` here simply says so earlier.
+        """
+
+        declared = (
+            resolution.approval_requirement
+            if resolution is not None
+            else ApprovalRequirement.conservative()
+        )
+        run_requirement = GraphApprovalRequirementResolver.resolve(
+            self._approvals,
+            tool_name=tool_name,
+            arguments=arguments,
+        )
+        if run_requirement is None:
+            return declared
+        return ApprovalRequirement.narrowest(declared, run_requirement)
 
     @staticmethod
     def _resource_fingerprints(
@@ -602,7 +799,10 @@ class RunBatchAdmission:
 
 
 __all__ = (
+    "DeclaredApprovalRequirementSource",
     "DeclaredConcurrencyPolicySource",
+    "GraphApprovalRequirementResolver",
+    "GraphApprovalRequirementSource",
     "GraphBatchBounds",
     "GraphBatchMessages",
     "GraphConcurrencyPolicySource",
