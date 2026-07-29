@@ -110,6 +110,16 @@ class TrajectoryProjector:
     """
 
     _CAPABILITY_KEYS = ("capability_id", "tool_name", "tool", "operation")
+    #: The decision row's numeric extension, in payload spelling. A step counts
+    #: as *measured* when any one of them is present, so a producer that
+    #: honestly reports zero candidates is distinguishable from one that
+    #: reports nothing at all.
+    _DISCOVERY_COUNT_KEYS = (
+        "candidate_count",
+        "selection_rank",
+        "result_tokens",
+        "model_turns",
+    )
     _INVOCATION_RECORD_KINDS = frozenset(
         {
             "invocation_planned",
@@ -258,6 +268,11 @@ class TrajectoryProjector:
             ),
             discovery_phase=cls._discovery_text(payload, "phase"),
             discovery_outcome=cls._discovery_text(payload, "outcome_code"),
+            discovery_candidate_count=cls._discovery_int(payload, "candidate_count"),
+            discovery_recall_rank=cls._discovery_int(payload, "selection_rank"),
+            discovery_result_tokens=cls._discovery_int(payload, "result_tokens"),
+            discovery_model_turns=cls._discovery_int(payload, "model_turns"),
+            discovery_counts_observed=cls._discovery_counts_observed(payload),
             payload_digest=canonical_json_sha256(payload),
         )
 
@@ -269,18 +284,41 @@ class TrajectoryProjector:
         is shared with every other feature's decisions, so the ``feature``
         discriminator is what makes this projection F3-only: an F4 or F12
         decision passing through here contributes nothing.
-
-        Only ``phase`` and ``outcome_code`` are projectable from a real run.
-        The discovery counts a fixture case can assert — candidates, recall
-        rank, result tokens, model turns — are published as metrics rather than
-        persisted on the decision row, because ``quality.decision.v1`` has no
-        numeric field and this lane does not extend the closed event family.
         """
 
         if payload.get("feature") != "f3":
             return None
         value = payload.get(key)
         return value if isinstance(value, str) and value.strip() else None
+
+    @staticmethod
+    def _discovery_int(payload: Mapping[str, object], key: str) -> int:
+        """Project one member of the decision row's numeric extension.
+
+        Gated on the same ``feature`` discriminator as the text fields, so a
+        non-F3 decision that happens to carry counts contributes none of them.
+        An absent or non-integer value projects as ``0``; whether that zero was
+        *measured* is carried separately by ``discovery_counts_observed``,
+        because a ceiling of zero must not be satisfiable by absent data.
+        """
+
+        if payload.get("feature") != "f3":
+            return 0
+        value = payload.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return 0
+        return value
+
+    @classmethod
+    def _discovery_counts_observed(cls, payload: Mapping[str, object]) -> bool:
+        """Report whether this F3 row actually carried a numeric fact."""
+
+        if payload.get("feature") != "f3":
+            return False
+        return any(
+            isinstance(payload.get(key), int) and not isinstance(payload.get(key), bool)
+            for key in cls._DISCOVERY_COUNT_KEYS
+        )
 
     @staticmethod
     def _policy_text(payload: Mapping[str, object], key: str) -> str | None:

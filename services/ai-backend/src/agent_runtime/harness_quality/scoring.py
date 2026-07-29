@@ -527,6 +527,18 @@ class ModelInvocationTrajectoryScorer:
         )
 
 
+#: Every numeric expectation an F3 discovery case may declare. Naming them in
+#: one place is what lets the scorer refuse to grade a numeric assertion whose
+#: quantity was never measured.
+_DISCOVERY_NUMERIC_KEYS = (
+    "minimum_recall_rank",
+    "maximum_recall_rank",
+    "maximum_candidate_count",
+    "maximum_result_tokens",
+    "maximum_model_turns",
+)
+
+
 class CapabilityDiscoveryTrajectoryScorer:
     """Score the closed, body-free F3 capability-discovery projection.
 
@@ -544,10 +556,18 @@ class CapabilityDiscoveryTrajectoryScorer:
     * **end-to-end quality** — ``required_phases`` pins that the chain actually
       ran, and the token/turn ceilings pin that it stayed cheap.
 
-    Recall is checked over search steps specifically rather than over the whole
-    trajectory: a describe or invoke step has no rank to report, and folding
-    their zeroes into the same set would make every passing case look like a
-    recall miss.
+    Recall is checked over every discovery step, considering positive ranks
+    only. The rank is a *selection* fact — the position the reference the run
+    actually acted on held in the search that offered it — so on a real run it
+    is reported by the describe or invoke step that made the selection. Ignoring
+    zeroes is what makes that safe, and it preserves the original reason for
+    looking at search steps alone: a step with no rank to report contributes
+    nothing rather than reading as a miss.
+
+    Every numeric bound is refused outright when no step carried a measurement.
+    A ``maximum_`` bound over an unpopulated field is satisfied by the absence
+    of data, so without that refusal a green case would attest to safety nobody
+    observed.
     """
 
     scorer_id = "capability_discovery_trajectory"
@@ -582,10 +602,20 @@ class CapabilityDiscoveryTrajectoryScorer:
         search_steps = tuple(
             step for step in steps if step.discovery_phase == "capability_search"
         )
-        ranks = tuple(step.discovery_recall_rank for step in search_steps)
+        # Rank is read across every discovery step rather than over search
+        # steps alone. On a real run the rank is a *selection* fact: it is
+        # known when the model describes or invokes a reference and can be
+        # placed against the search that offered it, which is a describe/invoke
+        # step, not a search one. Folding the other phases in is safe because
+        # only positive ranks are considered, so a step with nothing to report
+        # still contributes nothing — the reason the original narrowing
+        # existed. An authored fixture that puts its rank on the search step
+        # scores identically.
+        ranks = tuple(step.discovery_recall_rank for step in steps)
         best_rank = min((rank for rank in ranks if rank > 0), default=0)
         result_tokens = sum(step.discovery_result_tokens for step in steps)
         model_turns = sum(step.discovery_model_turns for step in steps)
+        counts_observed = any(step.discovery_counts_observed for step in steps)
 
         checks = (
             (
@@ -624,6 +654,20 @@ class CapabilityDiscoveryTrajectoryScorer:
             unobserved = _string_set(tuple(required_phase_outcomes)) - phases
             if mismatched or unobserved:
                 reason = "capability_discovery_phase_outcome_mismatch"
+        # A numeric assertion that never saw a number is not a passing
+        # assertion. Every ``maximum_`` bound below is satisfied by an
+        # unpopulated field — ``maximum_recall_rank: 0`` and
+        # ``maximum_candidate_count: 0`` most dangerously, because they are how
+        # the security case says an unauthorized name must not come back from a
+        # search at all, and a bound of zero over absent data checks nothing.
+        # Failing closed here means a green case reports observed safety rather
+        # than missing evidence.
+        if (
+            reason is None
+            and not counts_observed
+            and any(key in expected for key in _DISCOVERY_NUMERIC_KEYS)
+        ):
+            reason = "capability_discovery_counts_unobserved"
         minimum_rank = _non_negative_int(expected.get("minimum_recall_rank", 0))
         if reason is None and minimum_rank and best_rank < minimum_rank:
             # ``best_rank`` is 0 when the target never appeared, so an absent

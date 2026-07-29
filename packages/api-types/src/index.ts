@@ -2458,6 +2458,28 @@ export interface QualityDecisionPayload {
   outcome_code: string;
   record_ref: string | null;
   parent_decision_refs: readonly string[];
+  /**
+   * The decision row's bounded numeric extension. Named, separately
+   * range-constrained counts rather than a numeric map, so the payload's key
+   * set stays closed and each quantity can state its own ceiling.
+   *
+   * `null` means *not observed*, which is deliberately distinct from an
+   * observed `0`: a ceiling of zero has to tell "nothing came back" apart from
+   * "nothing was measured". Rows written before this extension omit all four.
+   *
+   * A rank is a number — the thing ranked never travels with it.
+   */
+  /** Candidates this decision's search answered with. 0..64. */
+  candidate_count: number | null;
+  /**
+   * 1-based position the selected reference held in the search that offered
+   * it; `0` means it came back from no search at all. 0..64.
+   */
+  selection_rank: number | null;
+  /** Model-visible tokens this decision's answer cost. 0..1000000. */
+  result_tokens: number | null;
+  /** Model turns this decision consumed. 0..1000. */
+  model_turns: number | null;
   created_at: string;
 }
 

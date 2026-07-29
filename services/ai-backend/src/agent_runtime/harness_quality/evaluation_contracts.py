@@ -167,6 +167,12 @@ class TrajectoryStep(RuntimeContract):
     discovery_recall_rank: Annotated[int, Field(ge=0)] = 0
     discovery_result_tokens: Annotated[int, Field(ge=0)] = 0
     discovery_model_turns: Annotated[int, Field(ge=0)] = 0
+    #: Whether the four counts above were *measured* on this step, as opposed
+    #: to left at their zero default because the source carried no numeric
+    #: field. A ``maximum_`` ceiling of zero is satisfied by both, so without
+    #: this flag such a ceiling would pass on absent data and read as evidence
+    #: of safety that was never observed.
+    discovery_counts_observed: bool = False
     payload_digest: Sha256
 
 
@@ -1067,6 +1073,10 @@ def _without_empty_task_policy_projection(value: object) -> object:
         "discovery_recall_rank",
         "discovery_result_tokens",
         "discovery_model_turns",
+        # ``False`` compares equal to ``0`` here, so an unobserved step is
+        # dropped from the digest exactly as the zeroed counts beside it are.
+        # Manifests projected before the numeric extension keep their digests.
+        "discovery_counts_observed",
     }
     return {
         key: _without_empty_task_policy_projection(item)

@@ -122,6 +122,10 @@ class FixtureTrajectoryObservation(RuntimeContract):
     discovery_recall_rank: int = Field(default=0, ge=0)
     discovery_result_tokens: int = Field(default=0, ge=0)
     discovery_model_turns: int = Field(default=0, ge=0)
+    #: Whether the four counts above are authored measurements rather than
+    #: untouched defaults. A fixture discovery observation states this so the
+    #: fixture path and the real-event path agree on what a zero means.
+    discovery_counts_observed: bool = False
     payload_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
 
 
@@ -301,6 +305,7 @@ class FixtureOnlyCaseExecutor:
             discovery_recall_rank=observation.discovery_recall_rank,
             discovery_result_tokens=observation.discovery_result_tokens,
             discovery_model_turns=observation.discovery_model_turns,
+            discovery_counts_observed=observation.discovery_counts_observed,
             payload_digest=observation.payload_digest,
         )
 
