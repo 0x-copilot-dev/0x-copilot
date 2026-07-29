@@ -497,10 +497,13 @@ class TestTheWriteOrderingDetectsAnOverlappedEffect:
 
         result = _score(
             _WRITE,
+            # The same three segments, reordered so a write leads. Deliberately
+            # not a shorter tuple: a length change would fail an order check
+            # that only compared sizes, and this must fail on position alone.
             _mutated(
                 trajectory,
                 record_kind=_PLAN,
-                parallel_segment_modes=("serial", "parallel"),
+                parallel_segment_modes=("serial", "parallel", "serial"),
             ),
         )
 
@@ -977,7 +980,7 @@ class TestAFailingCaseActuallyBlocksTheSuite:
         overlapped = _mutated(
             trajectory,
             record_kind=_PLAN,
-            parallel_segment_modes=("serial", "parallel"),
+            parallel_segment_modes=("serial", "parallel", "serial"),
         )
 
         results = tuple(

@@ -1123,29 +1123,44 @@ def _f6_scenario(family: str) -> Mapping[str, object]:
             },
         },
         "parallel_write_after_planned_reads": {
-            "call_count": 3,
+            "call_count": 4,
             "after_observations": (
                 {
-                    "ordinal": 3,
+                    "ordinal": 4,
                     "record_kind": "plan_bound",
                     "kill_switch_reason": "snapshot_governs",
-                    # The reads are flushed into their own segment *before* the
-                    # write's barrier opens a new one, so the write is alone and
+                    # The exact segmentation ``BatchPlanner`` produces for two
+                    # independent reads followed by two writes. The reads are
+                    # flushed into their own segment *before* either write's
+                    # barrier opens a new one, so each write is alone and
                     # strictly after them.
+                    #
+                    # Both writes are here because they are serialized by
+                    # different rules, and only one of them is interesting.
+                    # ``policy_requires_serial`` is the easy case: the policy
+                    # said serial. ``effectful_operation`` is the load-bearing
+                    # one — that operation's policy declares ``parallel_safe``,
+                    # and it is refused the overlap on its effect class alone.
+                    # A fixture carrying only the mode-serial write would prove
+                    # nothing about an operator who mislabels a write.
                     "segments": (
                         ("parallel", "independent_reads", 2),
                         ("serial", "effectful_operation", 1),
+                        ("serial", "policy_requires_serial", 1),
                     ),
                 },
             ),
             "parallel_assertion": {
                 "required_record_kinds": ["plan_bound"],
                 # Order is the whole assertion: the set {parallel, serial} is
-                # equally true of a plan that put the write inside the overlap.
-                "required_segment_mode_order": ["parallel", "serial"],
+                # equally true of a plan that put the writes inside the overlap.
+                "required_segment_mode_order": ["parallel", "serial", "serial"],
                 "required_parallel_segment_reasons": ["independent_reads"],
                 "allowed_parallel_segment_reasons": ["independent_reads"],
-                "required_serial_segment_reasons": ["effectful_operation"],
+                "required_serial_segment_reasons": [
+                    "effectful_operation",
+                    "policy_requires_serial",
+                ],
                 "minimum_overlapping_operations": 2,
                 "maximum_overlapping_operations": 2,
                 "maximum_segment_width": 2,
