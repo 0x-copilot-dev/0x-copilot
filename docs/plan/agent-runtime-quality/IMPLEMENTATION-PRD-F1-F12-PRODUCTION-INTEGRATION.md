@@ -253,6 +253,25 @@ create a second planning queue.
       so no promoted configuration runs F3 without it.
 - [ ] **Step 10:** Complete F6 persisted batches, scoped permits, serial/parallel
       scheduling, cancellation, recovery, and kill switches.
+      **Five of six exit criteria are MET; the sixth needs a product decision, so
+      the step stays unticked.** Verified by the integration owner directly after
+      the gate lane stalled twice: unknown metadata is serial and sibling failure
+      is isolated (631 concurrency tests); the approvals authority is reached on
+      the single `RunBatchAdmission` construction site, which now passes
+      `approvals=` (30 wiring tests); cancel and restart are on the wired path
+      (15 tests); `rate_limit_scope` is consumed at `rate_limits.py:157` and
+      `TRUSTED_PROVIDER` has a production source in `provider_hints.py`, closing
+      ARQ-010's two named items; and the journal append cost is pinned linear.
+
+      **The open criterion is "independent curated reads improve p95 latency."**
+      What changed is *why* it cannot close. The gate previously refused because
+      F6's own critical-path cost was unmeasured and might have swamped the win;
+      BUG-20 made that cost linear and pinned it, so the objection is now purely
+      that a latency **number** requires real connectors — which is §18.5's
+      territory, not a unit suite's. Moving the criterion there is a defensible
+      call but it is a **re-scope of an exit criterion**, and doing that
+      unilaterally is exactly what makes a checkbox untrustworthy. It waits for
+      an explicit decision.
 
 **Wave B**
 
