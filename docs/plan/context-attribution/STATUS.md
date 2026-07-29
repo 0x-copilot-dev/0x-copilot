@@ -23,17 +23,44 @@ could proceed unblocked — all are reversible, none changes the contract shape:
 Implemented as a 6-phase workflow, not in the doc's PRD numbering (the doc's order is
 logical; this order is what parallelises safely without two agents fighting over a file).
 
-| Phase      | Contents                                                                                                          | State |
-| ---------- | ----------------------------------------------------------------------------------------------------------------- | ----- |
-| Foundation | `context_origin.py` — ContextOrigin, lifecycle, registry, declare/read seam                                       | —     |
-| Build      | tool footprints + declarations · snapshot + token counter · message classifier · deepagents adapter · persistence | —     |
-| Integrate  | `ModelInvocationMiddleware` hook, capture + reconcile, fail-open guard                                            | —     |
-| Gate       | AST conformance gate + pinned golden inventory (the keystone)                                                     | —     |
-| API        | `/v1/agent/runs/{id}/context`, conversation latest, SSE event, facade proxy                                       | —     |
-| Verify     | full-suite regression sweep + adversarial invariant review                                                        | —     |
+| Phase      | Contents                                                                                                          | State       |
+| ---------- | ----------------------------------------------------------------------------------------------------------------- | ----------- |
+| Foundation | `context_origin.py` — ContextOrigin, lifecycle, registry, declare/read seam                                       | **done**    |
+| Build      | tool footprints + declarations · snapshot + token counter · message classifier · deepagents adapter · persistence | **done**    |
+| Integrate  | `ModelInvocationMiddleware` hook, capture + reconcile, fail-open guard                                            | in progress |
+| Gate       | AST conformance gate + pinned golden inventory (the keystone)                                                     | pending     |
+| API        | `/v1/agent/runs/{id}/context`, conversation latest, SSE event, facade proxy                                       | pending     |
+| Verify     | full-suite regression sweep + adversarial invariant review                                                        | pending     |
 
 Phase states are updated as they land. See git log on this branch for what is actually
 committed.
+
+## Verified so far
+
+- **Full ai-backend unit suite: 7,866 passed, 107 skipped, 0 failures** at `a8d71900`,
+  and 929 green again after merging 8 commits of main. The ledger is additive — nothing
+  existing moved.
+- **P0 holds.** `ToolSchemaLedger.revision` produces a byte-identical digest to the
+  pre-change `_model_tool_schema_revision` (verified directly, not by eye). Prompt-cache
+  identity is intact, and `_model_tool_schema_revision` now delegates so the two cannot
+  drift apart later.
+- **The deepagents blind spot is now measured.** 35 library-owned prompt/tool constants,
+  **13,812 estimated tokens**, pinned as a golden fixture — a dependency bump that changes
+  any of them fails CI naming the constant. Largest: `TASK_TOOL_DESCRIPTION` 1,644,
+  `MEMORY_SYSTEM_PROMPT` 1,281, `EXECUTE_TOOL_DESCRIPTION` 693 (excluded on the web
+  profile, present on desktop — which is why occupancy is resolved through the live
+  profile rather than assumed).
+
+## Things worth a second look at review
+
+1. **`ThirdPartyContextOrigins` deliberately never registers harness profiles.** I nearly
+   "fixed" a `None` return by making it call `_ensure_web_harness_profiles_registered()`.
+   That would have been a real bug: `register_harness_profile` merges additively, and a
+   second registration collapses the per-child `extra_middleware` factory into fixed
+   instances — an observability read would have perturbed the topology it measures. The
+   refusal to register is correct and load-bearing; the test arranges registration itself.
+2. **`services/ai-backend/.coverage` is tracked in git** and churns on every test run.
+   Pre-existing, not from this branch, flagged as a separate task.
 
 ## Invariants under test
 
