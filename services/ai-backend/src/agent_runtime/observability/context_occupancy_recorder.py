@@ -775,12 +775,16 @@ class ContextOccupancyRecorder:
         unknown, so ``free_tokens`` will be ``None`` rather than a fabricated
         number (§4.5).
 
+        ``model_family`` doubles as the tokenizer selector: it is the
+        provider-native model name the counting chain routes on, so a segment is
+        counted with the tokenizer of the model it was actually sent to rather
+        than with a house default.
+
         Never raises. Every failure path yields a snapshot — possibly with no
         segments at all — because a missing row reads as "this call had no
         context", while an empty row reads as "we failed to measure this call".
         """
 
-        model = model_family
         try:
             materialized = MaterializedProviderRequest.of(request)
         except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
@@ -794,19 +798,23 @@ class ContextOccupancyRecorder:
             segments = (
                 *self._guarded(
                     ContextSegmentClass.SYSTEM,
-                    lambda: self._system_segments(materialized, plan=plan, model=model),
+                    lambda: self._system_segments(
+                        materialized, plan=plan, model=model_family
+                    ),
                 ),
                 *self._guarded(
                     ContextSegmentClass.TOOLS,
-                    lambda: self._tool_segments(materialized, model=model),
+                    lambda: self._tool_segments(materialized, model=model_family),
                 ),
                 *self._guarded(
                     ContextSegmentClass.MESSAGES,
-                    lambda: self._message_segments(materialized, model=model),
+                    lambda: self._message_segments(materialized, model=model_family),
                 ),
                 *self._guarded(
                     ContextSegmentClass.RESPONSE_FORMAT,
-                    lambda: self._response_format_segments(materialized, model=model),
+                    lambda: self._response_format_segments(
+                        materialized, model=model_family
+                    ),
                 ),
             )
         return self._build(
@@ -1314,9 +1322,17 @@ class ContextOccupancyRecorder:
         produce something. It produces a constant that is obviously not a real
         call id, which lands in the store as a visible anomaly rather than as a
         row that silently claims to describe a different call.
+
+        Wrapped rather than relying on ``getattr``'s default: the default only
+        covers a *missing* attribute, and this runs outside the per-class guards
+        — a raising identity here would be the one path in ``capture`` that
+        could still throw.
         """
 
-        value = getattr(identity, "model_call_id", None)
+        try:
+            value = getattr(identity, "model_call_id", None)
+        except Exception:  # noqa: BLE001 — unreadable is measured as absent
+            value = None
         if isinstance(value, str) and value.strip():
             return value.strip()
         return "model-call:unidentified"

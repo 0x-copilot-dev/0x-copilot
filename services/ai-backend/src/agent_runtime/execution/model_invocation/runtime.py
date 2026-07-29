@@ -1515,6 +1515,15 @@ class ModelInvocationMiddleware(AgentMiddleware):
         here rather than re-looking-up a pricing row keeps the denominator
         consistent with the route the attempt actually used, including on an
         alternate-route retry to a differently-sized deployment.
+
+        Capture is unconditional wherever the F10 binding is installed, while
+        *persistence* is gated on a wired store. That asymmetry is deliberate:
+        the snapshot is the input to both the durable row (§5) and the streamed
+        ``context_occupancy`` event (§7), so gating the measurement on a store
+        would make a streaming surface depend on persistence being configured.
+        The cost of measuring is bounded by §3.4's digest memoization — a
+        resident prompt and tool surface is tokenized once per process — and by
+        the fact that nothing here can fail a run.
         """
 
         try:
