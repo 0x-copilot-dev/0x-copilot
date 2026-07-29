@@ -71,6 +71,25 @@ class ExplodingMessage:
         raise RuntimeError("content is unavailable")
 
 
+class CountingContentMessage:
+    """A message whose ``content`` reads are counted.
+
+    Stands in for the real risk behind materializing once: ``content`` on a
+    library message is an ordinary attribute today, but it is not *contractually*
+    a cheap pure read, and the rule chain has seven rules that would each want
+    the same bytes.
+    """
+
+    def __init__(self, content: object) -> None:
+        self._content = content
+        self.reads = 0
+
+    @property
+    def content(self) -> object:
+        self.reads += 1
+        return self._content
+
+
 class ExplodingToolCallsMessage:
     """A readable turn whose ``tool_calls`` explode.
 

@@ -24,6 +24,20 @@ and
 carries its leading separator, so the parts of one message sum byte-for-byte
 back to the message.
 
+**Where the split deliberately stops.** ``ToolResultNote`` appends onto whatever
+part of a result the model reads, and for a *dict-shaped* result (an MCP
+``CallToolResult`` envelope, or a generic dict) that is a new ``content`` block
+or a new top-level key — not a trailing string. Once such a result is serialized
+into a ``ToolMessage`` the note sits inside the JSON body, without the separator,
+with its own characters JSON-escaped. Peeling it would mean re-deriving the
+producer's escaping and reassembling a non-contiguous remainder: a pattern guess
+over untrusted text, which is exactly what the single-sourced constants exist to
+avoid. So those note bytes stay attributed to ``tool_result``. The mis-attribution
+is bounded and lifecycle-safe — ``tool_result`` and both note origins are all
+``PER_RESULT``, so the lifecycle rollup a reader acts on is unchanged, and only
+the note-versus-body split within it under-reports. ``test_context_message_
+classifier`` pins this so the boundary cannot move silently.
+
 **Untrusted input, and what that costs.** Message content is model output, tool
 output, and user text: all untrusted (see the service's untrusted-inputs rule).
 Two consequences are designed for rather than assumed away. First, nothing here
@@ -54,7 +68,9 @@ to the measurement pass, not to the classifier.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
+import json
 import logging
 from typing import Annotated, ClassVar, Final, Literal
 
@@ -76,7 +92,6 @@ from agent_runtime.observability.context_origin import (
     ContextSegmentClass,
 )
 from agent_runtime.observability.redactor import Sensitive, SensitiveCategory
-from agent_runtime.surfaces_v2.canonical_json import canonical_json
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -236,13 +251,19 @@ class ClassifiedMessagePart(RuntimeContract):
 
     MAX_DETAIL_LENGTH: ClassVar[int] = 200
     MAX_LABEL_LENGTH: ClassVar[int] = 240
-    """Label bound, taken from ``ContextSegment`` rather than chosen here.
+    """Label bound, mirroring ``ContextSegment``'s rather than chosen here.
 
     A part exists to become a segment, so the two bounds must agree: a part that
     validated under a wider bound than the record it feeds would push the
     failure one step downstream, into the pass that can no longer fall back to
-    an ``UNDECLARED`` row for it.
+    an ``UNDECLARED`` row for it. The value is restated rather than imported
+    because ``context_occupancy`` pulls the token counter — and litellm behind
+    it — into the import graph, which an object that only slices strings should
+    not carry. Both are pinned together by a test.
     """
+
+    ENCODING: ClassVar[str] = "utf-8"
+    ENCODING_FALLBACK_ERRORS: ClassVar[str] = "surrogatepass"
 
     UNDECLARED_LIFECYCLE: ClassVar[ContextLifecycle] = ContextLifecycle.PER_TURN
     """Structural lifecycle for bytes no declaration covered.
@@ -280,7 +301,7 @@ class ClassifiedMessagePart(RuntimeContract):
         ``UNDECLARED`` part rather than letting it reach the model call.
         """
 
-        if self.byte_count != len(self.text.encode("utf-8")):
+        if self.byte_count != self.utf8_byte_count(self.text):
             msg = "byte_count must be the UTF-8 length of text"
             raise ValueError(msg)
         if self.origin is None:
@@ -307,6 +328,34 @@ class ClassifiedMessagePart(RuntimeContract):
         return self.origin is None
 
     @classmethod
+    def utf8_byte_count(cls, text: str) -> int:
+        """UTF-8 length of ``text``, tolerating the lone surrogates JSON allows.
+
+        ``"\\ud800"`` is a legal JSON string escape, so a provider response or an
+        MCP server can hand this runtime a Python ``str`` holding an unpaired
+        surrogate. A plain ``.encode("utf-8")`` raises on one, and every
+        construction site here is inside the classifier's fail-open guard — so
+        without this fallback an ordinary tool result carrying one stray escape
+        would be recorded as a zero-byte ``UNDECLARED`` part.
+
+        That failure mode is worse than it looks, and it is why this is a
+        correctness fix rather than a nicety. ``undeclared_tokens`` is defined
+        (§4.4) as *measured bytes matching no declaration*, expected to be **0**,
+        with any non-zero value actionable as a contract bug — and §9 pins that
+        with a hermetic run asserting it stays 0. Letting untrusted content
+        decide whether that alarm fires would make the one field that flags real
+        declaration breaches fire on text nobody declared wrong.
+
+        ``surrogatepass`` is the honest width: it encodes the surrogate in the
+        three bytes its UTF-8 form occupies, which is what the byte count is for.
+        """
+
+        try:
+            return len(text.encode(cls.ENCODING))
+        except UnicodeEncodeError:
+            return len(text.encode(cls.ENCODING, cls.ENCODING_FALLBACK_ERRORS))
+
+    @classmethod
     def declared(
         cls,
         origin: ContextOrigin,
@@ -327,7 +376,7 @@ class ClassifiedMessagePart(RuntimeContract):
             lifecycle=origin.lifecycle,
             third_party=origin.third_party,
             detail=detail,
-            byte_count=len(text.encode("utf-8")),
+            byte_count=cls.utf8_byte_count(text),
             item_count=item_count,
             text=text,
             origin=origin,
@@ -353,10 +402,54 @@ class ClassifiedMessagePart(RuntimeContract):
             lifecycle=cls.UNDECLARED_LIFECYCLE,
             third_party=False,
             detail=detail,
-            byte_count=len(text.encode("utf-8")),
+            byte_count=cls.utf8_byte_count(text),
             item_count=item_count,
             text=text,
             origin=None,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class MaterializedMessage:
+    """One untrusted message rendered to text **once**, for the whole rule chain.
+
+    Rendering a message is the expensive half of classification: a content block
+    that is not plain text is serialized to JSON, and a request can carry
+    hundreds of them. The rules, though, are a first-match-wins chain in which
+    several rules must look at the same text before one of them claims it — the
+    summary probe, the offload-stub probe, and the tool-result split each need
+    the whole body. Letting each rule materialize for itself made the cost a
+    multiple of the request size rather than the request size, against a §3.4
+    budget of p95 < 15 ms *including* the tokenizer. So the render happens here,
+    before the chain starts, and every rule reads the result.
+
+    Rendering once buys a correctness property too, not just speed. ``message``
+    is a library object this runtime does not own, and reading it is not
+    guaranteed to be pure — a lazily-built or streaming content property can
+    answer differently on a second read. One render means every rule sees the
+    same bytes, so the note split's "the parts sum back to the message" claim is
+    about a fixed string rather than about whatever the object last returned.
+
+    ``block_texts`` is positionally aligned with ``blocks`` so a rule that keeps
+    a subset of blocks (rule 5 separating thinking from answer text) recovers
+    its text by selection instead of by re-rendering. ``text`` is the whole
+    message: the raw string for string content, and the ordered join of
+    ``block_texts`` for block content.
+    """
+
+    message: object
+    detail: str
+    blocks: tuple[object, ...]
+    block_texts: tuple[str, ...]
+    text: str
+
+    def text_where(self, keep: Callable[[object], bool]) -> str:
+        """Join the already-rendered text of the blocks ``keep`` selects."""
+
+        return "".join(
+            rendered
+            for block, rendered in zip(self.blocks, self.block_texts, strict=True)
+            if keep(block)
         )
 
 
@@ -569,19 +662,19 @@ class ContextMessageClassifier:
 
         detail = cls.DETAIL_TEMPLATE.format(ordinal=ordinal)
         try:
+            materialized = cls._materialize(message, detail=detail)
             return (
-                cls._binary_parts(message, detail=detail)
-                or cls._summary_parts(message, detail=detail)
-                or cls._offload_stub_parts(message, detail=detail)
+                cls._binary_parts(materialized)
+                or cls._summary_parts(materialized)
+                or cls._offload_stub_parts(materialized)
                 or cls._tool_result_parts(
-                    message,
-                    detail=detail,
+                    materialized,
                     subagent_trace_call_ids=subagent_trace_call_ids,
                 )
-                or cls._assistant_parts(message, detail=detail)
-                or cls._state_file_parts(message, detail=detail)
-                or cls._user_parts(message, detail=detail)
-                or cls._undeclared_parts(message, detail=detail)
+                or cls._assistant_parts(materialized)
+                or cls._state_file_parts(materialized)
+                or cls._user_parts(materialized)
+                or cls._undeclared_parts(materialized)
             )
         except Exception:  # noqa: BLE001 — measurement never fails a run (§6.4)
             _LOGGER.warning(
@@ -597,9 +690,7 @@ class ContextMessageClassifier:
     @classmethod
     def _binary_parts(
         cls,
-        message: object,
-        *,
-        detail: str,
+        materialized: MaterializedMessage,
     ) -> tuple[ClassifiedMessagePart, ...]:
         """Rule 1 — base64 payloads, wherever in the request they landed.
 
@@ -609,15 +700,16 @@ class ContextMessageClassifier:
         what else the message is.
         """
 
-        blocks = cls._content_blocks(message)
-        encoded = tuple(block for block in blocks if cls._is_base64_block(block))
-        if not encoded and not cls._declares_base64_encoding(message):
+        encoded = tuple(
+            block for block in materialized.blocks if cls._is_base64_block(block)
+        )
+        if not encoded and not cls._declares_base64_encoding(materialized.message):
             return ()
         return (
             ClassifiedMessagePart.declared(
                 MessageContextOrigins.WORKSPACE_BINARY_B64,
-                text=cls._message_text(message),
-                detail=detail,
+                text=materialized.text,
+                detail=materialized.detail,
                 item_count=max(len(encoded), 1),
             ),
         )
@@ -625,9 +717,7 @@ class ContextMessageClassifier:
     @classmethod
     def _summary_parts(
         cls,
-        message: object,
-        *,
-        detail: str,
+        materialized: MaterializedMessage,
     ) -> tuple[ClassifiedMessagePart, ...]:
         """Rule 2 — a compaction summary standing in for evicted history.
 
@@ -636,22 +726,20 @@ class ContextMessageClassifier:
         turn is a compaction bug, and it is invisible until this row exists.
         """
 
-        if not cls._is_summary_message(message):
+        if not cls._is_summary_message(materialized):
             return ()
         return (
             ClassifiedMessagePart.declared(
                 MessageContextOrigins.SUMMARY,
-                text=cls._message_text(message),
-                detail=detail,
+                text=materialized.text,
+                detail=materialized.detail,
             ),
         )
 
     @classmethod
     def _offload_stub_parts(
         cls,
-        message: object,
-        *,
-        detail: str,
+        materialized: MaterializedMessage,
     ) -> tuple[ClassifiedMessagePart, ...]:
         """Rule 3 — the bounded preview an oversized result was replaced by.
 
@@ -660,24 +748,23 @@ class ContextMessageClassifier:
         the compressed form still costs".
         """
 
-        if not cls._is_tool_message(message):
+        if not cls._is_tool_message(materialized.message):
             return ()
-        if not cls._carries_offload_stub(message):
+        if not cls._carries_offload_stub(materialized):
             return ()
         return (
             ClassifiedMessagePart.declared(
                 MessageContextOrigins.OFFLOAD_STUB,
-                text=cls._message_text(message),
-                detail=detail,
+                text=materialized.text,
+                detail=materialized.detail,
             ),
         )
 
     @classmethod
     def _tool_result_parts(
         cls,
-        message: object,
+        materialized: MaterializedMessage,
         *,
-        detail: str,
         subagent_trace_call_ids: frozenset[str],
     ) -> tuple[ClassifiedMessagePart, ...]:
         """Rule 4 — a tool result, with its appended notes split off the tail.
@@ -692,13 +779,15 @@ class ContextMessageClassifier:
         zero-byte result row, but a genuinely empty result should still appear.
         """
 
-        if not cls._is_tool_message(message):
+        if not cls._is_tool_message(materialized.message):
             return ()
-        remainder, notes = cls._split_notes(cls._message_text(message))
+        detail = materialized.detail
+        remainder, notes = cls._split_notes(materialized.text)
         origin = (
             MessageContextOrigins.SUBAGENT_TRACE
             if cls._is_subagent_trace_result(
-                message, subagent_trace_call_ids=subagent_trace_call_ids
+                materialized.message,
+                subagent_trace_call_ids=subagent_trace_call_ids,
             )
             else MessageContextOrigins.TOOL_RESULT
         )
@@ -716,9 +805,7 @@ class ContextMessageClassifier:
     @classmethod
     def _assistant_parts(
         cls,
-        message: object,
-        *,
-        detail: str,
+        materialized: MaterializedMessage,
     ) -> tuple[ClassifiedMessagePart, ...]:
         """Rule 5 — thinking, then tool calls, then answer text.
 
@@ -731,22 +818,21 @@ class ContextMessageClassifier:
         expects to dominate and usually does not.
         """
 
+        message = materialized.message
         if not isinstance(message, AIMessage):
             return ()
-        blocks = cls._content_blocks(message)
-        reasoning = tuple(block for block in blocks if cls._is_reasoning_block(block))
-        remainder = tuple(
-            block for block in blocks if not cls._is_reasoning_block(block)
-        )
+        detail = materialized.detail
+        blocks = materialized.blocks
+        reasoning_count = sum(1 for block in blocks if cls._is_reasoning_block(block))
         tool_calls = cls._tool_calls(message)
         parts: list[ClassifiedMessagePart] = []
-        if reasoning:
+        if reasoning_count:
             parts.append(
                 ClassifiedMessagePart.declared(
                     MessageContextOrigins.ASSISTANT_THINKING,
-                    text=cls._blocks_text(reasoning),
+                    text=materialized.text_where(cls._is_reasoning_block),
                     detail=detail,
-                    item_count=len(reasoning),
+                    item_count=reasoning_count,
                 )
             )
         if tool_calls:
@@ -758,7 +844,13 @@ class ContextMessageClassifier:
                     item_count=len(tool_calls),
                 )
             )
-        text = cls._message_text(message) if not blocks else cls._blocks_text(remainder)
+        text = (
+            materialized.text
+            if not blocks
+            else materialized.text_where(
+                lambda block: not cls._is_reasoning_block(block)
+            )
+        )
         if text or not parts:
             parts.append(
                 ClassifiedMessagePart.declared(
@@ -772,9 +864,7 @@ class ContextMessageClassifier:
     @classmethod
     def _state_file_parts(
         cls,
-        message: object,
-        *,
-        detail: str,
+        materialized: MaterializedMessage,
     ) -> tuple[ClassifiedMessagePart, ...]:
         """Rule 6 — Deep Agents state standing in for an evicted message body.
 
@@ -785,41 +875,37 @@ class ContextMessageClassifier:
         the trade happened at all.
         """
 
-        if not cls._is_state_file_message(message):
+        if not cls._is_state_file_message(materialized):
             return ()
         return (
             ClassifiedMessagePart.declared(
                 MessageContextOrigins.STATE_FILE,
-                text=cls._message_text(message),
-                detail=detail,
+                text=materialized.text,
+                detail=materialized.detail,
             ),
         )
 
     @classmethod
     def _user_parts(
         cls,
-        message: object,
-        *,
-        detail: str,
+        materialized: MaterializedMessage,
     ) -> tuple[ClassifiedMessagePart, ...]:
         """Rule 7 — conversation input, declared by the runtime on its behalf."""
 
-        if not isinstance(message, HumanMessage):
+        if not isinstance(materialized.message, HumanMessage):
             return ()
         return (
             ClassifiedMessagePart.declared(
                 MessageContextOrigins.USER,
-                text=cls._message_text(message),
-                detail=detail,
+                text=materialized.text,
+                detail=materialized.detail,
             ),
         )
 
     @classmethod
     def _undeclared_parts(
         cls,
-        message: object,
-        *,
-        detail: str,
+        materialized: MaterializedMessage,
     ) -> tuple[ClassifiedMessagePart, ...]:
         """No rule matched — record it as ``UNDECLARED`` rather than absorbing it.
 
@@ -832,8 +918,8 @@ class ContextMessageClassifier:
 
         return (
             ClassifiedMessagePart.undeclared(
-                text=cls._message_text(message),
-                detail=detail,
+                text=materialized.text,
+                detail=materialized.detail,
             ),
         )
 
@@ -943,8 +1029,8 @@ class ContextMessageClassifier:
         )
 
     @classmethod
-    def _is_summary_message(cls, message: object) -> bool:
-        """Whether ``message`` is compaction output rather than conversation.
+    def _is_summary_message(cls, materialized: MaterializedMessage) -> bool:
+        """Whether the message is compaction output rather than conversation.
 
         The metadata marker is authoritative — it is the same field the
         summarization middleware itself matches on. The content prefixes are the
@@ -952,27 +1038,25 @@ class ContextMessageClassifier:
         only when the metadata is absent.
         """
 
-        metadata = cls._additional_kwargs(message)
+        metadata = cls._additional_kwargs(materialized.message)
         if metadata.get(cls.Keys.LC_SOURCE) == cls.Markers.SUMMARIZATION_SOURCE:
             return True
-        text = cls._message_text(message)
         return any(
-            text.startswith(prefix) for prefix in cls.Markers.SUMMARY_CONTENT_PREFIXES
+            materialized.text.startswith(prefix)
+            for prefix in cls.Markers.SUMMARY_CONTENT_PREFIXES
         )
 
     @classmethod
-    def _is_state_file_message(cls, message: object) -> bool:
-        """Whether ``message`` is a pointer to a body evicted into state."""
+    def _is_state_file_message(cls, materialized: MaterializedMessage) -> bool:
+        """Whether the message is a pointer to a body evicted into state."""
 
-        metadata = cls._additional_kwargs(message)
+        metadata = cls._additional_kwargs(materialized.message)
         if isinstance(metadata.get(cls.Keys.LC_EVICTED_TO), str):
             return True
-        return cls._message_text(message).startswith(
-            cls.Markers.STATE_FILE_CONTENT_PREFIX
-        )
+        return materialized.text.startswith(cls.Markers.STATE_FILE_CONTENT_PREFIX)
 
     @classmethod
-    def _carries_offload_stub(cls, message: object) -> bool:
+    def _carries_offload_stub(cls, materialized: MaterializedMessage) -> bool:
         """Whether a tool result is an admission stub rather than the result.
 
         The typed artifact is checked first because it is a fact the admission
@@ -980,10 +1064,10 @@ class ContextMessageClassifier:
         the bounded ``model_content`` string survives into the message.
         """
 
-        artifact = cls._attribute(message, cls.Keys.ARTIFACT)
+        artifact = cls._attribute(materialized.message, cls.Keys.ARTIFACT)
         if isinstance(artifact, ToolResultAdmission):
             return True
-        return cls._message_text(message).startswith(cls.OFFLOAD_STUB_HEADER)
+        return materialized.text.startswith(cls.OFFLOAD_STUB_HEADER)
 
     @classmethod
     def _is_subagent_trace_result(
@@ -1089,15 +1173,64 @@ class ContextMessageClassifier:
     # --- materialization -----------------------------------------------------
 
     @classmethod
-    def _content_blocks(cls, message: object) -> tuple[object, ...]:
-        """Return the message's content as a block tuple, or empty for text.
+    def _materialize(cls, message: object, *, detail: str) -> MaterializedMessage:
+        """Render ``message`` once into the view every rule reads (§3.4).
+
+        The single place a message's bytes are produced. Blocks are rendered
+        individually and then joined, rather than the whole content being
+        rendered as one value, so rule 5 can separate thinking from answer text
+        by *selecting* already-rendered pieces instead of rendering again.
+        """
+
+        content = cls._attribute(message, cls.Keys.CONTENT)
+        blocks = cls._blocks_of(content)
+        if isinstance(content, str):
+            return MaterializedMessage(
+                message=message,
+                detail=detail,
+                blocks=blocks,
+                block_texts=(),
+                text=content,
+            )
+        if content is None:
+            return MaterializedMessage(
+                message=message,
+                detail=detail,
+                blocks=blocks,
+                block_texts=(),
+                text="",
+            )
+        if cls._is_block_container(content):
+            block_texts = tuple(cls._block_text(block) for block in blocks)
+            return MaterializedMessage(
+                message=message,
+                detail=detail,
+                blocks=blocks,
+                block_texts=block_texts,
+                text="".join(block_texts),
+            )
+        return MaterializedMessage(
+            message=message,
+            detail=detail,
+            blocks=blocks,
+            block_texts=(),
+            text=cls._safe_json(content),
+        )
+
+    @classmethod
+    def _blocks_of(cls, content: object) -> tuple[object, ...]:
+        """Return ``content`` as a block tuple, or empty when it is not blocks.
+
+        Takes the already-read content rather than the message, so
+        :meth:`_materialize` touches the ``content`` attribute exactly once. A
+        message is a library object whose content may be a computed property;
+        reading it twice risks two different answers and buys nothing.
 
         An empty result means "this message's content is not a block list", not
         "this message is empty" — the rules that care about blocks fall through
         to the whole-message text when it is.
         """
 
-        content = cls._attribute(message, cls.Keys.CONTENT)
         if isinstance(content, Mapping):
             return (content,)
         if isinstance(content, Sequence) and not isinstance(content, (str, bytes)):
@@ -1105,42 +1238,18 @@ class ContextMessageClassifier:
         return ()
 
     @classmethod
-    def _message_text(cls, message: object) -> str:
-        """Materialize everything of ``message`` that crosses the wire.
-
-        Tool-call arguments are excluded: they live on the message object rather
-        than in its content, and rule 5 measures them as their own part. What is
-        included is content, in the form the provider receives it — which for a
-        base64 block means the payload, because that payload is the occupancy.
-
-        An empty block container materializes to nothing rather than to its JSON
-        rendering: a message with no blocks occupies no context, and reporting
-        two bytes for ``[]`` would make every empty message look like it charged
-        a little rent.
-        """
-
-        content = cls._attribute(message, cls.Keys.CONTENT)
-        if isinstance(content, str):
-            return content
-        if content is None:
-            return ""
-        if cls._is_block_container(content):
-            return cls._blocks_text(cls._content_blocks(message))
-        return cls._safe_json(content)
-
-    @classmethod
     def _is_block_container(cls, content: object) -> bool:
-        """Whether ``content`` is a block list or a single block mapping."""
+        """Whether ``content`` is a block list or a single block mapping.
+
+        Deciding this is what lets :meth:`_materialize` treat an empty block
+        container as nothing rather than as its JSON rendering: a message with
+        no blocks occupies no context, and reporting two bytes for ``[]`` would
+        make every empty message look like it charged a little rent.
+        """
 
         if isinstance(content, Mapping):
             return True
         return isinstance(content, Sequence) and not isinstance(content, (str, bytes))
-
-    @classmethod
-    def _blocks_text(cls, blocks: Sequence[object]) -> str:
-        """Concatenate the material of ``blocks`` in order."""
-
-        return "".join(cls._block_text(block) for block in blocks)
 
     @classmethod
     def _block_text(cls, block: object) -> str:
@@ -1182,22 +1291,46 @@ class ContextMessageClassifier:
             ]
         )
 
+    JSON_SEPARATORS: Final[tuple[str, str]] = (",", ":")
+
     @classmethod
     def _safe_json(cls, value: object) -> str:
         """Render ``value`` deterministically, degrading rather than raising.
 
-        Canonical JSON is used so two identical requests materialize to
-        identical bytes and the §3.4 digest memoization can hit. A value it
-        refuses (a cycle, a type it does not model) falls back to ``str``, and a
-        value that refuses that too measures as empty — a worse number, never a
-        failed run.
+        Keys are sorted and separators are tight so two identical requests
+        materialize to identical bytes and the §3.4 digest memoization can hit,
+        and ``ensure_ascii`` is off so a non-ASCII character measures as the
+        UTF-8 bytes a provider actually receives rather than as a ``\\uXXXX``
+        escape roughly twice its width.
+
+        Deliberately **not** ``surfaces_v2.canonical_json``, despite that being
+        the repository's other deterministic renderer. That one enforces a
+        cross-language digest contract — it *raises* on tuples, bytes,
+        non-finite floats, arbitrary objects, and integers outside JavaScript's
+        exact range. Message content is untrusted and genuinely carries all of
+        those, so every such block would pay a full pure-Python walk only to
+        raise and fall back to ``repr``, which is neither faster nor closer to
+        what crosses the wire. Nothing here is compared against a TypeScript
+        rendering, so that contract buys this module nothing and costs it ~8× per
+        block. ``default=str`` keeps the unmodelled types rendering as JSON
+        instead of aborting the whole message.
+
+        The ``str`` fallback still covers what ``json`` itself refuses — a cycle,
+        or mixed-type dict keys that cannot be sorted — and a value that refuses
+        that too measures as empty: a worse number, never a failed run.
         """
 
         try:
-            return canonical_json(value)
+            return json.dumps(
+                value,
+                sort_keys=True,
+                ensure_ascii=False,
+                separators=cls.JSON_SEPARATORS,
+                default=str,
+            )
         except Exception:  # noqa: BLE001 — the fallback is the error handling
             _LOGGER.debug(
-                "Could not canonicalize message content for occupancy "
+                "Could not render message content as JSON for occupancy "
                 "measurement; falling back to its string form.",
                 exc_info=True,
             )
@@ -1210,5 +1343,6 @@ class ContextMessageClassifier:
 __all__ = (
     "ClassifiedMessagePart",
     "ContextMessageClassifier",
+    "MaterializedMessage",
     "MessageContextOrigins",
 )
