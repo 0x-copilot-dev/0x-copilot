@@ -1255,6 +1255,7 @@ class WorkLedgerVocabulary:
         "artifact_author": ArtifactAuthor,
         "artifact_presentation_preference": ArtifactPresentationPreference,
         "presentation_decision": PresentationDecision,
+        "surface_accent": SurfaceAccent,
         "surface_subject_type": SurfaceSubjectType,
         "effect_policy": EffectPolicy,
         "effect_decision": EffectDecisionKind,

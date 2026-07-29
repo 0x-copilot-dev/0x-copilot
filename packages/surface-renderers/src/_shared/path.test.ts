@@ -135,6 +135,36 @@ describe("numericValue", () => {
     expect(numericValue("-12.5")).toBe(-12.5);
   });
 
+  // An omitted redundant zero is not an added mark: ".5" has one reading and
+  // only one, and no identifier scheme elides — schemes pad. Refusing them was
+  // never worth one missing bar either, because `isUnreadableNumber` promotes
+  // any digit-carrying string the grammar rejects into whole-column suppression.
+  it("reads the lenient decimal spellings as the magnitudes they are", () => {
+    expect(numericValue(".5")).toBe(0.5);
+    expect(numericValue("-.5")).toBe(-0.5);
+    expect(numericValue("12.")).toBe(12);
+    expect(numericValue("-12.")).toBe(-12);
+    expect(numericValue("0.")).toBe(0);
+    expect(numericValue(".5e3")).toBe(500);
+    expect(numericValue("12.e-1")).toBe(1.2);
+  });
+
+  // Widening the fraction must not widen anything else: a point is not a
+  // licence, and the padding rule still holds on both sides of it.
+  it("still refuses shapes that are no number's spelling", () => {
+    expect(numericValue(".")).toBeNull();
+    expect(numericValue("-")).toBeNull();
+    expect(numericValue("-.")).toBeNull();
+    expect(numericValue("12..")).toBeNull();
+    expect(numericValue(".5.")).toBeNull();
+    expect(numericValue("1.2.3")).toBeNull();
+    expect(numericValue("1e")).toBeNull();
+    expect(numericValue("e5")).toBeNull();
+    expect(numericValue("00.5")).toBeNull(); // padded, so still an id shape
+    expect(numericValue("007.")).toBeNull();
+    expect(numericValue(".5,5")).toBeNull();
+  });
+
   // CSV cells arrive with the separator's padding attached; that is
   // presentation whitespace, not a different value.
   it("reads a padded cell as the number it is", () => {
@@ -238,6 +268,27 @@ describe("magnitudeShares — identifiers are not magnitudes (regression)", () =
   });
 });
 
+describe("magnitudeShares — the grammar's edges (regression)", () => {
+  // One lenient spelling used to erase every bar beside it: this column was
+  // [0.75, 0.25, 1] before ".5" was excluded, and [null, null, null] after,
+  // because a digit-carrying string the grammar rejects suppresses the column.
+  // Whatever the grammar refuses, it refuses at the width of the column.
+  it("does not erase a column because one cell dropped a redundant zero", () => {
+    expect(magnitudeShares(["1.5", ".5", "2"])).toEqual([0.75, 0.25, 1]);
+    expect(magnitudeShares(["12.", "6"])).toEqual([1, 0.5]);
+    expect(magnitudeShares([100, "-.5", 50])).toEqual([1, 0.005, 0.5]);
+  });
+
+  // The price of refusing the phone-number spelling, pinned so it stays a
+  // decision. "+12" is a delta and "-4" is flawlessly in grammar; both lose
+  // their bar because nothing local to "+12" tells it from "+14155550123".
+  // Erring the other way would scale a column of phone numbers by dialling
+  // code and print "+12" as "12" — see `numericValue`.
+  it("suppresses a signed-delta column, the cost of the leading-+ refusal", () => {
+    expect(magnitudeShares(["+12", "-4", "+30"])).toEqual([null, null, null]);
+  });
+});
+
 describe("formatValue and the bars agree about what a magnitude is", () => {
   // The defect: `Number("007")` is 7, so a `format: "number"` cell PRINTED "7"
   // while `magnitudeShares` — reading "007" as an identifier — gave it no bar.
@@ -250,6 +301,32 @@ describe("formatValue and the bars agree about what a magnitude is", () => {
       expect(numericValue(identifier)).toBeNull();
     },
   );
+
+  // The other edge of the same rule. A dropped zero carried no information, so
+  // printing it back canonically destroys nothing — unlike "007" → "7", where
+  // the padding WAS the identifier.
+  it("prints a lenient decimal as the magnitude it is", () => {
+    expect(formatValue(".5", "number")).toBe(
+      new Intl.NumberFormat(undefined).format(0.5),
+    );
+    expect(formatValue("12.", "number")).toBe(
+      new Intl.NumberFormat(undefined).format(12),
+    );
+  });
+
+  // The leading `+` is a bet, not a reading, so the losing side is recorded
+  // rather than hidden: this IS a delta, and it is exactly what Intl emits
+  // under signDisplay. The half the bet wins is asserted on the same value —
+  // its sign survives the print, where accepting the spelling would reformat
+  // "+12" to "12" and delete the mark that made it a delta.
+  it("leaves a signed delta unsized, and keeps its sign intact", () => {
+    const emitted = new Intl.NumberFormat("en-US", {
+      signDisplay: "always",
+    }).format(12);
+    expect(emitted).toBe("+12");
+    expect(numericValue(emitted)).toBeNull();
+    expect(formatValue(emitted, "number")).toBe("+12");
+  });
 
   it("still formats real magnitudes, including awkward spellings", () => {
     expect(formatValue(1000, "number")).toContain("1");
@@ -271,4 +348,34 @@ describe("formatValue and the bars agree about what a magnitude is", () => {
       expect(formatValue(value, "currency")).toBe(value);
     },
   );
+});
+
+describe("resolvePath reads own properties only", () => {
+  // Specs are untrusted: `specFromState` checks two fields, and the event
+  // projector merges payload state verbatim. A path naming an inherited member
+  // printed JS internals as if the tool had returned them.
+  it.each(["constructor", "toString", "valueOf", "hasOwnProperty"])(
+    "returns undefined for the inherited member %s",
+    (inherited) => {
+      expect(resolvePath({ title: "real" }, inherited)).toBeUndefined();
+    },
+  );
+
+  it("does not read __proto__ as a value", () => {
+    expect(resolvePath({ title: "real" }, "__proto__")).toBeUndefined();
+    expect(resolvePath({ a: { b: 1 } }, "a.__proto__.b")).toBeUndefined();
+  });
+
+  it("still reads an own property that shadows an inherited name", () => {
+    expect(resolvePath({ constructor: "mine" }, "constructor")).toBe("mine");
+    expect(resolvePath({ toString: "also mine" }, "toString")).toBe(
+      "also mine",
+    );
+  });
+
+  it("still reads a null-prototype object", () => {
+    const bare = Object.create(null) as Record<string, unknown>;
+    bare.title = "from a bare object";
+    expect(resolvePath(bare, "title")).toBe("from a bare object");
+  });
 });

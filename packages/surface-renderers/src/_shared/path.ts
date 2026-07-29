@@ -38,6 +38,15 @@ export function resolvePath(data: unknown, path: string): unknown {
       continue;
     }
     if (typeof current === "object") {
+      // OWN properties only. A bare bracket read walks the prototype chain, so
+      // a spec path of "constructor" printed `function Object() { [native code] }`
+      // and "toString" printed its source — JS internals rendered as if they
+      // were facts the tool returned. Specs are untrusted (`specFromState`
+      // checks two fields, and the event projector merges payload state
+      // verbatim), so the path is reachable from tool output.
+      if (!Object.prototype.hasOwnProperty.call(current, segment)) {
+        return undefined;
+      }
       current = (current as Record<string, unknown>)[segment];
       continue;
     }
@@ -130,14 +139,19 @@ export function isNumericFormat(format?: SurfaceFieldFormat): boolean {
 }
 
 /**
- * A number spelled the way a number is spelled — JSON's number grammar: an
- * optional minus, an integer part with no leading zero, an optional fraction,
- * an optional exponent.
+ * A number spelled the way a number is spelled: an optional minus, an integer
+ * part with no leading zero, an optional fraction — digits required on at least
+ * ONE side of the point, so ".5" and "12." are in — and an optional exponent.
+ *
+ * JSON's number grammar with those two lenient decimals added back. See
+ * `numericValue` for why the line sits here and not exactly on JSON's.
  *
  * Linear, with no nested quantifier, so a hostile 10k-char cell costs one scan.
+ * The two mantissa alternatives are disjoint on their first character — digit
+ * versus `.` — so neither can be reached by backtracking out of the other.
  */
 const NUMBER_SPELLING =
-  /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][-+]?[0-9]+)?$/;
+  /^-?(?:(?:0|[1-9][0-9]*)(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?$/;
 
 /**
  * The finite number behind a resolved cell value, or `null`.
@@ -156,17 +170,41 @@ const NUMBER_SPELLING =
  * figure register says they are meant to be read digit-column against
  * digit-column, which is what that register means and not what they are.
  *
- * The line is SPELLING, not value. A string counts only when it is written the
- * way a number is written, and JSON's grammar already draws exactly that line:
- * it forbids a leading zero, a leading `+`, and every prefix notation, while
- * keeping the spellings that really are magnitudes — "1000", "3.14", "-12.5",
- * "-0" (genuinely zero) and "1e5" (genuinely scientific notation).
+ * The line is SPELLING, not value, and it runs between a mark a canonical
+ * number does not carry and a character a canonical number could have dropped:
  *
- * It also excludes two lenient spellings a human might type by hand, ".5" and
- * "12.". That is a deliberate trade, not an oversight: machine payloads do not
- * emit them (neither `JSON.stringify` nor `Intl.NumberFormat` ever does), and
- * the cost of a false negative here is one missing bar, where a false positive
- * is a wrong claim about what the value IS.
+ *  - an ADDED mark was added to say something, and what it says is never the
+ *    size. A leading zero says how wide the field is padded, "0x"/"0b"/"0o" say
+ *    which radix, a separator says which grouping locale. Refused, which keeps
+ *    out "007", "0x1F", "0b101" and "1,234" while keeping "1000", "3.14",
+ *    "-12.5", "-0" (genuinely zero) and "1e5" (genuinely scientific notation).
+ *  - an OMITTED redundant zero says nothing at all. ".5" and "12." are the
+ *    canonical spelling minus a character that carried no information; they
+ *    have one reading and only one, and no identifier scheme elides — schemes
+ *    pad. Accepted, and printed back as "0.5" and "12", which is the same
+ *    magnitude and destroys nothing that identified the value.
+ *
+ * The minus is not an added mark: it IS how a negative number is spelled, by
+ * `JSON.stringify` and by `Intl` alike.
+ *
+ * The leading `+` is the one place this is a bet rather than a reading, so it
+ * is stated plainly. "+14155550123" is a phone number. "+12" is a delta, and it
+ * is exactly what `Intl.NumberFormat(undefined, { signDisplay: "always" })`
+ * emits, so machines really do produce it. Nothing local to the value separates
+ * them — both are `+` then digits, and digit count is a guess about size, not a
+ * difference in spelling. The near misses are worse than the bet: a
+ * column-level rule ("all-`+` is phones, mixed signs are deltas") would break
+ * the one thing `formatValue` and the bars share, a single definition applied
+ * per value with no view of its neighbours; a carve-out for "+12.5" (no phone
+ * number carries a point) would split one delta column across two registers,
+ * printing some rows with their sign and some without.
+ *
+ * We refuse the whole spelling, and the cost is not one bar. The delta column
+ * ["+12", "-4", "+30"] gets none at all, `isUnreadableNumber` taking the
+ * in-grammar "-4" down with it. We take that over the alternative because
+ * accepting the mark would ALSO print "+12" as "12", deleting the one mark that
+ * made it a delta — the same harm as printing "007" as "7" — while a column of
+ * phone numbers would be scaled, ranking rows by dialling code.
  */
 export function numericValue(value: unknown): number | null {
   if (typeof value === "number") {
@@ -202,6 +240,11 @@ export function numericValue(value: unknown): number | null {
  * ones, the same inverted ranking the separator case produces. And when the
  * column is identifiers all the way down there is no magnitude in it to lose,
  * so suppressing it costs nothing.
+ *
+ * The blast radius runs the other way too, and `NUMBER_SPELLING` is written
+ * knowing it: one member is enough to suppress the entire column, so a false
+ * negative in the grammar never costs the one bar under that value — it costs
+ * every bar beside it, including values spelled perfectly well.
  */
 function isUnreadableNumber(value: unknown): boolean {
   return (
