@@ -32,6 +32,26 @@ from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _MAX_REF_LENGTH = 256
+#: Ceilings for the decision row's numeric extension. They mirror the bounds
+#: ``runtime_api``'s ``QualityDecisionPayload`` enforces on the same four
+#: quantities, restated here rather than imported because ``agent_runtime`` is
+#: the domain and must not depend on the presentation schema. A test pins the
+#: two sets equal, so a widened payload bound cannot silently outgrow the record
+#: that feeds it.
+_MAX_DECISION_COUNT = 64
+_MAX_DECISION_TOKENS = 1_000_000
+_MAX_DECISION_TURNS = 1_000
+#: The numeric extension's members and the ceiling each one is held to, named
+#: once. ``digest_payload`` excludes them, the event-journal adapter omits the
+#: unobserved ones, and the F3 producer clamps to these ceilings, so the three
+#: places that must agree read one mapping instead of three copied literals.
+DECISION_COUNT_CEILINGS: dict[str, int] = {
+    "candidate_count": _MAX_DECISION_COUNT,
+    "selection_rank": _MAX_DECISION_COUNT,
+    "result_tokens": _MAX_DECISION_TOKENS,
+    "model_turns": _MAX_DECISION_TURNS,
+}
+DECISION_COUNT_FIELDS = tuple(DECISION_COUNT_CEILINGS)
 _BUDGET_ID_PATTERN = r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$"
 _BUDGET_REF_PATTERN = (
     r"^budget://[A-Za-z0-9][A-Za-z0-9._:-]{0,159}/sha256/[0-9a-f]{64}$"
@@ -283,7 +303,26 @@ class RunControlSnapshot(RuntimeContract):
 
 
 class RunControlDecision(RuntimeContract):
-    """Append-only lineage for one post-bind feature decision."""
+    """Append-only lineage for one post-bind feature decision.
+
+    The four optional counters are the record's **numeric extension**: bounded,
+    body-free measurements a feature may attach to its own decision. A rank is a
+    number and the thing ranked never travels with it, so there is no field here
+    a query, capability name, argument, or result can enter through.
+
+    ``None`` means *not observed*, which is deliberately distinct from an
+    observed ``0``: a ceiling of zero must be able to tell "nothing came back"
+    from "nothing was measured", and F1's ``unauthorized_probe`` case rests on
+    exactly that distinction.
+
+    They are **excluded from** :meth:`digest_payload`, beside ``created_at``.
+    The digest is the identity of the *decision* — which run, which phase, which
+    feature, which outcome — and a measurement of how that decision performed is
+    not part of that identity. Folding them in would also change every
+    ``decision_digest`` already written, since a producer that measures nothing
+    and one that measures zero would then digest differently from the rows they
+    replace.
+    """
 
     schema_version: Literal[1] = 1
     decision_id: str = Field(min_length=1, max_length=160)
@@ -296,6 +335,15 @@ class RunControlDecision(RuntimeContract):
     outcome_code: str = Field(min_length=1, max_length=120)
     record_ref: str | None = Field(default=None, max_length=512)
     parent_decision_refs: tuple[str, ...] = Field(default=(), max_length=64)
+    #: How many candidates the search behind this decision answered with.
+    candidate_count: int | None = Field(default=None, ge=0, le=_MAX_DECISION_COUNT)
+    #: The 1-based position the selected reference held in the search that
+    #: offered it; an observed ``0`` means it came back from no search at all.
+    selection_rank: int | None = Field(default=None, ge=0, le=_MAX_DECISION_COUNT)
+    #: Model-visible tokens this decision's answer cost.
+    result_tokens: int | None = Field(default=None, ge=0, le=_MAX_DECISION_TOKENS)
+    #: Model turns this decision consumed.
+    model_turns: int | None = Field(default=None, ge=0, le=_MAX_DECISION_TURNS)
     created_at: datetime
     decision_digest: str = Field(pattern=_SHA256_PATTERN)
 
@@ -341,9 +389,18 @@ class RunControlDecision(RuntimeContract):
         return self
 
     def digest_payload(self) -> dict[str, object]:
+        """Return the canonical identity body this record's digest is taken over.
+
+        ``created_at`` is excluded because when a decision happened is not what
+        it was, and the numeric extension is excluded for the same reason: it
+        measures the decision rather than identifying it. Keeping the exclusion
+        also means every ``decision_digest`` written before the extension still
+        verifies byte-for-byte.
+        """
+
         return self.model_dump(
             mode="json",
-            exclude={"created_at", "decision_digest"},
+            exclude={"created_at", "decision_digest", *DECISION_COUNT_FIELDS},
         )
 
     @classmethod
@@ -360,6 +417,10 @@ class RunControlDecision(RuntimeContract):
         outcome_code: str,
         record_ref: str | None = None,
         parent_decision_refs: tuple[str, ...] = (),
+        candidate_count: int | None = None,
+        selection_rank: int | None = None,
+        result_tokens: int | None = None,
+        model_turns: int | None = None,
         created_at: datetime | None = None,
     ) -> "RunControlDecision":
         payload = {
@@ -374,6 +435,10 @@ class RunControlDecision(RuntimeContract):
             "outcome_code": outcome_code,
             "record_ref": record_ref,
             "parent_decision_refs": parent_decision_refs,
+            "candidate_count": candidate_count,
+            "selection_rank": selection_rank,
+            "result_tokens": result_tokens,
+            "model_turns": model_turns,
             "created_at": created_at or datetime.now(timezone.utc),
         }
         provisional = cls.model_construct(
@@ -387,6 +452,8 @@ class RunControlDecision(RuntimeContract):
 
 
 __all__ = [
+    "DECISION_COUNT_CEILINGS",
+    "DECISION_COUNT_FIELDS",
     "BudgetEnvelope",
     "RunControlDecision",
     "RunControlSnapshot",

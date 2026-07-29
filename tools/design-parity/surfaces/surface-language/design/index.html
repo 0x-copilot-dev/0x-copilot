@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="sky">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>design-parity · surface language (board + no spec) · DESIGN</title>
+    <link rel="icon" href="data:," />
+    <!--
+      surface-lang.css is the vendored Claude Design sheet. Its first line is
+      `@import url("copilot-v3.css")`, which resolves to the sibling shim in
+      this directory, which in turn pulls the SHARED design-kit cascade
+      (copilot.css → copilot-v3.css). One link tag, three sheets.
+    -->
+    <link rel="stylesheet" href="surface-lang.css" />
+    <style>
+      /* HARNESS geometry — pinned on purpose.
+         The extraction context reports innerWidth 0 (SKILL.md, "Pin the layout
+         on BOTH sides"), which would collapse every percentage-derived width
+         and fold the four-lane board into one 196px column. 1040px is the same
+         content width the live harness pins, so both sides resolve the same
+         lane track. Backgrounds beyond the frame are irrelevant to the diff. */
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--ink);
+      }
+      #parity-frame {
+        width: 1040px;
+        height: 760px;
+        display: flex;
+        overflow: hidden;
+      }
+      #app-root {
+        display: flex;
+        flex: 1;
+        min-width: 0;
+      }
+      .sl {
+        flex: 1;
+        min-width: 0;
+      }
+      .sl-cv {
+        flex: 1;
+      }
+      /* Determinism: nothing we measure is animated, and a running keyframe
+         makes a computed-style read a coin flip. */
+      *,
+      *::before,
+      *::after {
+        animation: none !important;
+        transition: none !important;
+      }
+      /* Shown only when the bundle is missing (see the note below). */
+      #build-hint {
+        color: #f0764f;
+        font:
+          13px/1.6 ui-monospace,
+          monospace;
+        padding: 20px;
+      }
+      #app-root:not(:empty) + #build-hint {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="parity-frame">
+      <div id="app-root"></div>
+      <div id="build-hint">
+        design bundle missing — build it first:<br /><br />
+        <code
+          >node
+          tools/design-parity/lib/prepare-surface-language-design.mjs</code
+        ><br /><br />
+        (the parity runner does this for you:
+        <code>node tools/design-parity/lib/run-surface-language-parity.mjs</code
+        >)
+      </div>
+    </div>
+
+    <!--
+      One self-contained bundle: React + the shared kit stubs + the three
+      vendored design files + the ?state= mount, compiled by esbuild from
+      node_modules. No CDN — the other design harnesses pull React/Babel from
+      unpkg at render time, which makes a parity run depend on the network from
+      inside headless chromium. Generated, and gitignored: `design/build/`.
+    -->
+    <script src="./build/design.js"></script>
+  </body>
+</html>

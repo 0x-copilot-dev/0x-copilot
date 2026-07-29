@@ -35,10 +35,35 @@ class _Key:
     # for replay compatibility, but production generation always uses this
     # canonical field.
     SURFACE_URI = "surface_uri"
+    # ``surface.created`` names the read's origin as ``source {connector, op}``
+    # (the ledger's vocabulary).  The renderer contract spells the same two
+    # facts ``source {server, tool}`` — see :class:`_StateKey`.
+    SOURCE = "source"
+    CONNECTOR = "connector"
+    OP = "op"
+
+
+class _StateKey:
+    """Keys of the ``{spec?, source?, data}`` state the surface renderers read.
+
+    Named apart from :class:`_Key` because they are a different contract: those
+    are ledger-event payload keys, these are the ``SurfaceState`` wire shape
+    (``packages/api-types`` ``SurfaceState`` / the ai-backend pydantic mirror).
+    """
+
+    DATA = "data"
+    SPEC = "spec"
+    SOURCE = "source"
+    SERVER = "server"
+    TOOL = "tool"
 
 
 class SurfaceContentProjection:
-    """Resolve declared surface references into ``{data, spec?}`` state.
+    """Resolve declared surface references into ``{data, spec?, source?}`` state.
+
+    ``source`` is the read's own ``surface.created`` provenance re-spelled in the
+    renderer's vocabulary — never inferred from the payload, and never invented
+    for a subject the caller did not declare.
 
     ``surface_payload_refs`` is normally supplied from ``SurfaceStoreState`` so
     the HTTP endpoint explicitly declares which subjects it is authorized to
@@ -72,6 +97,7 @@ class SurfaceContentProjection:
 
         output_by_call: dict[str, object] = {}
         spec_by_surface: dict[str, Mapping[str, object]] = {}
+        source_by_surface: dict[str, dict[str, str]] = {}
         for event in ordered:
             event_type, payload = SurfaceContentProjection._fields(event)
             if event_type == _EventType.TOOL_RESULT:
@@ -80,6 +106,13 @@ class SurfaceContentProjection:
                     # ``output`` is persisted tool data. It may be scalar,
                     # list, or object; no shape is inferred here.
                     output_by_call[call_id] = payload[_Key.OUTPUT]
+            elif event_type == _EventType.SURFACE_CREATED:
+                surface_id = SurfaceContentProjection._text(
+                    payload.get(_Key.SURFACE_ID)
+                )
+                source = SurfaceContentProjection._state_source(payload)
+                if surface_id in refs and source is not None:
+                    source_by_surface[surface_id] = source
             elif event_type == _EventType.SURFACE_SPEC_GENERATED:
                 surface_id = SurfaceContentProjection._text(
                     payload.get(_Key.SURFACE_URI)
@@ -93,13 +126,42 @@ class SurfaceContentProjection:
             call_id = SurfaceContentProjection._call_id_from_ref(payload_ref)
             state: dict[str, object] = {}
             if call_id is not None and call_id in output_by_call:
-                state["data"] = output_by_call[call_id]
+                state[_StateKey.DATA] = output_by_call[call_id]
             spec = spec_by_surface.get(surface_id)
             if spec is not None:
-                state["spec"] = dict(spec)
+                state[_StateKey.SPEC] = dict(spec)
             if state:
+                # Provenance rides only on a state that already has content.
+                # A ``source``-only state would flip an unhydrated surface from
+                # "no content event yet" (the honest skeleton) to "hydrated with
+                # nothing in it", which is the fabricated body this module exists
+                # to avoid.
+                source = source_by_surface.get(surface_id)
+                if source is not None:
+                    state[_StateKey.SOURCE] = dict(source)
                 content[surface_id] = state
         return content
+
+    @staticmethod
+    def _state_source(payload: Mapping[str, object]) -> dict[str, str] | None:
+        """Translate ``surface.created``'s ``source {connector, op}`` into the
+        renderer contract's ``source {server, tool}``.
+
+        This is the only thing that can name the tool on a spec-less surface:
+        the tier-3 note reads ``state.source.tool``, and a generic surface has
+        no spec to read it from. Returns ``None`` unless BOTH members resolve to
+        non-blank strings — a half-named source would put "unknown" in front of
+        the user in a register that says "this is what the system knows".
+        """
+
+        source = payload.get(_Key.SOURCE)
+        if not isinstance(source, Mapping):
+            return None
+        server = SurfaceContentProjection._text(source.get(_Key.CONNECTOR))
+        tool = SurfaceContentProjection._text(source.get(_Key.OP))
+        if server is None or tool is None:
+            return None
+        return {_StateKey.SERVER: server, _StateKey.TOOL: tool}
 
     @staticmethod
     def _declared_refs(events: Iterable[_LedgerEventLike]) -> dict[str, str]:

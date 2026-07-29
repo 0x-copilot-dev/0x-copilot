@@ -47,6 +47,16 @@ function idempotencyKey(): string {
 export function ArtifactSurface(props: {
   readonly uri: string;
   readonly transport: Transport;
+  /**
+   * The artifact's chosen identity hue — `publish_artifact`'s `accent`, as the
+   * conversation-canvas record carries it. The caller holds that record (this
+   * surface fetches content and revisions, not the canvas), so the choice is
+   * passed in rather than re-fetched here, and it is the SAME value the caller
+   * gives the artifact's tab. Omitted means no choice was made: the hue is then
+   * derived from the artifact URI's scheme, which is what every artifact
+   * rendered before this prop existed.
+   */
+  readonly hue?: string;
   readonly downloadPort?: ArtifactDownloadPort;
   readonly onNavigateRevision?: (uri: string) => void;
 }): ReactElement {
@@ -370,6 +380,10 @@ export function ArtifactSurface(props: {
             mountedState.artifactId,
             mountedState.revision,
           )}
+          // Forwarded unresolved. The mount resolves it through the same helper
+          // the tab strip uses, so an artifact's card and its tab cannot end up
+          // claiming different sources.
+          hue={props.hue}
           transport={props.transport}
           state={mountedState}
         />

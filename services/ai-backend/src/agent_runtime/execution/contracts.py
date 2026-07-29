@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from contextvars import ContextVar, Token
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 import re
-from typing import TypeAlias
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, runtime_checkable
 from uuid import uuid4
 
 from pydantic import (
@@ -29,6 +31,24 @@ from agent_runtime.observability.constants import Keys as ObservabilityKeys
 from agent_runtime.observability.redactor import JsonObjectCoercer
 from agent_runtime.observability.tracing import TraceContext
 from agent_runtime.capabilities.skills.sources import SkillSourceConfig
+
+if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
+    from agent_runtime.capabilities.discovery.activation import (
+        CapabilityExpansionLimits,
+    )
+    from agent_runtime.capabilities.discovery.contracts import (
+        CapabilityReferenceMinter,
+    )
+    from agent_runtime.capabilities.discovery.revision_authority import (
+        CapabilityRefRevalidation,
+    )
+    from agent_runtime.capabilities.discovery.schema_artifacts import (
+        RunScopedSchemaArtifactPublisher,
+    )
+    from agent_runtime.capabilities.discovery.telemetry import (
+        CapabilityDiscoveryObserver,
+        CapabilityExpansionObserver,
+    )
 
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]*$")
 
@@ -563,6 +583,145 @@ class AgentRuntimeContext(RuntimeContract):
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CapabilityBridgeComposition:
+    """The F3 invocation-seam inputs only a composition root can supply.
+
+    The bridge is built from two halves that live on opposite sides of this
+    module.  The runtime factory owns the *model-framework* half — it is the one
+    place a run's :class:`~agent_runtime.capabilities.mcp.loader.McpLoader` and
+    its single :class:`~agent_runtime.capabilities.mcp.tools.CallMcpTool` exist,
+    and reusing those instances is what keeps F3 a reuse of the one MCP dispatch
+    route rather than a second one.  The worker owns the *run-scoped* half
+    collected here: none of it is derivable inside the factory, and none of it
+    is derivable inside the discovery package either.
+
+    Every field is independently optional and every one of them fails dark:
+
+    * no ``minter`` means no second-tier expansion, so the bridge registers the
+      catalog-only search it registered before;
+    * no ``revalidation`` means ``invoke_capability`` is not registered at all,
+      because a reference that cannot be revalidated at use time must never be
+      offered; and
+    * no ``observer`` or ``schema_artifacts`` changes nothing the bridge *does* —
+      the run is merely unmeasured, and an over-bound schema is reported
+      ``unavailable`` rather than deferred to an artifact.
+
+    ``minter`` carries the load-bearing invariant.  It must be keyed exactly as
+    the :class:`~agent_runtime.capabilities.discovery.builder.AuthorizedCatalogBuilder`
+    that projected the catalog beside it was, because expansion mints references
+    for that catalog's own id — a different key would mint references the run's
+    catalog identity cannot explain.  Supplying the builder's *own* minter object
+    rather than a second one built from the same bytes is how the composition
+    root makes that unrepresentable rather than merely true.
+
+    The annotations resolve only under ``TYPE_CHECKING``: the discovery contracts
+    import this module, so a runtime import here would close a cycle and would
+    also drag the discovery package onto the dark path's import graph.
+    """
+
+    minter: CapabilityReferenceMinter | None = None
+    revalidation: CapabilityRefRevalidation | None = None
+    observer: CapabilityDiscoveryObserver | None = None
+    expansion_observer: CapabilityExpansionObserver | None = None
+    schema_artifacts: RunScopedSchemaArtifactPublisher | None = None
+    expansion_limits: CapabilityExpansionLimits | None = None
+
+
+@runtime_checkable
+class RuntimeBatchAdmissionPort(Protocol):
+    """The graph tool seam's one route into an F6 batch, expressed without F6.
+
+    :class:`~agent_runtime.control_plane.parallel_admission.ParallelAdmissionPort`
+    already carries the half of this seam that decides a call's *width*. It is
+    deliberately not enough on its own: knowing that three calls may overlap
+    does not make anything plan them, journal them, permit them, or stop them,
+    and F6 owns all four. This port carries the other half — the two moments the
+    graph is the only thing that can tell F6 about.
+
+    Its signatures name no F6 type at all, which is the whole reason it lives
+    here rather than in ``capabilities.concurrency``. The middleware that
+    consumes it must not import the concurrency package: a dark deployment's
+    import graph has to stay byte-identical to the pre-F6 one, and an import for
+    a type annotation would break that as surely as an import for a call. So the
+    protocol speaks only in provider tool-call ids and an awaitable body, and the
+    capabilities side implements it.
+
+    Both methods are total. Neither may raise into a healthy run, and neither may
+    change what a call *is* — only whether, and alongside what, it runs.
+    """
+
+    async def aplan_model_batch(
+        self,
+        *,
+        execution_scope: str,
+        model_turn: int,
+        tool_calls: Sequence[Mapping[str, Any]],
+    ) -> None:
+        """Durably record the ordering for one model turn's tool calls.
+
+        Awaited from ``aafter_model``, which the framework runs to completion
+        before it routes to the tool node — so a plan is durable before any child
+        it names can dispatch, by graph topology rather than by a lock.
+        """
+
+    async def arun_tool_body(
+        self,
+        *,
+        tool_call_id: str,
+        body: Callable[[], Awaitable[Any]],
+    ) -> Any:
+        """Run one graph tool body, through F6 when it is a planned child.
+
+        ``tool_call_id`` that names no planned child must await ``body`` exactly
+        as the caller would have — the unknown case is the unchanged case, not a
+        refusal — which is what keeps "unknown means serial" a property of the
+        composition rather than a branch each caller remembers.
+        """
+
+
+_CURRENT_BATCH_ADMISSION: ContextVar[RuntimeBatchAdmissionPort | None] = ContextVar(
+    "agent_runtime_batch_admission",
+    default=None,
+)
+
+
+class RuntimeBatchAdmissionContext:
+    """The run-scoped slot the graph tool seam reads its F6 binding from.
+
+    A context variable rather than a middleware constructor argument for the
+    same reason the run control binding is one: Deep Agents materializes a fresh
+    middleware stack for every locally compiled subagent graph, so a value
+    threaded through ``__init__`` would reach the supervisor and none of its
+    children. A delegated tool call would then be the one call that never
+    crossed F6 — precisely the bypass this seam exists to make impossible.
+
+    Installed once per run by the composition root and never rebound, so the
+    object every scope sees is the same object; the plan a turn records is
+    therefore visible to the tool calls that turn emitted, in every scope.
+    """
+
+    @staticmethod
+    def install(
+        port: RuntimeBatchAdmissionPort,
+    ) -> Token[RuntimeBatchAdmissionPort | None]:
+        """Bind one run's batch admission and return its reset token."""
+
+        return _CURRENT_BATCH_ADMISSION.set(port)
+
+    @staticmethod
+    def current() -> RuntimeBatchAdmissionPort | None:
+        """Return the active batch admission, or ``None`` when F6 is dark."""
+
+        return _CURRENT_BATCH_ADMISSION.get()
+
+    @staticmethod
+    def reset(token: Token[RuntimeBatchAdmissionPort | None]) -> None:
+        """Release one run's binding."""
+
+        _CURRENT_BATCH_ADMISSION.reset(token)
+
+
 class RuntimeDependencies(RuntimeContract):
     """Dependency-injected runtime ports.
 
@@ -662,6 +821,13 @@ class RuntimeDependencies(RuntimeContract):
     # concrete types and narrows to no bridge tools when either is unresolved.
     capability_activation: object | None = None
     capability_catalog: object | None = None
+    # Optional F3 invocation seam: the run-scoped inputs only a composition root
+    # can know (the keyed reference minter, the live revalidation, the telemetry
+    # observers, and the protected-schema publisher). See
+    # :class:`CapabilityBridgeComposition`. ``None`` — the production default —
+    # leaves the registrar with the catalog-only search and describe pair it
+    # registered before, so nothing about the dark path changes.
+    capability_bridge: object | None = None
 
     @field_validator(
         "tool_registry",

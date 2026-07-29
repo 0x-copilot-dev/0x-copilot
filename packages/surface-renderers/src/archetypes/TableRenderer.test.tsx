@@ -107,10 +107,25 @@ describe("tableAdapter row cap (>200 rows)", () => {
 
 // Spec-less fallback + empties.
 describe("tableAdapter defensive rendering", () => {
-  it("renders the fallback body when the spec is absent", () => {
+  it("renders the no-spec view when the spec is absent", () => {
     const state: SurfaceState = { data: [{ id: 1 }] };
     expect(() => render(tableAdapter.renderCurrent(state))).not.toThrow();
-    expect(screen.getByTestId("surface-preparing-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-no-spec-note")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-read-only-footer")).toBeInTheDocument();
+    expect(screen.queryByTestId("surface-preparing-hint")).toBeNull();
+  });
+
+  it("shows the first row's fields for a bare array payload, and says how many rows there are", () => {
+    const state: SurfaceState = {
+      data: [
+        { id: 1, region: "EMEA" },
+        { id: 2, region: "AMER" },
+      ],
+    };
+    render(tableAdapter.renderCurrent(state));
+    expect(screen.getByTestId("field-region-value")).toHaveTextContent("EMEA");
+    // Without the count, one row's fields would read as the whole payload.
+    expect(screen.getByTestId("surface-badge")).toHaveTextContent("2 rows");
   });
 
   it("shows an empty message when items_path resolves to nothing", () => {

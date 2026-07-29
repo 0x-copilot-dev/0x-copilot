@@ -222,11 +222,20 @@ create a second planning queue.
 
 **Wave A — unblocked by completed Steps 4, 5, and 7**
 
-- [ ] **Step RB:** Add one shared `RevisionBoundRef` contract and
+- [x] **Step RB:** Add one shared `RevisionBoundRef` contract and
       `revalidate_at_use` protocol with a single conformance suite, then adopt
       it in the existing F8 descriptor-revision check. F3 refs, F5 evidence, F9
       grants, and F11 targets bind to the same primitive in their own steps
       rather than reimplementing staleness and reauthorization five times.
+      **Complete** (`14260424`, `ee345d5e`, `2d0ed56e`). All four exit criteria
+      are evidenced: the protocol and one conformance suite exist and F8 passes
+      them with **74 pre-existing tests unmodified and zero assertions changed**;
+      the primitive can only narrow, structurally; outcomes are a closed enum
+      with stable reason codes; and a later adopter bound without editing it —
+      F3 deleted its own private staleness check in the process. The suite now
+      runs 16 cases across 3 instantiations. RB.3 did edit the primitive, but to
+      close two contract defects both adopters independently hit, not because an
+      adopter could not bind. F5, F9 and F11 bind in Waves B and C.
 - [ ] **Step 8:** Enable F3 catalog activation, top-K expansion,
       search/describe/invoke, gateway revalidation, and fallback. Also declares
       the named promotion cohort matrix that Step 15 evaluates.

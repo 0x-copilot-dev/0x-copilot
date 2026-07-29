@@ -2269,6 +2269,22 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     surfacesV2,
   );
 
+  // The author's chosen hue, keyed by artifact id, read from the conversation
+  // record — the one place that knows it.
+  //
+  // Component scope, NOT inside the tab memo where it started. Scoped to the
+  // memo it could only reach the tab, so the surface CARD kept deriving its hue
+  // from the URI and the two disagreed the moment anyone chose one: same
+  // artifact, two colours, on screen at once. One map, both consumers.
+  const accentByArtifactId = useMemo(() => {
+    const byId = new Map<string, SurfaceHue>();
+    for (const subject of conversationCanvas.subjects) {
+      if (subject.kind === "artifact" && subject.accent !== null)
+        byId.set(subject.subjectId, subject.accent);
+    }
+    return byId;
+  }, [conversationCanvas]);
+
   const v2CanvasTabs = useMemo(() => {
     const uriBySubjectKey = new Map<string, string>();
     const legacyUris = new Set<string>();
@@ -2296,15 +2312,9 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     // source of display identity for both the current run's tabs and prior
     // turns', so a tab and its panel header cannot disagree.
     const canvasTitleById = new Map<string, string>();
-    // The accent travels with the title, from the same record and in the same
-    // pass. Both are display identity the artifact owns, so reading them from
-    // one source is what stops a tab's name and its colour from disagreeing.
-    const canvasAccentById = new Map<string, SurfaceHue>();
     for (const subject of conversationCanvas.subjects) {
       if (subject.kind !== "artifact") continue;
       if (subject.title) canvasTitleById.set(subject.subjectId, subject.title);
-      if (subject.accent !== null)
-        canvasAccentById.set(subject.subjectId, subject.accent);
     }
     const add = (
       uri: string,
@@ -2341,7 +2351,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             subject.lastSeq,
             subject.key,
             false,
-            canvasAccentById.get(subject.subjectId),
+            accentByArtifactId.get(subject.subjectId),
           );
         }
         continue;
@@ -2453,6 +2463,7 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
       "";
     return { tabs, uriBySubjectKey, legacyUris, preferredUri };
   }, [
+    accentByArtifactId,
     displayedCanvasLifecycle,
     // Read inside this memo for the artifact's real title and chosen accent,
     // and previously missing here — so the maps were captured from whatever the
@@ -3510,6 +3521,17 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             uri={uri}
             transport={transport}
             downloadPort={artifactDownloadPort}
+            // The same map the tab strip reads. Without this the card derived
+            // its hue from the URI while the tab used the author's choice, so a
+            // chosen accent showed on one and not the other.
+            {...(() => {
+              const parsed = parseArtifactSurfaceUri(uri);
+              const hue =
+                parsed === null
+                  ? undefined
+                  : accentByArtifactId.get(parsed.artifactId);
+              return hue === undefined ? {} : { hue };
+            })()}
             // No acting run is sent. Conversation scope grants VISIBILITY of an
             // artifact from an earlier turn; the edit itself is caused by the
             // conversation, not by whichever run happens to be on screen. That

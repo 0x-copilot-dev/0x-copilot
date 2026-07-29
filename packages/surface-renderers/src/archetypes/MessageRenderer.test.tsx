@@ -75,9 +75,11 @@ describe("messageAdapter.renderDiff", () => {
 });
 
 describe("messageAdapter spec-less fallback", () => {
-  it("renders the Preparing hint without throwing", () => {
+  it("renders the no-spec view without throwing", () => {
     const state: SurfaceState = { data: GMAIL_MESSAGE_DATA };
     expect(() => render(messageAdapter.renderCurrent(state))).not.toThrow();
-    expect(screen.getByTestId("surface-preparing-hint")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-no-spec-note")).toBeInTheDocument();
+    expect(screen.getByTestId("surface-read-only-footer")).toBeInTheDocument();
+    expect(screen.queryByTestId("surface-preparing-hint")).toBeNull();
   });
 });

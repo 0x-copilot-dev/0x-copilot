@@ -15,6 +15,7 @@ from agent_runtime.harness_quality.evaluation_contracts import (
     ScorerAttribution,
     ScorerResult,
     TrajectoryManifest,
+    TrajectoryStep,
 )
 
 
@@ -527,6 +528,18 @@ class ModelInvocationTrajectoryScorer:
         )
 
 
+#: Every numeric expectation an F3 discovery case may declare. Naming them in
+#: one place is what lets the scorer refuse to grade a numeric assertion whose
+#: quantity was never measured.
+_DISCOVERY_NUMERIC_KEYS = (
+    "minimum_recall_rank",
+    "maximum_recall_rank",
+    "maximum_candidate_count",
+    "maximum_result_tokens",
+    "maximum_model_turns",
+)
+
+
 class CapabilityDiscoveryTrajectoryScorer:
     """Score the closed, body-free F3 capability-discovery projection.
 
@@ -544,10 +557,18 @@ class CapabilityDiscoveryTrajectoryScorer:
     * **end-to-end quality** — ``required_phases`` pins that the chain actually
       ran, and the token/turn ceilings pin that it stayed cheap.
 
-    Recall is checked over search steps specifically rather than over the whole
-    trajectory: a describe or invoke step has no rank to report, and folding
-    their zeroes into the same set would make every passing case look like a
-    recall miss.
+    Recall is checked over every discovery step, considering positive ranks
+    only. The rank is a *selection* fact — the position the reference the run
+    actually acted on held in the search that offered it — so on a real run it
+    is reported by the describe or invoke step that made the selection. Ignoring
+    zeroes is what makes that safe, and it preserves the original reason for
+    looking at search steps alone: a step with no rank to report contributes
+    nothing rather than reading as a miss.
+
+    Every numeric bound is refused outright when no step carried a measurement.
+    A ``maximum_`` bound over an unpopulated field is satisfied by the absence
+    of data, so without that refusal a green case would attest to safety nobody
+    observed.
     """
 
     scorer_id = "capability_discovery_trajectory"
@@ -582,10 +603,20 @@ class CapabilityDiscoveryTrajectoryScorer:
         search_steps = tuple(
             step for step in steps if step.discovery_phase == "capability_search"
         )
-        ranks = tuple(step.discovery_recall_rank for step in search_steps)
+        # Rank is read across every discovery step rather than over search
+        # steps alone. On a real run the rank is a *selection* fact: it is
+        # known when the model describes or invokes a reference and can be
+        # placed against the search that offered it, which is a describe/invoke
+        # step, not a search one. Folding the other phases in is safe because
+        # only positive ranks are considered, so a step with nothing to report
+        # still contributes nothing — the reason the original narrowing
+        # existed. An authored fixture that puts its rank on the search step
+        # scores identically.
+        ranks = tuple(step.discovery_recall_rank for step in steps)
         best_rank = min((rank for rank in ranks if rank > 0), default=0)
         result_tokens = sum(step.discovery_result_tokens for step in steps)
         model_turns = sum(step.discovery_model_turns for step in steps)
+        counts_observed = any(step.discovery_counts_observed for step in steps)
 
         checks = (
             (
@@ -624,6 +655,20 @@ class CapabilityDiscoveryTrajectoryScorer:
             unobserved = _string_set(tuple(required_phase_outcomes)) - phases
             if mismatched or unobserved:
                 reason = "capability_discovery_phase_outcome_mismatch"
+        # A numeric assertion that never saw a number is not a passing
+        # assertion. Every ``maximum_`` bound below is satisfied by an
+        # unpopulated field — ``maximum_recall_rank: 0`` and
+        # ``maximum_candidate_count: 0`` most dangerously, because they are how
+        # the security case says an unauthorized name must not come back from a
+        # search at all, and a bound of zero over absent data checks nothing.
+        # Failing closed here means a green case reports observed safety rather
+        # than missing evidence.
+        if (
+            reason is None
+            and not counts_observed
+            and any(key in expected for key in _DISCOVERY_NUMERIC_KEYS)
+        ):
+            reason = "capability_discovery_counts_unobserved"
         minimum_rank = _non_negative_int(expected.get("minimum_recall_rank", 0))
         if reason is None and minimum_rank and best_rank < minimum_rank:
             # ``best_rank`` is 0 when the target never appeared, so an absent
@@ -664,6 +709,321 @@ class CapabilityDiscoveryTrajectoryScorer:
             hard_gate=assertion.hard_gate,
             reason_code=reason,
         )
+
+
+#: Every expectation whose quantity comes from a *plan record's* segment list
+#: rather than from counting steps. Named in one place so the scorer can refuse
+#: to grade a width nobody measured — the same refusal
+#: :data:`_DISCOVERY_NUMERIC_KEYS` exists for, and for the same reason.
+#:
+#: ``maximum_planned_batches``, ``minimum_dispatch_intents``,
+#: ``maximum_determinate_settlements``, and ``minimum_tool_calls`` are
+#: deliberately *not* here. Those count observable steps, so their quantity is
+#: present whenever the trajectory is, and an unplannable case must be able to
+#: assert "no plan was bound" without a plan record to read it from.
+_PARALLEL_SEGMENT_NUMERIC_KEYS = (
+    "minimum_planned_operations",
+    "minimum_overlapping_operations",
+    "maximum_overlapping_operations",
+    "minimum_segment_width",
+    "maximum_segment_width",
+)
+
+#: The two dispositions that *claim* something about the world.
+#: ``indeterminate`` is deliberately absent: it is a settlement that asserts
+#: nothing, which is the honest record for work whose outcome nobody can
+#: establish. Counting it as an outcome would make a correctly cancelled run
+#: indistinguishable from one that invented a result.
+_DETERMINATE_DISPOSITIONS = frozenset({"succeeded", "failed"})
+
+
+class ParallelExecutionTrajectoryScorer:
+    """Score the closed, body-free F6 batch-journal projection.
+
+    Step 10 turns on graph-level parallel execution, and ARQ-010 gates that on
+    F1 evaluation being present. Six properties carry that gate, and all six are
+    expressible over one projection of ``operation_batch.journal.v1``:
+
+    * **independent reads overlap** — a ``parallel`` segment exists, every one
+      of them carries ``independent_reads``, and enough operations actually sat
+      inside one. ``minimum_overlapping_operations`` is the load-bearing half:
+      a planner that emitted a parallel segment of nothing would satisfy the
+      mode check and overlap no work at all.
+    * **unknown stays serial** — ``forbidden_segment_modes`` plus the serial
+      reasons the planner is required to have used. Stated as reasons rather
+      than as "no parallel segment" so a plan that went serial for the *wrong*
+      reason still fails.
+    * **a write never overlaps the reads planned before it** —
+      ``required_segment_mode_order`` compares the plan's modes as an ordered
+      tuple. A set cannot express this: ``{parallel, serial}`` is equally true
+      of a plan that overlapped the write.
+    * **approval-gated work is unplannable** — ``maximum_planned_batches: 0``
+      with ``minimum_tool_calls``. The floor is what stops the ceiling from
+      passing on an empty trajectory: absence of a plan proves nothing unless
+      the turn demonstrably ran.
+    * **a sibling failure leaves a completed child intact** — the settled
+      dispositions must still contain ``succeeded``.
+    * **cancel and restart invent neither rollback nor success** —
+      ``require_unresolved_child`` states positively that a child was begun and
+      the journal never claimed an outcome for it, and
+      ``maximum_determinate_settlements`` bounds how many outcomes were claimed
+      at all. Both are phrased over *determinate* settlements — ``succeeded``
+      and ``failed`` only — rather than over settlements, because a durable
+      ``indeterminate`` row is the honest answer rather than a violation. That
+      distinction is what lets one case grade a run whose cancel path records
+      nothing and a run whose cancel path records its uncertainty: the property
+      is that no outcome was manufactured, not which of the two shapes the
+      journal took. A manufactured ``succeeded`` (invented result) or
+      ``failed`` (invented "nothing reached the connector") fails both bounds.
+
+    Every segment-derived numeric bound is refused outright when no step carried
+    a plan record, because a ``maximum_`` ceiling over an unpopulated width is
+    satisfied by absence.
+    """
+
+    scorer_id = "parallel_execution_trajectory"
+
+    def score(
+        self,
+        *,
+        case: EvaluationCase,
+        trajectory: TrajectoryManifest,
+    ) -> ScorerResult:
+        assertion = _assertion(case, self.scorer_id)
+        if assertion is None:
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=1.0,
+                passed=True,
+                hard_gate=False,
+                reason_code="parallel_execution_not_applicable",
+            )
+        expected = assertion.expected
+        if not isinstance(expected, Mapping):
+            return ScorerResult(
+                scorer_id=self.scorer_id,
+                score=0,
+                passed=False,
+                hard_gate=assertion.hard_gate,
+                reason_code="parallel_execution_assertion_invalid",
+            )
+        reason = self._reason(expected=expected, trajectory=trajectory)
+        passed = reason == "parallel_execution_trajectory_passed"
+        return ScorerResult(
+            scorer_id=self.scorer_id,
+            score=1.0 if passed else 0.0,
+            passed=passed,
+            hard_gate=assertion.hard_gate,
+            reason_code=reason,
+        )
+
+    @classmethod
+    def _reason(
+        cls,
+        *,
+        expected: Mapping[str, object],
+        trajectory: TrajectoryManifest,
+    ) -> str:
+        steps = tuple(
+            step for step in trajectory.ordered_steps if step.parallel_record_kind
+        )
+        plan_steps = tuple(
+            step for step in steps if step.parallel_record_kind == "plan_bound"
+        )
+        child_steps = tuple(
+            step for step in steps if step.parallel_record_kind == "child_transition"
+        )
+        record_kinds = {step.parallel_record_kind for step in steps}
+        # Modes are concatenated across plan steps in trajectory order, so a
+        # turn planned as one batch reads as one ordered tuple.
+        segment_modes = tuple(
+            mode for step in plan_steps for mode in step.parallel_segment_modes
+        )
+        parallel_reasons = {
+            item
+            for step in plan_steps
+            for item in step.parallel_parallel_segment_reasons
+        }
+        serial_reasons = {
+            item for step in plan_steps for item in step.parallel_serial_segment_reasons
+        }
+        kill_switch_reasons = {
+            reason
+            for step in plan_steps
+            if (reason := step.parallel_kill_switch_reason) is not None
+        }
+        child_phases = {
+            phase
+            for step in child_steps
+            if (phase := step.parallel_child_phase) is not None
+        }
+        child_dispositions = {
+            disposition
+            for step in child_steps
+            if (disposition := step.parallel_child_disposition) is not None
+        }
+        dispatch_intents = sum(
+            step.parallel_child_phase == "dispatch_intent" for step in child_steps
+        )
+        # Settlements that *claim an outcome*, as opposed to recording that the
+        # outcome is unknown. This is the count the cancel property is about,
+        # and it is deliberately not "settlements": a cancel that durably says
+        # ``indeterminate`` has settled a child without asserting anything about
+        # the world, which is the honest answer rather than a violation.
+        determinate_settlements = sum(
+            step.parallel_child_disposition in _DETERMINATE_DISPOSITIONS
+            for step in child_steps
+        )
+        counts_observed = any(step.parallel_counts_observed for step in plan_steps)
+
+        checks = (
+            (
+                _string_set(expected.get("required_record_kinds", ())) - record_kinds,
+                "parallel_execution_record_missing",
+            ),
+            (
+                _string_set(expected.get("forbidden_record_kinds", ())) & record_kinds,
+                "parallel_execution_forbidden_record_observed",
+            ),
+            (
+                _string_set(expected.get("forbidden_segment_modes", ()))
+                & set(segment_modes),
+                "parallel_execution_forbidden_mode_observed",
+            ),
+            (
+                _string_set(expected.get("required_parallel_segment_reasons", ()))
+                - parallel_reasons,
+                "parallel_execution_parallel_reason_missing",
+            ),
+            (
+                _string_set(expected.get("required_serial_segment_reasons", ()))
+                - serial_reasons,
+                "parallel_execution_serial_reason_missing",
+            ),
+            (
+                _string_set(expected.get("required_kill_switch_reasons", ()))
+                - kill_switch_reasons,
+                "parallel_execution_kill_switch_reason_missing",
+            ),
+            (
+                _string_set(expected.get("required_child_phases", ())) - child_phases,
+                "parallel_execution_child_phase_missing",
+            ),
+            (
+                _string_set(expected.get("required_child_dispositions", ()))
+                - child_dispositions,
+                "parallel_execution_child_disposition_missing",
+            ),
+            (
+                _string_set(expected.get("forbidden_child_dispositions", ()))
+                & child_dispositions,
+                "parallel_execution_forbidden_disposition_observed",
+            ),
+        )
+        reason = next(
+            (reason_code for observed, reason_code in checks if observed),
+            None,
+        )
+        # An allowlist rather than a denylist, because the planner's reason
+        # vocabulary is open to extension and the claim being made is "every
+        # segment that overlapped did so *only* because the reads were
+        # independent". A forbidden-list version of this would silently admit
+        # any reason added after the case was written.
+        if reason is None and "allowed_parallel_segment_reasons" in expected:
+            allowed = _string_set(expected.get("allowed_parallel_segment_reasons"))
+            if parallel_reasons - allowed:
+                reason = "parallel_execution_parallel_reason_unexpected"
+        if reason is None and "required_segment_mode_order" in expected:
+            required_order = _string_tuple(expected.get("required_segment_mode_order"))
+            if segment_modes != required_order:
+                reason = "parallel_execution_segment_order_mismatch"
+        if reason is None:
+            reason = cls._count_reason(
+                expected=expected,
+                trajectory=trajectory,
+                plan_steps=plan_steps,
+                counts_observed=counts_observed,
+                dispatch_intents=dispatch_intents,
+                determinate_settlements=determinate_settlements,
+            )
+        return reason or "parallel_execution_trajectory_passed"
+
+    @staticmethod
+    def _count_reason(
+        *,
+        expected: Mapping[str, object],
+        trajectory: TrajectoryManifest,
+        plan_steps: Sequence[TrajectoryStep],
+        counts_observed: bool,
+        dispatch_intents: int,
+        determinate_settlements: int,
+    ) -> str | None:
+        # A plan whose widths were never measured cannot answer a width
+        # question. Every ``maximum_`` bound below is satisfied by an
+        # unpopulated field, so a case declaring one over an unmeasured plan
+        # would report safety nobody observed. This is BUG-14 in F6's shape.
+        if not counts_observed and any(
+            key in expected for key in _PARALLEL_SEGMENT_NUMERIC_KEYS
+        ):
+            return "parallel_execution_counts_unobserved"
+        planned_operations = sum(
+            step.parallel_planned_operations for step in plan_steps
+        )
+        overlapping = sum(step.parallel_overlapping_operations for step in plan_steps)
+        widest = max(
+            (step.parallel_maximum_segment_width for step in plan_steps),
+            default=0,
+        )
+        # ``maximum_planned_batches`` counts plan records, which is why it is
+        # not gated above: an unplannable case has no plan record by definition
+        # and must still be gradeable.
+        if "maximum_planned_batches" in expected and len(
+            plan_steps
+        ) > _non_negative_int(expected.get("maximum_planned_batches")):
+            return "parallel_execution_unexpected_plan"
+        tool_calls = _usage_int(trajectory, "tool_calls") or sum(
+            step.capability_id is not None for step in trajectory.ordered_steps
+        )
+        # The floor that stops an absence assertion from passing on an empty
+        # trajectory: "no plan was bound" is only evidence when the turn ran.
+        if tool_calls < _non_negative_int(expected.get("minimum_tool_calls", 0)):
+            return "parallel_execution_tool_call_minimum_not_met"
+        if planned_operations < _non_negative_int(
+            expected.get("minimum_planned_operations", 0)
+        ):
+            return "parallel_execution_planned_operations_below_minimum"
+        if overlapping < _non_negative_int(
+            expected.get("minimum_overlapping_operations", 0)
+        ):
+            return "parallel_execution_overlap_below_minimum"
+        if "maximum_overlapping_operations" in expected and overlapping > (
+            _non_negative_int(expected.get("maximum_overlapping_operations"))
+        ):
+            return "parallel_execution_overlap_above_maximum"
+        if widest < _non_negative_int(expected.get("minimum_segment_width", 0)):
+            return "parallel_execution_segment_width_below_minimum"
+        # Read by key presence rather than truthiness, because ``0`` and ``1``
+        # are this ceiling's most important settings: they are how a case says
+        # "nothing overlapped".
+        if "maximum_segment_width" in expected and widest > _non_negative_int(
+            expected.get("maximum_segment_width")
+        ):
+            return "parallel_execution_segment_width_exceeded"
+        if dispatch_intents < _non_negative_int(
+            expected.get("minimum_dispatch_intents", 0)
+        ):
+            return "parallel_execution_dispatch_intent_minimum_not_met"
+        if "maximum_determinate_settlements" in expected and (
+            determinate_settlements
+            > _non_negative_int(expected.get("maximum_determinate_settlements"))
+        ):
+            return "parallel_execution_invented_outcome_observed"
+        if (
+            expected.get("require_unresolved_child", False)
+            and dispatch_intents <= determinate_settlements
+        ):
+            return "parallel_execution_unresolved_child_missing"
+        return None
 
 
 class RedactedGradeRequest(RuntimeContract):
@@ -805,6 +1165,7 @@ DEFAULT_HARD_SCORERS = (
     PromptCacheTrajectoryScorer(),
     ModelInvocationTrajectoryScorer(),
     CapabilityDiscoveryTrajectoryScorer(),
+    ParallelExecutionTrajectoryScorer(),
 )
 
 
@@ -865,6 +1226,17 @@ def _string_set(value: object) -> frozenset[str]:
     )
 
 
+def _string_tuple(value: object) -> tuple[str, ...]:
+    """Return a declared sequence in order, for expectations where order is the
+    assertion rather than an incidental detail."""
+
+    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+        return ()
+    return tuple(
+        item.strip() for item in value if isinstance(item, str) and item.strip()
+    )
+
+
 def _count_mapping(value: object) -> dict[str, int]:
     if not isinstance(value, Mapping):
         return {}
@@ -890,6 +1262,7 @@ __all__ = [
     "HardGroundednessScorer",
     "HardSafetyScorer",
     "ModelInvocationTrajectoryScorer",
+    "ParallelExecutionTrajectoryScorer",
     "RedactedGradeRequest",
     "RedactedGraderPort",
     "PromptCacheTrajectoryScorer",

@@ -167,6 +167,44 @@ class TrajectoryStep(RuntimeContract):
     discovery_recall_rank: Annotated[int, Field(ge=0)] = 0
     discovery_result_tokens: Annotated[int, Field(ge=0)] = 0
     discovery_model_turns: Annotated[int, Field(ge=0)] = 0
+    #: Whether the four counts above were *measured* on this step, as opposed
+    #: to left at their zero default because the source carried no numeric
+    #: field. A ``maximum_`` ceiling of zero is satisfied by both, so without
+    #: this flag such a ceiling would pass on absent data and read as evidence
+    #: of safety that was never observed.
+    discovery_counts_observed: bool = False
+    parallel_record_kind: str | None = Field(default=None, max_length=80)
+    #: Segment execution modes in plan order. Order is the point: "the write did
+    #: not overlap the reads planned before it" is a statement about *sequence*,
+    #: and a set of modes cannot express it.
+    parallel_segment_modes: tuple[str, ...] = Field(default=(), max_length=100)
+    #: Planner reasons split by the mode the segment was given. Keeping them
+    #: apart is what lets a case say "every segment that overlapped did so
+    #: because the reads were independent" without also having to trust that no
+    #: other reason ever reaches a parallel segment.
+    parallel_parallel_segment_reasons: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+    )
+    parallel_serial_segment_reasons: tuple[str, ...] = Field(
+        default=(),
+        max_length=100,
+    )
+    parallel_kill_switch_reason: str | None = Field(default=None, max_length=80)
+    parallel_child_phase: str | None = Field(default=None, max_length=80)
+    parallel_child_disposition: str | None = Field(default=None, max_length=80)
+    parallel_planned_operations: Annotated[int, Field(ge=0)] = 0
+    #: How many operations actually sat inside a parallel segment. Distinct from
+    #: the plan's size: a plan of four operations that overlapped none of them
+    #: reports ``0`` here, which is the regression a "reads overlap" case exists
+    #: to catch.
+    parallel_overlapping_operations: Annotated[int, Field(ge=0)] = 0
+    parallel_maximum_segment_width: Annotated[int, Field(ge=0)] = 0
+    #: Whether the three counts above were *measured* on this step. Same reason
+    #: :attr:`discovery_counts_observed` exists: a ``maximum_`` ceiling over an
+    #: unpopulated field is satisfied by absence, so without this a green case
+    #: would attest to a width nobody observed.
+    parallel_counts_observed: bool = False
     payload_digest: Sha256
 
 
@@ -1067,6 +1105,21 @@ def _without_empty_task_policy_projection(value: object) -> object:
         "discovery_recall_rank",
         "discovery_result_tokens",
         "discovery_model_turns",
+        # ``False`` compares equal to ``0`` here, so an unobserved step is
+        # dropped from the digest exactly as the zeroed counts beside it are.
+        # Manifests projected before the numeric extension keep their digests.
+        "discovery_counts_observed",
+        "parallel_record_kind",
+        "parallel_segment_modes",
+        "parallel_parallel_segment_reasons",
+        "parallel_serial_segment_reasons",
+        "parallel_kill_switch_reason",
+        "parallel_child_phase",
+        "parallel_child_disposition",
+        "parallel_planned_operations",
+        "parallel_overlapping_operations",
+        "parallel_maximum_segment_width",
+        "parallel_counts_observed",
     }
     return {
         key: _without_empty_task_policy_projection(item)

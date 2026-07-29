@@ -1,0 +1,57 @@
+{
+  "surface": "surface-language",
+  "state": "board-capped",
+  "prd": "docs/plan/surface-language/PRD-01-board-lanes.md",
+  "viewport": "1200x816",
+  "design": "surfaces/surface-language/design/index.html?state=table",
+  "live": "surfaces/surface-language/live/board-capped.html",
+  "note": "PRD-01 requirement 6 — past CARD_RENDER_CAP the board must SAY it truncated. Read this report as a REGISTER comparison and nothing stronger: the mock has no board cap line at all, so the design side here is the TABLE surface, whose .sft-cap footer is the design's one and only \"this view is truncated, and says so\" element (\"Showing 8 of 1284 rows · 6 of 6 columns · render cap 200\"). Rows below therefore answer \"does the live cap line read like the design's cap register?\", not \"does it match a board cap line the design specified\" — the design specified none. The badge pair is included because it is the other half of the same question: the badge states the TRUE total while the cap line states how much of it is painted.",
+  "extraProps": [
+    "position",
+    "top",
+    "zIndex",
+    "gridAutoFlow",
+    "gridAutoColumns",
+    "minHeight",
+    "maxHeight",
+    "overflowX",
+    "overflowY",
+    "overscrollBehaviorX",
+    "overscrollBehaviorY",
+    "textWrap",
+    "textWrapStyle",
+    "gridTemplateColumns",
+    "fontVariantNumeric",
+    "alignItems",
+    "overflowWrap"
+  ],
+  "elements": [
+    {
+      "label": "cap.line",
+      "group": "Cap",
+      "design": ".sft-cap",
+      "live": "[data-testid=\"board-card-cap\"]",
+      "note": "Design register: mono 10px on --mut2, --ink2 ground, top hairline, 7px 12px padding, 13px gap. Live composes an inline 12px sans on --color-text-muted with no ground and no border."
+    },
+    {
+      "label": "cap.badge",
+      "group": "Cap",
+      "design": ".sfc-r > .sfb",
+      "live": "[data-testid=\"surface-badge\"]",
+      "note": "Both state the true total (design \"8 of 1284 rows\", live \"260 cards\") rather than the painted slice — which is the behaviour PRD-01 wants; only the register is in question."
+    },
+    {
+      "label": "cap.card",
+      "group": "Cap",
+      "design": ".sf > .sfc",
+      "live": "[data-testid=\"board-renderer\"] > section",
+      "note": "Context anchor, so a cap-line delta can be read against the card it sits in."
+    }
+  ],
+  "unmapped": [
+    {
+      "design": ".sft, .sft th, .sft td",
+      "why": "The design state is the table surface only because of its cap footer. Its grid is the subject of a different piece of work (the shared table language) and is deliberately not anchored here — this file must not turn into a table-parity report by accident."
+    }
+  ]
+}

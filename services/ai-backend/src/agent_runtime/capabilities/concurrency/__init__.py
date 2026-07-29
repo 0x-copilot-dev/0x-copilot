@@ -6,13 +6,35 @@ The whole domain shares one vocabulary in
 policy over those types: descriptor precedence, batch planning, scoped permits,
 and serial kill switches.
 
-:mod:`agent_runtime.capabilities.concurrency.batch_journal_store` is
-deliberately **not** re-exported here. It is the one F6 module that knows the
-run-event transport schema, and that schema imports this package's record
-vocabulary — so importing the adapter from this ``__init__`` would close a
-cycle. Import it by module path.
+Two modules are deliberately **not** re-exported here, for two different
+reasons, and both must be imported by module path.
+
+:mod:`agent_runtime.capabilities.concurrency.batch_journal_store` is the one F6
+module that knows the run-event transport schema, and that schema imports this
+package's record vocabulary — so importing the adapter from this ``__init__``
+would close a cycle.
+
+:mod:`agent_runtime.capabilities.concurrency.graph_admission` is kept out for a
+parity reason instead. ``runtime_api.schemas.events`` imports this package's
+journal record, which means *this* ``__init__`` runs in every deployment,
+configured or not. Anything re-exported from here is therefore loaded by every
+deployment, and the graph seam is exactly the module a deployment without F6
+configured must not pay for. Keeping it off this list is what lets a test assert
+that importing the tool middleware never loads it.
 """
 
+from agent_runtime.capabilities.concurrency.batch_cancellation import (
+    BatchCancellationReason,
+    BatchCancellationReport,
+    CancelledChild,
+    ChildCancellationState,
+    ChildEffectCertainty,
+)
+from agent_runtime.capabilities.concurrency.batch_child_journal import (
+    BatchChildTransitionRecorder,
+    BatchRunBinding,
+    ChildTransitionJournalPort,
+)
 from agent_runtime.capabilities.concurrency.batch_coordinator import (
     BatchAdmissionOutcome,
     BatchAllowanceSupplier,
@@ -33,6 +55,10 @@ from agent_runtime.capabilities.concurrency.batch_coordinator import (
 )
 from agent_runtime.capabilities.concurrency.batch_journal import (
     BATCH_JOURNAL_RECORD_ADAPTER,
+    BatchChildDisposition,
+    BatchChildPhase,
+    BatchChildTransitionRecord,
+    BatchChildTransitionWrite,
     BatchJournalConflict,
     BatchJournalCorruption,
     BatchJournalError,
@@ -49,9 +75,24 @@ from agent_runtime.capabilities.concurrency.batch_journal import (
     BatchPlanStorePort,
     BatchRecoveryView,
     DurableBatchPlan,
+    DurableChildTransition,
     PlannedOperation,
     SequencedBatchJournalRecord,
     validate_batch_journal_record,
+)
+from agent_runtime.capabilities.concurrency.batch_recovery import (
+    BatchEvidence,
+    BatchRestartPlan,
+    BatchRestartPlanner,
+    ChildRestartDecision,
+    ChildRestartDisposition,
+    ChildRestartEvidence,
+    RunRestartPlan,
+)
+from agent_runtime.capabilities.concurrency.batch_run_recovery import (
+    BatchRecoveryViewPort,
+    BatchRunRecovery,
+    withheld_operation_ids,
 )
 from agent_runtime.capabilities.concurrency.child_execution import (
     BatchChildDispatch,
@@ -69,6 +110,7 @@ from agent_runtime.capabilities.concurrency.child_execution import (
 )
 from agent_runtime.capabilities.concurrency.contracts import (
     BatchFailurePolicy,
+    ApprovalRequirement,
     BatchOperation,
     BatchPlan,
     BatchSegment,
@@ -100,6 +142,7 @@ from agent_runtime.capabilities.concurrency.contracts import (
     SideEffectKind,
 )
 from agent_runtime.capabilities.concurrency.descriptor_policy import (
+    APPROVAL_REQUIREMENT_KEY,
     CapabilityConcurrencyDeclaration,
     ConcurrencyDescriptorParser,
     ConcurrencyNarrowing,
@@ -121,6 +164,7 @@ from agent_runtime.capabilities.concurrency.errors import (
     ResourceKeyTemplateRejected,
 )
 from agent_runtime.capabilities.concurrency.kill_switches import (
+    ConcurrencyKillSwitchAllowanceSupplier,
     ConcurrencyKillSwitchDecision,
     ConcurrencyKillSwitchDirectives,
     ConcurrencyKillSwitchError,
@@ -137,13 +181,18 @@ from agent_runtime.capabilities.concurrency.permits import RunPermitManager
 from agent_runtime.capabilities.concurrency.planner import BatchPlanner
 
 __all__ = (
+    "APPROVAL_REQUIREMENT_KEY",
     "BATCH_JOURNAL_RECORD_ADAPTER",
+    "ApprovalRequirement",
     "BatchAdmissionOutcome",
     "BatchAllowanceSupplier",
+    "BatchCancellationReason",
+    "BatchCancellationReport",
     "BatchChildAdmission",
     "BatchChildDispatch",
     "BatchChildDispatchPort",
     "BatchChildDispatchStatus",
+    "BatchChildDisposition",
     "BatchChildExecutionBounds",
     "BatchChildExecutionError",
     "BatchChildExecutionMessages",
@@ -151,15 +200,20 @@ __all__ = (
     "BatchChildExecutorMisconfigured",
     "BatchChildIdentity",
     "BatchChildOutcome",
+    "BatchChildPhase",
     "BatchChildResult",
     "BatchChildRunner",
     "BatchChildStatus",
+    "BatchChildTransitionRecord",
+    "BatchChildTransitionRecorder",
+    "BatchChildTransitionWrite",
     "BatchChildWork",
     "BatchChildWorkPort",
     "BatchClock",
     "BatchCoordinatorBounds",
     "BatchCoordinatorError",
     "BatchCoordinatorMessages",
+    "BatchEvidence",
     "BatchExecutionCoordinator",
     "BatchExecutionReport",
     "BatchExecutionStatus",
@@ -175,22 +229,35 @@ __all__ = (
     "BatchJournalSnapshotConflict",
     "BatchJournalWrite",
     "BatchOperation",
+    "BatchPermitScopeFactory",
     "BatchPlan",
     "BatchPlanBoundRecord",
     "BatchPlanRecorder",
     "BatchPlanRequest",
-    "BatchPermitScopeFactory",
     "BatchPlanStorePort",
     "BatchPlanner",
     "BatchRecoveryView",
+    "BatchRecoveryViewPort",
+    "BatchRestartPlan",
+    "BatchRestartPlanner",
+    "BatchRunBinding",
+    "BatchRunRecovery",
     "BatchSegment",
     "BatchSegmentMode",
     "BatchSegmentReason",
+    "CancelledChild",
     "CapabilityConcurrencyDeclaration",
+    "ChildCancellationState",
+    "ChildEffectCertainty",
+    "ChildRestartDecision",
+    "ChildRestartDisposition",
+    "ChildRestartEvidence",
+    "ChildTransitionJournalPort",
     "ConcurrencyAllowance",
     "ConcurrencyBounds",
     "ConcurrencyDeclarationRejected",
     "ConcurrencyDescriptorParser",
+    "ConcurrencyKillSwitchAllowanceSupplier",
     "ConcurrencyKillSwitchDecision",
     "ConcurrencyKillSwitchDirectives",
     "ConcurrencyKillSwitchError",
@@ -214,6 +281,7 @@ __all__ = (
     "ConcurrencyRejectionReason",
     "ConcurrencyScope",
     "DurableBatchPlan",
+    "DurableChildTransition",
     "GatewayBatchChildExecutor",
     "IdempotencyKind",
     "NarrowableEnum",
@@ -241,8 +309,10 @@ __all__ = (
     "ResourceKeyTemplate",
     "ResourceKeyTemplateRejected",
     "RunPermitManager",
+    "RunRestartPlan",
     "RunScopedBatchChildWork",
     "SequencedBatchJournalRecord",
     "SideEffectKind",
     "validate_batch_journal_record",
+    "withheld_operation_ids",
 )

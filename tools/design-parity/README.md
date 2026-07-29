@@ -29,11 +29,12 @@ tools/design-parity/
 
 ## Surfaces
 
-| Surface              | Design spec                  | Parity report                                                                                              | States                                                                                           |
-| -------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| **first-run** (FTUE) | `surfaces/first-run/design/` | `surfaces/first-run/out/report.md` (gate: 12 HIGH / 30 MED)                                                | gate ✅ · Ollama states ①–④ renderable + anchored (`anchors-ollama.json`) ✅ · composer/ack TODO |
-| **login**            | `surfaces/login/design/`     | `surfaces/login/out/report.md` (36 HIGH / 31 MED) + [`FINDINGS.md`](surfaces/login/out/FINDINGS.md)        | pick·connecting·sign·done ✅ · werr/gerr/google = design-only (live has no recovery views)       |
-| **run-empty**        | `surfaces/run-empty/design/` | `surfaces/run-empty/out/report.md` (9 HIGH / 23 MED) + [`FINDINGS.md`](surfaces/run-empty/out/FINDINGS.md) | composer ✅                                                                                      |
+| Surface              | Design spec                                                                                 | Parity report                                                                                              | States                                                                                                                      |
+| -------------------- | ------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **first-run** (FTUE) | `surfaces/first-run/design/`                                                                | `surfaces/first-run/out/report.md` (gate: 12 HIGH / 30 MED)                                                | gate ✅ · Ollama states ①–④ renderable + anchored (`anchors-ollama.json`) ✅ · composer/ack TODO                            |
+| **login**            | `surfaces/login/design/`                                                                    | `surfaces/login/out/report.md` (36 HIGH / 31 MED) + [`FINDINGS.md`](surfaces/login/out/FINDINGS.md)        | pick·connecting·sign·done ✅ · werr/gerr/google = design-only (live has no recovery views)                                  |
+| **run-empty**        | `surfaces/run-empty/design/`                                                                | `surfaces/run-empty/out/report.md` (9 HIGH / 23 MED) + [`FINDINGS.md`](surfaces/run-empty/out/FINDINGS.md) | composer ✅                                                                                                                 |
+| **surface-language** | `surfaces/surface-language/design/` — see its [README](surfaces/surface-language/README.md) | `surfaces/surface-language/out/report.md` (one report per state)                                           | board · board-changed · board-capped · no-spec · no-spec-board ✅ — one command: `node lib/run-surface-language-parity.mjs` |
 
 ## Using it for the surface you're working on
 
