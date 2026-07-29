@@ -81,6 +81,11 @@ class TestPublishArtifactTool(BoundContextMixin):
             "kind": "code",
             "title": "hello.py",
             "presentation": "none",
+            # Destination stated in the result, not left to inference. A result
+            # silent on this is what let the model claim a published CSV was
+            # "saved to your documents folder".
+            "stored_in": "artifact_library",
+            "wrote_to_filesystem": False,
         }
         assert duplicate == first
         assert len(service.byte_calls) == 1

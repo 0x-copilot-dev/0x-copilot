@@ -64,6 +64,9 @@ from agent_runtime.capabilities.tools.builtin.stage_rowset_write import (
 from agent_runtime.capabilities.tools.builtin.publish_artifact import (
     PublishArtifactInput,
 )
+from agent_runtime.capabilities.tools.builtin.revise_artifact import (
+    ReviseArtifactInput,
+)
 from agent_runtime.capabilities.tools.builtin.suggest_mcp_connector import (
     SuggestMcpConnectorInput,
     SuggestMcpConnectorTool,
@@ -276,6 +279,7 @@ async def _assemble_harness(
             sandbox_execute_tool=runtime_dependencies.sandbox_execute_tool,
             stage_rowset_write_tool=runtime_dependencies.stage_rowset_write_tool,
             publish_artifact_tool=runtime_dependencies.publish_artifact_tool,
+            revise_artifact_tool=runtime_dependencies.revise_artifact_tool,
             capability_activation=runtime_dependencies.capability_activation,
             capability_catalog=runtime_dependencies.capability_catalog,
             runtime_context=runtime_context,
@@ -478,6 +482,7 @@ def _model_visible_tools(
     sandbox_execute_tool: object | None = None,
     stage_rowset_write_tool: object | None = None,
     publish_artifact_tool: object | None = None,
+    revise_artifact_tool: object | None = None,
     capability_activation: object | None = None,
     capability_catalog: object | None = None,
     runtime_context: AgentRuntimeContext,
@@ -614,6 +619,11 @@ def _model_visible_tools(
         model_tools.append(
             _structured_tool(publish_artifact_tool, PublishArtifactInput)
         )
+    # Paired with publication so the model can change an artifact instead of
+    # minting a near-duplicate. Composed by the same worker seam, so a run that
+    # can publish can also revise.
+    if revise_artifact_tool is not None:
+        model_tools.append(_structured_tool(revise_artifact_tool, ReviseArtifactInput))
     return tuple(model_tools)
 
 

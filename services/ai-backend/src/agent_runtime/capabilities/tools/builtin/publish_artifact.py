@@ -211,6 +211,13 @@ class PublishArtifactTool:
             "kind": parsed.kind.value,
             "title": parsed.title,
             "presentation": presentation.value,
+            # Where the content actually went, stated in the result rather than
+            # left to inference. A result silent on destination is what let the
+            # model tell users their CSV was "saved to your documents folder"
+            # while the process had no filesystem capability at all. Both fields
+            # are server-derived; model input cannot set them.
+            "stored_in": "artifact_library",
+            "wrote_to_filesystem": False,
         }
 
     async def __call__(

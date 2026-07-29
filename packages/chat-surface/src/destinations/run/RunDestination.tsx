@@ -2254,6 +2254,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
     }
     const tabs: Array<{ uri: string; title: string; lastSeq: number }> = [];
     const seen = new Set<string>();
+    // The artifact record's own title, keyed by artifact id. One authoritative
+    // source of display identity for both the current run's tabs and prior
+    // turns', so a tab and its panel header cannot disagree.
+    const canvasTitleById = new Map<string, string>();
+    for (const subject of conversationCanvas.subjects) {
+      if (subject.kind === "artifact" && subject.title)
+        canvasTitleById.set(subject.subjectId, subject.title);
+    }
     const add = (
       uri: string,
       title: string,
@@ -2274,7 +2282,14 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
         if (kind !== null && subject.revision !== null) {
           add(
             artifactUri(kind, subject.subjectId, subject.revision),
-            `${subject.title} · r${subject.revision}`,
+            // The artifact's real name, from the conversation-canvas record.
+            // The lifecycle fold can only synthesize "<kind> artifact" because
+            // `artifact.created` carries no title, so two CSVs in one run both
+            // came out as "dataset artifact · r1" — indistinguishable in the
+            // tab strip. Prior-turn subjects below already use this same
+            // authoritative title; this makes the current run agree with them
+            // instead of keeping a second, lossier derivation.
+            `${canvasTitleById.get(subject.subjectId) ?? subject.title} · r${subject.revision}`,
             subject.lastSeq,
             subject.key,
           );
@@ -3427,11 +3442,11 @@ export function RunDestination(props: RunDestinationProps): ReactElement {
             uri={uri}
             transport={transport}
             downloadPort={artifactDownloadPort}
-            // Flow D in one line: conversation scope grants VISIBILITY of an
-            // artifact from an earlier turn, but the authority to mutate it
-            // stays bound to the run the user is actually in. Sending the
-            // acting run is what keeps an edit causal — and therefore visible.
-            {...(session.runId !== null ? { actingRunId: session.runId } : {})}
+            // No acting run is sent. Conversation scope grants VISIBILITY of an
+            // artifact from an earlier turn; the edit itself is caused by the
+            // conversation, not by whichever run happens to be on screen. That
+            // run is normally already sealed by the time a table is visible, so
+            // naming it turned every ordinary save into a refused write.
           />
         );
       }

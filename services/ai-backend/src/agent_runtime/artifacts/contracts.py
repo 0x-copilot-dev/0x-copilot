@@ -28,6 +28,7 @@ from agent_runtime.surfaces_v2.ledger_ids import (
 )
 from agent_runtime.surfaces_v2.ledger_models import (
     ArtifactAuthor,
+    ArtifactCausalLane,
     ArtifactKind,
     ArtifactPresentationPreference,
     LedgerEventType,
@@ -153,19 +154,41 @@ class ArtifactLimits(RuntimeContract):
 
 
 class ArtifactScope(RuntimeContract):
-    """Verified run ownership used by every mutation and dereference."""
+    """Verified ownership used by every mutation and dereference.
+
+    The scope carries the mutation's *causal subject*, which is what a terminal
+    run event is entitled to seal. ``RUN`` lane mutations belong to a run and
+    must name one; ``CONVERSATION`` lane mutations belong to the conversation
+    and deliberately name no run, because a user edit made after a turn ends was
+    not caused by that turn.
+    """
 
     org_id: str = Field(min_length=1, max_length=255)
     user_id: str = Field(min_length=1, max_length=255)
     conversation_id: str = Field(min_length=1, max_length=255)
-    run_id: str = Field(min_length=1, max_length=255)
+    #: Present for the RUN lane and absent for the CONVERSATION lane. Optional
+    #: on the type, mandatory in practice for RUN — enforced below so a run-lane
+    #: scope without a run is unconstructable rather than merely discouraged.
+    run_id: str | None = Field(default=None, min_length=1, max_length=255)
     trace_id: str = Field(min_length=1, max_length=255)
+    #: Derived server-side from authorship, never accepted from a caller.
+    lane: ArtifactCausalLane = ArtifactCausalLane.RUN
     #: Whether the resolved run has already sealed its ledger. Only consulted
     #: when a caller *claims* a run to act in (PRD-02 ``acting_run_id``): a
     #: terminal run cannot accept the causal event the mutation would produce,
     #: so the claim is refused rather than silently producing an unrefreshable
-    #: surface. Defaults false so every existing in-run caller is unchanged.
+    #: surface. Never consulted in the CONVERSATION lane, which claims no run.
     run_is_terminal: bool = False
+
+    @model_validator(mode="after")
+    def _lane_names_its_subject(self) -> ArtifactScope:
+        if self.lane is ArtifactCausalLane.RUN and not self.run_id:
+            raise ValueError("run-lane artifact scope requires run_id")
+        if self.lane is ArtifactCausalLane.CONVERSATION and self.run_id is not None:
+            # A conversation-lane scope that still carries a run would let a
+            # downstream reader re-derive run causality the lane just denied.
+            raise ValueError("conversation-lane artifact scope must not name a run")
+        return self
 
 
 class ArtifactCreateRequest(RuntimeContract):
@@ -199,6 +222,21 @@ class ArtifactRevisionRequest(RuntimeContract):
 
     Optional so existing callers (agent-authored revisions, which act inside the
     creating run) keep working unchanged; when unset the creating run is used.
+
+    It applies to the ``RUN`` lane only. A *user* edit has no run at all: the
+    user opens a prior turn's artifact and changes a cell, which no run caused.
+    Attributing that to a run — the creating one or the one merely on screen —
+    asks a sealed ledger to accept an event outside its causal prefix, and both
+    runs are typically sealed by the time anyone edits. Such a revision takes the
+    ``CONVERSATION`` lane instead, whose subject the server reads from the
+    artifact's own record. There is deliberately no ``acting_conversation_id``
+    on the wire: the artifact already knows the conversation it belongs to, so
+    accepting one would add a forgeable input for a fact the server can derive.
+
+    Which lane applies is decided server-side from ``ArtifactProvenance.author``,
+    never from this request, so a caller cannot route a model-authored write into
+    the unsealed lane. ``acting_run_id`` is therefore not consulted for
+    user-authored revisions — it names a subject that lane does not use.
     """
 
     artifact_id: str
@@ -366,7 +404,12 @@ class ArtifactAppendCommand(RuntimeContract):
     expected_revision: PositiveInt
     revision: ArtifactStoredRevision
     idempotency: ArtifactIdempotencyBinding
-    ledger_event: ArtifactLedgerEvent
+    #: Present for RUN-lane mutations, which a run ledger records. Absent for the
+    #: CONVERSATION lane: the only event transport appends to the *run* event
+    #: store, and a user edit was not caused by a run, so there is no honest run
+    #: to append it to. Durability is unaffected — the immutable revision itself
+    #: carries author, timestamp, size, and digest.
+    ledger_event: ArtifactLedgerEvent | None = None
 
     @field_validator("artifact_id")
     @classmethod
@@ -383,6 +426,17 @@ class ArtifactAppendCommand(RuntimeContract):
             raise ValueError("parent_revision must equal expected_revision")
         if revision.revision != self.expected_revision + 1:
             raise ValueError("revision must increment expected_revision by one")
+        return self
+
+    @model_validator(mode="after")
+    def _lane_matches_ledger_event(self) -> ArtifactAppendCommand:
+        run_lane = self.scope.lane is ArtifactCausalLane.RUN
+        if run_lane and self.ledger_event is None:
+            raise ValueError("run-lane append requires a ledger event")
+        if not run_lane and self.ledger_event is not None:
+            # Carrying one would hand a downstream drain an event with no run to
+            # append it to — exactly the sealed-ledger write the lane prevents.
+            raise ValueError("conversation-lane append must not carry a ledger event")
         return self
 
 

@@ -38,14 +38,6 @@ export function ArtifactSurface(props: {
   readonly transport: Transport;
   readonly downloadPort?: ArtifactDownloadPort;
   readonly onNavigateRevision?: (uri: string) => void;
-  /**
-   * The run the user is editing in (PRD-02 Flow B). Once the canvas outlives a
-   * single turn, an open artifact can belong to an earlier, already-sealed run;
-   * without this the server attributes the revision there, the ledger event is
-   * rejected, and the tab never learns it changed. Optional so surfaces mounted
-   * outside a run cockpit keep the creating-run behaviour.
-   */
-  readonly actingRunId?: string;
 }): ReactElement {
   const parsed = parseArtifactSurfaceUri(props.uri);
   const [selectedRevision, setSelectedRevision] = useState<number | null>(null);
@@ -90,9 +82,10 @@ export function ArtifactSurface(props: {
           filename:
             data.detail.suggested_filename ?? data.detail.artifact.title,
           idempotencyKey: idempotencyKey(),
-          ...(props.actingRunId !== undefined
-            ? { actingRunId: props.actingRunId }
-            : {}),
+          // Deliberately claims no run. This surface only ever produces
+          // user-authored revisions, which the server attributes to the
+          // conversation — a subject that never seals. Naming a run here is what
+          // made saving a cell edit fail once the viewed run had finished.
         });
         if (!isArtifactMutationResponse(response)) return "error";
         setSelectedRevision(response.current_revision.revision);
@@ -106,7 +99,15 @@ export function ArtifactSurface(props: {
         );
         return "saved";
       } catch (error) {
-        return isTransportHttpError(error) && error.status === 409
+        // Only report a lost update when the server actually said the parent is
+        // stale. Three unrelated causes share 409, and treating them all as
+        // staleness is how the surface came to claim "a newer revision exists"
+        // when the artifact had exactly one revision. A server that sent no code
+        // keeps the prior behaviour; anything else falls through to a plain
+        // failure, which is honest rather than confidently wrong.
+        if (!isTransportHttpError(error) || error.status !== 409)
+          return "error";
+        return error.code === null || error.code === "artifact_conflict"
           ? "conflict"
           : "error";
       }
