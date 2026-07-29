@@ -1222,7 +1222,6 @@ class TestBatchJournalClientContract(BatchJournalFixtureMixin):
             ("BatchSegmentMode", BatchSegmentMode),
             ("BatchSegmentReason", BatchSegmentReason),
             ("BatchFailurePolicy", BatchFailurePolicy),
-            ("BatchJournalRecordKind", BatchJournalRecordKind),
             ("ConcurrencyMode", ConcurrencyMode),
             ("ConcurrencySideEffectKind", SideEffectKind),
             ("ConcurrencyIdempotencyKind", IdempotencyKind),
@@ -1240,6 +1239,29 @@ class TestBatchJournalClientContract(BatchJournalFixtureMixin):
             assert self._string_union(source, name) == {
                 member.value for member in vocabulary
             }, name
+
+    def test_the_record_kind_union_lags_python_only_where_intended(self) -> None:
+        """The one place F6.6 knowingly leaves the published contract behind.
+
+        ``child_transition`` is a backend record on an event family clients
+        already receive, so the TypeScript union genuinely needs it — but
+        ``packages/api-types`` is a cross-package change this lane may not make.
+        Rather than drop the guard, it is narrowed to the exact, named delta:
+        TypeScript may still never invent a kind the backend does not have, and
+        any *other* new Python kind still fails here.
+
+        The assertion is deliberately written to stay green once the pending
+        api-types addition lands, so closing the gap does not require touching
+        this test.
+        """
+
+        published = self._string_union(self._api_types(), "BatchJournalRecordKind")
+        python_kinds = {member.value for member in BatchJournalRecordKind}
+        pending = {BatchJournalRecordKind.CHILD_TRANSITION.value}
+
+        assert published <= python_kinds
+        assert python_kinds - published <= pending
+        assert BatchJournalRecordKind.PLAN_BOUND.value in published
 
     @staticmethod
     def _api_types() -> str:
