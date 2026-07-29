@@ -823,6 +823,54 @@ class PermitScope(RuntimeContract):
         )
 
     @classmethod
+    def required_components(cls, kind: ConcurrencyScope) -> tuple[str, ...] | None:
+        """Return the components ``kind``'s pool identity needs, or ``None``.
+
+        ``None`` means the kind names no pool at all, which is true of exactly
+        one member — ``UNKNOWN`` — and is why callers resolve a declared scope
+        through :meth:`ConcurrencyScope.permit_pool` before asking.
+        """
+
+        required = cls._REQUIRED_COMPONENTS.get(kind)
+        return None if required is None else tuple(required)
+
+    @classmethod
+    def for_pool(
+        cls,
+        kind: ConcurrencyScope,
+        *,
+        profile_id: str | None = None,
+        subject_fingerprint: str | None = None,
+        installation_id: str | None = None,
+        connector_id: str | None = None,
+        capability_name: str | None = None,
+    ) -> Self | None:
+        """Return the scope for one pool kind, or ``None`` when unidentifiable.
+
+        The single component-driven constructor, so the required-component table
+        stays the one place that knows what a pool is made of. Returning ``None``
+        rather than raising is deliberate: "this operation cannot identify the
+        pool its capability declared" is an answer a caller has to act on
+        conservatively, not a fault. Every named constructor below is this method
+        with its components already known to be present.
+        """
+
+        required = cls._REQUIRED_COMPONENTS.get(kind)
+        if required is None:
+            return None
+        supplied: dict[str, str | None] = {
+            cls.Keys.PROFILE_ID: profile_id,
+            cls.Keys.SUBJECT_FINGERPRINT: subject_fingerprint,
+            cls.Keys.INSTALLATION_ID: installation_id,
+            cls.Keys.CONNECTOR_ID: connector_id,
+            cls.Keys.CAPABILITY_NAME: capability_name,
+        }
+        components = {name: supplied[name] for name in required}
+        if any(value is None for value in components.values()):
+            return None
+        return cls(kind=kind, **components)
+
+    @classmethod
     def for_global(cls) -> Self:
         """Return the process-wide scope for this run."""
 
@@ -1034,6 +1082,7 @@ class PermitAcquisitionRequest(RuntimeContract):
         capability_name: str,
         connector_id: str | None = None,
         installation_id: str | None = None,
+        rate_limit_scope: ConcurrencyScope = ConcurrencyScope.UNKNOWN,
         wait_mode: PermitWaitMode = PermitWaitMode.REFUSE_IF_SATURATED,
         timeout_seconds: float | None = None,
         max_parallelism: int | None = None,
@@ -1044,6 +1093,19 @@ class PermitAcquisitionRequest(RuntimeContract):
         capability whose declared rate-limit scope is ``UNKNOWN`` is already
         bounded: :meth:`ConcurrencyScope.permit_pool` resolves it to a pool this
         ladder always acquires.
+
+        ``rate_limit_scope`` is the capability's *declared* pool, and it may only
+        add to the ladder or narrow the requested width — never remove a rung.
+        Two outcomes are possible and both are narrowings:
+
+        - The declared pool is identifiable, so it is acquired. When the ladder
+          already holds it this is a no-op, which is why an undeclared
+          capability's request is byte-identical to the pre-declaration one.
+        - The declared pool is **not** identifiable — a capability declaring a
+          connector rate limit on an operation that carries no connector id, say.
+          The declaration is then known to be unenforceable at the pool it names,
+          so the request is bound to :attr:`ConcurrencyBounds.SERIAL_PARALLELISM`.
+          Unknown means serial, structurally, rather than silently unbounded.
         """
 
         scopes: list[PermitScope] = [
@@ -1077,6 +1139,18 @@ class PermitAcquisitionRequest(RuntimeContract):
                 capability_name=capability_name,
             )
         )
+        declared = PermitScope.for_pool(
+            rate_limit_scope.permit_pool(),
+            profile_id=profile_id,
+            subject_fingerprint=subject_fingerprint,
+            installation_id=installation_id,
+            connector_id=connector_id,
+            capability_name=capability_name,
+        )
+        if declared is None:
+            max_parallelism = ConcurrencyBounds.SERIAL_PARALLELISM
+        elif declared not in scopes:
+            scopes.append(declared)
         return cls(
             scopes=tuple(scopes),
             wait_mode=wait_mode,
