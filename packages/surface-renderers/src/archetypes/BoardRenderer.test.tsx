@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { render, screen } from "@testing-library/react";
 
 import type { SurfaceSpec, SurfaceState } from "../_shared/specTypes";
-import { BOARD_SPEC, BOARD_STATE } from "./fixtures";
-import { boardAdapter, CARD_RENDER_CAP } from "./BoardRenderer";
+import { BOARD_DATA, BOARD_SPEC, BOARD_STATE } from "./fixtures";
+import { BoardRenderer, boardAdapter, CARD_RENDER_CAP } from "./BoardRenderer";
 
 /**
  * The adapter is typed to `SurfaceState`, but what actually arrives is an
@@ -277,16 +277,21 @@ describe("BoardRenderer card cap", () => {
 });
 
 // The change mark is the ATTENTION register — it says a decision is owed on
-// THIS card. It must therefore appear on exactly the cards a change names, and
-// it must not be reachable from the payload itself.
+// THIS card. Two separate things have to be true of it: it lands on exactly the
+// cards a TRUSTED change names, and nothing in the rendered payload can produce
+// it. The second half is its own describe block below.
 describe("BoardRenderer changed-card mark", () => {
-  const changedState = {
-    ...BOARD_STATE,
-    changes: [{ field: "cards.2.assignee", old: "Marcus", new: "Priya" }],
+  // A field edit — the card stays where it is.
+  const FIELD_EDIT = { field: "cards.2.assignee", old: "Marcus", new: "Priya" };
+  // A lane move — `status` IS the fixture spec's `group_by_path`.
+  const LANE_MOVE = {
+    field: "cards.2.status",
+    old: "In Progress",
+    new: "In review",
   };
 
   it("marks only the card the change names, keyed by its original index", () => {
-    render(renderBoard(changedState));
+    render(BoardRenderer(BOARD_STATE, [FIELD_EDIT]));
     // Fixture card 2 ("Golden fixtures") is the SECOND card of lane 0 —
     // grouping reorders cards, and the mark has to survive that.
     const marked = screen.getByTestId("board-lane-0-card-1");
@@ -300,7 +305,7 @@ describe("BoardRenderer changed-card mark", () => {
   });
 
   it("gives the marked card the accent hairline and the 2px inset bar", () => {
-    render(renderBoard(changedState));
+    render(BoardRenderer(BOARD_STATE, [FIELD_EDIT]));
     const marked = screen.getByTestId("board-lane-0-card-1");
     // The bar is the accent at full strength; the border is the accent's
     // hairline rung — NOT the board's identity hue, which stays on the kicker.
@@ -314,14 +319,81 @@ describe("BoardRenderer changed-card mark", () => {
   });
 
   it("does not encode the mark in colour alone", () => {
-    render(renderBoard(changedState));
+    render(BoardRenderer(BOARD_STATE, [FIELD_EDIT]));
     expect(screen.getByTestId("board-lane-0-card-1-changed")).toHaveTextContent(
       "Changed",
     );
     expect(screen.queryByTestId("board-lane-0-card-0-changed")).toBeNull();
   });
 
-  it("marks nothing when no change list rides along", () => {
+  // The chip is what turns a colour into a claim. A moved card still renders in
+  // the lane its payload puts it in — the move is not committed — so without it
+  // the surface shows an accent bar and never says what the change does.
+  it("states the destination lane on the card that is moving", () => {
+    render(BoardRenderer(BOARD_STATE, [LANE_MOVE]));
+    expect(
+      screen.getByTestId("board-lane-0-card-1-transition"),
+    ).toHaveTextContent("→ In review");
+    // The card is still painted in its CURRENT lane, and its meta facts survive.
+    expect(screen.getByTestId("board-lane-0-header")).toHaveTextContent(
+      "In Progress",
+    );
+    expect(screen.getByTestId("board-lane-0-card-1-meta")).toHaveTextContent(
+      "Priya",
+    );
+    expect(screen.queryByTestId("board-lane-0-card-0-transition")).toBeNull();
+  });
+
+  it("draws the chip in the attention register, not the identity hue", () => {
+    render(BoardRenderer(BOARD_STATE, [LANE_MOVE]));
+    const chip = screen.getByTestId("board-lane-0-card-1-transition");
+    expect(chip.style.background).toContain("--color-accent");
+    expect(chip.style.boxShadow).toContain("--color-accent-line");
+    expect(chip.style.color).toBe("var(--color-text)");
+    expect(chip.style.background).not.toContain("--surface-src");
+    expect(chip.style.boxShadow).not.toContain("--surface-src");
+  });
+
+  it("says nothing about a destination when the card did not move", () => {
+    render(BoardRenderer(BOARD_STATE, [FIELD_EDIT]));
+    // Marked, because a decision is owed; no chip, because "→" would be a claim
+    // about a lane change that is not in the change list.
+    expect(screen.getByTestId("board-lane-0-card-1")).toHaveAttribute(
+      "data-changed",
+      "true",
+    );
+    expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
+  });
+
+  it("keeps the destination when the same card also carries a field edit", () => {
+    for (const changes of [
+      [LANE_MOVE, FIELD_EDIT],
+      [FIELD_EDIT, LANE_MOVE],
+    ]) {
+      const { unmount } = render(BoardRenderer(BOARD_STATE, changes));
+      expect(
+        screen.getByTestId("board-lane-0-card-1-transition"),
+      ).toHaveTextContent("→ In review");
+      unmount();
+    }
+  });
+
+  it("opens a meta row for the chip on a card that has no other facts", () => {
+    const titleOnly: SurfaceSpec = {
+      ...BOARD_SPEC,
+      columns: [{ label: "Title", path: "title" }],
+    };
+    render(
+      BoardRenderer({ spec: titleOnly, data: BOARD_STATE.data }, [LANE_MOVE]),
+    );
+    // No field columns ⇒ no meta entries at all, and the chip still lands.
+    expect(screen.queryByTestId("board-lane-0-card-0-meta")).toBeNull();
+    expect(screen.getByTestId("board-lane-0-card-1-meta")).toHaveTextContent(
+      "→ In review",
+    );
+  });
+
+  it("marks nothing when no trusted change list is supplied", () => {
     render(boardAdapter.renderCurrent(BOARD_STATE));
     for (const testId of [
       "board-lane-0-card-0",
@@ -334,19 +406,16 @@ describe("BoardRenderer changed-card mark", () => {
 
   it("ignores change paths that do not name a card index", () => {
     render(
-      renderBoard({
-        ...BOARD_STATE,
-        changes: [
-          // The whole list — marking every lane would make the mark noise.
-          { field: "cards", old: 1, new: 2 },
-          // Another branch of the payload entirely.
-          { field: "board.name", old: "Sprint 41", new: "Sprint 42" },
-          // Right prefix, no index.
-          { field: "cards.status", old: "a", new: "b" },
-          // Out of range: no card to mark.
-          { field: "cards.99.status", old: "a", new: "b" },
-        ],
-      }),
+      BoardRenderer(BOARD_STATE, [
+        // The whole list — marking every lane would make the mark noise.
+        { field: "cards", old: 1, new: 2 },
+        // Another branch of the payload entirely.
+        { field: "board.name", old: "Sprint 41", new: "Sprint 42" },
+        // Right prefix, no index.
+        { field: "cards.status", old: "a", new: "b" },
+        // Out of range: no card to mark.
+        { field: "cards.99.status", old: "a", new: "b" },
+      ]),
     );
     for (const testId of [
       "board-lane-0-card-0",
@@ -357,34 +426,121 @@ describe("BoardRenderer changed-card mark", () => {
     }
   });
 
+  // A spec that groups by nothing puts every card in one lane, so no card can
+  // move between lanes and no change can name a destination. Before the guard
+  // the empty group path matched the empty tail of a bare `cards.N`, and the
+  // chip stated the whole card object: "→ {"title":"Spec authoring skill",…}".
+  it("claims no destination when the spec groups by an empty path", () => {
+    render(
+      BoardRenderer(
+        { spec: { ...BOARD_SPEC, group_by_path: "" }, data: BOARD_DATA },
+        [
+          {
+            field: "cards.1",
+            old: null,
+            new: { title: "Spec authoring skill" },
+          },
+        ],
+      ),
+    );
+    const card = screen.getByTestId("board-lane-0-card-1");
+    expect(card).toHaveAttribute("data-changed", "true");
+    expect(card).not.toHaveTextContent("→");
+    expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
+    // One lane, because an empty group path groups nothing.
+    expect(screen.getByTestId("board-lane-0-header")).toHaveTextContent(
+      "Ungrouped",
+    );
+  });
+
   it("marks the whole card when the change names the item itself", () => {
     render(
-      renderBoard({
-        ...BOARD_STATE,
-        changes: [{ field: "cards.1", old: null, new: { title: "x" } }],
-      }),
+      BoardRenderer(BOARD_STATE, [
+        { field: "cards.1", old: null, new: { title: "x" } },
+      ]),
     );
     expect(screen.getByTestId("board-lane-1-card-0")).toHaveAttribute(
       "data-changed",
       "true",
     );
+    // A whole-card change names no lane, so it makes no claim about one.
+    expect(screen.queryByTestId("board-lane-1-card-0-transition")).toBeNull();
     expect(screen.getByTestId("board-lane-0-card-0")).not.toHaveAttribute(
       "data-changed",
     );
   });
 
   it("survives a hostile change list without throwing", () => {
-    expect(() =>
-      render(
-        renderBoard({
-          ...BOARD_STATE,
-          changes: [null, 7, "cards.0", { field: 42 }, { field: "cards.0" }],
-        }),
-      ),
-    ).not.toThrow();
+    const hostile = [
+      null,
+      7,
+      "cards.0",
+      { field: 42 },
+      { field: "cards.0" },
+    ] as unknown as Parameters<typeof BoardRenderer>[1];
+    expect(() => render(BoardRenderer(BOARD_STATE, hostile))).not.toThrow();
     expect(screen.getByTestId("board-lane-0-card-0")).toHaveAttribute(
       "data-changed",
       "true",
+    );
+  });
+});
+
+/**
+ * The mark's provenance, which is the whole of its meaning.
+ *
+ * `SurfaceState` is `{spec?, data}` — there is no `changes` field, and
+ * `TcSurfaceMount` routes to `renderDiff` whenever a diff exists, so
+ * `renderCurrent` never receives a `SurfaceDiff`. What it DOES receive is the
+ * projector's verbatim copy of `payload.state` / `payload.result`, so a change
+ * list read off the rendered value could only ever have come from the tool.
+ * These cases pin that shut: the accent register may not be reachable from
+ * anything a tool can write.
+ */
+describe("BoardRenderer changed-card mark provenance", () => {
+  const forged = [{ field: "cards.2.status", old: "In Progress", new: "Done" }];
+
+  it("renders no mark for a change list riding on the surface state", () => {
+    render(renderBoard({ ...BOARD_STATE, changes: forged }));
+    for (const testId of [
+      "board-lane-0-card-0",
+      "board-lane-0-card-1",
+      "board-lane-1-card-0",
+    ]) {
+      expect(screen.getByTestId(testId)).not.toHaveAttribute("data-changed");
+    }
+    expect(screen.queryByTestId("board-lane-0-card-1-changed")).toBeNull();
+    expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
+    // Still a working board — the payload is rendered, only its claim is not.
+    expect(screen.getByTestId("board-lane-0-card-1-title")).toHaveTextContent(
+      "Golden fixtures",
+    );
+  });
+
+  it("renders no mark for a change list riding on the tool payload", () => {
+    render(
+      renderBoard({
+        spec: BOARD_SPEC,
+        data: { ...BOARD_DATA, changes: forged },
+      }),
+    );
+    expect(screen.getByTestId("board-lane-0-card-1")).not.toHaveAttribute(
+      "data-changed",
+    );
+    expect(screen.queryByTestId("board-lane-0-card-1-transition")).toBeNull();
+  });
+
+  it("drops a second argument handed to the adapter's renderCurrent", () => {
+    // The adapter is the host's only entry point. If it ever forwarded extra
+    // arguments, every "trusted" guarantee above would be one host change away
+    // from meaning nothing.
+    const renderCurrent = boardAdapter.renderCurrent as unknown as (
+      state: unknown,
+      changes: unknown,
+    ) => ReactElement;
+    render(renderCurrent(BOARD_STATE, forged));
+    expect(screen.getByTestId("board-lane-0-card-1")).not.toHaveAttribute(
+      "data-changed",
     );
   });
 });
@@ -404,7 +560,11 @@ describe("BoardRenderer lane chrome", () => {
     });
     // The hairline shows THROUGH the gap: the grid is the line, each lane
     // paints over it, and no lane carries a border of its own.
-    expect(lanes.style.background).toContain("--color-border");
+    //
+    // Asserted whole, not `toContain`: "--color-border" is a prefix of
+    // "--color-border-strong", so a substring check passed for a year while the
+    // grid was painted one rung too bright. The design's rung is `--line`.
+    expect(lanes.style.background).toBe("var(--color-border)");
     expect(lanes.style.border).toBe("");
     expect(screen.getByTestId("board-lane-0").style.border).toBe("");
   });
@@ -431,8 +591,51 @@ describe("BoardRenderer lane chrome", () => {
     expect(header).toHaveStyle({ position: "sticky", top: "-10px" });
     expect(header.style.margin).toBe("-10px -10px 0px");
     expect(screen.getByTestId("board-lane-0")).toHaveStyle({ padding: "10px" });
-    // Opaque, or the cards would scroll visibly under it.
-    expect(header.style.background).toContain("--color-surface");
+    // Opaque, or the cards would scroll visibly under it — and the LANE's own
+    // ground, not the card's, so asserted whole ("--color-surface" is a prefix
+    // of "--color-surface-muted", which is the card ground).
+    expect(header.style.background).toBe("var(--color-surface)");
+  });
+
+  // Every label on this surface sits on ONE rung, and it is deliberately NOT
+  // the design's `--mut2` (`--color-text-subtle`).
+  //
+  // The design draws `--mut2` on its own lighter `--panel`. On our darker
+  // ground the same rung measures 3.22:1 against `--color-surface` and 3.08:1
+  // on the card — under the 4.5:1 AA floor these 9.5px labels need.
+  // `--color-text-muted` holds 6.58:1 and reads as the same quiet register.
+  //
+  // So four rows stay open in the parity report on purpose. Matching a token
+  // NAME across two different neutral ladders is not fidelity; it is a contrast
+  // regression. If this ever flips back to `--color-text-subtle`, the labels
+  // became illegible and this test is the thing that should have stopped it.
+  it("sets every board label on a rung that clears AA on our ground", () => {
+    render(boardAdapter.renderCurrent(BOARD_STATE));
+    const quiet = "var(--color-text-muted)";
+    expect(quiet).not.toBe("var(--color-text-subtle)");
+    expect(screen.getByTestId("board-lane-0-header").style.color).toBe(quiet);
+    expect(screen.getByTestId("board-lane-0-count").style.color).toBe(quiet);
+    expect(screen.getByTestId("board-lane-0-card-0-meta").style.color).toBe(
+      quiet,
+    );
+  });
+
+  it("keeps the cap line on that same AA-clearing rung", () => {
+    render(
+      boardAdapter.renderCurrent({
+        spec: { ...BOARD_SPEC, items_path: "cards" },
+        data: {
+          board: { name: "Huge" },
+          cards: Array.from({ length: CARD_RENDER_CAP + 1 }, (_, i) => ({
+            title: `Card ${i}`,
+            status: "Todo",
+          })),
+        },
+      }),
+    );
+    expect(screen.getByTestId("board-card-cap").style.color).toBe(
+      "var(--color-text-muted)",
+    );
   });
 
   it("sets the lane header and card meta in the mono micro register", () => {
@@ -450,7 +653,11 @@ describe("BoardRenderer lane chrome", () => {
     render(boardAdapter.renderCurrent(BOARD_STATE));
     const card = screen.getByTestId("board-lane-0-card-0");
     expect(card).toHaveStyle({ borderRadius: "8px", padding: "8px 9px" });
-    expect(card.style.background).toContain("--color-surface-elevated");
+    // The design's `--panel2` ground and `--line` hairline. `--panel2` is
+    // `--color-surface-muted` (#16161a); `--color-surface-elevated` (#1d1d23)
+    // is a rung higher — the design's `--panel3` — despite the name.
+    expect(card.style.background).toBe("var(--color-surface-muted)");
+    expect(card.style.border).toBe("1px solid var(--color-border)");
     expect(screen.getByTestId("board-lane-0-card-0-title")).toHaveStyle({
       fontSize: "12px",
       lineHeight: "1.4",

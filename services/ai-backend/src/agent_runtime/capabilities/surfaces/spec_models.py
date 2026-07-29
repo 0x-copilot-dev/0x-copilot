@@ -222,9 +222,20 @@ class SurfaceState(RuntimeContract):
     ``spec`` absent ⇒ the frontend renders the tier-3 generic view; a spec may
     arrive later via ``surface_spec_generated`` and be merged by URI (PRD-04).
     ``data`` is untrusted tool output — the schema keeps it inert.
+
+    ``source`` names the connector tool whose output ``data`` is. It belongs to
+    the ENVELOPE layer, which the runtime writes: it is never read back out of
+    ``data``, because a payload that could name its own provenance could claim
+    to be any tool. It exists so the spec-less (tier-3) view can say *which*
+    tool it could not match rather than "this tool result" (PRD-02 req 1).
+
+    Optional **forever**: every surface emitted before this field existed
+    carries none, and replaying those events must keep rendering. ``None``
+    means "unknown tool" — never an error.
     """
 
     spec: SurfaceSpec | None = None
+    source: SurfaceSource | None = None
     data: object
 
 

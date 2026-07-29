@@ -16,6 +16,7 @@ import {
   reduceTo,
   type PendingDiffHandle,
 } from "./TcSurfaceMount";
+import { TcTabs } from "./TcTabs";
 import type { RuntimeEventEnvelope } from "@0x-copilot/api-types";
 
 const stubTransport = {} as unknown as Transport;
@@ -367,6 +368,106 @@ describe("TcSurfaceMount", () => {
       "data-tier",
       "tier3",
     );
+  });
+
+  // The identity register. A surface says WHICH SOURCE it is; the tab strip and
+  // the card are that one statement shown in two places, so the tests below
+  // assert the two AGREE rather than that a prop was handed over.
+  describe("source hue", () => {
+    const ARTIFACT_URI = "artifact-dataset://art_1@1";
+
+    /**
+     * Render the tab strip and the mount from the SAME surface and the SAME
+     * chosen accent — the arrangement a user actually sees — and report what
+     * each one ended up claiming.
+     */
+    function renderTabAndMount(
+      uri: string,
+      chosen?: string,
+    ): { readonly tab: string | null; readonly mount: string | null } {
+      const choice = chosen === undefined ? {} : { hue: chosen };
+      render(
+        <>
+          <TcTabs
+            tabs={[{ uri, title: "forecast", ...choice }]}
+            activeUri={uri}
+            onActivate={() => {}}
+            onClose={() => {}}
+          />
+          <TcSurfaceMount uri={uri} transport={stubTransport} {...choice} />
+        </>,
+      );
+      return {
+        tab: screen.getByRole("tab").getAttribute("data-surface-hue"),
+        mount: screen
+          .getByTestId("tc-surface-mount")
+          .getAttribute("data-surface-hue"),
+      };
+    }
+
+    it("carries the author's chosen hue to the card, not just the tab", () => {
+      const { tab, mount } = renderTabAndMount(ARTIFACT_URI, "ember");
+      // Both halves state the choice. Equality alone would also hold if both
+      // had dropped it, so the resolved value is pinned too.
+      expect(mount).toBe(tab);
+      expect(mount).toBe("ember");
+    });
+
+    it("derives the same hue from the URI on both when nothing was chosen", () => {
+      const { tab, mount } = renderTabAndMount(ARTIFACT_URI);
+      expect(mount).toBe(tab);
+      expect(mount).toBe("sky");
+    });
+
+    // The choice arrives from a model argument, so "malformed" is a reachable
+    // case, not a hypothetical. Both halves must degrade the same way — to the
+    // kind's own hue, never to a blank identity and never to the raw string.
+    it("degrades a malformed choice identically on both", () => {
+      const hostile = "ember; background: url(x)";
+      const { tab, mount } = renderTabAndMount(ARTIFACT_URI, hostile);
+      expect(mount).toBe(tab);
+      expect(mount).toBe("sky");
+      expect(mount).not.toBe(hostile);
+    });
+
+    it("honours an explicit none on both — a chosen absence is still a choice", () => {
+      const { tab, mount } = renderTabAndMount("table://safe/batch", "none");
+      expect(mount).toBe(tab);
+      expect(mount).toBe("none");
+    });
+
+    // Everything that renders today passes no hue at all; that path must be
+    // byte-identical to what shipped before the prop existed.
+    it.each([
+      ["table://safe/batch", "jade"],
+      ["board://linear/cycle/14", "plum"],
+      ["record://salesforce/opportunity/006Ab", "indigo"],
+      ["incident://pagerduty/4127", "none"],
+      ["not-a-uri", "none"],
+    ])("keeps the URI-derived hue for %s with no choice", (uri, expected) => {
+      const { tab, mount } = renderTabAndMount(uri);
+      expect(mount).toBe(tab);
+      expect(mount).toBe(expected);
+    });
+
+    // The hue says which SOURCE a surface is, which does not change with which
+    // renderer painted it. The cases above all land on the placeholder (no
+    // adapter is registered); this pins the degraded render too.
+    it("keeps the chosen hue when the render degrades to tier-3", () => {
+      registerAdapter(adapterThatThrows("boom"));
+      registerAdapter(tier3RenderingText("tier-3 rendered"));
+      render(
+        <TcSurfaceMount
+          uri="email://draft-1"
+          transport={stubTransport}
+          hue="plum"
+        />,
+      );
+      expect(screen.getByText("tier-3 rendered")).toBeInTheDocument();
+      const mount = screen.getByTestId("tc-surface-mount");
+      expect(mount).toHaveAttribute("data-tier", "tier3");
+      expect(mount).toHaveAttribute("data-surface-hue", "plum");
+    });
   });
 });
 
