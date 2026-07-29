@@ -8,11 +8,11 @@ import {
   DiffFieldRow,
   EmptyBody,
   fieldGridStyle,
-  GenericFieldList,
+  NoSpecView,
   pageStyle,
-  PreparingHint,
   SurfaceHeader,
   SurfaceLinkRow,
+  toolNameFromState,
 } from "../_shared/primitives";
 import {
   formatValue,
@@ -39,7 +39,8 @@ export const ROW_RENDER_CAP = 200;
 /**
  * The `table://` archetype — columns from the spec, rows from `items_path`.
  * ≥50 columns window through the shared `sheet/_columns` helper; >200 rows show
- * a "showing 200 of N" cap. Spec-less state falls back to the generic list.
+ * a "showing 200 of N" cap. Spec-less state falls back to the no-spec view
+ * (PRD-02).
  */
 export function TableRenderer(state: SurfaceState | unknown): ReactElement {
   const spec = specFromState(state);
@@ -53,7 +54,7 @@ export function TableRenderer(state: SurfaceState | unknown): ReactElement {
       aria-label="Table surface"
     >
       <section style={cardStyle}>
-        {spec ? renderWithSpec(spec, data) : renderFallback(data)}
+        {spec ? renderWithSpec(spec, data) : renderFallback(state, data)}
       </section>
     </article>
   );
@@ -203,17 +204,42 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
   );
 }
 
-function renderFallback(data: unknown): ReactElement {
+/**
+ * Both halves of the boundary value: `state` is where a tool identity would
+ * ride, `data` is the payload the note is about.
+ *
+ * A bare array of rows has no top-level fields of its own, so the note's "the
+ * payload as the tool sent it" is served by the FIRST row — the shape the rest
+ * of them share. Everything else goes in whole.
+ *
+ * The badge is what keeps that honest. Without it a 200-row payload rendered as
+ * one row's fields would read as a tool that returned a single object, so the
+ * header states the true count in the same words the spec-driven path uses.
+ */
+function renderFallback(state: unknown, data: unknown): ReactElement {
   const rows = Array.isArray(data) ? data : [];
   return (
     <>
-      <SurfaceHeader kicker={KICKER} title="Table" />
-      <PreparingHint />
-      {rows.length > 0 ? (
-        <GenericFieldList data={rows[0]} format={(v) => formatValue(v)} />
-      ) : (
-        <GenericFieldList data={data} format={(v) => formatValue(v)} />
-      )}
+      <SurfaceHeader
+        kicker={KICKER}
+        title="Table"
+        badge={
+          rows.length > 0
+            ? `${rows.length} row${rows.length === 1 ? "" : "s"}`
+            : undefined
+        }
+      />
+      <NoSpecView
+        // The first row that actually CARRIES something, not merely the first.
+        // `rows[0]` can be a hole: `[null, {id:2}]` handed NoSpecView `null`, so
+        // the note said "The tool returned no payload." directly beneath a badge
+        // reading "2 rows" — two mutually exclusive statements in one card, and
+        // the payload's real shape never shown. Falling back to the whole value
+        // when every entry is a hole keeps the badge and the note describing the
+        // same thing.
+        data={rows.find((row) => row !== null && row !== undefined) ?? data}
+        tool={toolNameFromState(state)}
+      />
     </>
   );
 }

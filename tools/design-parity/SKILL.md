@@ -113,6 +113,33 @@ a defect wastes the reader's time; drift filed as intent hides a real bug. Cite 
 decision (PRD §, ADR, a code comment) in the reason — if you cannot cite one, it is
 drift.
 
+### Measuring a property the default set omits (`extraProps`)
+
+`extract-computed.js` captures a deliberately narrow curated set — the properties that
+matter on almost every surface. **A property that is not captured cannot be compared,
+and the report will read as parity.** If the surface's spec is written in terms of
+something outside that set, declare it in the anchors file:
+
+```jsonc
+"extraProps": ["position", "top", "gridAutoColumns", "fontVariantNumeric"],
+"elements": [ … ]
+```
+
+`extract-playwright.mjs` passes these through and the extractor **appends** them to the
+defaults (it never replaces — narrowing the set for one surface would silently shrink
+its diff). The key is per-surface, so no other surface's committed baseline moves.
+
+Check this whenever a PRD quotes CSS verbatim: read its declarations against
+`DEFAULT_PROPS` and add whatever is missing before you trust a clean report. The
+`surface-language` surface is the worked example — both its PRDs turn on `position` /
+`top` / `grid-auto-columns` / `max-height` / `overscroll-behavior` / `text-wrap` /
+`font-variant-numeric`, **none** of which the default set carries. Measured before and
+after: adding them turned up 42 MEDIUM rows the harness had been blind to, and
+positively confirmed a lane geometry that had previously been neither confirmed nor
+denied. `classify()` in `compare.mjs` buckets the common ones (grid/scroll/position →
+LAYOUT, declared `max-height`/`min-height`/`top` → BOX, `font-variant-numeric` →
+alongside `font-weight`); anything unlisted still falls through to LOW.
+
 ## Severity model (in `lib/compare.mjs`)
 
 - 🔴 **HIGH** — wrong typeface class (mono↔sans), font-size Δ ≥ 2px, any color/token swap, an element present in design but absent in live (unless `expectDivergence`).
@@ -256,3 +283,23 @@ in `design-kit/` — fetch it per `design-kit/REFRESH.md` and link it in the har
   recovery screens have no live analog.
 - **run-empty**: FULLY WIRED (`lib/render-live-run-empty.test.tsx` + `anchors.json` +
   `out/report.md`, 9 HIGH / 23 MED, + `out/FINDINGS.md`).
+- **surface-language** (board lanes · the no-spec view): FULLY WIRED and reducible to
+  ONE command — `node lib/run-surface-language-parity.mjs` builds the design bundle,
+  renders the live side, extracts both, and writes five reports. Read
+  `surfaces/surface-language/README.md` before the reports; three caveats there
+  (width noise · the functional-mode oklch ladder · a decorative dot inheriting type)
+  decide whether a row is a finding or an artifact.
+  - Two patterns here are worth stealing for the next surface:
+    - **No CDN.** `lib/prepare-surface-language-design.mjs` compiles the vendored JSX
+      with esbuild + React from `node_modules` into a gitignored `design/build/`,
+      instead of pulling React + Babel from unpkg at render time. Same DOM, ~30 ms, and
+      a parity run stops depending on the network from inside headless chromium.
+    - **Structural anchors for a slot that has no testid yet.** PRD-02's `NoSpecView`
+      had not landed, so `nospec.note` binds to `[data-testid="surface-header"] + *`
+      ("whatever occupies that slot") and `nospec.footer` to the card's last child minus
+      the field list. Both keep reporting the truth before AND after the code lands —
+      strictly better than guessing a testid, and better than leaving the anchor out.
+  - Each anchors file carries an `unmapped` array naming what was deliberately NOT
+    compared and why (`board-diff-rows`, `surface-empty`, the mock's approval bar, the
+    "Open in PagerDuty" button). Neither `extract-playwright.mjs` nor `compare.mjs`
+    reads that key — it exists so an omission is a stated decision rather than a hole.
