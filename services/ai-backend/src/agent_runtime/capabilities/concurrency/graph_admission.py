@@ -92,12 +92,21 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+import logging
 from typing import Any, Final, Protocol, runtime_checkable
 
+from agent_runtime.capabilities.concurrency.batch_cancellation import (
+    BatchCancellationReason,
+    BatchCancellationReport,
+)
 from agent_runtime.capabilities.concurrency.batch_coordinator import (
     BatchChildAdmission,
     BatchChildStatus,
     BatchExecutionCoordinator,
+)
+from agent_runtime.capabilities.concurrency.batch_recovery import RunRestartPlan
+from agent_runtime.capabilities.concurrency.batch_run_recovery import (
+    withheld_operation_ids,
 )
 from agent_runtime.capabilities.concurrency.batch_journal import (
     BatchJournalLimits,
@@ -129,6 +138,8 @@ from agent_runtime.control_plane.parallel_admission import (
 )
 from agent_runtime.execution.call_identity import RuntimeToolCallIdentity
 from agent_runtime.surfaces_v2.canonical_json import canonical_json_sha256
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class GraphBatchBounds:
@@ -406,6 +417,7 @@ class RunBatchAdmission:
         "_planned_batches",
         "_policies",
         "_recorder",
+        "_restart_plan",
         "_snapshot",
         "_trace_id",
         "_work",
@@ -434,6 +446,7 @@ class RunBatchAdmission:
         self._children: dict[str, PlannedGraphChild] = {}
         self._work: dict[str, RunScopedBatchChildWork] = {}
         self._planned_batches: set[str] = set()
+        self._restart_plan: RunRestartPlan | None = None
 
     @property
     def tracked_children(self) -> int:
@@ -441,10 +454,68 @@ class RunBatchAdmission:
 
         return len(self._children)
 
+    @property
+    def restart_plan(self) -> RunRestartPlan | None:
+        """Return the durable restart decision this run is executing under."""
+
+        return self._restart_plan
+
     def work_for_batch(self, batch_id: str) -> RunScopedBatchChildWork | None:
         """Return one batch's immutable child work table, if it was planned."""
 
         return self._work.get(batch_id)
+
+    def adopt_restart_plan(self, plan: RunRestartPlan | None) -> None:
+        """Make one run's durable restart decision binding on its execution.
+
+        The plan is the *finding*; this is what turns it into a rule. Without
+        this call a restarted run re-plans the same turn from the same replayed
+        tool calls and dispatches every one of them, which is precisely the
+        replay F6.6's evidence rules were derived to prevent — the analysis
+        would be correct and unread.
+
+        Only the withheld half crosses into the coordinator. "Resume this safe
+        read" needs no instruction because running is already what an admitted
+        child does; the decision that has to be carried is the one that stops
+        something from happening.
+        """
+
+        if plan is None:
+            return
+        self._restart_plan = plan
+        self._coordinator.withhold_on_restart(withheld_operation_ids(plan))
+
+    async def acancel(
+        self,
+        *,
+        reason: BatchCancellationReason = BatchCancellationReason.RUN_CANCELLED,
+        drain_seconds: float | None = None,
+    ) -> BatchCancellationReport | None:
+        """Stop this run's batches and return what that honestly achieved.
+
+        The route F6.6 built and nothing reached. It delegates rather than
+        re-implements, so the ordering the coordinator's own docstring
+        argues for — admission stops synchronously, only cancellable reads are
+        interrupted, the drain is bounded, whatever is left is *indeterminate*
+        and durably recorded as such — is the ordering production gets.
+
+        Total by contract, and that matters more here than anywhere else in this
+        class: this is called while a run is being torn down, frequently from a
+        handler that has already decided the run is over. A cancellation route
+        that could raise would turn "we could not describe the cancellation"
+        into "the cancellation failed", and the caller has no better answer to
+        give than the one it was already giving. ``None`` says the report could
+        not be produced; it never says nothing was in flight.
+        """
+
+        try:
+            return await self._coordinator.cancel(
+                reason=reason,
+                drain_seconds=drain_seconds,
+            )
+        except Exception:  # noqa: BLE001 - a run being cancelled is already over.
+            _LOGGER.warning("F6 batch cancellation did not complete", exc_info=True)
+            return None
 
     async def aplan_model_batch(
         self,

@@ -76,6 +76,7 @@ from runtime_api.schemas import (
     RuntimeStageCommitCommand,
 )
 from runtime_worker.batch_concurrency_composition import (
+    LiveBatchAdmissionRegistry,
     build_batch_concurrency_composer,
 )
 from runtime_worker.handlers.approval import RuntimeApprovalHandler
@@ -334,6 +335,16 @@ class RuntimeWorker:
             environ=worker_environment,
         )
         self.batch_concurrency_composer = batch_concurrency_composer
+        # The join between the two claims cancellation is split across: the run
+        # claim owns the live coordinator, the cancel claim learns the run is
+        # over. Built only when F6 is, so an unconfigured worker gains neither
+        # the object nor the bookkeeping.
+        live_batch_admissions = (
+            LiveBatchAdmissionRegistry()
+            if batch_concurrency_composer is not None
+            else None
+        )
+        self.live_batch_admissions = live_batch_admissions
         model_invocation_composer = ModelInvocationWorkerComposer(
             settings=self.settings,
             persistence=self.persistence,
@@ -436,6 +447,7 @@ class RuntimeWorker:
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
             batch_concurrency_composer=batch_concurrency_composer,
+            live_batch_admissions=live_batch_admissions,
         )
         # Give artifact publication its live path. Without this the artifact's
         # ledger events only reach the run through the outbox, which is drained
@@ -468,6 +480,7 @@ class RuntimeWorker:
             model_invocation_store=self.model_invocation_store,
             usage_recorder=usage_recorder,
             model_invocation_terminal=model_invocation_terminal,
+            live_batch_admissions=live_batch_admissions,
         )
         self.approval_handler = approval_handler or RuntimeApprovalHandler(
             persistence=self.persistence,
@@ -489,6 +502,7 @@ class RuntimeWorker:
             model_invocation_terminal=model_invocation_terminal,
             terminal_run_observer=terminal_run_observer,
             batch_concurrency_composer=batch_concurrency_composer,
+            live_batch_admissions=live_batch_admissions,
         )
         self.artifact_event_handler = (
             artifact_event_handler

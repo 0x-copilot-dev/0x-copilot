@@ -62,7 +62,7 @@ through ``live_allowance``), and any factory or worker wiring (root).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -152,8 +152,17 @@ class BatchCoordinatorMessages:
 class BatchAdmissionOutcome(StrEnum):
     """Closed, deterministic result of one child's admission attempt.
 
-    Every refusal is a fact the caller can report honestly: the child's body was
-    never awaited, so no external effect is in doubt.
+    Every refusal is a fact about *this* admission: the child's body was never
+    awaited here, so this process introduced no external effect.
+
+    ``REFUSED_WITHHELD_ON_RESTART`` is the one member for which that is the
+    whole claim rather than the whole story. It is reached only when a durable
+    restart decision forbade re-running the child, and the reason such a
+    decision exists is that an *earlier* process may already have done the work.
+    Reading it as "nothing ever happened" would invert the very finding that
+    produced it, so :attr:`introduced_no_effect` refuses to say so and callers
+    that want the prior-process answer must read the journal, which is the only
+    thing that knows.
     """
 
     ADMITTED = "admitted"
@@ -167,12 +176,26 @@ class BatchAdmissionOutcome(StrEnum):
     REFUSED_DISPOSED = "refused_disposed"
     REFUSED_RUN_CANCELLED = "refused_run_cancelled"
     REFUSED_UNDURABLE = "refused_undurable"
+    REFUSED_WITHHELD_ON_RESTART = "refused_withheld_on_restart"
 
     @property
     def admitted(self) -> bool:
         """Return whether this outcome let a child body run."""
 
         return self is BatchAdmissionOutcome.ADMITTED
+
+    @property
+    def introduced_no_effect(self) -> bool:
+        """Return whether *no* process can have acted on this child's behalf.
+
+        Derived by exclusion rather than listed, so a member added later is
+        effect-uncertain by default and has to argue its way into the safe set.
+        """
+
+        return self not in (
+            BatchAdmissionOutcome.ADMITTED,
+            BatchAdmissionOutcome.REFUSED_WITHHELD_ON_RESTART,
+        )
 
 
 class BatchChildStatus(StrEnum):
@@ -646,6 +669,7 @@ class BatchExecutionCoordinator:
         self._batches: dict[str, _BatchState] = {}
         self._disposed = False
         self._cancelled = False
+        self._withheld: frozenset[str] = frozenset()
         self._running_children = 0
         self._quiescent = asyncio.Event()
         self._quiescent.set()
@@ -673,6 +697,37 @@ class BatchExecutionCoordinator:
         """Return how many batches currently hold execution state."""
 
         return len(self._batches)
+
+    @property
+    def withheld_operations(self) -> frozenset[str]:
+        """Return every operation a durable restart decision forbade re-running."""
+
+        return self._withheld
+
+    def withhold_on_restart(self, operation_ids: Iterable[str]) -> None:
+        """Forbid re-running the named children, whatever a replayed turn asks.
+
+        This is the *execution-side* half of F6.6's never-replay-a-started-write
+        rule. The planner establishes the rule from durable facts; this makes it
+        binding on the only path a child can reach a connector, so a restarted
+        graph re-emitting an identical tool call cannot route around the finding
+        by simply asking again.
+
+        Union rather than replacement, and there is deliberately no way to
+        un-withhold. A restart decision is derived from durable evidence that
+        does not improve while the run is going, so every route that could
+        narrow this set is a route by which a withheld write becomes runnable —
+        and none of them is worth the throughput.
+
+        Refusal happens *before* the segment gate and *before* any dispatch
+        intent is journalled, which is what keeps a withheld child's evidence
+        intact: it still reads as never-started to the next restart rather than
+        being downgraded to indeterminate by the act of refusing it.
+        """
+
+        self._withheld |= frozenset(
+            operation_id for operation_id in operation_ids if operation_id
+        )
 
     def begin(self, plan: DurableBatchPlan) -> None:
         """Register one already-durable plan as executable.
@@ -737,6 +792,17 @@ class BatchExecutionCoordinator:
                 state,
                 BatchAdmissionOutcome.REFUSED_ALREADY_SETTLED,
             )
+        if operation_id in self._withheld:
+            # Settled here rather than raised so the batch's segment accounting
+            # stays whole: a withheld child that never reached a terminal state
+            # would hold its segment open and strand every sibling behind it.
+            self._settle(
+                batch,
+                state,
+                BatchChildStatus.REFUSED,
+                admission=BatchAdmissionOutcome.REFUSED_WITHHELD_ON_RESTART,
+            )
+            return state.result()
 
         gate = await self._wait_for_gate(batch, state)
         if not gate.admitted:

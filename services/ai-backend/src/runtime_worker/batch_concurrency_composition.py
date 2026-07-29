@@ -50,6 +50,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
+    from agent_runtime.capabilities.concurrency.batch_recovery import RunRestartPlan
     from agent_runtime.capabilities.concurrency.descriptor_policy import (
         CapabilityConcurrencyDeclaration,
     )
@@ -63,6 +64,74 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+class LiveBatchAdmissionRegistry:
+    """Which runs are executing F6 batches *in this process*, right now.
+
+    Cancellation in this runtime is out of band: the API enqueues a command and
+    a worker claims it as a claim of its own, so the coroutine that learns a run
+    was cancelled is never the coroutine executing it.  The coordinator, by
+    contrast, is per run and lives only in memory.  Something has to join those
+    two facts, and this is the smallest thing that can: a lookup, not a second
+    cancellation mechanism.
+
+    Two properties are deliberate.
+
+    *A miss is not an error.*  In a multi-worker deployment the cancel claim may
+    land on a process that is not running the run, and then there is no live
+    coordinator to stop — which is exactly the situation before this class
+    existed.  The lookup returns ``None`` and the cancel handler does what it has
+    always done.  This registry makes the same-process case *better*; it must
+    never make the cross-process case *worse* by pretending to have reached
+    something.
+
+    *Registration is scoped to the run's own try/finally.*  The entry is removed
+    on every exit path, so a process that has stopped executing a run cannot
+    later be asked to cancel it and answer from a stale object.
+    """
+
+    __slots__ = ("_admissions",)
+
+    #: A ceiling, not a target: one entry per run this process is executing, and
+    #: the worker's own claim semaphore already bounds that far below this.
+    MAX_TRACKED_RUNS: Final[int] = 1024
+
+    def __init__(self) -> None:
+        self._admissions: dict[str, RunBatchAdmission] = {}
+
+    @property
+    def tracked_runs(self) -> int:
+        """Return how many runs currently have a live admission in this process."""
+
+        return len(self._admissions)
+
+    def register(self, *, run_id: str, admission: RunBatchAdmission) -> object | None:
+        """Publish one run's live admission, returning a release token.
+
+        The token is the handle a ``finally`` releases.  Returning one rather
+        than having the caller re-derive the key keeps the removal paired with
+        this exact registration, so a run that was never registered — because
+        F6 is off, or because the table was full — releases nothing instead of
+        evicting a namesake.
+        """
+
+        key = (run_id or "").strip()
+        if not key or len(self._admissions) >= self.MAX_TRACKED_RUNS:
+            return None
+        self._admissions[key] = admission
+        return key
+
+    def release(self, token: object | None) -> None:
+        """Withdraw one registration.  Idempotent, and safe on ``None``."""
+
+        if isinstance(token, str):
+            self._admissions.pop(token, None)
+
+    def admission_for(self, run_id: str) -> RunBatchAdmission | None:
+        """Return the live admission for one run, if this process holds it."""
+
+        return self._admissions.get((run_id or "").strip())
 
 
 class BatchConcurrencyEnvironment:
@@ -195,6 +264,55 @@ class BatchConcurrencyComposer:
         except Exception:  # noqa: BLE001 - an uncomposable run is a serial run.
             _LOGGER.warning("F6 batch concurrency did not compose", exc_info=True)
             return None
+
+    async def aplan_restart(
+        self,
+        *,
+        org_id: str,
+        run_id: str,
+        subject_fingerprint: str,
+    ) -> RunRestartPlan | None:
+        """Return what this run's durable journal permits a restart to repeat.
+
+        Called at the two moments a process begins executing a run it may not
+        have started — a worker claim and an approval resume — because those are
+        the moments at which "did somebody already do this?" stops being
+        answerable from memory.
+
+        On the overwhelmingly common first attempt the journal holds no batch
+        plan and this answers ``None`` after one read.  It is deliberately a
+        separate call from :meth:`compose` rather than folded into it: composing
+        is synchronous and infallible-by-design, and making it await a store
+        would put a database read on the path of every run F6 does not even
+        apply to.
+        """
+
+        try:
+            return await self._recovery().aplan(
+                org_id=org_id,
+                run_id=run_id,
+                subject_fingerprint=subject_fingerprint,
+            )
+        except Exception:  # noqa: BLE001 - an unreadable journal decides nothing.
+            _LOGGER.warning("F6 restart recovery did not plan", exc_info=True)
+            return None
+
+    def _recovery(self) -> Any:
+        """Build the recovery service over the same one journal F6 already writes."""
+
+        from agent_runtime.capabilities.concurrency.batch_journal_store import (
+            EventJournalBatchPlanStore,
+        )
+        from agent_runtime.capabilities.concurrency.batch_run_recovery import (
+            BatchRunRecovery,
+        )
+
+        return BatchRunRecovery(
+            store=EventJournalBatchPlanStore(
+                events=self._events,
+                snapshots=self._snapshots,
+            )
+        )
 
     def _compose(
         self,
@@ -357,6 +475,42 @@ class BatchConcurrencyComposer:
         return declarations
 
 
+async def activate_batch_admission(
+    *,
+    composer: BatchConcurrencyComposer | None,
+    registry: LiveBatchAdmissionRegistry | None,
+    admission: Any,
+    org_id: str,
+    run_id: str,
+    subject_fingerprint: str,
+) -> object | None:
+    """Bind a composed admission to its durable past and to the cancel claim.
+
+    One function rather than two blocks in two handlers, because the run path
+    and the approval-resume path must do *identically* this: a resumed run that
+    skipped the restart decision would replay exactly the writes the run path
+    withheld, and the bug would live in the gap between two copies of the same
+    six lines.
+
+    Returns the registry token the caller's ``finally`` releases.  Ordering is
+    load-bearing: the restart decision is adopted *before* the admission is
+    published, so a cancel arriving the instant it becomes visible finds an
+    admission that already knows what it may not re-run.
+    """
+
+    if composer is not None:
+        admission.adopt_restart_plan(
+            await composer.aplan_restart(
+                org_id=org_id,
+                run_id=run_id,
+                subject_fingerprint=subject_fingerprint,
+            )
+        )
+    if registry is None:
+        return None
+    return registry.register(run_id=run_id, admission=admission)
+
+
 def build_batch_concurrency_composer(
     *,
     events: EventStorePort | None,
@@ -389,5 +543,7 @@ __all__ = (
     "BatchConcurrencyComposer",
     "BatchConcurrencyEnvironment",
     "EnvironmentConcurrencyKillSwitchSource",
+    "LiveBatchAdmissionRegistry",
+    "activate_batch_admission",
     "build_batch_concurrency_composer",
 )
