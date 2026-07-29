@@ -3,6 +3,40 @@
 from __future__ import annotations
 
 
+# Stated here once instead of in every tool's ``args_schema``.
+#
+# ``agent_runtime.capabilities.middleware.display_metadata`` appends two
+# optional display arguments to *every* model-visible tool. Their guidance is
+# identical on all of them, so carrying it in the schema meant re-sending the
+# same paragraph once per tool on every single request — the schema block is
+# re-sent in full each turn and, unlike the stable prompt prefix, none of it is
+# cacheable. This paragraph joins ``DEFAULT_INSTRUCTIONS``, which the factory
+# classifies as installation-scoped immutable policy in the cacheable stable
+# prefix, so the convention is paid for approximately once rather than once per
+# tool per turn.
+#
+# The argument names below are deliberately the bare ``display_title`` /
+# ``display_summary`` forms. Those are what the model actually sees: the fields
+# carry ``_display_*`` aliases, but LangChain rebuilds the model-facing schema
+# through ``_create_subset_model`` when a tool declares an injected argument
+# (these tools all declare ``InjectedToolCallId``), and that rebuild drops
+# aliases. Naming the underscore form here would point the model at a key it is
+# never shown.
+DISPLAY_FIELD_CONVENTION = (
+    "Tools whose schema offers the optional display_title and display_summary "
+    "arguments use them to label the activity card the user sees for that "
+    "call. Supply them only when the tool's default card label would be too "
+    "generic; otherwise omit both. display_title is a short noun phrase of "
+    "roughly three to seven words and never a sentence: write 'Q1 launch risk "
+    "tickets' or 'Recent Slack mentions', not 'Searching Linear for the "
+    "user-requested tickets' or 'Looking through all the documents that...'. "
+    "display_summary is ONE clause of roughly ten to fifteen words saying why "
+    "this particular call helps the current request, in plain English, rather "
+    "than what the tool does in general: write 'Risk-tagged tickets opened in "
+    "the launch quarter' or 'Posts that mention the launch in the past two "
+    "weeks'."
+)
+
 DEFAULT_INSTRUCTIONS = (
     "You are the 0xCopilot agent runtime. Respect the provided "
     "runtime context, expose only authorized capabilities, and return "
@@ -42,6 +76,11 @@ DEFAULT_INSTRUCTIONS = (
     "Use only links that came from the user, conversation context, or tool "
     "results. Do not fabricate destination URLs. Do not place raw URLs on "
     "their own lines unless the user explicitly asks to see the full URL.\n\n"
+    # Activity-card display arguments. Sits with the other tool-call
+    # conventions; see DISPLAY_FIELD_CONVENTION above for why it lives here
+    # rather than in each tool's schema.
+    + DISPLAY_FIELD_CONVENTION
+    + "\n\n"
     # Model-declared citation pointers.
     "Cite tool calls inline. Each tool result you read contains a pointer "
     "in the form `[Tool call #N — <tool_name> — cite as [[N]] when "

@@ -413,6 +413,23 @@ class _DisplayFields(BaseModel):
     over-long string just makes the card taller. ``extra="forbid"`` rejects
     unknown ``_display_*`` keys (e.g. a typo like ``_display_summery``) so
     wrapping fails loudly during testing rather than silently dropping the field.
+
+    **These two descriptions are paid for once per tool, on every turn.** The
+    wrap is applied to every model-visible tool, so anything written here is
+    duplicated across the whole surface — a dozen-odd tools today. The
+    descriptions therefore carry only the *shape* of each field (what kind of
+    string, roughly how long), which is what a caller needs at the point of
+    use and cannot infer from the field name alone.
+
+    The *convention* — when to override at all, worked examples, and the
+    counter-examples that stop the model writing a narrated sentence — is
+    stated once in ``DISPLAY_FIELD_CONVENTION``
+    (``agent_runtime.prompts.runtime``), which the runtime folds into the
+    system prompt. That fragment is installation-scoped immutable policy and
+    joins the cacheable stable prefix, so it is amortised to roughly nothing,
+    whereas per-tool schema bytes are re-sent in full on every request and
+    cannot be cached that way. Keep the split: guidance that is *identical for
+    every tool* belongs in the prompt, not here.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(
@@ -424,26 +441,15 @@ class _DisplayFields(BaseModel):
         default=None,
         alias=DISPLAY_TITLE_KEY,
         description=(
-            "Optional. A short noun phrase (~3-7 words) for the activity "
-            "card title. NOT a full sentence. Use ONLY when the deterministic "
-            "title would be too generic. "
-            "Examples: 'Q1 launch risk tickets', 'Recent Slack mentions', "
-            "'External Q1 coverage'. "
-            "Counter-examples (do NOT do this): 'Searching Linear for the "
-            "user-requested...', 'Looking through all the documents that...'"
+            "Optional activity-card title: a 3-7 word noun phrase, not a sentence."
         ),
     )
     display_summary: str | None = Field(
         default=None,
         alias=DISPLAY_SUMMARY_KEY,
         description=(
-            "Optional. ONE short clause (~10-15 words) for the activity "
-            "card body. Why this specific call helps the current request, "
-            "in plain English. NOT a description of what the tool does in "
-            "general. "
-            "Examples: 'Risk-tagged tickets opened in the launch quarter', "
-            "'Posts that mention the launch in the past two weeks'. "
-            "Leave null if the tool's deterministic title is already clear."
+            "Optional activity-card body: one ~10-15 word clause on why this "
+            "call helps."
         ),
     )
     # This is injected by LangGraph and omitted from the model-visible schema.
