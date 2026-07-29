@@ -198,6 +198,7 @@ class RuntimeApprovalHandler:
             ConversationToolOrdinalStorePort | None
         ) = None,
         mcp_discovery_cache: object | None = None,
+        mcp_revision_resolver: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         artifact_service: object | None = None,
         run_control_builder: RunControlPlaneBuilder | None = None,
@@ -272,6 +273,7 @@ class RuntimeApprovalHandler:
                     schema_artifact_writer=(
                         self._file_store_wiring.schema_artifact_writer()
                     ),
+                    descriptor_revision_resolver=mcp_revision_resolver,
                 ),
             )
         )

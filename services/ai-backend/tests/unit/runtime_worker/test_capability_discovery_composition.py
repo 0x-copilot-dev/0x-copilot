@@ -18,10 +18,12 @@ from agent_runtime.capabilities.discovery import (
     CapabilityCatalogGeneration,
     CapabilityCatalogGenerationPort,
     CapabilityCatalogRevisionAuthority,
+    CapabilityExpansionLimits,
     CapabilityRefRevalidation,
     CapabilitySource,
     CatalogDescriptorRevision,
 )
+from agent_runtime.capabilities.discovery.contracts import CapabilityExpansionBounds
 from agent_runtime.capabilities.mcp.cards import (
     McpAuthMode,
     McpServerCard,
@@ -949,3 +951,235 @@ class TestActivationVocabulary(CapabilityCompositionMixin):
 
         assert decision.mode.feature is AgentQualityFeature.F3_CAPABILITY_DISCOVERY
         assert decision.mode.effective_mode is FeatureMode.ENFORCE
+
+
+class _RecordingRevisionResolver:
+    """An F8 resolver whose answer moves, refuses, or disappears on demand.
+
+    Only the resolver's two-method surface is modelled here. What is under test
+    is what the composition root *does* with the answers -- the resolver has its
+    own suite next door, and the wired-together case is proved against the
+    production resolver in ``test_step8_exit_criteria``.
+    """
+
+    class _Result:
+        def __init__(self, revision: object | None) -> None:
+            self.revision = revision
+
+    class _Revision:
+        def __init__(self, revision: str) -> None:
+            self.revision = revision
+            self.profile_id = "profile-a"
+            self.subject_scope_hash = "scope-a"
+
+    def __init__(
+        self,
+        revisions: Mapping[str, str] | None = None,
+        *,
+        raises: bool = False,
+    ) -> None:
+        self.revisions = dict(revisions or {})
+        self.raises = raises
+        self.registered: list[tuple[str, str]] = []
+        self.resolved: list[str] = []
+
+    async def register(
+        self, *, org_id: str, user_id: str, server_name: str, server_id: str
+    ) -> None:
+        del org_id, user_id
+        self.registered.append((server_name, server_id))
+
+    async def resolve(
+        self, *, org_id: str, user_id: str, server_name: str
+    ) -> "_RecordingRevisionResolver._Result":
+        del org_id, user_id
+        self.resolved.append(server_name)
+        if self.raises:
+            raise RuntimeError("revision authority unreachable")
+        revision = self.revisions.get(server_name)
+        return self._Result(None if revision is None else self._Revision(revision))
+
+
+class TestTheDescriptorRevisionSourceNarrowsOnly(CapabilityCompositionMixin):
+    """BUG-12's wiring: what the composition root folds, and what it refuses to.
+
+    A composed catalog generation is only as trustworthy as the revisions it
+    keys on, so every way a revision can fail to resolve has to remove
+    capability rather than add it.
+    """
+
+    def composer_with(self, resolver: object | None) -> CapabilityDiscoveryComposer:
+        return CapabilityDiscoveryComposer(
+            descriptor_revision_resolver=resolver,  # type: ignore[arg-type]
+            environ=dict(_DEFERRED_ENV),
+            clock=lambda: _NOW,
+        )
+
+    async def acompose(
+        self,
+        composer: CapabilityDiscoveryComposer,
+        *cards: McpServerCard,
+    ) -> RunCapabilityDiscovery | None:
+        context = self.context()
+        token = RunControlContext.bind_for_run(self.binding(run_id=context.run_id))
+        try:
+            return await composer.acompose(
+                context,
+                mcp_server_cards=cards or (self.card(server_id="srv_drive"),),
+            )
+        finally:
+            RunControlContext.unbind(token)
+
+    async def test_a_resolved_revision_is_folded_into_the_generation(self) -> None:
+        resolver = _RecordingRevisionResolver({"drive_server": "rev-1"})
+
+        result = await self.acompose(self.composer_with(resolver))
+
+        assert result is not None
+        assert result.catalog.generation is not None
+        assert result.catalog.generation.descriptor_revision_count == 1
+        assert resolver.registered == [("drive_server", "srv_drive")]
+
+    async def test_no_resolver_folds_nothing_at_all(self) -> None:
+        """Feature-off parity: F8 unconfigured composes what it always did."""
+
+        result = await self.acompose(self.composer_with(None))
+
+        assert result is not None
+        assert result.catalog.generation is not None
+        assert result.catalog.generation.descriptor_revision_count == 0
+
+    async def test_an_untracked_server_contributes_no_revision(self) -> None:
+        """``not_found`` is an answer, not a revision, and is never invented."""
+
+        result = await self.acompose(self.composer_with(_RecordingRevisionResolver()))
+
+        assert result is not None
+        assert result.catalog.generation is not None
+        assert result.catalog.generation.descriptor_revision_count == 0
+
+    async def test_an_unreachable_authority_never_fails_the_run(self) -> None:
+        """A dark feature may narrow a run; it may not break one."""
+
+        resolver = _RecordingRevisionResolver(raises=True)
+
+        result = await self.acompose(self.composer_with(resolver))
+
+        assert result is not None
+        assert result.catalog.generation is not None
+        assert result.catalog.generation.descriptor_revision_count == 0
+        assert resolver.resolved == ["drive_server"]
+
+    async def test_a_card_without_a_server_id_is_skipped_rather_than_guessed(
+        self,
+    ) -> None:
+        """The resolver is keyed by the backend's id; there is nothing to invent."""
+
+        resolver = _RecordingRevisionResolver({"drive_server": "rev-1"})
+
+        result = await self.acompose(
+            self.composer_with(resolver),
+            self.card(server_id=None),
+        )
+
+        assert result is not None
+        assert result.catalog.generation is not None
+        assert result.catalog.generation.descriptor_revision_count == 0
+        assert resolver.registered == []
+
+    async def test_the_live_authority_re_reads_rather_than_replaying(self) -> None:
+        """The whole point of the wiring, at the composer's own boundary."""
+
+        resolver = _RecordingRevisionResolver({"drive_server": "rev-1"})
+        result = await self.acompose(self.composer_with(resolver))
+        assert result is not None
+        generation = result.catalog.generation
+        assert generation is not None
+        scope = RevisionBoundScope(
+            subject_fingerprint=generation.subject_fingerprint,
+            run_id=self.RUN_A,
+            catalog_generation=generation.generation_ref,
+        )
+
+        token = RunControlContext.bind_for_run(self.binding(run_id=self.RUN_A))
+        try:
+            before = await result.generation_source.live_generation(scope=scope)
+            resolver.revisions["drive_server"] = "rev-2"
+            after = await result.generation_source.live_generation(scope=scope)
+        finally:
+            RunControlContext.unbind(token)
+
+        assert before.state is RevisionAuthorityState.ACTIVE
+        assert after.state is RevisionAuthorityState.ACTIVE
+        assert before.generation != after.generation
+
+    async def test_an_authority_that_goes_dark_mid_run_narrows_the_answer(
+        self,
+    ) -> None:
+        """Losing the authority removes the revision, so the ref stops matching.
+
+        The refusal is the point: an authority that cannot be reached is not
+        evidence that a reference is still good.
+        """
+
+        resolver = _RecordingRevisionResolver({"drive_server": "rev-1"})
+        result = await self.acompose(self.composer_with(resolver))
+        assert result is not None
+        generation = result.catalog.generation
+        assert generation is not None
+        scope = RevisionBoundScope(
+            subject_fingerprint=generation.subject_fingerprint,
+            run_id=self.RUN_A,
+            catalog_generation=generation.generation_ref,
+        )
+
+        token = RunControlContext.bind_for_run(self.binding(run_id=self.RUN_A))
+        try:
+            resolver.raises = True
+            after = await result.generation_source.live_generation(scope=scope)
+        finally:
+            RunControlContext.unbind(token)
+
+        assert after.state is RevisionAuthorityState.ACTIVE
+        assert after.generation != generation
+
+
+class TestTheExpansionLimitsReachTheBridge(CapabilityCompositionMixin):
+    """BUG-13's wiring: the operator's bounds, resolved once at this root."""
+
+    def limits_for(self, environ: Mapping[str, str]) -> object:
+        composer = CapabilityDiscoveryComposer(
+            card_source=self.card_source(),
+            environ=dict(environ),
+            clock=lambda: _NOW,
+        )
+        result = self.compose(composer, self.context())
+        assert result is not None
+        return result.bridge.expansion_limits
+
+    def test_the_composed_bridge_carries_resolved_limits(self) -> None:
+        limits = self.limits_for(
+            {**_DEFERRED_ENV, "F3_DISCOVERY_MAX_EXPANDED_SERVERS": "5"}
+        )
+
+        assert limits is not None
+        assert limits.max_servers == 5  # type: ignore[attr-defined]
+
+    def test_an_unconfigured_deployment_carries_the_conservative_defaults(
+        self,
+    ) -> None:
+        limits = self.limits_for(_DEFERRED_ENV)
+
+        assert limits == CapabilityExpansionLimits()
+
+    @pytest.mark.parametrize("raw", ["999", "-1", "not-a-number", "", "   "])
+    def test_an_unreadable_bound_resolves_down_and_never_up(self, raw: str) -> None:
+        """A typo may only remove fan-out. It may never buy more of it."""
+
+        limits = self.limits_for(
+            {**_DEFERRED_ENV, "F3_DISCOVERY_MAX_EXPANDED_SERVERS": raw}
+        )
+
+        assert limits is not None
+        assert limits.max_servers == CapabilityExpansionLimits().max_servers  # type: ignore[attr-defined]
+        assert limits.max_servers < CapabilityExpansionBounds.MAX_SERVERS  # type: ignore[attr-defined]

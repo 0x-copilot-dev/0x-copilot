@@ -239,14 +239,22 @@ class BridgeWiringHarness(DynamicMcpLoadingMixin):
         *,
         decision_store: object | None = None,
         schema_artifact_writer: object | None = None,
+        descriptor_revision_resolver: object | None = None,
     ) -> DefaultRuntimeDependenciesFactory:
-        """The worker's own factory, wired through its own composer builder."""
+        """The worker's own factory, wired through its own composer builder.
+
+        ``descriptor_revision_resolver`` is the worker process's F8 revision
+        authority, which ``__main__`` supplies from the one MCP control-plane
+        assembly. Defaulting it to ``None`` keeps every case that does not care
+        about revisions on the deployment shape it always had.
+        """
 
         return DefaultRuntimeDependenciesFactory(
             RuntimeSettings.load(environ={}),
             capability_discovery=build_capability_discovery_composer(
                 decision_store=decision_store,
                 schema_artifact_writer=schema_artifact_writer,
+                descriptor_revision_resolver=descriptor_revision_resolver,
             ),
         )
 
@@ -257,6 +265,7 @@ class BridgeWiringHarness(DynamicMcpLoadingMixin):
         registry: object,
         decision_store: object | None = None,
         schema_artifact_writer: object | None = None,
+        descriptor_revision_resolver: object | None = None,
         binding: RunControlBinding | None = None,
     ) -> RuntimeDependencies:
         """Build one run's dependencies through the production composition root."""
@@ -264,6 +273,7 @@ class BridgeWiringHarness(DynamicMcpLoadingMixin):
         factory = self.factory(
             decision_store=decision_store,
             schema_artifact_writer=schema_artifact_writer,
+            descriptor_revision_resolver=descriptor_revision_resolver,
         )
         token = RunControlContext.bind_for_run(
             binding or self.binding(run_id=context.run_id)
@@ -970,3 +980,33 @@ class TestTheApprovalResumeWiresTheSameBridge(BridgeWiringHarness):
             source = (worker / "handlers" / handler).read_text(encoding="utf-8")
             assert "await compose_capability_discovery(" in source, handler
             assert "build_capability_discovery_composer(" in source, handler
+
+    def test_the_worker_root_supplies_the_f8_revision_authority(self) -> None:
+        """BUG-12's failure class, pinned where it actually happened.
+
+        Every unit of the revision-bound-reference chain passed while the
+        composition root supplied no revision source, so the safety property it
+        exists for was inert in production and nothing failed. The chain is only
+        as live as its least-wired link, and the least-wired link is the one
+        no unit test can reach: the process root that owns the MCP control
+        plane.
+
+        Asserted at source level because that is the only level at which it is
+        assertable — constructing the real entrypoint would require a database,
+        a queue, and a backend. A runtime proof of what this enables lives in
+        ``test_step8_exit_criteria``; this pins that production reaches it.
+        """
+
+        from pathlib import Path  # noqa: PLC0415
+
+        worker = Path(__file__).resolve().parents[3] / "src" / "runtime_worker"
+        root = (worker / "__main__.py").read_text(encoding="utf-8")
+        assert "mcp_revision_resolver=mcp_control_plane.resolver" in root
+
+        loop = (worker / "loop.py").read_text(encoding="utf-8")
+        # Both handlers, or the approval resume composes a different generation
+        # from the turn it is resuming — bug R1's lesson, one seam later.
+        assert loop.count("mcp_revision_resolver=mcp_revision_resolver") == 2
+        for handler in ("run.py", "approval.py"):
+            source = (worker / "handlers" / handler).read_text(encoding="utf-8")
+            assert "descriptor_revision_resolver=mcp_revision_resolver" in source

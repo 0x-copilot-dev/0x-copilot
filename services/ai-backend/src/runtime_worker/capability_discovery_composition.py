@@ -40,7 +40,7 @@ at all.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import hashlib
@@ -55,6 +55,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
         CapabilityCatalog,
         CapabilityCatalogGeneration,
         CapabilityDiscoveryObserver,
+        CapabilityExpansionLimits,
         CapabilityReferenceMinter,
         CatalogDescriptorRevision,
         LiveCapabilityCatalogGeneration,
@@ -72,6 +73,11 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
     CapabilityBridgeComposition,
+)
+from runtime_worker.capability_descriptor_revisions import (
+    McpRevisionResolverPort,
+    RefreshableDescriptorRevisionSource,
+    RunScopedDescriptorRevisions,
 )
 
 
@@ -291,6 +297,14 @@ class RunScopedCapabilityCatalogGeneration:
     minted against, and never widens a scope.  Comparison belongs to the shared
     revalidator.  The one check performed here is a *narrowing* one: a scope this
     source does not own is answered ``unknown`` rather than resolved.
+
+    ``refresh`` is what makes "recompute" mean something.  Three of the four
+    keyed inputs are frozen for the run by contract, so the F8 descriptor
+    revisions are the only one that can move -- and they can only move if
+    something re-reads them.  Awaiting the refresh here rather than at the
+    composition root is the whole difference between an authority that can
+    report a reference stale mid-run and one that re-derives the same answer
+    forever.
     """
 
     def __init__(
@@ -299,10 +313,12 @@ class RunScopedCapabilityCatalogGeneration:
         subject_fingerprint: str,
         run_id: str,
         resolve_inputs: Callable[[], CapabilityGenerationInputs | None],
+        refresh: Callable[[], Awaitable[None]] | None = None,
     ) -> None:
         self._subject_fingerprint = subject_fingerprint
         self._run_id = run_id
         self._resolve_inputs = resolve_inputs
+        self._refresh = refresh
 
     async def live_generation(
         self,
@@ -333,6 +349,22 @@ class RunScopedCapabilityCatalogGeneration:
             return LiveCapabilityCatalogGeneration.for_state(
                 RevisionAuthorityState.UNKNOWN
             )
+        if self._refresh is not None:
+            try:
+                await self._refresh()
+            except Exception:
+                # The refresh itself is total, so reaching here means the
+                # authority behind it is in a state this source cannot describe.
+                # Answering from the stale snapshot would report a catalog that
+                # may already have moved as current, so refuse instead.
+                _LOGGER.warning(
+                    "Catalog descriptor revisions could not be re-read; "
+                    "reporting the scope unavailable.",
+                    exc_info=True,
+                )
+                return LiveCapabilityCatalogGeneration.for_state(
+                    RevisionAuthorityState.UNAVAILABLE
+                )
         try:
             current = self._resolve_inputs()
         except Exception:
@@ -403,6 +435,7 @@ class CapabilityDiscoveryComposer:
         *,
         card_source: McpServerCardSnapshotPort | None = None,
         descriptor_revision_source: CatalogDescriptorRevisionSourcePort | None = None,
+        descriptor_revision_resolver: McpRevisionResolverPort | None = None,
         decision_store: "RunControlDecisionStorePort | None" = None,
         schema_artifact_writer: "OffloadWriter | None" = None,
         environ: Mapping[str, str] | None = None,
@@ -410,6 +443,12 @@ class CapabilityDiscoveryComposer:
     ) -> None:
         self._card_source = card_source
         self._descriptor_revision_source = descriptor_revision_source
+        # The F8 revision authority the worker process already owns. It is the
+        # same resolver the MCP loader consults, so this reads an answer the
+        # deployment already maintains rather than introducing a second one.
+        # ``None`` -- every deployment with F8 unconfigured -- folds zero
+        # revisions, exactly as this module did before it was threaded.
+        self._descriptor_revision_resolver = descriptor_revision_resolver
         # Both are optional in the way every other input here is. Without a
         # decision store the run is unmeasured; without a writer an over-bound
         # schema is reported unavailable. Neither changes what the bridge does,
@@ -419,21 +458,66 @@ class CapabilityDiscoveryComposer:
         self._environ = environ
         self._clock = clock
 
+    async def acompose(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        mcp_server_cards: Sequence["McpServerCard"] | None = None,
+    ) -> RunCapabilityDiscovery | None:
+        """Compose with this run's F8 descriptor revisions resolved first.
+
+        This is the entry point the worker's async composition root uses, and
+        the ordering it enforces is the point: the revisions are read *before*
+        the catalog is projected, so the generation the catalog is stamped with
+        and the generation the live authority recomputes are keyed to the same
+        four inputs.  Reading them afterwards would stamp a catalog with a
+        generation nothing could ever reproduce.
+
+        The synchronous :meth:`compose` remains exactly what it was for callers
+        that have no revision authority to await.
+        """
+
+        source = self._revision_source(context, mcp_server_cards)
+        if source is not None:
+            try:
+                await source.refresh()
+            except Exception:  # pragma: no cover - refresh is total.
+                _LOGGER.warning(
+                    "Catalog descriptor revisions are unavailable; "
+                    "composing without them.",
+                    exc_info=True,
+                )
+        return self.compose(
+            context,
+            mcp_server_cards=mcp_server_cards,
+            descriptor_revision_source=source,
+        )
+
     def compose(
         self,
         context: AgentRuntimeContext,
         *,
         mcp_server_cards: Sequence["McpServerCard"] | None = None,
+        descriptor_revision_source: CatalogDescriptorRevisionSourcePort | None = None,
     ) -> RunCapabilityDiscovery | None:
         """Return this run's composed discovery inputs, or ``None`` to stay dark.
 
         ``None`` is the correct and expected answer for every deployment that
         has configured nothing, and for every configured deployment whose run
         cannot produce a bindable catalog.  It is never an error.
+
+        ``descriptor_revision_source`` is the run-scoped view :meth:`acompose`
+        already awaited.  It is passed rather than stored because the composer
+        is process-scoped and the view is not: a source cached on the instance
+        would leak one run's server set into the next run's generation.
         """
 
         try:
-            return self._compose(context, mcp_server_cards=mcp_server_cards)
+            return self._compose(
+                context,
+                mcp_server_cards=mcp_server_cards,
+                descriptor_revision_source=descriptor_revision_source,
+            )
         except Exception:
             # A dark feature must never fail an otherwise healthy run, and it
             # must never widen a tool surface on the way down.
@@ -449,6 +533,7 @@ class CapabilityDiscoveryComposer:
         context: AgentRuntimeContext,
         *,
         mcp_server_cards: Sequence["McpServerCard"] | None,
+        descriptor_revision_source: CatalogDescriptorRevisionSourcePort | None = None,
     ) -> RunCapabilityDiscovery | None:
         from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
             AuthorizedCatalogBuilder,
@@ -480,7 +565,8 @@ class CapabilityDiscoveryComposer:
         builder = AuthorizedCatalogBuilder(reference_key=reference_key)
         subject_fingerprint = builder.subject_fingerprint(context)
         connector_scope_revision = self._connector_scope_revision(context)
-        descriptor_revisions = self._descriptor_revisions(context)
+        revision_source = descriptor_revision_source or self._descriptor_revision_source
+        descriptor_revisions = self._descriptor_revisions(context, revision_source)
 
         cards = (
             tuple(mcp_server_cards)
@@ -520,6 +606,15 @@ class CapabilityDiscoveryComposer:
             resolve_inputs=lambda: self._live_inputs(
                 context,
                 subject_fingerprint=subject_fingerprint,
+                revision_source=revision_source,
+            ),
+            # Only a source that can be re-read makes "live" mean anything. One
+            # that cannot is left alone rather than wrapped, so a deployment
+            # with no F8 authority behaves exactly as it did.
+            refresh=(
+                revision_source.refresh
+                if isinstance(revision_source, RefreshableDescriptorRevisionSource)
+                else None
             ),
         )
         return RunCapabilityDiscovery(
@@ -579,7 +674,39 @@ class CapabilityDiscoveryComposer:
             ),
             expansion_observer=metrics,
             schema_artifacts=self._schema_artifacts(minter),
+            expansion_limits=self._expansion_limits(),
         )
+
+    def _expansion_limits(self) -> "CapabilityExpansionLimits | None":
+        """Resolve the operator's second-tier bounds, or ``None`` on any doubt.
+
+        The knobs are documented on
+        :class:`~agent_runtime.capabilities.discovery.activation.CapabilityExpansionLimits`
+        and were readable there from the start; what was missing was a caller.
+        This is it, and it is deliberately the only one — a second reader would
+        be a second effective ``K``.
+
+        Resolution is delegated whole rather than reimplemented, so the contract's
+        own rule stands: a missing, blank, non-numeric, or out-of-range value
+        resolves to the conservative default and never to the ceiling.  A typo
+        therefore cannot raise fan-out or the deadline, and ``None`` -- returned
+        only if the contract itself could not be built -- leaves the expander on
+        the same hard defaults it used before this was threaded.
+        """
+
+        from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+            CapabilityExpansionLimits,
+        )
+
+        try:
+            return CapabilityExpansionLimits.from_environment(self._environ)
+        except Exception:  # pragma: no cover - resolution defaults, never raises.
+            _LOGGER.warning(
+                "Capability expansion limits could not be resolved; "
+                "keeping the bounded defaults.",
+                exc_info=True,
+            )
+            return None
 
     @staticmethod
     def _revalidation(
@@ -795,18 +922,41 @@ class CapabilityDiscoveryComposer:
             return ()
         return tuple(self._card_source(context))
 
+    def _revision_source(
+        self,
+        context: AgentRuntimeContext,
+        mcp_server_cards: Sequence["McpServerCard"] | None,
+    ) -> RunScopedDescriptorRevisions | None:
+        """Build this run's re-readable F8 revision view, or ``None``.
+
+        The view is keyed to the cards the run was already authorized to see, so
+        it can only ever report revisions for servers the catalog itself indexes.
+        Building it performs no I/O; :meth:`acompose` awaits the first read.
+        """
+
+        if mcp_server_cards is None:
+            return None
+        return RunScopedDescriptorRevisions.for_cards(
+            resolver=self._descriptor_revision_resolver,
+            context=context,
+            cards=tuple(mcp_server_cards),
+        )
+
+    @staticmethod
     def _descriptor_revisions(
-        self, context: AgentRuntimeContext
+        context: AgentRuntimeContext,
+        source: CatalogDescriptorRevisionSourcePort | None,
     ) -> tuple["CatalogDescriptorRevision", ...]:
-        if self._descriptor_revision_source is None:
+        if source is None:
             return ()
-        return tuple(self._descriptor_revision_source(context))
+        return tuple(source(context))
 
     def _live_inputs(
         self,
         context: AgentRuntimeContext,
         *,
         subject_fingerprint: str,
+        revision_source: CatalogDescriptorRevisionSourcePort | None = None,
     ) -> CapabilityGenerationInputs | None:
         """Re-read every keyed input as it stands *now*.
 
@@ -815,6 +965,11 @@ class CapabilityDiscoveryComposer:
         and so is the run-control snapshot, but the F8 descriptor revisions are
         not -- so a descriptor that moved mid-run changes the derived identity
         here and the shared revalidator fails the reference closed.
+
+        ``revision_source`` is the run's own view rather than the composer's
+        instance field for the same reason :meth:`compose` takes it as an
+        argument: the composer outlives the run, and a view that outlived it with
+        it would key one run's generation to another run's server set.
         """
 
         control = self._run_control()
@@ -825,7 +980,10 @@ class CapabilityDiscoveryComposer:
             subject_fingerprint=subject_fingerprint,
             connector_scope_revision=self._connector_scope_revision(context),
             task_policy_selection_ref=task_policy_selection_ref,
-            descriptor_revisions=self._descriptor_revisions(context),
+            descriptor_revisions=self._descriptor_revisions(
+                context,
+                revision_source or self._descriptor_revision_source,
+            ),
         )
 
 
@@ -833,6 +991,7 @@ def build_capability_discovery_composer(
     *,
     decision_store: object | None = None,
     schema_artifact_writer: object | None = None,
+    descriptor_revision_resolver: object | None = None,
 ) -> CapabilityDiscoveryComposer | None:
     """Build the worker's fully-wired composer, or ``None`` to stay dark.
 
@@ -849,6 +1008,12 @@ def build_capability_discovery_composer(
     still goes through the one F3 resolver and still resolves conservatively.
     Both handlers call this rather than constructing a composer of their own, so
     the run and approval-resume paths cannot drift into wiring F3 differently.
+
+    ``descriptor_revision_resolver`` is the worker process's one F8 revision
+    authority, threaded exactly as ``mcp_discovery_cache`` already is and for the
+    same reason: it is per-process state that only ``__main__`` can build.  It is
+    ``None`` on every deployment with F8 unconfigured, and the composer then
+    folds no revisions -- the behaviour that shipped.
     """
 
     if not CapabilityDiscoveryEnvironment.is_configured():
@@ -856,6 +1021,7 @@ def build_capability_discovery_composer(
     return CapabilityDiscoveryComposer(
         decision_store=decision_store,  # type: ignore[arg-type]
         schema_artifact_writer=schema_artifact_writer,  # type: ignore[arg-type]
+        descriptor_revision_resolver=descriptor_revision_resolver,  # type: ignore[arg-type]
     )
 
 

@@ -307,6 +307,13 @@ class DefaultRuntimeDependenciesFactory:
         a cost of the activated posture only, so the dark path is unchanged in
         behaviour *and* in work done.  Every failure below returns the
         dependencies untouched, leaving the run on the pre-F3 path.
+
+        The same await is what lets the F8 descriptor revisions reach the
+        generation this catalog is stamped with.  ``acompose`` reads them from
+        the revision authority the worker already owns, keyed to the very cards
+        listed above, *before* the catalog is projected — the ordering the
+        generation contract requires.  With no revision authority wired it reads
+        nothing and composes exactly what ``compose`` composed before.
         """
 
         composer = self.capability_discovery
@@ -321,7 +328,7 @@ class DefaultRuntimeDependenciesFactory:
                 exc_info=True,
             )
             return dependencies
-        discovery = composer.compose(context, mcp_server_cards=tuple(cards))
+        discovery = await composer.acompose(context, mcp_server_cards=tuple(cards))
         if discovery is None:
             return dependencies
         return dependencies.model_copy(

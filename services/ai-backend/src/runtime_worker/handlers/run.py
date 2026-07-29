@@ -264,6 +264,7 @@ class RuntimeRunHandler:
         ) = None,
         usage_recorder: UsageRecorder | None = None,
         mcp_discovery_cache: object | None = None,
+        mcp_revision_resolver: object | None = None,
         user_policies_resolver: UserPoliciesResolver | None = None,
         token_counter: TokenCounterPort | None = None,
         queue: object | None = None,
@@ -355,6 +356,7 @@ class RuntimeRunHandler:
                     schema_artifact_writer=(
                         self._file_store_worker_wiring.schema_artifact_writer()
                     ),
+                    descriptor_revision_resolver=mcp_revision_resolver,
                 ),
             )
         )
