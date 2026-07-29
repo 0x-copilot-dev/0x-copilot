@@ -9,6 +9,7 @@ import {
   type Transport,
 } from "@0x-copilot/chat-transport";
 import { TcSurfaceMount } from "../thread-canvas/TcSurfaceMount";
+import type { SurfaceHue } from "../surfaces/surfaceHue";
 import type { ArtifactDownloadPort } from "../ports/ArtifactDownloadPort";
 import { ArtifactEditor } from "./ArtifactEditor";
 import { ArtifactFrame } from "./ArtifactFrame";
@@ -44,8 +45,16 @@ export function ArtifactSurface(props: {
    * gives the artifact's tab. Omitted means no choice was made: the hue is then
    * derived from the artifact URI's scheme, which is what every artifact
    * rendered before this prop existed.
+   *
+   * Typed as the closed hue set, not `string`. Untrusted values are narrowed
+   * with `isSurfaceHue` where they enter — `useConversationCanvas` does exactly
+   * that when parsing the record — so every real caller already holds a
+   * `SurfaceHue`, and `string` here only discarded a check they could satisfy.
+   * The runtime fallback in `resolveSurfaceHue` stays regardless: this prop is
+   * a compile-time guarantee, and the renderer must remain total over a value
+   * that reached it without one.
    */
-  readonly hue?: string;
+  readonly hue?: SurfaceHue;
   readonly downloadPort?: ArtifactDownloadPort;
   readonly onNavigateRevision?: (uri: string) => void;
 }): ReactElement {

@@ -21,6 +21,7 @@ import type {
 import { describe, expect, it } from "vitest";
 
 import { TcTabs } from "../thread-canvas/TcTabs";
+import type { SurfaceHue } from "../surfaces/surfaceHue";
 import { ArtifactSurface } from "./ArtifactSurface";
 import { artifactUri } from "./uri";
 
@@ -103,7 +104,13 @@ async function huesFor(
   accent?: string,
 ): Promise<{ readonly tab: string | null; readonly mount: string | null }> {
   const uri = artifactUri(kind, ARTIFACT_ID, 1);
-  const choice = accent === undefined ? {} : { hue: accent };
+  // The cast is the point of the malformed case below, not a workaround for it.
+  // `ArtifactSurface.hue` is now the closed hue set, so a hostile accent can
+  // only reach the component by lying about its type — which is exactly what a
+  // caller skipping `isSurfaceHue` would do, and what the degradation these
+  // tests pin has to survive. One object still feeds both halves, so the tab
+  // and the card are handed the identical value.
+  const choice = accent === undefined ? {} : { hue: accent as SurfaceHue };
   render(
     <>
       <TcTabs

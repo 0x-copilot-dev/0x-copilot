@@ -25,7 +25,11 @@ from contextvars import ContextVar
 from dataclasses import dataclass
 
 from agent_runtime.capabilities.mcp.annotations import McpToolAnnotationsRegistry
-from agent_runtime.capabilities.surfaces.builtin import server_slug, tool_slug
+from agent_runtime.capabilities.surfaces.builtin import (
+    display_name,
+    server_slug,
+    tool_slug,
+)
 from agent_runtime.capabilities.surfaces.generator import DotPathResolver
 from agent_runtime.capabilities.surfaces.spec_models import SurfaceArchetype
 from agent_runtime.surfaces_v2.constants import Keys, Messages, Titles, Values
@@ -96,6 +100,12 @@ class WorkLedgerEmitter:
         """
 
         try:
+            # Two registers, deliberately not one value. ``action.classified``
+            # and ``read.executed`` identify the CALL, so they carry the lookup
+            # slugs the classifier and the catalogs key on. ``surface.created``
+            # carries the SURFACE's provenance, which is the pair the fold hands
+            # to the renderer as ``state.source`` and the no-spec note reads out
+            # loud — see ``_emit_surface``.
             connector = server_slug(server_name)
             op = tool_slug(tool_name)
             payload_ref = f"{Values.CALL_REF_PREFIX}{call_id}"
@@ -121,8 +131,8 @@ class WorkLedgerEmitter:
                 await self._emit_surface(
                     surface=surface,
                     surface_uri=surface_uri,
-                    connector=connector,
-                    op=op,
+                    server_name=server_name,
+                    tool_name=tool_name,
                     payload_ref=payload_ref,
                 )
         except Exception:  # noqa: BLE001 - ledger emission never fails a tool call
@@ -266,10 +276,35 @@ class WorkLedgerEmitter:
         *,
         surface: Mapping[str, object],
         surface_uri: object,
-        connector: str,
-        op: str,
+        server_name: str,
+        tool_name: str,
         payload_ref: str,
     ) -> None:
+        """Emit ``surface.created`` + the first ``view.derived`` for one surface.
+
+        ``source`` is the surface's provenance in the DISPLAY register, not the
+        lookup slugs: the v2 content fold restates exactly this pair as the
+        renderer's ``state.source {server, tool}``, and the tier-3 note prints
+        it — "No spec matched ``<tool>``".
+
+        It is READ OUT OF THE ENVELOPE rather than recomputed here, which is the
+        whole point. ``SurfaceProjector._state_source`` already produced this
+        pair; the two used to derive it separately — this one through
+        ``tool_slug``, the projector not — so one tool could be served under two
+        names depending on which path a client read. One producer, one value:
+        this emitter restates what the envelope says and can no longer disagree
+        with it. The call's own names remain the fallback for an envelope that
+        carries no source (a nameless tool).
+
+        Nothing keys off this value: every registry/store/spec-ref lookup that
+        later receives it (``ViewDeriver.regenerate`` via
+        ``SurfaceSnapshot.connector`` / ``.op``) re-slugs its inputs, so a name
+        that is not a slug resolves exactly where a slug did.
+        """
+
+        connector, op = self._surface_source(
+            surface, server_name=server_name, tool_name=tool_name
+        )
         surface_id = (
             surface_uri if isinstance(surface_uri, str) and surface_uri else None
         )
@@ -318,6 +353,31 @@ class WorkLedgerEmitter:
         )
 
     @staticmethod
+    def _surface_source(
+        surface: Mapping[str, object],
+        *,
+        server_name: str,
+        tool_name: str,
+    ) -> tuple[str, str]:
+        """The envelope's ``state.source`` as ``(connector, op)``, display register.
+
+        Total over an untrusted mapping: a missing, non-mapping, or half-named
+        source falls back to the identity names this call was made with, which
+        is the same pair the projector would have used. Both members must
+        resolve together — a source naming only its server would otherwise pair
+        a real connector name with a slugged op and re-open the split.
+        """
+
+        state = surface.get(_EnvelopeKey.STATE)
+        source = state.get(_EnvelopeKey.SOURCE) if isinstance(state, Mapping) else None
+        if isinstance(source, Mapping):
+            server = display_name(source.get(_EnvelopeKey.SERVER))
+            tool = display_name(source.get(_EnvelopeKey.TOOL))
+            if server and tool:
+                return server, tool
+        return display_name(server_name), display_name(tool_name)
+
+    @staticmethod
     def _title_for(
         *,
         spec: Mapping[str, object] | None,
@@ -327,7 +387,11 @@ class WorkLedgerEmitter:
     ) -> str:
         """Resolve the surface title (D1): ``spec.title_path`` against ``data``
         when a spec is present and the path resolves, else ``<connector> · <op>``.
-        Truncated to :data:`Values.TITLE_MAX_LEN`."""
+        Truncated to :data:`Values.TITLE_MAX_LEN`.
+
+        The fallback is a tab label a person reads, so ``connector`` / ``op``
+        arrive already in the display register — the same reason ``source`` does.
+        """
 
         resolved: str | None = None
         if spec is not None:

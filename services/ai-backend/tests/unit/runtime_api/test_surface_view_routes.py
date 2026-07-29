@@ -25,6 +25,7 @@ from agent_runtime.api.surface_view_coordinator import SurfaceViewCoordinator
 from agent_runtime.execution.contracts import StreamEventSource
 from agent_runtime.execution.models import ModelConfigResolver
 from agent_runtime.settings import RuntimeSettings
+from agent_runtime.surfaces_v2.content import SurfaceContentProjection
 from agent_runtime.surfaces_v2.ledger_models import ViewKeep
 from agent_runtime.surfaces_v2.projection import SurfaceStoreProjection
 from runtime_adapters.in_memory import InMemoryRuntimeApiStore
@@ -46,11 +47,19 @@ _VALID_CANDIDATE: dict[str, object] = {
 
 
 class _FakeCompletion:
-    """Returns a pre-canned valid candidate; never a live model."""
+    """Returns a pre-canned valid candidate; never a live model.
+
+    Records every ``user`` prompt so a test can assert WHAT was sent to the
+    shaping model, not merely that a call happened.
+    """
+
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
 
     async def complete(self, *, system: str, user: str):
         from agent_runtime.capabilities.surfaces.generator import SpecCompletionResult
 
+        self.prompts.append(user)
         return SpecCompletionResult(
             candidate=dict(_VALID_CANDIDATE),
             raw_text=json.dumps(_VALID_CANDIDATE),
@@ -68,6 +77,7 @@ class SurfaceViewMixin:
         self,
         *,
         environ: dict[str, str] | None = None,
+        completion: _FakeCompletion | None = None,
     ) -> tuple[
         InMemoryRuntimeApiStore, RuntimeEventProducer, SurfaceViewCoordinator, RunRecord
     ]:
@@ -111,7 +121,7 @@ class SurfaceViewMixin:
             persistence=store,
             event_store=store,
             event_producer=producer,
-            completion=_FakeCompletion(),
+            completion=completion if completion is not None else _FakeCompletion(),
             environ=environ if environ is not None else dict(_FLAG_ON),
         )
         return store, producer, coordinator, store.runs[run_response.run_id]
@@ -166,6 +176,29 @@ class SurfaceViewMixin:
             payload={
                 "call_id": "call_1",
                 "output": {"issue": {"id": "ENG-1", "title": "Fix"}},
+            },
+        )
+
+    @staticmethod
+    async def _append_generated_spec(
+        producer: RuntimeEventProducer,
+        run: RunRecord,
+        *,
+        surface_id: str,
+    ) -> None:
+        """A spec the RUNTIME generated for this surface, with no content event.
+
+        This is the state the ``data``-less fold comes from: a surface can carry
+        a generated spec while its declared ``payload_ref`` resolves to nothing.
+        """
+
+        await producer.append_api_event(
+            run=run,
+            source=StreamEventSource.RUNTIME,
+            event_type=RuntimeApiEventType.SURFACE_SPEC_GENERATED,
+            payload={
+                "surface_uri": surface_id,
+                "spec": dict(_VALID_CANDIDATE),
             },
         )
 
@@ -224,6 +257,55 @@ class TestRegenerate(SurfaceViewMixin):
         assert usage, "shaping recorded a usage.recorded ledger event"
         assert usage[-1].payload["purpose"] == "view_shaping"
         assert usage[-1].payload["surface_id"] == "record://customsrv/custom_tool/x"
+
+    async def test_our_own_provenance_is_never_shaped_as_tool_output(self) -> None:
+        # The surface has a generated spec but no resolvable stored response, so
+        # the B2 fold produces `{'spec': …, 'source': …}` — both members the
+        # runtime's own output. "Re-derive from the stored response" has no
+        # stored response to work from, and the only honest answer is to refuse.
+        #
+        # Asserting the model's INPUT, not that a call happened: the defect was
+        # that our provenance and our prior spec were sent inside the prompt's
+        # `<untrusted-sample>` block as if a connector had returned them, and
+        # then hashed into the cache key the regenerated spec is stored under.
+        completion = _FakeCompletion()
+        store, producer, coordinator, run = await self._setup(completion=completion)
+        surface_id = "record://customsrv/custom_tool/x"
+        await self._append_surface(
+            producer,
+            run,
+            surface_id=surface_id,
+            connector="customsrv",
+            op="custom_tool",
+            tier="generic",
+            basis="schema",
+        )
+        await self._append_generated_spec(producer, run, surface_id=surface_id)
+        events = await store.list_events_after(
+            org_id=self.ORG, run_id=run.run_id, after_sequence=0
+        )
+        state = SurfaceContentProjection.fold(
+            events, surface_payload_refs={surface_id: "call:call_1"}
+        )[surface_id]
+        # The trap's precondition, stated rather than assumed: content, and none
+        # of it the connector's.
+        assert sorted(state) == ["source", "spec"]
+
+        with pytest.raises(RuntimeApiError) as exc:
+            await coordinator.regenerate_view(
+                org_id=self.ORG,
+                user_id=self.USER,
+                run_id=run.run_id,
+                surface_id=surface_id,
+            )
+
+        assert exc.value.http_status == 404
+        assert exc.value.envelope.safe_message == "surface_not_found"
+        assert completion.prompts == []
+        after = await store.list_events_after(
+            org_id=self.ORG, run_id=run.run_id, after_sequence=0
+        )
+        assert len(after) == len(events)  # no view.derived off our own state
 
     async def test_unknown_surface_404(self) -> None:
         _store, _producer, coordinator, run = await self._setup()
