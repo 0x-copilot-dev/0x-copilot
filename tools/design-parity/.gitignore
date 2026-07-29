@@ -1,6 +1,13 @@
 # Regenerable live renders (run: vitest --config tools/design-parity/vitest.config.mjs)
 surfaces/*/live/
 
+# Regenerable DESIGN bundle. `surface-language` compiles its vendored JSX with
+# esbuild from node_modules instead of pulling React + Babel from unpkg at
+# render time (see lib/prepare-surface-language-design.mjs). The output is
+# derived from files that ARE tracked, so committing it would only create a
+# second copy to drift. Rebuild: node lib/prepare-<surface>-design.mjs.
+surfaces/*/design/build/
+
 # Regenerable measurement artifacts.
 #
 # These are OUTPUTS of the pipeline, not inputs: `extract-playwright.mjs` /

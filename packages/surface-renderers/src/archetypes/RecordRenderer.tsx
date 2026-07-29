@@ -8,11 +8,11 @@ import {
   EmptyBody,
   FieldRow,
   fieldGridStyle,
-  GenericFieldList,
+  NoSpecView,
   pageStyle,
-  PreparingHint,
   SurfaceHeader,
   SurfaceLinkRow,
+  toolNameFromState,
 } from "../_shared/primitives";
 import { formatValue, isNumericFormat, resolvePath } from "../_shared/path";
 import {
@@ -30,8 +30,8 @@ const KICKER = "Record";
 /**
  * The `record://` archetype — a single resource as a title/subtitle header over
  * a label/value field grid (the OpportunityRenderer grammar, spec-driven).
- * Spec-less state renders a "Preparing view…" hint + generic field list; a
- * malformed spec/data never throws.
+ * Spec-less state renders the no-spec view (PRD-02); a malformed spec/data
+ * never throws.
  */
 export function RecordRenderer(state: SurfaceState | unknown): ReactElement {
   const spec = specFromState(state);
@@ -45,7 +45,7 @@ export function RecordRenderer(state: SurfaceState | unknown): ReactElement {
       aria-label="Record surface"
     >
       <section style={cardStyle}>
-        {spec ? renderWithSpec(spec, data) : renderFallback(data)}
+        {spec ? renderWithSpec(spec, data) : renderFallback(state, data)}
       </section>
     </article>
   );
@@ -85,12 +85,13 @@ function renderWithSpec(spec: SurfaceSpec, data: unknown): ReactElement {
   );
 }
 
-function renderFallback(data: unknown): ReactElement {
+/** Both halves of the boundary value: `state` is where a tool identity would
+ * ride, `data` is the payload the note is about. */
+function renderFallback(state: unknown, data: unknown): ReactElement {
   return (
     <>
       <SurfaceHeader kicker={KICKER} title="Record" />
-      <PreparingHint />
-      <GenericFieldList data={data} format={(v) => formatValue(v)} />
+      <NoSpecView data={data} tool={toolNameFromState(state)} />
     </>
   );
 }
