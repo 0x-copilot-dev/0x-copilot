@@ -54,19 +54,57 @@ if TYPE_CHECKING:  # pragma: no cover - typing only, never imported at runtime.
         CapabilityActivationDecision,
         CapabilityCatalog,
         CapabilityCatalogGeneration,
+        CapabilityDiscoveryObserver,
+        CapabilityReferenceMinter,
         CatalogDescriptorRevision,
         LiveCapabilityCatalogGeneration,
+        RunScopedSchemaArtifactPublisher,
     )
     from agent_runtime.capabilities.mcp.cards import McpServerCard
+    from agent_runtime.context.memory.summarization import OffloadWriter
+    from agent_runtime.control_plane.context import RunControlBinding
+    from agent_runtime.control_plane.ports import RunControlDecisionStorePort
     from agent_runtime.control_plane.revision_binding import (
         RevisionBoundScope,
         RevisionResolutionHandle,
     )
 
-from agent_runtime.execution.contracts import AgentRuntimeContext
+from agent_runtime.execution.contracts import (
+    AgentRuntimeContext,
+    CapabilityBridgeComposition,
+)
 
 
 _LOGGER = logging.getLogger(__name__)
+
+#: One meter set per worker process, created on first activated run and never
+#: on the dark path.  Instruments are per-instance, so building a set per run
+#: would register a duplicate instrument per run for the life of the process;
+#: the meters themselves are stateless and run-agnostic, which is exactly why
+#: they can be shared and why no run identity may ever be labelled onto them.
+_METRICS: object | None = None
+
+
+def _discovery_metrics() -> object | None:
+    """Return this process's discovery meters, or ``None`` if unavailable.
+
+    Failing to build meters is never a reason to fail a run or to change what
+    the bridge registers, so every failure resolves to an unmeasured run.
+    """
+
+    global _METRICS  # noqa: PLW0603 - one process-wide meter set, by design.
+    if _METRICS is not None:
+        return _METRICS
+    try:
+        from agent_runtime.capabilities.discovery.telemetry import (  # noqa: PLC0415
+            CapabilityDiscoveryMetrics,
+        )
+
+        _METRICS = CapabilityDiscoveryMetrics()
+    except Exception:
+        _LOGGER.debug("capability_discovery.metrics_unavailable", exc_info=True)
+        return None
+    return _METRICS
 
 
 class CapabilityDiscoveryEnvironment:
@@ -329,15 +367,25 @@ class RunCapabilityDiscovery:
     """Everything one run's F3 composition produced, or nothing at all.
 
     ``activation`` and ``catalog`` are the two ``RuntimeDependencies`` fields
-    W1 defined.  ``generation_source`` is the live authority the invoke seam's
-    revalidation needs; it is produced here because it must be keyed to the same
-    reference key and the same trusted inputs as the catalog beside it.
+    W1 defined, and ``bridge`` is the third: the invocation-seam inputs only a
+    composition root can supply.  ``generation_source`` is the live authority
+    the invoke seam's revalidation needs; it is produced here because it must be
+    keyed to the same reference key and the same trusted inputs as the catalog
+    beside it.
+
+    ``bridge`` is built here rather than by the caller for the same reason.  Its
+    minter, its revalidation, and its schema-artifact publisher are all keyed to
+    the one ``reference_key`` this run derived, and that key never leaves
+    :meth:`CapabilityDiscoveryComposer._compose`.  Handing the caller the key so
+    it could build them would make "the bridge and the catalog agree on a key"
+    an instruction; deriving both from one local makes it a fact.
     """
 
     activation: "CapabilityActivationDecision"
     catalog: "CapabilityCatalog"
     generation_source: RunScopedCapabilityCatalogGeneration
     subject_fingerprint: str
+    bridge: CapabilityBridgeComposition = CapabilityBridgeComposition()
 
 
 class CapabilityDiscoveryComposer:
@@ -355,11 +403,19 @@ class CapabilityDiscoveryComposer:
         *,
         card_source: McpServerCardSnapshotPort | None = None,
         descriptor_revision_source: CatalogDescriptorRevisionSourcePort | None = None,
+        decision_store: "RunControlDecisionStorePort | None" = None,
+        schema_artifact_writer: "OffloadWriter | None" = None,
         environ: Mapping[str, str] | None = None,
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
     ) -> None:
         self._card_source = card_source
         self._descriptor_revision_source = descriptor_revision_source
+        # Both are optional in the way every other input here is. Without a
+        # decision store the run is unmeasured; without a writer an over-bound
+        # schema is reported unavailable. Neither changes what the bridge does,
+        # and neither can fail a run.
+        self._decision_store = decision_store
+        self._schema_artifact_writer = schema_artifact_writer
         self._environ = environ
         self._clock = clock
 
@@ -458,19 +514,194 @@ class CapabilityDiscoveryComposer:
         if catalog.generation is None:  # pragma: no cover - builder always stamps.
             return None
 
+        generation_source = RunScopedCapabilityCatalogGeneration(
+            subject_fingerprint=subject_fingerprint,
+            run_id=context.run_id,
+            resolve_inputs=lambda: self._live_inputs(
+                context,
+                subject_fingerprint=subject_fingerprint,
+            ),
+        )
         return RunCapabilityDiscovery(
             activation=activation,
             catalog=catalog,
-            generation_source=RunScopedCapabilityCatalogGeneration(
-                subject_fingerprint=subject_fingerprint,
-                run_id=context.run_id,
-                resolve_inputs=lambda: self._live_inputs(
-                    context,
-                    subject_fingerprint=subject_fingerprint,
-                ),
-            ),
+            generation_source=generation_source,
             subject_fingerprint=subject_fingerprint,
+            bridge=self._bridge(
+                context,
+                reference_key=reference_key,
+                subject_fingerprint=subject_fingerprint,
+                generation_source=generation_source,
+            ),
         )
+
+    def _bridge(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        reference_key: bytes,
+        subject_fingerprint: str,
+        generation_source: RunScopedCapabilityCatalogGeneration,
+    ) -> CapabilityBridgeComposition:
+        """Assemble the invocation-seam inputs keyed to this run's own key.
+
+        Every part is built from the single ``reference_key`` the catalog beside
+        it was projected under, and that key exists in exactly one place — the
+        local in :meth:`_compose`.  There is no second derivation to keep in
+        step, so an expanded reference is byte-identical to a catalog member's
+        by construction rather than by agreement.
+
+        The whole assembly degrades one part at a time.  A missing decision
+        store costs the run its journal lineage, a missing writer costs it the
+        protected-schema answer, and an unbuildable revalidation costs it
+        ``invoke_capability`` entirely — none of them costs it the bridge, and
+        none of them raises.
+        """
+
+        from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+            HmacCapabilityReferenceMinter,
+        )
+
+        minter: CapabilityReferenceMinter = HmacCapabilityReferenceMinter(
+            reference_key=reference_key
+        )
+        metrics = _discovery_metrics()
+        return CapabilityBridgeComposition(
+            minter=minter,
+            revalidation=self._revalidation(
+                subject_fingerprint=subject_fingerprint,
+                generation_source=generation_source,
+            ),
+            observer=self._observer(
+                context,
+                subject_fingerprint=subject_fingerprint,
+                metrics=metrics,
+            ),
+            expansion_observer=metrics,
+            schema_artifacts=self._schema_artifacts(minter),
+        )
+
+    @staticmethod
+    def _revalidation(
+        *,
+        subject_fingerprint: str,
+        generation_source: RunScopedCapabilityCatalogGeneration,
+    ) -> object | None:
+        """Bind the shared Step RB revalidator to this run's live authority.
+
+        The authority recomputes a generation from freshly re-read trusted
+        inputs, so this is what makes a reference minted before a descriptor
+        moved fail closed at use time.  Without it the registrar refuses to
+        offer ``invoke_capability`` at all, which is the correct narrowing: an
+        unrevalidatable reference is never usable.
+        """
+
+        from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+            CapabilityCatalogRevisionAuthority,
+            CapabilityRefRevalidation,
+        )
+        from agent_runtime.control_plane.revision_binding import (  # noqa: PLC0415
+            RevisionBindingRevalidator,
+        )
+
+        try:
+            return CapabilityRefRevalidation(
+                revalidator=RevisionBindingRevalidator(
+                    CapabilityCatalogRevisionAuthority(generation_source)
+                ),
+                subject_fingerprint=subject_fingerprint,
+            )
+        except Exception:
+            _LOGGER.warning(
+                "Capability ref revalidation could not be composed; "
+                "invoke_capability stays unregistered.",
+                exc_info=True,
+            )
+            return None
+
+    def _observer(
+        self,
+        context: AgentRuntimeContext,
+        *,
+        subject_fingerprint: str,
+        metrics: object | None,
+    ) -> object | None:
+        """Fan discovery decisions out to the run journal and to the meters.
+
+        The recorder's binding is read from the verified run-control snapshot
+        rather than from this composition: the journal is partitioned by the
+        *control* subject fingerprint, and F3's catalog-keyed fingerprint is a
+        different derivation for a different purpose.  Using the wrong one would
+        write rows no reader of that run could ever list.
+
+        ``subject_fingerprint`` is still taken as a parameter so the caller
+        cannot silently pass F3's; it is used only when the snapshot carries
+        none, which no verified binding ever does.
+        """
+
+        from agent_runtime.capabilities.discovery.telemetry import (  # noqa: PLC0415
+            CapabilityDiscoveryObserverGroup,
+            RunJournalDiscoveryDecisionRecorder,
+        )
+
+        observers: list[CapabilityDiscoveryObserver] = []
+        binding = self._control_binding()
+        store = self._decision_store
+        if store is not None and binding is not None:
+            snapshot = binding.snapshot
+            observers.append(
+                RunJournalDiscoveryDecisionRecorder(
+                    store=store,
+                    org_id=context.org_id,
+                    run_id=context.run_id,
+                    trace_id=context.trace_id,
+                    subject_fingerprint=(
+                        snapshot.subject_fingerprint or subject_fingerprint
+                    ),
+                    snapshot_id=snapshot.snapshot_id,
+                    policy_revision=snapshot.policy_revisions.capability,
+                    clock=self._clock,
+                )
+            )
+        if metrics is not None:
+            observers.append(metrics)  # type: ignore[arg-type]
+        if not observers:
+            return None
+        return CapabilityDiscoveryObserverGroup(observers=tuple(observers))
+
+    def _schema_artifacts(
+        self,
+        minter: "CapabilityReferenceMinter",
+    ) -> "RunScopedSchemaArtifactPublisher | None":
+        """Publish over-bound schemas through the runtime's existing offload seam.
+
+        The publisher takes the *same* minter object the catalog's references
+        came from, not a second one built from the same bytes.  Its derivation
+        folds in the binding digest, so an artifact reference is a function of
+        the run, subject, and catalog generation — and a run handed a foreign
+        key would mint references its own resolver re-derives differently and
+        therefore refuses.
+        """
+
+        writer = self._schema_artifact_writer
+        if writer is None:
+            return None
+        from agent_runtime.capabilities.discovery import (  # noqa: PLC0415
+            RunScopedSchemaArtifactPublisher,
+        )
+
+        return RunScopedSchemaArtifactPublisher(
+            writer=writer,
+            minter=minter,  # type: ignore[arg-type]
+        )
+
+    @staticmethod
+    def _control_binding() -> "RunControlBinding | None":
+        from agent_runtime.control_plane.context import (  # noqa: PLC0415
+            RunControlContext,
+        )
+
+        return RunControlContext.current()
 
     def _activation(self) -> "CapabilityActivationDecision":
         """Resolve the posture from deployment config and the run's own mode.
@@ -598,6 +829,36 @@ class CapabilityDiscoveryComposer:
         )
 
 
+def build_capability_discovery_composer(
+    *,
+    decision_store: object | None = None,
+    schema_artifact_writer: object | None = None,
+) -> CapabilityDiscoveryComposer | None:
+    """Build the worker's fully-wired composer, or ``None`` to stay dark.
+
+    The presence gate is read *here*, before the composer is constructed, and
+    that placement is the whole point.  A handler that always held a composer
+    would run the real composition on every run of every deployment — importing
+    the discovery package, resolving a posture, deriving a key — only to discard
+    the result, and the dark path's import graph would no longer be the pre-F3
+    one.  Returning ``None`` keeps the unconfigured deployment on the branch
+    that has always existed.
+
+    Testing *presence* rather than meaning is deliberate and is not a second
+    activation vocabulary: any value that is present, including a misspelling,
+    still goes through the one F3 resolver and still resolves conservatively.
+    Both handlers call this rather than constructing a composer of their own, so
+    the run and approval-resume paths cannot drift into wiring F3 differently.
+    """
+
+    if not CapabilityDiscoveryEnvironment.is_configured():
+        return None
+    return CapabilityDiscoveryComposer(
+        decision_store=decision_store,  # type: ignore[arg-type]
+        schema_artifact_writer=schema_artifact_writer,  # type: ignore[arg-type]
+    )
+
+
 __all__ = (
     "CapabilityDiscoveryComposer",
     "CapabilityDiscoveryEnvironment",
@@ -606,4 +867,5 @@ __all__ = (
     "McpServerCardSnapshotPort",
     "RunCapabilityDiscovery",
     "RunScopedCapabilityCatalogGeneration",
+    "build_capability_discovery_composer",
 )

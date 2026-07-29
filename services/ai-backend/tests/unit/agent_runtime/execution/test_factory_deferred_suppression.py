@@ -18,8 +18,9 @@ Three things are asserted here and nowhere else:
   model has neither the cards nor a bridge; and
 * **the direct MCP tools survive** — search and describe supersede the card
   block's *enumeration*, not the tools that load, call, or authenticate a
-  server.  Suppressing those would leave a deferred run unable to reach MCP at
-  all, because the factory registers no ``invoke_capability``.
+  server.  W2 threaded the invocation seam, so ``invoke_capability`` does now
+  register; the argument for keeping ``call_mcp_tool`` moved with it and is
+  restated in ``TestDirectMcpToolsSurviveSuppression`` rather than deleted.
 """
 
 from __future__ import annotations
@@ -27,6 +28,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from pydantic import ValidationError
 
 from agent_runtime.capabilities.discovery import (
     AuthorizedCatalogBuilder,
@@ -37,6 +39,9 @@ from agent_runtime.capabilities.discovery import (
     CapabilityCatalog,
     CapabilityCatalogRevision,
     CapabilityCatalogScope,
+    CapabilityInvokeRequest,
+    CapabilityRefRevalidation,
+    HmacCapabilityReferenceMinter,
 )
 from agent_runtime.capabilities.mcp.cards import (
     McpAuthMode,
@@ -49,6 +54,7 @@ from agent_runtime.capabilities.mcp.constants import Values as McpValues
 from agent_runtime.control_plane.feature_modes import FeatureMode
 from agent_runtime.execution.contracts import (
     AgentRuntimeContext,
+    CapabilityBridgeComposition,
     RuntimeDependencies,
 )
 from agent_runtime.execution.factory import acreate_agent_runtime
@@ -74,9 +80,10 @@ _CARD_ROW_MARKER = "auth_state="
 # * ``load_mcp_server`` — describe_capability returns bounded metadata and
 #   explicitly never a schema, and an MCP-server catalog entry carries no
 #   parameters at all, so nothing else can produce a callable tool name;
-# * ``call_mcp_tool`` — its superseder is ``invoke_capability``, which needs an
-#   executor and a revalidation the factory does not thread, so it is never
-#   registered; and
+# * ``call_mcp_tool`` — ``invoke_capability`` now registers (W2 threads the
+#   executor and the revalidation), but it accepts only opaque refs the bridge
+#   itself disclosed, so it can never act on a ``load_mcp_server`` descriptor;
+#   and
 # * ``auth_mcp`` — nothing in the bridge authenticates, and a CapabilityIndexEntry
 #   has no auth field, so removing the cards removes the only *proactive* auth
 #   signal. The tool is the reactive route that replaces it.
@@ -170,6 +177,27 @@ def _decision(activation: CapabilityActivationMode) -> object:
     )
 
 
+class _Revalidator:
+    async def revalidate_at_use(self, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("composing a runtime must not revalidate a ref")
+
+
+def _bridge() -> CapabilityBridgeComposition:
+    """The invocation seam a fully configured composition root supplies.
+
+    Keyed identically to ``_catalog``'s builder, because that is the invariant
+    the bridge rests on rather than a convenience of this fixture.
+    """
+
+    return CapabilityBridgeComposition(
+        minter=HmacCapabilityReferenceMinter(reference_key=_REFERENCE_KEY),
+        revalidation=CapabilityRefRevalidation(
+            revalidator=_Revalidator(),  # type: ignore[arg-type]
+            subject_fingerprint="a" * 64,
+        ),
+    )
+
+
 async def _build(
     context: AgentRuntimeContext,
     dependencies: RuntimeDependencies,
@@ -177,6 +205,7 @@ async def _build(
     servers: int = 20,
     capability_activation: object | None = None,
     capability_catalog: object | None = None,
+    capability_bridge: object | None = None,
 ) -> object:
     """Compose one full runtime and return the captured graph request."""
 
@@ -189,6 +218,7 @@ async def _build(
                 "mcp_registry": _McpRegistry(servers=_cards(servers)),
                 "capability_activation": capability_activation,
                 "capability_catalog": capability_catalog,
+                "capability_bridge": capability_bridge,
             }
         ),
         agent_builder=builder,
@@ -205,7 +235,15 @@ async def _deferred(
     dependencies: RuntimeDependencies,
     *,
     servers: int = 20,
+    wired: bool = False,
 ) -> object:
+    """Compose a ``deferred`` run, with or without the F3 invocation seam.
+
+    Both are reachable production states: ``wired=False`` is a run whose
+    composition root could not supply a reference key or whose registry exposes
+    no MCP seam, and suppression must behave identically in either.
+    """
+
     cards = _cards(servers)
     return await _build(
         context,
@@ -213,6 +251,7 @@ async def _deferred(
         servers=servers,
         capability_activation=_decision(CapabilityActivationMode.DEFERRED),
         capability_catalog=_catalog(context, cards=cards),
+        capability_bridge=_bridge() if wired else None,
     )
 
 
@@ -235,6 +274,30 @@ class TestDeferredSuppressesTheCardBlock:
             CapabilityBridgeToolName.SEARCH_CAPABILITIES.value,
             CapabilityBridgeToolName.DESCRIBE_CAPABILITY.value,
         }
+
+    async def test_a_wired_bridge_suppresses_exactly_as_the_read_pair_does(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        """Adding ``invoke_capability`` must not change the suppression decision.
+
+        Suppression is read off the composed surface, so a third bridge tool
+        could in principle move it. It must not: the card block is replaced
+        because search and describe supersede its *enumeration*, and invoke
+        supersedes nothing about enumeration at all.
+        """
+
+        request = await _deferred(runtime_context_admin, fake_dependencies, wired=True)
+        prompt = request.system_prompt  # type: ignore[attr-defined]
+
+        assert MCP_SERVER_CARDS_INSTRUCTIONS not in prompt
+        assert _CARD_ROW_MARKER not in prompt
+        assert CAPABILITY_DISCOVERY_INSTRUCTIONS in prompt
+        assert (
+            prompt
+            == (await _deferred(runtime_context_admin, fake_dependencies)).system_prompt  # type: ignore[attr-defined]
+        )
 
     async def test_the_replacement_block_takes_the_card_block_s_place(
         self,
@@ -531,23 +594,67 @@ class TestDirectMcpToolsSurviveSuppression:
         for tool_name in _DIRECT_MCP_TOOLS:
             assert tool_name in names
 
-    async def test_invoke_capability_is_absent_so_call_mcp_tool_is_load_bearing(
+    async def test_call_mcp_tool_survives_even_when_invoke_capability_registers(
         self,
         runtime_context_admin: AgentRuntimeContext,
         fake_dependencies: RuntimeDependencies,
     ) -> None:
-        """Pins *why* ``call_mcp_tool`` may not be suppressed yet.
+        """W2 changed this test's premise, so it states the new reason instead.
 
-        The factory threads no executor or revalidation, so the registrar never
-        offers ``invoke_capability``. Until it does, ``call_mcp_tool`` is the
-        only execution route a deferred run has, and removing it would leave a
-        model that can search and describe but never act.
+        Until W2 the factory threaded no executor and no revalidation, so
+        ``invoke_capability`` never registered and ``call_mcp_tool`` was the only
+        execution route a deferred run had. That argument is now spent: the
+        composition root supplies both, and invoke registers.
+
+        ``call_mcp_tool`` still may not be suppressed, for a reason that does not
+        depend on invoke's absence. ``load_mcp_server`` also survives
+        suppression — it is the tool that reads a server's descriptors, and the
+        replacement prompt block names it — and what it returns is *plain tool
+        names*. ``invoke_capability`` accepts only an opaque ``cap_`` reference
+        that second-tier expansion disclosed into this run's ledger, so it can
+        never act on anything ``load_mcp_server`` produced. Suppressing
+        ``call_mcp_tool`` would therefore leave the model holding a descriptor it
+        has no way to call.
+
+        Invoke is narrower than the tool it superficially resembles in two more
+        ways the suppression argument would have to survive: it refuses any
+        target that is not an MCP-sourced capability with a recorded dispatch
+        binding, and it refuses an idempotency key outright. It is an additional
+        route for references the bridge itself disclosed, not a replacement for
+        the direct one.
+        """
+
+        names = _names(
+            await _deferred(runtime_context_admin, fake_dependencies, wired=True)
+        )
+
+        assert CapabilityBridgeToolName.INVOKE_CAPABILITY.value in names
+        assert McpValues.ToolName.CALL_MCP_TOOL in names
+        assert McpValues.ToolName.LOAD_MCP_SERVER in names
+        # The premise, asserted rather than described: an opaque ``cap_`` ref is
+        # the only thing invoke's request contract can carry, and no descriptor
+        # ``load_mcp_server`` returns is one.
+        with pytest.raises(ValidationError):
+            CapabilityInvokeRequest(capability_ref="list_issues", arguments={})
+
+    async def test_an_unwired_bridge_still_registers_only_the_read_pair(
+        self,
+        runtime_context_admin: AgentRuntimeContext,
+        fake_dependencies: RuntimeDependencies,
+    ) -> None:
+        """The reachable state the old premise described is still reachable.
+
+        A deferred run whose composition root could not derive a reference key,
+        or whose registry exposes no MCP seam, composes no invocation seam. It
+        must still get search, describe, and every direct MCP tool — never a
+        suppressed card block beside a bridge that cannot act.
         """
 
         names = _names(await _deferred(runtime_context_admin, fake_dependencies))
 
         assert CapabilityBridgeToolName.INVOKE_CAPABILITY.value not in names
-        assert McpValues.ToolName.CALL_MCP_TOOL in names
+        for tool_name in _DIRECT_MCP_TOOLS:
+            assert tool_name in names
 
     async def test_the_replacement_block_names_the_tools_it_leaves_in_place(
         self,
