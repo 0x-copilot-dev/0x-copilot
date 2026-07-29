@@ -8,6 +8,24 @@ references they carry is read through
 
 from __future__ import annotations
 
+from agent_runtime.context.planning.budgeter import (
+    BASIS_POINTS,
+    ContextAdmission,
+    ContextAdmissionRejected,
+    ContextAdmissionTables,
+    ContextAllocation,
+    ContextAllocationError,
+    ContextAllocationNotReproducible,
+    ContextAllocationPolicy,
+    ContextAllocationRejected,
+    ContextBudget,
+    ContextBudgetExceeded,
+    ContextClassShare,
+    ContextHydrationRejected,
+    ContextPlanAssembler,
+    ContextRepresentationHydrator,
+    aplan_model_context,
+)
 from agent_runtime.context.planning.providers import (
     ContextCandidateCollection,
     ContextCandidateCollector,
@@ -34,11 +52,25 @@ from agent_runtime.context.planning.providers import (
 )
 
 __all__ = (
+    "BASIS_POINTS",
+    "ContextAdmission",
+    "ContextAdmissionRejected",
+    "ContextAdmissionTables",
+    "ContextAllocation",
+    "ContextAllocationError",
+    "ContextAllocationNotReproducible",
+    "ContextAllocationPolicy",
+    "ContextAllocationRejected",
+    "ContextBudget",
+    "ContextBudgetExceeded",
     "ContextCandidateCollection",
     "ContextCandidateCollector",
     "ContextCandidateIdentity",
     "ContextCandidateRequest",
+    "ContextClassShare",
     "ContextCollectionRejected",
+    "ContextHydrationRejected",
+    "ContextPlanAssembler",
     "ContextProviderAlreadyRegistered",
     "ContextProviderBounds",
     "ContextProviderError",
@@ -49,6 +81,7 @@ __all__ = (
     "ContextProviderReport",
     "ContextProviderReportRejected",
     "ContextProviderTables",
+    "ContextRepresentationHydrator",
     "ContextSourceAuthorityPort",
     "ContextSourceEnumerationPort",
     "ContextSourcePolicy",
@@ -56,4 +89,5 @@ __all__ = (
     "ContextSourceRecord",
     "ContextWithholdingTally",
     "ScopedCandidateProvider",
+    "aplan_model_context",
 )
